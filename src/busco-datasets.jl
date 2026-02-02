@@ -12,7 +12,8 @@ Pre-download BUSCO lineage datasets using the BUSCO CLI `--download` flag. This 
 - BUSCO requires network access for downloads.
 - Uses the same Bioconda environment as `run_busco`.
 """
-function run_busco_download_datasets(datasets::Union{String, Vector{String}}="all"; outdir::String="busco_downloads", threads::Int=get_default_threads())
+function run_busco_download_datasets(datasets::Union{String, Vector{String}} = "all";
+        outdir::String = "busco_downloads", threads::Int = get_default_threads())
     add_bioconda_env("busco")
     mkpath(outdir)
 
@@ -51,7 +52,7 @@ List available BUSCO lineage datasets via the BUSCO CLI `--list-datasets` flag.
 # Notes
 - Shares the same Bioconda environment as other BUSCO wrappers.
 """
-function list_busco_datasets(; parse_output::Bool=true)
+function list_busco_datasets(; parse_output::Bool = true)
     add_bioconda_env("busco")
 
     cmd_parts = ["busco", "--list-datasets"]

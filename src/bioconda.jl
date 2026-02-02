@@ -7,7 +7,8 @@ function _ensure_conda_env_vars!()
         end
         conda_python = joinpath(dirname(conda_exe), "python")
         if isfile(conda_python)
-            if !isfile(get(ENV, "CONDA_PYTHON_EXE", "")) || get(ENV, "CONDA_PYTHON_EXE", "") != conda_python
+            if !isfile(get(ENV, "CONDA_PYTHON_EXE", "")) ||
+               get(ENV, "CONDA_PYTHON_EXE", "") != conda_python
                 ENV["CONDA_PYTHON_EXE"] = conda_python
             end
         end
@@ -46,17 +47,17 @@ function _install_vibrant()
     # install VIBRANT from Bioconda
     # run(`conda install -y -c bioconda vibrant`)
     Mycelia.add_bioconda_env("vibrant")
-    
+
     # ⚠️ WARNING: This will re-download databases every time it's called
     # TODO: Check if databases exist before downloading
     @warn "VIBRANT databases will be re-downloaded. This needs to be fixed to check for existing databases first."
-    
+
     # download required HMM databases
     # run(`bash -lc "download-db.sh"`)
     # don't love the default location, but that's ok for now - no obvious way to set to a different location
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n vibrant download-db.sh`)
     # Likely unused optional arguments
-    
+
     # -d: specify the location of the databases/ directory if moved from its default location.
     # -m: specify the location of the files/ directory if moved from its default location.
     # For -d and -m please specify the full path to the new location of the files. For example, -d new_location/databases/.
@@ -67,9 +68,9 @@ end
 
 Set up the PhageBoost conda environment if it doesn't exist or if force_reinstall is true.
 """
-function _setup_phageboost_environment(force_reinstall::Bool=false)
+function _setup_phageboost_environment(force_reinstall::Bool = false)
     env_name = "phageboost_env"
-    
+
     if force_reinstall && _check_conda_env_exists(env_name)
         println("Removing existing PhageBoost environment...")
         try
@@ -78,7 +79,7 @@ function _setup_phageboost_environment(force_reinstall::Bool=false)
             @warn "Failed to remove existing environment: $e"
         end
     end
-    
+
     if !_check_conda_env_exists(env_name) || force_reinstall
         println("Creating PhageBoost conda environment...")
         try
@@ -193,7 +194,8 @@ function check_bioconda_env_is_installed(pkg)
         end
     end
     # try
-    current_environments = Set(first.(filter(x -> length(x) == 2, split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
+    current_environments = Set(first.(filter(x -> length(x) == 2,
+        split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
     if pkg in current_environments
         return true
     else
@@ -213,7 +215,7 @@ Create a Conda environment from a YAML file.
 # Keywords
 - `force::Bool=false`: If true, remove existing environment before creation
 """
-function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::AbstractString; force::Bool=false)
+function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::AbstractString; force::Bool = false)
     _ensure_conda_env_vars!()
     if !isfile(yaml_file)
         throw(ArgumentError("YAML file does not exist: $(yaml_file)"))
@@ -270,7 +272,7 @@ add_bioconda_env("blast", force=true)
 - Uses CONDA_RUNNER global variable to determine whether to use conda or mamba
 - Cleans conda cache after installation
 """
-function add_bioconda_env(pkg; force=false, quiet=false)
+function add_bioconda_env(pkg; force = false, quiet = false)
     _ensure_conda_env_vars!()
     channel = nothing
     if occursin("::", pkg)

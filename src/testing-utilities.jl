@@ -42,10 +42,10 @@ rm(test_genome)
 - [`Mycelia.random_fasta_record`](@ref): Generate random FASTA records
 - [`Mycelia.get_test_genome_fasta`](@ref): Download real genome with simulated fallback
 """
-function create_test_genome_fasta(;length::Int=5386, seed::Int=42)
-    record = random_fasta_record(moltype=:DNA, seed=seed, L=length)
+function create_test_genome_fasta(; length::Int = 5386, seed::Int = 42)
+    record = random_fasta_record(moltype = :DNA, seed = seed, L = length)
     temp_fasta = tempname() * ".fasta"
-    write_fasta(outfile=temp_fasta, records=[record])
+    write_fasta(outfile = temp_fasta, records = [record])
     return temp_fasta
 end
 
@@ -104,10 +104,10 @@ sim_genome = Mycelia.get_test_genome_fasta(use_ncbi=false)
 - [`Mycelia.create_test_genome_fasta`](@ref): Create simulated test genomes
 """
 function get_test_genome_fasta(;
-    use_ncbi::Bool=true,
-    accession::String="GCF_000819615.1",
-    outdir::Union{Nothing,AbstractString}=nothing,
-    cleanup_at_exit::Bool=true
+        use_ncbi::Bool = true,
+        accession::String = "GCF_000819615.1",
+        outdir::Union{Nothing, AbstractString} = nothing,
+        cleanup_at_exit::Bool = true
 )
     if use_ncbi
         download_root = nothing
@@ -118,17 +118,18 @@ function get_test_genome_fasta(;
             outfolder = joinpath(download_root, accession)
             # Clean up any existing partial downloads
             if isdir(outfolder)
-                rm(outfolder, recursive=true, force=true)
+                rm(outfolder, recursive = true, force = true)
             end
             dataset = ncbi_genome_download_accession(
-                accession=accession, 
-                include_string="genome",
-                outdir=download_root,
-                max_attempts=3,
-                initial_retry_delay=10.0
+                accession = accession,
+                include_string = "genome",
+                outdir = download_root,
+                max_attempts = 3,
+                initial_retry_delay = 10.0
             )
             cleanup_target = created_tmp ? download_root : outfolder
-            cleanup_fn = () -> isdir(cleanup_target) && rm(cleanup_target, recursive=true, force=true)
+            cleanup_fn = () -> isdir(cleanup_target) &&
+                               rm(cleanup_target, recursive = true, force = true)
             if cleanup_at_exit
                 atexit(cleanup_fn)
             end
@@ -140,16 +141,16 @@ function get_test_genome_fasta(;
             )
         catch e
             if created_tmp && download_root !== nothing && isdir(download_root)
-                rm(download_root, recursive=true, force=true)
+                rm(download_root, recursive = true, force = true)
             end
             @warn "NCBI download failed after all retries, using simulated genome" exception=e
         end
     end
-    
+
     # Fallback to simulated genome
     # Use same length as phiX174 for consistency
-    temp_fasta = create_test_genome_fasta(length=5386, seed=42)
-    cleanup_fn = () -> isfile(temp_fasta) && rm(temp_fasta, force=true)
+    temp_fasta = create_test_genome_fasta(length = 5386, seed = 42)
+    cleanup_fn = () -> isfile(temp_fasta) && rm(temp_fasta, force = true)
     if cleanup_at_exit
         atexit(cleanup_fn)
     end
@@ -197,21 +198,23 @@ Mycelia.write_fastq(records=reads, filename="test_reads.fastq")
 - [`Mycelia.create_test_rna_reads`](@ref): RNA-specific version
 - [`Mycelia.create_test_aa_reads`](@ref): Amino acid-specific version
 """
-function create_test_reads(reference_sequence::Union{String, BioSequences.LongDNA{4}}, coverage::Int, error_rate::Float64)
+function create_test_reads(reference_sequence::Union{String, BioSequences.LongDNA{4}},
+        coverage::Int, error_rate::Float64)
     records = FASTX.FASTQ.Record[]
 
     for i in 1:coverage
         # Use the observe function to introduce errors
-        bio_seq = reference_sequence isa String ? BioSequences.LongDNA{4}(reference_sequence) : reference_sequence
-        observed_seq, quality_scores = observe(bio_seq, error_rate=error_rate)
-        
+        bio_seq = reference_sequence isa String ?
+                  BioSequences.LongDNA{4}(reference_sequence) : reference_sequence
+        observed_seq, quality_scores = observe(bio_seq, error_rate = error_rate)
+
         # Convert quality scores to string format (Phred+33)
         quality_string = String([Char(q + 33) for q in quality_scores])
-        
+
         record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
         push!(records, record)
     end
-    
+
     return records
 end
 
@@ -241,21 +244,23 @@ reads = Mycelia.create_test_rna_reads(rna_seq, 50, 0.01)
 - [`Mycelia.create_test_reads`](@ref): DNA-specific version
 - [`Mycelia.observe`](@ref): Core sequencing error simulation
 """
-function create_test_rna_reads(reference_sequence::Union{String, BioSequences.LongRNA{4}}, coverage::Int, error_rate::Float64)
+function create_test_rna_reads(reference_sequence::Union{String, BioSequences.LongRNA{4}},
+        coverage::Int, error_rate::Float64)
     records = FASTX.FASTQ.Record[]
-    
+
     for i in 1:coverage
         # Use the observe function to introduce errors
-        bio_seq = reference_sequence isa String ? BioSequences.LongRNA{4}(reference_sequence) : reference_sequence
-        observed_seq, quality_scores = observe(bio_seq, error_rate=error_rate)
-        
+        bio_seq = reference_sequence isa String ?
+                  BioSequences.LongRNA{4}(reference_sequence) : reference_sequence
+        observed_seq, quality_scores = observe(bio_seq, error_rate = error_rate)
+
         # Convert quality scores to string format (Phred+33)
         quality_string = String([Char(q + 33) for q in quality_scores])
-        
+
         record = FASTX.FASTQ.Record("read_$i", string(observed_seq), quality_string)
         push!(records, record)
     end
-    
+
     return records
 end
 
@@ -289,13 +294,15 @@ reads = Mycelia.create_test_aa_reads(aa_seq, 100, 0.01)
 - [`Mycelia.create_test_reads`](@ref): DNA-specific version
 - [`Mycelia.observe`](@ref): Core sequencing error simulation
 """
-function create_test_aa_reads(reference_sequence::Union{String, BioSequences.LongAA}, coverage::Int, error_rate::Float64)
+function create_test_aa_reads(reference_sequence::Union{String, BioSequences.LongAA},
+        coverage::Int, error_rate::Float64)
     records = FASTX.FASTQ.Record[]
 
     for i in 1:coverage
         # Use the observe function to introduce errors
-        bio_seq = reference_sequence isa String ? BioSequences.LongAA(reference_sequence) : reference_sequence
-        observed_seq, quality_scores = observe(bio_seq, error_rate=error_rate)
+        bio_seq = reference_sequence isa String ? BioSequences.LongAA(reference_sequence) :
+                  reference_sequence
+        observed_seq, quality_scores = observe(bio_seq, error_rate = error_rate)
 
         # Validate that no termination characters (*) are present in amino acid sequences
         # This ensures compatibility with FASTQ format
@@ -310,20 +317,20 @@ function create_test_aa_reads(reference_sequence::Union{String, BioSequences.Lon
         record = FASTX.FASTQ.Record("read_$i", observed_seq_str, quality_string)
         push!(records, record)
     end
-    
+
     return records
 end
 
-const _BINNING_TEST_INPUTS_CACHE = Ref{Union{Nothing,NamedTuple}}(nothing)
+const _BINNING_TEST_INPUTS_CACHE = Ref{Union{Nothing, NamedTuple}}(nothing)
 
-function _build_simulated_binning_contigs(;n_contigs::Int, contig_length::Int, seed::Int)
+function _build_simulated_binning_contigs(; n_contigs::Int, contig_length::Int, seed::Int)
     @assert n_contigs > 0 "n_contigs must be positive"
     @assert contig_length > 0 "contig_length must be positive"
     rng = StableRNGs.StableRNG(seed)
     records = FASTX.FASTA.Record[]
     length_jitter = max(1, Int(round(contig_length * 0.1)))
     for i in 1:n_contigs
-        base_len = contig_length + rand(rng, -length_jitter:length_jitter)
+        base_len = contig_length + rand(rng, (-length_jitter):length_jitter)
         seq_len = max(base_len, 5000)
         seq = BioSequences.randdnaseq(rng, seq_len)
         record_id = "genome_$(i)"
@@ -365,24 +372,25 @@ Returns a named tuple with contigs, depth table, coverage table, assembly graph,
 mapping file, genomes list, and bin directories.
 """
 function prepare_binning_test_inputs(;
-    outdir::Union{Nothing,String}=nothing,
-    n_contigs::Int=4,
-    contig_length::Int=50_000,
-    seed::Int=7,
-    depth_target::Real=20.0,
-    readset::Symbol=:illumina_pe150,
-    threads::Int=get_default_threads()
+        outdir::Union{Nothing, String} = nothing,
+        n_contigs::Int = 4,
+        contig_length::Int = 50_000,
+        seed::Int = 7,
+        depth_target::Real = 20.0,
+        readset::Symbol = :illumina_pe150,
+        threads::Int = get_default_threads()
 )
     inputs_dir = outdir === nothing ? mktempdir() : outdir
     mkpath(inputs_dir)
     if outdir === nothing
-        atexit(() -> isdir(inputs_dir) && rm(inputs_dir; recursive=true, force=true))
+        atexit(() -> isdir(inputs_dir) && rm(inputs_dir; recursive = true, force = true))
     end
 
     contigs_fasta = joinpath(inputs_dir, "contigs.fna")
     if !isfile(contigs_fasta)
-        records = _build_simulated_binning_contigs(n_contigs=n_contigs, contig_length=contig_length, seed=seed)
-        Mycelia.write_fasta(outfile=contigs_fasta, records=records, gzip=false)
+        records = _build_simulated_binning_contigs(
+            n_contigs = n_contigs, contig_length = contig_length, seed = seed)
+        Mycelia.write_fasta(outfile = contigs_fasta, records = records, gzip = false)
     end
 
     contig_ids = String[]
@@ -391,7 +399,7 @@ function prepare_binning_test_inputs(;
         push!(contig_ids, String(FASTX.identifier(record)))
         push!(contig_lengths, length(FASTX.sequence(record)))
     end
-    reference_table = DataFrames.DataFrame(sequence_id=contig_ids, length=contig_lengths)
+    reference_table = DataFrames.DataFrame(sequence_id = contig_ids, length = contig_lengths)
 
     taxonomy_file = joinpath(inputs_dir, "taxonomy.tsv")
     if !isfile(taxonomy_file)
@@ -405,17 +413,17 @@ function prepare_binning_test_inputs(;
 
     sim_outdir = joinpath(inputs_dir, "simulation")
     sim = Mycelia.simulate_metagenome_community(
-        reference_fasta=contigs_fasta,
-        reference_table=reference_table,
-        n_organisms=length(contig_ids),
-        depth_target=depth_target,
-        abundance_profile=:log_normal,
-        readset=readset,
-        outdir=sim_outdir,
-        selected_ids=contig_ids,
-        rng=StableRNGs.StableRNG(seed),
-        emit_truth_reads=false,
-        cleanup=false
+        reference_fasta = contigs_fasta,
+        reference_table = reference_table,
+        n_organisms = length(contig_ids),
+        depth_target = depth_target,
+        abundance_profile = :log_normal,
+        readset = readset,
+        outdir = sim_outdir,
+        selected_ids = contig_ids,
+        rng = StableRNGs.StableRNG(seed),
+        emit_truth_reads = false,
+        cleanup = false
     )
 
     if readset != :illumina_pe150
@@ -428,10 +436,10 @@ function prepare_binning_test_inputs(;
 
     mem_gb = (Int(Sys.total_memory()) / 1e9 * 0.85)
     index_result = Mycelia.minimap_index(
-        fasta=contigs_fasta,
-        mapping_type="sr",
-        mem_gb=mem_gb,
-        threads=threads
+        fasta = contigs_fasta,
+        mapping_type = "sr",
+        mem_gb = mem_gb,
+        threads = threads
     )
     if !isfile(index_result.outfile) || filesize(index_result.outfile) == 0
         run(index_result.cmd)
@@ -439,14 +447,14 @@ function prepare_binning_test_inputs(;
 
     bam_path = joinpath(inputs_dir, "contigs.minimap2.sorted.bam")
     mapping = Mycelia.minimap_map_with_index(
-        fasta=contigs_fasta,
-        mapping_type="sr",
-        fastq=(forward_reads, reverse_reads),
-        index_file=index_result.outfile,
-        mem_gb=mem_gb,
-        outfile=bam_path,
-        threads=threads,
-        sorted=true
+        fasta = contigs_fasta,
+        mapping_type = "sr",
+        fastq = (forward_reads, reverse_reads),
+        index_file = index_result.outfile,
+        mem_gb = mem_gb,
+        outfile = bam_path,
+        threads = threads,
+        sorted = true
     )
     if !isfile(mapping.outfile) || filesize(mapping.outfile) == 0
         run(mapping.cmd)
@@ -458,10 +466,10 @@ function prepare_binning_test_inputs(;
     coverage_table = joinpath(inputs_dir, "coverm_contig.tsv")
     if !isfile(coverage_table) || filesize(coverage_table) == 0
         Mycelia.run_coverm_contig(
-            bam_files=[mapping.outfile],
-            output_tsv=coverage_table,
-            threads=threads,
-            quiet=true
+            bam_files = [mapping.outfile],
+            output_tsv = coverage_table,
+            threads = threads,
+            quiet = true
         )
     end
 
@@ -471,7 +479,8 @@ function prepare_binning_test_inputs(;
             first_line = readline(io)
             first_fields = split(first_line, '\t')
             open(metacoag_abundance, "w") do out
-                if isempty(first_fields) || lowercase(first_fields[1]) ∉ ("contig", "contigname")
+                if isempty(first_fields) ||
+                   lowercase(first_fields[1]) ∉ ("contig", "contigname")
                     write(out, first_line, '\n')
                 end
                 for line in eachline(io)
@@ -494,21 +503,21 @@ function prepare_binning_test_inputs(;
     mkpath(bins_b)
     for (idx, genome) in enumerate(genomes)
         bin_name = "bin_$(idx).fna"
-        cp(genome, joinpath(bins_a, bin_name); force=true)
-        cp(genome, joinpath(bins_b, bin_name); force=true)
+        cp(genome, joinpath(bins_a, bin_name); force = true)
+        cp(genome, joinpath(bins_b, bin_name); force = true)
     end
 
     return (
-        outdir=inputs_dir,
-        contigs_fasta=contigs_fasta,
-        depth_file=depth_file,
-        coverage_table=coverage_table,
-        marker_file=nothing,
-        taxonomy_file=taxonomy_file,
-        assembly_graph=assembly_graph,
-        mapping_file=metacoag_abundance,
-        genomes=genomes,
-        bins_dirs=[bins_a, bins_b]
+        outdir = inputs_dir,
+        contigs_fasta = contigs_fasta,
+        depth_file = depth_file,
+        coverage_table = coverage_table,
+        marker_file = nothing,
+        taxonomy_file = taxonomy_file,
+        assembly_graph = assembly_graph,
+        mapping_file = metacoag_abundance,
+        genomes = genomes,
+        bins_dirs = [bins_a, bins_b]
     )
 end
 
@@ -517,11 +526,11 @@ end
 
 Cache and return binning integration test inputs.
 """
-function get_binning_test_inputs(;force::Bool=false, kwargs...)
+function get_binning_test_inputs(; force::Bool = false, kwargs...)
     if !force && _BINNING_TEST_INPUTS_CACHE[] !== nothing
         return _BINNING_TEST_INPUTS_CACHE[]
     end
-    inputs = prepare_binning_test_inputs(;kwargs...)
+    inputs = prepare_binning_test_inputs(; kwargs...)
     _BINNING_TEST_INPUTS_CACHE[] = inputs
     return inputs
 end

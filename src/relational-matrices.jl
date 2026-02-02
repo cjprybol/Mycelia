@@ -52,7 +52,6 @@ struct RelationalMatrix{T}
     metadata_b::Union{DataFrames.DataFrame, Nothing}
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -89,17 +88,17 @@ rm = Mycelia.long_to_relational_matrix(df, :sample, :feature, :value)
 ```
 """
 function long_to_relational_matrix(
-    df::DataFrames.DataFrame,
-    entity_a_col::Symbol,
-    entity_b_col::Symbol,
-    value_col::Symbol;
-    entity_a_name::String = "entity_a",
-    entity_b_name::String = "entity_b",
-    measurement_name::String = "value",
-    missing_value = NaN,
-    agg_func::Function = Statistics.median,
-    entity_a_order::Union{Nothing, Vector{String}} = nothing,
-    entity_b_order::Union{Nothing, Vector{String}} = nothing
+        df::DataFrames.DataFrame,
+        entity_a_col::Symbol,
+        entity_b_col::Symbol,
+        value_col::Symbol;
+        entity_a_name::String = "entity_a",
+        entity_b_name::String = "entity_b",
+        measurement_name::String = "value",
+        missing_value = NaN,
+        agg_func::Function = Statistics.median,
+        entity_a_order::Union{Nothing, Vector{String}} = nothing,
+        entity_b_order::Union{Nothing, Vector{String}} = nothing
 )
     ## Validate columns exist
     required_cols = [entity_a_col, entity_b_col, value_col]
@@ -171,7 +170,7 @@ function long_to_relational_matrix(
 
     ## Report statistics
     total_cells = n_a * n_b
-    pct_filled = round(100 * n_filled / total_cells, digits=1)
+    pct_filled = round(100 * n_filled / total_cells, digits = 1)
     @info "RelationalMatrix: $n_a $(entity_a_name) × $n_b $(entity_b_name), $pct_filled% filled"
 
     return RelationalMatrix{T}(
@@ -186,7 +185,6 @@ function long_to_relational_matrix(
     )
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -200,7 +198,7 @@ Useful for switching clustering perspective (e.g., from sample-centric to featur
 # Returns
 - `RelationalMatrix{T}`: Transposed matrix with swapped entity types
 """
-function transpose_relational(rm::RelationalMatrix{T}) where T
+function transpose_relational(rm::RelationalMatrix{T}) where {T}
     return RelationalMatrix{T}(
         permutedims(rm.matrix),
         rm.entity_b_ids,
@@ -212,7 +210,6 @@ function transpose_relational(rm::RelationalMatrix{T}) where T
         rm.metadata_a
     )
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -226,7 +223,7 @@ Generate summary statistics for a RelationalMatrix.
 # Returns
 - `NamedTuple`: Summary statistics including shape, sparsity, and value distribution
 """
-function summarize_relational_matrix(rm::RelationalMatrix{T}; verbose::Bool = true) where T
+function summarize_relational_matrix(rm::RelationalMatrix{T}; verbose::Bool = true) where {T}
     n_a, n_b = size(rm.matrix)
     total_cells = n_a * n_b
 
@@ -248,8 +245,8 @@ function summarize_relational_matrix(rm::RelationalMatrix{T}; verbose::Bool = tr
         n_total_cells = total_cells,
         n_valid_values = n_valid,
         n_missing_values = n_missing,
-        pct_filled = round(100 * n_valid / total_cells, digits=2),
-        sparsity = round(1.0 - (n_valid / total_cells), digits=4),
+        pct_filled = round(100 * n_valid / total_cells, digits = 2),
+        sparsity = round(1.0 - (n_valid / total_cells), digits = 4),
         rows_all_missing = count(==(n_b), row_missing),
         cols_all_missing = count(==(n_a), col_missing),
         value_min = isempty(valid_values) ? NaN : minimum(valid_values),
@@ -282,7 +279,6 @@ function summarize_relational_matrix(rm::RelationalMatrix{T}; verbose::Bool = tr
     return stats
 end
 
-
 ## Accessor functions
 
 """Get entity_a identifiers."""
@@ -307,14 +303,15 @@ n_entity_a(rm::RelationalMatrix) = length(rm.entity_a_ids)
 n_entity_b(rm::RelationalMatrix) = length(rm.entity_b_ids)
 
 """Count of missing/NaN values."""
-n_missing(rm::RelationalMatrix) = count(x -> ismissing(x) || (x isa Number && isnan(x)), rm.matrix)
+function n_missing(rm::RelationalMatrix)
+    count(x -> ismissing(x) || (x isa Number && isnan(x)), rm.matrix)
+end
 
 """Count of valid (non-missing, non-NaN) values."""
 n_filled(rm::RelationalMatrix) = length(rm.matrix) - n_missing(rm)
 
 """Fraction of cells that are filled (valid values)."""
 coverage(rm::RelationalMatrix) = n_filled(rm) / length(rm.matrix)
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -337,7 +334,6 @@ function Base.getindex(rm::RelationalMatrix, a_id::String, b_id::String)
     return rm.matrix[i, j]
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -355,18 +351,17 @@ function Base.getindex(rm::RelationalMatrix, i::Int, j::Int)
     return rm.matrix[i, j]
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Pretty print for RelationalMatrix.
 """
-function Base.show(io::IO, rm::RelationalMatrix{T}) where T
+function Base.show(io::IO, rm::RelationalMatrix{T}) where {T}
     n_a, n_b = size(rm)
-    pct = round(100 * coverage(rm), digits=1)
-    print(io, "RelationalMatrix{$T}: $(n_a) $(rm.entity_a_name) × $(n_b) $(rm.entity_b_name), $(pct)% filled")
+    pct = round(100 * coverage(rm), digits = 1)
+    print(io,
+        "RelationalMatrix{$T}: $(n_a) $(rm.entity_a_name) × $(n_b) $(rm.entity_b_name), $(pct)% filled")
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -380,7 +375,7 @@ Convert RelationalMatrix to a DataFrame in long format.
 # Returns
 - `DataFrames.DataFrame`: Long-format DataFrame with entity_a, entity_b, value columns
 """
-function relational_matrix_to_long(rm::RelationalMatrix{T}; include_missing::Bool = false) where T
+function relational_matrix_to_long(rm::RelationalMatrix{T}; include_missing::Bool = false) where {T}
     ## Build column vectors
     a_col = String[]
     b_col = String[]
@@ -406,7 +401,6 @@ function relational_matrix_to_long(rm::RelationalMatrix{T}; include_missing::Boo
     )
 end
 
-
 # =============================================================================
 # Distance Functions for RelationalMatrix
 # =============================================================================
@@ -429,7 +423,6 @@ function gower_distance(rm::RelationalMatrix; kwargs...)
     return gower_distance(rm.matrix; kwargs...)
 end
 
-
 # =============================================================================
 # Relational Clustering Pipeline
 # =============================================================================
@@ -450,6 +443,7 @@ Clusters entity_a based on their profiles across entity_b (or vice versa).
 - `min_k::Union{Nothing, Int}`: Minimum k (used if ks is nothing)
 - `max_k::Union{Nothing, Int}`: Maximum k (used if ks is nothing)
 - `plot_backend::Symbol`: Visualization backend (`:cairomakie` or `:statsplots`). Default: `:cairomakie`
+- `display_plot::Bool`: Whether to display the plot (default: true). Automatically suppressed in CI environments.
 
 # Returns
 - `NamedTuple` with:
@@ -474,15 +468,16 @@ result = Mycelia.relational_clustering_pipeline(
 ```
 """
 function relational_clustering_pipeline(
-    rm::RelationalMatrix{T};
-    cluster_by::Symbol = :entity_a,
-    distance_metric::Symbol = :euclidean,
-    imputation::Symbol = :max_observed,
-    ks::Union{Nothing, AbstractRange} = nothing,
-    min_k::Union{Nothing, Int} = nothing,
-    max_k::Union{Nothing, Int} = nothing,
-    plot_backend::Symbol = :cairomakie
-) where T
+        rm::RelationalMatrix{T};
+        cluster_by::Symbol = :entity_a,
+        distance_metric::Symbol = :euclidean,
+        imputation::Symbol = :max_observed,
+        ks::Union{Nothing, AbstractRange} = nothing,
+        min_k::Union{Nothing, Int} = nothing,
+        max_k::Union{Nothing, Int} = nothing,
+        plot_backend::Symbol = :cairomakie,
+        display_plot::Bool = true
+) where {T}
     println("=" ^ 60)
     println("Relational Clustering Pipeline")
     println("=" ^ 60)
@@ -514,16 +509,16 @@ function relational_clustering_pipeline(
     raw_distance = if distance_metric == :euclidean
         pairwise_distance_matrix(
             profile_matrix_t;
-            dist_func=Distances.euclidean,
-            show_progress=true,
-            progress_desc="Computing Euclidean distances"
+            dist_func = Distances.euclidean,
+            show_progress = true,
+            progress_desc = "Computing Euclidean distances"
         )
     elseif distance_metric == :cosine
         pairwise_distance_matrix(
             profile_matrix_t;
-            dist_func=Distances.cosine_dist,
-            show_progress=true,
-            progress_desc="Computing cosine distances"
+            dist_func = Distances.cosine_dist,
+            show_progress = true,
+            progress_desc = "Computing cosine distances"
         )
     elseif distance_metric == :jaccard
         ## Binarize the matrix
@@ -559,7 +554,7 @@ function relational_clustering_pipeline(
             throw(ArgumentError("Unknown imputation method: $imputation. Use :max, :max_observed, :median, or :mean"))
         end
         println("  Found $(validation.n_missing_pairs) missing pairs, imputing with $imputation")
-        distance_matrix = impute_distances(raw_distance; method=imputation_method)
+        distance_matrix = impute_distances(raw_distance; method = imputation_method)
     else
         distance_matrix = raw_distance
     end
@@ -587,10 +582,11 @@ function relational_clustering_pipeline(
     println("\n[4/5] Identifying optimal cluster count...")
     cluster_result = identify_optimal_number_of_clusters(
         distance_matrix;
-        ks=ks,
-        min_k=min_k,
-        max_k=max_k,
-        plot_backend=plot_backend
+        ks = ks,
+        min_k = min_k,
+        max_k = max_k,
+        plot_backend = plot_backend,
+        display_plot = display_plot
     )
 
     optimal_k = cluster_result.optimal_number_of_clusters
@@ -607,7 +603,7 @@ function relational_clustering_pipeline(
         distance_matrix,
         assignments,
         entity_ids;
-        metric_type=:distance
+        metric_type = :distance
     )
 
     rankings_df = rankings_to_dataframe(rankings)

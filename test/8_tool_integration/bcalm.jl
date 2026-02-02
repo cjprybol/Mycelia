@@ -46,21 +46,21 @@ Test.@testset "Bcalm Tool Integration" begin
                     input1 = joinpath(workdir, "bcalm_reads_1.fasta")
                     input2 = joinpath(workdir, "bcalm_reads_2.fasta")
 
-                    record1 = Mycelia.random_fasta_record(moltype=:DNA, seed=11, L=400)
+                    record1 = Mycelia.random_fasta_record(moltype = :DNA, seed = 11, L = 400)
                     seq1 = FASTX.sequence(record1)
                     records1 = [
                         FASTX.FASTA.Record("read1", seq1),
-                        FASTX.FASTA.Record("read2", seq1),
+                        FASTX.FASTA.Record("read2", seq1)
                     ]
-                    Mycelia.write_fasta(outfile=input1, records=records1)
+                    Mycelia.write_fasta(outfile = input1, records = records1)
 
-                    record2 = Mycelia.random_fasta_record(moltype=:DNA, seed=22, L=400)
+                    record2 = Mycelia.random_fasta_record(moltype = :DNA, seed = 22, L = 400)
                     seq2 = FASTX.sequence(record2)
                     records2 = [
                         FASTX.FASTA.Record("read3", seq2),
-                        FASTX.FASTA.Record("read4", seq2),
+                        FASTX.FASTA.Record("read4", seq2)
                     ]
-                    Mycelia.write_fasta(outfile=input2, records=records2)
+                    Mycelia.write_fasta(outfile = input2, records = records2)
 
                     Mycelia.install_bcalm()
                     Test.@test Mycelia.check_bioconda_env_is_installed(Mycelia.BCALM_ENV_NAME)
@@ -71,9 +71,9 @@ Test.@testset "Bcalm Tool Integration" begin
                     result_single = Mycelia.run_bcalm(
                         input1,
                         out_single;
-                        kmer_size=21,
-                        abundance_min=2,
-                        threads=1,
+                        kmer_size = 21,
+                        abundance_min = 2,
+                        threads = 1
                     )
                     Test.@test isfile(result_single.unitigs)
                     Test.@test filesize(result_single.unitigs) > 0
@@ -82,7 +82,8 @@ Test.@testset "Bcalm Tool Integration" begin
                     gfa_content = read(result_single.gfa, String)
                     gfa_lines = filter(!isempty, split(strip(gfa_content), '\n'))
                     Test.@test !isempty(gfa_lines)
-                    Test.@test startswith(gfa_lines[1], "H\t") || startswith(gfa_lines[1], "S\t")
+                    Test.@test startswith(gfa_lines[1], "H\t") ||
+                               startswith(gfa_lines[1], "S\t")
 
                     graph = Mycelia.Rhizomorph.read_gfa_next(result_single.gfa)
                     Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -91,14 +92,14 @@ Test.@testset "Bcalm Tool Integration" begin
                     result_multi = Mycelia.run_bcalm(
                         [input1, input2],
                         out_multi;
-                        kmer_size=21,
-                        abundance_min=2,
-                        threads=1,
+                        kmer_size = 21,
+                        abundance_min = 2,
+                        threads = 1
                     )
                     Test.@test isfile(result_multi.unitigs)
                     Test.@test isfile(result_multi.gfa)
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         end

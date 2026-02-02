@@ -25,7 +25,7 @@
 #     num_sequences::Int        # Number of test sequences
 #     sequence_length::Int      # Length of each sequence
 #     alphabet::Vector{Char}    # DNA alphabet
-    
+
 #     BenchmarkConfig(k=15, num_sequences=100, sequence_length=1000) = 
 #         new(k, num_sequences, sequence_length, ['A', 'T', 'G', 'C'])
 # end
@@ -43,16 +43,16 @@
 # """
 # function generate_test_sequences(config::BenchmarkConfig)
 #     sequences = Vector{FASTX.FASTA.Record}()
-    
+
 #     for i in 1:config.num_sequences
 #         # Generate random DNA sequence
 #         seq_chars = rand(config.alphabet, config.sequence_length)
 #         sequence = String(seq_chars)
-        
+
 #         record = FASTX.FASTA.Record("seq_$i", sequence)
 #         push!(sequences, record)
 #     end
-    
+
 #     return sequences
 # end
 
@@ -76,41 +76,41 @@
 # function benchmark_graph_construction(config::BenchmarkConfig=BenchmarkConfig())
 #     println("🔬 Benchmarking Graph Construction Performance")
 #     println("=" ^ 60)
-    
+
 #     # Generate test data
 #     sequences = generate_test_sequences(config)
 #     kmer_type = BioSequences.DNAKmer{config.k}
-    
+
 #     println("Configuration:")
 #     println("  K-mer size: $(config.k)")
 #     println("  Sequences: $(config.num_sequences)")
 #     println("  Length per sequence: $(config.sequence_length)")
 #     println("  Total nucleotides: $(config.num_sequences * config.sequence_length)")
 #     println()
-    
+
 #     # Benchmark legacy implementation
 #     println("📊 Benchmarking Legacy MetaGraphs Implementation...")
 #     legacy_benchmark = BenchmarkTools.@benchmark Mycelia.build_stranded_kmer_graph($kmer_type, $sequences) samples=5 evals=1
-    
+
 #     # Benchmark next-generation implementation  
 #     println("📊 Benchmarking Next-Generation MetaGraphsNext Implementation...")
 #     next_benchmark = BenchmarkTools.@benchmark Mycelia.Rhizomorph.build_kmer_graph($sequences, k) samples=5 evals=1
-    
+
 #     # Extract metrics
 #     legacy_time = Statistics.median(legacy_benchmark.times) / 1e9  # Convert to seconds
 #     next_time = Statistics.median(next_benchmark.times) / 1e9
-    
+
 #     legacy_memory = Statistics.median(legacy_benchmark.memory)
 #     next_memory = Statistics.median(next_benchmark.memory)
-    
+
 #     legacy_allocs = Statistics.median(legacy_benchmark.allocs)
 #     next_allocs = Statistics.median(next_benchmark.allocs)
-    
+
 #     # Calculate improvements
 #     speed_improvement = legacy_time / next_time
 #     memory_reduction = (legacy_memory - next_memory) / legacy_memory * 100
 #     alloc_reduction = (legacy_allocs - next_allocs) / legacy_allocs * 100
-    
+
 #     # Display results
 #     println("\n🎯 Performance Results:")
 #     println("=" ^ 40)
@@ -120,12 +120,12 @@
 #     println(Printf.format("Speed improvement:       %.2fx faster", speed_improvement))
 #     println(Printf.format("Memory reduction:        %.1f%%", memory_reduction))
 #     println(Printf.format("Allocation reduction:    %.1f%%", alloc_reduction))
-    
+
 #     # Check targets
 #     println("\n🎯 Target Achievement:")
 #     println("  Speed target (2x faster):    ", speed_improvement >= 2.0 ? "✅ ACHIEVED" : "⚠️  $(speed_improvement:.1f)x")
 #     println("  Memory target (50% reduction): ", memory_reduction >= 50.0 ? "✅ ACHIEVED" : "⚠️  $(memory_reduction:.1f)%")
-    
+
 #     return (
 #         legacy_time = legacy_time,
 #         next_time = next_time,
@@ -159,28 +159,28 @@
 # function benchmark_memory_patterns(config::BenchmarkConfig=BenchmarkConfig())
 #     println("\n🧠 Benchmarking Memory Usage Patterns")
 #     println("=" ^ 60)
-    
+
 #     sequences = generate_test_sequences(config)
 #     kmer_type = BioSequences.DNAKmer{config.k}
-    
+
 #     # Build graphs
 #     println("Building graphs for memory analysis...")
 #     legacy_graph = Mycelia.build_stranded_kmer_graph(kmer_type, sequences)
 #     next_graph = Mycelia.Rhizomorph.build_kmer_graph(sequences, k)
-    
+
 #     # Analyze vertex counts
 #     legacy_vertices = Graphs.nv(legacy_graph)
 #     next_vertices = length(MetaGraphsNext.labels(next_graph))
 #     vertex_reduction = (legacy_vertices - next_vertices) / legacy_vertices * 100
-    
+
 #     # Analyze edge counts  
 #     legacy_edges = Graphs.ne(legacy_graph)
 #     next_edges = length(collect(MetaGraphsNext.edge_labels(next_graph)))
-    
+
 #     # Estimate memory usage
 #     legacy_vertex_memory = legacy_vertices * 200  # Rough estimate per vertex
 #     next_vertex_memory = next_vertices * 150      # More efficient canonical representation
-    
+
 #     println("\n📊 Memory Pattern Analysis:")
 #     println("=" ^ 40)
 #     println(Printf.format("Legacy vertices:         %d", legacy_vertices))
@@ -189,7 +189,7 @@
 #     println(Printf.format("Next-gen edges:          %d", next_edges))
 #     println()
 #     println(Printf.format("Estimated vertex memory: Legacy %.1f KB, Next-gen %.1f KB", (legacy_vertex_memory/1024), (next_vertex_memory/1024)))
-    
+
 #     return (
 #         legacy_vertices = legacy_vertices,
 #         next_vertices = next_vertices,
@@ -219,16 +219,16 @@
 # function benchmark_type_stability(config::BenchmarkConfig=BenchmarkConfig())
 #     println("\n🔬 Benchmarking Type Stability")
 #     println("=" ^ 60)
-    
+
 #     sequences = generate_test_sequences(BenchmarkConfig(config.k, 10, 100))  # Smaller for detailed analysis
 #     kmer_type = BioSequences.DNAKmer{config.k}
-    
+
 #     # Test next-generation implementation for type stability
 #     println("Analyzing type stability of next-generation implementation...")
-    
+
 #     # Build graph and measure allocations during operations
 #     graph = Mycelia.Rhizomorph.build_kmer_graph(sequences, k)
-    
+
 #     # Test vertex access type stability
 #     vertex_access = BenchmarkTools.@benchmark begin
 #         for label in MetaGraphsNext.labels($graph)
@@ -236,7 +236,7 @@
 #             length(vertex_data.coverage)
 #         end
 #     end samples=10
-    
+
 #     # Test edge access type stability
 #     edge_access = BenchmarkTools.@benchmark begin
 #         for edge_labels in MetaGraphsNext.edge_labels($graph)
@@ -246,18 +246,18 @@
 #             end
 #         end
 #     end samples=10
-    
+
 #     vertex_allocs = Statistics.median(vertex_access.allocs)
 #     edge_allocs = Statistics.median(edge_access.allocs)
-    
+
 #     println("📊 Type Stability Results:")
 #     println("=" ^ 40)
 #     println(Printf.format("Vertex access allocations: %d (target: 0)", vertex_allocs))
 #     println(Printf.format("Edge access allocations:   %d (target: 0)", edge_allocs))
-    
+
 #     type_stable = vertex_allocs == 0 && edge_allocs == 0
 #     println("Type stability achieved:    ", type_stable ? "✅ YES" : "⚠️  NO")
-    
+
 #     return (
 #         vertex_allocs = vertex_allocs,
 #         edge_allocs = edge_allocs,
@@ -286,27 +286,27 @@
 #     println("=" ^ 80)
 #     println("Testing Phase 1 performance targets...")
 #     println()
-    
+
 #     # Run individual benchmarks
 #     construction_results = benchmark_graph_construction(config)
 #     memory_results = benchmark_memory_patterns(config)
 #     stability_results = benchmark_type_stability(config)
-    
+
 #     # Overall assessment
 #     println("\n🎯 FINAL ASSESSMENT")
 #     println("=" ^ 80)
-    
+
 #     targets_met = construction_results.targets_met && 
 #                   memory_results.memory_efficient && 
 #                   stability_results.type_stable
-    
+
 #     println("Performance Targets:")
 #     println("  ✅ Construction Speed: ", construction_results.speed_improvement >= 2.0 ? "ACHIEVED" : "MISSED")
 #     println("  ✅ Memory Efficiency:  ", construction_results.memory_reduction >= 50.0 ? "ACHIEVED" : "MISSED") 
 #     println("  ✅ Type Stability:     ", stability_results.type_stable ? "ACHIEVED" : "MISSED")
 #     println()
 #     println("🏆 Overall Phase 1 Success: ", targets_met ? "✅ ALL TARGETS MET" : "⚠️  SOME TARGETS MISSED")
-    
+
 #     return (
 #         construction = construction_results,
 #         memory = memory_results,

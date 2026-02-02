@@ -32,7 +32,7 @@ Test.@testset "CheckM Tools" begin
         Test.@test isa(Mycelia.setup_checkm(), String)
         Test.@test isa(Mycelia.setup_checkm2(), String)
     end
-    
+
     Test.@testset "FASTA File Detection" begin
         # Test FASTA file detection with existing constants
         Test.@test occursin(Mycelia.FASTA_REGEX, "test.fasta")

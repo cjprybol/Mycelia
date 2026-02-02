@@ -12,8 +12,8 @@ function parse_fastplong_json(json_file::String)
 
     try
         data = JSON.parsefile(json_file)
-        sample_id = replace(basename(json_file), 
-            r"\.json$" => "", 
+        sample_id = replace(basename(json_file),
+            r"\.json$" => "",
             r"\.fastplong.*$" => "", # Cleanup common suffixes
             r"\.hifi_reads.*$" => ""
         )
@@ -36,18 +36,19 @@ function parse_fastplong_json(json_file::String)
         for stage in ["before_filtering", "after_filtering"]
             if haskey(summary_node, stage)
                 section = summary_node[stage]
-                push!(rows, (
-                    sample_id   = sample_id,
-                    stage       = stage,
-                    total_reads = get(section, "total_reads", 0),
-                    total_bases = get(section, "total_bases", 0),
-                    q20_bases   = get(section, "q20_bases", 0),
-                    q30_bases   = get(section, "q30_bases", 0),
-                    # Handle naming variations (fastp uses mean_length, fastplong uses read_mean_length)
-                    mean_length = get(section, "read_mean_length", get(section, "mean_length", 0.0)),
-                    n50         = get(section, "read_n50", get(section, "n50", 0.0)),
-                    gc_content  = get(section, "gc_content", 0.0)
-                ))
+                push!(rows,
+                    (
+                        sample_id = sample_id,
+                        stage = stage,
+                        total_reads = get(section, "total_reads", 0),
+                        total_bases = get(section, "total_bases", 0),
+                        q20_bases = get(section, "q20_bases", 0),
+                        q30_bases = get(section, "q30_bases", 0),
+                        # Handle naming variations (fastp uses mean_length, fastplong uses read_mean_length)
+                        mean_length = get(section, "read_mean_length", get(section, "mean_length", 0.0)),
+                        n50 = get(section, "read_n50", get(section, "n50", 0.0)),
+                        gc_content = get(section, "gc_content", 0.0)
+                    ))
             end
         end
 
@@ -60,8 +61,10 @@ function parse_fastplong_json(json_file::String)
 
         # 3. Safe Calculation of Derived Metrics
         # Use safe division to avoid errors if total_bases is 0
-        df.q20_percent = [r.total_bases > 0 ? r.q20_bases / r.total_bases * 100 : 0.0 for r in eachrow(df)]
-        df.q30_percent = [r.total_bases > 0 ? r.q30_bases / r.total_bases * 100 : 0.0 for r in eachrow(df)]
+        df.q20_percent = [r.total_bases > 0 ? r.q20_bases / r.total_bases * 100 : 0.0
+                          for r in eachrow(df)]
+        df.q30_percent = [r.total_bases > 0 ? r.q30_bases / r.total_bases * 100 : 0.0
+                          for r in eachrow(df)]
         df.yield_gb = df.total_bases ./ 1e9
 
         # 4. Extract Histograms (if available) for advanced plotting
@@ -70,8 +73,8 @@ function parse_fastplong_json(json_file::String)
         if haskey(data, "read_length_histogram")
             histograms[:read_length] = data["read_length_histogram"]
         end
-        
-        return (; sample_id, summary=df, json_data=data, histograms)
+
+        return (; sample_id, summary = df, json_data = data, histograms)
 
     catch e
         @warn "Error parsing $json_file: $e"
@@ -88,14 +91,14 @@ Useful if you have already run `parse_fastplong_json` (e.g., via pmap or a loop)
 function aggregate_fastplong_reports(parsed_results::Vector)
     # Filter out any 'nothing' entries from failed parses
     valid_results = filter(!isnothing, parsed_results)
-    
+
     if isempty(valid_results)
         return DataFrames.DataFrame()
     end
 
     # Combine all individual summary DataFrames
     all_summaries = vcat([r.summary for r in valid_results]...)
-    
+
     # By default, we usually want the 'after_filtering' stats for batch QC
     # But returning the full table allows the user to filter later if they want 'before_filtering'
     return all_summaries
@@ -117,11 +120,12 @@ end
 
 Aggregate QC metrics from all .json files in a directory.
 """
-function aggregate_fastplong_reports(input_dir::String; recursive=false)
+function aggregate_fastplong_reports(input_dir::String; recursive = false)
     if recursive
-        files = [joinpath(root, f) for (root, dirs, files) in walkdir(input_dir) for f in files if endswith(f, ".json")]
+        files = [joinpath(root, f) for (root, dirs, files) in walkdir(input_dir)
+                 for f in files if endswith(f, ".json")]
     else
-        files = filter(f -> endswith(f, ".json"), readdir(input_dir, join=true))
+        files = filter(f -> endswith(f, ".json"), readdir(input_dir, join = true))
     end
     return aggregate_fastplong_reports(files)
 end
@@ -175,15 +179,14 @@ that violate the automated checks.
 Returns a named tuple with filtered, flagged, metrics, and thresholds.
 """
 function filter_genome_outliers(
-    df_in::DataFrames.AbstractDataFrame;
-    group_col::AbstractString = "reference_entity",
-    path_col::AbstractString = "normalized_fastx_path",
-    k_local_median::Float64 = 3.0,
-    k_local_rcv::Float64 = 3.0,
-    k_global_median::Float64 = 3.0,
-    k_global_rcv::Float64 = 3.0,
-    combine_mode::Symbol = :and,
-    # combine_mode::Symbol = :or,
+        df_in::DataFrames.AbstractDataFrame;
+        group_col::AbstractString = "reference_entity",
+        path_col::AbstractString = "normalized_fastx_path",
+        k_local_median::Float64 = 3.0,
+        k_local_rcv::Float64 = 3.0,
+        k_global_median::Float64 = 3.0,
+        k_global_rcv::Float64 = 3.0,
+        combine_mode::Symbol = :and        # combine_mode::Symbol = :or,
 )
     df = DataFrames.DataFrame(df_in)
     n = DataFrames.nrow(df)
@@ -192,7 +195,7 @@ function filter_genome_outliers(
             filtered = df,
             flagged = DataFrames.DataFrame(),
             metrics = DataFrames.DataFrame(),
-            thresholds = (global_median = 0.0, global_rcv = 0.0),
+            thresholds = (global_median = 0.0, global_rcv = 0.0)
         )
     end
 
@@ -206,7 +209,8 @@ function filter_genome_outliers(
     global_rcvs = Float64[]
 
     # Per-group cache to compute local thresholds later
-    group_results = Vector{NamedTuple{(:rowids, :group_label, :medians, :rcvs), Tuple{Vector{Int}, Any, Vector{Float64}, Vector{Float64}}}}()
+    group_results = Vector{NamedTuple{(:rowids, :group_label, :medians, :rcvs),
+        Tuple{Vector{Int}, Any, Vector{Float64}, Vector{Float64}}}}()
 
     # Compute per-genome metrics per group
     for sub in groups
@@ -240,12 +244,13 @@ function filter_genome_outliers(
         append!(global_medians, medians)
         append!(global_rcvs, rcvs)
 
-        push!(group_results, (
-            rowids = Vector{Int}(sub[!, :__rowid]),
-            group_label = sub[1, group_col],
-            medians = medians,
-            rcvs = rcvs,
-        ))
+        push!(group_results,
+            (
+                rowids = Vector{Int}(sub[!, :__rowid]),
+                group_label = sub[1, group_col],
+                medians = medians,
+                rcvs = rcvs
+            ))
     end
 
     # Compute global thresholds
@@ -285,10 +290,9 @@ function filter_genome_outliers(
             local_trigger = (flag_l_m || flag_l_r)
             global_trigger = (flag_g_m || flag_g_r)
 
-            flag =
-                (combine_mode === :or)  ? (local_trigger || global_trigger) :
-                (combine_mode === :and) ? (local_trigger && global_trigger) :
-                (local_trigger || global_trigger)
+            flag = (combine_mode === :or) ? (local_trigger || global_trigger) :
+                   (combine_mode === :and) ? (local_trigger && global_trigger) :
+                   (local_trigger || global_trigger)
 
             if flag
                 push!(flagged_rowids, rowid)
@@ -320,7 +324,7 @@ function filter_genome_outliers(
         :flag_global_rcv => flag_g_r_v,
         :flag_outlier => flag_out_v,
         :T_local_median => T_local_m_v,
-        :T_local_rcv => T_local_r_v,
+        :T_local_rcv => T_local_r_v
     )
 
     # Drop the group column on the right side to avoid duplicate names during join
@@ -328,7 +332,9 @@ function filter_genome_outliers(
 
     df_joined = DataFrames.leftjoin(df, metrics_join, on = :__rowid => :__rowid)
 
-    is_flagged = hasproperty(df_joined, :flag_outlier) ? coalesce.(df_joined[!, :flag_outlier], false) : falses(DataFrames.nrow(df_joined))
+    is_flagged = hasproperty(df_joined, :flag_outlier) ?
+                 coalesce.(df_joined[!, :flag_outlier], false) :
+                 falses(DataFrames.nrow(df_joined))
     flagged_df = df_joined[is_flagged, :]
     filtered_df = df_joined[.!is_flagged, :]
 
@@ -345,7 +351,8 @@ function filter_genome_outliers(
 
     thresholds = (global_median = T_global_median, global_rcv = T_global_rcv)
 
-    return (filtered = filtered_df, flagged = flagged_df, metrics = metrics_df, thresholds = thresholds)
+    return (filtered = filtered_df, flagged = flagged_df,
+        metrics = metrics_df, thresholds = thresholds)
 end
 
 """
@@ -364,9 +371,9 @@ function confusion_matrix(true_labels, pred_labels)
     # Visualization: heatmap
     cm_plot = Plots.heatmap(
         string.(labels), string.(labels), cm;
-        xlabel="Predicted", ylabel="True", title="Confusion Matrix", colorbar_title="Count", c=:blues
+        xlabel = "Predicted", ylabel = "True", title = "Confusion Matrix", colorbar_title = "Count", c = :blues
     )
-    return (cm=cm, labels=labels, plot=cm_plot)
+    return (cm = cm, labels = labels, plot = cm_plot)
 end
 
 """
@@ -389,8 +396,8 @@ function precision_recall_f1(true_labels, pred_labels)
         fp = Statistics.sum(cm[:, i]) - tp
         fn = Statistics.sum(cm[i, :]) - tp
         precision = tp == 0 && fp == 0 ? 1.0 : tp / (tp + fp + 1e-10)
-        recall    = tp == 0 && fn == 0 ? 1.0 : tp / (tp + fn + 1e-10)
-        f1        = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
+        recall = tp == 0 && fn == 0 ? 1.0 : tp / (tp + fn + 1e-10)
+        f1 = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
         precisions[label] = precision
         recalls[label] = recall
         f1s[label] = f1
@@ -440,15 +447,15 @@ function precision_recall_f1(true_labels, pred_labels)
     )
 
     return (
-        precisions=precisions,
-        recalls=recalls,
-        f1s=f1s,
-        macro_precision=macro_precision,
-        macro_recall=macro_recall,
-        macro_f1=macro_f1,
-        precision_plot=precision_plot,
-        recall_plot=recall_plot,
-        f1_plot=f1_plot
+        precisions = precisions,
+        recalls = recalls,
+        f1s = f1s,
+        macro_precision = macro_precision,
+        macro_recall = macro_recall,
+        macro_f1 = macro_f1,
+        precision_plot = precision_plot,
+        recall_plot = recall_plot,
+        f1_plot = f1_plot
     )
 end
 
@@ -466,7 +473,7 @@ function presence_precision_recall_f1(truth_ids::AbstractVector, predicted_ids::
     precision = tp == 0 ? 0.0 : tp / (tp + fp)
     recall = tp == 0 ? 0.0 : tp / (tp + fn)
     f1 = (precision + recall) == 0 ? 0.0 : 2 * precision * recall / (precision + recall)
-    return (tp=tp, fp=fp, fn=fn, precision=precision, recall=recall, f1=f1)
+    return (tp = tp, fp = fp, fn = fn, precision = precision, recall = recall, f1 = f1)
 end
 
 """
@@ -478,19 +485,24 @@ Returns a DataFrame with one row per rank.
 function evaluate_taxonomy_presence_metrics(reference_table::DataFrames.DataFrame,
         truth_ids::AbstractVector,
         predicted_ids::AbstractVector;
-        ranks::Vector{String}=String[])
+        ranks::Vector{String} = String[])
     if isempty(ranks)
-        ranks = ["species", "genus", "family", "order", "class", "phylum", "kingdom", "realm", "domain"]
+        ranks = ["species", "genus", "family", "order", "class",
+            "phylum", "kingdom", "realm", "domain"]
     end
     ranks = filter(col -> col in DataFrames.names(reference_table), ranks)
-    metrics = DataFrames.DataFrame(rank=String[], precision=Float64[], recall=Float64[], f1=Float64[], tp=Int[], fp=Int[], fn=Int[])
+    metrics = DataFrames.DataFrame(
+        rank = String[], precision = Float64[], recall = Float64[],
+        f1 = Float64[], tp = Int[], fp = Int[], fn = Int[])
     truth_set = Set(String.(truth_ids))
     pred_set = Set(String.(predicted_ids))
     for rank in ranks
         truth_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(truth_set), rank]))
         pred_taxa = unique(skipmissing(reference_table[reference_table.sequence_id .∈ Ref(pred_set), rank]))
         scores = presence_precision_recall_f1(String.(truth_taxa), String.(pred_taxa))
-        DataFrames.push!(metrics, (rank=rank, precision=scores.precision, recall=scores.recall, f1=scores.f1, tp=scores.tp, fp=scores.fp, fn=scores.fn))
+        DataFrames.push!(metrics,
+            (rank = rank, precision = scores.precision, recall = scores.recall,
+                f1 = scores.f1, tp = scores.tp, fp = scores.fp, fn = scores.fn))
     end
     return metrics
 end
@@ -511,7 +523,7 @@ Runs confusion_matrix, precision_recall_f1, and accuracy.
 Pretty-prints macro metrics and accuracy.
 Returns a named tuple with all results and plots.
 """
-function evaluate_classification(true_labels, pred_labels; verbose::Bool=true)
+function evaluate_classification(true_labels, pred_labels; verbose::Bool = true)
     cm_out = confusion_matrix(true_labels, pred_labels)
     prf_out = precision_recall_f1(true_labels, pred_labels)
     acc = accuracy(true_labels, pred_labels)
@@ -610,24 +622,24 @@ println("Assembly has \$n_contigs contigs, \$total_length bp total, N50=\$n50, L
 """
 function assess_assembly_quality(contigs_file)
     contigs = []
-    
+
     open(FASTX.FASTA.Reader, contigs_file) do reader
         for record in reader
             push!(contigs, length(FASTX.FASTA.sequence(record)))
         end
     end
-    
+
     n_contigs = length(contigs)
     total_length = sum(contigs)
-    
+
     # Calculate N50 and L50
-    sorted_lengths = sort(contigs, rev=true)
+    sorted_lengths = sort(contigs, rev = true)
     cumsum_lengths = cumsum(sorted_lengths)
     target_length = total_length / 2
     n50_idx = findfirst(x -> x >= target_length, cumsum_lengths)
     n50 = n50_idx !== nothing ? sorted_lengths[n50_idx] : 0
     l50 = n50_idx !== nothing ? n50_idx : length(contigs)
-    
+
     return n_contigs, total_length, n50, l50
 end
 
@@ -664,7 +676,7 @@ function assembly_metrics(contigs_file)
         collect(reader)
     end
     lengths = [length(FASTX.sequence(record)) for record in records]
-    sorted_lengths = sort(lengths, rev=true)
+    sorted_lengths = sort(lengths, rev = true)
     n90, l90 = compute_nl_stats(sorted_lengths, 0.9)
 
     gc_count = 0
@@ -682,14 +694,14 @@ function assembly_metrics(contigs_file)
     largest_contig = isempty(sorted_lengths) ? 0 : first(sorted_lengths)
 
     return (
-        n_contigs=n_contigs,
-        total_length=total_length,
-        n50=n50,
-        l50=l50,
-        n90=n90,
-        l90=l90,
-        largest_contig=largest_contig,
-        gc_content=gc_content
+        n_contigs = n_contigs,
+        total_length = total_length,
+        n50 = n50,
+        l50 = l50,
+        n90 = n90,
+        l90 = l90,
+        largest_contig = largest_contig,
+        gc_content = gc_content
     )
 end
 
@@ -698,7 +710,7 @@ end
 
 Detect contigs with GC fraction more than two standard deviations from the mean.
 """
-function contig_gc_outliers(contigs_file; min_length=500)
+function contig_gc_outliers(contigs_file; min_length = 500)
     outliers = []
     if contigs_file === nothing || !isfile(contigs_file)
         return outliers
@@ -732,7 +744,7 @@ function contig_gc_outliers(contigs_file; min_length=500)
         gc_count = count(base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
         gc = gc_count / length(seq)
         if abs(gc - mean_gc) > 2 * std_gc
-            push!(outliers, (id=FASTX.identifier(record), length=length(seq), gc=gc))
+            push!(outliers, (id = FASTX.identifier(record), length = length(seq), gc = gc))
         end
     end
 
@@ -756,7 +768,8 @@ DataFrame containing quality metrics for each k-mer size:
 - `js_divergence`: Jensen-Shannon divergence between distributions  
 - `qv`: MerQury-style quality value score
 """
-function assess_assembly_kmer_quality(;assembly, observations, ks::Vector{Int}=filter(x -> 17 <= x <= 23, Mycelia.ks()))
+function assess_assembly_kmer_quality(;
+        assembly, observations, ks::Vector{Int} = filter(x -> 17 <= x <= 23, Mycelia.ks()))
     results = DataFrames.DataFrame()
     @show ks
     ProgressMeter.@showprogress for k in ks
@@ -768,7 +781,7 @@ function assess_assembly_kmer_quality(;assembly, observations, ks::Vector{Int}=f
         # assembled_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(assembled_canonical_kmer_counts_file)
         # sort!(assembled_canonical_kmer_counts_table, "kmer")
         # assembled_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(assembled_canonical_kmer_counts_table))
-        
+
         @info "counting observation kmers..."
         observed_canonical_kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, observations)
         # observed_canonical_kmer_counts_file = Mycelia.jellyfish_count(fastx=observations, k=k, canonical=true)
@@ -776,10 +789,13 @@ function assess_assembly_kmer_quality(;assembly, observations, ks::Vector{Int}=f
         # observed_canonical_kmer_counts_table = Mycelia.load_jellyfish_counts(observed_canonical_kmer_counts_file)
         # sort!(observed_canonical_kmer_counts_table, "kmer")
         # observed_canonical_kmer_counts = OrderedCollections.OrderedDict(row["kmer"] => row["count"] for row in DataFrames.eachrow(observed_canonical_kmer_counts_table))
-        cosine_distance = kmer_counts_to_cosine_similarity(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
-        js_divergence = kmer_counts_to_js_divergence(observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
-        qv = kmer_counts_to_merqury_qv(raw_data_counts=observed_canonical_kmer_counts, assembly_counts=assembled_canonical_kmer_counts)
-        push!(results, (;k, cosine_distance, js_divergence, qv))
+        cosine_distance = kmer_counts_to_cosine_similarity(
+            observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        js_divergence = kmer_counts_to_js_divergence(
+            observed_canonical_kmer_counts, assembled_canonical_kmer_counts)
+        qv = kmer_counts_to_merqury_qv(raw_data_counts = observed_canonical_kmer_counts,
+            assembly_counts = assembled_canonical_kmer_counts)
+        push!(results, (; k, cosine_distance, js_divergence, qv))
     end
     return results
 end
@@ -810,7 +826,9 @@ QV is calculated using:
 Rhie et al. "Merqury: reference-free quality, completeness, and phasing assessment
 for genome assemblies" Genome Biology (2020)
 """
-function kmer_counts_to_merqury_qv(;raw_data_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}, assembly_counts::AbstractDict{Kmers.DNAKmer{k,N}, Int}) where {k,N}
+function kmer_counts_to_merqury_qv(;
+        raw_data_counts::AbstractDict{Kmers.DNAKmer{k, N}, Int},
+        assembly_counts::AbstractDict{Kmers.DNAKmer{k, N}, Int}) where {k, N}
     # Ktotal = # of kmers found in assembly
     Ktotal = length(keys(assembly_counts))
     # Kshared = # of shared kmers between assembly and readset
@@ -829,7 +847,7 @@ end
 
 Compute Merqury-style QV for an assembly using raw read data.
 """
-function compute_merqury_qv(assembly_file, reads_file; k=21)
+function compute_merqury_qv(assembly_file, reads_file; k = 21)
     if assembly_file === nothing || reads_file === nothing
         return missing
     end
@@ -839,7 +857,7 @@ function compute_merqury_qv(assembly_file, reads_file; k=21)
 
     assembly_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, assembly_file)
     read_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, reads_file)
-    return Mycelia.kmer_counts_to_merqury_qv(raw_data_counts=read_counts, assembly_counts=assembly_counts)
+    return Mycelia.kmer_counts_to_merqury_qv(raw_data_counts = read_counts, assembly_counts = assembly_counts)
 end
 
 # ---------- CheckM, CheckM2, CheckV Functions ----------
@@ -859,7 +877,7 @@ CheckV is a tool for assessing the quality and completeness of viral genomes.
 setup_checkv()
 ```
 """
-function setup_checkv(; db_dir::String=joinpath(homedir(), "workspace", ".checkv"))
+function setup_checkv(; db_dir::String = joinpath(homedir(), "workspace", ".checkv"))
     add_bioconda_env("checkv")
     if !isdir(db_dir)
         mkpath(db_dir)
@@ -883,7 +901,7 @@ CheckM is a tool for assessing the quality and completeness of bacterial genomes
 setup_checkm()
 ```
 """
-function setup_checkm(; db_dir::String=joinpath(homedir(), "workspace", ".checkm"))
+function setup_checkm(; db_dir::String = joinpath(homedir(), "workspace", ".checkm"))
     add_bioconda_env("checkm-genome")
     if !isdir(db_dir)
         mkpath(db_dir)
@@ -907,7 +925,7 @@ CheckM2 is a rapid tool for assessing the quality and completeness of bacterial 
 setup_checkm2()
 ```
 """
-function setup_checkm2(; db_dir::String=joinpath(homedir(), "workspace", ".checkm2"))
+function setup_checkm2(; db_dir::String = joinpath(homedir(), "workspace", ".checkm2"))
     add_bioconda_env("checkm2")
     if !isdir(db_dir)
         mkpath(db_dir)
@@ -934,7 +952,10 @@ require a high-memory filesystem for optimal performance (/dev/shm on systems wi
 - `manifest_url`: Manifest URL for `sync_files.py` (required when `download_db=true`)
 - `download_db`: If true, download the GX DB using `sync_files.py`
 """
-function setup_ncbi_fcs_gx(; db_dir::Union{String,Nothing}=joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"), manifest_url::Union{String,Nothing}=nothing, download_db::Bool=false)
+function setup_ncbi_fcs_gx(;
+        db_dir::Union{String, Nothing} = joinpath(homedir(), "workspace", ".ncbi-fcs-gx", "gxdb"),
+        manifest_url::Union{String, Nothing} = nothing,
+        download_db::Bool = false)
     add_bioconda_env("ncbi-fcs-gx")
     if isnothing(db_dir)
         return db_dir
@@ -959,7 +980,7 @@ function resolve_ncbi_fcs_gx_db_path(gx_db::String)
     end
 
     if isdir(gx_db)
-        gxi_files = filter(path -> endswith(path, ".gxi"), readdir(gx_db; join=true))
+        gxi_files = filter(path -> endswith(path, ".gxi"), readdir(gx_db; join = true))
         if isempty(gxi_files)
             error("No .gxi file found in GX database directory: $(gx_db)")
         elseif length(gxi_files) > 1
@@ -973,7 +994,7 @@ function resolve_ncbi_fcs_gx_db_path(gx_db::String)
         prefix = basename(gx_db)
         gxi_files = filter(
             path -> startswith(basename(path), prefix) && endswith(path, ".gxi"),
-            readdir(parent_dir; join=true)
+            readdir(parent_dir; join = true)
         )
         if isempty(gxi_files)
             error("GX database not found for prefix: $(gx_db)")
@@ -1015,15 +1036,17 @@ result = run_checkv("genome.fasta")
 println("Quality summary: ", result.quality_summary)
 ```
 """
-function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", db_dir::String=joinpath(homedir(), "workspace", ".checkv"), threads::Int=get_default_threads())
+function run_checkv(fasta_file::String; outdir::String = fasta_file * "_checkv",
+        db_dir::String = joinpath(homedir(), "workspace", ".checkv"),
+        threads::Int = get_default_threads())
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
     end
-    
+
     if !occursin(FASTA_REGEX, fasta_file)
         error("Input file does not match FASTA format: $(fasta_file)")
     end
-    
+
     # Define expected output files
     output_files = (
         complete_genomes = joinpath(outdir, "complete_genomes.tsv"),
@@ -1033,20 +1056,20 @@ function run_checkv(fasta_file::String; outdir::String=fasta_file * "_checkv", d
         quality_summary = joinpath(outdir, "quality_summary.tsv"),
         viruses = joinpath(outdir, "viruses.fna")
     )
-    
+
     # Check if output directory exists and all expected files are present
     if !(isdir(outdir) && all(isfile, output_files))
         # @warn "CheckV output directory already exists with all expected files. Skipping analysis: $(outdir)"
-    # else
-        latest_db = last(readdir(Mycelia.setup_checkv(), join=true))
+        # else
+        latest_db = last(readdir(Mycelia.setup_checkv(), join = true))
         run(`$(CONDA_RUNNER) run -n checkv checkv end_to_end $(fasta_file) $(outdir) -d $(latest_db) -t $(threads)`)
     end
-    
+
     # Clean up temporary directory if it exists
     tmp_dir = joinpath(outdir, "tmp")
-    Mycelia.cleanup_directory(tmp_dir, verbose=false, force=true)
-    
-    return (outdir=outdir, output_files...)
+    Mycelia.cleanup_directory(tmp_dir, verbose = false, force = true)
+
+    return (outdir = outdir, output_files...)
 end
 
 """
@@ -1079,24 +1102,24 @@ Notes:
 - The tool may query NCBI for taxonomy division information if `--div` is not set.
 """
 function run_ncbi_fcs(
-    fasta_file::String;
-    tax_id::Int,
-    outdir::String=fasta_file * "_fcs_gx",
-    out_basename::Union{String,Nothing}=nothing,
-    gx_db::Union{String,Nothing}=nothing,
-    manifest_url::Union{String,Nothing}=nothing,
-    download_db::Bool=false,
-    species::Union{String,Nothing}=nothing,
-    split_fasta::Bool=true,
-    div::Union{String,Nothing}=nothing,
-    mask_transposons::Union{Bool,Nothing}=nothing,
-    allow_same_species::Union{Bool,Nothing}=nothing,
-    ignore_same_kingdom::Bool=false,
-    action_report::Bool=true,
-    save_hits::Bool=false,
-    generate_logfile::Bool=false,
-    phone_home_label::Union{String,Nothing}=nothing,
-    debug::Bool=false,
+        fasta_file::String;
+        tax_id::Int,
+        outdir::String = fasta_file * "_fcs_gx",
+        out_basename::Union{String, Nothing} = nothing,
+        gx_db::Union{String, Nothing} = nothing,
+        manifest_url::Union{String, Nothing} = nothing,
+        download_db::Bool = false,
+        species::Union{String, Nothing} = nothing,
+        split_fasta::Bool = true,
+        div::Union{String, Nothing} = nothing,
+        mask_transposons::Union{Bool, Nothing} = nothing,
+        allow_same_species::Union{Bool, Nothing} = nothing,
+        ignore_same_kingdom::Bool = false,
+        action_report::Bool = true,
+        save_hits::Bool = false,
+        generate_logfile::Bool = false,
+        phone_home_label::Union{String, Nothing} = nothing,
+        debug::Bool = false
 )
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
@@ -1111,9 +1134,9 @@ function run_ncbi_fcs(
     download_dir = isdir(gx_db_path) ? gx_db_path : dirname(gx_db_path)
 
     setup_ncbi_fcs_gx(
-        db_dir=download_db ? download_dir : nothing,
-        manifest_url=manifest_url,
-        download_db=download_db
+        db_dir = download_db ? download_dir : nothing,
+        manifest_url = manifest_url,
+        download_db = download_db
     )
 
     resolved_gx_db = resolve_ncbi_fcs_gx_db_path(gx_db_path)
@@ -1129,7 +1152,7 @@ function run_ncbi_fcs(
         "--split-fasta", string(split_fasta),
         "--action-report", string(action_report),
         "--save-hits", string(save_hits),
-        "--generate-logfile", string(generate_logfile),
+        "--generate-logfile", string(generate_logfile)
     ]
 
     if !isnothing(out_basename)
@@ -1166,7 +1189,8 @@ function run_ncbi_fcs(
 
     run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
 
-    base = out_basename === nothing ? splitext(basename(fasta_file))[1] * "." * string(tax_id) : out_basename
+    base = out_basename === nothing ?
+           splitext(basename(fasta_file))[1] * "." * string(tax_id) : out_basename
     out_prefix = joinpath(outdir, base)
     taxonomy_report = out_prefix * ".taxonomy.rpt"
     report = action_report ? out_prefix * ".fcs_gx_report.txt" : nothing
@@ -1181,7 +1205,8 @@ function run_ncbi_fcs(
         error("FCS-GX action report missing: $(report)")
     end
 
-    return (outdir=outdir, out_basename=base, taxonomy_report=taxonomy_report, report=report, summary=summary, hits=hits)
+    return (outdir = outdir, out_basename = base, taxonomy_report = taxonomy_report,
+        report = report, summary = summary, hits = hits)
 end
 
 """
@@ -1197,12 +1222,12 @@ end
 Apply an FCS-GX action report to produce a cleaned FASTA and optional contamination FASTA.
 """
 function run_ncbi_fcs_clean_genome(
-    fasta_file::String;
-    action_report::String,
-    outdir::String=fasta_file * "_fcs_gx_clean",
-    output_fasta::Union{String,Nothing}=nothing,
-    contam_fasta::Union{String,Nothing}=nothing,
-    min_seq_len::Int=200,
+        fasta_file::String;
+        action_report::String,
+        outdir::String = fasta_file * "_fcs_gx_clean",
+        output_fasta::Union{String, Nothing} = nothing,
+        contam_fasta::Union{String, Nothing} = nothing,
+        min_seq_len::Int = 200
 )
     if !isfile(fasta_file)
         error("Input file does not exist: $(fasta_file)")
@@ -1212,11 +1237,12 @@ function run_ncbi_fcs_clean_genome(
         error("Action report does not exist: $(action_report)")
     end
 
-    setup_ncbi_fcs_gx(db_dir=nothing)
+    setup_ncbi_fcs_gx(db_dir = nothing)
     mkpath(outdir)
 
     output_fasta = output_fasta === nothing ? joinpath(outdir, "clean.fasta") : output_fasta
-    contam_fasta = contam_fasta === nothing ? joinpath(outdir, "contam.fasta") : contam_fasta
+    contam_fasta = contam_fasta === nothing ? joinpath(outdir, "contam.fasta") :
+                   contam_fasta
 
     cmd_parts = [
         "gx",
@@ -1225,7 +1251,7 @@ function run_ncbi_fcs_clean_genome(
         "--action-report", action_report,
         "--output", output_fasta,
         "--contam-fasta-out", contam_fasta,
-        "--min-seq-len", string(min_seq_len),
+        "--min-seq-len", string(min_seq_len)
     ]
 
     run(`$(CONDA_RUNNER) run --live-stream -n ncbi-fcs-gx $cmd_parts`)
@@ -1234,7 +1260,8 @@ function run_ncbi_fcs_clean_genome(
         error("Cleaned FASTA not generated: $(output_fasta)")
     end
 
-    return (outdir=outdir, cleaned_fasta=output_fasta, contamination_fasta=contam_fasta)
+    return (
+        outdir = outdir, cleaned_fasta = output_fasta, contamination_fasta = contam_fasta)
 end
 
 """
@@ -1256,32 +1283,34 @@ CheckM requires a directory of genome files as input.
 run_checkm("./genomes/")
 ```
 """
-function run_checkm(input_path::String; outdir::String=input_path * "_checkm", db_dir::String=joinpath(homedir(), "workspace", ".checkm"), extension::String="fasta", threads::Int=get_default_threads())
-    setup_checkm(db_dir=db_dir)
-    
+function run_checkm(input_path::String; outdir::String = input_path * "_checkm",
+        db_dir::String = joinpath(homedir(), "workspace", ".checkm"),
+        extension::String = "fasta", threads::Int = get_default_threads())
+    setup_checkm(db_dir = db_dir)
+
     if !isdir(input_path)
         error("CheckM requires a directory of genome files as input: $(input_path)")
     end
-    
+
     fasta_files = find_fasta_files(input_path)
     if isempty(fasta_files)
         error("No FASTA files found in directory: $(input_path)")
     end
-    
+
     # Check for potential performance issues
     num_genomes = length(fasta_files)
     if num_genomes > 1000
         @warn "Processing $(num_genomes) genomes. CheckM documentation suggests splitting large datasets (>1000 genomes) into smaller groups for better performance and memory management."
     end
-    
+
     # Check available memory (convert from bytes to GB)
     available_memory_gb = Sys.total_memory() / (1024^3)
     if available_memory_gb < 64
         @warn "Available system memory: $(round(available_memory_gb, digits=1)) GB. CheckM may require 64+ GB of RAM for optimal performance with large datasets. Consider reducing the number of genomes or running on a system with more memory."
     end
-    
+
     run(`$(CONDA_RUNNER) run -n checkm-genome checkm lineage_wf $(input_path) $(outdir) -x $(extension) --data $(db_dir) -t $(threads)`)
-    
+
     return outdir
 end
 
@@ -1304,35 +1333,38 @@ A named tuple with the following fields:
 - `diamond_results`: Path to DIAMOND_RESULTS.tsv
 - `protein_file`: Path to the single .faa file
 """
-function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=get_default_threads())
+function run_checkm2(input_path::String; outdir::String = input_path * "_checkm2",
+        db_dir::String = joinpath(homedir(), "workspace", ".checkm2"),
+        threads::Int = get_default_threads())
     # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
     # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
     db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
     @assert isfile(db_path)
-    
+
     fasta_files = find_fasta_files(input_path)
-    
+
     if isempty(fasta_files)
         error("No FASTA files found in: $(input_path)")
     end
-    
+
     # Define expected output file paths
     quality_report = joinpath(outdir, "quality_report.tsv")
     log_file = joinpath(outdir, "checkm2.log")
     diamond_results = joinpath(outdir, "diamond_output", "DIAMOND_RESULTS.tsv")
     protein_files_dir = joinpath(outdir, "protein_files")
-    
+
     # Check if all expected files already exist
-    files_exist = isfile(quality_report) && isfile(log_file) && isfile(diamond_results) && isdir(protein_files_dir)
-    
+    files_exist = isfile(quality_report) && isfile(log_file) && isfile(diamond_results) &&
+                  isdir(protein_files_dir)
+
     if files_exist
         # Check for exactly one .faa file
-        faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
-        
+        faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join = true))
+
         if length(faa_files) == 1
             protein_file = first(faa_files)
             # @warn "All expected CheckM2 output files already exist. Skipping execution and returning existing results." outdir
-            
+
             return (
                 outdir = outdir,
                 quality_report = quality_report,
@@ -1342,25 +1374,25 @@ function run_checkm2(input_path::String; outdir::String=input_path * "_checkm2",
             )
         end
     end
-    
+
     # CheckM2 can take comma-separated fasta files as input
     input_str = join(fasta_files, ",")
-    
+
     run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads) --force`)
-    
+
     # Verify output files were created
     if !isdir(protein_files_dir)
         error("Protein files directory not found: $(protein_files_dir)")
     end
-    
-    faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join=true))
-    
+
+    faa_files = filter(f -> endswith(f, ".faa"), readdir(protein_files_dir, join = true))
+
     if length(faa_files) != 1
         error("Expected exactly 1 .faa file, but found $(length(faa_files)) in $(protein_files_dir)")
     end
-    
+
     protein_file = first(faa_files)
-    
+
     return (
         outdir = outdir,
         quality_report = quality_report,
@@ -1389,16 +1421,19 @@ files = ["genome1.fasta.gz", "genome2.fasta", "genome3.fasta.gz"]
 run_checkm2_list(files)
 ```
 """
-function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized_current_datetime() * "_checkm2", db_dir::String=joinpath(homedir(), "workspace", ".checkm2"), threads::Int=get_default_threads())
+function run_checkm2_list(fasta_files::Vector{String};
+        outdir::String = normalized_current_datetime() * "_checkm2",
+        db_dir::String = joinpath(homedir(), "workspace", ".checkm2"),
+        threads::Int = get_default_threads())
     # /home/jupyter/workspace/.checkm2/CheckM2_database/uniref100.KO.1.dmnd
     # latest_db = first(readdir(last(readdir(setup_checkm2(db_dir=db_dir), join=true)), join=true))
     db_path = joinpath(db_dir, "CheckM2_database", "uniref100.KO.1.dmnd")
     @assert isfile(db_path)
-    
+
     if isempty(fasta_files)
         error("No FASTA files provided")
     end
-    
+
     # Validate that all files exist and match FASTA format
     for file in fasta_files
         if !isfile(file)
@@ -1408,12 +1443,12 @@ function run_checkm2_list(fasta_files::Vector{String}; outdir::String=normalized
             error("File does not match FASTA format: $(file)")
         end
     end
-    
+
     # CheckM2 can take comma-separated fasta files as input and handles mixed gz/non-gz automatically
     input_str = join(fasta_files, ",")
-    
+
     run(`$(CONDA_RUNNER) run -n checkm2 checkm2 predict -i $(input_str) -o $(outdir) --database_path $(db_path) --threads $(threads)`)
-    
+
     return outdir
 end
 
@@ -1482,24 +1517,24 @@ function analyze_fastq_quality(fastq_file::String)
     q40_reads = 0
 
     reader = FASTX.FASTQ.Reader(open(fastq_file, "r"))
-    
+
     try
         for record in reader
             n_reads += 1
-            
+
             # Get sequence and quality
             sequence = FASTX.sequence(record)
             quality_scores = FASTX.quality_scores(record)
-            
+
             # Calculate length
             read_length = length(sequence)
             total_length += read_length
             total_bases += read_length
-            
+
             # Calculate quality metrics
             mean_read_quality = Statistics.mean(quality_scores)
             total_quality += mean_read_quality
-            
+
             # Count quality thresholds
             if mean_read_quality >= 20
                 q20_reads += 1
@@ -1510,7 +1545,7 @@ function analyze_fastq_quality(fastq_file::String)
             if mean_read_quality >= 40
                 q40_reads += 1
             end
-            
+
             # Count GC content
             for base in sequence
                 if base == BioSequences.DNA_G || base == BioSequences.DNA_C
@@ -1521,22 +1556,22 @@ function analyze_fastq_quality(fastq_file::String)
     finally
         close(reader)
     end
-    
+
     if n_reads == 0
         error("No reads found in FASTQ file: $(fastq_file)")
     end
-    
+
     # Calculate final metrics
     mean_quality = total_quality / n_reads
     mean_length = total_length / n_reads
     gc_content = (gc_count / total_bases) * 100.0
-    
+
     quality_dist = QualityDistribution(
         (q20_reads / n_reads) * 100.0,
         (q30_reads / n_reads) * 100.0,
         (q40_reads / n_reads) * 100.0
     )
-    
+
     return FastqQualityResults(
         n_reads,
         mean_quality,
@@ -1592,13 +1627,13 @@ quast_dir = Mycelia.run_quast(assemblies,
 - With reference: adds reference-based metrics (genome fraction, misassemblies, etc.)
 - Gene finding requires additional dependencies and is disabled by default
 """
-function run_quast(assembly_files::Vector{String}; 
-                   outdir::Union{String,Nothing}=nothing, 
-                   reference::Union{String,Nothing}=nothing,
-                   threads::Int=get_default_threads(),
-                   min_contig::Int=500,
-                   gene_finding::Bool=false)
-    
+function run_quast(assembly_files::Vector{String};
+        outdir::Union{String, Nothing} = nothing,
+        reference::Union{String, Nothing} = nothing,
+        threads::Int = get_default_threads(),
+        min_contig::Int = 500,
+        gene_finding::Bool = false)
+
     # Install QUAST via Bioconda if needed
     add_bioconda_env("quast")
 
@@ -1630,7 +1665,7 @@ function run_quast(assembly_files::Vector{String};
 
     # Create output directory
     mkpath(outdir)
-    
+
     # Build QUAST command
     cmd_parts = [
         "quast.py",
@@ -1638,43 +1673,43 @@ function run_quast(assembly_files::Vector{String};
         "--threads", string(threads),
         "--min-contig", string(min_contig)
     ]
-    
+
     # Add reference if provided
     if reference !== nothing
         push!(cmd_parts, "--reference", reference)
     end
-    
+
     # Add gene finding if requested
     if gene_finding
         push!(cmd_parts, "--gene-finding")
     end
-    
+
     # Add assembly files
     append!(cmd_parts, assembly_files)
-    
+
     # Run QUAST
     try
         println("Running QUAST on $(length(assembly_files)) assemblies...")
         if reference !== nothing
             println("Using reference: $(reference)")
         end
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quast $cmd_parts`)
-        
+
         # Verify output files were created
         report_txt = joinpath(outdir, "report.txt")
         report_tsv = joinpath(outdir, "report.tsv")
-        
+
         if !isfile(report_txt) || !isfile(report_tsv)
             error("QUAST failed to generate expected output files")
         end
-        
+
         println("QUAST analysis completed successfully")
         println("Results saved in: $(outdir)")
         println("View HTML report: $(joinpath(outdir, "report.html"))")
-        
+
         return outdir
-        
+
     catch e
         error("QUAST execution failed: $(e)")
     end
@@ -1737,25 +1772,25 @@ busco_dir = Mycelia.run_busco(assemblies,
 - Results provide Complete, Fragmented, and Missing BUSCO counts
 """
 function run_busco(assembly_files::Vector{String};
-                   outdir::Union{String,Nothing}=nothing,
-                   lineage::Union{String,Nothing}=nothing,
-                   mode::String="genome",
-                   threads::Int=get_default_threads(),
-                   force::Bool=false,
-                   auto_lineage::Bool=true,
-                   auto_lineage_euk::Bool=false,
-                   auto_lineage_prok::Bool=false)
-    
+        outdir::Union{String, Nothing} = nothing,
+        lineage::Union{String, Nothing} = nothing,
+        mode::String = "genome",
+        threads::Int = get_default_threads(),
+        force::Bool = false,
+        auto_lineage::Bool = true,
+        auto_lineage_euk::Bool = false,
+        auto_lineage_prok::Bool = false)
+
     # Install BUSCO via Bioconda if needed
     add_bioconda_env("busco")
-    
+
     # Validate input files
     for assembly_file in assembly_files
         if !isfile(assembly_file)
             error("Assembly file does not exist: $(assembly_file)")
         end
     end
-    
+
     # Validate mode
     valid_modes = ["genome", "transcriptome", "proteins"]
     if !(mode in valid_modes)
@@ -1773,7 +1808,7 @@ function run_busco(assembly_files::Vector{String};
     if lineage === nothing && !(auto_lineage || auto_lineage_euk || auto_lineage_prok)
         auto_lineage = true
     end
-    
+
     # Derive default outdir from first assembly if not provided
     if outdir === nothing
         first_asm = assembly_files[1]
@@ -1783,14 +1818,14 @@ function run_busco(assembly_files::Vector{String};
 
     # Create output directory
     mkpath(outdir)
-    
+
     # Process each assembly file
     results_dirs = String[]
-    
+
     for (i, assembly_file) in enumerate(assembly_files)
         assembly_name = splitext(basename(assembly_file))[1]
         assembly_outdir = joinpath(outdir, assembly_name)
-        
+
         # Build BUSCO command
         cmd_parts = [
             "busco",
@@ -1811,25 +1846,26 @@ function run_busco(assembly_files::Vector{String};
         else
             push!(cmd_parts, "--auto-lineage")
         end
-        
+
         # Add force flag if requested
         if force
             push!(cmd_parts, "--force")
         end
-        
+
         # Add quiet flag to reduce output
         push!(cmd_parts, "--quiet")
-        
+
         try
             println("Running BUSCO on $(assembly_file)...")
             println("Lineage: $(lineage), Mode: $(mode)")
-            
+
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n busco $cmd_parts`)
-            
+
             # Verify output files were created
             summary_files = String[]
             if isdir(assembly_outdir)
-                summary_files = filter(name -> occursin(r"^short_summary.*\.txt$", name), readdir(assembly_outdir))
+                summary_files = filter(
+                    name -> occursin(r"^short_summary.*\.txt$", name), readdir(assembly_outdir))
                 if isempty(summary_files)
                     for (root, _, files) in walkdir(assembly_outdir)
                         for name in files
@@ -1844,24 +1880,24 @@ function run_busco(assembly_files::Vector{String};
             if isempty(summary_files)
                 error("BUSCO failed to generate summary file for $(assembly_file)")
             end
-            
+
             println("BUSCO analysis completed for $(assembly_file)")
             println("Results saved in: $(assembly_outdir)")
-            
+
             push!(results_dirs, assembly_outdir)
-            
+
         catch e
             error("BUSCO execution failed for $(assembly_file): $(e)")
         end
     end
-    
+
     # Print summary information
     println("\nBUSCO analysis completed for all assemblies")
     println("Results directories:")
     for dir in results_dirs
         println("  - $(dir)")
     end
-    
+
     return outdir
 end
 
@@ -1919,37 +1955,37 @@ mummer_dir = Mycelia.run_mummer(ref_genome, query_genome,
 - Results include alignment coordinates, percent identity, and coverage
 - For visualization, use mummerplot (requires gnuplot)
 """
-function run_mummer(reference::String, query::String; 
-                    outdir::String="mummer_results",
-                    prefix::String="out",
-                    mincluster::Int=65,
-                    minmatch::Int=20,
-                    threads::Int=1)
-    
+function run_mummer(reference::String, query::String;
+        outdir::String = "mummer_results",
+        prefix::String = "out",
+        mincluster::Int = 65,
+        minmatch::Int = 20,
+        threads::Int = 1)
+
     # Install MUMmer via Bioconda if needed
     add_bioconda_env("mummer")
-    
+
     # Validate input files
     if !isfile(reference)
         error("Reference file does not exist: $(reference)")
     end
-    
+
     if !isfile(query)
         error("Query file does not exist: $(query)")
     end
-    
+
     # Create output directory
     mkpath(outdir)
-    
+
     # Define output files
     delta_file = joinpath(outdir, "$(prefix).delta")
     coords_file = joinpath(outdir, "$(prefix).coords")
-    
+
     try
         println("Running MUMmer comparison...")
         println("Reference: $(reference)")
         println("Query: $(query)")
-        
+
         # Run nucmer for alignment
         nucmer_cmd = [
             "nucmer",
@@ -1959,39 +1995,39 @@ function run_mummer(reference::String, query::String;
             reference,
             query
         ]
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mummer $nucmer_cmd`)
-        
+
         # Generate coordinate output
         coords_cmd = [
             "show-coords",
             "-r", "-c", "-l",  # -r: sort by reference, -c: show percent coverage, -l: show length
             delta_file
         ]
-        
+
         coords_output = read(`$(Mycelia.CONDA_RUNNER) run -n mummer $coords_cmd`, String)
-        
+
         # Write coordinates to file
         open(coords_file, "w") do io
             write(io, coords_output)
         end
-        
+
         # Verify output files were created
         if !isfile(delta_file)
             error("MUMmer failed to generate delta file")
         end
-        
+
         if !isfile(coords_file)
             error("Failed to generate coordinates file")
         end
-        
+
         println("MUMmer analysis completed successfully")
         println("Results saved in: $(outdir)")
         println("Delta file: $(delta_file)")
         println("Coordinates file: $(coords_file)")
-        
+
         return outdir
-        
+
     catch e
         error("MUMmer execution failed: $(e)")
     end
@@ -2023,7 +2059,8 @@ function parse_mummer_coords(coords_file)
             end_query = parse(Int, fields[4])
             len_ref = parse(Int, fields[5])
             identity = parse(Float64, fields[7])
-            push!(alignments, (;start_ref, end_ref, start_query, end_query, len_ref, identity))
+            push!(alignments, (;
+                start_ref, end_ref, start_query, end_query, len_ref, identity))
         end
     end
     return alignments
@@ -2047,27 +2084,27 @@ Generate dot plot visualization from MUMmer delta file using mummerplot.
 - Requires gnuplot to be installed
 - Useful for visualizing genome alignments and rearrangements
 """
-function run_mummer_plot(delta_file::String; 
-                         outdir::String="",
-                         prefix::String="plot",
-                         plot_type::String="png")
-    
+function run_mummer_plot(delta_file::String;
+        outdir::String = "",
+        prefix::String = "plot",
+        plot_type::String = "png")
+
     # Install MUMmer via Bioconda if needed
     add_bioconda_env("mummer")
-    
+
     if !isfile(delta_file)
         error("Delta file does not exist: $(delta_file)")
     end
-    
+
     # Set output directory
     if outdir == ""
         outdir = dirname(delta_file)
     else
         mkpath(outdir)
     end
-    
+
     plot_file = joinpath(outdir, "$(prefix).$(plot_type)")
-    
+
     try
         # Run mummerplot
         plot_cmd = [
@@ -2076,16 +2113,16 @@ function run_mummer_plot(delta_file::String;
             "--prefix", joinpath(outdir, prefix),
             delta_file
         ]
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mummer $plot_cmd`)
-        
+
         if !isfile(plot_file)
             error("Failed to generate plot file")
         end
-        
+
         println("MUMmer plot generated: $(plot_file)")
         return plot_file
-        
+
     catch e
         error("MUMmer plot generation failed: $(e)")
     end
@@ -2136,8 +2173,9 @@ The QV score follows the Merqury methodology:
 Rhie, A. et al. "Merqury: reference-free quality, completeness, and phasing 
 assessment for genome assemblies." Genome Biology 21, 245 (2020).
 """
-function assess_assembly_quality(;assembly, observations, ks::Vector{Int}=filter(x -> x in [11,13,17,19,23,31,53], Mycelia.ks()))
-    return assess_assembly_kmer_quality(assembly=assembly, observations=observations, ks=ks)
+function assess_assembly_quality(; assembly, observations,
+        ks::Vector{Int} = filter(x -> x in [11, 13, 17, 19, 23, 31, 53], Mycelia.ks()))
+    return assess_assembly_kmer_quality(assembly = assembly, observations = observations, ks = ks)
 end
 
 """
@@ -2178,23 +2216,24 @@ plot = generate_qv_heatmap(results,
                           clims=(20, 50))
 ```
 """
-function generate_qv_heatmap(qv_results::DataFrames.DataFrame; 
-                            assembler_column::String="assembler",
-                            k_column::String="k", 
-                            qv_column::String="qv",
-                            title::String="Assembly Quality (QV Scores)",
-                            clims::Tuple=(0, 60))
-    
+function generate_qv_heatmap(qv_results::DataFrames.DataFrame;
+        assembler_column::String = "assembler",
+        k_column::String = "k",
+        qv_column::String = "qv",
+        title::String = "Assembly Quality (QV Scores)",
+        clims::Tuple = (0, 60))
+
     # Get unique assemblers and k-values
     assemblers = sort(unique(qv_results[!, assembler_column]))
     ks = sort(unique(qv_results[!, k_column]))
-    
+
     # Create QV matrix
     qv_matrix = zeros(length(ks), length(assemblers))
-    
+
     for (i, k) in enumerate(ks)
         for (j, assembler) in enumerate(assemblers)
-            matching_rows = (qv_results[!, k_column] .== k) .& (qv_results[!, assembler_column] .== assembler)
+            matching_rows = (qv_results[!, k_column] .== k) .&
+                            (qv_results[!, assembler_column] .== assembler)
             if any(matching_rows)
                 qv_matrix[i, j] = first(qv_results[matching_rows, qv_column])
             else
@@ -2202,12 +2241,12 @@ function generate_qv_heatmap(qv_results::DataFrames.DataFrame;
             end
         end
     end
-    
+
     # Create heatmap
     heatmap_plot = Plots.heatmap(
         qv_matrix,
         xlabel = "Assembler",
-        ylabel = "K-mer Size", 
+        ylabel = "K-mer Size",
         title = title,
         xticks = (1:length(assemblers), assemblers),
         yticks = (1:length(ks), ks),
@@ -2216,7 +2255,7 @@ function generate_qv_heatmap(qv_results::DataFrames.DataFrame;
         size = (600, 400),
         margin = 5Plots.PlotMeasures.mm
     )
-    
+
     return heatmap_plot
 end
 
@@ -2245,14 +2284,15 @@ Named tuple containing:
 - Utilizes requested CPU threads for BWA mapping
 - Skips analysis if output files already exist
 """
-function run_ale(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_ale", threads::Int=get_default_threads())
+function run_ale(assembly_file::String, reads_file::String;
+        outdir::String = assembly_file * "_ale", threads::Int = get_default_threads())
     Mycelia.add_bioconda_env("ale")
     mkpath(outdir)
-    
+
     basename_assembly = basename(assembly_file, ".fasta")
     ale_score_file = joinpath(outdir, basename_assembly * ".ale")
     ale_plot_file = joinpath(outdir, basename_assembly * "_ALE_plot.png")
-    
+
     if !isfile(ale_score_file)
         # Map reads to assembly first
         sam_file = joinpath(outdir, basename_assembly * ".sam")
@@ -2267,17 +2307,17 @@ function run_ale(assembly_file::String, reads_file::String; outdir::String=assem
                 run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale bwa mem -t $(threads) $(assembly_file) $(reads_file) -o $(sam_file)`)
             end
         end
-        
+
         # Run ALE evaluation
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale ALE $(sam_file) $(assembly_file) $(ale_score_file)`)
-        
+
         # Generate plot if available
         if isfile(ale_score_file)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ale ALEplot $(ale_score_file) $(assembly_file) $(ale_plot_file)`)
         end
     end
-    
-    return (;outdir, ale_score=ale_score_file, ale_plot=ale_plot_file)
+
+    return (; outdir, ale_score = ale_score_file, ale_plot = ale_plot_file)
 end
 
 """
@@ -2305,14 +2345,15 @@ Named tuple containing:
 - Utilizes requested CPU threads for BWA mapping
 - Skips analysis if output files already exist
 """
-function run_frcbam(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_frcbam", threads::Int=get_default_threads())
+function run_frcbam(assembly_file::String, reads_file::String;
+        outdir::String = assembly_file * "_frcbam", threads::Int = get_default_threads())
     Mycelia.add_bioconda_env("frcbam")
     mkpath(outdir)
-    
+
     basename_assembly = basename(assembly_file, ".fasta")
     frc_txt_file = joinpath(outdir, basename_assembly * "_FRC.txt")
     frc_plot_file = joinpath(outdir, basename_assembly * "_FRC.png")
-    
+
     if !isfile(frc_txt_file)
         # Map reads to assembly first
         bam_file = joinpath(outdir, basename_assembly * ".bam")
@@ -2323,32 +2364,32 @@ function run_frcbam(assembly_file::String, reads_file::String; outdir::String=as
                 reads = split(reads_file, ",")
                 run(
                     pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads[1]) $(reads[2])`,
-                        `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
-                    )
+                    `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads[1]) $(reads[2])`,
+                    `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
+                )
                 )
             else
                 # Single-end reads (FRCbam works best with paired-end)
                 run(
                     pipeline(
-                        `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads_file)`, 
-                        `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
-                    )
+                    `$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam bwa mem -t $(threads) $(assembly_file) $(reads_file)`,
+                    `samtools sort -@ $(get_default_threads()) -o $(bam_file)`
+                )
                 )
             end
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam samtools index $(bam_file)`)
         end
-        
+
         # Run FRCbam analysis
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam FRC --pe-bam $(bam_file) --output $(frc_txt_file)`)
-        
+
         # Generate plot if available
         if isfile(frc_txt_file)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n frcbam FRCplot --FRC-file $(frc_txt_file) --output $(frc_plot_file)`)
         end
     end
-    
-    return (;outdir, frc_txt=frc_txt_file, frc_plot=frc_plot_file)
+
+    return (; outdir, frc_txt = frc_txt_file, frc_plot = frc_plot_file)
 end
 
 """
@@ -2372,19 +2413,19 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with 4cac
 - Skips analysis if output files already exist
 """
-function run_4cac(assembly_file::String; outdir::String=assembly_file * "_4cac")
+function run_4cac(assembly_file::String; outdir::String = assembly_file * "_4cac")
     Mycelia.add_bioconda_env("4cac")
     mkpath(outdir)
-    
+
     basename_assembly = basename(assembly_file, ".fasta")
     predictions_file = joinpath(outdir, basename_assembly * "_predictions.txt")
-    
+
     if !isfile(predictions_file)
         # Run 4CAC classification
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n 4cac 4CAC -i $(assembly_file) -o $(predictions_file)`)
     end
-    
-    return (;outdir, predictions=predictions_file)
+
+    return (; outdir, predictions = predictions_file)
 end
 
 #

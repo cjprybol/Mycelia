@@ -1,6 +1,5 @@
 # # neo_import_dir = "/Users/cameronprybol/Library/Application Support/Neo4j Desktop/Application/relate-data/dbmss/dbms-8ab8baac-5dea-4137-bb24-e0b426447940/import"
 
-
 # # uploading over API is slow for remote and local connections
 # # Progress:   0%|▏                                        |  ETA: 8:13:39
 # # upload_nodes_over_api(graph, ADDRESS=local_neo4j_bolt_address, PASSWORD=local_neo4j_password)
@@ -15,7 +14,6 @@
 # # # run(`neo4j-admin push-to-cloud --overwrite --verbose --bolt-uri=$(ADDRESS) --username=$(USERNAME) --password=$(PASSWORD)`)
 # # # run(`sudo neo4j-admin push-to-cloud --overwrite --verbose --dump-to "$(DIR)/test.db.dump" --bolt-uri=$(a) --username=$(USERNAME) --password=$(PASSWORD)`)
 # # run(`sudo neo4j-admin push-to-cloud --overwrite --verbose --bolt-uri=$(a) --username=$(USERNAME) --password=$(PASSWORD)`)
-
 
 # # cmd = "CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.tax_id IS UNIQUE"
 # # @time run(cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd))
@@ -48,7 +46,6 @@
 # #     cypher_cmd = Mycelia.cypher(address = local_address, username = USERNAME, password = local_password, database = DATABASE, cmd = cmd)
 # #     run(cypher_cmd) 
 # # end
-
 
 # # ProgressMeter.@showprogress for (i, w) in enumerate(windows)
 # #     df_sub = edge_table[w, :]
@@ -84,10 +81,10 @@
 # - `neo4j_import_directory`: Path to Neo4j's import directory for bulk loading
 # """
 # function upload_nodes_to_neo4j(;graph, address, username="neo4j", password, format="auto", database="neo4j", neo4j_import_directory)
-    
+
 #     node_types = unique(MetaGraphs.props(graph, v)[:TYPE] for v in Graphs.vertices(graph))
 #     # node_type_strings = Mycelia.type_to_string.(node_types)
-    
+
 #     for node_type in node_types
 #         @info "uploading node_type => $(Mycelia.type_to_string(node_type))..."
 #         node_type_table = node_type_to_dataframe(node_type=node_type, graph=graph)
@@ -97,7 +94,7 @@
 #             showerror(stdout, e)
 #         end
 #     end
-    
+
 #     @info "done!"
 # end
 
@@ -164,7 +161,7 @@
 # function upload_node_table(;table, window_size=1000, address, password, username="neo4j", database="neo4j", neo4j_import_dir)
 #     nrows = DataFrames.nrow(table)
 #     windows = (i:min(i+window_size-1,nrows) for i in 1:window_size:nrows)
-    
+
 #     node_types = unique(table[!, "TYPE"])
 #     @assert length(node_types) == 1
 #     NODE_TYPE = Mycelia.type_to_string(first(node_types))
@@ -277,7 +274,6 @@
 #     end
 # end
 
-
 # # function batch_upload_edge_type_over_url_from_graph(src_type, dst_type, edge_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE; window_size=100)    
 # #     src_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == src_type, Graphs.vertices(graph))
 # #     dst_nodes = filter(v -> MetaGraphs.get_prop(graph, v, :TYPE) == dst_type, Graphs.vertices(graph))
@@ -291,10 +287,10 @@
 # #             push!(edges_to_upload, this_edge)
 # #         end
 # #     end
-    
+
 # #     N = length(edges_to_upload)
 # #     windows = [i:min(i+window_size-1,N) for i in 1:window_size:N]
-    
+
 # #     ProgressMeter.@showprogress for window in windows
 # #         cmds = []
 # #         for (i, e) in enumerate(edges_to_upload[window])
@@ -324,10 +320,10 @@
 # # function batch_upload_node_type_over_url_from_graph(node_type, graph, ADDRESS, USERNAME, PASSWORD, DATABASE, window_size=100)
 # #     node_type_params = Set{Symbol}()
 # #     vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
-    
+
 # #     V = length(vertices_of_type)
 # #     windows = [i:min(i+window_size-1,V) for i in 1:window_size:V]
-    
+
 # #     ProgressMeter.@showprogress for window in windows
 # #         cmds = []
 # #         for (i, v) in enumerate(vertices_of_type[window])
@@ -365,10 +361,10 @@
 # function upload_node_type_over_url_from_graph(;node_type, graph, ADDRESS, USERNAME="neo4j", PASSWORD, DATABASE="neo4j", window_size=100)
 #     node_type_params = Set{Symbol}()
 #     vertices_of_type = [v for v in Graphs.vertices(graph) if (graph.vprops[v][:TYPE] == node_type)]
-    
+
 #     V = length(vertices_of_type)
 #     windows = [i:min(i+window_size-1,V) for i in 1:window_size:V]
-    
+
 #     ProgressMeter.@showprogress for window in windows
 #         cmds = []
 #         for (i, v) in enumerate(vertices_of_type[window])
@@ -424,10 +420,10 @@
 #             push!(edges_to_upload, this_edge)
 #         end
 #     end
-    
+
 #     N = length(edges_to_upload)
 #     windows = (i:min(i+window_size-1,N) for i in 1:window_size:N)
-    
+
 #     ProgressMeter.@showprogress for window in windows
 #         cmds = []
 #         for (i, e) in enumerate(edges_to_upload[window])
@@ -568,11 +564,11 @@
 # function taxonomic_id_to_children(tax_id; DATABASE_ID, USERNAME="neo4j", PASSWORD)
 #     DATABASE = "neo4j"
 #     ADDRESS="neo4j+s://$(database_id).databases.neo4j.io:7687"
-    
+
 #     # NOTE! *, or 0 distance (e.g. [*0..2]) step range will include source node!!!!
 #     cmd = "MATCH (n)<-[*]-(n2) WHERE n.tax_id IS NOT NULL AND n.tax_id = \"$(tax_id)\" RETURN DISTINCT n2.tax_id AS tax_id"
 #     println(cmd)
-    
+
 #     cypher = cypher(cmd, address=ADDRESS, username = USERNAME, password = PASSWORD, database = DATABASE)
 #     tax_ids = readlines(open(cypher))[2:end]
 #     tax_ids = strip.(tax_ids, '"')

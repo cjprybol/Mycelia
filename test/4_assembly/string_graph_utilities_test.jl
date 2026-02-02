@@ -7,9 +7,9 @@ Test.@testset "String Graph Utilities" begin
     Test.@testset "Token graph construction" begin
         tokens = [
             ["the", "cat", "sat"],
-            ["the", "dog"],
+            ["the", "dog"]
         ]
-        graph = Mycelia.Rhizomorph.build_token_graph(tokens; dataset_id="tokens")
+        graph = Mycelia.Rhizomorph.build_token_graph(tokens; dataset_id = "tokens")
 
         Test.@test MetaGraphsNext.haskey(graph, "the")
         Test.@test MetaGraphsNext.haskey(graph, "cat")
@@ -31,7 +31,7 @@ Test.@testset "String Graph Utilities" begin
                 println(io, "")
             end
 
-            graph = Mycelia.Rhizomorph.build_string_graph_from_file(path1; min_overlap=3)
+            graph = Mycelia.Rhizomorph.build_string_graph_from_file(path1; min_overlap = 3)
             Test.@test MetaGraphsNext.haskey(graph, "ATCG")
             Test.@test MetaGraphsNext.haskey(graph, "TCGA")
 
@@ -50,7 +50,7 @@ Test.@testset "String Graph Utilities" begin
                 println(io, "CGAT")
             end
 
-            graph_multi = Mycelia.Rhizomorph.build_string_graph_from_files([path1, path2]; min_overlap=3)
+            graph_multi = Mycelia.Rhizomorph.build_string_graph_from_files([path1, path2]; min_overlap = 3)
             datasets = Mycelia.Rhizomorph.get_all_dataset_ids(graph_multi["TCGA"])
             Test.@test length(datasets) == 2
         end
@@ -59,9 +59,9 @@ Test.@testset "String Graph Utilities" begin
     Test.@testset "String graph statistics on empty graph" begin
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
-            label_type=String,
-            vertex_data_type=Mycelia.Rhizomorph.StringVertexData,
-            edge_data_type=Mycelia.Rhizomorph.StringEdgeData
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
         )
 
         stats = Mycelia.Rhizomorph.get_string_graph_statistics(graph)

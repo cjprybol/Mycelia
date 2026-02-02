@@ -49,7 +49,7 @@ function cached_stage(compute_fn::Function, name::String, checkpoint_dir::String
 
     Logging.@info "Computing '$(name)'..."
     result = compute_fn()
-    JLD2.jldsave(cache_file; data=result)
+    JLD2.jldsave(cache_file; data = result)
     Logging.@info "Saved '$(name)' to $(cache_file)"
     return result
 end
@@ -150,7 +150,7 @@ info = Mycelia.checkpoint_info(CHECKPOINT_DIR)
 """
 function checkpoint_info(checkpoint_dir::String)
     if !isdir(checkpoint_dir)
-        return DataFrames.DataFrame(name=String[], size_mb=Float64[], modified=DateTime[])
+        return DataFrames.DataFrame(name = String[], size_mb = Float64[], modified = DateTime[])
     end
 
     names = String[]
@@ -161,14 +161,14 @@ function checkpoint_info(checkpoint_dir::String)
         if endswith(f, ".jld2")
             fpath = joinpath(checkpoint_dir, f)
             push!(names, replace(f, ".jld2" => ""))
-            push!(sizes, round(filesize(fpath) / 1e6; digits=2))
+            push!(sizes, round(filesize(fpath) / 1e6; digits = 2))
             push!(modified, Dates.unix2datetime(mtime(fpath)))
         end
     end
 
     return DataFrames.DataFrame(
-        name=names,
-        size_mb=sizes,
-        modified=modified
+        name = names,
+        size_mb = sizes,
+        modified = modified
     )
 end

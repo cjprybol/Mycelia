@@ -148,7 +148,8 @@ struct QualityBioSequenceVertexData{T}
     quality_scores::Vector{UInt8}
     evidence::Dict{String, Dict{String, Set{QualityEvidenceEntry}}}
 
-    function QualityBioSequenceVertexData(sequence::T, quality_scores::Vector{UInt8}=Vector{UInt8}()) where {T}
+    function QualityBioSequenceVertexData(
+            sequence::T, quality_scores::Vector{UInt8} = Vector{UInt8}()) where {T}
         if !isempty(quality_scores) && length(sequence) != length(quality_scores)
             error("Sequence and quality lengths must match")
         end
@@ -214,6 +215,9 @@ end
 KmerVertexData{T}(kmer::T) where {T} = KmerVertexData(kmer)
 QualmerVertexData{T}(kmer::T) where {T} = QualmerVertexData(kmer)
 BioSequenceVertexData{T}(sequence::T) where {T} = BioSequenceVertexData(sequence)
-QualityBioSequenceVertexData{T}(sequence::T) where {T} = QualityBioSequenceVertexData(sequence)
-QualityBioSequenceVertexData{T}(sequence::T, quality_scores::Vector{UInt8}) where {T} =
+function QualityBioSequenceVertexData{T}(sequence::T) where {T}
+    QualityBioSequenceVertexData(sequence)
+end
+function QualityBioSequenceVertexData{T}(sequence::T, quality_scores::Vector{UInt8}) where {T}
     QualityBioSequenceVertexData(sequence, quality_scores)
+end

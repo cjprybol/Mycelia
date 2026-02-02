@@ -63,13 +63,15 @@ Test.@testset "Prokrustean Tool Integration" begin
                         end
 
                         bwt_path = joinpath(workdir, "test.bwt")
-                        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ropebwt2 ropebwt2 $fasta_path`, stdout=bwt_path))
+                        run(pipeline(
+                            `$(Mycelia.CONDA_RUNNER) run --live-stream -n ropebwt2 ropebwt2 $fasta_path`,
+                            stdout = bwt_path))
                         Test.@test isfile(bwt_path)
 
                         install_dir = joinpath(workdir, "prokrustean_install")
                         build_ok = true
                         try
-                            Mycelia.install_prokrustean(dest_dir=install_dir, force=true)
+                            Mycelia.install_prokrustean(dest_dir = install_dir, force = true)
                             Test.@test isfile(joinpath(install_dir, "build", "prokrustean"))
                         catch e
                             Test.@test_skip "Prokrustean build failed: $(e)"
@@ -78,28 +80,33 @@ Test.@testset "Prokrustean Tool Integration" begin
 
                         if build_ok
                             graph_path = joinpath(workdir, "test.prokrustean")
-                            Mycelia.prokrustean_build_graph(bwt_path, graph_path; kmin=5, install_dir=install_dir)
+                            Mycelia.prokrustean_build_graph(
+                                bwt_path, graph_path; kmin = 5, install_dir = install_dir)
                             Test.@test isfile(graph_path)
 
                             kmer_counts_file = joinpath(workdir, "kmer_counts.txt")
-                            Mycelia.prokrustean_kmer_count(graph_path, kmer_counts_file; install_dir=install_dir)
+                            Mycelia.prokrustean_kmer_count(
+                                graph_path, kmer_counts_file; install_dir = install_dir)
                             Test.@test isfile(kmer_counts_file)
                             Test.@test filesize(kmer_counts_file) > 0
 
                             unitig_counts_file = joinpath(workdir, "unitig_counts.txt")
-                            Mycelia.prokrustean_unitig_count(graph_path, unitig_counts_file; install_dir=install_dir)
+                            Mycelia.prokrustean_unitig_count(
+                                graph_path, unitig_counts_file; install_dir = install_dir)
                             Test.@test isfile(unitig_counts_file)
                             lines = readlines(unitig_counts_file)
                             Test.@test !isempty(lines)
-                            Test.@test all(line -> tryparse(Float64, split(strip(line))[1]) !== nothing, lines)
+                            Test.@test all(
+                                line -> tryparse(Float64, split(strip(line))[1]) !==
+                                        nothing, lines)
 
                             overlap_file = joinpath(workdir, "overlap.txt")
-                            Mycelia.prokrustean_overlap(graph_path, overlap_file; install_dir=install_dir)
+                            Mycelia.prokrustean_overlap(graph_path, overlap_file; install_dir = install_dir)
                             Test.@test isfile(overlap_file)
                         end
                     end
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         end

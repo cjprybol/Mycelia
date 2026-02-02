@@ -14,8 +14,8 @@ Test.@testset "Variant Analysis Parsing" begin
 
         df = Mycelia.parse_rtg_eval_output(eval_path)
         Test.@test Mycelia.DataFrames.nrow(df) == 2
-        Test.@test isapprox(df[1, "Precision"], 0.9; atol=1e-6)
-        Test.@test isapprox(df[2, "Recall"], 0.8; atol=1e-6)
+        Test.@test isapprox(df[1, "Precision"], 0.9; atol = 1e-6)
+        Test.@test isapprox(df[2, "Recall"], 0.8; atol = 1e-6)
 
         empty_path = joinpath(temp_dir, "empty.tsv.gz")
         empty_content = "#Precision\tRecall\tScore\n"
@@ -32,15 +32,15 @@ Test.@testset "Variant Analysis Parsing" begin
 
     Test.@testset "Evaluation summary" begin
         df = Mycelia.DataFrames.DataFrame(
-            Precision=[0.9, 0.5],
-            Recall=[0.6, 0.8],
-            Score=[10.0, 20.0]
+            Precision = [0.9, 0.5],
+            Recall = [0.6, 0.8],
+            Score = [10.0, 20.0]
         )
         summary = Mycelia.calculate_evaluation_summary(Dict("snp_roc" => df))
-        Test.@test isapprox(summary.snp_roc.max_f1, 0.72; atol=1e-6)
+        Test.@test isapprox(summary.snp_roc.max_f1, 0.72; atol = 1e-6)
         Test.@test summary.snp_roc.max_precision == 0.9
         Test.@test summary.snp_roc.max_recall == 0.8
         Test.@test summary.snp_roc.optimal_threshold == 10.0
-        Test.@test isapprox(summary.snp_roc.auc_estimate, 0.14; atol=1e-6)
+        Test.@test isapprox(summary.snp_roc.auc_estimate, 0.14; atol = 1e-6)
     end
 end

@@ -15,7 +15,8 @@ struct ContigPath{T, S}
     length::Int
     n50_contribution::Float64
 
-    function ContigPath(vertices::Vector{T}, sequence::S, coverage::Vector{Float64}) where {T, S}
+    function ContigPath(vertices::Vector{T}, sequence::S, coverage::Vector{Float64}) where {
+            T, S}
         new{T, S}(vertices, sequence, coverage, length(sequence), 0.0)
     end
 end
@@ -26,7 +27,7 @@ end
 Extract linear contigs from the assembly graph. Returns contigs whose assembled
 sequence length is at least `min_contig_length`.
 """
-function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int=500)
+function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int = 500)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
         return ContigPath{Any, Any}[]
@@ -74,7 +75,7 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         out_neighbors = Rhizomorph.get_outgoing_neighbors(graph, current)
         valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path)]
 
-        next_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction=:out)
+        next_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :out)
         if next_vertex === nothing
             break
         end
@@ -92,9 +93,11 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
 
     while true
         in_neighbors = Rhizomorph.get_incoming_neighbors(graph, current)
-        valid_neighbors = [n for n in in_neighbors if !(n in visited) && !(n in path) && !(n in backward_path)]
+        valid_neighbors = [n
+                           for n in in_neighbors
+                           if !(n in visited) && !(n in path) && !(n in backward_path)]
 
-        prev_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction=:in)
+        prev_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :in)
         if prev_vertex === nothing
             break
         end
@@ -133,16 +136,17 @@ function _select_linear_neighbor(graph, current, neighbors; direction::Symbol)
     if length(neighbors) == 1
         return neighbors[1]
     end
-    return _dominant_neighbor(graph, current, neighbors; direction=direction)
+    return _dominant_neighbor(graph, current, neighbors; direction = direction)
 end
 
 function _dominant_neighbor(graph, current, neighbors; direction::Symbol)
     supports = Vector{Tuple{eltype(neighbors), Int}}(undef, length(neighbors))
     for (idx, neighbor) in enumerate(neighbors)
-        support = direction == :out ? _edge_support(graph, current, neighbor) : _edge_support(graph, neighbor, current)
+        support = direction == :out ? _edge_support(graph, current, neighbor) :
+                  _edge_support(graph, neighbor, current)
         supports[idx] = (neighbor, support)
     end
-    sort!(supports, by=last, rev=true)
+    sort!(supports, by = last, rev = true)
 
     best_neighbor, best_support = supports[1]
     second_support = length(supports) > 1 ? supports[2][2] : 0
@@ -159,7 +163,7 @@ function _edge_is_dominant_among_incoming(graph, src, dst)
     if length(incoming) <= 1
         return true
     end
-    dominant = _dominant_neighbor(graph, dst, incoming; direction=:in)
+    dominant = _dominant_neighbor(graph, dst, incoming; direction = :in)
     return dominant == src
 end
 
@@ -168,15 +172,17 @@ function _edge_is_dominant_among_outgoing(graph, src, dst)
     if length(outgoing) <= 1
         return true
     end
-    dominant = _dominant_neighbor(graph, src, outgoing; direction=:out)
+    dominant = _dominant_neighbor(graph, src, outgoing; direction = :out)
     return dominant == dst
 end
 
 """
 Generate an assembled sequence for a contig path.
 """
-function generate_contig_sequence(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
-                                  path::Vector{T}) where {T}
+function generate_contig_sequence(
+        graph::MetaGraphsNext.MetaGraph{
+            <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
+        path::Vector{T}) where {T}
     if isempty(path)
         return ""
     end
@@ -198,7 +204,8 @@ function generate_contig_sequence(graph::MetaGraphsNext.MetaGraph{<:Integer, <:A
             next_sequence = graph[dst].sequence
 
             overlap = min(edge_overlap, length(next_sequence))
-            append_part = overlap < length(next_sequence) ? next_sequence[(overlap + 1):end] : SequenceType()
+            append_part = overlap < length(next_sequence) ?
+                          next_sequence[(overlap + 1):end] : SequenceType()
             assembled = assembled * append_part
         end
 
@@ -238,7 +245,7 @@ end
 Sort contigs by sequence length (descending).
 """
 function sort_contigs_by_length(contigs::Vector{ContigPath})
-    return sort(contigs, by=c -> c.length, rev=true)
+    return sort(contigs, by = c -> c.length, rev = true)
 end
 
 """

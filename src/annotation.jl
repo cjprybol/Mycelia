@@ -35,18 +35,22 @@ fasta_path = extract_proteins_from_genbank("genome.gbk")
 fasta_path = extract_proteins_from_genbank("genome.gbk", output_path="proteins.faa")
 ```
 """
-function extract_proteins_from_genbank(genbank_path::String; output_path::Union{String, Nothing}=nothing)
+function extract_proteins_from_genbank(genbank_path::String; output_path::Union{
+        String, Nothing} = nothing)
     output_fasta = isnothing(output_path) ? genbank_path * ".extracted.faa" : output_path
-    
+
     genbank_records = GenomicAnnotations.readgbk(genbank_path)
     protein_records = FASTX.FASTA.Record[]
-    
+
     for chromosome in genbank_records
-        for cds_gene in filter(gene -> GenomicAnnotations.feature(gene) == :CDS, chromosome.genes)
+        for cds_gene in
+            filter(gene -> GenomicAnnotations.feature(gene) == :CDS, chromosome.genes)
             ## Skip pseudogenes
-            if haskey(GenomicAnnotations.attributes(cds_gene), :pseudo) && GenomicAnnotations.attributes(cds_gene).pseudo
+            if haskey(GenomicAnnotations.attributes(cds_gene), :pseudo) &&
+               GenomicAnnotations.attributes(cds_gene).pseudo
                 continue
-            elseif haskey(GenomicAnnotations.attributes(cds_gene), :translation) && !haskey(GenomicAnnotations.attributes(cds_gene), :pseudo)
+            elseif haskey(GenomicAnnotations.attributes(cds_gene), :translation) &&
+                   !haskey(GenomicAnnotations.attributes(cds_gene), :pseudo)
                 ## Use existing translation if available
                 protein_name = replace(GenomicAnnotations.attributes(cds_gene).product, r"\s+" => "_")
                 protein_sequence = GenomicAnnotations.attributes(cds_gene).translation
@@ -60,17 +64,19 @@ function extract_proteins_from_genbank(genbank_path::String; output_path::Union{
                 protein_name = replace(GenomicAnnotations.attributes(cds_gene).label, r"\s+" => "_")
                 protein_sequence = BioSequences.translate(extracted_gene_sequence)
             end
-            
+
             ## Create unique identifier with sequence hash
-            protein_hash = Mycelia.create_sequence_hash(protein_sequence, hash_function=:md5, encoding=:hex)
-            this_protein_record_identifier = join([basename(genbank_path), protein_hash, protein_name], "_")
+            protein_hash = Mycelia.create_sequence_hash(protein_sequence, hash_function = :md5, encoding = :hex)
+            this_protein_record_identifier = join(
+                [
+                    basename(genbank_path), protein_hash, protein_name], "_")
             this_protein_record = FASTX.FASTA.Record(this_protein_record_identifier, protein_sequence)
             push!(protein_records, this_protein_record)
         end
     end
-    
-    Mycelia.write_fasta(outfile=output_fasta, records=protein_records)
-    
+
+    Mycelia.write_fasta(outfile = output_fasta, records = protein_records)
+
     return output_fasta
 end
 
@@ -486,7 +492,7 @@ end
 #                 if occursin("</entry>", line)
 #                     in_entry = false
 #                     records_read += 1
-                    
+
 #                     entry_xml_string = String(take!(buf))
 #                     doc = EzXML.parsexml(entry_xml_string)
 #                     root = EzXML.root(doc)
@@ -498,7 +504,7 @@ end
 #                             continue # Skip this entry
 #                         end
 #                     end
-                    
+
 #                     _process_entry!(
 #                         root,
 #                         entry_id, updated, name,
@@ -654,39 +660,49 @@ Returns:
 - `String`: Path to `outdir` when `as_string=false`, or the bash command string when `as_string=true`.
 """
 function run_pgap(;
-    fasta::AbstractString,
-    organism::AbstractString,
-    pgap_dir = joinpath(homedir(), "workspace", "pgap"),
-    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
-    as_string::Bool = false,
-    force::Bool = false,
-    threads::Int = get_default_threads(),
-    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
-    min_seq_length::Int = 200,
-    filter_short::Bool = true,
-    ignore_all_errors::Bool = false,
-    no_internet::Bool = false,
+        fasta::AbstractString,
+        organism::AbstractString,
+        pgap_dir = joinpath(homedir(), "workspace", "pgap"),
+        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
+        as_string::Bool = false,
+        force::Bool = false,
+        threads::Int = get_default_threads(),
+        prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
+        min_seq_length::Int = 200,
+        filter_short::Bool = true,
+        ignore_all_errors::Bool = false,
+        no_internet::Bool = false
 )
     # Expected outputs from a successful run (accept either prefix.fna or prefixprefix.fna)
     function _expected_complete(outdir_::AbstractString, prefix_::AbstractString)
         singles = String[
-            joinpath(outdir_, "$(prefix_)_cds_from_genomic.fna"),
-            joinpath(outdir_, "$(prefix_)_translated_cds.faa"),
-            joinpath(outdir_, "$(prefix_)_with_genomic_fasta.gff"),
-            joinpath(outdir_, "$(prefix_).faa"),
-            joinpath(outdir_, "$(prefix_).gbk"),
-            joinpath(outdir_, "$(prefix_).gff"),
-            joinpath(outdir_, "$(prefix_).sqn"),
-            joinpath(outdir_, "$(prefix_)ani-tax-report.txt"),
-            joinpath(outdir_, "$(prefix_)ani-tax-report.xml"),
-            joinpath(outdir_, "$(prefix_)checkm.txt"),
-            joinpath(outdir_, "$(prefix_)cwltool.log"),
-            joinpath(outdir_, "$(prefix_)fastaval.xml"),
-            joinpath(outdir_, "$(prefix_)uuid.txt"),
-        ]
+        joinpath(outdir_, "$(prefix_)_cds_from_genomic.fna"),
+        joinpath(
+            outdir_, "$(prefix_)_translated_cds.faa"),
+        joinpath(
+            outdir_, "$(prefix_)_with_genomic_fasta.gff"),
+        joinpath(
+            outdir_, "$(prefix_).faa"),
+        joinpath(outdir_, "$(prefix_).gbk"),
+        joinpath(
+            outdir_, "$(prefix_).gff"),
+        joinpath(outdir_, "$(prefix_).sqn"),
+        joinpath(
+            outdir_, "$(prefix_)ani-tax-report.txt"),
+        joinpath(
+            outdir_, "$(prefix_)ani-tax-report.xml"),
+        joinpath(
+            outdir_, "$(prefix_)checkm.txt"),
+        joinpath(
+            outdir_, "$(prefix_)cwltool.log"),
+        joinpath(
+            outdir_, "$(prefix_)fastaval.xml"),
+        joinpath(
+            outdir_, "$(prefix_)uuid.txt")
+]
         any_groups = Vector{Vector{String}}([
-            [ joinpath(outdir_, "$(prefix_).fna"),
-              joinpath(outdir_, "$(prefix_)$(prefix_).fna") ],
+            [joinpath(outdir_, "$(prefix_).fna"),
+            joinpath(outdir_, "$(prefix_)$(prefix_).fna")],
         ])
         if !all(isfile, singles)
             return false
@@ -695,8 +711,9 @@ function run_pgap(;
     end
 
     success_marker = joinpath(outdir, ".pgap_success")
-    _run_is_successful(outdir_::AbstractString, prefix_::AbstractString) =
-        isfile(success_marker) || _expected_complete(outdir_, prefix_)
+    _run_is_successful(outdir_::AbstractString,
+        prefix_::AbstractString) = isfile(success_marker) ||
+                                   _expected_complete(outdir_, prefix_)
 
     # Ensure PGAP availability
     pgap_py_script = joinpath(pgap_dir, "pgap.py")
@@ -713,14 +730,14 @@ function run_pgap(;
     # Handle pre-existing outdir
     if isdir(outdir)
         if force
-            rm(outdir, recursive=true)
+            rm(outdir, recursive = true)
         else
             if _run_is_successful(outdir, prefix)
                 # @info "Detected completed PGAP run in $outdir; reusing outputs"
                 return outdir
             else
                 @warn "$outdir exists but appears incomplete; removing it to allow a clean retry"
-                rm(outdir, recursive=true)
+                rm(outdir, recursive = true)
             end
         end
     end
@@ -739,7 +756,7 @@ function run_pgap(;
     end
 
     # Build filtered temporary FASTA
-    filtered_fasta::Union{Nothing,String} = nothing
+    filtered_fasta::Union{Nothing, String} = nothing
     try
         reader = Mycelia.open_fastx(fasta)
         records = FASTX.FASTA.Record[]
@@ -773,7 +790,7 @@ function run_pgap(;
         catch e
             if isdir(outdir)
                 try
-                    rm(outdir, recursive=true)
+                    rm(outdir, recursive = true)
                 catch
                 end
             end
@@ -811,15 +828,15 @@ Returns:
 - `Nothing`: Always throws until implemented.
 """
 function run_egapx(;
-    fasta::AbstractString,
-    organism::AbstractString,
-    egapx_dir = joinpath(homedir(), "workspace", "egapx"),
-    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_egapx"),
-    as_string::Bool = false,
-    force::Bool = false,
-    threads::Int = get_default_threads(),
-    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
-    no_internet::Bool = false,
+        fasta::AbstractString,
+        organism::AbstractString,
+        egapx_dir = joinpath(homedir(), "workspace", "egapx"),
+        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_egapx"),
+        as_string::Bool = false,
+        force::Bool = false,
+        threads::Int = get_default_threads(),
+        prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
+        no_internet::Bool = false
 )
     error("EGAPx wrapper not implemented yet; see planning-docs/TODO.md for scope notes.")
 end
@@ -868,25 +885,25 @@ Returns:
 - `NamedTuple`: Contains `outdir`, `txt_report`, and `xml_report` paths.
 """
 function run_pgap_taxonomy_check(;
-    fasta::AbstractString,
-    organism::AbstractString,
-    pgap_dir = joinpath(homedir(), "workspace", "pgap"),
-    outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
-    as_string::Bool = false,
-    prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
-    no_internet::Bool = false,
-    min_seq_length::Int = 200,
-    filter_ambiguous::Bool = false,
+        fasta::AbstractString,
+        organism::AbstractString,
+        pgap_dir = joinpath(homedir(), "workspace", "pgap"),
+        outdir = replace(fasta, Mycelia.FASTA_REGEX => "_pgap"),
+        as_string::Bool = false,
+        prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
+        no_internet::Bool = false,
+        min_seq_length::Int = 200,
+        filter_ambiguous::Bool = false
 )
     # Expected output from taxonomy check
     tax_report = joinpath(outdir, "$(prefix)ani-tax-report.txt")
     tax_report_xml = joinpath(outdir, "$(prefix)ani-tax-report.xml")
-    
+
     # Check if taxonomy report already exists
     if isfile(tax_report)
         return (outdir = outdir, txt_report = tax_report, xml_report = tax_report_xml)
     end
-    
+
     # Ensure PGAP availability
     pgap_py_script = joinpath(pgap_dir, "pgap.py")
     if !isfile(pgap_py_script)
@@ -895,7 +912,8 @@ function run_pgap_taxonomy_check(;
         @assert isfile(pgap_py_script)
     end
     if !no_internet && isempty(filter(x -> occursin(r"input\-", x), readdir(pgap_dir)))
-        @time Base.run(setenv(`python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
+        @time Base.run(setenv(
+            `python3 $(pgap_py_script) --update`, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
     end
 
     # If only returning the command string, return immediately
@@ -908,24 +926,24 @@ function run_pgap_taxonomy_check(;
     end
 
     # Build temporary uncompressed FASTA for PGAP with filtering
-    temp_fasta::Union{Nothing,String} = nothing
-    temp_outdir::Union{Nothing,String} = nothing
-    
+    temp_fasta::Union{Nothing, String} = nothing
+    temp_outdir::Union{Nothing, String} = nothing
+
     try
         reader = Mycelia.open_fastx(fasta)
         records = FASTX.FASTA.Record[]
         filtered_count = 0
-        
+
         for record in reader
             seq = FASTX.sequence(record)
             seq_length = length(seq)
-            
+
             # Filter by length
             if seq_length <= min_seq_length
                 filtered_count += 1
                 continue
             end
-            
+
             # Filter by ambiguous nucleotides using BioSequences
             if filter_ambiguous
                 if BioSequences.hasambiguity(BioSequences.LongDNA{4}(seq))
@@ -933,19 +951,19 @@ function run_pgap_taxonomy_check(;
                     continue
                 end
             end
-            
+
             # Make an owned copy (iterator may reuse buffers)
             push!(records, copy(record))
         end
-        
+
         if isempty(records)
             throw(ArgumentError("All sequences were filtered out (filtered: $(filtered_count), min_length: $(min_seq_length) bp, filter_ambiguous: $(filter_ambiguous)); nothing to analyze."))
         end
-        
+
         if filtered_count > 0
             # @info "Filtered $(filtered_count) sequences; $(length(records)) sequences retained for taxonomy check"
         end
-        
+
         temp_fasta = Mycelia.write_fasta(; outfile = tempname() * ".fna", records = records, gzip = false)
 
         # PGAP won't write to an existing directory, so we need to handle this
@@ -956,50 +974,50 @@ function run_pgap_taxonomy_check(;
             temp_base = tempname()
             # Remove it if it exists
             if isdir(temp_base)
-                rm(temp_base, recursive=true)
+                rm(temp_base, recursive = true)
             end
             temp_outdir = temp_base
             temp_base
         else
             outdir
         end
-        
+
         # Construct and run the taxonomy check command
         if !no_internet
             cmd = `python3 $(pgap_py_script) --ignore-all-errors --report-usage-true --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
         else
             cmd = `python3 $(pgap_py_script) --ignore-all-errors --no-internet --report-usage-false --taxcheck-only --output $(actual_outdir) --genome $(temp_fasta) --organism $(organism) --prefix $(prefix)`
         end
-        
+
         temp_tax_report = joinpath(actual_outdir, "$(prefix)ani-tax-report.txt")
         temp_tax_report_xml = joinpath(actual_outdir, "$(prefix)ani-tax-report.xml")
-        
+
         try
             @time Base.run(setenv(cmd, merge(ENV, Dict("PGAP_INPUT_DIR" => pgap_dir))))
-            
+
             # If we used a temporary directory, move the taxonomy files to the final location
             if use_temp_dir
                 if !isdir(outdir)
                     mkpath(outdir)
                 end
                 if isfile(temp_tax_report)
-                    mv(temp_tax_report, tax_report, force=true)
+                    mv(temp_tax_report, tax_report, force = true)
                 end
                 if isfile(temp_tax_report_xml)
-                    mv(temp_tax_report_xml, tax_report_xml, force=true)
+                    mv(temp_tax_report_xml, tax_report_xml, force = true)
                 end
                 # Clean up temporary directory
                 if !isnothing(temp_outdir) && isdir(temp_outdir)
-                    rm(temp_outdir, recursive=true, force=true)
+                    rm(temp_outdir, recursive = true, force = true)
                 end
             end
-            
+
             return (outdir = outdir, txt_report = tax_report, xml_report = tax_report_xml)
         catch e
             # Clean up temporary directory if it exists
             if !isnothing(temp_outdir) && isdir(temp_outdir)
                 try
-                    rm(temp_outdir, recursive=true, force=true)
+                    rm(temp_outdir, recursive = true, force = true)
                 catch
                 end
             end
@@ -1084,17 +1102,17 @@ Fields:
 struct PGAPTaxonomyReport
     assembly_name::String
     submitted_organism::String
-    submitted_taxid::Union{Int,Nothing}
-    submitted_rank::Union{String,Nothing}
-    submitted_lineage::Union{String,Nothing}
-    predicted_organism::Union{String,Nothing}
-    predicted_taxid::Union{Int,Nothing}
-    predicted_rank::Union{String,Nothing}
-    predicted_lineage::Union{String,Nothing}
-    best_match_organism::Union{String,Nothing}
-    best_match_taxid::Union{Int,Nothing}
-    best_match_rank::Union{String,Nothing}
-    best_match_lineage::Union{String,Nothing}
+    submitted_taxid::Union{Int, Nothing}
+    submitted_rank::Union{String, Nothing}
+    submitted_lineage::Union{String, Nothing}
+    predicted_organism::Union{String, Nothing}
+    predicted_taxid::Union{Int, Nothing}
+    predicted_rank::Union{String, Nothing}
+    predicted_lineage::Union{String, Nothing}
+    best_match_organism::Union{String, Nothing}
+    best_match_taxid::Union{Int, Nothing}
+    best_match_rank::Union{String, Nothing}
+    best_match_lineage::Union{String, Nothing}
     has_type::Bool
     status::String
     confidence::String
@@ -1114,7 +1132,7 @@ Returns:
 """
 function parse_pgap_taxonomy_report(report_file::AbstractString)
     lines = readlines(report_file)
-    
+
     # Initialize variables
     assembly_name = ""
     submitted_organism = ""
@@ -1133,25 +1151,27 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
     status = ""
     confidence = ""
     matches = PGAPTaxonomyMatch[]
-    
+
     in_table = false
-    
+
     for line in lines
         line = strip(line)
-        
+
         # Skip empty lines
         if isempty(line)
             continue
         end
-        
+
         # Parse header information
         if startswith(line, "ANI report for assembly:")
-            assembly_name = strip(split(line, ":", limit=2)[2])
+            assembly_name = strip(split(line, ":", limit = 2)[2])
         elseif startswith(line, "Submitted organism:")
             # Parse: Organism name (taxid = X, rank = Y, lineage = Z)
-            parts = split(line, ":", limit=2)[2]
+            parts = split(line, ":", limit = 2)[2]
             if contains(parts, "(taxid")
-                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                org_match = match(
+                    r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$",
+                    strip(parts))
                 if !isnothing(org_match)
                     submitted_organism = strip(org_match.captures[1])
                     submitted_taxid = parse(Int, org_match.captures[2])
@@ -1162,9 +1182,11 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
                 submitted_organism = strip(parts)
             end
         elseif startswith(line, "Predicted organism:")
-            parts = split(line, ":", limit=2)[2]
+            parts = split(line, ":", limit = 2)[2]
             if contains(parts, "(taxid")
-                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                org_match = match(
+                    r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$",
+                    strip(parts))
                 if !isnothing(org_match)
                     predicted_organism = strip(org_match.captures[1])
                     predicted_taxid = parse(Int, org_match.captures[2])
@@ -1173,9 +1195,11 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
                 end
             end
         elseif startswith(line, "Best match:")
-            parts = split(line, ":", limit=2)[2]
+            parts = split(line, ":", limit = 2)[2]
             if contains(parts, "(taxid")
-                org_match = match(r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$", strip(parts))
+                org_match = match(
+                    r"^(.*?)\s*\(taxid\s*=\s*(\d+),\s*rank\s*=\s*([^,]+),\s*lineage\s*=\s*(.+)\)\s*$",
+                    strip(parts))
                 if !isnothing(org_match)
                     best_match_organism = strip(org_match.captures[1])
                     best_match_taxid = parse(Int, org_match.captures[2])
@@ -1186,9 +1210,9 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
         elseif startswith(line, "Submitted organism has type:")
             has_type = contains(lowercase(line), "yes")
         elseif startswith(line, "Status:")
-            status = strip(split(line, ":", limit=2)[2])
+            status = strip(split(line, ":", limit = 2)[2])
         elseif startswith(line, "Confidence:")
-            confidence = strip(split(line, ":", limit=2)[2])
+            confidence = strip(split(line, ":", limit = 2)[2])
         elseif startswith(line, "ANI") && contains(line, "(Coverages)")
             # Start of table header
             in_table = true
@@ -1206,22 +1230,23 @@ function parse_pgap_taxonomy_report(report_file::AbstractString)
             match_regex = r"^\s*(\d+\.\d+)\s+\(\s*(\d+\.\d+)\s+(\d+\.\d+)\)\s+(\d+)\s+(\d+)\s+(\d+)\s+([A-Z]*)\s+(.+?)\s+\(([^,]+),\s*(.+)\)\s*$"
             m = match(match_regex, line)
             if !isnothing(m)
-                push!(matches, PGAPTaxonomyMatch(
-                    parse(Float64, m.captures[1]),
-                    parse(Float64, m.captures[2]),
-                    parse(Float64, m.captures[3]),
-                    parse(Int, m.captures[4]),
-                    parse(Int, m.captures[5]),
-                    parse(Int, m.captures[6]),
-                    m.captures[7],
-                    strip(m.captures[8]),
-                    strip(m.captures[9]),
-                    strip(m.captures[10])
-                ))
+                push!(matches,
+                    PGAPTaxonomyMatch(
+                        parse(Float64, m.captures[1]),
+                        parse(Float64, m.captures[2]),
+                        parse(Float64, m.captures[3]),
+                        parse(Int, m.captures[4]),
+                        parse(Int, m.captures[5]),
+                        parse(Int, m.captures[6]),
+                        m.captures[7],
+                        strip(m.captures[8]),
+                        strip(m.captures[9]),
+                        strip(m.captures[10])
+                    ))
             end
         end
     end
-    
+
     return PGAPTaxonomyReport(
         assembly_name,
         submitted_organism,
@@ -1249,29 +1274,31 @@ function load_pgap_taxonomy_reports(txt_reports)
     for txt_report in txt_reports
         try
             report = Mycelia.parse_pgap_taxonomy_report(txt_report)
-            
-            push!(validation_rows, (
-                submitted_organism = report.submitted_organism,
-                submitted_taxid = report.submitted_taxid,
-                submitted_rank = report.submitted_rank,
-                best_match_organism = report.best_match_organism,
-                best_match_taxid = report.best_match_taxid,
-                best_match_rank = report.best_match_rank,
-                predicted_organism = report.predicted_organism,
-                predicted_taxid = report.predicted_taxid,
-                predicted_rank = report.predicted_rank,
-                status = report.status,
-                confidence = report.confidence,
-                has_type = report.has_type,
-                top_ani = isempty(report.matches) ? missing : report.matches[1].ani,
-                top_match_organism = isempty(report.matches) ? missing : report.matches[1].organism,
-                num_matches = length(report.matches)
-            ))
+
+            push!(validation_rows,
+                (
+                    submitted_organism = report.submitted_organism,
+                    submitted_taxid = report.submitted_taxid,
+                    submitted_rank = report.submitted_rank,
+                    best_match_organism = report.best_match_organism,
+                    best_match_taxid = report.best_match_taxid,
+                    best_match_rank = report.best_match_rank,
+                    predicted_organism = report.predicted_organism,
+                    predicted_taxid = report.predicted_taxid,
+                    predicted_rank = report.predicted_rank,
+                    status = report.status,
+                    confidence = report.confidence,
+                    has_type = report.has_type,
+                    top_ani = isempty(report.matches) ? missing : report.matches[1].ani,
+                    top_match_organism = isempty(report.matches) ? missing :
+                                         report.matches[1].organism,
+                    num_matches = length(report.matches)
+                ))
         catch e
             println("Failed to parse report for $(result.fna_path): $e")
         end
     end
-    
+
     validation_df = DataFrames.DataFrame(validation_rows)
     return validation_df
 end
@@ -1279,12 +1306,12 @@ end
 function run_bakta(;
         fasta::AbstractString,
         outdir = replace(fasta, Mycelia.FASTA_REGEX => "_bakta"),
-        baktadb_dir=joinpath(homedir(), "workspace", "bakta"),
-        mode="full",
-        threads=get_default_threads(),
+        baktadb_dir = joinpath(homedir(), "workspace", "bakta"),
+        mode = "full",
+        threads = get_default_threads(),
         as_string = false,
         force = false
-    )
+)
     @assert mode in ["full", "light"]
     @assert isfile(fasta)
     Mycelia.add_bioconda_env("bakta")
@@ -1302,7 +1329,8 @@ function run_bakta(;
     # --locus-tag eco634
     # --prodigal-tf eco.tf
     # --replicons replicon.tsv
-    if !isdir(outdir) || isempty(filter(x -> !occursin(r"^\.", x), readdir(outdir))) || force
+    if !isdir(outdir) || isempty(filter(x -> !occursin(r"^\.", x), readdir(outdir))) ||
+       force
         if as_string
             bash_command = "$(Mycelia.CONDA_RUNNER) run --live-stream -n bakta bakta --verbose --db $(bakta_db_path) --output $(outdir) --threads $(threads) $(fasta) --force"
             return bash_command
@@ -1346,26 +1374,26 @@ machine learning models and database comparisons.
 NamedTuple containing paths to all generated output files and directories
 """
 function run_virsorter2(;
-    input_fasta,
-    output_directory = input_fasta * "_virsorter2",
-    database_path = mkpath(joinpath(homedir(), "workspace", "virsorter2_db")),
-    include_groups = "dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae", # full set is dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae
-    min_score = 0.5,
-    min_length = 1500,
-    threads = get_default_threads(),
-    provirus_off = false,
-    max_orf_per_seq = nothing,
-    prep_for_dramv = false,
-    label = nothing,
-    forceall = false,
-    force = false
+        input_fasta,
+        output_directory = input_fasta * "_virsorter2",
+        database_path = mkpath(joinpath(homedir(), "workspace", "virsorter2_db")),
+        include_groups = "dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae", # full set is dsDNAphage,NCLDV,RNA,ssDNA,lavidaviridae
+        min_score = 0.5,
+        min_length = 1500,
+        threads = get_default_threads(),
+        provirus_off = false,
+        max_orf_per_seq = nothing,
+        prep_for_dramv = false,
+        label = nothing,
+        forceall = false,
+        force = false
 )
-    
+
     # Define output file paths based on VirSorter2 structure
     final_viral_combined = joinpath(output_directory, "final-viral-combined.fa")
     final_viral_score = joinpath(output_directory, "final-viral-score.tsv")
     final_viral_boundary = joinpath(output_directory, "final-viral-boundary.tsv")
-    
+
     # Label-specific files if label was provided
     if label !== nothing
         labeled_viral_combined = joinpath(output_directory, "$(label)-final-viral-combined.fa")
@@ -1376,81 +1404,83 @@ function run_virsorter2(;
         labeled_viral_score = nothing
         labeled_viral_boundary = nothing
     end
-    
+
     # DRAMv output files if prep_for_dramv was enabled
     dramv_dir = joinpath(output_directory, "for-dramv")
-    dramv_viral_combined = prep_for_dramv ? joinpath(dramv_dir, "final-viral-combined-for-dramv.fa") : nothing
+    dramv_viral_combined = prep_for_dramv ?
+                           joinpath(dramv_dir, "final-viral-combined-for-dramv.fa") :
+                           nothing
     dramv_affi_contigs = prep_for_dramv ? joinpath(dramv_dir, "affi-contigs.tab") : nothing
-    
+
     # Check if output files already exist (unless force is true)
     if !force
         # Build list of expected output files to check
         expected_files = [final_viral_combined, final_viral_score, final_viral_boundary]
-        
+
         # Add label-specific files if label was provided
         if label !== nothing
             push!(expected_files, labeled_viral_combined, labeled_viral_score, labeled_viral_boundary)
         end
-        
+
         # Add DRAMv files if prep_for_dramv is enabled
         if prep_for_dramv
             push!(expected_files, dramv_viral_combined, dramv_affi_contigs)
         end
-        
+
         # Filter out nothing values and check if all files exist
         files_to_check = filter(x -> x !== nothing, expected_files)
         all_files_exist = all(Base.Filesystem.isfile, files_to_check)
-        
+
         if all_files_exist
             @warn "All VirSorter2 output files already exist in $(output_directory). Skipping analysis."
             @warn "Use `force=true` to rerun anyway."
-            
+
             # Intermediate directories and files that might be useful
             iter_dir = joinpath(output_directory, "iter-0")
             checkpoints_dir = joinpath(output_directory, "checkpoints")
             logs_dir = joinpath(output_directory, "logs")
-            
+
             # Configuration and temporary files
             config_yaml = joinpath(output_directory, "config.yaml")
-            
+
             # Return comprehensive NamedTuple with all output paths (same as below)
             return (
                 # Main output directory
                 output_directory = output_directory,
                 database_path = database_path,
-                
+
                 # Primary output files (most commonly used)
                 final_viral_combined = final_viral_combined,
                 final_viral_score = final_viral_score,
                 final_viral_boundary = final_viral_boundary,
-                
+
                 # Label-specific outputs (if label was provided)
                 labeled_viral_combined = labeled_viral_combined,
                 labeled_viral_score = labeled_viral_score,
                 labeled_viral_boundary = labeled_viral_boundary,
-                
+
                 # DRAMv compatibility outputs (if enabled)
                 dramv_directory = prep_for_dramv ? dramv_dir : nothing,
                 dramv_viral_combined = dramv_viral_combined,
                 dramv_affi_contigs = dramv_affi_contigs,
-                
+
                 # Intermediate directories
                 iter_directory = iter_dir,
                 checkpoints_directory = checkpoints_dir,
                 logs_directory = logs_dir,
-                
+
                 # Configuration
                 config_file = config_yaml,
-                
+
                 # Environment information
                 conda_environment = "vs2"
             )
         end
     end
-    
+
     # Install VirSorter2 environment with specific version convention
     env_name = "vs2"
-    
+
     # Check if environment exists, if not create it
     env_exists = try
         run(pipeline(`$(Mycelia.CONDA_RUNNER) env list`, `grep -q "^$(env_name) "`))
@@ -1458,30 +1488,31 @@ function run_virsorter2(;
     catch
         false
     end
-    
+
     if !env_exists
         println("Creating VirSorter2 conda environment...")
         run(`$(Mycelia.CONDA_RUNNER) create -n $(env_name) -c conda-forge -c bioconda virsorter=2 -y`)
         println("Setting up VirSorter2 database (this may take a while)...")
-        
+
         # Remove incomplete database directory if it exists
         if Base.Filesystem.isdir(database_path)
-            Base.Filesystem.rm(database_path, recursive=true, force=true)
+            Base.Filesystem.rm(database_path, recursive = true, force = true)
         end
-        
+
         # Setup database
         setup_cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`
-        
+
         # Run database setup
         process = run(setup_cmd)
-        
+
         if !success(process)
             error("VirSorter2 database setup failed. You may need to download manually from https://osf.io/v46sc/download")
         end
     end
-    
+
     # Setup database if it doesn't exist or is incomplete
-    if !Base.Filesystem.isdir(database_path) || isempty(Base.Filesystem.readdir(database_path))
+    if !Base.Filesystem.isdir(database_path) ||
+       isempty(Base.Filesystem.readdir(database_path))
         @warn "VirSorter2 database not detected"
         @warn "to install, delete any existing directory at the output location, and then run"
         @warn "`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`"
@@ -1489,95 +1520,96 @@ function run_virsorter2(;
         # if Base.Filesystem.isdir(database_path)
         #     Base.Filesystem.rm(database_path, recursive=true, force=true)
         # end
-        
+
         # # Setup database
         # setup_cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n $(env_name) virsorter setup -d $(database_path) -j $(threads)`
-        
+
         # # Run database setup
         # process = run(setup_cmd)
-        
+
         # if !success(process)
         #     error("VirSorter2 database setup failed. You may need to download manually from https://osf.io/v46sc/download")
         # end
     end
-    
+
     # Build VirSorter2 command arguments
-    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", env_name, "virsorter", "run"]
-    
+    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output",
+        "-n", env_name, "virsorter", "run"]
+
     # Add required arguments
     push!(cmd_args, "-w", output_directory)
     push!(cmd_args, "-i", input_fasta)
     push!(cmd_args, "-j", string(threads))
-    
+
     # Add optional arguments
     push!(cmd_args, "--include-groups", include_groups)
     push!(cmd_args, "--min-score", string(min_score))
     push!(cmd_args, "--min-length", string(min_length))
-    
+
     if provirus_off
         push!(cmd_args, "--provirus-off")
     end
-    
+
     if max_orf_per_seq !== nothing
         push!(cmd_args, "--max-orf-per-seq", string(max_orf_per_seq))
     end
-    
+
     if prep_for_dramv
         push!(cmd_args, "--prep-for-dramv")
     end
-    
+
     if label !== nothing
         push!(cmd_args, "--label", label)
     end
-    
+
     if forceall
         push!(cmd_args, "--forceall")
     end
-    
+
     # Add positional argument (default is 'all')
     push!(cmd_args, "all")
-    
+
     # Run VirSorter2
     println("Running VirSorter2...")
     run(Cmd(cmd_args))
-    
+
     # Intermediate directories and files that might be useful
     iter_dir = joinpath(output_directory, "iter-0")
     checkpoints_dir = joinpath(output_directory, "checkpoints")
     logs_dir = joinpath(output_directory, "logs")
-    
+
     # Configuration and temporary files
     config_yaml = joinpath(output_directory, "config.yaml")
-    
+
     # Return comprehensive NamedTuple with all output paths
     return (
         # Main output directory
         output_directory = output_directory,
         database_path = database_path,
-        
+
         # Primary output files (most commonly used)
         final_viral_combined = final_viral_combined,
         final_viral_score = final_viral_score,
         final_viral_boundary = final_viral_boundary,
-        
+
         # Label-specific outputs (if label was provided)
         labeled_viral_combined = labeled_viral_combined,
         labeled_viral_score = labeled_viral_score,
         labeled_viral_boundary = labeled_viral_boundary,
-        
+
         # DRAMv compatibility outputs (if enabled)
         dramv_directory = prep_for_dramv ? dramv_dir : nothing,
         dramv_viral_combined = dramv_viral_combined,
         dramv_affi_contigs = dramv_affi_contigs,
-        
+
         # Intermediate directories
         iter_directory = iter_dir,
         checkpoints_directory = checkpoints_dir,
         logs_directory = logs_dir,
-        
+
         # Configuration
         config_file = config_yaml,
-        
+
         # Environment information
         conda_environment = env_name
     )
@@ -1602,23 +1634,24 @@ using machine learning and database comparisons.
 NamedTuple containing paths to all generated output files and directories
 """
 function run_genomad(;
-    input_fasta,
-    output_directory=input_fasta * "_genomad",
-    genomad_dbpath = mkpath(joinpath(homedir(), "workspace", "genomad")),
-    threads = get_default_threads(),
-    cleanup = true,
-    splits = nothing,
-    force = false
+        input_fasta,
+        output_directory = input_fasta * "_genomad",
+        genomad_dbpath = mkpath(joinpath(homedir(), "workspace", "genomad")),
+        threads = get_default_threads(),
+        cleanup = true,
+        splits = nothing,
+        force = false
 )
     # Get the base name for output files (remove path and extensions)
     input_basename = splitext(basename(input_fasta))[1]
-    if endswith(input_basename, ".fna") || endswith(input_basename, ".fa") || endswith(input_basename, ".fasta")
+    if endswith(input_basename, ".fna") || endswith(input_basename, ".fa") ||
+       endswith(input_basename, ".fasta")
         input_basename = splitext(input_basename)[1]
     end
-    
+
     # Define expected output paths
     summary_dir = joinpath(output_directory, "$(input_basename)_summary")
-    
+
     # Core output files
     virus_summary = joinpath(summary_dir, "$(input_basename)_virus_summary.tsv")
     plasmid_summary = joinpath(summary_dir, "$(input_basename)_plasmid_summary.tsv")
@@ -1629,22 +1662,23 @@ function run_genomad(;
     virus_genes = joinpath(summary_dir, "$(input_basename)_virus_genes.tsv")
     plasmid_genes = joinpath(summary_dir, "$(input_basename)_plasmid_genes.tsv")
     summary_json = joinpath(summary_dir, "$(input_basename)_summary.json")
-    
+
     # Module directories
     marker_classification_dir = joinpath(output_directory, "$(input_basename)_marker_classification")
     nn_classification_dir = joinpath(output_directory, "$(input_basename)_nn_classification")
     find_proviruses_dir = joinpath(output_directory, "$(input_basename)_find_proviruses")
     annotate_dir = joinpath(output_directory, "$(input_basename)_annotate")
     aggregated_classification_dir = joinpath(output_directory, "$(input_basename)_aggregated_classification")
-    
+
     # Log files
     marker_classification_log = joinpath(output_directory, "$(input_basename)_marker_classification.log")
     nn_classification_log = joinpath(output_directory, "$(input_basename)_nn_classification.log")
     find_proviruses_log = joinpath(output_directory, "$(input_basename)_find_proviruses.log")
     annotate_log = joinpath(output_directory, "$(input_basename)_annotate.log")
-    aggregated_classification_log = joinpath(output_directory, "$(input_basename)_aggregated_classification.log")
+    aggregated_classification_log = joinpath(
+        output_directory, "$(input_basename)_aggregated_classification.log")
     summary_log = joinpath(output_directory, "$(input_basename)_summary.log")
-    
+
     # Check if output files already exist (unless force is true)
     if !force
         # Build list of expected core output files to check
@@ -1659,20 +1693,20 @@ function run_genomad(;
             plasmid_genes,
             summary_json
         ]
-        
+
         # Check if all core files exist
         all_files_exist = all(Base.Filesystem.isfile, expected_files)
-        
+
         if all_files_exist
             @warn "All geNomad output files already exist in $(output_directory). Skipping analysis."
             @warn "Use `force=true` to rerun anyway."
-            
+
             # Return NamedTuple with all paths (same as below)
             return (
                 # Main output directory
                 output_directory = output_directory,
                 summary_directory = summary_dir,
-                
+
                 # Summary files (most commonly used)
                 virus_summary = virus_summary,
                 plasmid_summary = plasmid_summary,
@@ -1683,14 +1717,14 @@ function run_genomad(;
                 virus_genes = virus_genes,
                 plasmid_genes = plasmid_genes,
                 summary_json = summary_json,
-                
+
                 # Module directories
                 marker_classification_dir = marker_classification_dir,
                 nn_classification_dir = nn_classification_dir,
                 find_proviruses_dir = find_proviruses_dir,
                 annotate_dir = annotate_dir,
                 aggregated_classification_dir = aggregated_classification_dir,
-                
+
                 # Log files
                 marker_classification_log = marker_classification_log,
                 nn_classification_log = nn_classification_log,
@@ -1701,40 +1735,42 @@ function run_genomad(;
             )
         end
     end
-    
+
     # Add genomad environment
     Mycelia.add_bioconda_env("genomad")
-    
+
     # Download database if it doesn't exist or is empty
     final_genomad_dbpath = joinpath(genomad_dbpath, "genomad_db")
-    if !Base.Filesystem.isdir(final_genomad_dbpath) || isempty(Base.Filesystem.readdir(final_genomad_dbpath))
+    if !Base.Filesystem.isdir(final_genomad_dbpath) ||
+       isempty(Base.Filesystem.readdir(final_genomad_dbpath))
         run(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n genomad genomad download-database $(genomad_dbpath)`)
     end
-    
+
     # Build command arguments
-    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "genomad", "genomad", "end-to-end"]
-    
+    cmd_args = ["$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output",
+        "-n", "genomad", "genomad", "end-to-end"]
+
     if cleanup
         push!(cmd_args, "--cleanup")
     end
-    
+
     push!(cmd_args, "--threads", string(threads))
-    
+
     if splits !== nothing
         push!(cmd_args, "--splits", string(splits))
     end
-    
+
     push!(cmd_args, input_fasta, output_directory, final_genomad_dbpath)
-    
+
     # Run genomad
     run(Cmd(cmd_args))
-    
+
     # Return NamedTuple with all paths
     return (
         # Main output directory
         output_directory = output_directory,
         summary_directory = summary_dir,
-        
+
         # Summary files (most commonly used)
         virus_summary = virus_summary,
         plasmid_summary = plasmid_summary,
@@ -1745,14 +1781,14 @@ function run_genomad(;
         virus_genes = virus_genes,
         plasmid_genes = plasmid_genes,
         summary_json = summary_json,
-        
+
         # Module directories
         marker_classification_dir = marker_classification_dir,
         nn_classification_dir = nn_classification_dir,
         find_proviruses_dir = find_proviruses_dir,
         annotate_dir = annotate_dir,
         aggregated_classification_dir = aggregated_classification_dir,
-        
+
         # Log files
         marker_classification_log = marker_classification_log,
         nn_classification_log = nn_classification_log,
@@ -1821,41 +1857,41 @@ A NamedTuple with paths to generated output files (contents depend on output_cho
 - `output_dir`: Path to output directory
 - `input_genbank`: Path to GenBank file used (original or generated by Prokka)
 """
-function run_phispy(input_file::String; 
-                output_dir::String="",
-                phage_genes::Int=2,
-                color::Bool=false,
-                prefix::String="",
-                phmms::String="",
-                threads::Int=1,
-                metrics::Vector{String}=String[],
-                expand_slope::Bool=false,
-                window_size::Int=30,
-                min_contig_size::Int=5000,
-                skip_search::Bool=false,
-                output_choice::Int=512,
-                training_set::String="",
-                prokka_args::NamedTuple=NamedTuple(),
-                force::Bool=false)
-    
+function run_phispy(input_file::String;
+        output_dir::String = "",
+        phage_genes::Int = 2,
+        color::Bool = false,
+        prefix::String = "",
+        phmms::String = "",
+        threads::Int = 1,
+        metrics::Vector{String} = String[],
+        expand_slope::Bool = false,
+        window_size::Int = 30,
+        min_contig_size::Int = 5000,
+        skip_search::Bool = false,
+        output_choice::Int = 512,
+        training_set::String = "",
+        prokka_args::NamedTuple = NamedTuple(),
+        force::Bool = false)
+
     # Validate input file exists
     if !Base.Filesystem.isfile(input_file)
         throw(ArgumentError("Input file does not exist: $input_file"))
     end
-    
+
     # Set default output directory
     if Base.isempty(output_dir)
         output_dir = input_file * "_phispy"
     end
-    
+
     # Set default prefix from input filename if not provided
     if Base.isempty(prefix)
         prefix = Base.Filesystem.splitext(Base.Filesystem.basename(input_file))[1]
     end
-    
+
     # Build expected output file paths based on output_choice
     output_files = Dict{Symbol, String}()
-    
+
     # Map output choice bits to file paths
     output_mapping = [
         (1, :prophage_coordinates, "prophage_coordinates.tsv"),
@@ -1868,7 +1904,7 @@ function run_phispy(input_file::String;
         (128, :test_data, "test_data.tsv"),
         (256, :gff3_genome, prefix * ".gff3")
     ]
-    
+
     # Check which outputs were requested and add paths
     expected_files = String[]
     for (bit, key, filename) in output_mapping
@@ -1878,20 +1914,20 @@ function run_phispy(input_file::String;
             Base.push!(expected_files, file_path)
         end
     end
-    
+
     # Check if output files already exist (unless force is true)
     if !force && Base.Filesystem.isdir(output_dir)
         # Check if all expected files exist
         # all_files_exist = Base.all(Base.Filesystem.isfile, expected_files)
-        
+
         # if all_files_exist && !Base.isempty(expected_files)
         if !isempty(readdir(output_dir))
             @warn "PhiSpy output files already exist in $(output_dir). Skipping analysis."
             @warn "Use `force=true` to rerun anyway."
-            
+
             # Add standard output files
             output_files[:output_dir] = Base.Filesystem.abspath(output_dir)
-            
+
             # For existing runs, we need to determine the input genbank path
             # Check if there's a Prokka temp directory
             # prokka_temp_dir = output_dir * "_prokka_temp"
@@ -1906,116 +1942,118 @@ function run_phispy(input_file::String;
             # else
             #     output_files[:input_genbank] = Base.Filesystem.abspath(input_file)
             # end
-            
+
             return NamedTuple(output_files)
         end
     end
-    
+
     # Determine input file type and prepare GenBank file
     input_genbank = ""
     file_extension = Base.lowercase(Base.Filesystem.splitext(input_file)[2])
-    
+
     if file_extension in [".fasta", ".fa", ".fna", ".fas"]
         # Input is FASTA - need to run Prokka first
         @info "FASTA input detected. Running Prokka for annotation..."
-        
+
         # Ensure bioconda environment is set up
         Mycelia.add_bioconda_env("phispy")
-        
+
         prokka_output_dir = output_dir * "_prokka_temp"
         prokka_prefix = prefix * "_prokka"
-        
+
         # Set up Prokka arguments
         prokka_kwargs = Dict{Symbol, Any}(
             :output_dir => prokka_output_dir,
             :prefix => prokka_prefix
         )
-        
+
         # Add any additional Prokka arguments provided
         for (key, value) in Base.pairs(prokka_args)
             prokka_kwargs[key] = value
         end
-        
+
         # Run Prokka
         prokka_results = Mycelia.run_prokka(input_file; prokka_kwargs...)
         input_genbank = prokka_results.gbk
-        
+
         @info "Prokka completed. Using generated GenBank file: $input_genbank"
-        
-    elseif file_extension in [".gb", ".gbk", ".genbank", ".gbf"] || 
-           (file_extension == ".gz" && Base.any(x -> Base.occursin(x, Base.lowercase(input_file)), [".gb", ".gbk", ".genbank", ".gbf"]))
+
+    elseif file_extension in [".gb", ".gbk", ".genbank", ".gbf"] ||
+           (file_extension == ".gz" &&
+            Base.any(x -> Base.occursin(x, Base.lowercase(input_file)), [
+        ".gb", ".gbk", ".genbank", ".gbf"]))
         # Input is already GenBank format
         input_genbank = input_file
         @info "GenBank input detected: $input_genbank"
     else
         throw(ArgumentError("Unsupported file format. Please provide FASTA (.fasta, .fa, .fna, .fas) or GenBank (.gb, .gbk, .genbank, .gbf) files."))
     end
-    
+
     # Ensure bioconda environment is set up
     Mycelia.add_bioconda_env("phispy")
-    
+
     # Create output directory if it doesn't exist
     if !Base.Filesystem.isdir(output_dir)
         Base.Filesystem.mkdir(output_dir)
     end
-    
+
     # Build PhiSpy command
     cmd_args = String[
-        "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "phispy", "PhiSpy.py",
-        input_genbank,
-        "-o", output_dir
-    ]
-    
+    "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "phispy", "PhiSpy.py",
+    input_genbank,
+    "-o", output_dir
+]
+
     # Add optional arguments
     if phage_genes != 2
         Base.push!(cmd_args, "--phage_genes", Base.string(phage_genes))
     end
-    
+
     if color
         Base.push!(cmd_args, "--color")
     end
-    
+
     # if !Base.isempty(prefix)
     #     Base.push!(cmd_args, "--prefix", prefix)
     # end
-    
+
     if !Base.isempty(phmms)
         Base.push!(cmd_args, "--phmms", phmms)
     end
-    
+
     if threads != 1
         Base.push!(cmd_args, "--threads", Base.string(threads))
     end
-    
+
     if !Base.isempty(metrics)
         Base.push!(cmd_args, "--metrics")
         Base.append!(cmd_args, metrics)
     end
-    
+
     if expand_slope
         Base.push!(cmd_args, "--expand_slope")
     end
-    
+
     if window_size != 30
         Base.push!(cmd_args, "--window_size", Base.string(window_size))
     end
-    
+
     if min_contig_size != 5000
         Base.push!(cmd_args, "--min_contig_size", Base.string(min_contig_size))
     end
-    
+
     if skip_search
         Base.push!(cmd_args, "--skip_search")
     end
-    
+
     if output_choice != 3
         Base.push!(cmd_args, "--output_choice", Base.string(output_choice))
     end
-    
+
     if !Base.isempty(training_set)
         Base.push!(cmd_args, "-t", training_set)
     end
-    
+
     # Run PhiSpy
     try
         @info "Running PhiSpy with command: $(Base.join(cmd_args, " "))"
@@ -2023,30 +2061,30 @@ function run_phispy(input_file::String;
     catch e
         throw(ErrorException("PhiSpy failed to run: $e"))
     end
-    
+
     # Verify output directory exists
     if !Base.Filesystem.isdir(output_dir)
         throw(ErrorException("PhiSpy output directory was not created: $output_dir"))
     end
-    
+
     # Add standard output files
     output_files[:output_dir] = Base.Filesystem.abspath(output_dir)
     # output_files[:input_genbank] = Base.Filesystem.abspath(input_genbank)
-    
+
     # # Check if key output files exist and warn if missing
     # key_files = [
     #     Base.get(output_files, :prophage_coordinates, ""),
     #     Base.get(output_files, :genbank_output, ""),
     #     Base.get(output_files, :prophage_information, "")
     # ]
-    
+
     # existing_files = Base.filter(f -> !Base.isempty(f) && Base.Filesystem.isfile(f), key_files)
     # missing_files = Base.filter(f -> !Base.isempty(f) && !Base.Filesystem.isfile(f), key_files)
-    
+
     # if !Base.isempty(missing_files)
     #     @warn "Some expected output files were not created: $(Base.join(missing_files, ", "))"
     # end
-    
+
     # if Base.isempty(existing_files)
     #     @warn "No standard PhiSpy output files were found. Check PhiSpy logs for errors."
     # else
@@ -2054,7 +2092,7 @@ function run_phispy(input_file::String;
     # end
 
     @assert isdir(output_files[:output_dir]) && !isempty(readdir(output_files[:output_dir]))
-    
+
     return NamedTuple(output_files)
 end
 
@@ -2103,41 +2141,41 @@ A NamedTuple with paths to all generated output files:
 - `tsv`: Tab-separated feature table
 - `output_dir`: Path to output directory
 """
-function run_prokka(input_fasta::String; 
-                output_dir::String="",
-                prefix::String="",
-                cpus::Int=0,
-                kingdom::String="Bacteria",
-                genus::String="",
-                species::String="", 
-                strain::String="",
-                force_overwrite::Bool=false,
-                addgenes::Bool=false,
-                compliant::Bool=false,
-                fast::Bool=false,
-                evalue::Float64=1e-06,
-                mincontiglen::Int=1,
-                force::Bool=false)
-    
+function run_prokka(input_fasta::String;
+        output_dir::String = "",
+        prefix::String = "",
+        cpus::Int = 0,
+        kingdom::String = "Bacteria",
+        genus::String = "",
+        species::String = "",
+        strain::String = "",
+        force_overwrite::Bool = false,
+        addgenes::Bool = false,
+        compliant::Bool = false,
+        fast::Bool = false,
+        evalue::Float64 = 1e-06,
+        mincontiglen::Int = 1,
+        force::Bool = false)
+
     # Validate input file exists
     if !Base.Filesystem.isfile(input_fasta)
         Base.throw(ArgumentError("Input FASTA file does not exist: $input_fasta"))
     end
-    
+
     # Set default output directory
     if Base.isempty(output_dir)
         output_dir = input_fasta * "_prokka"
     end
-    
+
     # Set default prefix from input filename if not provided
     if Base.isempty(prefix)
         prefix = Base.Filesystem.splitext(Base.Filesystem.basename(input_fasta))[1]
     end
-    
+
     # Build output file paths
     output_files = (
         gff = Base.Filesystem.joinpath(output_dir, prefix * ".gff"),
-        gbk = Base.Filesystem.joinpath(output_dir, prefix * ".gbk"), 
+        gbk = Base.Filesystem.joinpath(output_dir, prefix * ".gbk"),
         fna = Base.Filesystem.joinpath(output_dir, prefix * ".fna"),
         faa = Base.Filesystem.joinpath(output_dir, prefix * ".faa"),
         ffn = Base.Filesystem.joinpath(output_dir, prefix * ".ffn"),
@@ -2145,12 +2183,12 @@ function run_prokka(input_fasta::String;
         fsa = Base.Filesystem.joinpath(output_dir, prefix * ".fsa"),
         tbl = Base.Filesystem.joinpath(output_dir, prefix * ".tbl"),
         err = Base.Filesystem.joinpath(output_dir, prefix * ".err"),
-        log = Base.Filesystem.joinpath(output_dir, prefix * ".log"), 
+        log = Base.Filesystem.joinpath(output_dir, prefix * ".log"),
         txt = Base.Filesystem.joinpath(output_dir, prefix * ".txt"),
         tsv = Base.Filesystem.joinpath(output_dir, prefix * ".tsv"),
         output_dir = Base.Filesystem.abspath(output_dir)
     )
-    
+
     # Check if output files already exist (unless force is true)
     if !force
         # Build list of expected core output files to check
@@ -2163,95 +2201,95 @@ function run_prokka(input_fasta::String;
             output_files.txt,
             output_files.tsv
         ]
-        
+
         # Check if all core files exist
         all_files_exist = Base.all(Base.Filesystem.isfile, expected_files)
-        
+
         if all_files_exist
             @warn "All Prokka output files already exist in $(output_dir). Skipping analysis."
             @warn "Use `force=true` to rerun anyway."
-            
+
             return output_files
         end
     end
-    
+
     # Ensure bioconda environment is set up
     Mycelia.add_bioconda_env("prokka")
-    
+
     # Build prokka command
     cmd_args = String[
-        "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "prokka", "prokka",
-        "--outdir", output_dir,
-        "--prefix", prefix,
-        "--kingdom", kingdom
-    ]
-    
+    "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "prokka", "prokka",
+    "--outdir", output_dir,
+    "--prefix", prefix,
+    "--kingdom", kingdom
+]
+
     # Add optional arguments
     if cpus > 0
         Base.push!(cmd_args, "--cpus", Base.string(cpus))
     elseif cpus == 0
         Base.push!(cmd_args, "--cpus", "0")  # Use all available CPUs
     end
-    
+
     if !Base.isempty(genus)
         Base.push!(cmd_args, "--genus", genus)
     end
-    
-    if !Base.isempty(species) 
+
+    if !Base.isempty(species)
         Base.push!(cmd_args, "--species", species)
     end
-    
+
     if !Base.isempty(strain)
         Base.push!(cmd_args, "--strain", strain)
     end
-    
+
     if force_overwrite
         Base.push!(cmd_args, "--force")
     end
-    
+
     if addgenes
-        Base.push!(cmd_args, "--addgenes")  
+        Base.push!(cmd_args, "--addgenes")
     end
-    
+
     if compliant
         Base.push!(cmd_args, "--compliant")
     end
-    
+
     if fast
         Base.push!(cmd_args, "--fast")
     end
-    
+
     if evalue != 1e-06
         Base.push!(cmd_args, "--evalue", Base.string(evalue))
     end
-    
+
     if mincontiglen != 1
         Base.push!(cmd_args, "--mincontiglen", Base.string(mincontiglen))
     end
-    
+
     # Add input file
     Base.push!(cmd_args, Base.Filesystem.abspath(input_fasta))
-    
+
     # Run prokka
     try
         Base.run(Base.Cmd(cmd_args))
     catch e
         Base.throw(ErrorException("Prokka failed to run: $e"))
     end
-    
+
     # Verify output directory was created
     if !Base.Filesystem.isdir(output_dir)
         Base.throw(ErrorException("Prokka output directory was not created: $output_dir"))
     end
-    
+
     # Verify key output files exist
     key_files = [output_files.gff, output_files.gbk, output_files.fna]
     missing_files = Base.filter(f -> !Base.Filesystem.isfile(f), key_files)
-    
+
     if !Base.isempty(missing_files)
         @warn "Some expected output files were not created: $(Base.join(missing_files, ", "))"
     end
-    
+
     return output_files
 end
 
@@ -2284,38 +2322,38 @@ function run_amrfinderplus(;
         fasta::String,
         output_dir::String = fasta * "_amrfinderplus",
         force::Bool = false
-    )
-    
+)
+
     # Validate input file extension
     if !Base.occursin(Mycelia.FASTA_REGEX, fasta)
         Base.error("Input file does not match FASTA format: $(fasta)")
     end
-    
+
     if !Base.Filesystem.isfile(fasta)
         Base.error("Input FASTA file not found: $(fasta)")
     end
-    
+
     # Get base filename for outputs
     base_name = Base.replace(Base.Filesystem.basename(fasta), Mycelia.FASTA_REGEX => "")
     amrfinder_output = Base.Filesystem.joinpath(output_dir, "$(base_name).amrfinderplus.tsv")
-    
+
     # Check if output files already exist (unless force is true)
     if !force
         if Base.Filesystem.isfile(amrfinder_output)
             @warn "AMRFinderPlus output file already exists: $(amrfinder_output). Skipping analysis."
             @warn "Use `force=true` to rerun anyway."
-                return (;output_dir, amrfinder_output)
+            return (; output_dir, amrfinder_output)
         end
     end
-    
+
     # Create output directory
     if !Base.Filesystem.isdir(output_dir)
         Base.Filesystem.mkpath(output_dir)
     end
-    
+
     # Determine sequence type by checking file extension first, then by detection
     sequence_type = :unknown
-    
+
     # Check common file extensions first for efficiency
     fasta_lower = Base.lowercase(fasta)
     if Base.endswith(fasta_lower, ".faa") || Base.endswith(fasta_lower, ".faa.gz")
@@ -2326,7 +2364,9 @@ function run_amrfinderplus(;
         # For generic extensions (.fa, .fasta, etc.), detect from sequence content
         @info "Generic FASTA extension detected, analyzing sequence content to determine type"
         for (i, record) in Base.enumerate(Mycelia.open_fastx(fasta))
-            if i > 3 Base.break end  # Sample first 3 sequences
+            if i > 3
+                Base.break
+            end  # Sample first 3 sequences
             seq_ext = Mycelia.detect_sequence_extension(record)
             if seq_ext == ".faa"
                 sequence_type = :protein
@@ -2336,15 +2376,15 @@ function run_amrfinderplus(;
                 Base.break
             end
         end
-        
+
         if sequence_type == :unknown
             Base.error("Could not determine sequence type for: $(fasta)")
         end
     end
-    
+
     # Determine protein FASTA file to use based on sequence type
     protein_fasta = ""
-    
+
     if sequence_type == :protein
         # Input is already protein - use directly
         protein_fasta = fasta
@@ -2353,32 +2393,32 @@ function run_amrfinderplus(;
         # Input is nucleotide - need to run pyrodigal first
         @info "Nucleotide FASTA detected, running pyrodigal to generate protein sequences"
         pyrodigal_dir = Base.Filesystem.joinpath(output_dir, "pyrodigal")
-        pyrodigal_results = Mycelia.run_pyrodigal(fasta_file=fasta, out_dir=pyrodigal_dir)
+        pyrodigal_results = Mycelia.run_pyrodigal(fasta_file = fasta, out_dir = pyrodigal_dir)
         protein_fasta = pyrodigal_results.faa
     else
         Base.error("Unsupported sequence type: $(sequence_type)")
     end
-    
+
     Base.@assert Base.Filesystem.isfile(protein_fasta) "Protein FASTA file not found: $(protein_fasta)"
-    
+
     # Run AMRFinderPlus
     @info "Running AMRFinderPlus on protein sequences: $(protein_fasta)"
-    
+
     # Ensure AMRFinderPlus is available
     Mycelia.add_bioconda_env("ncbi-amrfinderplus")
     Base.run(`$(Mycelia.CONDA_RUNNER) run --no-capture-output -n ncbi-amrfinderplus amrfinder -u`)
-    
+
     cmd = `$(Mycelia.CONDA_RUNNER) run --no-capture-output -n ncbi-amrfinderplus amrfinder
            -p $(protein_fasta)
            --plus
            --output $(amrfinder_output)`
-    
+
     Base.run(cmd)
-    
+
     Base.@assert Base.Filesystem.isfile(amrfinder_output) "AMRFinderPlus output not generated: $(amrfinder_output)"
     @info "AMRFinderPlus completed successfully. Results: $(amrfinder_output)"
-    
-    return (;output_dir, amrfinder_output)
+
+    return (; output_dir, amrfinder_output)
 end
 
 # VIBRANT
@@ -2399,7 +2439,7 @@ Run VIBRANT for virus and prophage detection.
 - Uses the VIBRANT conda environment
 - Utilizes the requested CPU threads via `-t`
 """
-function run_vibrant(;input_fasta, output_dir=input_fasta * "_vibrant", threads=get_default_threads())
+function run_vibrant(; input_fasta, output_dir = input_fasta * "_vibrant", threads = get_default_threads())
     Mycelia._install_vibrant()
     # mkpath(output_dir)
     # run(`bash -lc "VIBRANT_run.py -i $input_fasta -folder $output_dir"`)
@@ -2413,7 +2453,6 @@ function run_vibrant(;input_fasta, output_dir=input_fasta * "_vibrant", threads=
     # https://github.com/AnantharamanLab/VIBRANT?tab=readme-ov-file#output-explanations--
     return output_dir
 end
-
 
 """
     run_phageboost(input_fasta::AbstractString, output_dir::AbstractString; force_reinstall::Bool=false)
@@ -2437,21 +2476,23 @@ This function will:
   - `output_dir::String`: Path to the output directory
   - `files::Vector{String}`: List of files generated in the output directory
 """
-function run_phageboost(;input_fasta::AbstractString, output_dir::AbstractString=input_fasta * "_phageboost", force_reinstall::Bool=false)
+function run_phageboost(; input_fasta::AbstractString,
+        output_dir::AbstractString = input_fasta * "_phageboost",
+        force_reinstall::Bool = false)
     # Check if input file exists
     if !Base.isfile(input_fasta)
         throw(ArgumentError("Input FASTA file does not exist: $input_fasta"))
     end
-    
+
     # Setup environment if needed
     _setup_phageboost_environment(force_reinstall)
-    
+
     # # Validate PhageBoost installation
     # _validate_phageboost_installation()
-    
+
     # Ensure output directory exists
     Base.mkpath(output_dir)
-    
+
     # Run PhageBoost
     println("Running PhageBoost on $input_fasta...")
     try
@@ -2463,13 +2504,12 @@ function run_phageboost(;input_fasta::AbstractString, output_dir::AbstractString
     catch e
         throw(ErrorException("PhageBoost execution failed: $e"))
     end
-    
+
     # Get list of output files
     output_files = _get_output_files(output_dir)
-    
-    return (output_dir=output_dir, files=output_files)
-end
 
+    return (output_dir = output_dir, files = output_files)
+end
 
 """
     parallel_pyrodigal(normalized_fastas::Vector{String})
@@ -2491,7 +2531,7 @@ function parallel_pyrodigal(normalized_fastas::Vector{String})
     Base.println("Processing $(num_files) FASTA files using $(Threads.nthreads()) threads...")
 
     # Create a Progress object for manual updates
-    p = ProgressMeter.Progress(num_files; dt=1, desc="Running Pyrodigal: ", barlen=50)
+    p = ProgressMeter.Progress(num_files; dt = 1, desc = "Running Pyrodigal: ", barlen = 50)
 
     # Use Channels to collect results and failures thread-safely
     # Channel{Tuple{Filename, ResultType}} - adjust ResultType if known
@@ -2512,7 +2552,8 @@ function parallel_pyrodigal(normalized_fastas::Vector{String})
         catch e
             # --- Store failure ---
             err_msg = Base.sprint(Base.showerror, e) # Get the error message as a string
-            Base.println(Base.stderr, "ERROR processing $(fasta_file) on thread $(Threads.threadid()): $(err_msg)")
+            Base.println(Base.stderr,
+                "ERROR processing $(fasta_file) on thread $(Threads.threadid()): $(err_msg)")
             Base.put!(failures, (fasta_file, err_msg))
         finally
             # --- Always update progress ---
@@ -2543,7 +2584,7 @@ function parallel_pyrodigal(normalized_fastas::Vector{String})
     end
     Base.println("------------------------------------")
 
-    return (;successful_results, failed_files) # Return both successes and failures
+    return (; successful_results, failed_files) # Return both successes and failures
 end
 
 # """
@@ -2658,8 +2699,8 @@ function annotate_fasta(;
         mmseqsdb::String = joinpath(homedir(), "workspace/mmseqs/UniRef50"),
         threads::Int = get_default_threads(),
         outdir::AbstractString = replace(fasta, Mycelia.FASTA_REGEX => "") * "_annotation"
-    )
-    
+)
+
     # outdir = joinpath(basedir, identifier)
     # @assert outdir != fasta "Output directory cannot be the same as the input FASTA file path."
 
@@ -2668,44 +2709,49 @@ function annotate_fasta(;
         return outdir
     end
     mkpath(outdir)
-    
+
     # Path to the FASTA file copied into the output directory
     f_in_outdir = joinpath(outdir, basename(fasta))
     # Copy input FASTA to output directory if it's not already there or needs update
     if !isfile(f_in_outdir) || mtime(fasta) > mtime(f_in_outdir)
-        cp(fasta, f_in_outdir, force=true)
+        cp(fasta, f_in_outdir, force = true)
     end
 
     # --- Gene Prediction using Pyrodigal ---
     # Call run_pyrodigal, assuming it's part of the Mycelia module.
     # run_pyrodigal handles its own output file naming and existence checks.
     # We direct its output to be within our main `outdir`.
-    pyrodigal_outputs = Mycelia.run_pyrodigal(fasta_file=f_in_outdir, out_dir=outdir)
-    
+    pyrodigal_outputs = Mycelia.run_pyrodigal(fasta_file = f_in_outdir, out_dir = outdir)
+
     nucleic_acid_fasta = pyrodigal_outputs.fna
     amino_acid_fasta = pyrodigal_outputs.faa
     gff_file_pyrodigal = pyrodigal_outputs.gff # Renamed to avoid confusion with later gff_file variables
     # --- End of Pyrodigal section ---
 
-    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+    mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta = amino_acid_fasta, target_database = mmseqsdb)
     # Update GFF with MMseqs results, using Pyrodigal's GFF as base
-    mmseqs_gff_file = Mycelia.write_gff(gff = Mycelia.update_gff_with_mmseqs(gff_file_pyrodigal, mmseqs_outfile), outfile = mmseqs_outfile * ".gff")
-    
+    mmseqs_gff_file = Mycelia.write_gff(
+        gff = Mycelia.update_gff_with_mmseqs(gff_file_pyrodigal, mmseqs_outfile),
+        outfile = mmseqs_outfile * ".gff")
+
     # Predict terminators using TransTerm on the original sequence copy
     if occursin(r"\.gz$", f_in_outdir)
         @warn "transterm doesn't seem to work with gzip compressed fasta files"
     end
-    transterm_results = Mycelia.run_transterm(fasta=f_in_outdir) # Assuming run_transterm returns path or object usable by transterm_output_to_gff
+    transterm_results = Mycelia.run_transterm(fasta = f_in_outdir) # Assuming run_transterm returns path or object usable by transterm_output_to_gff
     transterm_gff_file = Mycelia.transterm_output_to_gff(transterm_results)
-    
+
     # Combine MMseqs and TransTerm GFFs
     combined_gff_path = joinpath(outdir, basename(f_in_outdir) * ".gff")
-    joint_gff_df = DataFrames.sort!(DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)), ["#seqid", "start", "end"])
-    Mycelia.write_gff(gff=joint_gff_df, outfile=combined_gff_path)
-    
+    joint_gff_df = DataFrames.sort!(
+        DataFrames.vcat(Mycelia.read_gff(mmseqs_gff_file), Mycelia.read_gff(transterm_gff_file)),
+        ["#seqid", "start", "end"])
+    Mycelia.write_gff(gff = joint_gff_df, outfile = combined_gff_path)
+
     genbank_path = combined_gff_path * ".genbank"
-    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(fasta=f_in_outdir, gff=combined_gff_path, genbank=genbank_path)
-    
+    annotated_genbank = Mycelia.fasta_and_gff_to_genbank(
+        fasta = f_in_outdir, gff = combined_gff_path, genbank = genbank_path)
+
     return outdir
 end
 
@@ -2733,8 +2779,8 @@ function annotate_aa_fasta(;
         identifier = replace(basename(fasta), Mycelia.FASTA_REGEX => ""),
         basedir = pwd(),
         mmseqsdb = "$(homedir())/workspace/mmseqs/UniRef50",
-        threads=get_default_threads()
-    )
+        threads = get_default_threads()
+)
     # @show basedir
     outdir = joinpath(basedir, identifier)
     @assert outdir != fasta
@@ -2743,10 +2789,11 @@ function annotate_aa_fasta(;
         mkpath(outdir)
         f = joinpath(outdir, basename(fasta))
         # make this an rclone copy for portability
-        cp(fasta, f, force=true)
+        cp(fasta, f, force = true)
         amino_acid_fasta = f
 
-        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(query_fasta=amino_acid_fasta, target_database=mmseqsdb)
+        mmseqs_outfile = Mycelia.run_mmseqs_easy_search(
+            query_fasta = amino_acid_fasta, target_database = mmseqsdb)
     else
         @info "$(outdir) already present, skipping..."
     end
@@ -2793,13 +2840,13 @@ Parameters:
 - verbose::Bool: If false (default), suppress stdout/stderr from the padloc command unless it fails.
 """
 function run_padloc(; fasta_file,
-                     outdir = replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc",
-                     threads = get_default_threads(),
-                     cleanup_on_failure::Bool = true,
-                     return_error::Bool = true,
-                     verbose::Bool = false)
-
-    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "") * "_padloc.csv")
+        outdir = replace(fasta_file, Mycelia.FASTA_REGEX => "") * "_padloc",
+        threads = get_default_threads(),
+        cleanup_on_failure::Bool = true,
+        return_error::Bool = true,
+        verbose::Bool = false)
+    padloc_outfile = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "") *
+                                      "_padloc.csv")
     pre_existing_outdir = isdir(outdir)
 
     if isfile(padloc_outfile)
@@ -2810,10 +2857,10 @@ function run_padloc(; fasta_file,
         padloc_gff = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.gff"))
         padloc_domtblout = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => ".domtblout"))
         return (csv = padloc_outfile,
-                faa = padloc_faa,
-                gff = padloc_gff,
-                domtblout = padloc_domtblout,
-                error = nothing)
+            faa = padloc_faa,
+            gff = padloc_gff,
+            domtblout = padloc_domtblout,
+            error = nothing)
     end
 
     setup_padloc()
@@ -2840,15 +2887,15 @@ function run_padloc(; fasta_file,
         open(temp_fasta, "w") do io
             lf = lowercase(fasta_file)
             if endswith(lf, ".gz")
-                run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+                run(pipeline(`gzip -dc $fasta_file`, stdout = io))
             elseif endswith(lf, ".bz2")
-                run(pipeline(`bzip2 -dc $fasta_file`, stdout=io))
+                run(pipeline(`bzip2 -dc $fasta_file`, stdout = io))
             elseif endswith(lf, ".xz")
-                run(pipeline(`xz -dc $fasta_file`, stdout=io))
+                run(pipeline(`xz -dc $fasta_file`, stdout = io))
             elseif endswith(lf, ".zip")
-                run(pipeline(`unzip -p $fasta_file`, stdout=io))
+                run(pipeline(`unzip -p $fasta_file`, stdout = io))
             else
-                run(pipeline(`gzip -dc $fasta_file`, stdout=io))
+                run(pipeline(`gzip -dc $fasta_file`, stdout = io))
             end
         end
         input_fasta = temp_fasta
@@ -2867,13 +2914,13 @@ function run_padloc(; fasta_file,
             out_pipe = Pipe()
             err_pipe = Pipe()
 
-            process = run(pipeline(cmd, stdout=out_pipe, stderr=err_pipe), wait=false)
+            process = run(pipeline(cmd, stdout = out_pipe, stderr = err_pipe), wait = false)
             close(out_pipe.in)
             close(err_pipe.in)
 
             stdout_task = @async read(out_pipe, String)
             stderr_task = @async read(err_pipe, String)
-            
+
             wait(process) # Throws ProcessFailedException on non-zero exit
 
             stdout_str = fetch(stdout_task)
@@ -2881,7 +2928,7 @@ function run_padloc(; fasta_file,
         end
     catch err
         run_error = err
-        
+
         # If we were capturing output, fetch it for the log.
         # This check is needed because tasks might not be defined if `verbose=true`.
         if @isdefined(stdout_task)
@@ -2895,7 +2942,7 @@ function run_padloc(; fasta_file,
 
         if cleanup_on_failure && !pre_existing_outdir && isdir(outdir)
             try
-                rm(outdir; force=true, recursive=true)
+                rm(outdir; force = true, recursive = true)
                 if verbose
                     @info "Removed output directory after failure: $(outdir)"
                 end
@@ -2909,7 +2956,7 @@ function run_padloc(; fasta_file,
     finally
         if is_compressed && temp_dir != ""
             try
-                rm(temp_dir; force=true, recursive=true)
+                rm(temp_dir; force = true, recursive = true)
                 if verbose
                     @info "Removed temporary directory $(temp_dir)"
                 end
@@ -2921,10 +2968,10 @@ function run_padloc(; fasta_file,
 
     if run_error !== nothing
         return (csv = missing,
-                faa = missing,
-                gff = missing,
-                domtblout = missing,
-                error = run_error)
+            faa = missing,
+            gff = missing,
+            domtblout = missing,
+            error = run_error)
     end
 
     padloc_faa = joinpath(outdir, replace(basename(fasta_file), Mycelia.FASTA_REGEX => "_prodigal.faa"))
@@ -2936,10 +2983,10 @@ function run_padloc(; fasta_file,
     end
 
     return (csv = padloc_outfile,
-            faa = padloc_faa,
-            gff = padloc_gff,
-            domtblout = padloc_domtblout,
-            error = nothing)
+        faa = padloc_faa,
+        gff = padloc_gff,
+        domtblout = padloc_domtblout,
+        error = nothing)
 end
 
 """
@@ -2962,7 +3009,7 @@ profiles of housekeeping genes against curated MLST schemes.
 - Automatically sets up conda environment if not present
 """
 function run_mlst(fasta_file)
-    Mycelia.add_bioconda_env("mlst")    
+    Mycelia.add_bioconda_env("mlst")
     mlst_outfile = "$(fasta_file).mlst.out"
     @show mlst_outfile
     if !isfile(mlst_outfile)
@@ -3014,11 +3061,11 @@ Run TransTermHP to predict rho-independent transcription terminators in DNA sequ
 - Removes temporary files after completion.
 - Requires Mycelia's Conda setup.
 """
-function run_transterm(;fasta, gff="")
+function run_transterm(; fasta, gff = "")
     # Determine the base path for output files, removing .gz if present.
     base_path_for_outputs = isempty(gff) ? fasta : gff
     if endswith(lowercase(base_path_for_outputs), ".gz")
-        base_path_for_outputs = base_path_for_outputs[1:end-3]
+        base_path_for_outputs = base_path_for_outputs[1:(end - 3)]
     end
 
     # Determine the final output file path from the base path.
@@ -3040,7 +3087,7 @@ function run_transterm(;fasta, gff="")
         # The `transterm` binary itself needs the fasta, but it may handle compression,
         # so we only decompress when our Julia functions require it.
         if isempty(gff) && endswith(lowercase(fasta), ".gz")
-            temp_fasta_path = write_fasta(records=collect(open_fastx(fasta)), gzip=false)
+            temp_fasta_path = write_fasta(records = collect(open_fastx(fasta)), gzip = false)
             fasta_to_use = temp_fasta_path
         end
 
@@ -3049,7 +3096,7 @@ function run_transterm(;fasta, gff="")
         else
             coordinates = generate_transterm_coordinates_from_gff(gff)
         end
-        
+
         Mycelia.add_bioconda_env("transtermhp")
 
         conda_base = dirname(dirname(Mycelia.CONDA_RUNNER))
@@ -3062,10 +3109,10 @@ function run_transterm(;fasta, gff="")
         # Julia-side coordinate generation.
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n transtermhp transterm -p $(dat_file) $(fasta_to_use) $(coordinates)`
         stderr_buffer = IOBuffer()
-        
+
         # The stdout of the process is redirected to `transterm_calls_file`.
         # The stderr is captured in `stderr_buffer`.
-        process = run(pipeline(cmd, stdout=transterm_calls_file, stderr=stderr_buffer), wait=false)
+        process = run(pipeline(cmd, stdout = transterm_calls_file, stderr = stderr_buffer), wait = false)
         wait(process)
 
         if !success(process)
@@ -3081,7 +3128,7 @@ function run_transterm(;fasta, gff="")
             rm(temp_fasta_path)
         end
     end
-    
+
     return transterm_calls_file
 end
 
@@ -3168,7 +3215,7 @@ function generate_transterm_coordinates_from_fasta(fasta)
         push!(coords_table, row)
     end
     transterm_coordinates_file = fasta * ".coords"
-    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(coords_table)), delim="  ")
+    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(coords_table)), delim = "  ")
     return transterm_coordinates_file
 end
 
@@ -3198,7 +3245,7 @@ function generate_transterm_coordinates_from_gff(gff_file)
     raw_gff[!, "gene_id"] = last.(split.(first.(split.(raw_gff[!, "attributes"], ";")), '='))
     raw_gff = raw_gff[!, ["gene_id", "start", "end", "#seqid"]]
     transterm_coordinates_file = gff_file * ".coords"
-    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(raw_gff)), delim="  ")
+    uCSV.write(transterm_coordinates_file, data = collect(DataFrames.eachcol(raw_gff)), delim = "  ")
     return transterm_coordinates_file
 end
 
@@ -3238,21 +3285,22 @@ Creates the following files in `outdir`:
 - Checks for the existence of expected output files to determine if the process should be skipped.
 - Cleans up partially generated files if the `tRNAscan-SE` command fails.
 """
-function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan", model::String="G", force::Bool=false, verbose::Bool=false)
-
+function run_trnascan(; fna_file::String,
+        outdir::String = replace(fna_file, Mycelia.FASTA_REGEX => "") * "_trnascan",
+        model::String = "G", force::Bool = false, verbose::Bool = false)
     if !ispath(outdir)
         mkpath(outdir)
     end
 
     ID = replace(basename(fna_file), Mycelia.FASTA_REGEX => "")
-    
+
     output_files = (
-        out       = joinpath(outdir, "$(ID).trnascan.out"),
-        bed       = joinpath(outdir, "$(ID).trnascan.bed"),
-        fasta     = joinpath(outdir, "$(ID).trnascan.fasta"),
+        out = joinpath(outdir, "$(ID).trnascan.out"),
+        bed = joinpath(outdir, "$(ID).trnascan.bed"),
+        fasta = joinpath(outdir, "$(ID).trnascan.fasta"),
         structure = joinpath(outdir, "$(ID).trnascan.struct"),
-        stats     = joinpath(outdir, "$(ID).trnascan.stats"),
-        log       = joinpath(outdir, "$(ID).trnascan.log"),
+        stats = joinpath(outdir, "$(ID).trnascan.stats"),
+        log = joinpath(outdir, "$(ID).trnascan.log")
     )
 
     all_files_exist = all(ispath, values(output_files))
@@ -3261,9 +3309,9 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
         if verbose
             @info "All output files already exist in $(outdir). Skipping tRNAscan-SE run. Use `force=true` to rerun."
         end
-        return (; output_files..., outdir=outdir)
+        return (; output_files..., outdir = outdir)
     end
-    
+
     input_to_process = fna_file
     temp_fna_path = ""
 
@@ -3286,7 +3334,7 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
 
         model_parts = split(model)
         model_flag = "-" * model_parts[1]
-        
+
         cmd_parts = [
             "$(Mycelia.CONDA_RUNNER)", "run", "--no-capture-output", "-n", "trnascan-se", "tRNAscan-SE",
             model_flag
@@ -3295,15 +3343,16 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
             push!(cmd_parts, model_parts[2])
         end
 
-        append!(cmd_parts, [
-            "--output", output_files.out,
-            "--bed", output_files.bed,
-            "--fasta", output_files.fasta,
-            "--struct", output_files.structure,
-            "--stats", output_files.stats,
-            "--log", output_files.log,
-            input_to_process
-        ])
+        append!(cmd_parts,
+            [
+                "--output", output_files.out,
+                "--bed", output_files.bed,
+                "--fasta", output_files.fasta,
+                "--struct", output_files.structure,
+                "--stats", output_files.stats,
+                "--log", output_files.log,
+                input_to_process
+            ])
 
         trnascan_cmd = Cmd(cmd_parts)
         if verbose
@@ -3317,9 +3366,9 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
             else
                 stderr_buffer = IOBuffer()
                 # Redirect stdout to devnull and capture stderr
-                process = run(pipeline(trnascan_cmd, stdout=devnull, stderr=stderr_buffer), wait=false)
+                process = run(pipeline(trnascan_cmd, stdout = devnull, stderr = stderr_buffer), wait = false)
                 wait(process)
-                
+
                 if !success(process)
                     stderr_output = String(take!(stderr_buffer))
                     # Throw a more informative error including stderr
@@ -3346,7 +3395,7 @@ function run_trnascan(; fna_file::String, outdir::String=replace(fna_file, Mycel
         end
     end
 
-    return (; output_files..., outdir=outdir)
+    return (; output_files..., outdir = outdir)
 end
 
 # function run_counterselection_spacer_detection(strain, out_dir, normalized_fasta_file)
@@ -3406,7 +3455,6 @@ end
 #             end
 #         end
 
-
 #         uCSV.write(
 #             "$(counter_selection_dir)/$(ID)-cpf1-spacers.tsv",
 #             delim='\t',
@@ -3440,7 +3488,8 @@ Named tuple containing paths to all output files:
 - `out`: Path to Augustus output report
 - `std_err`: Path to captured stderr output
 """
-function run_augustus(;fasta_file, species="human", out_dir=dirname(fasta_file), strands="both", config_path=nothing)
+function run_augustus(; fasta_file, species = "human", out_dir = dirname(fasta_file),
+        strands = "both", config_path = nothing)
     Mycelia.add_bioconda_env("augustus")
     mkpath(out_dir)
 
@@ -3463,14 +3512,15 @@ function run_augustus(;fasta_file, species="human", out_dir=dirname(fasta_file),
         ]
         cmd = Cmd(cmd_parts)
         pipeline_cmd = if isempty(resolved_config_path)
-            pipeline(cmd, stdout=gff, stderr=std_err)
+            pipeline(cmd, stdout = gff, stderr = std_err)
         else
-            pipeline(setenv(cmd, Dict("AUGUSTUS_CONFIG_PATH" => resolved_config_path)), stdout=gff, stderr=std_err)
+            pipeline(setenv(cmd, Dict("AUGUSTUS_CONFIG_PATH" => resolved_config_path)),
+                stdout = gff, stderr = std_err)
         end
         run(pipeline_cmd)
     end
 
-    return (;fasta_file, out_dir, gff, out, std_err)
+    return (; fasta_file, out_dir, gff, out, std_err)
 end
 
 """
@@ -3495,7 +3545,8 @@ Named tuple containing paths to all output files:
 - `codon_faa`: Path to codon-aligned protein sequences
 - `tmp_dir`: Temporary directory path used for the run
 """
-function run_metaeuk(;fasta_file, db_file, out_dir=dirname(fasta_file), threads=Threads.nthreads(), tmp_dir=nothing)
+function run_metaeuk(; fasta_file, db_file, out_dir = dirname(fasta_file),
+        threads = Threads.nthreads(), tmp_dir = nothing)
     Mycelia.add_bioconda_env("metaeuk")
     mkpath(out_dir)
 
@@ -3517,7 +3568,8 @@ function run_metaeuk(;fasta_file, db_file, out_dir=dirname(fasta_file), threads=
         run(cmd)
     end
 
-    return (;fasta_file, out_dir, out_prefix, gff, faa, codon_faa, tmp_dir=resolved_tmp_dir)
+    return (;
+        fasta_file, out_dir, out_prefix, gff, faa, codon_faa, tmp_dir = resolved_tmp_dir)
 end
 
 """
@@ -3540,7 +3592,7 @@ Named tuple containing paths to all output files:
 - `std_out`: Path to captured stdout
 - `std_err`: Path to captured stderr
 """
-function run_prodigal_gv(;fasta_file, out_dir=dirname(fasta_file), translation_table=nothing)
+function run_prodigal_gv(; fasta_file, out_dir = dirname(fasta_file), translation_table = nothing)
     mkpath(out_dir)
 
     gff = "$(out_dir)/$(basename(fasta_file)).prodigal-gv.gff"
@@ -3560,11 +3612,11 @@ function run_prodigal_gv(;fasta_file, out_dir=dirname(fasta_file), translation_t
             push!(cmd_parts, string(translation_table))
         end
         cmd = Cmd(cmd_parts)
-        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        p = pipeline(cmd, stdout = std_out, stderr = std_err)
         run(p)
     end
 
-    return (;fasta_file, out_dir, gff, faa, fna, std_out, std_err)
+    return (; fasta_file, out_dir, gff, faa, fna, std_out, std_err)
 end
 
 """
@@ -3589,8 +3641,8 @@ Named tuple containing paths to all output files:
 - `std_out`: Path to captured stdout
 - `std_err`: Path to captured stderr
 """
-function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), translation_table=nothing)
-    
+function run_prodigal(; fasta_file, out_dir = dirname(fasta_file), translation_table = nothing)
+
     # if isempty(out_dir)
     #     prodigal_dir = mkpath("$(fasta_file)_prodigal")
     # else
@@ -3630,23 +3682,24 @@ function run_prodigal(;fasta_file, out_dir=dirname(fasta_file), translation_tabl
     gene_scores = "$(out_dir)/$(basename(fasta_file)).prodigal.all_potential_gene_scores.txt"
     std_out = "$(out_dir)/$(basename(fasta_file)).prodigal.out"
     std_err = "$(out_dir)/$(basename(fasta_file)).prodigal.err"
-    
+
     # I usually delete the rest, so don't reprocess if outputs of interest are present
     if (!isfile(gff) && !isfile(faa))
         add_bioconda_env("prodigal")
         cmd_parts = [
             Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "prodigal", "prodigal",
-            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i", fasta_file, "-a", faa, "-d", fna, "-s", gene_scores
+            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i",
+            fasta_file, "-a", faa, "-d", fna, "-s", gene_scores
         ]
         if translation_table !== nothing && translation_table !== missing
             push!(cmd_parts, "-g")
             push!(cmd_parts, string(translation_table))
         end
         cmd = Cmd(cmd_parts)
-        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        p = pipeline(cmd, stdout = std_out, stderr = std_err)
         run(p)
     end
-    return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
+    return (; fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
 end
 
 """
@@ -3677,7 +3730,7 @@ Named tuple containing:
 - Requires Pyrodigal to be available in a Conda environment
 - Skips processing if output files already exist
 """
-function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal", translation_table=nothing)
+function run_pyrodigal(; fasta_file, out_dir = fasta_file * "_pyrodigal", translation_table = nothing)
     # https://pyrodigal.readthedocs.io/en/stable/guide/cli.html#command-line-interface
 
     # -a trans_file         Write protein translations to the selected file.
@@ -3728,14 +3781,15 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal", translati
     std_out = "$(out_dir)/$(basename(fasta_file)).pyrodigal.out"
     std_err = "$(out_dir)/$(basename(fasta_file)).pyrodigal.err"
     mkpath(out_dir)
-    
+
     # I usually delete the rest, so don't reprocess if outputs of interest are present
     # `max_overlap` must be lower than `min_gene`
     if (!isfile(gff) || !isfile(faa))
         Mycelia.add_bioconda_env("pyrodigal")
         cmd_parts = [
             Mycelia.CONDA_RUNNER, "run", "--no-capture-output", "-n", "pyrodigal", "pyrodigal",
-            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i", fasta_file, "-a", faa, "-d", fna, "-s", gene_scores,
+            "-f", "gff", "-m", "-p", "meta", "-o", gff, "-i",
+            fasta_file, "-a", faa, "-d", fna, "-s", gene_scores,
             "--min-gene", "33", "--max-overlap", "31"
         ]
         if translation_table !== nothing && translation_table !== missing
@@ -3743,10 +3797,10 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal", translati
             push!(cmd_parts, string(translation_table))
         end
         cmd = Cmd(cmd_parts)
-        p = pipeline(cmd, stdout=std_out, stderr=std_err)
+        p = pipeline(cmd, stdout = std_out, stderr = std_err)
         run(p)
         if fasta_file != "$(out_dir)/$(basename(fasta_file))"
-            cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force=true)
+            cp(fasta_file, "$(out_dir)/$(basename(fasta_file))", force = true)
         end
         if isfile(std_out) && (filesize(std_out) == 0)
             rm(std_out)
@@ -3756,7 +3810,7 @@ function run_pyrodigal(;fasta_file, out_dir=fasta_file * "_pyrodigal", translati
         end
     end
     # return (;fasta_file, out_dir, gff, gene_scores, fna, faa, std_out, std_err)
-    return (;fasta_file, out_dir, gff, faa, fna)
+    return (; fasta_file, out_dir, gff, faa, fna)
 end
 
 """
@@ -3794,48 +3848,51 @@ Each row represents one predicted terminator with the following columns:
 See TransTerm HP documentation for details on scoring and location codes.
 """
 function parse_transterm_output(transterm_output)
-    
-   #     3. FORMAT OF THE TRANSTERM OUTPUT
 
-#     The organism's genes are listed sorted by their end coordinate and terminators
-#     are output between them. A terminator entry looks like this:
+    #     3. FORMAT OF THE TRANSTERM OUTPUT
 
-#         TERM 19  15310 - 15327  -      F     99      -12.7 -4.0 |bidir
-#         (name)   (start - end)  (sense)(loc) (conf) (hp) (tail) (notes)
+    #     The organism's genes are listed sorted by their end coordinate and terminators
+    #     are output between them. A terminator entry looks like this:
 
-#     where 'conf' is the overall confidence score, 'hp' is the hairpin score, and
-#     'tail' is the tail score. 'Conf' (which ranges from 0 to 100) is what you
-#     probably want to use to assess the quality of a terminator. Higher is better.
-#     The confidence, hp score, and tail scores are described in the paper cited
-#     above.  'Loc' gives type of region the terminator is in:
+    #         TERM 19  15310 - 15327  -      F     99      -12.7 -4.0 |bidir
+    #         (name)   (start - end)  (sense)(loc) (conf) (hp) (tail) (notes)
 
-#         'G' = in the interior of a gene (at least 50bp from an end),
-#         'F' = between two +strand genes,
-#         'R' = between two -strand genes,
-#         'T' = between the ends of a +strand gene and a -strand gene,
-#         'H' = between the starts of a +strand gene and a -strand gene,
-#         'N' = none of the above (for the start and end of the DNA)
+    #     where 'conf' is the overall confidence score, 'hp' is the hairpin score, and
+    #     'tail' is the tail score. 'Conf' (which ranges from 0 to 100) is what you
+    #     probably want to use to assess the quality of a terminator. Higher is better.
+    #     The confidence, hp score, and tail scores are described in the paper cited
+    #     above.  'Loc' gives type of region the terminator is in:
 
-#     Because of how overlapping genes are handled, these designations are not
-#     exclusive. 'G', 'F', or 'R' can also be given in lowercase, indicating that
-#     the terminator is on the opposite strand as the region.  Unless the
-#     --all-context option is given, only candidate terminators that appear to be in
-#     an appropriate genome context (e.g. T, F, R) are output. 
+    #         'G' = in the interior of a gene (at least 50bp from an end),
+    #         'F' = between two +strand genes,
+    #         'R' = between two -strand genes,
+    #         'T' = between the ends of a +strand gene and a -strand gene,
+    #         'H' = between the starts of a +strand gene and a -strand gene,
+    #         'N' = none of the above (for the start and end of the DNA)
 
-#     Following the TERM line is the sequence of the hairpin and the 5' and 3'
-#     tails, always written 5' to 3'.
-    
+    #     Because of how overlapping genes are handled, these designations are not
+    #     exclusive. 'G', 'F', or 'R' can also be given in lowercase, indicating that
+    #     the terminator is on the opposite strand as the region.  Unless the
+    #     --all-context option is given, only candidate terminators that appear to be in
+    #     an appropriate genome context (e.g. T, F, R) are output. 
+
+    #     Following the TERM line is the sequence of the hairpin and the 5' and 3'
+    #     tails, always written 5' to 3'.
+
     transterm_table = DataFrames.DataFrame()
     chromosome = ""
-    for line in Iterators.filter(x -> occursin(r"^\s*(SEQUENCE|TERM)", x), eachline(transterm_output))
+    for line in
+        Iterators.filter(x -> occursin(r"^\s*(SEQUENCE|TERM)", x), eachline(transterm_output))
         line = strip(line)
         if occursin(r"^SEQUENCE", line)
             chromosome = split(line)[2]
         else
             transterm_regex = r"(TERM \d+)\s+(\d+) - (\d+)\s+(\S)\s+(\w+)\s+(\d+)\s+(\S+)\s+(\S+)\s+\|(.*)"
-            term_id, start, stop, strand, location, confidence, hairpin_score, tail_score, notes = match(transterm_regex, line).captures
+            term_id, start, stop, strand, location, confidence, hairpin_score,
+            tail_score, notes = match(transterm_regex, line).captures
             notes = strip(notes)
-            row = (;chromosome, term_id, start, stop, strand, location, confidence, hairpin_score, tail_score, notes)
+            row = (; chromosome, term_id, start, stop, strand, location,
+                confidence, hairpin_score, tail_score, notes)
             push!(transterm_table, row)
         end
     end
@@ -3861,7 +3918,7 @@ Parses TransTerm output and generates a standardized GFF3 file with the followin
 """
 function transterm_output_to_gff(transterm_output)
     transterm_table = parse_transterm_output(transterm_output)
-    
+
     final_gff_table = if DataFrames.nrow(transterm_table) == 0
         # If the input table is empty, create an empty DataFrame with the correct GFF columns and types.
         DataFrames.DataFrame(
@@ -3880,21 +3937,23 @@ function transterm_output_to_gff(transterm_output)
         transterm_table[!, "source"] .= "transterm"
         transterm_table[!, "type"] .= "terminator"
         transterm_table[!, "phase"] .= "."
-        transterm_table[!, "attributes"] = map(x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
+        transterm_table[!, "attributes"] = map(
+            x -> "label=" * replace(x, " " => "_"), transterm_table[!, "term_id"])
         DataFrames.rename!(transterm_table,
             "chromosome" => "#seqid",
             "stop" => "end",
-            "confidence" => "score",
+            "confidence" => "score"
         )
         # Select and reorder columns for the final GFF structure.
-        transterm_table[!, ["#seqid", "source", "type", "start", "end", "score", "strand", "phase", "attributes"]]
+        transterm_table[!, ["#seqid", "source", "type", "start", "end",
+            "score", "strand", "phase", "attributes"]]
     end
 
     transterm_gff_path = transterm_output * ".gff"
     # Write the resulting DataFrame (either with data or empty with correct columns) to a GFF file.
     # uCSV will correctly write just the header if the DataFrame is empty.
-    uCSV.write(transterm_gff_path, final_gff_table, delim='\t')
-    
+    uCSV.write(transterm_gff_path, final_gff_table, delim = '\t')
+
     return transterm_gff_path
 end
 
@@ -3910,7 +3969,7 @@ Parse a VirSorter score TSV file and return a DataFrame.
 - `DataFrame`: A DataFrame containing the parsed data from the TSV file. If the file is empty, returns a DataFrame with the appropriate headers but no data.
 """
 function parse_virsorter_score_tsv(virsorter_score_tsv)
-    data, header = uCSV.read(virsorter_score_tsv, delim='\t', header=1)
+    data, header = uCSV.read(virsorter_score_tsv, delim = '\t', header = 1)
     if length(data) == 0
         data = [[] for i in 1:length(header)]
     end

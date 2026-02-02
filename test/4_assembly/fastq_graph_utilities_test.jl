@@ -13,7 +13,7 @@ Test.@testset "FASTQ Graph Utilities" begin
             write(io, "IIII\n")
         end
 
-        graph = Mycelia.Rhizomorph.build_fastq_graph_from_file(fastq_path; min_overlap=3)
+        graph = Mycelia.Rhizomorph.build_fastq_graph_from_file(fastq_path; min_overlap = 3)
         stats = Mycelia.Rhizomorph.get_fastq_graph_statistics(graph)
         Test.@test stats[:num_vertices] == 1
         Test.@test stats[:num_edges] == 0
@@ -32,7 +32,8 @@ Test.@testset "FASTQ Graph Utilities" begin
             write(io, "IIII\n")
         end
 
-        graph_multi = Mycelia.Rhizomorph.build_fastq_graph_from_files([fastq_path, fastq_path2]; min_overlap=3)
+        graph_multi = Mycelia.Rhizomorph.build_fastq_graph_from_files(
+            [fastq_path, fastq_path2]; min_overlap = 3)
         Test.@test length(MetaGraphsNext.labels(graph_multi)) >= 1
 
         fasta_path = joinpath(dir, "reads.fasta")

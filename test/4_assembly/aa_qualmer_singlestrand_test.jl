@@ -37,9 +37,9 @@ Test.@testset "AA Qualmer SingleStrand Graph" begin
     graph = Mycelia.Rhizomorph.build_qualmer_graph(
         reads,
         3;
-        dataset_id="test",
-        mode=:singlestrand,
-        type_hint=:AA
+        dataset_id = "test",
+        mode = :singlestrand,
+        type_hint = :AA
     )
 
     # Structure validation
@@ -56,7 +56,8 @@ Test.@testset "AA Qualmer SingleStrand Graph" begin
             for entries in values(evidence_map)
                 for entry in entries
                     Test.@test entry isa Mycelia.Rhizomorph.QualityEvidenceEntry
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                     Test.@test all(q -> 0 <= q - UInt8(33) <= 60, entry.quality_scores)
                 end
             end
@@ -82,7 +83,8 @@ Test.@testset "AA Qualmer SingleStrand Graph" begin
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
 
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
 

@@ -16,7 +16,9 @@ Keyword arguments
 Notes
 - When returning a DataFrame, absent values are represented with `missing` (so columns are join-friendly).
 """
-function list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :view, link_template::Union{Nothing,String}=nothing, rclone_args::Vector{String}=String[], return_df::Bool=true)
+function list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :view,
+        link_template::Union{Nothing, String} = nothing,
+        rclone_args::Vector{String} = String[], return_df::Bool = true)
     # Build rclone command
     cmd_parts = ["rclone", "lsjson", remote]
     if !isempty(rclone_args)
@@ -67,14 +69,14 @@ function list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :vie
     id_keys = ("ID", "Id", "id", "DriveId", "driveId")
     # id_keys = ("ID")
 
-    entries = Vector{Dict{String,Any}}()
+    entries = Vector{Dict{String, Any}}()
     for item in parsed
         if !isa(item, Dict)
             throw(ErrorException("Expected each entry from `rclone lsjson` to be an object/dict, found: $(typeof(item))"))
         end
 
         # Ensure keys are Strings and we have a mutable Dict
-        entry = Dict{String,Any}(item)
+        entry = Dict{String, Any}(item)
 
         # Find ID-like key
         idval = nothing
@@ -106,7 +108,6 @@ function list_gdrive_with_links(remote::AbstractString; link_type::Symbol = :vie
     end
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -119,7 +120,8 @@ List all directories at the specified rclone path.
 - `Vector{String}`: Full paths to all directories found at the specified location
 """
 function rclone_list_directories(path)
-    directories = [join(split(line)[5:end], " ") for line in eachline(open(`rclone lsd $(path)`))]
+    directories = [join(split(line)[5:end], " ")
+                   for line in eachline(open(`rclone lsd $(path)`))]
     directories = joinpath.(path, directories)
     return directories
 end
@@ -163,10 +165,10 @@ success = rclone_copy_list(
 - Add option to preserve directory structure or flatten it
 - Add dry-run option for testing
 """
-function rclone_copy_list(;source::String, destination::String, relative_paths::Vector{String})
+function rclone_copy_list(; source::String, destination::String, relative_paths::Vector{String})
     # Create a temporary file for storing file paths
     temp_file = joinpath(tempdir(), "rclone_sources_$(Random.randstring(8)).txt")
-    
+
     try
         # Write paths to temp file
         open(temp_file, "w") do file
@@ -174,18 +176,18 @@ function rclone_copy_list(;source::String, destination::String, relative_paths::
                 println(file, path)
             end
         end
-        
+
         println("Starting transfer of $(length(relative_paths)) files from $source to $destination...")
-        
+
         # Make sure the destination directory exists if it's local
         if !occursin(":", destination) && !isdir(destination)
             mkdir(destination)
         end
-        
+
         # Download files using rclone with progress reporting
         # --verbose --drive-chunk-size 2G --drive-upload-cutoff 1T --tpslimit 1 
         run(`rclone copy $source $destination --verbose --files-from $temp_file`)
-        
+
         println("Download completed successfully")
         return true
     catch e
@@ -220,7 +222,7 @@ Uses optimized rclone settings for large files:
 - 1TB upload cutoff
 - Rate limited to 1 transaction per second
 """
-function rclone_copy(source, dest; config="", max_attempts=3, sleep_timer=60)
+function rclone_copy(source, dest; config = "", max_attempts = 3, sleep_timer = 60)
     done = false
     attempts = 0
     while !done && attempts < max_attempts
@@ -267,11 +269,11 @@ Copy files between local and remote storage using rclone with automated retry lo
 - `recursive::Bool=false`: If true, adds the flag for recursive traversal
 """
 function rclone_copy2(source, dest;
-                     config = "",
-                     max_attempts = 3, sleep_timer = 60,
-                     includes = String[],
-                     excludes = String[],
-                     recursive = false)
+        config = "",
+        max_attempts = 3, sleep_timer = 60,
+        includes = String[],
+        excludes = String[],
+        recursive = false)
     done = false
     attempts = 0
     while !done && attempts < max_attempts
@@ -279,9 +281,9 @@ function rclone_copy2(source, dest;
         try
             # Define base flags optimized for large files
             flags = ["--drive-chunk-size", "2G",
-                     "--drive-upload-cutoff", "1T",
-                     "--tpslimit", "1",
-                     "--verbose"]
+                "--drive-upload-cutoff", "1T",
+                "--tpslimit", "1",
+                "--verbose"]
 
             # Append each include pattern with its flag
             for pattern in includes

@@ -4,7 +4,8 @@ Wrapper for ggcat (Graph Construction and Querying).
 
 const GGCAT_ENV_NAME = "ggcat"
 
-function _ggcat_input_args(input_files::Union{AbstractString, AbstractVector{<:AbstractString}})
+function _ggcat_input_args(input_files::Union{
+        AbstractString, AbstractVector{<:AbstractString}})
     if input_files isa AbstractVector{<:AbstractString}
         if isempty(input_files)
             throw(ArgumentError("input_files cannot be empty"))
@@ -50,8 +51,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Ensure the GGCAT environment is installed via Bioconda.
 """
-function install_ggcat(; force::Bool=false)
-    Mycelia.add_bioconda_env(GGCAT_ENV_NAME; force=force)
+function install_ggcat(; force::Bool = false)
+    Mycelia.add_bioconda_env(GGCAT_ENV_NAME; force = force)
 end
 
 """
@@ -79,18 +80,18 @@ Run `ggcat build` to construct a compacted or colored de Bruijn graph.
 The path to the output graph file (resolved if ggcat appends `.lz4` or `.gz`).
 """
 function ggcat_build(
-    input_files::Union{AbstractString, AbstractVector{<:AbstractString}},
-    output_file::AbstractString,
-    kmer_length::Int;
-    threads::Int=1,
-    min_multiplicity::Int=2,
-    colors::Bool=false,
-    generate_links::Bool=false,
-    matchtigs::Bool=false,
-    eulertigs::Bool=false,
-    pathtigs::Bool=false,
-    prefer_memory::Bool=false,
-    color_mapping::Union{Nothing, AbstractString}=nothing,
+        input_files::Union{AbstractString, AbstractVector{<:AbstractString}},
+        output_file::AbstractString,
+        kmer_length::Int;
+        threads::Int = 1,
+        min_multiplicity::Int = 2,
+        colors::Bool = false,
+        generate_links::Bool = false,
+        matchtigs::Bool = false,
+        eulertigs::Bool = false,
+        pathtigs::Bool = false,
+        prefer_memory::Bool = false,
+        color_mapping::Union{Nothing, AbstractString} = nothing
 )
     if kmer_length < 1
         throw(ArgumentError("kmer_length must be positive, got $(kmer_length)"))
@@ -107,12 +108,12 @@ function ggcat_build(
 
     input_args = _ggcat_input_args(input_files)
     cmd_flags = String[
-        "build",
-        "--kmer-length", string(kmer_length),
-        "--threads-count", string(threads),
-        "--min-multiplicity", string(min_multiplicity),
-        "--output-file", String(output_file),
-    ]
+    "build",
+    "--kmer-length", string(kmer_length),
+    "--threads-count", string(threads),
+    "--min-multiplicity", string(min_multiplicity),
+    "--output-file", String(output_file)
+]
 
     if colors
         push!(cmd_flags, "--colors")
@@ -174,12 +175,12 @@ Run `ggcat query` to query k-mers in an existing graph.
 - `colors::Bool=false`: Set to true if querying a colored graph.
 """
 function ggcat_query(
-    graph_file::AbstractString,
-    query_file::AbstractString,
-    output_file::AbstractString,
-    kmer_length::Int;
-    threads::Int=1,
-    colors::Bool=false,
+        graph_file::AbstractString,
+        query_file::AbstractString,
+        output_file::AbstractString,
+        kmer_length::Int;
+        threads::Int = 1,
+        colors::Bool = false
 )
     if kmer_length < 1
         throw(ArgumentError("kmer_length must be positive, got $(kmer_length)"))
@@ -198,10 +199,10 @@ function ggcat_query(
     mkpath(dirname(String(output_file)))
 
     cmd_flags = String[
-        "query",
-        "-k", string(kmer_length),
-        "-j", string(threads),
-    ]
+    "query",
+    "-k", string(kmer_length),
+    "-j", string(threads)
+]
 
     if colors
         push!(cmd_flags, "--colors")
@@ -210,7 +211,7 @@ function ggcat_query(
     append!(cmd_flags, [String(graph_file), String(query_file)])
 
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(GGCAT_ENV_NAME) ggcat $(cmd_flags)`
-    run(pipeline(cmd, stdout=String(output_file)))
+    run(pipeline(cmd, stdout = String(output_file)))
 
     if !isfile(output_file)
         error("ggcat query failed to produce output at $(output_file)")

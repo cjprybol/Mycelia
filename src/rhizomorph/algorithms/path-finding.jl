@@ -34,14 +34,14 @@ struct GraphPath{T}
     steps::Vector{WalkStep{T}}
     total_probability::Float64
 
-    function GraphPath{T}(steps::Vector{WalkStep{T}}) where T
+    function GraphPath{T}(steps::Vector{WalkStep{T}}) where {T}
         total_prob = isempty(steps) ? 0.0 : last(steps).cumulative_probability
         new{T}(steps, total_prob)
     end
 end
 
 # Convenience constructor that infers the type parameter
-function GraphPath(steps::Vector{WalkStep{T}}) where T
+function GraphPath(steps::Vector{WalkStep{T}}) where {T}
     return GraphPath{T}(steps)
 end
 
@@ -106,20 +106,20 @@ by default, and strand orientation is inferred from the first evidence entry
 when present. Undirected graphs are expanded into bidirectional edges.
 """
 function weighted_graph_from_rhizomorph(
-    source_graph::MetaGraphsNext.MetaGraph;
-    default_weight::Float64=1e-10,
-    edge_weight::Function=count_evidence,
+        source_graph::MetaGraphsNext.MetaGraph;
+        default_weight::Float64 = 1e-10,
+        edge_weight::Function = count_evidence
 )
     labels = collect(MetaGraphsNext.labels(source_graph))
     label_type = isempty(labels) ? String : typeof(first(labels))
 
     weighted = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
-        label_type=label_type,
-        vertex_data_type=Any,
-        edge_data_type=StrandWeightedEdgeData,
-        weight_function=edge_data_weight,
-        default_weight=0.0,
+        label_type = label_type,
+        vertex_data_type = Any,
+        edge_data_type = StrandWeightedEdgeData,
+        weight_function = edge_data_weight,
+        default_weight = 0.0
     )
 
     for label in labels
@@ -132,7 +132,7 @@ function weighted_graph_from_rhizomorph(
         edge_data = source_graph[src, dst]
         weight_value = Float64(edge_weight(edge_data))
         weight = weight_value > 0 ? weight_value : default_weight
-        strand = first_evidence_strand(edge_data.evidence; default=Forward)
+        strand = first_evidence_strand(edge_data.evidence; default = Forward)
         weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
         if !is_directed
             weighted[dst, src] = StrandWeightedEdgeData(weight, strand, strand)
@@ -143,11 +143,11 @@ function weighted_graph_from_rhizomorph(
 end
 
 function probabilistic_walk_next(
-    graph::MetaGraphsNext.MetaGraph,
-    start_vertex::T,
-    max_steps::Int;
-    seed::Union{Nothing, Int}=nothing,
-) where T
+        graph::MetaGraphsNext.MetaGraph,
+        start_vertex::T,
+        max_steps::Int;
+        seed::Union{Nothing, Int} = nothing
+) where {T}
     if seed !== nothing
         Mycelia.Random.seed!(seed)
     end
@@ -186,11 +186,11 @@ function probabilistic_walk_next(
 end
 
 function maximum_weight_walk_next(
-    graph::MetaGraphsNext.MetaGraph,
-    start_vertex::T,
-    max_steps::Int;
-    weight_function::Function = edge_data_weight,
-) where T
+        graph::MetaGraphsNext.MetaGraph,
+        start_vertex::T,
+        max_steps::Int;
+        weight_function::Function = edge_data_weight
+) where {T}
     if !(start_vertex in MetaGraphsNext.labels(graph))
         throw(ArgumentError("Start vertex $start_vertex not found in graph"))
     end
@@ -261,12 +261,13 @@ function _get_valid_transitions(graph, vertex_label, strand)
             if edge_src_strand == strand
                 probability = edge_data.weight > 0 ? edge_data.weight : 1e-10
 
-                push!(transitions, Dict(
-                    :target_vertex => target_vertex,
-                    :target_strand => _normalize_strand(edge_data.dst_strand),
-                    :probability => probability,
-                    :edge_data => edge_data,
-                ))
+                push!(transitions,
+                    Dict(
+                        :target_vertex => target_vertex,
+                        :target_strand => _normalize_strand(edge_data.dst_strand),
+                        :probability => probability,
+                        :edge_data => edge_data
+                    ))
             end
         end
     end
@@ -312,16 +313,18 @@ function _sample_transition(transitions, probabilities)
 end
 
 function shortest_probability_path_next(
-    graph::MetaGraphsNext.MetaGraph,
-    source::T,
-    target::T,
-) where T
-    if !(source in MetaGraphsNext.labels(graph)) || !(target in MetaGraphsNext.labels(graph))
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T
+) where {T}
+    if !(source in MetaGraphsNext.labels(graph)) ||
+       !(target in MetaGraphsNext.labels(graph))
         return nothing
     end
 
     distances = Dict{Tuple{T, StrandOrientation}, Float64}()
-    predecessors = Dict{Tuple{T, StrandOrientation}, Union{Nothing, Tuple{T, StrandOrientation}}}()
+    predecessors = Dict{
+        Tuple{T, StrandOrientation}, Union{Nothing, Tuple{T, StrandOrientation}}}()
     visited = Set{Tuple{T, StrandOrientation}}()
     pq = DataStructures.PriorityQueue{Tuple{T, StrandOrientation}, Float64}()
 
@@ -342,7 +345,8 @@ function shortest_probability_path_next(
         current_vertex, current_strand = current_state
 
         if current_vertex == target
-            return _reconstruct_shortest_path(predecessors, distances, (source, Forward), current_state, graph)
+            return _reconstruct_shortest_path(
+                predecessors, distances, (source, Forward), current_state, graph)
         end
 
         transitions = _get_valid_transitions(graph, current_vertex, current_strand)
@@ -420,7 +424,8 @@ exactly once. The algorithm checks that:
 - At most one vertex has (out-degree - in-degree) = -1 (end vertex)
 - All other vertices have equal in-degree and out-degree
 """
-function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where T
+function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{
+        <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where {T}
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
         return Vector{Vector{T}}()
@@ -526,7 +531,8 @@ function _find_eulerian_path_hierholzer(graph::Graphs.AbstractGraph, start_verte
     reverse!(path)
 
     # Verify all edges were used
-    total_edges_used = Graphs.ne(graph) - sum(length(neighbors) for neighbors in values(adj_list))
+    total_edges_used = Graphs.ne(graph) -
+                       sum(length(neighbors) for neighbors in values(adj_list))
 
     if total_edges_used != Graphs.ne(graph)
         return Int[]  # Failed to find Eulerian path
@@ -535,7 +541,7 @@ function _find_eulerian_path_hierholzer(graph::Graphs.AbstractGraph, start_verte
     return path
 end
 
-function _find_eulerian_path_hierholzer_labels(adj_list::Dict{T, Vector{T}}, start_vertex::T) where T
+function _find_eulerian_path_hierholzer_labels(adj_list::Dict{T, Vector{T}}, start_vertex::T) where {T}
     path = T[]
     stack = T[start_vertex]
 
@@ -625,7 +631,7 @@ of find_eulerian_paths_next. For k-mer graphs, reconstructs by overlapping k-mer
 # Returns
 Appropriate sequence type based on the k-mer type.
 """
-function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where T
+function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where {T}
     if isempty(path)
         return _get_empty_sequence_for_label_type(T)
     end
@@ -676,7 +682,7 @@ concatenates sequences.
 - Maintains type stability - returns same sequence type as graph contains
 - Handles strand orientation correctly (forward/reverse complement)
 """
-function path_to_sequence(path::GraphPath{T}, graph::MetaGraphsNext.MetaGraph) where T
+function path_to_sequence(path::GraphPath{T}, graph::MetaGraphsNext.MetaGraph) where {T}
     if isempty(path.steps)
         # Return appropriate empty sequence type
         return _get_empty_sequence_for_label_type(T)
@@ -720,7 +726,7 @@ end
 """
 Extract sequence from a single step, maintaining type stability.
 """
-function _extract_sequence_from_step(step::WalkStep{T}, graph, SequenceType) where T
+function _extract_sequence_from_step(step::WalkStep{T}, graph, SequenceType) where {T}
     vertex_data = graph[step.vertex_label]
 
     # Handle different vertex data types
@@ -767,7 +773,7 @@ end
 """
 Determine the appropriate sequence type for reconstruction from the first step.
 """
-function _get_sequence_type_for_path(step::WalkStep{T}, graph) where T
+function _get_sequence_type_for_path(step::WalkStep{T}, graph) where {T}
     vertex_data = graph[step.vertex_label]
 
     if hasfield(typeof(vertex_data), :sequence)
@@ -823,7 +829,7 @@ end
 """
 Get empty sequence for a given label type.
 """
-function _get_empty_sequence_for_label_type(::Type{T}) where T
+function _get_empty_sequence_for_label_type(::Type{T}) where {T}
     if T <: Kmers.DNAKmer
         return BioSequences.LongDNA{4}()
     elseif T <: Kmers.RNAKmer

@@ -63,39 +63,39 @@
 #     strain_recall::Float64           
 #     strain_precision::Float64        
 #     strain_f1_score::Float64         
-    
+
 #     # Assembly Contiguity Metrics
 #     NGA50::Int64                     
 #     largest_alignment::Int64         
 #     total_aligned_length::Int64      
-    
+
 #     # Assembly Accuracy Metrics
 #     mismatches_per_100kb::Float64    
 #     indels_per_100kb::Float64        
 #     misassemblies_total::Int64       
 #     misassemblies_local::Int64       
-    
+
 #     # Completeness and Contamination
 #     completeness::Float64            
 #     contamination::Float64           
 #     busco_completeness::Float64      
-    
+
 #     # Read Mapping Metrics
 #     read_mapping_rate::Float64       
 #     properly_paired_rate::Float64    
-    
+
 #     # Confidence and Uncertainty
 #     mean_base_confidence::Float64    
 #     uncertain_regions_fraction::Float64  
-    
+
 #     # Resource Usage
 #     peak_memory_gb::Float64          
 #     cpu_time_hours::Float64          
-    
+
 #     # Technology-Specific Metrics
 #     homopolymer_accuracy::Float64    
 #     repeat_resolution_rate::Float64  
-    
+
 #     # Default constructor with zeros
 #     StrainQualityMetrics() = new(
 #         0.0, 0.0, 0.0,  # strain metrics
@@ -142,12 +142,12 @@
 #     confidence::Vector{Float64}  # Per-base confidence scores
 #     strain_id::Union{String, Nothing}
 #     strain_probability::Float64  # Confidence in strain assignment
-    
+
 #     function StrainContig(id::String, sequence::BioSequences.LongDNA{4})
 #         length = Base.length(sequence)
 #         new(id, sequence, length, 0.0, zeros(length), nothing, 0.0)
 #     end
-    
+
 #     function StrainContig(id::String, sequence::BioSequences.LongDNA{4}, 
 #                          strain_id::String, strain_probability::Float64)
 #         length = Base.length(sequence)
@@ -190,7 +190,7 @@
 #     allele_frequency::Float64
 #     supporting_reads::Int64
 #     strain_id::Union{String, Nothing}
-    
+
 #     function StrainVariant(contig_id::String, position::Int64, reference::String, 
 #                           alternative::String, variant_type::Symbol, confidence::Float64,
 #                           allele_frequency::Float64, supporting_reads::Int64)
@@ -227,7 +227,7 @@
 #     strain_paths::Dict{String, Vector{T}}    # strain_id -> path through graph
 #     confidence_scores::Dict{T, Float64}      # k-mer -> confidence
 #     strain_support::Dict{T, Dict{String, Int64}}  # k-mer -> strain-specific counts
-    
+
 #     function StrainAssemblyGraph{T}() where {T <: BioSequences.BioSequence}
 #         new{T}(
 #             Dict{T, Int64}(),
@@ -270,7 +270,7 @@
 #     assembly_graph::Union{StrainAssemblyGraph, Nothing}
 #     strain_abundances::Dict{String, Float64}  # strain_id -> relative abundance
 #     metadata::Dict{String, Any}
-    
+
 #     StrainAssemblyResult() = new(
 #         StrainContig[], 
 #         StrainVariant[], 

@@ -10,7 +10,6 @@ import CSV
 import DataFrames
 
 Test.@testset "Sourmash Output Parsers" begin
-
     Test.@testset "parse_sourmash_gather_output" begin
         # Create a temporary test file with sourmash gather CSV format
         test_dir = mktempdir()
@@ -39,7 +38,7 @@ Test.@testset "Sourmash Output Parsers" begin
         # Test error on missing file
         Test.@test_throws ErrorException Mycelia.parse_sourmash_gather_output("nonexistent.csv")
 
-        rm(test_dir, recursive=true)
+        rm(test_dir, recursive = true)
     end
 
     Test.@testset "parse_sourmash_search_output" begin
@@ -70,7 +69,7 @@ Test.@testset "Sourmash Output Parsers" begin
         # Test error on missing file
         Test.@test_throws ErrorException Mycelia.parse_sourmash_search_output("nonexistent.csv")
 
-        rm(test_dir, recursive=true)
+        rm(test_dir, recursive = true)
     end
 end
 

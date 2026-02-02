@@ -37,12 +37,12 @@ Test.@testset "Rhizomorph Assembly Helpers" begin
 
     Test.@testset "Auto configuration" begin
         fasta_reads = [FASTX.FASTA.Record("read1", "ATCG")]
-        config = Mycelia.Rhizomorph._auto_configure_assembly(fasta_reads; k=3)
+        config = Mycelia.Rhizomorph._auto_configure_assembly(fasta_reads; k = 3)
         Test.@test config.graph_mode == Mycelia.Rhizomorph.DoubleStrand
         Test.@test config.use_quality_scores == false
 
         string_reads = ["ABCD"]
-        string_config = Mycelia.Rhizomorph._auto_configure_assembly(string_reads; k=2)
+        string_config = Mycelia.Rhizomorph._auto_configure_assembly(string_reads; k = 2)
         Test.@test string_config.sequence_type == String
         Test.@test string_config.graph_mode == Mycelia.Rhizomorph.SingleStrand
     end

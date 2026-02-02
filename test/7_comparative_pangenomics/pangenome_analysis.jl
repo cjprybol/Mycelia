@@ -29,7 +29,7 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
         genomes = [
             ("genome1.fasta", BioSequences.LongDNA{4}("ATGCGATGCA")),
             ("genome2.fasta", BioSequences.LongDNA{4}("ATGCGTTTAA")),
-            ("genome3.fasta", BioSequences.LongDNA{4}("TTTATGCGAA")),
+            ("genome3.fasta", BioSequences.LongDNA{4}("TTTATGCGAA"))
         ]
 
         genome_files = String[]
@@ -44,8 +44,8 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
         kmer_type = Kmers.DNAKmer{3}
         result = Mycelia.analyze_pangenome_kmers(
             genome_files;
-            kmer_type=kmer_type,
-            distance_metric=:jaccard,
+            kmer_type = kmer_type,
+            distance_metric = :jaccard
         )
 
         genome_names = [basename(path) for path in genome_files]
@@ -69,8 +69,9 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
         end
 
         expected_accessory = Set(
-            kmer for (kmer, count) in presence_counts
-            if count > 1 && count < length(kmer_sets)
+            kmer
+        for (kmer, count) in presence_counts
+        if count > 1 && count < length(kmer_sets)
         )
         expected_shared = union(expected_core, expected_accessory)
 
@@ -95,29 +96,33 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
 
         Test.@test size(result.presence_absence_matrix, 1) == length(all_kmers)
         Test.@test size(result.presence_absence_matrix, 2) == length(genome_names)
-        Test.@test result.distance_matrix == Mycelia.jaccard_distance(result.presence_absence_matrix)
+        Test.@test result.distance_matrix ==
+                   Mycelia.jaccard_distance(result.presence_absence_matrix)
 
         expected_mean = Statistics.mean(result.distance_matrix[result.distance_matrix .> 0])
         Test.@test result.similarity_stats.core_size == length(expected_core)
         Test.@test result.similarity_stats.accessory_size == length(expected_accessory)
         Test.@test result.similarity_stats.pangenome_size == length(all_kmers)
-        Test.@test result.similarity_stats.unique_total == sum(length(v) for v in values(expected_unique))
-        Test.@test isapprox(result.similarity_stats.mean_pairwise_distance, expected_mean; atol=1e-12)
+        Test.@test result.similarity_stats.unique_total ==
+                   sum(length(v) for v in values(expected_unique))
+        Test.@test isapprox(result.similarity_stats.mean_pairwise_distance, expected_mean; atol = 1e-12)
 
         bray_result = Mycelia.analyze_pangenome_kmers(
             genome_files;
-            kmer_type=kmer_type,
-            distance_metric=:bray_curtis,
+            kmer_type = kmer_type,
+            distance_metric = :bray_curtis
         )
-        Test.@test size(bray_result.distance_matrix) == (length(genome_files), length(genome_files))
+        Test.@test size(bray_result.distance_matrix) ==
+                   (length(genome_files), length(genome_files))
         Test.@test bray_result.distance_matrix == transpose(bray_result.distance_matrix)
-        Test.@test all(bray_result.distance_matrix[i, i] == 0 for i in 1:length(genome_files))
+        Test.@test all(bray_result.distance_matrix[i, i] == 0
+        for i in 1:length(genome_files))
 
         jaccard_similarity = Mycelia.compare_genome_kmer_similarity(
             genome_files[1],
             genome_files[2];
-            kmer_type=kmer_type,
-            metric=:jaccard,
+            kmer_type = kmer_type,
+            metric = :jaccard
         )
 
         kmer_counts_1 = expected_counts[genome_names[1]]
@@ -126,54 +131,58 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
         total_kmers = length(union(keys(kmer_counts_1), keys(kmer_counts_2)))
         expected_distance = 1.0 - shared_kmers / total_kmers
 
-        Test.@test isapprox(jaccard_similarity.distance, expected_distance; atol=1e-12)
-        Test.@test isapprox(jaccard_similarity.jaccard_similarity, shared_kmers / total_kmers; atol=1e-12)
+        Test.@test isapprox(jaccard_similarity.distance, expected_distance; atol = 1e-12)
+        Test.@test isapprox(
+            jaccard_similarity.jaccard_similarity, shared_kmers /
+                                                   total_kmers; atol = 1e-12)
         Test.@test jaccard_similarity.total_kmers == total_kmers
 
         js_divergence = Mycelia.compare_genome_kmer_similarity(
             genome_files[1],
             genome_files[2];
-            kmer_type=kmer_type,
-            metric=:js_divergence,
+            kmer_type = kmer_type,
+            metric = :js_divergence
         )
         js_divergence_same = Mycelia.compare_genome_kmer_similarity(
             genome_files[1],
             genome_files[1];
-            kmer_type=kmer_type,
-            metric=:js_divergence,
+            kmer_type = kmer_type,
+            metric = :js_divergence
         )
         Test.@test js_divergence.metric == :js_divergence
         Test.@test js_divergence.distance > 0
-        Test.@test isapprox(js_divergence_same.distance, 0.0; atol=1e-12)
+        Test.@test isapprox(js_divergence_same.distance, 0.0; atol = 1e-12)
 
         cosine_similarity = Mycelia.compare_genome_kmer_similarity(
             genome_files[1],
             genome_files[2];
-            kmer_type=kmer_type,
-            metric=:cosine,
+            kmer_type = kmer_type,
+            metric = :cosine
         )
         cosine_similarity_same = Mycelia.compare_genome_kmer_similarity(
             genome_files[1],
             genome_files[1];
-            kmer_type=kmer_type,
-            metric=:cosine,
+            kmer_type = kmer_type,
+            metric = :cosine
         )
         Test.@test cosine_similarity.metric == :cosine
         Test.@test cosine_similarity.distance > 0
-        Test.@test isapprox(cosine_similarity_same.distance, 0.0; atol=1e-12)
+        Test.@test isapprox(cosine_similarity_same.distance, 0.0; atol = 1e-12)
 
         distance_result = Mycelia.build_genome_distance_matrix(
             genome_files;
-            kmer_type=kmer_type,
-            metric=:jaccard,
+            kmer_type = kmer_type,
+            metric = :jaccard
         )
         Test.@test distance_result.genome_names == genome_names
-        Test.@test size(distance_result.distance_matrix) == (length(genome_files), length(genome_files))
-        Test.@test all(distance_result.distance_matrix[i, i] == 0 for i in 1:length(genome_files))
+        Test.@test size(distance_result.distance_matrix) ==
+                   (length(genome_files), length(genome_files))
+        Test.@test all(distance_result.distance_matrix[i, i] == 0
+        for i in 1:length(genome_files))
         Test.@test distance_result.distance_matrix[1, 2] == jaccard_similarity.distance
         Test.@test distance_result.distance_matrix[2, 1] == jaccard_similarity.distance
     finally
-        isdir(temp_dir) && rm(temp_dir, recursive=true, force=true)
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
 end
 
@@ -189,7 +198,8 @@ Test.@testset "Pangenome analysis - input validation" begin
         open(valid_file, "w") do io
             FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
         end
-        Test.@test_throws ErrorException Mycelia.analyze_pangenome_kmers([valid_file]; distance_metric=:cosine)
+        Test.@test_throws ErrorException Mycelia.analyze_pangenome_kmers(
+            [valid_file]; distance_metric = :cosine)
 
         other_file = joinpath(temp_dir, "other.fasta")
         open(other_file, "w") do io
@@ -198,9 +208,9 @@ Test.@testset "Pangenome analysis - input validation" begin
         Test.@test_throws ErrorException Mycelia.compare_genome_kmer_similarity(
             valid_file,
             other_file;
-            metric=:euclidean,
+            metric = :euclidean
         )
     finally
-        isdir(temp_dir) && rm(temp_dir, recursive=true, force=true)
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
 end

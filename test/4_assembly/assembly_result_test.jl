@@ -6,15 +6,15 @@ Test.@testset "Assembly Result Utilities" begin
     contigs = ["ATCG", "GG"]
     contig_names = ["contig_1", "contig_2"]
 
-    graph = Mycelia.Rhizomorph.build_ngram_graph(["ATCG"], 2; dataset_id="test")
+    graph = Mycelia.Rhizomorph.build_ngram_graph(["ATCG"], 2; dataset_id = "test")
     fastq_record = FASTX.FASTQ.Record("contig_1", "ATCG", "IIII")
 
     result = Mycelia.Rhizomorph.AssemblyResult(
         contigs,
         contig_names;
-        graph=graph,
-        assembly_stats=Dict("quality_preserved" => true),
-        fastq_contigs=[fastq_record]
+        graph = graph,
+        assembly_stats = Dict("quality_preserved" => true),
+        fastq_contigs = [fastq_record]
     )
 
     Test.@test Mycelia.Rhizomorph.get_fastq_contigs(result) == [fastq_record]
@@ -44,10 +44,10 @@ Test.@testset "Assembly Result Utilities" begin
         result_with_paths = Mycelia.Rhizomorph.AssemblyResult(
             contigs,
             contig_names;
-            graph=graph,
-            simplified_graph=graph,
-            paths=Dict("contig_1" => ["AT", "TC", "CG"]),
-            gfa_compatible=true
+            graph = graph,
+            simplified_graph = graph,
+            paths = Dict("contig_1" => ["AT", "TC", "CG"]),
+            gfa_compatible = true
         )
 
         Test.@test Mycelia.Rhizomorph.has_graph_structure(result_with_paths)
@@ -62,7 +62,7 @@ Test.@testset "Assembly Result Utilities" begin
             Test.@test occursin("\tcontig_1\t", contents)
         end
 
-        bad_result = Mycelia.Rhizomorph.AssemblyResult(["A"], ["contig_1", "contig_2"]; gfa_compatible=true)
+        bad_result = Mycelia.Rhizomorph.AssemblyResult(["A"], ["contig_1", "contig_2"]; gfa_compatible = true)
         Test.@test_throws ErrorException Mycelia.Rhizomorph.write_gfa(bad_result, "unused.gfa")
 
         report = Mycelia.Rhizomorph.validate_assembly_structure(bad_result)

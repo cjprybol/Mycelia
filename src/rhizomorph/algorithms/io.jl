@@ -164,7 +164,7 @@ graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31})
 graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 ```
 """
-function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode=DoubleStrand)
+function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode = DoubleStrand)
     lines = readlines(gfa_file)
 
     # Parse GFA file content
@@ -227,10 +227,10 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     # Create MetaGraphsNext graph
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=sample_kmer_type,
-        vertex_data_type=vertex_data_type,
-        edge_data_type=edge_data_type,
-        weight_function=compute_edge_weight
+        label_type = sample_kmer_type,
+        vertex_data_type = vertex_data_type,
+        edge_data_type = edge_data_type,
+        weight_function = compute_edge_weight
     )
 
     # Add vertices (segments) - convert sequences to k-mer types without canonicalizing
@@ -247,19 +247,19 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     end
 
     # Add edges (links)
-# <<<<<<< HEAD
-#     for (src_id, src_forward, dst_id, dst_forward) in links
-#         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
-#             src_kmer = id_to_kmer[src_id]
-#             dst_kmer = id_to_kmer[dst_id]
+    # <<<<<<< HEAD
+    #     for (src_id, src_forward, dst_id, dst_forward) in links
+    #         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
+    #             src_kmer = id_to_kmer[src_id]
+    #             dst_kmer = id_to_kmer[dst_id]
 
-#             # Convert GFA orientations to StrandOrientation
-#             src_strand = src_forward ? Forward : Reverse
-#             dst_strand = dst_forward ? Forward : Reverse
+    #             # Convert GFA orientations to StrandOrientation
+    #             src_strand = src_forward ? Forward : Reverse
+    #             dst_strand = dst_forward ? Forward : Reverse
 
-#             # Create strand-aware edge
-#             graph[src_kmer, dst_kmer] = edge_data_type(Dict{String, Dict{String, Set{EdgeEvidenceEntry}}}())
-# =======
+    #             # Create strand-aware edge
+    #             graph[src_kmer, dst_kmer] = edge_data_type(Dict{String, Dict{String, Set{EdgeEvidenceEntry}}}())
+    # =======
     for (src_id, src_forward, dst_id, dst_forward, _) in links
         if haskey(id_to_kmer, src_id) && haskey(id_to_kmer, dst_id)
             src_kmer = id_to_kmer[src_id]
@@ -300,8 +300,8 @@ graph = read_gfa_next("assembly.gfa")
 graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
 ```
 """
-function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStrand;
-                       force_biosequence_graph::Bool=false)
+function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleStrand;
+        force_biosequence_graph::Bool = false)
     # Parse GFA to detect segment lengths
     segment_lengths = Set{Int}()
     segments = Dict{String, String}()
@@ -351,10 +351,10 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
         if isempty(seq_types)
             return MetaGraphsNext.MetaGraph(
                 Graphs.DiGraph();
-                label_type=String,
-                vertex_data_type=StringVertexData,
-                edge_data_type=StringEdgeData,
-                weight_function=compute_edge_weight
+                label_type = String,
+                vertex_data_type = StringVertexData,
+                edge_data_type = StringEdgeData,
+                weight_function = compute_edge_weight
             )
         end
         if length(seq_types) != 1
@@ -365,10 +365,10 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode=DoubleStr
 
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
-            label_type=SeqType,
-            vertex_data_type=BioSequenceVertexData{SeqType},
-            edge_data_type=BioSequenceEdgeData,
-            weight_function=compute_edge_weight
+            label_type = SeqType,
+            vertex_data_type = BioSequenceVertexData{SeqType},
+            edge_data_type = BioSequenceEdgeData,
+            weight_function = compute_edge_weight
         )
 
         # Add vertices

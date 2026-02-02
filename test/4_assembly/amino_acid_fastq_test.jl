@@ -28,7 +28,7 @@ Test.@testset "Amino Acid Fix Test" begin
 
     # Test that the observe function doesn't produce invalid characters for FASTQ
     try
-        observed_seq, quality_scores = Mycelia.observe(reference_seq, error_rate=0.1)
+        observed_seq, quality_scores = Mycelia.observe(reference_seq, error_rate = 0.1)
         observed_seq_str = string(observed_seq)
 
         # Check that no termination characters (*) are present

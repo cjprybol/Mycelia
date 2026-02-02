@@ -25,8 +25,6 @@ import Graphs
 import FASTX
 
 Test.@testset "Assembly Merging Tests" begin
-
-
     Test.@testset "1. merge_fasta_files" begin
         fasta1_path = joinpath(tempdir(), "merge_test1.fa")
         fasta2_path = joinpath(tempdir(), "merge_test2.fa")
@@ -35,10 +33,10 @@ Test.@testset "Assembly Merging Tests" begin
         records1 = [FASTX.FASTA.Record("seq1", "ATCG")]
         records2 = [FASTX.FASTA.Record("seq2", "GCTA")]
 
-        Mycelia.write_fasta(records=records1, outfile=fasta1_path)
-        Mycelia.write_fasta(records=records2, outfile=fasta2_path)
+        Mycelia.write_fasta(records = records1, outfile = fasta1_path)
+        Mycelia.write_fasta(records = records2, outfile = fasta2_path)
 
-        Mycelia.merge_fasta_files(fasta_files=[fasta1_path, fasta2_path], fasta_file=merged_path)
+        Mycelia.merge_fasta_files(fasta_files = [fasta1_path, fasta2_path], fasta_file = merged_path)
 
         Test.@test isfile(merged_path)
 
@@ -73,13 +71,13 @@ Test.@testset "Assembly Merging Tests" begin
     #         result = Mycelia.run_quickmerge(assembly1_path, assembly2_path, outdir=outdir)
 
     #         Test.@test isfile(result.merged_assembly)
-            
+
     #         # Check if the merged assembly contains a merged contig.
     #         # The exact output of QuickMerge can be complex, so we'll just check
     #         # that the output file is non-empty and seems reasonable.
     #         merged_records = [r for r in FASTX.FASTA.Reader(open(result.merged_assembly))]
     #         Test.@test !isempty(merged_records)
-            
+
     #         # A simple check: the merged sequence should be longer than either of the inputs
     #         # that could have been merged.
     #         merged_seq_length = maximum(length(FASTX.FASTA.sequence(r)) for r in merged_records)

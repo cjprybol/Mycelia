@@ -43,32 +43,33 @@ println("Core k-mers: \$(length(result.core_kmers))")
 println("Total pangenome size: \$(size(result.presence_absence_matrix, 1)) k-mers")
 ```
 """
-function analyze_pangenome_kmers(genome_files::Vector{String}; kmer_type=Kmers.DNAKmer{21}, distance_metric=:jaccard)
+function analyze_pangenome_kmers(genome_files::Vector{String};
+        kmer_type = Kmers.DNAKmer{21}, distance_metric = :jaccard)
     if isempty(genome_files)
         error("No genome files provided")
     end
-    
+
     # Validate files exist
     for file in genome_files
         if !isfile(file)
             error("Genome file does not exist: $(file)")
         end
     end
-    
+
     genome_names = [basename(file) for file in genome_files]
     n_genomes = length(genome_files)
-    
+
     # Count k-mers for each genome using existing infrastructure
     println("Counting k-mers for $(n_genomes) genomes...")
     kmer_counts_by_genome = Dict{String, Dict}()
-    
+
     for (i, file) in enumerate(genome_files)
         println("  Processing $(genome_names[i])...")
         # Use existing count_canonical_kmers function
         kmer_counts = count_canonical_kmers(kmer_type, file)
         kmer_counts_by_genome[genome_names[i]] = kmer_counts
     end
-    
+
     # Get all unique k-mers across all genomes
     all_kmers = Set()
     for kmer_counts in values(kmer_counts_by_genome)
@@ -76,31 +77,31 @@ function analyze_pangenome_kmers(genome_files::Vector{String}; kmer_type=Kmers.D
     end
     all_kmers = collect(all_kmers)
     n_kmers = length(all_kmers)
-    
+
     println("Found $(n_kmers) unique k-mers across all genomes")
-    
+
     # Build presence/absence matrix
     presence_absence_matrix = BitMatrix(undef, n_kmers, n_genomes)
-    
+
     for (i, kmer) in enumerate(all_kmers)
         for (j, genome_name) in enumerate(genome_names)
             presence_absence_matrix[i, j] = haskey(kmer_counts_by_genome[genome_name], kmer)
         end
     end
-    
+
     # Classify k-mers into categories
     core_kmers = []
     accessory_kmers = []
     shared_kmers = []
     unique_kmers_by_genome = Dict{String, Vector}()
-    
+
     for genome_name in genome_names
         unique_kmers_by_genome[genome_name] = []
     end
-    
+
     for (i, kmer) in enumerate(all_kmers)
         presence_count = sum(presence_absence_matrix[i, :])
-        
+
         if presence_count == n_genomes
             # Present in all genomes - core
             push!(core_kmers, kmer)
@@ -116,7 +117,7 @@ function analyze_pangenome_kmers(genome_files::Vector{String}; kmer_type=Kmers.D
             push!(shared_kmers, kmer)
         end
     end
-    
+
     # Calculate distance matrix using existing distance functions
     println("Calculating distance matrix...")
     distance_matrix = if distance_metric == :jaccard
@@ -133,13 +134,13 @@ function analyze_pangenome_kmers(genome_files::Vector{String}; kmer_type=Kmers.D
     else
         error("Unsupported distance metric: $(distance_metric)")
     end
-    
+
     # Calculate summary statistics
     core_size = length(core_kmers)
     accessory_size = length(accessory_kmers)
     pangenome_size = n_kmers
     unique_total = sum(length(kmers) for kmers in values(unique_kmers_by_genome))
-    
+
     similarity_stats = (
         n_genomes = n_genomes,
         pangenome_size = pangenome_size,
@@ -151,14 +152,14 @@ function analyze_pangenome_kmers(genome_files::Vector{String}; kmer_type=Kmers.D
         unique_percentage = (unique_total / pangenome_size) * 100,
         mean_pairwise_distance = Statistics.mean(distance_matrix[distance_matrix .> 0])
     )
-    
+
     println("Pangenome Analysis Results:")
     println("  Total k-mers: $(pangenome_size)")
     println("  Core k-mers: $(core_size) ($(round(similarity_stats.core_percentage, digits=1))%)")
     println("  Accessory k-mers: $(accessory_size) ($(round(similarity_stats.accessory_percentage, digits=1))%)")
     println("  Unique k-mers: $(unique_total) ($(round(similarity_stats.unique_percentage, digits=1))%)")
     println("  Mean pairwise distance: $(round(similarity_stats.mean_pairwise_distance, digits=3))")
-    
+
     return PangenomeAnalysisResult(
         genome_names,
         kmer_counts_by_genome,
@@ -200,11 +201,12 @@ println("JS divergence: \$(similarity.distance)")
 println("Shared k-mers: \$(similarity.shared_kmers)")
 ```
 """
-function compare_genome_kmer_similarity(genome1_file::String, genome2_file::String; kmer_type=Kmers.DNAKmer{21}, metric=:js_divergence)
+function compare_genome_kmer_similarity(genome1_file::String, genome2_file::String;
+        kmer_type = Kmers.DNAKmer{21}, metric = :js_divergence)
     # Count k-mers using existing infrastructure
     kmer_counts1 = count_canonical_kmers(kmer_type, genome1_file)
     kmer_counts2 = count_canonical_kmers(kmer_type, genome2_file)
-    
+
     # Calculate distance using existing functions
     distance = if metric == :js_divergence
         kmer_counts_to_js_divergence(kmer_counts1, kmer_counts2)
@@ -218,13 +220,13 @@ function compare_genome_kmer_similarity(genome1_file::String, genome2_file::Stri
     else
         error("Unsupported metric: $(metric)")
     end
-    
+
     # Calculate additional statistics
     shared_kmers = length(intersect(keys(kmer_counts1), keys(kmer_counts2)))
     total_kmers = length(union(keys(kmer_counts1), keys(kmer_counts2)))
     genome1_unique = length(setdiff(keys(kmer_counts1), keys(kmer_counts2)))
     genome2_unique = length(setdiff(keys(kmer_counts2), keys(kmer_counts1)))
-    
+
     return (
         distance = distance,
         metric = metric,
@@ -259,26 +261,27 @@ result = Mycelia.build_genome_distance_matrix(genomes, kmer_type=Kmers.DNAKmer{3
 println("Distance matrix: \$(result.distance_matrix)")
 ```
 """
-function build_genome_distance_matrix(genome_files::Vector{String}; kmer_type=Kmers.DNAKmer{21}, metric=:js_divergence)
+function build_genome_distance_matrix(genome_files::Vector{String};
+        kmer_type = Kmers.DNAKmer{21}, metric = :js_divergence)
     n_genomes = length(genome_files)
     distance_matrix = zeros(Float64, n_genomes, n_genomes)
     genome_names = [basename(file) for file in genome_files]
-    
+
     println("Building $(n_genomes)x$(n_genomes) distance matrix using $(metric)...")
-    
+
     # Calculate pairwise distances
     for i in 1:n_genomes
-        for j in (i+1):n_genomes
+        for j in (i + 1):n_genomes
             println("  Comparing $(genome_names[i]) vs $(genome_names[j])...")
             similarity = compare_genome_kmer_similarity(
-                genome_files[i], genome_files[j]; 
-                kmer_type=kmer_type, metric=metric
+                genome_files[i], genome_files[j];
+                kmer_type = kmer_type, metric = metric
             )
             distance_matrix[i, j] = similarity.distance
             distance_matrix[j, i] = similarity.distance  # Symmetric
         end
     end
-    
+
     return (
         distance_matrix = distance_matrix,
         genome_names = genome_names,
@@ -321,35 +324,35 @@ genomes = ["reference.fasta", "assembly1.fasta", "assembly2.fasta"]
 gfa_file = Mycelia.construct_pangenome_pggb(genomes, "pangenome_output")
 ```
 """
-function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::String; 
-                                threads::Int=2, segment_length::Int=5000, 
-                                block_length::Int=3*segment_length, 
-                                mash_kmer::Int=16, min_match_length::Int=19,
-                                transclose_batch::Int=10000000, 
-                                additional_args::Vector{String}=String[])
-    
+function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::String;
+        threads::Int = 2, segment_length::Int = 5000,
+        block_length::Int = 3*segment_length,
+        mash_kmer::Int = 16, min_match_length::Int = 19,
+        transclose_batch::Int = 10000000,
+        additional_args::Vector{String} = String[])
+
     # Validate input files
     for file in genome_files
         if !isfile(file)
             error("Genome file does not exist: $(file)")
         end
     end
-    
+
     # Create joint FASTA file for PGGB input
     joint_fasta = joinpath(output_dir, "joint_genomes.fasta")
     mkpath(dirname(joint_fasta))
-    
+
     # Concatenate genome files (don't merge to preserve identifiers)
-    concatenate_files(files=genome_files, file=joint_fasta)
-    
+    concatenate_files(files = genome_files, file = joint_fasta)
+
     # Index the joint FASTA if not already indexed
     if !isfile(joint_fasta * ".fai")
-        samtools_index_fasta(fasta=joint_fasta)
+        samtools_index_fasta(fasta = joint_fasta)
     end
-    
+
     # Ensure PGGB conda environment exists
     add_bioconda_env("pggb")
-    
+
     # Build PGGB command
     pggb_args = [
         "-i", joint_fasta,
@@ -362,29 +365,29 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
         "-B", string(transclose_batch),
         "-n", string(length(genome_files))
     ]
-    
+
     # Add any additional arguments
     append!(pggb_args, additional_args)
-    
+
     # Run PGGB
     println("Running PGGB pangenome construction with $(length(genome_files)) genomes...")
     cmd = `$(CONDA_RUNNER) run --live-stream -n pggb pggb $(pggb_args)`
-    
+
     try
         run(cmd)
     catch e
         error("PGGB failed: $(e)")
     end
-    
+
     # Find and return the main GFA output file
-    gfa_files = filter(x -> endswith(x, ".gfa"), readdir(output_dir, join=true))
+    gfa_files = filter(x -> endswith(x, ".gfa"), readdir(output_dir, join = true))
     if isempty(gfa_files)
         error("No GFA output file found in $(output_dir)")
     end
-    
-    main_gfa = first(sort(gfa_files, by=filesize, rev=true))  # Return largest GFA file
+
+    main_gfa = first(sort(gfa_files, by = filesize, rev = true))  # Return largest GFA file
     println("PGGB completed. Main GFA file: $(main_gfa)")
-    
+
     return main_gfa
 end
 
@@ -413,21 +416,20 @@ gfa_file = "pangenome.gfa"
 vcf_file = Mycelia.call_variants_from_pggb_graph(gfa_file, "reference")
 ```
 """
-function call_variants_from_pggb_graph(gfa_file::String, reference_prefix::String; 
-                                      threads::Int=2, ploidy::Int=1, output_file::String="")
-    
+function call_variants_from_pggb_graph(gfa_file::String, reference_prefix::String;
+        threads::Int = 2, ploidy::Int = 1, output_file::String = "")
     if !isfile(gfa_file)
         error("GFA file does not exist: $(gfa_file)")
     end
-    
+
     # Set default output file name
     if isempty(output_file)
         output_file = gfa_file * ".vcf"
     end
-    
+
     # Ensure vg conda environment exists
     add_bioconda_env("vg")
-    
+
     # Build vg deconstruct command
     vg_args = [
         "deconstruct",
@@ -438,18 +440,18 @@ function call_variants_from_pggb_graph(gfa_file::String, reference_prefix::Strin
         "--threads", string(threads),
         gfa_file
     ]
-    
+
     println("Calling variants from pangenome graph: $(gfa_file)")
     cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg $(vg_args)`
-    
+
     try
         run(pipeline(cmd, output_file))
     catch e
         error("vg deconstruct failed: $(e)")
     end
-    
+
     println("Variant calling completed. VCF file: $(output_file)")
-    
+
     return output_file
 end
 
@@ -485,42 +487,44 @@ names = ["REFERENCE", "SAMPLE1", "SAMPLE2"]
 outputs = Mycelia.construct_pangenome_cactus(genomes, names, "cactus_out", "REFERENCE")
 ```
 """
-function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::Vector{String}, 
-                                  output_dir::String, reference_name::String;
-                                  max_cores::Int=8, max_memory_gb::Int=32,
-                                  output_formats::Vector{String}=["gbz", "gfa", "vcf", "odgi"])
-    
+function construct_pangenome_cactus(
+        genome_files::Vector{String}, genome_names::Vector{String},
+        output_dir::String, reference_name::String;
+        max_cores::Int = 8, max_memory_gb::Int = 32,
+        output_formats::Vector{String} = ["gbz", "gfa", "vcf", "odgi"])
+
     # Validate inputs
     if length(genome_files) != length(genome_names)
         error("Number of genome files must match number of genome names")
     end
-    
+
     for file in genome_files
         if !isfile(file)
             error("Genome file does not exist: $(file)")
         end
     end
-    
+
     if !(reference_name in genome_names)
         error("Reference name '$(reference_name)' not found in genome names")
     end
-    
+
     # Create output directory
     mkpath(output_dir)
-    
+
     # Create Cactus configuration file
     config_table = DataFrames.DataFrame(
         samples = genome_names,
         file_paths = genome_files
     )
-    
+
     config_file = joinpath(output_dir, "cactus_config.txt")
-    uCSV.write(config_file, data=collect(DataFrames.eachcol(config_table)), header=missing, delim='\t')
-    
+    uCSV.write(config_file, data = collect(DataFrames.eachcol(config_table)),
+        header = missing, delim = '\t')
+
     # Set up job store and output names
     jobstore = joinpath(output_dir, "cactus-job-store")
     output_name = "pangenome"
-    
+
     # Prepare output format flags
     format_flags = String[]
     for format in output_formats
@@ -530,11 +534,11 @@ function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::
             @warn "Unknown output format: $(format)"
         end
     end
-    
+
     # Build Cactus command using podman-hpc
     cactus_args = [
-        "run", "-it", 
-        "-v", "$(output_dir):/app", 
+        "run", "-it",
+        "-v", "$(output_dir):/app",
         "-w", "/app",
         "quay.io/comparative-genomics-toolkit/cactus:v2.8.1",
         "cactus-pangenome",
@@ -546,42 +550,42 @@ function construct_pangenome_cactus(genome_files::Vector{String}, genome_names::
         "--outName", output_name,
         "--reference", reference_name
     ]
-    
+
     # Add format flags
     append!(cactus_args, format_flags)
-    
+
     println("Running Cactus pangenome construction...")
     println("  Genomes: $(length(genome_files))")
     println("  Reference: $(reference_name)")
     println("  Output formats: $(join(output_formats, ", "))")
-    
+
     cmd = `podman-hpc $(cactus_args)`
-    
+
     # Set up logging
     log_file = joinpath(output_dir, "cactus.log")
-    
+
     try
-        run(pipeline(cmd, stdout=log_file, stderr=log_file))
+        run(pipeline(cmd, stdout = log_file, stderr = log_file))
     catch e
         @warn "Cactus may have failed. Check log file: $(log_file)"
         error("Cactus pangenome construction failed: $(e)")
     end
-    
+
     # Find output files
     output_files = Dict{String, String}()
     for format in output_formats
         pattern = "$(output_name).$(format)"
-        files = filter(x -> occursin(pattern, x), readdir(output_dir, join=true))
+        files = filter(x -> occursin(pattern, x), readdir(output_dir, join = true))
         if !isempty(files)
             output_files[format] = first(files)
         else
             @warn "Output file for format $(format) not found"
         end
     end
-    
+
     println("Cactus pangenome construction completed.")
     println("Output files: $(length(output_files))")
-    
+
     return output_files
 end
 
@@ -607,30 +611,29 @@ for improved performance in downstream analysis.
 vg_file = Mycelia.convert_gfa_to_vg_format("pangenome.gfa")
 ```
 """
-function convert_gfa_to_vg_format(gfa_file::String; output_file::String="")
-    
+function convert_gfa_to_vg_format(gfa_file::String; output_file::String = "")
     if !isfile(gfa_file)
         error("GFA file does not exist: $(gfa_file)")
     end
-    
+
     if isempty(output_file)
         output_file = replace(gfa_file, r"\.gfa$" => ".vg")
     end
-    
+
     # Ensure vg conda environment exists
     add_bioconda_env("vg")
-    
+
     println("Converting GFA to vg format: $(gfa_file)")
     cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg convert -g $(gfa_file) -v`
-    
+
     try
         run(pipeline(cmd, output_file))
     catch e
         error("GFA to vg conversion failed: $(e)")
     end
-    
+
     println("Conversion completed. vg file: $(output_file)")
-    
+
     return output_file
 end
 
@@ -654,21 +657,21 @@ analysis workflows including read mapping and path queries.
 indexes = Mycelia.index_pangenome_graph("pangenome.vg", index_types=["xg", "gcsa", "snarls"])
 ```
 """
-function index_pangenome_graph(graph_file::String; index_types::Vector{String}=["xg", "gcsa"])
-    
+function index_pangenome_graph(graph_file::String; index_types::Vector{String} = [
+        "xg", "gcsa"])
     if !isfile(graph_file)
         error("Graph file does not exist: $(graph_file)")
     end
-    
+
     # Ensure vg conda environment exists
     add_bioconda_env("vg")
-    
+
     index_files = Dict{String, String}()
     base_name = replace(graph_file, r"\.(gfa|vg)$" => "")
-    
+
     for index_type in index_types
         index_file = "$(base_name).$(index_type)"
-        
+
         if index_type == "xg"
             cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg index -x $(index_file) $(graph_file)`
         elseif index_type == "gcsa"
@@ -676,7 +679,7 @@ function index_pangenome_graph(graph_file::String; index_types::Vector{String}=[
             pruned_file = "$(base_name).pruned.vg"
             prune_cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg prune $(graph_file)`
             run(pipeline(prune_cmd, pruned_file))
-            
+
             cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg index -g $(index_file) $(pruned_file)`
         elseif index_type == "snarls"
             cmd = `$(CONDA_RUNNER) run --live-stream -n vg vg snarls $(graph_file)`
@@ -684,9 +687,9 @@ function index_pangenome_graph(graph_file::String; index_types::Vector{String}=[
             @warn "Unknown index type: $(index_type)"
             continue
         end
-        
+
         println("Building $(index_type) index for $(graph_file)")
-        
+
         try
             if index_type == "snarls"
                 run(pipeline(cmd, index_file))
@@ -699,6 +702,6 @@ function index_pangenome_graph(graph_file::String; index_types::Vector{String}=[
             @warn "Failed to build $(index_type) index: $(e)"
         end
     end
-    
+
     return index_files
 end

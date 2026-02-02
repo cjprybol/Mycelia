@@ -47,10 +47,10 @@ start_time = time()
 
 try
     Pkg.test()
-    elapsed = round(time() - start_time, digits=1)
+    elapsed = round(time() - start_time, digits = 1)
     println("\n✅ All integration tests passed in $elapsed seconds!")
 catch e
-    elapsed = round(time() - start_time, digits=1)
+    elapsed = round(time() - start_time, digits = 1)
     println("\n❌ Integration tests failed after $elapsed seconds")
     rethrow(e)
 end

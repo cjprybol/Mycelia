@@ -9,13 +9,12 @@ import Mycelia
 import Statistics
 
 Test.@testset "Alpha Diversity Metrics" begin
-
     Test.@testset "shannon_diversity" begin
         # Test with uniform distribution (max entropy)
         uniform = [10, 10, 10, 10]
         shannon_uniform = Mycelia.shannon_diversity(uniform)
         # For 4 equally abundant species, H' = ln(4) ≈ 1.386
-        Test.@test isapprox(shannon_uniform, log(4), atol=1e-10)
+        Test.@test isapprox(shannon_uniform, log(4), atol = 1e-10)
 
         # Test with single species (zero entropy)
         single = [100, 0, 0, 0]
@@ -36,7 +35,7 @@ Test.@testset "Alpha Diversity Metrics" begin
         uniform = [10, 10, 10, 10]
         simpson_uniform = Mycelia.simpsons_diversity(uniform)
         # For 4 equally abundant species, 1-D = 1 - 4*(0.25)^2 = 0.75
-        Test.@test isapprox(simpson_uniform, 0.75, atol=1e-10)
+        Test.@test isapprox(simpson_uniform, 0.75, atol = 1e-10)
 
         # Test with single species (zero diversity)
         single = [100, 0, 0, 0]
@@ -58,13 +57,14 @@ Test.@testset "Alpha Diversity Metrics" begin
         Test.@test Mycelia.species_richness([100]) == 1
 
         # Test that abundance magnitude doesn't matter
-        Test.@test Mycelia.species_richness([1, 1, 1]) == Mycelia.species_richness([100, 50, 25])
+        Test.@test Mycelia.species_richness([1, 1, 1]) ==
+                   Mycelia.species_richness([100, 50, 25])
     end
 
     Test.@testset "pielous_evenness" begin
         # Test with perfectly even distribution (J' = 1.0)
         even = [10, 10, 10, 10]
-        Test.@test isapprox(Mycelia.pielous_evenness(even), 1.0, atol=1e-10)
+        Test.@test isapprox(Mycelia.pielous_evenness(even), 1.0, atol = 1e-10)
 
         # Test with single species (undefined, returns 0.0)
         single = [100]
@@ -82,12 +82,10 @@ Test.@testset "Alpha Diversity Metrics" begin
 
     Test.@testset "calculate_alpha_diversity" begin
         # Create a simple abundance matrix (taxa × samples)
-        abundance = [
-            10 50 0;   # Taxon 1
-            10 25 100; # Taxon 2
-            10 25 0;   # Taxon 3
-            10 0 0     # Taxon 4
-        ]
+        abundance = [10 50 0;   # Taxon 1
+                     10 25 100; # Taxon 2
+                     10 25 0;   # Taxon 3
+                     10 0 0]
         samples = ["S1", "S2", "S3"]
 
         result = Mycelia.calculate_alpha_diversity(abundance, samples)
@@ -119,7 +117,6 @@ Test.@testset "Alpha Diversity Metrics" begin
 end
 
 Test.@testset "Beta Diversity Metrics" begin
-
     Test.@testset "bray_curtis_dissimilarity" begin
         # Identical samples (distance = 0)
         a = [10, 20, 30]
@@ -133,7 +130,8 @@ Test.@testset "Beta Diversity Metrics" begin
         # Symmetric
         x = [10, 20, 5]
         y = [15, 10, 25]
-        Test.@test Mycelia.bray_curtis_dissimilarity(x, y) == Mycelia.bray_curtis_dissimilarity(y, x)
+        Test.@test Mycelia.bray_curtis_dissimilarity(x, y) ==
+                   Mycelia.bray_curtis_dissimilarity(y, x)
 
         # Range is [0, 1]
         bc = Mycelia.bray_curtis_dissimilarity(x, y)
@@ -158,10 +156,11 @@ Test.@testset "Beta Diversity Metrics" begin
         y = [0, 15, 30, 0]  # Present at 2, 3
         # Intersection = 1 (position 2), Union = 3 (positions 1, 2, 3)
         # Jaccard = 1 - 1/3 = 2/3
-        Test.@test isapprox(Mycelia.jaccard_distance_vectors(x, y), 2/3, atol=1e-10)
+        Test.@test isapprox(Mycelia.jaccard_distance_vectors(x, y), 2/3, atol = 1e-10)
 
         # Symmetric
-        Test.@test Mycelia.jaccard_distance_vectors(x, y) == Mycelia.jaccard_distance_vectors(y, x)
+        Test.@test Mycelia.jaccard_distance_vectors(x, y) ==
+                   Mycelia.jaccard_distance_vectors(y, x)
 
         # Empty vectors
         Test.@test Mycelia.jaccard_distance_vectors([0, 0], [0, 0]) == 0.0
@@ -169,15 +168,13 @@ Test.@testset "Beta Diversity Metrics" begin
 
     Test.@testset "calculate_beta_diversity" begin
         # Create abundance matrix
-        abundance = [
-            10 50 10;
-            20 25 20;
-            30 25 30
-        ]
+        abundance = [10 50 10;
+                     20 25 20;
+                     30 25 30]
         samples = ["S1", "S2", "S3"]
 
         # Bray-Curtis
-        result_bc = Mycelia.calculate_beta_diversity(abundance, samples; metric=:bray_curtis)
+        result_bc = Mycelia.calculate_beta_diversity(abundance, samples; metric = :bray_curtis)
 
         Test.@test size(result_bc.distance_matrix) == (3, 3)
         Test.@test result_bc.sample_names == samples
@@ -189,6 +186,7 @@ Test.@testset "Beta Diversity Metrics" begin
 
         # Should be symmetric
         for i in 1:3, j in 1:3
+
             Test.@test result_bc.distance_matrix[i, j] == result_bc.distance_matrix[j, i]
         end
 
@@ -196,20 +194,18 @@ Test.@testset "Beta Diversity Metrics" begin
         Test.@test result_bc.distance_matrix[1, 3] == 0.0
 
         # Jaccard
-        result_jaccard = Mycelia.calculate_beta_diversity(abundance, samples; metric=:jaccard)
+        result_jaccard = Mycelia.calculate_beta_diversity(abundance, samples; metric = :jaccard)
         Test.@test size(result_jaccard.distance_matrix) == (3, 3)
 
         # Invalid metric should error
-        Test.@test_throws ErrorException Mycelia.calculate_beta_diversity(abundance, samples; metric=:invalid)
+        Test.@test_throws ErrorException Mycelia.calculate_beta_diversity(abundance, samples; metric = :invalid)
     end
 
     Test.@testset "frequency_matrix_to_bray_curtis_distance_matrix" begin
         # Test the wrapper function
-        abundance = [
-            10 50 10;
-            20 25 20;
-            30 25 30
-        ]
+        abundance = [10 50 10;
+                     20 25 20;
+                     30 25 30]
 
         result = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(abundance)
 
@@ -226,18 +222,15 @@ Test.@testset "Beta Diversity Metrics" begin
 end
 
 Test.@testset "PCoA and Visualization Helpers" begin
-
     Test.@testset "pcoa_to_dataframe" begin
         # Create a simple distance matrix
-        dist_matrix = [
-            0.0 0.5 0.8;
-            0.5 0.0 0.3;
-            0.8 0.3 0.0
-        ]
+        dist_matrix = [0.0 0.5 0.8;
+                       0.5 0.0 0.3;
+                       0.8 0.3 0.0]
         samples = ["S1", "S2", "S3"]
 
         # Run PCoA
-        pcoa_result = Mycelia.pcoa_from_dist(dist_matrix; maxoutdim=2)
+        pcoa_result = Mycelia.pcoa_from_dist(dist_matrix; maxoutdim = 2)
 
         # Convert to DataFrame
         df = Mycelia.pcoa_to_dataframe(pcoa_result, samples)
@@ -251,15 +244,13 @@ Test.@testset "PCoA and Visualization Helpers" begin
 
     Test.@testset "beta_diversity_pcoa" begin
         # Create abundance matrix
-        abundance = [
-            10 50 10 80;
-            20 25 20 10;
-            30 25 30 5;
-            40 0 40 5
-        ]
+        abundance = [10 50 10 80;
+                     20 25 20 10;
+                     30 25 30 5;
+                     40 0 40 5]
         samples = ["S1", "S2", "S3", "S4"]
 
-        result = Mycelia.beta_diversity_pcoa(abundance, samples; metric=:bray_curtis, maxoutdim=3)
+        result = Mycelia.beta_diversity_pcoa(abundance, samples; metric = :bray_curtis, maxoutdim = 3)
 
         # Check all expected fields
         Test.@test haskey(result, :distance_matrix)
@@ -285,8 +276,8 @@ Test.@testset "PCoA and Visualization Helpers" begin
         # S1 and S3 are identical, should have same coordinates
         s1_idx = findfirst(result.pcoa_df.sample .== "S1")
         s3_idx = findfirst(result.pcoa_df.sample .== "S3")
-        Test.@test isapprox(result.pcoa_df.PC1[s1_idx], result.pcoa_df.PC1[s3_idx], atol=1e-10)
-        Test.@test isapprox(result.pcoa_df.PC2[s3_idx], result.pcoa_df.PC2[s3_idx], atol=1e-10)
+        Test.@test isapprox(result.pcoa_df.PC1[s1_idx], result.pcoa_df.PC1[s3_idx], atol = 1e-10)
+        Test.@test isapprox(result.pcoa_df.PC2[s3_idx], result.pcoa_df.PC2[s3_idx], atol = 1e-10)
     end
 end
 

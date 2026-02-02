@@ -17,34 +17,34 @@ values are found in any column, a warning is issued and all conflicting rows are
 - `warn_on_conflict::Bool=true`: Emit a warning when conflicting values are found.
 - `summarize_conflicts::Bool=true`: Print a conflict summary after processing.
 """
-function collapse_duplicates(df, grouping_col; warn_on_conflict::Bool=true, summarize_conflicts::Bool=true)
+function collapse_duplicates(df, grouping_col; warn_on_conflict::Bool = true, summarize_conflicts::Bool = true)
     result_rows = DataFrames.DataFrame[]
     conflicts = []
-    
+
     for g in DataFrames.groupby(df, grouping_col)
         if DataFrames.nrow(g) == 1
             push!(result_rows, g)
             continue
         end
-        
+
         # Check for conflicts across all columns
         has_conflict = false
         conflicting_cols = String[]
-        
+
         for col in DataFrames.names(g)
             if col == grouping_col
                 continue
             end
-            
+
             non_missing_values = filter(!ismissing, g[!, col])
             unique_values = unique(non_missing_values)
-            
+
             if length(unique_values) > 1
                 has_conflict = true
                 push!(conflicting_cols, col)
             end
         end
-        
+
         if has_conflict
             # Keep all rows due to conflict
             group_id = g[1, grouping_col]
@@ -64,9 +64,9 @@ function collapse_duplicates(df, grouping_col; warn_on_conflict::Bool=true, summ
             push!(result_rows, merged_row)
         end
     end
-    
+
     collapsed_df = DataFrames.vcat(result_rows...)
-    
+
     if summarize_conflicts && !isempty(conflicts)
         println("\n=== Summary of Conflicts ===")
         println("Total groups with conflicts: $(length(conflicts))")
@@ -74,7 +74,7 @@ function collapse_duplicates(df, grouping_col; warn_on_conflict::Bool=true, summ
             println("  - $group_id: conflicts in $(join(cols, ", "))")
         end
     end
-    
+
     return collapsed_df
 end
 
@@ -120,17 +120,17 @@ end
 
 See also: [`ncbi_genome_download_accession`](@ref) which uses this for robust genome downloads.
 """
-function with_retry(f; 
-                    max_attempts::Int=3, 
-                    initial_delay::Float64=5.0, 
-                    max_delay::Float64=120.0, 
-                    backoff_factor::Float64=2.0,
-                    on_retry::Union{Function,Nothing}=nothing,
-                    log_on_retry::Bool=true,
-                    log_on_failure::Bool=true)
+function with_retry(f;
+        max_attempts::Int = 3,
+        initial_delay::Float64 = 5.0,
+        max_delay::Float64 = 120.0,
+        backoff_factor::Float64 = 2.0,
+        on_retry::Union{Function, Nothing} = nothing,
+        log_on_retry::Bool = true,
+        log_on_failure::Bool = true)
     local last_exception
     delay = initial_delay
-    
+
     for attempt in 1:max_attempts
         try
             return f()
@@ -140,16 +140,18 @@ function with_retry(f;
                 if on_retry !== nothing
                     on_retry(attempt, e, delay)
                 elseif log_on_retry
-                    @warn "Attempt $attempt/$max_attempts failed, retrying in $(delay)s..." exception=(e, catch_backtrace())
+                    @warn "Attempt $attempt/$max_attempts failed, retrying in $(delay)s..." exception=(
+                        e, catch_backtrace())
                 end
                 sleep(delay)
                 delay = min(delay * backoff_factor, max_delay)
             end
         end
     end
-    
+
     if log_on_failure
-        @error "All $max_attempts attempts failed" exception=(last_exception, catch_backtrace())
+        @error "All $max_attempts attempts failed" exception=(
+            last_exception, catch_backtrace())
     end
     throw(last_exception)
 end
@@ -193,26 +195,26 @@ and the value is the corresponding DataFrame.
 - `NamedTuple`: Named tuple with sheet names as keys and DataFrames as values
 """
 function read_xlsx(filename::AbstractString)
-    
+
     # Ensure filename ends with .xlsx
     filename = _ensure_xlsx_extension(filename)
-    
+
     # Open the XLSX file
     xf = XLSX.readxlsx(filename)
-    
+
     # Get all sheet names
     sheet_names = XLSX.sheetnames(xf)
-    
+
     # Read each sheet into a DataFrame
     dataframes = []
     symbols = Symbol[]
-    
+
     for sheet_name in sheet_names
         df = DataFrames.DataFrame(XLSX.readtable(filename, sheet_name))
         push!(dataframes, df)
         push!(symbols, Symbol(sheet_name))
     end
-    
+
     # Create and return named tuple
     return NamedTuple{Tuple(symbols)}(dataframes)
 end
@@ -227,24 +229,24 @@ Write one or more DataFrames to an XLSX file with multiple sheets.
 - `dataframes...`: Variable number of arguments that can be DataFrames or Pairs of sheet_name => dataframe
 """
 function write_xlsx(filename::AbstractString, dataframes...)
-    
+
     # Ensure filename ends with .xlsx
     filename = _ensure_xlsx_extension(filename)
-    
+
     # Process arguments to extract sheet names and dataframes
     sheets = _process_dataframe_args(dataframes...)
-    
+
     # Create new XLSX file
-    XLSX.openxlsx(filename, mode="w") do xf
+    XLSX.openxlsx(filename, mode = "w") do xf
         for (sheet_name, df) in sheets
             sheet = XLSX.addsheet!(xf, sheet_name)
-            
+
             # Write headers
             col_names = DataFrames.names(df)
             for (col_idx, col_name) in enumerate(col_names)
                 sheet[1, col_idx] = string(col_name)
             end
-            
+
             # Write data
             for row_idx in 1:DataFrames.nrow(df)
                 for (col_idx, col_name) in enumerate(col_names)
@@ -259,7 +261,7 @@ function write_xlsx(filename::AbstractString, dataframes...)
             end
         end
     end
-    
+
     println("Successfully wrote $(length(sheets)) sheet(s) to $filename")
 end
 
@@ -273,7 +275,7 @@ Convenience function to write a single DataFrame to an XLSX file.
 - `dataframe`: DataFrame to write
 - `sheet_name::AbstractString`: Name for the sheet (default: "Sheet1")
 """
-function write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString="Sheet1")
+function write_xlsx_single(filename::AbstractString, dataframe; sheet_name::AbstractString = "Sheet1")
     write_xlsx(filename, sheet_name => dataframe)
 end
 
@@ -299,21 +301,21 @@ function _ensure_xlsx_extension(filename::AbstractString)
     # Check for other common tabular data extensions
     other_extensions = [".csv", ".tsv", ".txt", ".tab"]
     filename_lower = lowercase(filename)
-    
+
     for ext in other_extensions
         if endswith(filename_lower, ext)
             @warn "File extension '$ext' detected. This function works with Excel files (.xlsx). " *
                   "Converting extension to .xlsx"
-            filename = filename[1:end-length(ext)] * ".xlsx"
+            filename = filename[1:(end - length(ext))] * ".xlsx"
             return filename
         end
     end
-    
+
     # Add .xlsx if not present
     if !endswith(filename_lower, ".xlsx")
         filename = filename * ".xlsx"
     end
-    
+
     return filename
 end
 
@@ -321,10 +323,9 @@ end
 Internal function to process variable arguments for write_xlsx function.
 """
 function _process_dataframe_args(dataframes...)
-    
     sheets = Pair{String, DataFrames.DataFrame}[]
     auto_sheet_counter = 1
-    
+
     for arg in dataframes
         if isa(arg, DataFrames.DataFrame)
             # Auto-generate sheet name
@@ -342,14 +343,13 @@ function _process_dataframe_args(dataframes...)
             error("Arguments must be DataFrames or Pairs of sheet_name => dataframe, got $(typeof(arg))")
         end
     end
-    
+
     if isempty(sheets)
         error("At least one DataFrame must be provided")
     end
-    
+
     return sheets
 end
-
 
 """
     sanitize_for_arrow(df::DataFrames.DataFrame) -> DataFrames.DataFrame
@@ -365,20 +365,20 @@ and converts them to the most specific, concrete type possible.
 """
 function sanitize_for_arrow(df::DataFrames.DataFrame)
     sanitized_df = copy(df) # Work on a copy
-    
+
     for col_name in names(sanitized_df)
         col = sanitized_df[!, col_name]
-        
+
         # Only process columns with abstract element types
         if !isconcretetype(eltype(col))
             # Get all unique types present in the column, ignoring missings
             present_types = unique(typeof.(skipmissing(col)))
-            
+
             if isempty(present_types)
                 # Column is all `missing`, which is fine.
                 continue
             end
-            
+
             target_type = nothing
             try
                 # Attempt to promote all found types to a common supertype
@@ -389,16 +389,16 @@ function sanitize_for_arrow(df::DataFrames.DataFrame)
                 target_type = String
                 @warn "Column '$col_name' has incompatible mixed types. Converting to String."
             end
-            
+
             # Create a new column by converting each element to the target type
             new_col = map(col) do val
                 ismissing(val) ? missing : convert(target_type, val)
             end
-            
+
             sanitized_df[!, col_name] = new_col
         end
     end
-    
+
     return sanitized_df
 end
 
@@ -421,18 +421,18 @@ Writes a DataFrame to an Apache Arrow file with optional pre-sanitization.
   to resolve mixed-type columns before writing. Recommended to leave on.
 """
 function write_arrow(
-    df::DataFrames.DataFrame;
-    filename::String,
-    compress::Symbol=:zstd,
-    force::Bool=false,
-    verbose::Bool=false,
-    sanitize::Bool=true # New keyword for safety
+        df::DataFrames.DataFrame;
+        filename::String,
+        compress::Symbol = :zstd,
+        force::Bool = false,
+        verbose::Bool = false,
+        sanitize::Bool = true # New keyword for safety
 )
     if isfile(filename) && !force
         @warn "File '$filename' already exists. Use force=true to overwrite."
         return filename
     end
-    
+
     # Use a temporary variable to hold the DataFrame to be written
     df_to_write = df
 
@@ -442,8 +442,8 @@ function write_arrow(
     end
 
     # Arrow.write handles everything else
-    Arrow.write(filename, df_to_write, compress=compress)
-    
+    Arrow.write(filename, df_to_write, compress = compress)
+
     verbose && println("Successfully wrote DataFrame to $filename")
     return filename
 end
@@ -463,14 +463,13 @@ function read_arrow(filename::String)
     if !isfile(filename)
         error("File not found: $filename")
     end
-    
+
     # Reading is a simple two-step process: open a table, then convert to a DataFrame.
     arrow_table = Arrow.Table(filename)
     df = DataFrames.DataFrame(arrow_table)
-    
+
     return df
 end
-
 
 # """
 #     @recordtest call_expr
@@ -505,14 +504,14 @@ function _get_output_files(output_dir::AbstractString)
     if !Base.isdir(output_dir)
         return String[]
     end
-    
+
     files = String[]
     for (root, dirs, filenames) in Base.walkdir(output_dir)
         for filename in filenames
             push!(files, Base.joinpath(root, filename))
         end
     end
-    
+
     return files
 end
 
@@ -531,7 +530,8 @@ Write a DataFrame to a gzipped TSV (.tsv.gz) file with robust stream and buffer 
 # Returns
 - The output filename as a String.
 """
-function write_tsvgz(;df::DataFrames.DataFrame, filename::String, force::Bool=false, bufsize::Int=2*1024^3, buffer_in_memory::Bool=false)
+function write_tsvgz(; df::DataFrames.DataFrame, filename::String, force::Bool = false,
+        bufsize::Int = 2*1024^3, buffer_in_memory::Bool = false)
     # Enforce .tsv.gz extension
     if !endswith(filename, ".tsv.gz")
         if endswith(filename, ".tsv")
@@ -546,9 +546,10 @@ function write_tsvgz(;df::DataFrames.DataFrame, filename::String, force::Bool=fa
     end
 
     open(filename, "w") do io
-        gzip_stream = CodecZlib.GzipCompressorStream(io, bufsize=bufsize)
+        gzip_stream = CodecZlib.GzipCompressorStream(io, bufsize = bufsize)
         # Use the same bufsize for both the Gzip stream and CSV.write
-        CSV.write(gzip_stream, df; delim='\t', bufsize=bufsize, buffer_in_memory=buffer_in_memory)
+        CSV.write(gzip_stream, df; delim = '\t', bufsize = bufsize,
+            buffer_in_memory = buffer_in_memory)
         close(gzip_stream)
     end
     return filename
@@ -567,7 +568,7 @@ Read a DataFrame from a gzipped TSV (.tsv.gz) file with proper decompression and
 # Returns
 - The loaded DataFrame.
 """
-function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int=2*1024^3)
+function read_tsvgz(filename::String; buffer_in_memory::Bool = false, bufsize::Int = 2*1024^3)
     # Enforce .tsv.gz extension
     if !endswith(filename, ".tsv.gz")
         error("File must have .tsv.gz extension, got: $filename")
@@ -576,8 +577,8 @@ function read_tsvgz(filename::String; buffer_in_memory::Bool=false, bufsize::Int
         error("File not found: $filename")
     end
     result_df = open(filename, "r") do io
-        gzip_stream = CodecZlib.GzipDecompressorStream(io, bufsize=bufsize)
-        df = CSV.read(gzip_stream, DataFrames.DataFrame; delim='\t', buffer_in_memory=buffer_in_memory)
+        gzip_stream = CodecZlib.GzipDecompressorStream(io, bufsize = bufsize)
+        df = CSV.read(gzip_stream, DataFrames.DataFrame; delim = '\t', buffer_in_memory = buffer_in_memory)
         close(gzip_stream)
         return df
     end
@@ -618,7 +619,7 @@ Where:
 
 If `will_fit_available` is false, either warns or errors depending on `severity`.
 """
-function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:warn)
+function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol = :warn)
     # Get total and available RAM
     total_mem = Sys.total_memory()
     # Sys.free_memory() is available on Linux & macOS, but not in Julia 1.6 on Windows.
@@ -632,13 +633,11 @@ function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol=:wa
     will_fit_total = bytes_needed ≤ total_mem
     will_fit_available = bytes_needed ≤ free_mem
 
-    
-    msg = 
-    """
-    Requested: $(Mycelia.bytes_human_readable(bytes_needed))
-    Free: $(Mycelia.bytes_human_readable(free_mem))
-    Total: $(Mycelia.bytes_human_readable(total_mem))"
-    """
+    msg = """
+          Requested: $(Mycelia.bytes_human_readable(bytes_needed))
+          Free: $(Mycelia.bytes_human_readable(free_mem))
+          Total: $(Mycelia.bytes_human_readable(total_mem))"
+          """
 
     if !will_fit_available
         if severity == :error
@@ -691,7 +690,8 @@ Estimate the memory required (in bytes) for a sparse matrix in CSC format.
 - If `T` is not provided, defaults to Float64.
 - You must specify either `nnz` (number of non-zeros) or `density` (proportion of non-zeros, between 0 and 1).
 """
-function estimate_sparse_matrix_memory(args...; nnz::Union{Nothing, Integer}=nothing, density::Union{Nothing, AbstractFloat}=nothing)
+function estimate_sparse_matrix_memory(args...; nnz::Union{Nothing, Integer} = nothing,
+        density::Union{Nothing, AbstractFloat} = nothing)
     if length(args) == 2
         nrows, ncols = args
         # T = Int
@@ -721,11 +721,11 @@ end
 """
 Apply breadth-first sampling to a DataFrame
 """
-function breadth_first_sample_dataframe(df::DataFrames.DataFrame, group_col::Union{Symbol, String}, 
-                                       total_sample_size::Int; with_replacement::Bool = false)
-
-    sampled_indices = breadth_first_sample(df[!, group_col], total_sample_size, 
-                                         with_replacement=with_replacement)
+function breadth_first_sample_dataframe(
+        df::DataFrames.DataFrame, group_col::Union{Symbol, String},
+        total_sample_size::Int; with_replacement::Bool = false)
+    sampled_indices = breadth_first_sample(df[!, group_col], total_sample_size,
+        with_replacement = with_replacement)
     return df[sampled_indices, :]
 end
 
@@ -768,7 +768,7 @@ function choose_top_n_markers(N::Int)
         :pixel,
         :hline,
         :vline,
-        :+,
+        :+
     ]
     max_n = min(N, length(marker_priority))
     return marker_priority[1:max_n]
@@ -849,12 +849,10 @@ function dictvec_to_dataframe(dictvec::Vector{<:AbstractDict}; symbol_columns::B
     end
 
     # Build rows as NamedTuples with missing for absent keys
-    rows = [
-        NamedTuple{Tuple(columns)}(
-            map(k -> get(d, k, missing), all_keys)
-        )
-        for d in dictvec
-    ]
+    rows = [NamedTuple{Tuple(columns)}(
+                map(k -> get(d, k, missing), all_keys)
+            )
+            for d in dictvec]
     DataFrames.DataFrame(rows)
 end
 
@@ -862,21 +860,21 @@ end
 Breadth-first sampling: sample at least one from each group,
 then sample remaining proportionally to group frequencies
 """
-function breadth_first_sample(group_vector, total_sample_size::Int; 
-                            with_replacement::Bool = false)
+function breadth_first_sample(group_vector, total_sample_size::Int;
+        with_replacement::Bool = false)
     if total_sample_size <= 0
         throw(ArgumentError("total_sample_size must be positive"))
     end
-    
+
     # Get unique groups and their counts
     group_counts = StatsBase.countmap(group_vector)
     unique_groups = collect(keys(group_counts))
     n_groups = length(unique_groups)
-    
+
     if total_sample_size < n_groups
         throw(ArgumentError("total_sample_size ($total_sample_size) must be >= number of groups ($n_groups)"))
     end
-    
+
     # Create indices for each group
     group_indices = Dict()
     for (i, group) in enumerate(group_vector)
@@ -885,17 +883,17 @@ function breadth_first_sample(group_vector, total_sample_size::Int;
         end
         push!(group_indices[group], i)
     end
-    
+
     # Step 1: Sample one from each group (breadth-first)
     sampled_indices = Int[]
     remaining_indices_by_group = Dict()
-    
+
     for group in unique_groups
         group_idx = group_indices[group]
         # Sample one index from this group
         sampled_idx = StatsBase.sample(group_idx, 1)[1]
         push!(sampled_indices, sampled_idx)
-        
+
         # Store remaining indices for this group
         if with_replacement
             remaining_indices_by_group[group] = group_idx
@@ -903,40 +901,41 @@ function breadth_first_sample(group_vector, total_sample_size::Int;
             remaining_indices_by_group[group] = filter(x -> x != sampled_idx, group_idx)
         end
     end
-    
+
     # Step 2: Calculate remaining sample size
     remaining_sample_size = total_sample_size - n_groups
-    
+
     if remaining_sample_size > 0
         # Calculate total remaining population
-        total_remaining = sum(length(indices) for indices in values(remaining_indices_by_group))
-        
+        total_remaining = sum(length(indices)
+        for indices in values(remaining_indices_by_group))
+
         if total_remaining == 0 && !with_replacement
             @warn "No remaining indices to sample from. Consider setting with_replacement=true"
             return sampled_indices
         end
-        
+
         # Sample proportionally from remaining indices
         for group in unique_groups
             remaining_group_indices = remaining_indices_by_group[group]
-            
+
             if length(remaining_group_indices) == 0
                 continue  # Skip if no remaining indices in this group
             end
-            
+
             # Calculate proportional sample size for this group
             if with_replacement
                 group_proportion = group_counts[group] / length(group_vector)
             else
                 group_proportion = length(remaining_group_indices) / total_remaining
             end
-            
+
             additional_samples = round(Int, remaining_sample_size * group_proportion)
-            
+
             if additional_samples > 0
                 if with_replacement || length(remaining_group_indices) >= additional_samples
-                    sampled = StatsBase.sample(remaining_group_indices, additional_samples, 
-                                             replace=with_replacement)
+                    sampled = StatsBase.sample(remaining_group_indices, additional_samples,
+                        replace = with_replacement)
                     append!(sampled_indices, sampled)
                 else
                     # Take all remaining if not enough for desired sample size
@@ -944,13 +943,13 @@ function breadth_first_sample(group_vector, total_sample_size::Int;
                 end
             end
         end
-        
+
         # Handle any rounding discrepancies by sampling randomly from all remaining
         current_sample_size = length(sampled_indices)
         if current_sample_size < total_sample_size
             shortfall = total_sample_size - current_sample_size
             all_remaining = Int[]
-            
+
             for indices in values(remaining_indices_by_group)
                 if with_replacement
                     append!(all_remaining, indices)
@@ -963,27 +962,28 @@ function breadth_first_sample(group_vector, total_sample_size::Int;
                     end
                 end
             end
-            
+
             if length(all_remaining) >= shortfall
-                additional = StatsBase.sample(all_remaining, shortfall, replace=with_replacement)
+                additional = StatsBase.sample(all_remaining, shortfall, replace = with_replacement)
                 append!(sampled_indices, additional)
             elseif with_replacement && length(all_remaining) > 0
-                additional = StatsBase.sample(all_remaining, shortfall, replace=true)
+                additional = StatsBase.sample(all_remaining, shortfall, replace = true)
                 append!(sampled_indices, additional)
             end
         end
     end
-    
+
     return sampled_indices
 end
 
-function can_downcast_column(col::AbstractVector{T}, ::Type{S}) where {T<:AbstractFloat, S<:AbstractFloat}
+function can_downcast_column(col::AbstractVector{T}, ::Type{S}) where {
+        T <: AbstractFloat, S <: AbstractFloat}
     col_vec = collect(col)
     col2 = convert(Vector{S}, col_vec)
     return col_vec == convert(Vector{T}, col2)
 end
 
-function downcast_float_columns(df::DataFrames.DataFrame; target_type=Float32)
+function downcast_float_columns(df::DataFrames.DataFrame; target_type = Float32)
     for name in DataFrames.names(df)
         col = df[!, name]
         if eltype(col) <: AbstractFloat
@@ -1001,7 +1001,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Write a DataFrame to a JLD2 file using a standardized internal name.
 """
-function JLD2_write_table(;df::DataFrames.DataFrame, filename::String)
+function JLD2_write_table(; df::DataFrames.DataFrame, filename::String)
     JLD2.jldopen(filename, "w") do file
         file["dataframe"] = df  # Always use the same internal name
     end
@@ -1020,20 +1020,22 @@ function JLD2_read_table(filename::String)
         if haskey(file, "dataframe")
             return file["dataframe"]
         end
-        
+
         # Otherwise search for any DataFrame
-        dataframe_keys = [key for key in keys(file) if typeof(file[key]) <: DataFrames.DataFrame]
+        dataframe_keys = [key
+                          for key in keys(file)
+                          if typeof(file[key]) <: DataFrames.DataFrame]
         if length(dataframe_keys) > 1
             Logging.@warn "Multiple DataFrames found in $filename: $(dataframe_keys). Returning first one: $(first(dataframe_keys))"
         end
         for key in dataframe_keys
             return file[key]
         end
-        
+
         # No DataFrame found
         error("No DataFrame found in file: $filename")
     end
-    
+
     return df
 end
 
@@ -1072,8 +1074,10 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 function dataframe_convert_dicts_to_json(df)
     df_copy = DataFrames.copy(df)
     for col in DataFrames.names(df_copy)
-        if eltype(df_copy[!, col]) <: AbstractDict || any(x -> isa(x, AbstractDict), df_copy[!, col])
-            df_copy[!, col] = [isa(cell, AbstractDict) ? JSON.json(cell) : cell for cell in df_copy[!, col]]
+        if eltype(df_copy[!, col]) <: AbstractDict ||
+           any(x -> isa(x, AbstractDict), df_copy[!, col])
+            df_copy[!, col] = [isa(cell, AbstractDict) ? JSON.json(cell) : cell
+                               for cell in df_copy[!, col]]
         end
     end
     return df_copy
@@ -1116,7 +1120,7 @@ function repr_long(v)
     println(buf, "]")
     return String(take!(buf))
 end
-        
+
 """
     dataframe_to_ndjson(df::DataFrame; outfile::Union{String,Nothing}=nothing)
 
@@ -1145,11 +1149,12 @@ println(ndjson_str)
 # Optionally, write to a file
 dataframe_to_ndjson(df; outfile="output.ndjson")
 """
-function dataframe_to_ndjson(df::DataFrames.DataFrame; outfile::Union{String, Nothing}=nothing) ndjson_lines = String[]
+function dataframe_to_ndjson(df::DataFrames.DataFrame; outfile::Union{String, Nothing} = nothing)
+    ndjson_lines = String[]
     # Iterate over each row in the DataFrame
     for row in eachrow(df)
         row_dict = Dict{String, Any}()
-    
+
         # Build a dictionary for the current row
         for (col, value) in pairs(row)
             # Convert column names to strings
@@ -1160,20 +1165,21 @@ function dataframe_to_ndjson(df::DataFrames.DataFrame; outfile::Union{String, No
             elseif isa(value, Dates.DateTime)
                 # Format DateTime value in ISO 8601 format with millisecond precision
                 # Modify the format string if a different format is needed for BigQuery.
-                formatted = Dates.format(value, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sss") * "Z"
+                formatted = Dates.format(value, Dates.dateformat"yyyy-mm-ddTHH:MM:SS.sss") *
+                            "Z"
                 row_dict[col_name] = formatted
             else
                 row_dict[col_name] = value
             end
         end
-    
+
         # Convert the dictionary to a JSON string and push into the list
         push!(ndjson_lines, JSON.json(row_dict))
     end
-    
+
     # Join all JSON strings with newline delimiters (one JSON object per line)
     ndjson_str = join(ndjson_lines, "\n")
-    
+
     # Optionally write the NDJSON content to a file if an outfile path is provided.
     if outfile !== nothing
         open(outfile, "w") do io
@@ -1188,18 +1194,18 @@ end
 function install_cloud_cli()
     # Get the user's home directory
     home_dir = ENV["HOME"]
-    
+
     # Define the target installation directory ($HOME/google-cloud-sdk)
     sdk_install_dir = joinpath(home_dir, "google-cloud-sdk")
     sdk_bin_dir = joinpath(sdk_install_dir, "bin")
-    
+
     # Function to update the PATH in current session and persist to .bashrc if needed.
     function update_path()
         # Update current session PATH
         if !occursin(sdk_bin_dir, ENV["PATH"])
             ENV["PATH"] = "$sdk_bin_dir:" * ENV["PATH"]
         end
-        
+
         bashrc_file = joinpath(home_dir, ".bashrc")
         path_is_set = false
         if isfile(bashrc_file)
@@ -1210,7 +1216,7 @@ function install_cloud_cli()
                 end
             end
         end
-        
+
         if !path_is_set
             println("Appending SDK bin path to $bashrc_file ...")
             open(bashrc_file, "a") do io
@@ -1222,7 +1228,7 @@ function install_cloud_cli()
             println("PATH already includes google-cloud-sdk/bin")
         end
     end
-    
+
     # Check if the SDK is already installed.
     if isdir(sdk_install_dir)
         println("Google Cloud CLI is already installed.")
@@ -1234,37 +1240,36 @@ function install_cloud_cli()
     # Not installed: proceed with downloading and installing.
     tarball = "google-cloud-cli-linux-x86_64.tar.gz"
     sdk_url = "https://dl.google.com/dl/cloudsdk/channels/rapid/downloads/$tarball"
-    
+
     println("Downloading Google Cloud CLI from: $sdk_url ...")
     run(`curl -O $sdk_url`)
-    
+
     println("Extracting $tarball to $home_dir ...")
     run(`tar -xf $tarball -C $home_dir`)
-    
+
     # Run the install script from within the extracted folder.
     install_script = joinpath(sdk_install_dir, "install.sh")
     println("Running the installation script ...")
     run(`bash $install_script --quiet --usage-reporting false --command-completion false --path-update false`)
-    
+
     # Cleanup the downloaded tarball on successful install.
     println("Cleaning up the downloaded tarball...")
-    rm(tarball, force=true)
-    
+    rm(tarball, force = true)
+
     update_path()
-    
+
     println("Installation complete. You now have gsutil and bq installed as part of the Google Cloud CLI.")
     println("Please run `gcloud init` or `gcloud auth login` and follow the interactive prompts to log in.")
 end
 
-
 function upload_dataframe_to_bigquery(;
-    ndjson_file::String,
-    project_id::String,
-    dataset_id::String,
-    table_id::String,
-    gcs_bucket_name::String,
-    bq_location::String, # e.g., "US"
-    verbose=true
+        ndjson_file::String,
+        project_id::String,
+        dataset_id::String,
+        table_id::String,
+        gcs_bucket_name::String,
+        bq_location::String, # e.g., "US"
+        verbose = true
 )
     full_table_id = "$(project_id):$(dataset_id).$(table_id)"
     if verbose
@@ -1272,7 +1277,7 @@ function upload_dataframe_to_bigquery(;
         println("Target GCS Bucket: ", gcs_bucket_name)
         println("BigQuery Location: ", bq_location)
     end
-    
+
     try
         @assert isfile(ndjson_file) && filesize(ndjson_file) > 0
         verbose && println("NDJSON detected locally at: ", ndjson_file)
@@ -1327,19 +1332,20 @@ Save a DataFrame to a JLD2 file.
 - `filename`: Path to the JLD2 file (will add .jld2 extension if not present)
 - `key`: The name of the dataset within the JLD2 file (defaults to "dataframe")
 """
-function save_df_jld2(;df::DataFrames.DataFrame, filename::String, key::String="dataframe", force::Bool=false)
+function save_df_jld2(; df::DataFrames.DataFrame, filename::String,
+        key::String = "dataframe", force::Bool = false)
     # Ensure filename has .jld2 extension
     if !endswith(filename, ".jld2")
         filename = filename * ".jld2"
     end
-    
+
     # Save the dataframe to the JLD2 file
     if !isfile(filename) || force
         JLD2.jldopen(filename, "w") do file
             file[key] = df
         end
     end
-    
+
     return filename
 end
 
@@ -1362,12 +1368,12 @@ Load a DataFrame from a JLD2 file.
 df = load_df_jld2("mydata")
 ```
 """
-function load_df_jld2(filename::String; key::String="dataframe")    
+function load_df_jld2(filename::String; key::String = "dataframe")
     # Check if file exists
     if !isfile(filename)
         error("File not found: $filename")
     end
-    
+
     # Load the dataframe from the JLD2 file
     df = JLD2.jldopen(filename, "r") do file
         if !haskey(file, key)
@@ -1375,7 +1381,7 @@ function load_df_jld2(filename::String; key::String="dataframe")
         end
         return file[key]
     end
-    
+
     return df
 end
 
@@ -1411,11 +1417,11 @@ It uses multithreading to run the function `f` on each item in parallel, updatin
 function run_parallel_progress(f::Function, items::AbstractVector)
     # Create a progress meter
     p = ProgressMeter.Progress(length(items))
-    
+
     # Create a lock and vector to store errors
     lock = ReentrantLock()
     errors = Vector{Union{Nothing, Tuple{Any, Any}}}(nothing, length(items))
-    
+
     Threads.@threads for (i, item) in enumerate(items)
         try
             f(item)
@@ -1473,11 +1479,11 @@ Concatenate multiple FASTA files into a single output file by simple appending.
 Platform-independent implementation of `cat *.fasta > combined.fasta`.
 Files are processed sequentially with a progress indicator.
 """
-function concatenate_files(;files, file)
+function concatenate_files(; files, file)
     close(open(file, "w"))
     ProgressMeter.@showprogress for f in files
         # stderr=file_path
-        run(pipeline(`cat $(f)`, stdout=file, append=true))
+        run(pipeline(`cat $(f)`, stdout = file, append = true))
     end
     return file
 end
@@ -1504,7 +1510,7 @@ Michaelis L., Menten M.L. (1913). Die Kinetik der Invertinwirkung.
 Biochem Z 49:333-369.
 """
 # Michaelis–Menten
-function calculate_v(s,p)
+function calculate_v(s, p)
     vmax = p[1]
     km = p[2]
     v = (vmax .* s) ./ (km .+ s)
@@ -1519,27 +1525,28 @@ Base.showerror(io::IO, e::BandageCompatibilityError) = print(io, e.msg)
 
 function _bandage_probe(bin::AbstractString)
     output = IOBuffer()
-    cmd = pipeline(ignorestatus(`$(bin) --version`); stdout=output, stderr=output)
+    cmd = pipeline(ignorestatus(`$(bin) --version`); stdout = output, stderr = output)
     if Sys.islinux()
         return mktempdir() do dir
             Base.withenv(
                 "QT_QPA_PLATFORM" => "offscreen",
                 "XDG_RUNTIME_DIR" => dir
             ) do
-                proc = run(cmd; wait=false)
+                proc = run(cmd; wait = false)
                 wait(proc)
                 return success(proc), String(take!(output))
             end
         end
     end
 
-    proc = run(cmd; wait=false)
+    proc = run(cmd; wait = false)
     wait(proc)
     return success(proc), String(take!(output))
 end
 
 function _ensure_bandage_runs(bin::AbstractString)
-    ok, output = try
+    ok,
+    output = try
         _bandage_probe(bin)
     catch err
         throw(BandageCompatibilityError("Failed to invoke Bandage binary at $(bin): $(err)"))
@@ -1560,11 +1567,11 @@ function _glibc_version_tuple()
     ldd === nothing && return nothing
 
     output = IOBuffer()
-    proc = run(pipeline(ignorestatus(`$(ldd) --version`); stdout=output, stderr=output); wait=false)
+    proc = run(pipeline(ignorestatus(`$(ldd) --version`); stdout = output, stderr = output); wait = false)
     wait(proc)
 
     text = String(take!(output))
-    lines = split(text, '\n'; keepempty=false)
+    lines = split(text, '\n'; keepempty = false)
     isempty(lines) && return nothing
 
     m = match(r"ldd \(GNU libc\) (\d+)\.(\d+)", strip(lines[1]))
@@ -1601,7 +1608,7 @@ function _install_bandage_from_url(url::AbstractString, bandage_executable::Abst
 
         lower_url = lowercase(url)
         if endswith(lower_url, ".appimage")
-            cp(archive_path, bandage_executable; force=true)
+            cp(archive_path, bandage_executable; force = true)
             chmod(bandage_executable, 0o755)
             return
         end
@@ -1611,9 +1618,10 @@ function _install_bandage_from_url(url::AbstractString, bandage_executable::Abst
             mountpoint = joinpath(tmp, "mnt")
             mkpath(mountpoint)
             run(`hdiutil attach -nobrowse -mountpoint $(mountpoint) $(archive_path)`)
-            candidate = joinpath(mountpoint, "BandageNG.app", "Contents", "MacOS", "BandageNG")
+            candidate = joinpath(
+                mountpoint, "BandageNG.app", "Contents", "MacOS", "BandageNG")
             isfile(candidate) || error("BandageNG executable not found in DMG")
-            cp(candidate, bandage_executable; force=true)
+            cp(candidate, bandage_executable; force = true)
             chmod(bandage_executable, 0o755)
             run(`hdiutil detach $(mountpoint)`)
             return
@@ -1646,7 +1654,7 @@ function _install_bandage_from_url(url::AbstractString, bandage_executable::Abst
         end
 
         best_candidate === nothing && error("Bandage archive did not contain an executable")
-        cp(best_candidate, bandage_executable; force=true)
+        cp(best_candidate, bandage_executable; force = true)
         chmod(bandage_executable, 0o755)
         return
     end
@@ -1674,7 +1682,7 @@ Downloads and installs Bandage, a bioinformatics visualization tool for genome a
 # Dependencies
 Requires system commands: unzip (for zip archives), hdiutil on macOS (for DMG)
 """
-function download_bandage(outdir=joinpath(first(DEPOT_PATH), "bin"))
+function download_bandage(outdir = joinpath(first(DEPOT_PATH), "bin"))
     cmd_override = get(ENV, "MYCELIA_BANDAGE_CMD", nothing)
     if cmd_override !== nothing
         _ensure_bandage_runs(cmd_override)
@@ -1788,7 +1796,7 @@ Returns the current git commit hash of the repository.
 # Returns
 A string containing the git commit hash (full 40 characters by default)
 """
-function githash(;short=false)
+function githash(; short = false)
     git_hash = rstrip(read(`git rev-parse HEAD`, String))
     if short
         git_hash = git_hash[1:8]
@@ -1813,7 +1821,7 @@ function find_nonempty_columns(df)
             push!(non_empty_columns, false)
             continue
         end
-        
+
         # Check if any value in the column is non-empty
         has_nonempty = any(col) do v
             if ismissing(v) || isnothing(v)
@@ -1826,7 +1834,7 @@ function find_nonempty_columns(df)
             # For other types, check if they're not empty
             return !isempty(v)
         end
-        
+
         push!(non_empty_columns, has_nonempty)
     end
     return non_empty_columns
@@ -1918,13 +1926,12 @@ Creates a gzipped tar archive of the specified directory along with verification
 # Returns
 - Path to the created tar archive file
 """
-function create_tarchive(;directory, tarchive=directory * ".tar.gz")
+function create_tarchive(; directory, tarchive = directory * ".tar.gz")
     directory = normpath(directory)
     tarchive = normpath(tarchive)
     output_dir = mkpath(dirname(tarchive))
-    
-    install_hashdeep()
 
+    install_hashdeep()
 
     working_dir, source = splitdir(directory)
     if isempty(source)
@@ -1940,15 +1947,15 @@ function create_tarchive(;directory, tarchive=directory * ".tar.gz")
             "target_file: $tarchive")
     log_file = tarchive * ".log"
     hashdeep_file = tarchive * ".hashdeep.dfxml"
-    
+
     if !isfile(tarchive)
         run(`tar --create --gzip --verbose --file=$(tarchive) $(directory)`)
     end
     if !isfile(log_file)
-        run(pipeline(`tar -tvf $(tarchive)`,log_file))
+        run(pipeline(`tar -tvf $(tarchive)`, log_file))
     end
     if !isfile(hashdeep_file)
-        run(pipeline(`hashdeep -c md5,sha1,sha256 -b -d $(tarchive)`,hashdeep_file))
+        run(pipeline(`hashdeep -c md5,sha1,sha256 -b -d $(tarchive)`, hashdeep_file))
     end
     return tarchive
 end
@@ -1966,7 +1973,7 @@ Extract contents of a gzipped tar archive file to a specified directory.
 # Returns
 - `AbstractString`: Path to the directory where contents were extracted
 """
-function tar_extract(;tarchive, directory=dirname(tarchive), verbose::Bool=false)
+function tar_extract(; tarchive, directory = dirname(tarchive), verbose::Bool = false)
     if verbose
         run(`tar --extract --gzip --verbose --file=$(tarchive) --directory=$(directory)`)
     else
@@ -1993,11 +2000,11 @@ This avoids writing directly to CodecZlib compressor streams, which can hit buff
 for large streaming writes.
 """
 function gzip_file(
-    infile::AbstractString;
-    outfile::Union{Nothing,AbstractString}=nothing,
-    threads::Integer=get_default_threads(),
-    force::Bool=false,
-    keep_input::Bool=false
+        infile::AbstractString;
+        outfile::Union{Nothing, AbstractString} = nothing,
+        threads::Integer = get_default_threads(),
+        force::Bool = false,
+        keep_input::Bool = false
 )::String
     @assert isfile(infile) "Input file not found: $infile"
 
@@ -2015,7 +2022,7 @@ function gzip_file(
     end
 
     tmp = out * ".tmp"
-    isfile(tmp) && rm(tmp; force=true)
+    isfile(tmp) && rm(tmp; force = true)
 
     pigz = Sys.which("pigz")
     gzip = Sys.which("gzip")
@@ -2025,16 +2032,17 @@ function gzip_file(
         Cmd([gzip, "-c", infile])
     else
         Mycelia.add_bioconda_env("pigz")
-        Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pigz", "pigz", "--processes", string(max(1, threads)), "-c", infile])
+        Cmd([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pigz",
+            "pigz", "--processes", string(max(1, threads)), "-c", infile])
     end
 
     open(tmp, "w") do out_io
-        run(pipeline(compressor, stdout=out_io))
+        run(pipeline(compressor, stdout = out_io))
     end
-    mv(tmp, out; force=true)
+    mv(tmp, out; force = true)
 
     if !keep_input
-        rm(infile; force=true)
+        rm(infile; force = true)
     end
 
     return out
@@ -2046,7 +2054,7 @@ end
 Return the system `ARG_MAX` (maximum total size of argv+env for `execve`) if it can be determined.
 Uses `getconf ARG_MAX` when available; returns `nothing` if unavailable.
 """
-function get_arg_max()::Union{Int,Nothing}
+function get_arg_max()::Union{Int, Nothing}
     getconf = Sys.which("getconf")
     getconf === nothing && return nothing
     try
@@ -2086,7 +2094,7 @@ function extract_pacbiosample_information(xml)
     # Initialize empty arrays to store the data
     biosample_names = []
     barcode_names = []
-    
+
     if haskey(wellsample, "BioSamples")
         # display(wellsample)
         for bs in wellsample["BioSamples"]["BioSample"]
@@ -2096,7 +2104,7 @@ function extract_pacbiosample_information(xml)
     end
 
     # Create the DataFrame
-    df = DataFrames.DataFrame(BioSampleName=biosample_names, BarcodeName=barcode_names)
+    df = DataFrames.DataFrame(BioSampleName = biosample_names, BarcodeName = barcode_names)
     return df
 end
 
@@ -2130,9 +2138,9 @@ Copy a file to a new location with a unique identifier prepended to the filename
 # Returns
 - `String`: Path to the newly created file
 """
-function copy_with_unique_identifier(infile, out_directory, unique_identifier; force=true)
+function copy_with_unique_identifier(infile, out_directory, unique_identifier; force = true)
     outfile = joinpath(out_directory, unique_identifier * "." * basename(infile))
-    cp(infile, outfile, force=force)
+    cp(infile, outfile, force = force)
     return outfile
 end
 
@@ -2175,7 +2183,7 @@ function bytes_human_readable(num::Real)
     # return @sprintf("%.2f %s", num, units[i])
 end
 
-function scientific_notation(num::Number; precision::Int=2)
+function scientific_notation(num::Number; precision::Int = 2)
     if precision < 0
         error("Number of decimal places (precision) must be non-negative.")
     end
@@ -2197,10 +2205,10 @@ Find the longest common prefix between two filenames.
 # Returns
 - `String`: The longest common prefix found between the filenames
 """
-function find_matching_prefix(filename1::String, filename2::String; strip_trailing_delimiters=true)
+function find_matching_prefix(filename1::String, filename2::String; strip_trailing_delimiters = true)
     min_length = min(length(filename1), length(filename2))
     matching_prefix = ""
-    
+
     for i in 1:min_length
         if filename1[i] == filename2[i]
             matching_prefix *= filename1[i]
@@ -2211,7 +2219,7 @@ function find_matching_prefix(filename1::String, filename2::String; strip_traili
     if strip_trailing_delimiters
         matching_prefix = replace(matching_prefix, r"[\.\-_]+$" => "")
     end
-    
+
     return matching_prefix
 end
 
@@ -2231,7 +2239,7 @@ Validations performed:
 Progress meter shows bytes read from the underlying file (compressed bytes
 for .gz). No second full pass is needed.
 """
-function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
+function parse_jsonl(filepath::String)::Vector{Dict{String, Any}}
     # --- Validate inputs ---
     fname = lowercase(filepath)
     valid_exts = (".jsonl", ".ndjson", ".jsonl.gz", ".ndjson.gz")
@@ -2248,15 +2256,15 @@ function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
 
     # --- Open raw and (optionally) decompress ---
     raw_io = open(filepath, "r")
-    io     = endswith(fname, ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
+    io = endswith(fname, ".gz") ? CodecZlib.GzipDecompressorStream(raw_io) : raw_io
 
     # --- Set up a byte‐based progress meter ---
     total_bytes = file_stat.size
-    p = ProgressMeter.Progress(total_bytes; desc="Parsing JSONL (bytes): ")
+    p = ProgressMeter.Progress(total_bytes; desc = "Parsing JSONL (bytes): ")
     last_pos = Int64(0)
 
     # --- Read & parse lines ---
-    results = Vector{Dict{String,Any}}()
+    results = Vector{Dict{String, Any}}()
     for line in eachline(io)
         s = strip(line)
         if !isempty(s)
@@ -2264,7 +2272,7 @@ function parse_jsonl(filepath::String)::Vector{Dict{String,Any}}
         end
         # track compressed‐byte progress even for gzipped files
         curr_pos = position(raw_io)
-        delta    = curr_pos - last_pos
+        delta = curr_pos - last_pos
         last_pos = curr_pos
         ProgressMeter.next!(p; step = delta)
     end
@@ -2319,7 +2327,8 @@ function _detect_slurm_cpu_allocation()
     slurm_job = _parse_positive_env_int("SLURM_JOB_CPUS_PER_NODE")
     slurm_cpt = _parse_positive_env_int("SLURM_CPUS_PER_TASK")
     slurm_tpn = _parse_positive_env_int("SLURM_TASKS_PER_NODE")
-    slurm_derived = slurm_cpt !== nothing && slurm_tpn !== nothing ? slurm_cpt * slurm_tpn : nothing
+    slurm_derived = slurm_cpt !== nothing && slurm_tpn !== nothing ? slurm_cpt * slurm_tpn :
+                    nothing
     slurm_on_node = _parse_positive_env_int("SLURM_CPUS_ON_NODE")
 
     return slurm_job !== nothing ? slurm_job :
@@ -2327,7 +2336,7 @@ function _detect_slurm_cpu_allocation()
            slurm_on_node
 end
 
-function _parse_gpu_list(val)::Union{Int,Nothing}
+function _parse_gpu_list(val)::Union{Int, Nothing}
     val === nothing && return nothing
     str = strip(String(val))
     isempty(str) && return nothing
@@ -2357,7 +2366,7 @@ function _parse_gpu_list(val)::Union{Int,Nothing}
     return total > 0 ? total : nothing
 end
 
-function _parse_gres_gpus(val)::Union{Int,Nothing}
+function _parse_gres_gpus(val)::Union{Int, Nothing}
     val === nothing && return nothing
     matches = collect(eachmatch(r"gpu(?::[A-Za-z0-9_-]+)?:(\d+)", String(val)))
     if isempty(matches)
@@ -2376,7 +2385,8 @@ function _detect_slurm_gpu_allocation()
 
     gpu_per_task = _parse_positive_env_int("SLURM_GPUS_PER_TASK")
     tasks_per_node = _parse_positive_env_int("SLURM_TASKS_PER_NODE")
-    gpu_task_total = gpu_per_task !== nothing && tasks_per_node !== nothing ? gpu_per_task * tasks_per_node : nothing
+    gpu_task_total = gpu_per_task !== nothing && tasks_per_node !== nothing ?
+                     gpu_per_task * tasks_per_node : nothing
     gpu_task_total !== nothing && return gpu_task_total
     gpu_per_task !== nothing && return gpu_per_task
 
@@ -2393,13 +2403,16 @@ function _detect_slurm_gpu_allocation()
 end
 
 function _in_slurm_environment()
-    any(haskey(ENV, var) for var in ("SLURM_JOB_ID", "SLURM_CLUSTER_NAME", "SLURM_JOB_NAME", "SLURM_STEP_ID"))
+    any(haskey(ENV, var)
+    for var in ("SLURM_JOB_ID", "SLURM_CLUSTER_NAME", "SLURM_JOB_NAME", "SLURM_STEP_ID"))
 end
 
-function _detect_visible_gpus(slurm_gpu_allocation::Union{Int,Nothing})
+function _detect_visible_gpus(slurm_gpu_allocation::Union{Int, Nothing})
     cuda_devices = get(ENV, "CUDA_VISIBLE_DEVICES", nothing)
     if cuda_devices !== nothing
-        devs = [strip(d) for d in split(String(cuda_devices), ",") if !isempty(strip(d)) && strip(d) != "NoDevFiles"]
+        devs = [strip(d)
+                for d in split(String(cuda_devices), ",")
+                if !isempty(strip(d)) && strip(d) != "NoDevFiles"]
         if !isempty(devs)
             return length(devs)
         elseif strip(String(cuda_devices)) == "NoDevFiles"
@@ -2418,7 +2431,9 @@ function _detect_visible_gpus(slurm_gpu_allocation::Union{Int,Nothing})
     return slurm_gpu_allocation
 end
 
-function _detect_slurm_memory_bytes(; cpu_allocation::Union{Int,Nothing}, gpu_allocation::Union{Int,Nothing}, total_memory::Int, available_memory::Int)
+function _detect_slurm_memory_bytes(;
+        cpu_allocation::Union{Int, Nothing}, gpu_allocation::Union{Int, Nothing},
+        total_memory::Int, available_memory::Int)
     mem_per_node = _parse_positive_env_int("SLURM_MEM_PER_NODE")
     mem_per_cpu = _parse_positive_env_int("SLURM_MEM_PER_CPU")
     mem_per_gpu = _parse_positive_env_int("SLURM_MEM_PER_GPU")
@@ -2471,7 +2486,8 @@ function get_default_threads()::Int
     # Respect explicit Julia threading request.
     julia_hint = _parse_positive_env_int("JULIA_NUM_THREADS")
     if julia_hint !== nothing
-        return cpu_threads === nothing ? max(1, julia_hint) : clamp(julia_hint, 1, cpu_threads)
+        return cpu_threads === nothing ? max(1, julia_hint) :
+               clamp(julia_hint, 1, cpu_threads)
     end
 
     # SLURM hints: prefer job-level declaration, otherwise derive from per-task × tasks-per-node.
@@ -2500,16 +2516,16 @@ struct SystemOverview
     system_threads::Int
     julia_threads::Int
     default_threads::Int
-    slurm_threads::Union{Int,Nothing}
-    system_gpus::Union{Int,Nothing}
-    slurm_gpus::Union{Int,Nothing}
+    slurm_threads::Union{Int, Nothing}
+    system_gpus::Union{Int, Nothing}
+    slurm_gpus::Union{Int, Nothing}
     total_memory::Int
     available_memory::Int
     occupied_memory::Int
     memory_occupied_percent::Float64
     memory_running_low::Bool
-    slurm_memory::Union{Int,Nothing}
-    slurm_memory_source::Union{Symbol,Nothing}
+    slurm_memory::Union{Int, Nothing}
+    slurm_memory_source::Union{Symbol, Nothing}
     total_storage::Int
     available_storage::Int
     occupied_storage::Int
@@ -2528,7 +2544,7 @@ Notes:
 - `default_threads` reflects the configured default based on environment hints (`get_default_threads`; e.g., `SLURM_CPUS_PER_TASK`, `PBS_NCPUS`, `OMP_NUM_THREADS`, `JULIA_NUM_THREADS`, or the conservative fallback) and may differ if the session was launched with different settings.
 - When running under SLURM, `slurm_threads`, `slurm_memory`, and `slurm_gpus` capture the scheduler allocations alongside system-wide availability. Memory falls back to 90% of currently available memory if no SLURM memory variables are exposed (treated as an exclusive node).
 """
-function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_threshold=0.90)
+function system_overview(; path = pwd(), memory_low_threshold = 0.90, storage_low_threshold = 0.90)
     if !(0.0 <= memory_low_threshold <= 1.0)
         error("memory_low_threshold must be between 0.0 and 1.0 (got $memory_low_threshold)")
     end
@@ -2553,11 +2569,12 @@ function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_th
     slurm_threads = _detect_slurm_cpu_allocation()
     slurm_gpus = _detect_slurm_gpu_allocation()
     system_gpus = _detect_visible_gpus(slurm_gpus)
-    slurm_memory, slurm_memory_source = _detect_slurm_memory_bytes(
-        cpu_allocation=slurm_threads,
-        gpu_allocation=slurm_gpus,
-        total_memory=total_memory,
-        available_memory=available_memory,
+    slurm_memory,
+    slurm_memory_source = _detect_slurm_memory_bytes(
+        cpu_allocation = slurm_threads,
+        gpu_allocation = slurm_gpus,
+        total_memory = total_memory,
+        available_memory = available_memory
     )
 
     if julia_threads > system_threads
@@ -2606,13 +2623,13 @@ function system_overview(; path=pwd(), memory_low_threshold=0.90, storage_low_th
         occupied_storage,
         storage_occupied_percent,
         storage_running_low,
-        String(path),
+        String(path)
     )
 end
 
 function Base.show(io::IO, ::MIME"text/plain", overview::SystemOverview)
-    memory_pct = round(overview.memory_occupied_percent * 100; digits=1)
-    storage_pct = round(overview.storage_occupied_percent * 100; digits=1)
+    memory_pct = round(overview.memory_occupied_percent * 100; digits = 1)
+    storage_pct = round(overview.storage_occupied_percent * 100; digits = 1)
 
     memory_flag = overview.memory_running_low ? " (LOW)" : ""
     storage_flag = overview.storage_running_low ? " (LOW)" : ""
@@ -2633,11 +2650,13 @@ function Base.show(io::IO, ::MIME"text/plain", overview::SystemOverview)
 
     memory_line = "  Memory: total=$(bytes_human_readable(overview.total_memory)), available=$(bytes_human_readable(overview.available_memory)), occupied=$(bytes_human_readable(overview.occupied_memory)) ($memory_pct% used)$memory_flag"
     if overview.slurm_memory !== nothing
-        source = overview.slurm_memory_source === nothing ? "" : " ($(overview.slurm_memory_source))"
+        source = overview.slurm_memory_source === nothing ? "" :
+                 " ($(overview.slurm_memory_source))"
         memory_line *= ", slurm_limit=$(bytes_human_readable(overview.slurm_memory))$source"
     end
     println(io, memory_line)
-    println(io, "  Storage: total=$(bytes_human_readable(overview.total_storage)), available=$(bytes_human_readable(overview.available_storage)), occupied=$(bytes_human_readable(overview.occupied_storage)) ($storage_pct% used)$storage_flag")
+    println(io,
+        "  Storage: total=$(bytes_human_readable(overview.total_storage)), available=$(bytes_human_readable(overview.available_storage)), occupied=$(bytes_human_readable(overview.occupied_storage)) ($storage_pct% used)$storage_flag")
     println(io, "  Path: $(overview.path)")
 end
 
@@ -2705,14 +2724,14 @@ For regular files, returns the last extension. For gzipped files, returns the ex
 before .gz.
 """
 function get_base_extension(filename::String)
-  parts = split(basename(filename), "."; limit=3)  # Limit to 3 to handle 2-part extensions
-  extension = parts[end]  # Get the last part
-  
-  if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
-    extension = parts[end - 1]  # Get the part before .gz
-  end
-  
-  return "." * extension
+    parts = split(basename(filename), "."; limit = 3)  # Limit to 3 to handle 2-part extensions
+    extension = parts[end]  # Get the last part
+
+    if extension == "gz" && length(parts) > 2  # Check for .gz and more parts
+        extension = parts[end - 1]  # Get the part before .gz
+    end
+
+    return "." * extension
 end
 
 """
@@ -2728,7 +2747,7 @@ Finds contiguous ranges of `true` values in a boolean vector.
 Vector of tuples `(start, end)` where each tuple represents the indices of a
 contiguous range of `true` values meeting the minimum length requirement.
 """
-function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length=1)
+function find_true_ranges(bool_vec::AbstractVector{Bool}; min_length = 1)
     indices = findall(bool_vec)  # Get indices of true values
     if isempty(indices)
         return []  # Handle the case of no true values
@@ -2754,7 +2773,7 @@ Sample `n` equally spaced elements from `vector`.
 A vector containing `n` equally spaced elements from the input vector.
 """
 function equally_spaced_samples(vector, n)
-    indices = round.(Int, range(1, length(vector), length=n))
+    indices = round.(Int, range(1, length(vector), length = n))
     return vector[indices]
 end
 
@@ -2775,7 +2794,7 @@ Compute a centered moving average over a vector using a sliding window.
 - Window is centered on each point, using floor(window_size/2) points on each side
 - Result type is always Float64 regardless of input type T
 """
-function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where T
+function rolling_centered_avg(data::AbstractVector{T}; window_size::Int) where {T}
     half_window = Int(floor(window_size / 2))
     result = Vector{Float64}(undef, length(data))
     for i in eachindex(data)
@@ -2821,18 +2840,18 @@ Generate a random symmetric distance matrix of size n×n with zeros on the diago
 - Off-diagonal elements are uniformly distributed random values
 """
 function random_symmetric_distance_matrix(n)
-  # Generate a random matrix
-  matrix = rand(n, n)
+    # Generate a random matrix
+    matrix = rand(n, n)
 
-  # Make the matrix symmetric
-  matrix = (matrix + matrix') / 2
+    # Make the matrix symmetric
+    matrix = (matrix + matrix') / 2
 
-  # Ensure the diagonal is zero
-  for i in 1:n
-    matrix[i, i] = 0.0
-  end
+    # Ensure the diagonal is zero
+    for i in 1:n
+        matrix[i, i] = 0.0
+    end
 
-  return matrix
+    return matrix
 end
 
 """
@@ -2927,11 +2946,11 @@ end
 #     elseif occursin(r"\.neo4j$", args["out"])
 #         out_type = :neo4j
 #     end
-    
+
 #     if ismissing(in_type) || ismissing(out_type)
 #         error("unable to determine in and out types")
 #     end
-    
+
 #     if (in_type == :jld2) && (out_type == :jld2)
 #         # done
 #     elseif (in_type == :jld2) && (out_type != :jld2)
@@ -2962,7 +2981,7 @@ Saves a matrix to a JLD2 file format.
 # Returns
 - The filename string that was used to save the matrix
 """
-function save_matrix_jld2(;matrix, filename)
+function save_matrix_jld2(; matrix, filename)
     if !isfile(filename) || (filesize(filename) == 0)
         JLD2.@save filename matrix
     else
@@ -3025,38 +3044,6 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Recursively include all files matching a pattern in a directory and its subdirectories.
-
-# Arguments
-- `dir::AbstractString`: Directory path to search recursively
-- `pattern::Regex=r"\\.jl\$"`: Regular expression pattern to match files (defaults to .jl files)
-
-# Details
-Files are processed in sorted order within each directory. This is useful for 
-loading test files, examples, or other Julia modules in a predictable order.
-
-# Examples
-```julia
-# Include all Julia files in a directory tree
-include_all_files("test/modules")
-
-# Include all text files
-include_all_files("docs", r"\\.txt\$")
-```
-"""
-function include_all_files(dir::AbstractString; pattern::Regex=r"\.jl$")
-    for (root, dirs, files) in walkdir(dir)
-        for file in sort(files)
-            if occursin(pattern, file)
-                include(joinpath(root, file))
-            end
-        end
-    end
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
 Calculate the theoretical k-mer space size for a given k-mer length and alphabet size.
 
 # Arguments
@@ -3081,7 +3068,7 @@ kmer_space_size(3)
 kmer_space_size(5, 20)
 ```
 """
-function kmer_space_size(k::Integer, alphabet_size::Integer=4)
+function kmer_space_size(k::Integer, alphabet_size::Integer = 4)
     return alphabet_size^k
 end
 
@@ -3124,19 +3111,20 @@ cleanup_directory("/tmp/cache", verbose=false)
 cleanup_directory("/tmp/large_data", force=true)
 ```
 """
-function cleanup_directory(directory::AbstractString; verbose::Bool=true, force::Bool=false)
+function cleanup_directory(directory::AbstractString; verbose::Bool = true, force::Bool = false)
     # Check if directory exists
     if !isdir(directory)
         if verbose
             println("Directory does not exist, nothing to clean up: $(directory)")
         end
-        return (existed=false, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        return (existed = false, files_deleted = 0,
+            bytes_freed = 0, human_readable_size = "0 B")
     end
-    
+
     # Calculate directory size and file count
     total_bytes = 0
     file_count = 0
-    
+
     for (root, dirs, files) in walkdir(directory)
         for file in files
             file_path = joinpath(root, file)
@@ -3153,25 +3141,27 @@ function cleanup_directory(directory::AbstractString; verbose::Bool=true, force:
             end
         end
     end
-    
+
     # Check if directory is empty
     if file_count == 0
         if verbose
             println("Directory is empty, removing: $(directory)")
         end
         try
-            rm(directory, recursive=true)
+            rm(directory, recursive = true)
         catch e
             if verbose
                 @warn "Failed to remove empty directory: $(directory). Error: $(e)"
             end
-            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+            return (existed = true, files_deleted = 0,
+                bytes_freed = 0, human_readable_size = "0 B")
         end
-        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        return (
+            existed = true, files_deleted = 0, bytes_freed = 0, human_readable_size = "0 B")
     end
-    
+
     human_readable_size = Base.format_bytes(total_bytes)
-    
+
     # Safety check for large directories
     if !force && (total_bytes > 1_000_000_000 || file_count > 10_000)  # 1GB or 10k files
         println("Warning: Large directory detected:")
@@ -3184,25 +3174,28 @@ function cleanup_directory(directory::AbstractString; verbose::Bool=true, force:
             if verbose
                 println("Cleanup cancelled by user")
             end
-            return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+            return (existed = true, files_deleted = 0,
+                bytes_freed = 0, human_readable_size = "0 B")
         end
     end
-    
+
     # Remove the directory
     try
-        rm(directory, recursive=true)
+        rm(directory, recursive = true)
         if verbose
             println("Cleanup completed:")
             println("  Directory: $(directory)")
             println("  Files deleted: $(file_count)")
             println("  Storage freed: $(human_readable_size)")
         end
-        return (existed=true, files_deleted=file_count, bytes_freed=total_bytes, human_readable_size=human_readable_size)
+        return (existed = true, files_deleted = file_count,
+            bytes_freed = total_bytes, human_readable_size = human_readable_size)
     catch e
         if verbose
             @warn "Failed to remove directory: $(directory). Error: $(e)"
         end
-        return (existed=true, files_deleted=0, bytes_freed=0, human_readable_size="0 B")
+        return (
+            existed = true, files_deleted = 0, bytes_freed = 0, human_readable_size = "0 B")
     end
 end
 
@@ -3265,8 +3258,8 @@ seq_type = alphabet_to_biosequence_type(:DNA)
 sequence = extract_typed_sequence(record, seq_type)
 ```
 """
-function extract_typed_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}, 
-                               sequence_type::Type{<:BioSequences.BioSequence})
+function extract_typed_sequence(record::Union{FASTX.FASTA.Record, FASTX.FASTQ.Record},
+        sequence_type::Type{<:BioSequences.BioSequence})
     return FASTX.sequence(sequence_type, record)
 end
 
@@ -3296,11 +3289,11 @@ function detect_and_extract_sequence(record::Union{FASTX.FASTA.Record, FASTX.FAS
     # First extract as string to detect alphabet
     sequence_string = FASTX.sequence(String, record)
     alphabet = detect_alphabet(sequence_string)
-    
+
     # Then extract with proper type
     sequence_type = alphabet_to_biosequence_type(alphabet)
     typed_sequence = extract_typed_sequence(record, sequence_type)
-    
+
     return (alphabet, typed_sequence)
 end
 
@@ -3373,7 +3366,7 @@ function calculate_gc_content(sequence::BioSequences.LongSequence)
             end
         end
     end
-    
+
     return (gc_count / total_bases) * 100.0
 end
 
@@ -3433,14 +3426,15 @@ records = collect(FASTX.FASTA.Reader(open("sequences.fasta")))
 gc_percent = calculate_gc_content(records)
 ```
 """
-function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FASTX.FASTA.Record, FASTX.FASTQ.Record}}
+function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{
+        FASTX.FASTA.Record, FASTX.FASTQ.Record}}
     if length(records) == 0
         return 0.0
     end
-    
+
     total_gc = 0
     total_bases = 0
-    
+
     for record in records
         _, sequence = detect_and_extract_sequence(record)
         alphabet = detect_alphabet(sequence)
@@ -3463,11 +3457,11 @@ function calculate_gc_content(records::AbstractVector{T}) where {T <: Union{FAST
             end
         end
     end
-    
+
     if total_bases == 0
         return 0.0
     end
-    
+
     return (total_gc / total_bases) * 100.0
 end
 
@@ -3503,7 +3497,8 @@ end
 
 Internal function to encode hash bytes with specified encoding and length handling.
 """
-function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded_length::Union{Int,Missing}, allow_truncation::Bool)::String
+function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol,
+        encoded_length::Union{Int, Missing}, allow_truncation::Bool)::String
     if encoding == :hex
         encoded = bytes2hex(hash_bytes)
     elseif encoding == :base58
@@ -3513,7 +3508,7 @@ function _encode_hash_bytes(hash_bytes::Vector{UInt8}, encoding::Symbol, encoded
     else
         error("Unsupported encoding: $encoding. Supported: :hex, :base58, :base64")
     end
-    
+
     # Handle length requirements
     if ismissing(encoded_length)
         return encoded
@@ -3547,7 +3542,7 @@ Simple CRC32 checksum function returning raw checksum value.
 # Returns
 - `UInt32`: Raw CRC32 checksum value
 """
-function crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool=true)::UInt32
+function crc32_checksum(data_to_hash::AbstractString; normalize_case::Bool = true)::UInt32
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     return CRC32c.crc32c(Vector{UInt8}(normalized_data))
 end
@@ -3557,7 +3552,9 @@ end
 
 Generate MD5 hash with configurable encoding and length.
 """
-function create_md5_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_md5_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = Vector{UInt8}(MD5.md5(Vector{UInt8}(normalized_data)))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3568,7 +3565,9 @@ end
 
 Generate SHA-1 hash with configurable encoding and length.
 """
-function create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sha1_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = SHA.sha1(Vector{UInt8}(normalized_data))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3579,7 +3578,9 @@ end
 
 Generate SHA-256 hash with configurable encoding and length.
 """
-function create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sha256_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = SHA.sha256(Vector{UInt8}(normalized_data))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3590,7 +3591,9 @@ end
 
 Generate SHA-512 hash with configurable encoding and length.
 """
-function create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sha512_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = SHA.sha512(Vector{UInt8}(normalized_data))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3601,7 +3604,9 @@ end
 
 Generate SHA-3 256-bit hash with configurable encoding and length.
 """
-function create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sha3_256_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = SHA.sha3_256(Vector{UInt8}(normalized_data))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3612,7 +3617,9 @@ end
 
 Generate SHA-3 512-bit hash with configurable encoding and length.
 """
-function create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_sha3_512_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     hash_bytes = SHA.sha3_512(Vector{UInt8}(normalized_data))
     return _encode_hash_bytes(hash_bytes, encoding, encoded_length, allow_truncation)
@@ -3623,7 +3630,9 @@ end
 
 Generate CRC32 checksum with configurable encoding and length.
 """
-function create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Union{Int,Missing}=missing, normalize_case::Bool=true, allow_truncation::Bool=false)::String
+function create_crc32_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Union{Int, Missing} = missing,
+        normalize_case::Bool = true, allow_truncation::Bool = false)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
     crc_val = CRC32c.crc32c(Vector{UInt8}(normalized_data))
     # Convert to 4 bytes (32 bits) in little-endian format
@@ -3644,18 +3653,21 @@ Generate BLAKE3 hash with configurable encoding and length.
 - `allow_truncation::Bool=false`: Allow truncation if encoded_length < native length
 - `hash_bytes::Union{Int,Missing}=missing`: Raw bytes to generate (auto-calculated if missing)
 """
-function create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol=:hex, encoded_length::Int=64, normalize_case::Bool=true, allow_truncation::Bool=false, hash_bytes::Union{Int,Missing}=missing)::String
+function create_blake3_hash(data_to_hash::AbstractString; encoding::Symbol = :hex,
+        encoded_length::Int = 64, normalize_case::Bool = true,
+        allow_truncation::Bool = false, hash_bytes::Union{Int, Missing} = missing)::String
     normalized_data = normalize_case ? uppercase(data_to_hash) : data_to_hash
-    
+
     # Calculate required bytes if not specified
-    bytes_needed = ismissing(hash_bytes) ? _calculate_required_bytes(encoding, encoded_length) : hash_bytes
-    
+    bytes_needed = ismissing(hash_bytes) ?
+                   _calculate_required_bytes(encoding, encoded_length) : hash_bytes
+
     hasher = Blake3Hash.Blake3Ctx()
     Blake3Hash.update!(hasher, Vector{UInt8}(normalized_data))
-    
+
     output_buffer = Vector{UInt8}(undef, bytes_needed)
     Blake3Hash.digest(hasher, output_buffer)
-    
+
     return _encode_hash_bytes(output_buffer, encoding, encoded_length, allow_truncation)
 end
 
@@ -3704,10 +3716,10 @@ function fibonacci_numbers_less_than(n::Int)
         return [0]
     else
         fib = [0, 1]
-        next_fib = fib[end] + fib[end-1]
+        next_fib = fib[end] + fib[end - 1]
         while next_fib < n
             push!(fib, next_fib)
-            next_fib = fib[end] + fib[end-1]
+            next_fib = fib[end] + fib[end - 1]
         end
         return fib
     end

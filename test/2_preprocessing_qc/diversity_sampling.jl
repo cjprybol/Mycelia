@@ -36,14 +36,12 @@ Test.@testset "Diversity-Based Sampling" begin
     # 1-3 are a tight cluster (dist ~0.1)
     # 4-5 are dist ~0.8
     # 6 is dist ~1.0 from everyone
-    dist_matrix = [
-        0.0 0.1 0.1 0.8 0.8 1.0; # 1
-        0.1 0.0 0.1 0.8 0.8 1.0; # 2
-        0.1 0.1 0.0 0.8 0.8 1.0; # 3
-        0.8 0.8 0.8 0.0 0.9 1.0; # 4 (Note: 4-5 is 0.9 dist)
-        0.8 0.8 0.8 0.9 0.0 1.0; # 5
-        1.0 1.0 1.0 1.0 1.0 0.0  # 6
-    ]
+    dist_matrix = [0.0 0.1 0.1 0.8 0.8 1.0; # 1
+                   0.1 0.0 0.1 0.8 0.8 1.0; # 2
+                   0.1 0.1 0.0 0.8 0.8 1.0; # 3
+                   0.8 0.8 0.8 0.0 0.9 1.0; # 4 (Note: 4-5 is 0.9 dist)
+                   0.8 0.8 0.8 0.9 0.0 1.0; # 5
+                   1.0 1.0 1.0 1.0 1.0 0.0]
 
     group_ids = ["A", "A", "A", "B", "B", "C"]
     weights = [10.0, 5.0, 1.0, 10.0, 10.0, 10.0] # Weights/Abundance
@@ -51,11 +49,11 @@ Test.@testset "Diversity-Based Sampling" begin
     Test.@testset "Medoid Selection (Distance)" begin
         # For Group A (1,2,3), all have equal sum distances (0.2).
         # Should pick index 1 (first appearance) or logic specific
-        medoid = Mycelia.find_group_medoid(dist_matrix, [1, 2, 3], metric_type=:distance)
+        medoid = Mycelia.find_group_medoid(dist_matrix, [1, 2, 3], metric_type = :distance)
         Test.@test medoid in [1, 2, 3]
 
         # For Group B (4,5), symmetric.
-        medoid_b = Mycelia.find_group_medoid(dist_matrix, [4, 5], metric_type=:distance)
+        medoid_b = Mycelia.find_group_medoid(dist_matrix, [4, 5], metric_type = :distance)
         Test.@test medoid_b in [4, 5]
     end
 
@@ -64,7 +62,7 @@ Test.@testset "Diversity-Based Sampling" begin
         # Should select exactly one from A, B, and C
         selected = Mycelia.select_diverse_representatives(
             dist_matrix, group_ids;
-            n_total=3, max_per_group=1, metric_type=:distance
+            n_total = 3, max_per_group = 1, metric_type = :distance
         )
         Test.@test length(selected) == 3
         selected_groups = [group_ids[i] for i in selected]
@@ -78,7 +76,7 @@ Test.@testset "Diversity-Based Sampling" begin
         # Then fills remaining
         selected = Mycelia.select_diverse_representatives(
             dist_matrix, group_ids;
-            n_total=5, max_per_group=2, metric_type=:distance
+            n_total = 5, max_per_group = 2, metric_type = :distance
         )
 
         # Must pick all of B (since they are very diverse, 0.9 dist)
@@ -104,7 +102,7 @@ Test.@testset "Diversity-Based Sampling" begin
         # Run selection
         selected = Mycelia.select_diverse_representatives(
             sim_matrix, group_ids;
-            n_total=3, max_per_group=1, metric_type=:similarity
+            n_total = 3, max_per_group = 1, metric_type = :similarity
         )
 
         Test.@test length(selected) == 3
@@ -122,14 +120,14 @@ Test.@testset "Diversity-Based Sampling" begin
         # Should pick 7 because of higher weight
         # Note: We need to pass indices 1,2 relative to this matrix
         # But the function handles indices relative to the matrix rows
-        medoid = Mycelia.find_group_medoid(dist_ties, [1, 2], metric_type=:distance)
+        medoid = Mycelia.find_group_medoid(dist_ties, [1, 2], metric_type = :distance)
         # In a perfect tie of scores (0.0), implementation usually takes first. 
         # But GreedyMaxMin uses weights.
 
         # Let's test greedy filling specifically
         # Already selected: nothing. n=1.
         selected = Mycelia.greedy_maxmin_diversity(
-            dist_ties, Int[], [1, 2], 1, w_ties, g_ties, 1, metric_type=:distance
+            dist_ties, Int[], [1, 2], 1, w_ties, g_ties, 1, metric_type = :distance
         )
         Test.@test selected[1] == 1 # Should pick index 1 (Weight 100)
     end
@@ -146,34 +144,34 @@ Test.@testset "Radial Dendrogram Visualization" begin
     points = hcat(randn(2, 20), randn(2, 20) .+ 5, randn(2, 10) .+ 10)
 
     # Compute Euclidean distance matrix
-    dist_matrix = Distances.pairwise(Distances.Euclidean(), points; dims=2)
+    dist_matrix = Distances.pairwise(Distances.Euclidean(), points; dims = 2)
 
     # Perform Hierarchical Clustering using Ward's linkage
-    hcl = Clustering.hclust(dist_matrix, linkage=:ward)
+    hcl = Clustering.hclust(dist_matrix, linkage = :ward)
 
     # 2. Define "Rings" (Annotation Layers)
     # We map specific indices to visual properties
     rings = [
         (
-            indices=collect(1:20),
-            label="Cluster A (Negative)",
-            color=:red,
-            marker=:circle,
-            size=8
+            indices = collect(1:20),
+            label = "Cluster A (Negative)",
+            color = :red,
+            marker = :circle,
+            size = 8
         ),
         (
-            indices=collect(21:40),
-            label="Cluster B (Positive)",
-            color=:blue,
-            marker=:rect,
-            size=8
+            indices = collect(21:40),
+            label = "Cluster B (Positive)",
+            color = :blue,
+            marker = :rect,
+            size = 8
         ),
         (
-            indices=collect(41:50),
-            label="Cluster C (Outliers)",
-            color=:green,
-            marker=:utriangle,
-            size=10
+            indices = collect(41:50),
+            label = "Cluster C (Outliers)",
+            color = :green,
+            marker = :utriangle,
+            size = 10
         )
     ]
 
@@ -181,13 +179,13 @@ Test.@testset "Radial Dendrogram Visualization" begin
     # We call the function fully qualified
     fig = Mycelia.plot_radial_dendrogram(
         hcl;
-        rings=rings,
-        title="Synthetic Radial Dendrogram Test",
-        inner_radius=0.2,
-        outer_radius=1.0,
-        ring_spacing=0.1,
-        line_color=(:black, 0.5),
-        line_width=1.5
+        rings = rings,
+        title = "Synthetic Radial Dendrogram Test",
+        inner_radius = 0.2,
+        outer_radius = 1.0,
+        ring_spacing = 0.1,
+        line_color = (:black, 0.5),
+        line_width = 1.5
     )
 
     # 4. Verify Output
@@ -197,5 +195,5 @@ Test.@testset "Radial Dendrogram Visualization" begin
     output_path = "radial_test_output.png"
     CairoMakie.save(output_path, fig)
     Test.@test isfile(output_path)
-    rm(output_path; force=true)
+    rm(output_path; force = true)
 end

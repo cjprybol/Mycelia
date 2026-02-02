@@ -43,9 +43,9 @@ PrecompileTools.@setup_workload begin
         # Graph creation (minimal)
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
-            label_type=String,
-            vertex_data_type=String,
-            edge_data_type=Int
+            label_type = String,
+            vertex_data_type = String,
+            edge_data_type = Int
         )
         graph["A"] = "vertex_A"
         graph["B"] = "vertex_B"

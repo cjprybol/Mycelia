@@ -22,7 +22,6 @@ import BioSequences
 import BioSymbols
 
 Test.@testset "Reduced Amino Acid Alphabets" begin
-
     Test.@testset "list_reduced_alphabets" begin
         schemes = Mycelia.list_reduced_alphabets()
 
@@ -379,5 +378,4 @@ Test.@testset "Reduced Amino Acid Alphabets" begin
             Test.@test length(all_aa_in_groups) >= 20  ## >= because some might be duplicated in metadata
         end
     end
-
 end

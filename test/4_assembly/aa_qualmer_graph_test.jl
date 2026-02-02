@@ -28,7 +28,6 @@ import FASTX
 import Kmers
 
 Test.@testset "AA Qualmer Graph - Singlestrand" begin
-
     Test.@testset "AA Qualmer Graph Construction - Basic" begin
         seq = "MKVLW"
         qual = [30, 35, 32, 28, 40]
@@ -36,7 +35,7 @@ Test.@testset "AA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("protein_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 3 unique AA k-mers
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 3
@@ -55,7 +54,7 @@ Test.@testset "AA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("protein_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         kmer = Kmers.AAKmer{3}("MKV")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -77,7 +76,7 @@ Test.@testset "AA Qualmer Graph - Singlestrand" begin
         record = FASTX.FASTQ.Record("protein_001", seq, qual_str)
 
         records = [record]
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         sources = Mycelia.Rhizomorph.get_all_sources(graph)
         sinks = Mycelia.Rhizomorph.get_all_sinks(graph)

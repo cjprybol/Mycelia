@@ -30,7 +30,6 @@ import Kmers
 import BioSequences
 
 Test.@testset "KmerVertexData - Correct Structure" begin
-
     Test.@testset "Basic Construction - Stores OBSERVED K-mer" begin
         # CRITICAL: Vertex should store the k-mer AS OBSERVED, not canonical
 
@@ -82,7 +81,7 @@ Test.@testset "KmerVertexData - Correct Structure" begin
 
         # Evidence should be nested dict structure
         Test.@test typeof(vertex_data.evidence) ==
-            Dict{String, Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}}
+                   Dict{String, Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}}
 
         # Should start empty
         Test.@test isempty(vertex_data.evidence)
@@ -97,7 +96,7 @@ Test.@testset "KmerVertexData - Correct Structure" begin
         observation_id = "read_001"
 
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
 
         # Verify structure
         Test.@test haskey(vertex_data.evidence, dataset_id)
@@ -115,11 +114,11 @@ Test.@testset "KmerVertexData - Correct Structure" begin
 
         # Add evidence at multiple positions
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EvidenceEntry(120, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(120, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EvidenceEntry(245, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(245, Mycelia.Rhizomorph.Forward))
 
         # Should have 3 evidence entries from same observation
         Test.@test length(vertex_data.evidence[dataset_id][observation_id]) == 3
@@ -133,11 +132,11 @@ Test.@testset "KmerVertexData - Correct Structure" begin
 
         # Evidence from multiple reads
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, "read_002",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, "read_003",
-                             Mycelia.Rhizomorph.EvidenceEntry(12, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EvidenceEntry(12, Mycelia.Rhizomorph.Reverse))
 
         # Should have 3 observations
         Test.@test length(vertex_data.evidence[dataset_id]) == 3
@@ -154,11 +153,11 @@ Test.@testset "KmerVertexData - Correct Structure" begin
 
         # Evidence from different datasets
         Mycelia.Rhizomorph.add_evidence!(vertex_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(8, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(vertex_data, "dataset_03", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(3, Mycelia.Rhizomorph.Forward))
 
         # Should have 3 datasets
         Test.@test length(keys(vertex_data.evidence)) == 3
@@ -175,7 +174,7 @@ Test.@testset "KmerVertexData - Correct Structure" begin
         for i in 1:100
             dataset_id = "dataset_$(lpad(i, 3, '0'))"
             Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, "read_001",
-                                 Mycelia.Rhizomorph.EvidenceEntry(i, Mycelia.Rhizomorph.Forward))
+                Mycelia.Rhizomorph.EvidenceEntry(i, Mycelia.Rhizomorph.Forward))
         end
 
         # O(1) access to specific dataset
@@ -196,7 +195,7 @@ Test.@testset "KmerVertexData - Correct Structure" begin
         for i in 1:100
             obs_id = "read_$(lpad(i, 3, '0'))"
             Mycelia.Rhizomorph.add_evidence!(vertex_data, dataset_id, obs_id,
-                                 Mycelia.Rhizomorph.EvidenceEntry(i, Mycelia.Rhizomorph.Forward))
+                Mycelia.Rhizomorph.EvidenceEntry(i, Mycelia.Rhizomorph.Forward))
         end
 
         # O(1) access to specific observation
@@ -248,7 +247,6 @@ Test.@testset "KmerVertexData - Correct Structure" begin
 end
 
 Test.@testset "KmerVertexData - Critical Anti-Patterns" begin
-
     Test.@testset "NEVER Store Canonical K-mer" begin
         # The OLD WRONG implementation stored canonical_kmer
         # The NEW CORRECT implementation stores observed Kmer
@@ -273,7 +271,8 @@ Test.@testset "KmerVertexData - Critical Anti-Patterns" begin
 
         # Should NOT have a flat coverage vector
         Test.@test !hasfield(typeof(vertex_data), :coverage) ||
-                   (typeof(vertex_data.coverage) != Vector{Tuple{Int, Int, Mycelia.Rhizomorph.StrandOrientation}})
+                   (typeof(vertex_data.coverage) !=
+                    Vector{Tuple{Int, Int, Mycelia.Rhizomorph.StrandOrientation}})
 
         # Should have nested evidence dict
         Test.@test hasfield(typeof(vertex_data), :evidence)
@@ -288,7 +287,7 @@ Test.@testset "KmerVertexData - Critical Anti-Patterns" begin
         vertex_data = Mycelia.Rhizomorph.KmerVertexData(kmer)
 
         Mycelia.Rhizomorph.add_evidence!(vertex_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EvidenceEntry(5, Mycelia.Rhizomorph.Forward))
 
         # Get an evidence entry
         evidence_set = vertex_data.evidence["dataset_01"]["read_001"]

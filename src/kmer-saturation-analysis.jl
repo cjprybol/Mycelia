@@ -91,18 +91,17 @@ kmer_counts = count_kmers(sequences, optimal_k)
 Based on Michaelis-Menten k-mer saturation analysis from: 
 `2021-09-15-sequencing-saturation.ipynb`
 """
-function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int}; 
-                                max_sampling_points::Int=20, 
-                                min_sequences::Int=100) where T
-    
+function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
+        max_sampling_points::Int = 20,
+        min_sequences::Int = 100) where {T}
     if length(sequences) < min_sequences
         throw(ArgumentError("Need at least $min_sequences sequences, got $(length(sequences))"))
     end
-    
+
     if isempty(k_range)
         throw(ArgumentError("k_range cannot be empty"))
     end
-    
+
     n_sequences = length(sequences)
 
     sequence_alphabet = nothing
@@ -141,26 +140,27 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
     else
         throw(ArgumentError("Unsupported alphabet: $(sequence_alphabet)"))
     end
-    
+
     ## Create sampling points (logarithmic spacing for better curve resolution)
-    sampling_points = unique([round(Int, 10^x) for x in range(log10(min_sequences), 
-                                                             log10(n_sequences), 
-                                                             length=max_sampling_points)])
+    sampling_points = unique([round(Int, 10^x)
+                              for x in range(log10(min_sequences),
+        log10(n_sequences),
+        length = max_sampling_points)])
     filter!(x -> x <= n_sequences, sampling_points)
     sort!(sampling_points)
-    
+
     @info "Testing k-mer saturation with $(length(k_range)) k values and $(length(sampling_points)) sampling points"
-    
+
     ## Initialize results storage
     unique_kmer_counts = Dict{Int, Vector{Int}}()
     curve_parameters = Dict{Int, Vector{Float64}}()
     convergence_quality = Dict{Int, Float64}()
     saturation_levels = Float64[]
-    
+
     ## Analyze each k-mer size
     for k in k_range
         @info "Analyzing k=$k saturation..."
-        
+
         kmer_counts_at_sampling = Int[]
         kmer_type = if sequence_alphabet == :DNA
             Kmers.DNAKmer{k}
@@ -169,7 +169,7 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
         else
             Kmers.AAKmer{k}
         end
-        
+
         ## Progressive sampling to build saturation curve
         for n_sample in sampling_points
             sampled_sequences = normalized_sequences[1:n_sample]
@@ -182,15 +182,16 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
 
             push!(kmer_counts_at_sampling, length(kmer_counts))
         end
-        
+
         unique_kmer_counts[k] = kmer_counts_at_sampling
-        
+
         ## Fit Michaelis-Menten curve: v = (vmax * s) / (km + s)
         try
-            params, r_squared = _fit_michaelis_menten(sampling_points, kmer_counts_at_sampling)
+            params,
+            r_squared = _fit_michaelis_menten(sampling_points, kmer_counts_at_sampling)
             curve_parameters[k] = params
             convergence_quality[k] = r_squared
-            
+
             ## Calculate saturation level
             vmax = params[1]
             max_possible_kmers = determine_max_possible_kmers(k, alphabet_symbols)
@@ -204,9 +205,9 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
             end
             saturation = vmax / theoretical_max
             push!(saturation_levels, saturation)
-            
+
             @info "k=$k: vmax=$(round(Int, vmax)), saturation=$(round(100*saturation, digits=2))%, R²=$(round(r_squared, digits=3))"
-            
+
         catch e
             @warn "Failed to fit curve for k=$k: $e"
             curve_parameters[k] = [NaN, NaN]
@@ -214,28 +215,28 @@ function analyze_kmer_saturation(sequences::Vector{T}, k_range::Vector{Int};
             push!(saturation_levels, 1.0)  ## Assume saturated if fitting fails
         end
     end
-    
+
     ## Select optimal k (lowest saturation with good fit quality)
     optimal_k_index = 1
     best_score = Inf
-    
+
     for (i, k) in enumerate(k_range)
         saturation = saturation_levels[i]
         r_squared = get(convergence_quality, k, 0.0)
-        
+
         ## Scoring function: prefer low saturation and good fit quality
         score = saturation - 0.1 * r_squared  ## Weight R² positively
-        
+
         if score < best_score && r_squared > 0.5  ## Require reasonable fit quality
             best_score = score
             optimal_k_index = i
         end
     end
-    
+
     optimal_k = k_range[optimal_k_index]
-    
+
     @info "Optimal k-mer size: $optimal_k (saturation: $(round(100*saturation_levels[optimal_k_index], digits=2))%)"
-    
+
     return SaturationCurveResult(
         optimal_k,
         saturation_levels,
@@ -288,33 +289,33 @@ filtered_kmers = filter(p -> p.second >= result.optimal_threshold, kmer_counts)
 ```
 """
 function find_optimal_assembly_threshold(kmer_counts::Dict{T, Int}, k::Int;
-                                       min_threshold::Int=1,
-                                       max_threshold::Int=100) where {T <: Kmers.Kmer}
-    
+        min_threshold::Int = 1,
+        max_threshold::Int = 100) where {T <: Kmers.Kmer}
     if isempty(kmer_counts)
         throw(ArgumentError("kmer_counts cannot be empty"))
     end
-    
+
     ## Determine reasonable threshold range based on data
     max_coverage = maximum(values(kmer_counts))
     actual_max_threshold = min(max_threshold, max_coverage)
-    
+
     ## Create exponentially spaced thresholds
-    thresholds = unique([round(Int, 2^x) for x in range(0, log2(actual_max_threshold), length=15)])
+    thresholds = unique([round(Int, 2^x)
+                         for x in range(0, log2(actual_max_threshold), length = 15)])
     filter!(t -> t >= min_threshold && t <= actual_max_threshold, thresholds)
     sort!(thresholds)
-    
+
     @info "Testing $(length(thresholds)) coverage thresholds from $min_threshold to $actual_max_threshold"
-    
+
     connectivity_scores = Float64[]
     component_counts = Int[]
     average_connectivity = Float64[]
-    
+
     ## Test each threshold
     for threshold in thresholds
         ## Filter k-mers by coverage threshold
         filtered_kmers = filter(p -> p.second >= threshold, kmer_counts)
-        
+
         if length(filtered_kmers) < 10
             ## Too few k-mers remaining - assign poor score
             push!(connectivity_scores, Inf)
@@ -322,35 +323,35 @@ function find_optimal_assembly_threshold(kmer_counts::Dict{T, Int}, k::Int;
             push!(average_connectivity, 0.0)
             continue
         end
-        
+
         ## Build overlap graph from filtered k-mers
         kmer_list = collect(keys(filtered_kmers))
         overlap_graph = _build_kmer_overlap_graph(kmer_list, k)
-        
+
         ## Calculate connectivity metrics
         n_components = _count_connected_components(overlap_graph)
         avg_connectivity = _calculate_average_connectivity(overlap_graph)
-        
+
         ## Score function: minimize fragmentation while targeting connectivity ≈ 2
         connectivity_penalty = abs(avg_connectivity - 2.0)
         score = n_components * (1.0 + connectivity_penalty)
-        
+
         push!(connectivity_scores, score)
         push!(component_counts, n_components)
         push!(average_connectivity, avg_connectivity)
-        
+
         @debug "Threshold $threshold: $(length(filtered_kmers)) k-mers, $n_components components, " *
                "connectivity $(round(avg_connectivity, digits=2)), score $(round(score, digits=2))"
     end
-    
+
     ## Find optimal threshold
     optimal_index = argmin(connectivity_scores)
     optimal_threshold = thresholds[optimal_index]
-    
+
     @info "Optimal coverage threshold: $optimal_threshold " *
           "($(component_counts[optimal_index]) components, " *
           "connectivity $(round(average_connectivity[optimal_index], digits=2)))"
-    
+
     return ConnectivityAnalysisResult(
         optimal_threshold,
         connectivity_scores,
@@ -365,37 +366,37 @@ function _fit_michaelis_menten(x::Vector{Int}, y::Vector{Int})
     ## Convert to Float64 for numerical stability
     x_float = Float64.(x)
     y_float = Float64.(y)
-    
+
     ## Initial parameter estimates
     vmax_init = maximum(y_float) * 1.2  ## Slightly above maximum observed
     km_init = x_float[findmin(abs.(y_float .- vmax_init/2))[2]]  ## x at half-max
-    
+
     ## Simple gradient descent fitting (could be replaced with LsqFit.jl for better performance)
     best_vmax, best_km = vmax_init, km_init
     best_sse = Inf
-    
+
     ## Grid search around initial estimates
-    for vmax in range(vmax_init * 0.8, vmax_init * 1.5, length=10)
-        for km in range(km_init * 0.5, km_init * 2.0, length=10)
+    for vmax in range(vmax_init * 0.8, vmax_init * 1.5, length = 10)
+        for km in range(km_init * 0.5, km_init * 2.0, length = 10)
             ## Calculate predicted values
             y_pred = [(vmax * xi) / (km + xi) for xi in x_float]
-            
+
             ## Sum of squared errors
-            sse = sum((y_float .- y_pred).^2)
-            
+            sse = sum((y_float .- y_pred) .^ 2)
+
             if sse < best_sse
                 best_sse = sse
                 best_vmax, best_km = vmax, km
             end
         end
     end
-    
+
     ## Calculate R-squared
     y_pred = [(best_vmax * xi) / (best_km + xi) for xi in x_float]
-    ss_res = sum((y_float .- y_pred).^2)
-    ss_tot = sum((y_float .- Statistics.mean(y_float)).^2)
+    ss_res = sum((y_float .- y_pred) .^ 2)
+    ss_tot = sum((y_float .- Statistics.mean(y_float)) .^ 2)
     r_squared = 1.0 - (ss_res / (ss_tot + 1e-10))
-    
+
     return [best_vmax, best_km], r_squared
 end
 
@@ -454,7 +455,7 @@ function _count_connected_components(adjacency::Vector{Vector{Int}})
     n = length(adjacency)
     visited = falses(n)
     components = 0
-    
+
     for i in 1:n
         if !visited[i]
             components += 1
@@ -469,7 +470,7 @@ function _count_connected_components(adjacency::Vector{Vector{Int}})
             end
         end
     end
-    
+
     return components
 end
 
@@ -478,7 +479,7 @@ function _calculate_average_connectivity(adjacency::Vector{Vector{Int}})
     if isempty(adjacency)
         return 0.0
     end
-    
+
     total_degree = sum(length(neighbors) for neighbors in adjacency)
     return total_degree / length(adjacency)
 end

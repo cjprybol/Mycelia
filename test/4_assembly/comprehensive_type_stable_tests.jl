@@ -43,10 +43,10 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
             if !isempty(path_vertices)
                 # Create WalkStep objects from the path labels
-                walk_steps = [
-                    Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
-                    for (i, vertex_label) in enumerate(path_vertices)
-                ]
+                walk_steps = [Mycelia.Rhizomorph.WalkStep(
+                                  vertex_label, Mycelia.Rhizomorph.Forward,
+                                  1.0, Float64(i))
+                              for (i, vertex_label) in enumerate(path_vertices)]
 
                 # Create GraphPath from WalkStep objects
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
@@ -95,28 +95,30 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         Test.@testset "DNA K-mer SingleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
             dna_kmer_type = Kmers.DNAKmer{5}
-            dna_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_reads, 5; dataset_id="test", mode=:singlestrand)
+            dna_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                dna_reads, 5; dataset_id = "test", mode = :singlestrand)
             test_round_trip_reconstruction(dna_graph, dna_kmer_type)
         end
 
         Test.@testset "DNA K-mer DoubleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
             dna_kmer_type = Kmers.DNAKmer{5}
-            dna_graph = Mycelia.Rhizomorph.build_kmer_graph(dna_reads, 5; dataset_id="test", mode=:doublestrand)
+            dna_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                dna_reads, 5; dataset_id = "test", mode = :doublestrand)
             test_round_trip_reconstruction(dna_graph, dna_kmer_type)
         end
 
         # DNA BioSequence graphs (SingleStrand + DoubleStrand)
         Test.@testset "DNA BioSequence SingleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
-            dna_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_reads; dataset_id="test", min_overlap=3)
+            dna_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_reads; dataset_id = "test", min_overlap = 3)
             # Use a dummy type for BioSequence graphs since they don't use k-mers
             test_round_trip_reconstruction(dna_graph, BioSequences.LongDNA{4})
         end
 
         Test.@testset "DNA BioSequence DoubleStrand" begin
             dna_reads = [FASTX.FASTA.Record("dna_seq", dna_seq)]
-            dna_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_reads; dataset_id="test", min_overlap=3)
+            dna_graph = Mycelia.Rhizomorph.build_fasta_graph(dna_reads; dataset_id = "test", min_overlap = 3)
             test_round_trip_reconstruction(dna_graph, BioSequences.LongDNA{4})
         end
 
@@ -133,7 +135,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                dna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(quality_reads, 5; dataset_id="test", mode=:singlestrand)
+                dna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    quality_reads, 5; dataset_id = "test", mode = :singlestrand)
                 test_round_trip_reconstruction(dna_qual_graph, Kmers.DNAKmer{5})
             end
         end
@@ -149,7 +152,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                dna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(quality_reads, 5; dataset_id="test", mode=:doublestrand)
+                dna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    quality_reads, 5; dataset_id = "test", mode = :doublestrand)
                 test_round_trip_reconstruction(dna_qual_graph, Kmers.DNAKmer{5})
             end
         end
@@ -165,7 +169,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                dna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(quality_reads; dataset_id="test", min_overlap=3)
+                dna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(
+                    quality_reads; dataset_id = "test", min_overlap = 3)
                 test_round_trip_reconstruction(dna_qual_bio_graph, BioSequences.LongDNA{4})
             end
         end
@@ -181,7 +186,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                dna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(quality_reads; dataset_id="test", min_overlap=3)
+                dna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(
+                    quality_reads; dataset_id = "test", min_overlap = 3)
                 test_round_trip_reconstruction(dna_qual_bio_graph, BioSequences.LongDNA{4})
             end
         end
@@ -192,27 +198,29 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         Test.@testset "RNA K-mer SingleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
             rna_kmer_type = Kmers.RNAKmer{5}
-            rna_graph = Mycelia.Rhizomorph.build_kmer_graph(rna_reads, 5; dataset_id="test", mode=:singlestrand)
+            rna_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                rna_reads, 5; dataset_id = "test", mode = :singlestrand)
             test_round_trip_reconstruction(rna_graph, rna_kmer_type)
         end
 
         Test.@testset "RNA K-mer DoubleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
             rna_kmer_type = Kmers.RNAKmer{5}
-            rna_graph = Mycelia.Rhizomorph.build_kmer_graph(rna_reads, 5; dataset_id="test", mode=:doublestrand)
+            rna_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                rna_reads, 5; dataset_id = "test", mode = :doublestrand)
             test_round_trip_reconstruction(rna_graph, rna_kmer_type)
         end
 
         # RNA BioSequence graphs (SingleStrand + DoubleStrand)
         Test.@testset "RNA BioSequence SingleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            rna_graph = Mycelia.Rhizomorph.build_fasta_graph(rna_reads; dataset_id="test", min_overlap=3)
+            rna_graph = Mycelia.Rhizomorph.build_fasta_graph(rna_reads; dataset_id = "test", min_overlap = 3)
             test_round_trip_reconstruction(rna_graph, BioSequences.LongRNA{4})
         end
 
         Test.@testset "RNA BioSequence DoubleStrand" begin
             rna_reads = [FASTX.FASTA.Record("rna_seq", rna_seq)]
-            rna_graph = Mycelia.Rhizomorph.build_fasta_graph(rna_reads; dataset_id="test", min_overlap=3)
+            rna_graph = Mycelia.Rhizomorph.build_fasta_graph(rna_reads; dataset_id = "test", min_overlap = 3)
             test_round_trip_reconstruction(rna_graph, BioSequences.LongRNA{4})
         end
 
@@ -228,7 +236,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                rna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(quality_reads, 5; dataset_id="test", mode=:singlestrand)
+                rna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    quality_reads, 5; dataset_id = "test", mode = :singlestrand)
                 test_round_trip_reconstruction(rna_qual_graph, Kmers.RNAKmer{5})
             end
         end
@@ -244,7 +253,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                rna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(quality_reads, 5; dataset_id="test", mode=:doublestrand)
+                rna_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    quality_reads, 5; dataset_id = "test", mode = :doublestrand)
                 test_round_trip_reconstruction(rna_qual_graph, Kmers.RNAKmer{5})
             end
         end
@@ -260,7 +270,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                rna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(quality_reads; dataset_id="test", min_overlap=3)
+                rna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(
+                    quality_reads; dataset_id = "test", min_overlap = 3)
                 test_round_trip_reconstruction(rna_qual_bio_graph, BioSequences.LongRNA{4})
             end
         end
@@ -276,7 +287,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                rna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(quality_reads; dataset_id="test", min_overlap=3)
+                rna_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(
+                    quality_reads; dataset_id = "test", min_overlap = 3)
                 test_round_trip_reconstruction(rna_qual_bio_graph, BioSequences.LongRNA{4})
             end
         end
@@ -287,14 +299,15 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         Test.@testset "AA K-mer SingleStrand" begin
             aa_reads = [FASTX.FASTA.Record("aa_seq", aa_seq)]
             aa_kmer_type = Kmers.AAKmer{5}
-            aa_graph = Mycelia.Rhizomorph.build_kmer_graph(aa_reads, 5; dataset_id="test", mode=:singlestrand)
+            aa_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                aa_reads, 5; dataset_id = "test", mode = :singlestrand)
             test_round_trip_reconstruction(aa_graph, aa_kmer_type)
         end
 
         # Amino Acid BioSequence graphs (SingleStrand only)
         Test.@testset "AA BioSequence SingleStrand" begin
             aa_reads = [FASTX.FASTA.Record("aa_seq", aa_seq)]
-            aa_graph = Mycelia.Rhizomorph.build_fasta_graph(aa_reads; dataset_id="test", min_overlap=3)
+            aa_graph = Mycelia.Rhizomorph.build_fasta_graph(aa_reads; dataset_id = "test", min_overlap = 3)
             test_round_trip_reconstruction(aa_graph, BioSequences.LongAA)
         end
 
@@ -310,7 +323,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                aa_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(quality_reads, 5; dataset_id="test", mode=:singlestrand)
+                aa_qual_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    quality_reads, 5; dataset_id = "test", mode = :singlestrand)
                 test_round_trip_reconstruction(aa_qual_graph, Kmers.AAKmer{5})
             end
         end
@@ -326,7 +340,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
             end
 
             if !isempty(quality_reads)
-                aa_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(quality_reads; dataset_id="test", min_overlap=3)
+                aa_qual_bio_graph = Mycelia.Rhizomorph.build_fastq_graph(
+                    quality_reads; dataset_id = "test", min_overlap = 3)
                 test_round_trip_reconstruction(aa_qual_bio_graph, BioSequences.LongAA)
             end
         end
@@ -336,14 +351,17 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
         # String N-gram graphs (SingleStrand only)
         Test.@testset "String N-gram SingleStrand" begin
             string_reads = [FASTX.FASTA.Record("string_seq", "ABCDEFGHIJKLMNOP")]
-            string_graph = Mycelia.Rhizomorph.build_ngram_graph([FASTX.sequence(String, first(string_reads))], 5; dataset_id="test")
+            string_graph = Mycelia.Rhizomorph.build_ngram_graph(
+                [FASTX.sequence(String, first(string_reads))], 5; dataset_id = "test")
             test_round_trip_reconstruction(string_graph, String)
         end
 
         # String BioSequence-like graphs (SingleStrand only) - treating strings as sequences
         Test.@testset "String BioSequence SingleStrand" begin
             string_reads = [FASTX.FASTA.Record("string_seq", "ABCDEFGHIJKLMNOP")]
-            string_seq_graph = Mycelia.Rhizomorph.build_string_graph([FASTX.sequence(String, first(string_reads))]; dataset_id="test", min_overlap=5)
+            string_seq_graph = Mycelia.Rhizomorph.build_string_graph(
+                [FASTX.sequence(String, first(string_reads))];
+                dataset_id = "test", min_overlap = 5)
             test_round_trip_reconstruction(string_seq_graph, String)
         end
 
@@ -360,7 +378,7 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
             if !isempty(quality_reads)
                 strings = [FASTX.sequence(String, record) for record in quality_reads]
-                string_graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 5; dataset_id="test")
+                string_graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 5; dataset_id = "test")
                 test_round_trip_reconstruction(string_graph, String)
             end
         end
@@ -377,7 +395,8 @@ Test.@testset "Comprehensive Type-Stable Reconstruction Tests" begin
 
             if !isempty(quality_reads)
                 strings = [FASTX.sequence(String, record) for record in quality_reads]
-                string_graph = Mycelia.Rhizomorph.build_string_graph(strings; dataset_id="test", min_overlap=5)
+                string_graph = Mycelia.Rhizomorph.build_string_graph(
+                    strings; dataset_id = "test", min_overlap = 5)
                 test_round_trip_reconstruction(string_graph, String)
             end
         end

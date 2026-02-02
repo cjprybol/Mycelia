@@ -30,7 +30,7 @@ Test.@testset "String N-gram SingleStrand Graph from FASTQ" begin
     fastq_record = FASTX.FASTQ.Record("test", test_string, qual_str)
     reads = [fastq_record]
 
-    graph = Mycelia.Rhizomorph.build_ngram_graph([String(FASTX.sequence(reads[1]))], 3; dataset_id="test")
+    graph = Mycelia.Rhizomorph.build_ngram_graph([String(FASTX.sequence(reads[1]))], 3; dataset_id = "test")
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) == 4  # ABC, BCD, CDE, DEF
@@ -45,7 +45,8 @@ Test.@testset "String N-gram SingleStrand Graph from FASTQ" begin
             for entries in values(evidence_map)
                 for entry in entries
                     Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                 end
             end
         end
@@ -61,7 +62,8 @@ Test.@testset "String N-gram SingleStrand Graph from FASTQ" begin
                 vertex_type = typeof(first(path_vector))
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)

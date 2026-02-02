@@ -29,7 +29,6 @@ import Test
 import Mycelia
 
 Test.@testset "KmerEdgeData - Correct Structure" begin
-
     Test.@testset "Basic Construction" begin
         # Edge data should use nested dict evidence structure
 
@@ -40,7 +39,7 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
 
         # Evidence should be nested dict structure
         Test.@test typeof(edge_data.evidence) ==
-            Dict{String, Dict{String, Set{Mycelia.Rhizomorph.EdgeEvidenceEntry}}}
+                   Dict{String, Dict{String, Set{Mycelia.Rhizomorph.EdgeEvidenceEntry}}}
 
         # Should start empty
         Test.@test isempty(edge_data.evidence)
@@ -54,7 +53,7 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
 
         # Add evidence for edge transition
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
 
         # Verify structure
         Test.@test haskey(edge_data.evidence, dataset_id)
@@ -76,11 +75,11 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
 
         # Same edge seen multiple times in different reads
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, "read_002",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, "read_003",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(15, 16, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(15, 16, Mycelia.Rhizomorph.Reverse))
 
         # Should have 3 observations
         Test.@test length(edge_data.evidence[dataset_id]) == 3
@@ -94,9 +93,9 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
         observation_id = "read_001"
 
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, observation_id,
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(120, 121, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(120, 121, Mycelia.Rhizomorph.Forward))
 
         # Should have 2 evidence entries from same read
         Test.@test length(edge_data.evidence[dataset_id][observation_id]) == 2
@@ -107,11 +106,11 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
 
         # Edge seen in multiple datasets
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_02", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(8, 9, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(8, 9, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_03", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(3, 4, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(3, 4, Mycelia.Rhizomorph.Forward))
 
         # Should have 3 datasets
         Test.@test length(keys(edge_data.evidence)) == 3
@@ -124,7 +123,7 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
         for i in 1:100
             dataset_id = "dataset_$(lpad(i, 3, '0'))"
             Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, "read_001",
-                                 Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
+                Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
         end
 
         # O(1) access to specific dataset
@@ -144,7 +143,7 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
         for i in 1:100
             obs_id = "read_$(lpad(i, 3, '0'))"
             Mycelia.Rhizomorph.add_evidence!(edge_data, dataset_id, obs_id,
-                                 Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
+                Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
         end
 
         # O(1) access to specific observation
@@ -157,7 +156,6 @@ Test.@testset "KmerEdgeData - Correct Structure" begin
 end
 
 Test.@testset "KmerEdgeData - NO Premature Computation" begin
-
     Test.@testset "No Stored Weight" begin
         # OLD WRONG: Edge stored computed weight
         # NEW CORRECT: Compute weight on-demand from evidence
@@ -166,7 +164,7 @@ Test.@testset "KmerEdgeData - NO Premature Computation" begin
 
         # Add evidence
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
 
         # Should NOT have pre-computed weight field
         # (Or if it exists, should be computed lazily)
@@ -182,9 +180,9 @@ Test.@testset "KmerEdgeData - NO Premature Computation" begin
 
         # Same edge can be traversed in different strand orientations
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Reverse))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Reverse))
 
         # Edge data should NOT have single src_strand/dst_strand fields
         # (Different observations may have different strand orientations)
@@ -195,7 +193,7 @@ Test.@testset "KmerEdgeData - NO Premature Computation" begin
 
         # Verify both strand orientations are in evidence
         all_entries = vcat([collect(obs_evidence)
-                           for obs_evidence in values(edge_data.evidence["dataset_01"])]...)
+                            for obs_evidence in values(edge_data.evidence["dataset_01"])]...)
         strands = [entry.strand for entry in all_entries]
         Test.@test Mycelia.Rhizomorph.Forward in strands
         Test.@test Mycelia.Rhizomorph.Reverse in strands
@@ -203,7 +201,6 @@ Test.@testset "KmerEdgeData - NO Premature Computation" begin
 end
 
 Test.@testset "KmerEdgeData - Critical Anti-Patterns" begin
-
     Test.@testset "NEVER Use Nested Tuples" begin
         # OLD WRONG: Vector{Tuple{Tuple{Int,Int,Strand}, Tuple{Int,Int,Strand}}}
         # NEW CORRECT: Dict{String, Dict{String, Set{EdgeEvidenceEntry}}}
@@ -211,7 +208,7 @@ Test.@testset "KmerEdgeData - Critical Anti-Patterns" begin
         edge_data = Mycelia.Rhizomorph.KmerEdgeData()
 
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
 
         # Get an evidence entry
         evidence_set = edge_data.evidence["dataset_01"]["read_001"]
@@ -258,14 +255,14 @@ Test.@testset "KmerEdgeData - Critical Anti-Patterns" begin
 end
 
 Test.@testset "KmerEdgeData - Weight Calculation" begin
-
     Test.@testset "Compute Weight from Evidence On-Demand" begin
         edge_data = Mycelia.Rhizomorph.KmerEdgeData()
 
         # Add evidence
         for i in 1:10
-            Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_$(lpad(i, 3, '0'))",
-                                 Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.add_evidence!(
+                edge_data, "dataset_01", "read_$(lpad(i, 3, '0'))",
+                Mycelia.Rhizomorph.EdgeEvidenceEntry(i, i+1, Mycelia.Rhizomorph.Forward))
         end
 
         # Compute weight from evidence count
@@ -274,7 +271,7 @@ Test.@testset "KmerEdgeData - Weight Calculation" begin
         # Weight should be based on number of observations
         # (e.g., count of observations, or sum of evidence entries)
         total_observations = sum(length(obs_evidence)
-                               for obs_evidence in values(edge_data.evidence["dataset_01"]))
+        for obs_evidence in values(edge_data.evidence["dataset_01"]))
         Test.@test weight > 0
         Test.@test weight isa Float64
     end
@@ -284,11 +281,11 @@ Test.@testset "KmerEdgeData - Weight Calculation" begin
 
         # Add varying amounts of evidence per observation
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(5, 6, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_001",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(50, 51, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(50, 51, Mycelia.Rhizomorph.Forward))
         Mycelia.Rhizomorph.add_evidence!(edge_data, "dataset_01", "read_002",
-                             Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
+            Mycelia.Rhizomorph.EdgeEvidenceEntry(10, 11, Mycelia.Rhizomorph.Forward))
 
         # Coverage should be computable from evidence
         coverage = Mycelia.Rhizomorph.compute_edge_coverage(edge_data)

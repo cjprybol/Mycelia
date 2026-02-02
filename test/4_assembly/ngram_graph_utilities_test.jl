@@ -1,7 +1,6 @@
 import Test
 import Mycelia
 
-
 Test.@testset "N-gram Graph Utilities" begin
     Test.@testset "Build from file and stats" begin
         mktempdir() do dir
@@ -36,7 +35,8 @@ Test.@testset "N-gram Graph Utilities" begin
             dataset_id1 = Mycelia.Rhizomorph.get_dataset_id_from_file(path1)
             dataset_id2 = Mycelia.Rhizomorph.get_dataset_id_from_file(path2)
 
-            shared = Mycelia.Rhizomorph.find_shared_ngrams(graph, [dataset_id1, dataset_id2])
+            shared = Mycelia.Rhizomorph.find_shared_ngrams(graph, [
+                dataset_id1, dataset_id2])
             Test.@test "BC" in shared
 
             unique_doc1 = Mycelia.Rhizomorph.find_unique_ngrams(graph, dataset_id1)

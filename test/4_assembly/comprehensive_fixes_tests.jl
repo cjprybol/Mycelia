@@ -25,13 +25,12 @@ import MetaGraphsNext
 
 # Test comprehensive fixes for canonicalization consistency and FASTQ compatibility
 Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
-
     Test.@testset "DoubleStrand DNA Mode Fix" begin
         reference_seq = BioSequences.dna"ATCGATCGATCG"
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
         kmer_type = Kmers.DNAKmer{5}
-        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id = "test", mode = :doublestrand)
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -52,7 +51,7 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
 
         kmer_type = Kmers.RNAKmer{5}
-        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id = "test", mode = :singlestrand)
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -74,7 +73,7 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         reference_seq = BioSequences.aa"ACDLMVFGHY"
 
         # Test that observe doesn't produce invalid characters
-        observed_seq, quality_scores = Mycelia.observe(reference_seq, error_rate=0.1)
+        observed_seq, quality_scores = Mycelia.observe(reference_seq, error_rate = 0.1)
         observed_seq_str = string(observed_seq)
 
         # No termination characters
@@ -88,7 +87,7 @@ Test.@testset "Canonicalization and FASTQ Compatibility Regression Tests" begin
         # Can build k-mer graph with amino acids
         kmer_type = Kmers.AAKmer{3}
         reads = [FASTX.FASTA.Record("read1", reference_seq)]
-        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id = "test", mode = :singlestrand)
         Test.@test !isempty(MetaGraphsNext.labels(graph))
     end
 end

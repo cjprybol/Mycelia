@@ -33,12 +33,13 @@ Test.@testset "PanTools Wrapper Tests" begin
 
     Test.@testset "Java opts" begin
         Test.@test Mycelia.pantools_java_opts() == String[]
-        Test.@test Mycelia.pantools_java_opts(xmx="5g") == ["-Xmx5g"]
-        Test.@test Mycelia.pantools_java_opts(xms="2g", xmx="5g") == ["-Xms2g", "-Xmx5g"]
+        Test.@test Mycelia.pantools_java_opts(xmx = "5g") == ["-Xmx5g"]
+        Test.@test Mycelia.pantools_java_opts(xms = "2g", xmx = "5g") ==
+                   ["-Xms2g", "-Xmx5g"]
     end
 
     Test.@testset "Command construction" begin
-        cmd_ls = Mycelia.pantools_cmd(["--help"]; env="pantools", live_stream=true)
+        cmd_ls = Mycelia.pantools_cmd(["--help"]; env = "pantools", live_stream = true)
         Test.@test cmd_ls isa Cmd
         Test.@test string(cmd_ls.exec[1]) == Mycelia.CONDA_RUNNER
         Test.@test "run" in cmd_ls.exec
@@ -46,7 +47,7 @@ Test.@testset "PanTools Wrapper Tests" begin
         Test.@test "-n" in cmd_ls.exec
         Test.@test "pantools" in cmd_ls.exec
 
-        cmd_no_ls = Mycelia.pantools_cmd(["--help"]; env="pantools", live_stream=false)
+        cmd_no_ls = Mycelia.pantools_cmd(["--help"]; env = "pantools", live_stream = false)
         Test.@test cmd_no_ls isa Cmd
         Test.@test !("--live-stream" in cmd_no_ls.exec)
     end
@@ -92,17 +93,19 @@ Test.@testset "PanTools Wrapper Tests" begin
             Test.@test isfile(genome_numbers_file)
             Test.@test readlines(genome_numbers_file) == ["1", "3", "2"]
 
-            regions_file = Mycelia.write_pantools_regions_file([(1, "contig1", 1, 10), (2, "contig2", 5, 20, '+')])
+            regions_file = Mycelia.write_pantools_regions_file([
+                (1, "contig1", 1, 10), (2, "contig2", 5, 20, '+')])
             push!(created, regions_file)
             Test.@test isfile(regions_file)
             Test.@test readlines(regions_file) == ["1 contig1 1 10", "2 contig2 5 20 +"]
 
-            Test.@test_throws AssertionError Mycelia.write_pantools_regions_file([(1, "c", 1)])
+            Test.@test_throws AssertionError Mycelia.write_pantools_regions_file([(
+                1, "c", 1)])
         finally
             for file in created
                 isfile(file) && rm(file)
             end
-            rm(workdir; recursive=true, force=true)
+            rm(workdir; recursive = true, force = true)
         end
     end
 

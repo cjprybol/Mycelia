@@ -30,8 +30,8 @@ Test.@testset "Qualmer RC evidence handling" begin
     rc_seq = String(BioSequences.reverse_complement(BioSequences.LongDNA{4}("ATGCA")))
     rc_record = FASTX.FASTQ.Record("rev", rc_seq, "IIIII")
 
-    ss = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([f_record], 3; dataset_id="fwd_ds")
-    Mycelia.Rhizomorph.add_observations_to_graph!(ss, [rc_record], 3; dataset_id="rev_ds")
+    ss = Mycelia.Rhizomorph.build_qualmer_graph_singlestrand([f_record], 3; dataset_id = "fwd_ds")
+    Mycelia.Rhizomorph.add_observations_to_graph!(ss, [rc_record], 3; dataset_id = "rev_ds")
 
     ds = Mycelia.Rhizomorph.convert_to_doublestrand(ss)
     canon = Mycelia.Rhizomorph.convert_to_canonical(ss)

@@ -43,7 +43,7 @@ Test.@testset "Reference Database Parsing" begin
                 "total_gene_count",
                 "protein_coding_gene_count",
                 "non_coding_gene_count",
-                "gc_percent",
+                "gc_percent"
             ]
 
             row = [
@@ -84,7 +84,7 @@ Test.@testset "Reference Database Parsing" begin
                 "4500",
                 "4300",
                 "200",
-                "50.0",
+                "50.0"
             ]
 
             open(path, "w") do io
@@ -103,7 +103,7 @@ Test.@testset "Reference Database Parsing" begin
 
     Test.@testset "NCBI FTP path helper" begin
         ftp_path = "ftp://example/GCF_000001"
-        url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp_path, extension="genomic.fna.gz")
+        url = Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "genomic.fna.gz")
         Test.@test url == "ftp://example/GCF_000001/GCF_000001_genomic.fna.gz"
     end
 end

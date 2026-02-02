@@ -3,8 +3,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Ensure the Foldseek environment is installed via Bioconda.
 """
-function install_foldseek(; force=false)
-    Mycelia.add_bioconda_env("foldseek"; force=force)
+function install_foldseek(; force = false)
+    Mycelia.add_bioconda_env("foldseek"; force = force)
 end
 
 """
@@ -31,17 +31,17 @@ Run `foldseek easy-search` to compare protein structures.
 - `gpu::Bool=false`: Enable GPU acceleration (requires CUDA-enabled system).
 """
 function foldseek_easy_search(
-    query_file::String,
-    target_database::String,
-    output_file::String;
-    tmp_dir::String=mktempdir(),
-    sensitivity::Float64=9.5,
-    alignment_type::Int=2,
-    format_output::String="query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits",
-    format_mode::Int=0,
-    threads::Int=1,
-    exhaustive_search::Bool=false,
-    gpu::Bool=false,
+        query_file::String,
+        target_database::String,
+        output_file::String;
+        tmp_dir::String = mktempdir(),
+        sensitivity::Float64 = 9.5,
+        alignment_type::Int = 2,
+        format_output::String = "query,target,fident,alnlen,mismatch,gapopen,qstart,qend,tstart,tend,evalue,bits",
+        format_mode::Int = 0,
+        threads::Int = 1,
+        exhaustive_search::Bool = false,
+        gpu::Bool = false
 )
     install_foldseek()
 
@@ -50,7 +50,7 @@ function foldseek_easy_search(
         "--alignment-type", string(alignment_type),
         "--format-output", format_output,
         "--format-mode", string(format_mode),
-        "--threads", string(threads),
+        "--threads", string(threads)
     ]
 
     if exhaustive_search
@@ -65,7 +65,7 @@ function foldseek_easy_search(
     run(cmd)
 
     if startswith(tmp_dir, tempdir()) && isdir(tmp_dir)
-        rm(tmp_dir; recursive=true, force=true)
+        rm(tmp_dir; recursive = true, force = true)
     end
 
     return output_file
@@ -93,15 +93,15 @@ Run `foldseek easy-cluster` to cluster protein structures.
 - `threads::Int=1`: Number of CPU threads.
 """
 function foldseek_easy_cluster(
-    input_file::String,
-    output_prefix::String;
-    tmp_dir::String=mktempdir(),
-    min_seq_id::Float64=0.0,
-    coverage::Float64=0.8,
-    cov_mode::Int=0,
-    alignment_type::Int=2,
-    sensitivity::Float64=9.5,
-    threads::Int=1,
+        input_file::String,
+        output_prefix::String;
+        tmp_dir::String = mktempdir(),
+        min_seq_id::Float64 = 0.0,
+        coverage::Float64 = 0.8,
+        cov_mode::Int = 0,
+        alignment_type::Int = 2,
+        sensitivity::Float64 = 9.5,
+        threads::Int = 1
 )
     install_foldseek()
 
@@ -111,14 +111,14 @@ function foldseek_easy_cluster(
         "--cov-mode", string(cov_mode),
         "--alignment-type", string(alignment_type),
         "-s", string(sensitivity),
-        "--threads", string(threads),
+        "--threads", string(threads)
     ]
 
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n foldseek foldseek easy-cluster $input_file $output_prefix $tmp_dir $cmd_flags`
     run(cmd)
 
     if startswith(tmp_dir, tempdir()) && isdir(tmp_dir)
-        rm(tmp_dir; recursive=true, force=true)
+        rm(tmp_dir; recursive = true, force = true)
     end
 
     return "$(output_prefix)_cluster.tsv"
@@ -130,9 +130,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Convert PDB/mmCIF files into a Foldseek database.
 """
 function foldseek_createdb(
-    input_files::String,
-    output_db_path::String;
-    threads::Int=1,
+        input_files::String,
+        output_db_path::String;
+        threads::Int = 1
 )
     install_foldseek()
 
@@ -154,10 +154,10 @@ Download pre-assembled Foldseek databases (e.g., "PDB", "Alphafold-SwissProt").
 - "GMGCL"
 """
 function foldseek_databases(
-    database_name::String,
-    destination_dir::String;
-    tmp_dir::String=mktempdir(),
-    threads::Int=1,
+        database_name::String,
+        destination_dir::String;
+        tmp_dir::String = mktempdir(),
+        threads::Int = 1
 )
     install_foldseek()
 
@@ -169,7 +169,7 @@ function foldseek_databases(
     run(cmd)
 
     if startswith(tmp_dir, tempdir()) && isdir(tmp_dir)
-        rm(tmp_dir; recursive=true, force=true)
+        rm(tmp_dir; recursive = true, force = true)
     end
 
     return destination_dir

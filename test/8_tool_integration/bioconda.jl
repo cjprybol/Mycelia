@@ -22,12 +22,12 @@ import Mycelia
 Test.@testset "Bioconda Environment Management Tests" begin
     # Note: These tests are designed to be safe and not actually modify the conda environment
     # They test the logic without triggering expensive conda operations
-    
+
     Test.@testset "check_bioconda_env_is_installed function" begin
         # Test with a non-existent package name
         # This should return false without creating anything
         fake_pkg = "nonexistent_package_$(rand(1000:9999))"
-        
+
         # This test will work as long as conda/mamba is available
         if haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
             result = Mycelia.check_bioconda_env_is_installed(fake_pkg)
@@ -41,11 +41,11 @@ Test.@testset "Bioconda Environment Management Tests" begin
     Test.@testset "Package name parsing" begin
         # Test package name parsing logic for add_bioconda_env
         # We'll create a mock version that doesn't actually run conda commands
-        
+
         # Test simple package name
         simple_pkg = "blast"
         Test.@test !occursin("::", simple_pkg)
-        
+
         # Test channel::package format
         channel_pkg = "bioconda::blast"
         Test.@test occursin("::", channel_pkg)
@@ -53,10 +53,10 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test length(parts) == 2
         Test.@test parts[1] == "bioconda"
         Test.@test parts[2] == "blast"
-        
+
         # Test multiple :: (should only split on first)
         complex_pkg = "bioconda::test::package"
-        parts = split(complex_pkg, "::", limit=2)
+        parts = split(complex_pkg, "::", limit = 2)
         Test.@test length(parts) == 2
         Test.@test parts[1] == "bioconda"
         Test.@test parts[2] == "test::package"
@@ -67,7 +67,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test isdefined(Mycelia, :CONDA_RUNNER)
         Test.@test Mycelia.CONDA_RUNNER isa String
         Test.@test !isempty(Mycelia.CONDA_RUNNER)
-        
+
         # Test that it's either conda or mamba
         runner_name = basename(Mycelia.CONDA_RUNNER)
         Test.@test runner_name in ["conda", "mamba"]
@@ -84,13 +84,13 @@ Test.@testset "Bioconda Environment Management Tests" begin
             "another_env              /opt/conda/envs/another_env",
             ""
         ]
-        
+
         # Apply the filtering logic from check_bioconda_env_is_installed
         filtered_lines = filter(x -> !occursin(r"^#", x), mock_output)
         split_lines = split.(filtered_lines)
         two_part_lines = filter(x -> length(x) == 2, split_lines)
         env_names = Set(first.(two_part_lines))
-        
+
         Test.@test "test_env" in env_names
         Test.@test "another_env" in env_names
         Test.@test "base" in env_names
@@ -100,17 +100,17 @@ Test.@testset "Bioconda Environment Management Tests" begin
     Test.@testset "Error handling and edge cases" begin
         # Test with empty string
         Test.@test !occursin("::", "")
-        
+
         # Test with just "::"
         just_separator = "::"
         Test.@test occursin("::", just_separator)
         parts = split(just_separator, "::")
         Test.@test length(parts) == 2  # ["", ""]
-        
+
         # Test with special characters in package names
         special_pkg = "my-package_123"
         Test.@test !occursin("::", special_pkg)
-        
+
         # Test with channel that has special characters
         special_channel_pkg = "my-channel::my-package_123"
         Test.@test occursin("::", special_channel_pkg)
@@ -122,10 +122,10 @@ Test.@testset "Bioconda Environment Management Tests" begin
     Test.@testset "Function parameter validation" begin
         # Test that functions can handle various string types
         test_pkg = "test_package"
-        
+
         # Test with String
         Test.@test test_pkg isa String
-        
+
         # Test with SubString (simulating parsed input)
         sub_pkg = SubString(test_pkg, 1, 4)  # "test"
         Test.@test sub_pkg isa AbstractString
@@ -135,7 +135,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
     Test.@testset "Integration with Conda.jl" begin
         # Test that Conda is available for use
         Test.@test isdefined(Mycelia, :Conda)
-        
+
         # Test CONDA_RUNNER path construction
         if haskey(ENV, "CONDA_PREFIX")
             # If in conda environment, CONDA_RUNNER should be accessible
@@ -152,7 +152,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
             ("conda-forge::python", "conda-forge", "python"),
             ("my-channel::my-package", "my-channel", "my-package")
         ]
-        
+
         for (input_pkg, expected_channel, expected_pkg) in test_cases
             if occursin("::", input_pkg)
                 channel, pkg = split(input_pkg, "::")
@@ -171,7 +171,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
         # Test that we can construct valid conda commands
         pkg = "test_package"
         channel = "test_channel"
-        
+
         # Basic command without channel
         basic_cmd = `$(Mycelia.CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`
         Test.@test basic_cmd isa Cmd
@@ -179,7 +179,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test "create" in basic_cmd.exec
         Test.@test "-n" in basic_cmd.exec
         Test.@test pkg in basic_cmd.exec
-        
+
         # Command with channel
         channel_cmd = `$(Mycelia.CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`
         Test.@test channel_cmd isa Cmd

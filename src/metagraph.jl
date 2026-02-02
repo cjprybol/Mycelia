@@ -5,7 +5,7 @@ Reference: https://github.com/ratschlab/metagraph
 
 const METAGRAPH_CONDA_ENV = "metagraph"
 
-function _metagraph_require_path(path::AbstractString; label::AbstractString="path")
+function _metagraph_require_path(path::AbstractString; label::AbstractString = "path")
     path_str = String(path)
     if !ispath(path_str)
         throw(ArgumentError("$(label) not found: $(path_str)"))
@@ -13,12 +13,13 @@ function _metagraph_require_path(path::AbstractString; label::AbstractString="pa
     return path_str
 end
 
-function _metagraph_input_args(inputs::AbstractVector{<:AbstractString}; label::AbstractString="input")
+function _metagraph_input_args(inputs::AbstractVector{<:AbstractString}; label::AbstractString = "input")
     isempty(inputs) && throw(ArgumentError("$(label) list cannot be empty"))
-    return [_metagraph_require_path(input_path; label=label) for input_path in inputs]
+    return [_metagraph_require_path(input_path; label = label) for input_path in inputs]
 end
 
-function _metagraph_output_base(outfile_base::AbstractString, out_dir::Union{Nothing,AbstractString})
+function _metagraph_output_base(outfile_base::AbstractString, out_dir::Union{
+        Nothing, AbstractString})
     base = String(outfile_base)
     if isnothing(out_dir)
         output_dir = dirname(base)
@@ -38,9 +39,9 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Get the MetaGraph command, optionally specifying the executable name (e.g., "metagraph", "metagraph_Protein", "metagraph_DNA5").
 """
 function metagraph_cmd(args::Vector{String};
-                       env::AbstractString=METAGRAPH_CONDA_ENV,
-                       executable::AbstractString="metagraph",
-                       live_stream::Bool=true)
+        env::AbstractString = METAGRAPH_CONDA_ENV,
+        executable::AbstractString = "metagraph",
+        live_stream::Bool = true)
     if live_stream
         return `$(CONDA_RUNNER) run --live-stream -n $(env) $(executable) $(args)`
     end
@@ -54,8 +55,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Install MetaGraph via Bioconda.
 """
-function install_metagraph(; force::Bool=false, quiet::Bool=false)
-    add_bioconda_env(METAGRAPH_CONDA_ENV; force=force, quiet=quiet)
+function install_metagraph(; force::Bool = false, quiet::Bool = false)
+    add_bioconda_env(METAGRAPH_CONDA_ENV; force = force, quiet = quiet)
 end
 
 """
@@ -72,14 +73,14 @@ Run a generic MetaGraph command.
 - `workdir`: Working directory for execution
 """
 function run_metagraph(args::Vector{String};
-                       env::AbstractString=METAGRAPH_CONDA_ENV,
-                       executable::AbstractString="metagraph",
-                       live_stream::Bool=true,
-                       force_env::Bool=false,
-                       quiet_env::Bool=false,
-                       mmap::Bool=false,
-                       workdir::Union{Nothing,AbstractString}=nothing)
-    add_bioconda_env(METAGRAPH_CONDA_ENV; force=force_env, quiet=quiet_env)
+        env::AbstractString = METAGRAPH_CONDA_ENV,
+        executable::AbstractString = "metagraph",
+        live_stream::Bool = true,
+        force_env::Bool = false,
+        quiet_env::Bool = false,
+        mmap::Bool = false,
+        workdir::Union{Nothing, AbstractString} = nothing)
+    add_bioconda_env(METAGRAPH_CONDA_ENV; force = force_env, quiet = quiet_env)
     args_final = args
     if mmap && !("--mmap" in args)
         args_final = copy(args)
@@ -89,11 +90,11 @@ function run_metagraph(args::Vector{String};
             insert!(args_final, 2, "--mmap")
         end
     end
-    cmd = metagraph_cmd(args_final; env=env, executable=executable, live_stream=live_stream)
+    cmd = metagraph_cmd(args_final; env = env, executable = executable, live_stream = live_stream)
     if isnothing(workdir)
         run(cmd)
     else
-        run(Cmd(cmd; dir=workdir))
+        run(Cmd(cmd; dir = workdir))
     end
     return cmd
 end
@@ -119,26 +120,27 @@ Build a de Bruijn graph from sequences.
 - `executable`: Binary to use ("metagraph", "metagraph_Protein", etc.)
 """
 function metagraph_build(inputs::AbstractVector{<:AbstractString};
-                         k::Integer=31,
-                         outfile_base::String="graph",
-                         out_dir::Union{Nothing,AbstractString}=nothing,
-                         threads::Union{Nothing,Integer}=get_default_threads(),
-                         mem_cap_gb::Union{Nothing,Integer}=nothing,
-                         disk_swap::Union{Nothing,AbstractString}=nothing,
-                         mode::Union{Nothing,AbstractString}=nothing,
-                         count_kmers::Bool=false,
-                         verbose::Bool=true,
-                         executable::AbstractString="metagraph",
-                         additional_args::Vector{String}=String[],
-                         kwargs...)
+        k::Integer = 31,
+        outfile_base::String = "graph",
+        out_dir::Union{Nothing, AbstractString} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        mem_cap_gb::Union{Nothing, Integer} = nothing,
+        disk_swap::Union{Nothing, AbstractString} = nothing,
+        mode::Union{Nothing, AbstractString} = nothing,
+        count_kmers::Bool = false,
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
     k > 0 || throw(ArgumentError("k must be positive, got $(k)"))
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
     end
     if !isnothing(mem_cap_gb)
-        mem_cap_gb > 0 || throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
+        mem_cap_gb > 0 ||
+            throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
     end
-    input_args = _metagraph_input_args(inputs; label="input")
+    input_args = _metagraph_input_args(inputs; label = "input")
 
     args = String["build"]
     if verbose
@@ -167,7 +169,7 @@ function metagraph_build(inputs::AbstractVector{<:AbstractString};
     append!(args, additional_args)
     append!(args, input_args)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return final_output
 end
 
@@ -197,39 +199,42 @@ Annotate a graph with labels.
 - `disk_swap`: Path for disk swap directory
 """
 function metagraph_annotate(graph::AbstractString,
-                            annotations::AbstractVector{<:AbstractString};
-                            out_dir::Union{Nothing,AbstractString}=nothing,
-                            outfile_base::String="annotation",
-                            anno_type::Union{Nothing,AbstractString}=nothing,
-                            count_kmers::Bool=false,
-                            count_width::Union{Nothing,Integer}=nothing,
-                            coordinates::Bool=false,
-                            anno_header::Bool=false,
-                            anno_filename::Bool=false,
-                            anno_label::Union{Nothing,AbstractString}=nothing,
-                            separately::Bool=false,
-                            threads_each::Union{Nothing,Integer}=nothing,
-                            fasta_anno::Bool=false,
-                            threads::Union{Nothing,Integer}=get_default_threads(),
-                            mem_cap_gb::Union{Nothing,Integer}=nothing,
-                            disk_swap::Union{Nothing,AbstractString}=nothing,
-                            verbose::Bool=true,
-                            executable::AbstractString="metagraph",
-                            additional_args::Vector{String}=String[],
-                            kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
-    anno_args = _metagraph_input_args(annotations; label="annotation")
+        annotations::AbstractVector{<:AbstractString};
+        out_dir::Union{Nothing, AbstractString} = nothing,
+        outfile_base::String = "annotation",
+        anno_type::Union{Nothing, AbstractString} = nothing,
+        count_kmers::Bool = false,
+        count_width::Union{Nothing, Integer} = nothing,
+        coordinates::Bool = false,
+        anno_header::Bool = false,
+        anno_filename::Bool = false,
+        anno_label::Union{Nothing, AbstractString} = nothing,
+        separately::Bool = false,
+        threads_each::Union{Nothing, Integer} = nothing,
+        fasta_anno::Bool = false,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        mem_cap_gb::Union{Nothing, Integer} = nothing,
+        disk_swap::Union{Nothing, AbstractString} = nothing,
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
+    anno_args = _metagraph_input_args(annotations; label = "annotation")
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
     end
     if !isnothing(threads_each)
-        threads_each > 0 || throw(ArgumentError("threads_each must be positive, got $(threads_each)"))
+        threads_each > 0 ||
+            throw(ArgumentError("threads_each must be positive, got $(threads_each)"))
     end
     if !isnothing(count_width)
-        count_width > 0 || throw(ArgumentError("count_width must be positive, got $(count_width)"))
+        count_width > 0 ||
+            throw(ArgumentError("count_width must be positive, got $(count_width)"))
     end
     if !isnothing(mem_cap_gb)
-        mem_cap_gb > 0 || throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
+        mem_cap_gb > 0 ||
+            throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
     end
 
     args = String["annotate"]
@@ -283,7 +288,7 @@ function metagraph_annotate(graph::AbstractString,
     append!(args, additional_args)
     append!(args, anno_args)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return final_output
 end
 
@@ -303,18 +308,18 @@ Query the graph for sequences.
 - `query_mode`: Query mode (e.g., "counts" or "coords")
 """
 function metagraph_query(graph::AbstractString,
-                         queries::AbstractString;
-                         annotation::Union{Nothing,AbstractString}=nothing,
-                         min_kmers_fraction::Union{Nothing,Float64}=nothing,
-                         labels_delimiter::Union{Nothing,AbstractString}=nothing,
-                         query_mode::Union{Nothing,AbstractString}=nothing,
-                         threads::Union{Nothing,Integer}=get_default_threads(),
-                         verbose::Bool=true,
-                         executable::AbstractString="metagraph",
-                         additional_args::Vector{String}=String[],
-                         kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
-    query_path = _metagraph_require_path(queries; label="query")
+        queries::AbstractString;
+        annotation::Union{Nothing, AbstractString} = nothing,
+        min_kmers_fraction::Union{Nothing, Float64} = nothing,
+        labels_delimiter::Union{Nothing, AbstractString} = nothing,
+        query_mode::Union{Nothing, AbstractString} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
+    query_path = _metagraph_require_path(queries; label = "query")
     if !isnothing(min_kmers_fraction)
         if min_kmers_fraction < 0.0 || min_kmers_fraction > 1.0
             throw(ArgumentError("min_kmers_fraction must be between 0.0 and 1.0, got $(min_kmers_fraction)"))
@@ -330,7 +335,7 @@ function metagraph_query(graph::AbstractString,
     end
     push!(args, "-i", graph_path)
     if !isnothing(annotation)
-        push!(args, "-a", _metagraph_require_path(annotation; label="annotation"))
+        push!(args, "-a", _metagraph_require_path(annotation; label = "annotation"))
     end
     if !isnothing(min_kmers_fraction)
         push!(args, "--min-kmers-fraction-label", string(min_kmers_fraction))
@@ -348,7 +353,7 @@ function metagraph_query(graph::AbstractString,
     append!(args, additional_args)
     push!(args, query_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
 end
 
 """
@@ -371,27 +376,29 @@ Align sequences to the graph.
 - `min_kmers_fraction`: Minimum fraction of k-mers required (0.0-1.0)
 """
 function metagraph_align(graph::AbstractString,
-                         queries::AbstractString;
-                         seeder::Union{Nothing,AbstractString}=nothing,
-                         batch_size::Union{Nothing,Integer}=nothing,
-                         map::Bool=false,
-                         query_presence::Bool=false,
-                         count_kmers::Bool=false,
-                         align_min_seed_length::Union{Nothing,Integer}=nothing,
-                         annotation::Union{Nothing,AbstractString}=nothing,
-                         min_kmers_fraction::Union{Nothing,Float64}=nothing,
-                         threads::Union{Nothing,Integer}=get_default_threads(),
-                         verbose::Bool=true,
-                         executable::AbstractString="metagraph",
-                         additional_args::Vector{String}=String[],
-                         kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
-    query_path = _metagraph_require_path(queries; label="query")
+        queries::AbstractString;
+        seeder::Union{Nothing, AbstractString} = nothing,
+        batch_size::Union{Nothing, Integer} = nothing,
+        map::Bool = false,
+        query_presence::Bool = false,
+        count_kmers::Bool = false,
+        align_min_seed_length::Union{Nothing, Integer} = nothing,
+        annotation::Union{Nothing, AbstractString} = nothing,
+        min_kmers_fraction::Union{Nothing, Float64} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
+    query_path = _metagraph_require_path(queries; label = "query")
     if !isnothing(batch_size)
-        batch_size > 0 || throw(ArgumentError("batch_size must be positive, got $(batch_size)"))
+        batch_size > 0 ||
+            throw(ArgumentError("batch_size must be positive, got $(batch_size)"))
     end
     if !isnothing(align_min_seed_length)
-        align_min_seed_length > 0 || throw(ArgumentError("align_min_seed_length must be positive, got $(align_min_seed_length)"))
+        align_min_seed_length > 0 ||
+            throw(ArgumentError("align_min_seed_length must be positive, got $(align_min_seed_length)"))
     end
     if !isnothing(min_kmers_fraction)
         if min_kmers_fraction < 0.0 || min_kmers_fraction > 1.0
@@ -408,7 +415,7 @@ function metagraph_align(graph::AbstractString,
     end
     push!(args, "-i", graph_path)
     if !isnothing(annotation)
-        push!(args, "-a", _metagraph_require_path(annotation; label="annotation"))
+        push!(args, "-a", _metagraph_require_path(annotation; label = "annotation"))
     end
     if !isnothing(seeder)
         push!(args, "--seeder", String(seeder))
@@ -438,7 +445,7 @@ function metagraph_align(graph::AbstractString,
     append!(args, additional_args)
     push!(args, query_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
 end
 
 """
@@ -455,17 +462,17 @@ Transform a graph representation.
 - `threads`: Number of parallel threads
 """
 function metagraph_transform(input_graph::AbstractString;
-                             out_file::AbstractString,
-                             to_fasta::Bool=false,
-                             primary_kmers::Bool=false,
-                             unitigs::Bool=false,
-                             state::Union{Nothing,AbstractString}=nothing,
-                             threads::Union{Nothing,Integer}=get_default_threads(),
-                             verbose::Bool=true,
-                             executable::AbstractString="metagraph",
-                             additional_args::Vector{String}=String[],
-                             kwargs...)
-    graph_path = _metagraph_require_path(input_graph; label="graph")
+        out_file::AbstractString,
+        to_fasta::Bool = false,
+        primary_kmers::Bool = false,
+        unitigs::Bool = false,
+        state::Union{Nothing, AbstractString} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(input_graph; label = "graph")
     output_path = _metagraph_output_base(out_file, nothing)
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
@@ -495,7 +502,7 @@ function metagraph_transform(input_graph::AbstractString;
     append!(args, additional_args)
     push!(args, graph_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return output_path
 end
 
@@ -530,53 +537,58 @@ Transform graph annotations (e.g., convert to Multi-BRWT).
 - `mem_cap_gb`: Memory cap in GB
 - `disk_swap`: Path for disk swap directory
 """
-function metagraph_transform_anno(input_annos::Union{AbstractString,AbstractVector{<:AbstractString}};
-                                  out_file::AbstractString,
-                                  anno_type::Union{Nothing,AbstractString}=nothing,
-                                  linkage::Bool=false,
-                                  greedy::Bool=false,
-                                  subsample::Union{Nothing,Integer}=nothing,
-                                  linkage_file::Union{Nothing,AbstractString}=nothing,
-                                  row_diff_stage::Union{Nothing,Integer}=nothing,
-                                  graph::Union{Nothing,AbstractString}=nothing,
-                                  coordinates::Bool=false,
-                                  count_kmers::Bool=false,
-                                  aggregate_columns::Bool=false,
-                                  min_count::Union{Nothing,Integer}=nothing,
-                                  max_count::Union{Nothing,Integer}=nothing,
-                                  min_fraction::Union{Nothing,Float64}=nothing,
-                                  max_fraction::Union{Nothing,Float64}=nothing,
-                                  min_value::Union{Nothing,Integer}=nothing,
-                                  max_value::Union{Nothing,Integer}=nothing,
-                                  rename_cols::Union{Nothing,AbstractString}=nothing,
-                                  parallel_nodes::Union{Nothing,Integer}=nothing,
-                                  threads::Union{Nothing,Integer}=get_default_threads(),
-                                  mem_cap_gb::Union{Nothing,Integer}=nothing,
-                                  disk_swap::Union{Nothing,AbstractString}=nothing,
-                                  verbose::Bool=true,
-                                  executable::AbstractString="metagraph",
-                                  additional_args::Vector{String}=String[],
-                                  kwargs...)
+function metagraph_transform_anno(
+        input_annos::Union{AbstractString, AbstractVector{<:AbstractString}};
+        out_file::AbstractString,
+        anno_type::Union{Nothing, AbstractString} = nothing,
+        linkage::Bool = false,
+        greedy::Bool = false,
+        subsample::Union{Nothing, Integer} = nothing,
+        linkage_file::Union{Nothing, AbstractString} = nothing,
+        row_diff_stage::Union{Nothing, Integer} = nothing,
+        graph::Union{Nothing, AbstractString} = nothing,
+        coordinates::Bool = false,
+        count_kmers::Bool = false,
+        aggregate_columns::Bool = false,
+        min_count::Union{Nothing, Integer} = nothing,
+        max_count::Union{Nothing, Integer} = nothing,
+        min_fraction::Union{Nothing, Float64} = nothing,
+        max_fraction::Union{Nothing, Float64} = nothing,
+        min_value::Union{Nothing, Integer} = nothing,
+        max_value::Union{Nothing, Integer} = nothing,
+        rename_cols::Union{Nothing, AbstractString} = nothing,
+        parallel_nodes::Union{Nothing, Integer} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        mem_cap_gb::Union{Nothing, Integer} = nothing,
+        disk_swap::Union{Nothing, AbstractString} = nothing,
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
     input_args = if input_annos isa AbstractVector{<:AbstractString}
-        _metagraph_input_args(input_annos; label="annotation")
+        _metagraph_input_args(input_annos; label = "annotation")
     else
-        [_metagraph_require_path(input_annos; label="annotation")]
+        [_metagraph_require_path(input_annos; label = "annotation")]
     end
     output_path = _metagraph_output_base(out_file, nothing)
     if !isnothing(subsample)
-        subsample > 0 || throw(ArgumentError("subsample must be positive, got $(subsample)"))
+        subsample > 0 ||
+            throw(ArgumentError("subsample must be positive, got $(subsample)"))
     end
     if !isnothing(row_diff_stage)
-        row_diff_stage >= 0 || throw(ArgumentError("row_diff_stage must be non-negative, got $(row_diff_stage)"))
+        row_diff_stage >= 0 ||
+            throw(ArgumentError("row_diff_stage must be non-negative, got $(row_diff_stage)"))
     end
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
     end
     if !isnothing(parallel_nodes)
-        parallel_nodes > 0 || throw(ArgumentError("parallel_nodes must be positive, got $(parallel_nodes)"))
+        parallel_nodes > 0 ||
+            throw(ArgumentError("parallel_nodes must be positive, got $(parallel_nodes)"))
     end
     if !isnothing(mem_cap_gb)
-        mem_cap_gb > 0 || throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
+        mem_cap_gb > 0 ||
+            throw(ArgumentError("mem_cap_gb must be positive, got $(mem_cap_gb)"))
     end
     if !isnothing(min_fraction)
         if min_fraction < 0.0 || min_fraction > 1.0
@@ -589,16 +601,20 @@ function metagraph_transform_anno(input_annos::Union{AbstractString,AbstractVect
         end
     end
     if !isnothing(min_count)
-        min_count >= 0 || throw(ArgumentError("min_count must be non-negative, got $(min_count)"))
+        min_count >= 0 ||
+            throw(ArgumentError("min_count must be non-negative, got $(min_count)"))
     end
     if !isnothing(max_count)
-        max_count >= 0 || throw(ArgumentError("max_count must be non-negative, got $(max_count)"))
+        max_count >= 0 ||
+            throw(ArgumentError("max_count must be non-negative, got $(max_count)"))
     end
     if !isnothing(min_value)
-        min_value >= 0 || throw(ArgumentError("min_value must be non-negative, got $(min_value)"))
+        min_value >= 0 ||
+            throw(ArgumentError("min_value must be non-negative, got $(min_value)"))
     end
     if !isnothing(max_value)
-        max_value >= 0 || throw(ArgumentError("max_value must be non-negative, got $(max_value)"))
+        max_value >= 0 ||
+            throw(ArgumentError("max_value must be non-negative, got $(max_value)"))
     end
 
     args = String["transform_anno"]
@@ -622,13 +638,13 @@ function metagraph_transform_anno(input_annos::Union{AbstractString,AbstractVect
         push!(args, "--subsample", string(subsample))
     end
     if !isnothing(linkage_file)
-        push!(args, "--linkage-file", _metagraph_require_path(linkage_file; label="linkage file"))
+        push!(args, "--linkage-file", _metagraph_require_path(linkage_file; label = "linkage file"))
     end
     if !isnothing(row_diff_stage)
         push!(args, "--row-diff-stage", string(row_diff_stage))
     end
     if !isnothing(graph)
-        push!(args, "-i", _metagraph_require_path(graph; label="graph"))
+        push!(args, "-i", _metagraph_require_path(graph; label = "graph"))
     end
     if coordinates
         push!(args, "--coordinates")
@@ -637,7 +653,7 @@ function metagraph_transform_anno(input_annos::Union{AbstractString,AbstractVect
         push!(args, "--count-kmers")
     end
     if !isnothing(rename_cols)
-        push!(args, "--rename-cols", _metagraph_require_path(rename_cols; label="rename rules"))
+        push!(args, "--rename-cols", _metagraph_require_path(rename_cols; label = "rename rules"))
     end
     if !isnothing(min_count)
         push!(args, "--min-count", string(min_count))
@@ -673,7 +689,7 @@ function metagraph_transform_anno(input_annos::Union{AbstractString,AbstractVect
     append!(args, additional_args)
     append!(args, input_args)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return output_path
 end
 
@@ -683,17 +699,18 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Relax a Multi-BRWT annotation to improve compression.
 """
 function metagraph_relax_brwt(input_anno::AbstractString;
-                              out_file::AbstractString,
-                              relax_arity::Union{Nothing,Integer}=nothing,
-                              threads::Union{Nothing,Integer}=get_default_threads(),
-                              verbose::Bool=true,
-                              executable::AbstractString="metagraph",
-                              additional_args::Vector{String}=String[],
-                              kwargs...)
-    input_path = _metagraph_require_path(input_anno; label="annotation")
+        out_file::AbstractString,
+        relax_arity::Union{Nothing, Integer} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    input_path = _metagraph_require_path(input_anno; label = "annotation")
     output_path = _metagraph_output_base(out_file, nothing)
     if !isnothing(relax_arity)
-        relax_arity > 0 || throw(ArgumentError("relax_arity must be positive, got $(relax_arity)"))
+        relax_arity > 0 ||
+            throw(ArgumentError("relax_arity must be positive, got $(relax_arity)"))
     end
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
@@ -714,7 +731,7 @@ function metagraph_relax_brwt(input_anno::AbstractString;
     append!(args, additional_args)
     push!(args, input_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return output_path
 end
 
@@ -724,14 +741,14 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run MetaGraph in server mode for querying via the Python API or HTTP.
 """
 function metagraph_server_query(graph::AbstractString;
-                                annotation::Union{Nothing,AbstractString}=nothing,
-                                port::Union{Nothing,Integer}=nothing,
-                                threads::Union{Nothing,Integer}=get_default_threads(),
-                                verbose::Bool=true,
-                                executable::AbstractString="metagraph",
-                                additional_args::Vector{String}=String[],
-                                kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
+        annotation::Union{Nothing, AbstractString} = nothing,
+        port::Union{Nothing, Integer} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
     if !isnothing(port)
         port > 0 || throw(ArgumentError("port must be positive, got $(port)"))
     end
@@ -745,7 +762,7 @@ function metagraph_server_query(graph::AbstractString;
     end
     push!(args, "-i", graph_path)
     if !isnothing(annotation)
-        push!(args, "-a", _metagraph_require_path(annotation; label="annotation"))
+        push!(args, "-a", _metagraph_require_path(annotation; label = "annotation"))
     end
     if !isnothing(port)
         push!(args, "--port", string(port))
@@ -756,7 +773,7 @@ function metagraph_server_query(graph::AbstractString;
 
     append!(args, additional_args)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
 end
 
 """
@@ -769,16 +786,16 @@ Assemble sequences from the graph.
 - `diff_assembly_rules`: Path to JSON rules file
 """
 function metagraph_assemble(graph::AbstractString;
-                            out_file::AbstractString,
-                            unitigs::Bool=false,
-                            annotation::Union{Nothing,AbstractString}=nothing,
-                            diff_assembly_rules::Union{Nothing,AbstractString}=nothing,
-                            threads::Union{Nothing,Integer}=get_default_threads(),
-                            verbose::Bool=true,
-                            executable::AbstractString="metagraph",
-                            additional_args::Vector{String}=String[],
-                            kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
+        out_file::AbstractString,
+        unitigs::Bool = false,
+        annotation::Union{Nothing, AbstractString} = nothing,
+        diff_assembly_rules::Union{Nothing, AbstractString} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
     output_path = _metagraph_output_base(out_file, nothing)
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
@@ -793,10 +810,11 @@ function metagraph_assemble(graph::AbstractString;
         push!(args, "--unitigs")
     end
     if !isnothing(annotation)
-        push!(args, "-a", _metagraph_require_path(annotation; label="annotation"))
+        push!(args, "-a", _metagraph_require_path(annotation; label = "annotation"))
     end
     if !isnothing(diff_assembly_rules)
-        push!(args, "--diff-assembly-rules", _metagraph_require_path(diff_assembly_rules; label="diff assembly rules"))
+        push!(args, "--diff-assembly-rules",
+            _metagraph_require_path(diff_assembly_rules; label = "diff assembly rules"))
     end
     if !isnothing(threads)
         push!(args, "--parallel", string(threads))
@@ -805,7 +823,7 @@ function metagraph_assemble(graph::AbstractString;
     append!(args, additional_args)
     push!(args, graph_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return output_path
 end
 
@@ -815,18 +833,18 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Get statistics for a graph or annotation.
 """
 function metagraph_stats(input_file::AbstractString;
-                         annotation::Union{Nothing,AbstractString}=nothing,
-                         print_col_names::Bool=false,
-                         print_counts_hist::Bool=false,
-                         count_quantiles::Union{Nothing,String}=nothing,
-                         executable::AbstractString="metagraph",
-                         additional_args::Vector{String}=String[],
-                         kwargs...)
-    input_path = _metagraph_require_path(input_file; label="input")
+        annotation::Union{Nothing, AbstractString} = nothing,
+        print_col_names::Bool = false,
+        print_counts_hist::Bool = false,
+        count_quantiles::Union{Nothing, String} = nothing,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    input_path = _metagraph_require_path(input_file; label = "input")
 
     args = String["stats"]
     if !isnothing(annotation)
-        push!(args, "-a", _metagraph_require_path(annotation; label="annotation"))
+        push!(args, "-a", _metagraph_require_path(annotation; label = "annotation"))
     end
     if print_col_names
         push!(args, "--print-col-names")
@@ -841,7 +859,7 @@ function metagraph_stats(input_file::AbstractString;
     append!(args, additional_args)
     push!(args, input_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
 end
 
 """
@@ -856,26 +874,29 @@ Clean the graph (remove sequencing errors).
 - `fallback`: Fallback abundance threshold when auto-estimation fails
 """
 function metagraph_clean(graph::AbstractString;
-                         out_file::AbstractString,
-                         to_fasta::Bool=false,
-                         prune_tips::Union{Nothing,Integer}=nothing,
-                         prune_unitigs::Union{Nothing,Integer}=nothing,
-                         fallback::Union{Nothing,Integer}=nothing,
-                         threads::Union{Nothing,Integer}=get_default_threads(),
-                         verbose::Bool=true,
-                         executable::AbstractString="metagraph",
-                         additional_args::Vector{String}=String[],
-                         kwargs...)
-    graph_path = _metagraph_require_path(graph; label="graph")
+        out_file::AbstractString,
+        to_fasta::Bool = false,
+        prune_tips::Union{Nothing, Integer} = nothing,
+        prune_unitigs::Union{Nothing, Integer} = nothing,
+        fallback::Union{Nothing, Integer} = nothing,
+        threads::Union{Nothing, Integer} = get_default_threads(),
+        verbose::Bool = true,
+        executable::AbstractString = "metagraph",
+        additional_args::Vector{String} = String[],
+        kwargs...)
+    graph_path = _metagraph_require_path(graph; label = "graph")
     output_path = _metagraph_output_base(out_file, nothing)
     if !isnothing(prune_tips)
-        prune_tips >= 0 || throw(ArgumentError("prune_tips must be non-negative, got $(prune_tips)"))
+        prune_tips >= 0 ||
+            throw(ArgumentError("prune_tips must be non-negative, got $(prune_tips)"))
     end
     if !isnothing(prune_unitigs)
-        prune_unitigs >= 0 || throw(ArgumentError("prune_unitigs must be non-negative, got $(prune_unitigs)"))
+        prune_unitigs >= 0 ||
+            throw(ArgumentError("prune_unitigs must be non-negative, got $(prune_unitigs)"))
     end
     if !isnothing(fallback)
-        fallback >= 0 || throw(ArgumentError("fallback must be non-negative, got $(fallback)"))
+        fallback >= 0 ||
+            throw(ArgumentError("fallback must be non-negative, got $(fallback)"))
     end
     if !isnothing(threads)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
@@ -905,6 +926,6 @@ function metagraph_clean(graph::AbstractString;
     append!(args, additional_args)
     push!(args, graph_path)
 
-    run_metagraph(args; executable=executable, kwargs...)
+    run_metagraph(args; executable = executable, kwargs...)
     return output_path
 end

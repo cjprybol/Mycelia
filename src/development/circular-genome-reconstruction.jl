@@ -115,25 +115,25 @@
 #                                    max_iterations::Int=10,
 #                                    completion_threshold::Float64=0.90,
 #                                    use_stochastic_selection::Bool=true)
-    
+
 #     if isempty(target_kmers)
 #         throw(ArgumentError("Target k-mer set cannot be empty"))
 #     end
-    
+
 #     if Graphs.nv(kmer_graph) == 0
 #         throw(ArgumentError("K-mer graph cannot be empty"))
 #     end
-    
+
 #     ## Convert target k-mers to canonical form for consistent comparison
 #     canonical_targets = Set([_get_canonical_kmer(kmer) for kmer in target_kmers])
-    
+
 #     @info "Starting circular reconstruction: $(length(canonical_targets)) target k-mers, " *
 #           "completion threshold: $(round(100*completion_threshold, digits=1))%"
-    
+
 #     ## Build k-mer index for graph navigation
 #     graph_kmers = collect(keys(kmer_coverage))
 #     kmer_to_vertex = Dict(kmer => i for (i, kmer) in enumerate(graph_kmers))
-    
+
 #     ## Identify hub nodes (degree ≥ 3)
 #     hub_kmers = String[]
 #     for (i, kmer) in enumerate(graph_kmers)
@@ -141,7 +141,7 @@
 #             push!(hub_kmers, kmer)
 #         end
 #     end
-    
+
 #     if isempty(hub_kmers)
 #         @warn "No hub nodes found in graph - using highest coverage k-mers as anchors"
 #         ## Fallback: use top 10% highest coverage k-mers as pseudo-hubs
@@ -149,53 +149,53 @@
 #         n_pseudo_hubs = max(1, length(sorted_kmers) ÷ 10)
 #         hub_kmers = [kmer for (kmer, cov) in sorted_kmers[1:n_pseudo_hubs]]
 #     end
-    
+
 #     @info "Found $(length(hub_kmers)) hub nodes for path anchoring"
-    
+
 #     ## Initialize reconstruction state
 #     reconstructed_path = String[]
 #     covered_targets = Set{String}()
 #     hub_nodes_used = String[]
 #     iterations_performed = 0
-    
+
 #     ## Main reconstruction loop
 #     for iteration in 1:max_iterations
 #         iterations_performed = iteration
-        
+
 #         ## Calculate current completion
 #         completion = length(covered_targets) / length(canonical_targets)
-        
+
 #         if completion >= completion_threshold
 #             @info "Completion threshold reached: $(round(100*completion, digits=1))%"
 #             break
 #         end
-        
+
 #         @debug "Iteration $iteration: $(round(100*completion, digits=1))% complete"
-        
+
 #         ## Select hub for path extension
 #         if use_stochastic_selection
 #             selected_hub = select_hub_stochastic(hub_kmers, kmer_coverage)
 #         else
 #             selected_hub = select_hub_deterministic(hub_kmers, kmer_coverage)
 #         end
-        
+
 #         if selected_hub === nothing
 #             @warn "No suitable hub found for iteration $iteration"
 #             break
 #         end
-        
+
 #         push!(hub_nodes_used, selected_hub)
-        
+
 #         ## Perform bidirectional extension from selected hub
 #         extension_result = extend_path_bidirectional(
 #             selected_hub, canonical_targets, covered_targets,
 #             kmer_graph, graph_kmers, kmer_to_vertex, kmer_coverage, k
 #         )
-        
+
 #         if !isempty(extension_result.path)
 #             ## Merge new path with existing reconstruction
 #             reconstructed_path = merge_paths(reconstructed_path, extension_result.path, k)
-            
+
 #             ## Update covered targets
 #             for kmer in extension_result.path
 #                 canonical_kmer = _get_canonical_kmer(kmer)
@@ -203,38 +203,38 @@
 #                     push!(covered_targets, canonical_kmer)
 #                 end
 #             end
-            
+
 #             @debug "Added $(length(extension_result.path)) k-mers, " *
 #                    "now covering $(length(covered_targets)) targets"
 #         else
 #             @debug "No path extension possible from hub $selected_hub"
 #         end
-        
+
 #         ## Remove used hub to avoid cycles
 #         filter!(h -> h != selected_hub, hub_kmers)
-        
+
 #         if isempty(hub_kmers)
 #             @info "All hub nodes exhausted after $iteration iterations"
 #             break
 #         end
 #     end
-    
+
 #     ## Reconstruct final sequence
 #     circular_sequence = ""
 #     if !isempty(reconstructed_path)
 #         circular_sequence = reconstruct_sequence_from_kmers(reconstructed_path, k)
 #     end
-    
+
 #     ## Calculate final metrics
 #     final_completion = length(covered_targets) / length(canonical_targets)
 #     gap_regions = identify_gap_regions(reconstructed_path, canonical_targets, k)
 #     reconstruction_confidence = calculate_reconstruction_confidence(
 #         reconstructed_path, kmer_coverage, final_completion
 #     )
-    
+
 #     @info "Circular reconstruction complete: $(round(100*final_completion, digits=1))% completion, " *
 #           "$(length(reconstructed_path)) k-mers, $(length(gap_regions)) gaps"
-    
+
 #     return CircularReconstructionResult(
 #         circular_sequence,
 #         final_completion,
@@ -259,24 +259,24 @@
 # `CircularityValidationResult`: Detailed circularity validation results
 # """
 # function validate_circularity(sequence::String, k::Int)
-    
+
 #     if length(sequence) < k
 #         return CircularityValidationResult(false, 0, 0.0, ("", ""), length(sequence))
 #     end
-    
+
 #     ## Extract terminal k-mers
 #     first_kmer = sequence[1:k]
 #     last_kmer = sequence[(end-k+1):end]
-    
+
 #     ## Check for overlap that would create circularity
 #     max_overlap = min(k-1, length(sequence) ÷ 2)
 #     best_overlap = 0
 #     circularity_confidence = 0.0
-    
+
 #     for overlap_len in 1:max_overlap
 #         prefix = sequence[1:overlap_len]
 #         suffix = sequence[(end-overlap_len+1):end]
-        
+
 #         if prefix == suffix
 #             best_overlap = overlap_len
 #             ## Higher overlap = higher confidence, but penalize very short overlaps
@@ -284,10 +284,10 @@
 #             break
 #         end
 #     end
-    
+
 #     is_circular = best_overlap > 0
 #     gap_size = is_circular ? 0 : k - 1  ## Minimum gap to achieve circularity
-    
+
 #     return CircularityValidationResult(
 #         is_circular,
 #         best_overlap,
@@ -309,33 +309,33 @@
 #                              kmer_graph::AbstractGraph,
 #                              kmer_coverage::Dict{String, Int},
 #                              k::Int)
-    
+
 #     if isempty(result.gap_regions)
 #         @info "No gaps to repair in circular reconstruction"
 #         return result
 #     end
-    
+
 #     @info "Attempting to repair $(length(result.gap_regions)) gaps"
-    
+
 #     repaired_path = copy(result.traversal_path)
 #     repaired_gaps = 0
-    
+
 #     ## Build k-mer index
 #     graph_kmers = collect(keys(kmer_coverage))
 #     kmer_to_vertex = Dict(kmer => i for (i, kmer) in enumerate(graph_kmers))
-    
+
 #     for (gap_start, gap_end) in result.gap_regions
 #         ## Identify k-mers flanking the gap
 #         before_gap = gap_start > 1 ? repaired_path[gap_start-1] : ""
 #         after_gap = gap_end < length(repaired_path) ? repaired_path[gap_end+1] : ""
-        
+
 #         if before_gap != "" && after_gap != ""
 #             ## Try to find a path connecting the flanking k-mers
 #             connecting_path = find_connecting_path(
 #                 before_gap, after_gap, kmer_graph, 
 #                 graph_kmers, kmer_to_vertex, kmer_coverage, k, 5  ## Max 5 steps
 #             )
-            
+
 #             if !isempty(connecting_path)
 #                 ## Insert connecting path to repair gap
 #                 repaired_path = vcat(
@@ -348,21 +348,21 @@
 #             end
 #         end
 #     end
-    
+
 #     ## Reconstruct sequence with repairs
 #     repaired_sequence = ""
 #     if !isempty(repaired_path)
 #         repaired_sequence = reconstruct_sequence_from_kmers(repaired_path, k)
 #     end
-    
+
 #     ## Recalculate metrics
 #     remaining_gaps = identify_gap_regions(repaired_path, Set(result.traversal_path), k)
 #     new_confidence = calculate_reconstruction_confidence(
 #         repaired_path, kmer_coverage, result.completion_percentage
 #     )
-    
+
 #     @info "Gap repair complete: $repaired_gaps gaps repaired, $(length(remaining_gaps)) remaining"
-    
+
 #     return CircularReconstructionResult(
 #         repaired_sequence,
 #         result.completion_percentage,  ## Completion doesn't change with gap repair
@@ -376,44 +376,44 @@
 
 # ## Helper function for stochastic hub selection
 # function select_hub_stochastic(hub_kmers::Vector{String}, kmer_coverage::Dict{String, Int})
-    
+
 #     if isempty(hub_kmers)
 #         return nothing
 #     end
-    
+
 #     ## Weight hubs by their coverage
 #     weights = [Float64(get(kmer_coverage, hub, 1)) for hub in hub_kmers]
 #     total_weight = sum(weights)
-    
+
 #     if total_weight == 0
 #         return first(hub_kmers)
 #     end
-    
+
 #     ## Weighted random selection
 #     rand_val = rand() * total_weight
 #     cumulative_weight = 0.0
-    
+
 #     for (i, weight) in enumerate(weights)
 #         cumulative_weight += weight
 #         if cumulative_weight >= rand_val
 #             return hub_kmers[i]
 #         end
 #     end
-    
+
 #     return last(hub_kmers)  ## Fallback
 # end
 
 # ## Helper function for deterministic hub selection
 # function select_hub_deterministic(hub_kmers::Vector{String}, kmer_coverage::Dict{String, Int})
-    
+
 #     if isempty(hub_kmers)
 #         return nothing
 #     end
-    
+
 #     ## Select hub with highest coverage
 #     best_hub = hub_kmers[1]
 #     best_coverage = get(kmer_coverage, best_hub, 0)
-    
+
 #     for hub in hub_kmers[2:end]
 #         coverage = get(kmer_coverage, hub, 0)
 #         if coverage > best_coverage
@@ -421,7 +421,7 @@
 #             best_hub = hub
 #         end
 #     end
-    
+
 #     return best_hub
 # end
 
@@ -430,45 +430,45 @@
 #                                  covered_targets::Set{String}, graph::AbstractGraph,
 #                                  graph_kmers::Vector{String}, kmer_to_vertex::Dict{String, Int},
 #                                  kmer_coverage::Dict{String, Int}, k::Int)
-    
+
 #     ## Find uncovered targets to prioritize
 #     uncovered_targets = setdiff(target_kmers, covered_targets)
-    
+
 #     if isempty(uncovered_targets)
 #         return (path=String[], targets_found=0)
 #     end
-    
+
 #     ## Use bidirectional search to find paths to uncovered targets
 #     hub_vertex = get(kmer_to_vertex, hub_kmer, nothing)
-    
+
 #     if hub_vertex === nothing
 #         return (path=String[], targets_found=0)
 #     end
-    
+
 #     ## Simple path extension using local search
 #     ## In production, would use the bidirectional Dijkstra from genomic-graph-algorithms.jl
 #     extended_path = [hub_kmer]
 #     current_vertex = hub_vertex
 #     targets_found = 0
-    
+
 #     ## Greedy extension to maximize target coverage
 #     for step in 1:20  ## Avoid infinite loops
 #         best_neighbor = nothing
 #         best_score = -1.0
-        
+
 #         if current_vertex <= Graphs.nv(graph)
 #             for neighbor_vertex in Graphs.neighbors(graph, current_vertex)
 #                 if neighbor_vertex <= length(graph_kmers)
 #                     neighbor_kmer = graph_kmers[neighbor_vertex]
 #                     canonical_neighbor = _get_canonical_kmer(neighbor_kmer)
-                    
+
 #                     ## Score based on target coverage and k-mer coverage
 #                     score = 0.0
 #                     if canonical_neighbor in uncovered_targets
 #                         score += 10.0  ## High priority for uncovered targets
 #                     end
 #                     score += log(1 + get(kmer_coverage, neighbor_kmer, 0))  ## Coverage bonus
-                    
+
 #                     if score > best_score
 #                         best_score = score
 #                         best_neighbor = neighbor_vertex
@@ -476,22 +476,22 @@
 #                 end
 #             end
 #         end
-        
+
 #         if best_neighbor === nothing
 #             break  ## No more extensions possible
 #         end
-        
+
 #         neighbor_kmer = graph_kmers[best_neighbor]
 #         push!(extended_path, neighbor_kmer)
 #         current_vertex = best_neighbor
-        
+
 #         ## Check if we found a target
 #         canonical_neighbor = _get_canonical_kmer(neighbor_kmer)
 #         if canonical_neighbor in uncovered_targets
 #             targets_found += 1
 #         end
 #     end
-    
+
 #     return (path=extended_path, targets_found=targets_found)
 # end
 
@@ -513,12 +513,12 @@
 #     if isempty(path)
 #         return 0.0
 #     end
-    
+
 #     ## Combine completion percentage with average coverage confidence
 #     avg_coverage = Statistics.mean([get(coverage, kmer, 1) for kmer in path])
 #     max_coverage = maximum(values(coverage))
 #     coverage_confidence = min(1.0, avg_coverage / (max_coverage * 0.5))
-    
+
 #     return 0.7 * completion + 0.3 * coverage_confidence
 # end
 
@@ -526,7 +526,7 @@
 #                             graph::AbstractGraph, graph_kmers::Vector{String},
 #                             kmer_to_vertex::Dict{String, Int}, coverage::Dict{String, Int},
 #                             k::Int, max_steps::Int)
-    
+
 #     ## Simplified path finding - would use genomic Dijkstra in production
 #     return String[]  ## Placeholder
 # end
@@ -536,16 +536,16 @@
 #     if isempty(kmers)
 #         return ""
 #     end
-    
+
 #     if length(kmers) == 1
 #         return kmers[1]
 #     end
-    
+
 #     sequence = kmers[1]
 #     for i in 2:length(kmers)
 #         sequence *= kmers[i][end]
 #     end
-    
+
 #     return sequence
 # end
 

@@ -25,168 +25,171 @@ import MetaGraphsNext
 import Kmers
 
 Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
-    
+
     # Test data for different sequence types
     test_sequences = (
         dna = "ATCGATCGATCGATCG",
-        rna = "AUCGAUCGAUCGAUCG", 
+        rna = "AUCGAUCGAUCGAUCG",
         protein = "ALAVALINEGLUTAMINE"
     )
-    
+
     # Quality scores for FASTQ tests - using existing fastq_record function
     high_quality_scores = fill(UInt8(39), 16)   # PHRED 39 for DNA/RNA sequences
     medium_quality_scores = fill(UInt8(30), 16) # PHRED 30 for DNA/RNA sequences
     protein_quality_scores = fill(UInt8(25), length(test_sequences.protein)) # PHRED 25 for protein
-    
+
     Test.@testset "1. N-gram Graphs - Unicode Text Assembly" begin
         test_string = "HELLO WORLD HELLO"
-        
+
         # Test N-gram graph construction
-        graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id = "test")
         Test.@test !isempty(MetaGraphsNext.labels(graph))
-        
+
         # Test assembly from N-gram graph
-        assembly_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id="test")
+        assembly_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id = "test")
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(assembly_graph)
         Test.@test !isempty(MetaGraphsNext.labels(assembly_graph))
         if !isempty(paths)
             assembled = Mycelia.Rhizomorph.path_to_sequence(first(paths), assembly_graph)
             Test.@test occursin(assembled, test_string) || occursin(test_string, assembled)
         end
-        
+
         println("✓ N-gram Graph: $(length(MetaGraphsNext.labels(graph))) vertices")
     end
-    
+
     Test.@testset "2. K-mer Graphs - BioSequence Assembly" begin
-        
         Test.@testset "DNA K-mer Graphs" begin
             dna_seq = test_sequences.dna
             records = [FASTX.FASTA.Record("test", dna_seq)]
-            
+
             # Test k-mer graph construction
-            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 5; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
             Test.@test all(kmer -> kmer isa Mycelia.Kmers.DNAKmer, kmers)
-            
+
             # Test vertex metadata
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
             Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
             Test.@test !isempty(vertex_data.evidence)
-            
+
             println("✓ DNA K-mer Graph: $(length(kmers)) k-mers, type-stable metadata")
         end
-        
+
         Test.@testset "RNA K-mer Graphs" begin
             rna_seq = test_sequences.rna
             records = [FASTX.FASTA.Record("test", rna_seq)]
-            
+
             # Test k-mer graph construction  
-            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 4; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
             Test.@test all(kmer -> kmer isa Mycelia.Kmers.RNAKmer, kmers)
-            
+
             println("✓ RNA K-mer Graph: $(length(kmers)) k-mers, type-stable metadata")
         end
-        
+
         Test.@testset "Amino Acid K-mer Graphs" begin
             aa_seq = test_sequences.protein
             records = [FASTX.FASTA.Record("test", aa_seq)]
-            
+
             # Test k-mer graph construction
-            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(records, 3; dataset_id = "test", mode = :singlestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
             Test.@test all(kmer -> kmer isa Mycelia.Kmers.AAKmer, kmers)
-            
+
             println("✓ Amino Acid K-mer Graph: $(length(kmers)) k-mers, type-stable metadata")
         end
     end
-    
+
     Test.@testset "3. Qualmer Graphs - Quality-Aware Assembly" begin
-        
         Test.@testset "DNA Qualmer Graphs" begin
             dna_seq = test_sequences.dna
-            records = [Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=high_quality_scores)]
-            
+            records = [Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = high_quality_scores)]
+
             # Test qualmer graph construction
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, 5; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data with quality information
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
-            
+
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
             Test.@test vertex_data isa Mycelia.Rhizomorph.QualmerVertexData
             Test.@test !isempty(vertex_data.evidence)
             mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, "test")
             Test.@test !isnothing(mean_quality)
-            
+
             println("✓ DNA Qualmer Graph: $(length(kmers)) k-mers")
         end
-        
+
         Test.@testset "RNA Qualmer Graphs" begin
             rna_seq = test_sequences.rna
-            records = [Mycelia.fastq_record(identifier="test", sequence=rna_seq, quality_scores=medium_quality_scores)]
-            
+            records = [Mycelia.fastq_record(identifier = "test", sequence = rna_seq,
+                quality_scores = medium_quality_scores)]
+
             # Test qualmer graph construction
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 4; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, 4; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test quality-aware vertex data
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
-            
+
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
             Test.@test vertex_data isa Mycelia.Rhizomorph.QualmerVertexData
             mean_quality = Mycelia.Rhizomorph.get_vertex_mean_quality(vertex_data, "test")
             Test.@test !isnothing(mean_quality)
-            
+
             println("✓ RNA Qualmer Graph: $(length(kmers)) k-mers")
         end
-        
+
         Test.@testset "Amino Acid Qualmer Graphs" begin
             aa_seq = test_sequences.protein
             records = [FASTX.FASTQ.Record("test", aa_seq, repeat("H", length(aa_seq)))]
-            
+
             # Test qualmer graph construction
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 3; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, 3; dataset_id = "test", mode = :singlestrand)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test quality-aware vertex data
             kmers = collect(MetaGraphsNext.labels(graph))
             Test.@test length(kmers) > 0
-            
+
             first_kmer = first(kmers)
             vertex_data = graph[first_kmer]
             Test.@test vertex_data isa Mycelia.Rhizomorph.QualmerVertexData
             Test.@test !isempty(vertex_data.evidence)
-            
+
             println("✓ Amino Acid Qualmer Graph: $(length(kmers)) k-mers")
         end
     end
-    
+
     Test.@testset "4. String Graphs - Simplified N-gram Graphs" begin
         test_string = "ABCDEFGHIJKLMNOP"
-        
+
         # Test string graph construction from N-gram graph
-        ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id="test")
+        ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], 3; dataset_id = "test")
         Test.@test !isempty(MetaGraphsNext.labels(ngram_graph))
-        
+
         # Test path collapsing (string graph simplification)
         try
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(ngram_graph)
@@ -196,107 +199,110 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             println("⚠ String Graph: Path collapsing not yet implemented - $(e)")
         end
     end
-    
+
     Test.@testset "5. FASTA Graphs - Simplified K-mer Graphs" begin
-        
         Test.@testset "Direct BioSequence Graph from FASTA" begin
             dna_seq = test_sequences.dna
             records = [FASTX.FASTA.Record("test", dna_seq)]
-            
+
             # Test direct BioSequence graph construction
-            graph = Mycelia.Rhizomorph.build_fasta_graph(records; dataset_id="test", min_overlap=5)
+            graph = Mycelia.Rhizomorph.build_fasta_graph(records; dataset_id = "test", min_overlap = 5)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data
             sequences = collect(MetaGraphsNext.labels(graph))
             Test.@test length(sequences) > 0
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
-            
+
             # Test GFA I/O
             temp_file = tempname() * ".gfa"
             Mycelia.Rhizomorph.write_gfa_next(graph, temp_file)
             Test.@test isfile(temp_file)
-            
+
             # Test reading back
-            read_graph = Mycelia.Rhizomorph.read_gfa_next(temp_file, force_biosequence_graph=true)
+            read_graph = Mycelia.Rhizomorph.read_gfa_next(temp_file, force_biosequence_graph = true)
             Test.@test !isempty(MetaGraphsNext.labels(read_graph))
-            
+
             rm(temp_file)
             println("✓ FASTA Graph: $(length(sequences)) BioSequences, GFA I/O working")
         end
-        
+
         Test.@testset "K-mer to BioSequence Graph Conversion" begin
             dna_seq = test_sequences.dna
             records = [FASTX.FASTA.Record("test", dna_seq)]
-            
+
             # Create k-mer graph first
-            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                records, 5; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(kmer_graph))
-            
+
             # Convert to BioSequence graph
             bio_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(kmer_graph)
             Test.@test !isempty(MetaGraphsNext.labels(bio_graph))
-            
+
             # Test that sequences are BioSequences
             sequences = collect(MetaGraphsNext.labels(bio_graph))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
-            
+
             println("✓ K-mer to FASTA Graph: $(length(MetaGraphsNext.labels(kmer_graph))) k-mers -> $(length(sequences)) BioSequences")
         end
     end
-    
+
     Test.@testset "6. FASTQ Graphs - Quality-Aware BioSequence Graphs" begin
-        
         Test.@testset "Direct Quality BioSequence Graph from FASTQ" begin
             dna_seq = test_sequences.dna
-            records = [Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=high_quality_scores)]
-            
+            records = [Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = high_quality_scores)]
+
             # Test direct quality BioSequence graph construction
-            graph = Mycelia.Rhizomorph.build_fastq_graph(records; dataset_id="test", min_overlap=5)
+            graph = Mycelia.Rhizomorph.build_fastq_graph(records; dataset_id = "test", min_overlap = 5)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Test vertex data with quality information
             sequences = collect(MetaGraphsNext.labels(graph))
             Test.@test length(sequences) > 0
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
-            
+
             # Test vertex metadata includes quality
             first_seq = first(sequences)
             vertex_data = graph[first_seq]
             Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
             Test.@test !isempty(vertex_data.evidence)
-            
+
             println("✓ FASTQ Graph: $(length(sequences)) quality-aware BioSequences")
         end
-        
+
         Test.@testset "Qualmer to Quality BioSequence Graph Conversion" begin
             dna_seq = test_sequences.dna
-            records = [Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=medium_quality_scores)]
-            
+            records = [Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = medium_quality_scores)]
+
             # Create qualmer graph first
-            qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, 5; dataset_id = "test", mode = :doublestrand)
             Test.@test !isempty(MetaGraphsNext.labels(qualmer_graph))
-            
+
             # Convert to quality BioSequence graph
             bio_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
             Test.@test !isempty(MetaGraphsNext.labels(bio_graph))
-            
+
             # Test that sequences are BioSequences with quality
             sequences = collect(MetaGraphsNext.labels(bio_graph))
             Test.@test all(seq -> seq isa BioSequences.LongDNA, sequences)
-            
+
             println("✓ Qualmer to FASTQ Graph: $(length(MetaGraphsNext.labels(qualmer_graph))) qualmers -> $(length(sequences)) quality BioSequences")
         end
-        
+
         Test.@testset "FASTQ Conversion Roundtrip" begin
             dna_seq = test_sequences.dna
-            original_record = Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=high_quality_scores)
+            original_record = Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = high_quality_scores)
             records = [original_record]
-            
+
             # Build quality graph
-            graph = Mycelia.Rhizomorph.build_fastq_graph(records; dataset_id="test", min_overlap=5)
+            graph = Mycelia.Rhizomorph.build_fastq_graph(records; dataset_id = "test", min_overlap = 5)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
-            
+
             # Convert back to FASTQ
             sequences = collect(MetaGraphsNext.labels(graph))
             Test.@test !isempty(sequences)
@@ -307,59 +313,61 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             println("✓ FASTQ Graph: Quality evidence preserved")
         end
     end
-    
+
     Test.@testset "7. Graph Type Hierarchy Integration" begin
-        
         Test.@testset "Fixed-Length to Variable-Length Conversion" begin
             dna_seq = test_sequences.dna
             records = [FASTX.FASTA.Record("test", dna_seq)]
-            
+
             # Test k-mer graph -> BioSequence graph conversion
-            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                records, 5; dataset_id = "test", mode = :doublestrand)
             bio_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(kmer_graph)
-            
+
             Test.@test !isempty(MetaGraphsNext.labels(kmer_graph))
             Test.@test !isempty(MetaGraphsNext.labels(bio_graph))
-            
+
             # Test that we can convert between representations
             kmer_count = length(MetaGraphsNext.labels(kmer_graph))
             bio_count = length(MetaGraphsNext.labels(bio_graph))
-            
+
             println("✓ Hierarchy Integration: $(kmer_count) k-mers -> $(bio_count) BioSequences")
         end
-        
+
         Test.@testset "Quality Preservation Through Hierarchy" begin
             dna_seq = test_sequences.dna
-            records = [Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=high_quality_scores)]
-            
+            records = [Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = high_quality_scores)]
+
             # Test qualmer graph -> quality BioSequence graph conversion
-            qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+            qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, 5; dataset_id = "test", mode = :doublestrand)
             bio_graph = Mycelia.Rhizomorph.convert_fixed_to_variable(qualmer_graph)
-            
+
             Test.@test !isempty(MetaGraphsNext.labels(qualmer_graph))
             Test.@test !isempty(MetaGraphsNext.labels(bio_graph))
-            
+
             # Test quality preservation
             sequences = collect(MetaGraphsNext.labels(bio_graph))
             first_seq = first(sequences)
             vertex_data = bio_graph[first_seq]
             Test.@test !isempty(vertex_data.quality_scores)
-            
+
             println("✓ Quality Preservation: Quality maintained through graph hierarchy")
         end
     end
-    
+
     Test.@testset "8. Assembly Pipeline Integration" begin
-        
         Test.@testset "Unified Assembly Interface" begin
             # Test different assembly methods
             dna_seq = test_sequences.dna
             fasta_records = [FASTX.FASTA.Record("test", dna_seq)]
-            fastq_records = [Mycelia.fastq_record(identifier="test", sequence=dna_seq, quality_scores=high_quality_scores)]
-            
+            fastq_records = [Mycelia.fastq_record(identifier = "test", sequence = dna_seq,
+                quality_scores = high_quality_scores)]
+
             # Test K-mer graph assembly (FASTA input auto-detects to k-mer graph)
             try
-                kmer_result = Mycelia.Rhizomorph.assemble_genome(fasta_records; k=5)
+                kmer_result = Mycelia.Rhizomorph.assemble_genome(fasta_records; k = 5)
                 Test.@test !isempty(kmer_result.contigs)
                 println("✓ Unified Assembly: K-mer graph method working")
             catch e
@@ -368,24 +376,24 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
             # Test Qualmer graph assembly (FASTQ input auto-detects to qualmer graph)
             try
-                qualmer_result = Mycelia.Rhizomorph.assemble_genome(fastq_records; k=5)
+                qualmer_result = Mycelia.Rhizomorph.assemble_genome(fastq_records; k = 5)
                 Test.@test !isempty(qualmer_result.contigs)
                 println("✓ Unified Assembly: Qualmer graph method working")
             catch e
                 println("⚠ Unified Assembly: Qualmer graph method - $(e)")
             end
         end
-        
+
         Test.@testset "Automatic Type Detection" begin
             # Test automatic sequence type detection
             dna_seq = test_sequences.dna
             rna_seq = test_sequences.rna
             aa_seq = test_sequences.protein
-            
+
             # Test DNA detection
             try
                 dna_records = [FASTX.FASTA.Record("test", dna_seq)]
-                dna_result = Mycelia.Rhizomorph.assemble_genome(dna_records; k=5)
+                dna_result = Mycelia.Rhizomorph.assemble_genome(dna_records; k = 5)
                 Test.@test !isempty(dna_result.contigs)
                 println("✓ Auto-detection: DNA assembly working")
             catch e
@@ -395,7 +403,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             # Test RNA detection
             try
                 rna_records = [FASTX.FASTA.Record("test", rna_seq)]
-                rna_result = Mycelia.Rhizomorph.assemble_genome(rna_records; k=4)
+                rna_result = Mycelia.Rhizomorph.assemble_genome(rna_records; k = 4)
                 Test.@test !isempty(rna_result.contigs)
                 println("✓ Auto-detection: RNA assembly working")
             catch e
@@ -405,7 +413,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             # Test protein detection (should auto-detect SingleStrand mode)
             try
                 aa_records = [FASTX.FASTA.Record("test", aa_seq)]
-                aa_result = Mycelia.Rhizomorph.assemble_genome(aa_records; k=3)
+                aa_result = Mycelia.Rhizomorph.assemble_genome(aa_records; k = 3)
                 Test.@test !isempty(aa_result.contigs)
                 println("✓ Auto-detection: Protein assembly working")
             catch e
@@ -415,7 +423,6 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
     end
 
     Test.@testset "9. Comprehensive Round-Trip I/O Testing" begin
-
         Test.@testset "GFA Round-Trip with Information Preservation" begin
 
             # Test different graph types with comprehensive validation
@@ -430,60 +437,71 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             long_dna_seq2 = "CGATCGATCGATCGATCGAT"
 
             test_data = [
-                (name="K-mer Graph (DNA)",
-                 records=[FASTX.FASTA.Record("test1", dna_seq1), FASTX.FASTA.Record("test2", dna_seq2)],
-                 builder=() -> Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", dna_seq1), FASTX.FASTA.Record("test2", dna_seq2)],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="K-mer Graph (RNA)",
-                 records=[FASTX.FASTA.Record("test1", rna_seq1), FASTX.FASTA.Record("test2", rna_seq2)],
-                 builder=() -> Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", rna_seq1), FASTX.FASTA.Record("test2", rna_seq2)],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="K-mer Graph (Protein)",
-                 records=[FASTX.FASTA.Record("test1", protein_seq1), FASTX.FASTA.Record("test2", protein_seq2)],
-                 builder=() -> Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", protein_seq1), FASTX.FASTA.Record("test2", protein_seq2)],
-                     3;
-                     dataset_id="test",
-                     mode=:singlestrand)),
-
-                (name="Qualmer Graph (DNA)",
-                 records=[Mycelia.fastq_record(identifier="test1", sequence=dna_seq1, quality_scores=fill(UInt8(35), length(dna_seq1)))],
-                 builder=() -> Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=dna_seq1, quality_scores=fill(UInt8(35), length(dna_seq1)))],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="Qualmer Graph (RNA)",
-                 records=[Mycelia.fastq_record(identifier="test1", sequence=rna_seq1, quality_scores=fill(UInt8(35), length(rna_seq1)))],
-                 builder=() -> Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=rna_seq1, quality_scores=fill(UInt8(35), length(rna_seq1)))],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="Qualmer Graph (Protein)",
-                 records=[Mycelia.fastq_record(identifier="test1", sequence=protein_seq1, quality_scores=fill(UInt8(35), length(protein_seq1)))],
-                 builder=() -> Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=protein_seq1, quality_scores=fill(UInt8(35), length(protein_seq1)))],
-                     3;
-                     dataset_id="test",
-                     mode=:singlestrand)),
-
-                (name="BioSequence Graph",
-                 records=[FASTX.FASTA.Record("test1", long_dna_seq1), FASTX.FASTA.Record("test2", long_dna_seq2)],
-                 builder=() -> Mycelia.Rhizomorph.build_fasta_graph(
-                     [FASTX.FASTA.Record("test1", long_dna_seq1), FASTX.FASTA.Record("test2", long_dna_seq2)];
-                     dataset_id="test",
-                     min_overlap=5))
+                (name = "K-mer Graph (DNA)",
+                    records = [FASTX.FASTA.Record("test1", dna_seq1),
+                        FASTX.FASTA.Record("test2", dna_seq2)],
+                    builder = () -> Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", dna_seq1),
+                            FASTX.FASTA.Record("test2", dna_seq2)],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)), (name = "K-mer Graph (RNA)",
+                    records = [FASTX.FASTA.Record("test1", rna_seq1),
+                        FASTX.FASTA.Record("test2", rna_seq2)],
+                    builder = () -> Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", rna_seq1),
+                            FASTX.FASTA.Record("test2", rna_seq2)],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "K-mer Graph (Protein)",
+                    records = [FASTX.FASTA.Record("test1", protein_seq1),
+                        FASTX.FASTA.Record("test2", protein_seq2)],
+                    builder = () -> Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", protein_seq1),
+                            FASTX.FASTA.Record("test2", protein_seq2)],
+                        3;
+                        dataset_id = "test",
+                        mode = :singlestrand)),
+                (name = "Qualmer Graph (DNA)",
+                    records = [Mycelia.fastq_record(
+                        identifier = "test1", sequence = dna_seq1,
+                        quality_scores = fill(UInt8(35), length(dna_seq1)))],
+                    builder = () -> Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(identifier = "test1", sequence = dna_seq1,
+                            quality_scores = fill(UInt8(35), length(dna_seq1)))],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "Qualmer Graph (RNA)",
+                    records = [Mycelia.fastq_record(
+                        identifier = "test1", sequence = rna_seq1,
+                        quality_scores = fill(UInt8(35), length(rna_seq1)))],
+                    builder = () -> Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(identifier = "test1", sequence = rna_seq1,
+                            quality_scores = fill(UInt8(35), length(rna_seq1)))],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "Qualmer Graph (Protein)",
+                    records = [Mycelia.fastq_record(
+                        identifier = "test1", sequence = protein_seq1,
+                        quality_scores = fill(UInt8(35), length(protein_seq1)))],
+                    builder = () -> Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(
+                            identifier = "test1", sequence = protein_seq1,
+                            quality_scores = fill(UInt8(35), length(protein_seq1)))],
+                        3;
+                        dataset_id = "test",
+                        mode = :singlestrand)),
+                (name = "BioSequence Graph",
+                    records = [FASTX.FASTA.Record("test1", long_dna_seq1),
+                        FASTX.FASTA.Record("test2", long_dna_seq2)],
+                    builder = () -> Mycelia.Rhizomorph.build_fasta_graph(
+                        [FASTX.FASTA.Record("test1", long_dna_seq1),
+                            FASTX.FASTA.Record("test2", long_dna_seq2)];
+                        dataset_id = "test",
+                        min_overlap = 5))
             ]
 
             for (test_name, test_records, graph_builder) in test_data
@@ -502,7 +520,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                             # Read back from GFA
                             # For BioSequence graphs, force BioSequence graph type to preserve original semantics
                             if test_name == "BioSequence Graph"
-                                restored_graph = Mycelia.Rhizomorph.read_gfa_next(gfa_file, force_biosequence_graph=true)
+                                restored_graph = Mycelia.Rhizomorph.read_gfa_next(
+                                    gfa_file, force_biosequence_graph = true)
                             else
                                 restored_graph = Mycelia.Rhizomorph.read_gfa_next(gfa_file)
                             end
@@ -512,7 +531,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                             restored_vertices = Set(MetaGraphsNext.labels(restored_graph))
 
                             # Test structural integrity
-                            Test.@test length(original_vertices) == length(restored_vertices)
+                            Test.@test length(original_vertices) ==
+                                       length(restored_vertices)
 
                             original_edges = collect(MetaGraphsNext.edge_labels(original_graph))
                             restored_edges = collect(MetaGraphsNext.edge_labels(restored_graph))
@@ -525,9 +545,12 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                                 rest_sample = first(restored_vertices)
 
                                 # For k-mer graphs, verify k-mer compatibility
-                                if orig_sample isa Union{Mycelia.Kmers.DNAKmer, Mycelia.Kmers.RNAKmer, Mycelia.Kmers.AAKmer}
-                                    Test.@test rest_sample isa Union{Mycelia.Kmers.DNAKmer, Mycelia.Kmers.RNAKmer, Mycelia.Kmers.AAKmer}
-                                    Test.@test length(string(orig_sample)) == length(string(rest_sample))
+                                if orig_sample isa Union{Mycelia.Kmers.DNAKmer,
+                                    Mycelia.Kmers.RNAKmer, Mycelia.Kmers.AAKmer}
+                                    Test.@test rest_sample isa Union{Mycelia.Kmers.DNAKmer,
+                                        Mycelia.Kmers.RNAKmer, Mycelia.Kmers.AAKmer}
+                                    Test.@test length(string(orig_sample)) ==
+                                               length(string(rest_sample))
                                 end
 
                                 # For BioSequence graphs, verify sequence compatibility
@@ -561,53 +584,51 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             long_dna_seq = "ATCGATCGATCGATCGATCG"
 
             test_graphs = [
-                (name="K-mer Graph (DNA)",
-                 graph=Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", dna_seq)],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="K-mer Graph (RNA)",
-                 graph=Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", rna_seq)],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="K-mer Graph (Protein)",
-                 graph=Mycelia.Rhizomorph.build_kmer_graph(
-                     [FASTX.FASTA.Record("test1", protein_seq)],
-                     3;
-                     dataset_id="test",
-                     mode=:singlestrand)),
-
-                (name="Qualmer Graph (DNA) with Quality Data",
-                 graph=Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=dna_seq, quality_scores=fill(UInt8(35), length(dna_seq)))],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="Qualmer Graph (RNA) with Quality Data",
-                 graph=Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=rna_seq, quality_scores=fill(UInt8(35), length(rna_seq)))],
-                     5;
-                     dataset_id="test",
-                     mode=:doublestrand)),
-
-                (name="Qualmer Graph (Protein) with Quality Data",
-                 graph=Mycelia.Rhizomorph.build_qualmer_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=protein_seq, quality_scores=fill(UInt8(35), length(protein_seq)))],
-                     3;
-                     dataset_id="test",
-                     mode=:singlestrand)),
-
-                (name="Quality BioSequence Graph",
-                 graph=Mycelia.Rhizomorph.build_fastq_graph(
-                     [Mycelia.fastq_record(identifier="test1", sequence=long_dna_seq, quality_scores=fill(UInt8(35), length(long_dna_seq)))];
-                     dataset_id="test",
-                     min_overlap=5))
+                (name = "K-mer Graph (DNA)",
+                    graph = Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", dna_seq)],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)), (name = "K-mer Graph (RNA)",
+                    graph = Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", rna_seq)],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "K-mer Graph (Protein)",
+                    graph = Mycelia.Rhizomorph.build_kmer_graph(
+                        [FASTX.FASTA.Record("test1", protein_seq)],
+                        3;
+                        dataset_id = "test",
+                        mode = :singlestrand)),
+                (name = "Qualmer Graph (DNA) with Quality Data",
+                    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(identifier = "test1", sequence = dna_seq,
+                            quality_scores = fill(UInt8(35), length(dna_seq)))],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "Qualmer Graph (RNA) with Quality Data",
+                    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(identifier = "test1", sequence = rna_seq,
+                            quality_scores = fill(UInt8(35), length(rna_seq)))],
+                        5;
+                        dataset_id = "test",
+                        mode = :doublestrand)),
+                (name = "Qualmer Graph (Protein) with Quality Data",
+                    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                        [Mycelia.fastq_record(identifier = "test1", sequence = protein_seq,
+                            quality_scores = fill(UInt8(35), length(protein_seq)))],
+                        3;
+                        dataset_id = "test",
+                        mode = :singlestrand)),
+                (name = "Quality BioSequence Graph",
+                    graph = Mycelia.Rhizomorph.build_fastq_graph(
+                        [Mycelia.fastq_record(
+                            identifier = "test1", sequence = long_dna_seq,
+                            quality_scores = fill(UInt8(35), length(long_dna_seq)))];
+                        dataset_id = "test",
+                        min_overlap = 5))
             ]
 
             for (test_name, original_graph) in test_graphs
@@ -628,7 +649,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                             restored_vertices = collect(MetaGraphsNext.labels(restored_graph))
 
                             # Exact structural preservation
-                            Test.@test length(original_vertices) == length(restored_vertices)
+                            Test.@test length(original_vertices) ==
+                                       length(restored_vertices)
                             Test.@test Set(original_vertices) == Set(restored_vertices)
 
                             original_edges = collect(MetaGraphsNext.edge_labels(original_graph))
@@ -650,33 +672,40 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                                 end
 
                                 if hasfield(typeof(original_data), :sequence)
-                                    Test.@test original_data.sequence == restored_data.sequence
+                                    Test.@test original_data.sequence ==
+                                               restored_data.sequence
                                 end
 
                                 if hasfield(typeof(original_data), :evidence)
-                                    Test.@test original_data.evidence == restored_data.evidence
+                                    Test.@test original_data.evidence ==
+                                               restored_data.evidence
                                 end
                             end
 
                             # Exact edge data preservation
                             for edge in original_edges
-                                if haskey(original_graph.edge_data, edge) && haskey(restored_graph.edge_data, edge)
+                                if haskey(original_graph.edge_data, edge) &&
+                                   haskey(restored_graph.edge_data, edge)
                                     original_edge_data = original_graph.edge_data[edge]
                                     restored_edge_data = restored_graph.edge_data[edge]
-                                    Test.@test typeof(original_edge_data) == typeof(restored_edge_data)
+                                    Test.@test typeof(original_edge_data) ==
+                                               typeof(restored_edge_data)
 
                                     if hasfield(typeof(original_edge_data), :overlap_length)
-                                        Test.@test original_edge_data.overlap_length == restored_edge_data.overlap_length
+                                        Test.@test original_edge_data.overlap_length ==
+                                                   restored_edge_data.overlap_length
                                     end
 
                                     if hasfield(typeof(original_edge_data), :evidence)
-                                        Test.@test original_edge_data.evidence == restored_edge_data.evidence
+                                        Test.@test original_edge_data.evidence ==
+                                                   restored_edge_data.evidence
                                     end
                                 end
                             end
 
                             # Graph metadata preservation
-                            Test.@test original_graph.default_weight == restored_graph.default_weight
+                            Test.@test original_graph.default_weight ==
+                                       restored_graph.default_weight
 
                             println("✓ $test_name: ZERO information loss - $(length(original_vertices)) vertices, $(length(original_edges)) edges exactly preserved")
                         end
@@ -694,8 +723,11 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             Test.@testset "Information Preservation Comparison" begin
                 # Build a complex graph with rich metadata
                 comparison_seq = "ATCGATCGATCG"
-                records = [Mycelia.fastq_record(identifier="test1", sequence=comparison_seq, quality_scores=fill(UInt8(35), length(comparison_seq)))]
-                original_graph = Mycelia.Rhizomorph.build_qualmer_graph(records, 5; dataset_id="test", mode=:doublestrand)
+                records = [Mycelia.fastq_record(
+                    identifier = "test1", sequence = comparison_seq,
+                    quality_scores = fill(UInt8(35), length(comparison_seq)))]
+                original_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                    records, 5; dataset_id = "test", mode = :doublestrand)
 
                 mktempdir() do tmpdir
                     gfa_file = joinpath(tmpdir, "comparison.gfa")
@@ -716,8 +748,10 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                     jld2_vertices = collect(MetaGraphsNext.labels(jld2_restored))
 
                     # Structure preservation comparison
-                    gfa_structure_preserved = length(original_vertices) == length(gfa_vertices)
-                    jld2_structure_preserved = length(original_vertices) == length(jld2_vertices)
+                    gfa_structure_preserved = length(original_vertices) ==
+                                              length(gfa_vertices)
+                    jld2_structure_preserved = length(original_vertices) ==
+                                               length(jld2_vertices)
 
                     Test.@test jld2_structure_preserved  # JLD2 should always preserve structure exactly
 
@@ -747,7 +781,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             Test.@testset "DNA K-mer Graph Content" begin
                 k = 3
                 records = [FASTX.FASTA.Record("test", test_dna)]
-                graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; dataset_id="test", mode=:doublestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    records, k; dataset_id = "test", mode = :doublestrand)
 
                 # Validate exact vertex set
                 vertices = collect(MetaGraphsNext.labels(graph))
@@ -756,7 +791,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 # DoubleStrand graphs include forward and reverse-complement k-mers
                 expected_kmer_strings = ["ATC", "TCG", "CGA", "GAT"]
                 expected_doublestrand = Set(expected_kmer_strings)
-                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
+                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s)))
+                for s in expected_kmer_strings)
                 expected_doublestrand = union(expected_doublestrand, expected_rc)
                 actual_unique_kmers = Set(vertex_strings)
 
@@ -790,13 +826,15 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             Test.@testset "RNA K-mer Graph Content" begin
                 k = 3
                 records = [FASTX.FASTA.Record("test", test_rna)]
-                graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; dataset_id="test", mode=:doublestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    records, k; dataset_id = "test", mode = :doublestrand)
 
                 vertices = collect(MetaGraphsNext.labels(graph))
                 vertex_strings = [string(v) for v in vertices]
                 expected_kmer_strings = ["AUC", "UCG", "CGA", "GAU"]  # RNA alphabet
                 expected_doublestrand = Set(expected_kmer_strings)
-                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.RNAKmer{k}(s))) for s in expected_kmer_strings)
+                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.RNAKmer{k}(s)))
+                for s in expected_kmer_strings)
                 expected_doublestrand = union(expected_doublestrand, expected_rc)
                 actual_unique_kmers = Set(vertex_strings)
 
@@ -807,7 +845,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             Test.@testset "Protein K-mer Graph Content" begin
                 k = 3
                 records = [FASTX.FASTA.Record("test", test_protein)]
-                graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; dataset_id="test", mode=:singlestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    records, k; dataset_id = "test", mode = :singlestrand)
 
                 vertices = collect(MetaGraphsNext.labels(graph))
                 vertex_strings = [string(v) for v in vertices]
@@ -822,12 +861,13 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
         Test.@testset "String Graph Path Validation" begin
             test_string = "Hello World"
             n = 3
-            ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], n; dataset_id="test")
+            ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([test_string], n; dataset_id = "test")
 
             # Validate exact n-gram content
             vertices = collect(MetaGraphsNext.labels(ngram_graph))
             # For "Hello World" with n=3: "Hel", "ell", "llo", "lo ", "o W", " Wo", "Wor", "orl", "rld"
-            expected_ngrams = ["Hel", "ell", "llo", "lo ", "o W", " Wo", "Wor", "orl", "rld"]
+            expected_ngrams = [
+                "Hel", "ell", "llo", "lo ", "o W", " Wo", "Wor", "orl", "rld"]
             Test.@test length(vertices) == length(expected_ngrams)
 
             for expected_ngram in expected_ngrams
@@ -851,7 +891,7 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
             seq2 = "GATCGATCGATC"  # 12bp, overlaps with seq1
             records = [FASTX.FASTA.Record("seq1", seq1), FASTX.FASTA.Record("seq2", seq2)]
 
-            graph = Mycelia.Rhizomorph.build_fasta_graph(records; dataset_id="test", min_overlap=8)
+            graph = Mycelia.Rhizomorph.build_fasta_graph(records; dataset_id = "test", min_overlap = 8)
 
             # Validate that sequences are vertices
             vertices = collect(MetaGraphsNext.labels(graph))
@@ -876,17 +916,20 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
 
         Test.@testset "Qualmer Graph Quality-Aware Validation" begin
             quality_scores = fill(UInt8(35), length(test_dna))  # High quality
-            records = [Mycelia.fastq_record(identifier="test", sequence=test_dna, quality_scores=quality_scores)]
+            records = [Mycelia.fastq_record(
+                identifier = "test", sequence = test_dna, quality_scores = quality_scores)]
 
             k = 3
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(records, k; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                records, k; dataset_id = "test", mode = :doublestrand)
 
             # Validate qualmer vertices have both sequence and quality data
             vertices = collect(MetaGraphsNext.labels(graph))
             vertex_strings = [string(v) for v in vertices]
             expected_kmer_strings = ["ATC", "TCG", "CGA", "GAT"]
             expected_doublestrand = Set(expected_kmer_strings)
-            expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
+            expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s)))
+            for s in expected_kmer_strings)
             expected_doublestrand = union(expected_doublestrand, expected_rc)
 
             Test.@test Set(vertex_strings) == expected_doublestrand
@@ -913,14 +956,16 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 # Test biological sequence → k-mer path → sequence reconstruction using existing qualmer functions
                 # Convert to FASTQ record for compatibility with existing functions
                 quality_scores = fill(UInt8(35), length(original_biosequence))
-                record = Mycelia.fastq_record(identifier="test", sequence=string(original_biosequence), quality_scores=quality_scores)
+                record = Mycelia.fastq_record(
+                    identifier = "test", sequence = string(original_biosequence),
+                    quality_scores = quality_scores)
 
                 # Build a simple k-mer graph and extract path
                 graph = Mycelia.Rhizomorph.build_kmer_graph(
                     [FASTX.FASTA.Record("test", original_biosequence)],
                     k;
-                    dataset_id="test",
-                    mode=:doublestrand)
+                    dataset_id = "test",
+                    mode = :doublestrand)
 
                 # Test that we can build the graph and it contains expected k-mers
                 vertices = collect(MetaGraphsNext.labels(graph))
@@ -929,7 +974,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 # For "ATCGATCGATC" with k=4: expect ATCG, TCGA, CGAT, GATC, ATCG, TCGA, CGAT, ATCG (8 total, fewer unique)
                 expected_kmer_strings = ["ATCG", "TCGA", "CGAT", "GATC"]
                 expected_doublestrand = Set(expected_kmer_strings)
-                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s))) for s in expected_kmer_strings)
+                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(s)))
+                for s in expected_kmer_strings)
                 expected_doublestrand = union(expected_doublestrand, expected_rc)
 
                 Test.@test Set(vertex_strings) == expected_doublestrand
@@ -942,7 +988,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 simple_seq = "ATCG"
                 k = 2
                 records = [FASTX.FASTA.Record("test", simple_seq)]
-                graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; dataset_id="test", mode=:doublestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    records, k; dataset_id = "test", mode = :doublestrand)
 
                 # For "ATCG" with k=2: expect vertices AT, TC, CG
                 # Expect edges: AT→TC, TC→CG
@@ -950,7 +997,8 @@ Test.@testset "End-to-End Assembly Tests for All 6 Graph Types" begin
                 vertex_strings = [string(v) for v in vertices]
                 expected_vertices = ["AT", "TC", "CG"]
                 expected_doublestrand = Set(expected_vertices)
-                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(v))) for v in expected_vertices)
+                expected_rc = Set(string(BioSequences.reverse_complement(Mycelia.Kmers.DNAKmer{k}(v)))
+                for v in expected_vertices)
                 expected_doublestrand = union(expected_doublestrand, expected_rc)
 
                 Test.@test Set(vertex_strings) == expected_doublestrand

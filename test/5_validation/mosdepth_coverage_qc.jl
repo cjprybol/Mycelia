@@ -31,30 +31,32 @@ Test.@testset "Mosdepth Coverage QC" begin
         rng = StableRNGs.StableRNG(42)
 
         ## Generate 3 different contigs/chromosomes with different lengths
-        contig1_record = Mycelia.random_fasta_record(L=5000, seed=rand(rng, 0:typemax(Int)))
-        contig2_record = Mycelia.random_fasta_record(L=3000, seed=rand(rng, 0:typemax(Int)))
-        contig3_record = Mycelia.random_fasta_record(L=4000, seed=rand(rng, 0:typemax(Int)))
+        contig1_record = Mycelia.random_fasta_record(L = 5000, seed = rand(rng, 0:typemax(Int)))
+        contig2_record = Mycelia.random_fasta_record(L = 3000, seed = rand(rng, 0:typemax(Int)))
+        contig3_record = Mycelia.random_fasta_record(L = 4000, seed = rand(rng, 0:typemax(Int)))
 
         ## Write multi-contig FASTA file
         multi_contig_fasta = joinpath(test_dir, "reference.fasta")
-        Mycelia.write_fasta(outfile=multi_contig_fasta, records=[contig1_record, contig2_record, contig3_record])
+        Mycelia.write_fasta(outfile = multi_contig_fasta,
+            records = [contig1_record, contig2_record, contig3_record])
 
         Test.@test isfile(multi_contig_fasta)
 
         ## Step 2: Simulate reads from multi-contig reference
         ## Use lower coverage for speed but enough to get meaningful results
-        simulated_reads = Mycelia.simulate_illumina_reads(fasta=multi_contig_fasta, coverage=10, quiet=true)
+        simulated_reads = Mycelia.simulate_illumina_reads(
+            fasta = multi_contig_fasta, coverage = 10, quiet = true)
 
         Test.@test isfile(simulated_reads.forward_reads)
 
         ## Step 3: Map reads to create unsorted BAM
         map_result = Mycelia.minimap_map(
-            fasta=multi_contig_fasta,
-            fastq=simulated_reads.forward_reads,
-            mapping_type="sr",
-            output_format="bam",
-            sorted=false,
-            quiet=true
+            fasta = multi_contig_fasta,
+            fastq = simulated_reads.forward_reads,
+            mapping_type = "sr",
+            output_format = "bam",
+            sorted = false,
+            quiet = true
         )
         run(map_result.cmd)
         unsorted_bam = map_result.outfile
@@ -89,7 +91,7 @@ Test.@testset "Mosdepth Coverage QC" begin
         Test.@test bai_path == sorted_bam * ".bai"
 
         ## Step 8: Run mosdepth on the indexed BAM
-        mosdepth_output = Mycelia.run_mosdepth(sorted_bam, no_per_base=true)
+        mosdepth_output = Mycelia.run_mosdepth(sorted_bam, no_per_base = true)
 
         Test.@test isfile(mosdepth_output.global_dist)
         Test.@test isfile(mosdepth_output.summary)
@@ -138,9 +140,9 @@ Test.@testset "Mosdepth Coverage QC" begin
             ## (proportions should increase as coverage threshold decreases)
             ## Check monotonicity within each chromosome separately
             for chrom_df in DataFrames.groupby(qc_metrics, :chromosome)
-                for j in 1:(length(expected_thresholds)-1)
+                for j in 1:(length(expected_thresholds) - 1)
                     lower_threshold = expected_thresholds[j]
-                    higher_threshold = expected_thresholds[j+1]
+                    higher_threshold = expected_thresholds[j + 1]
                     lower_col = Symbol("coverage_$(lower_threshold)X")
                     higher_col = Symbol("coverage_$(higher_threshold)X")
                     lower_val = chrom_df[1, lower_col]
@@ -189,7 +191,7 @@ Test.@testset "Mosdepth Coverage QC" begin
             end
 
             ## Merge QC metrics with summary statistics
-            comprehensive_table = DataFrames.innerjoin(qc_metrics, summary_df, on="chromosome")
+            comprehensive_table = DataFrames.innerjoin(qc_metrics, summary_df, on = "chromosome")
 
             Test.@test comprehensive_table isa DataFrames.DataFrame
             Test.@test DataFrames.nrow(comprehensive_table) >= 2  ## At least total + one contig
@@ -213,29 +215,29 @@ Test.@testset "Mosdepth Coverage QC" begin
         end
 
         ## Cleanup temporary files
-        rm(multi_contig_fasta, force=true)
-        rm(simulated_reads.forward_reads, force=true)
-        rm(simulated_reads.reverse_reads, force=true)
+        rm(multi_contig_fasta, force = true)
+        rm(simulated_reads.forward_reads, force = true)
+        rm(simulated_reads.reverse_reads, force = true)
         if simulated_reads.sam !== nothing
-            rm(simulated_reads.sam, force=true)
+            rm(simulated_reads.sam, force = true)
         end
         if simulated_reads.error_free_sam !== nothing
-            rm(simulated_reads.error_free_sam, force=true)
+            rm(simulated_reads.error_free_sam, force = true)
         end
-        rm(unsorted_bam, force=true)
-        rm(sorted_bam, force=true)
-        rm(bai_path, force=true)
-        rm(mosdepth_output.global_dist, force=true)
-        rm(mosdepth_output.summary, force=true)
+        rm(unsorted_bam, force = true)
+        rm(sorted_bam, force = true)
+        rm(bai_path, force = true)
+        rm(mosdepth_output.global_dist, force = true)
+        rm(mosdepth_output.summary, force = true)
         ## Also clean up mosdepth index files if they exist
         for ext in [".mosdepth.region.dist.txt", ".mosdepth.summary.txt.csi"]
             cleanup_file = sorted_bam * ext
             if isfile(cleanup_file)
-                rm(cleanup_file, force=true)
+                rm(cleanup_file, force = true)
             end
         end
     end
 
     ## Cleanup test directory
-    rm(test_dir, recursive=true, force=true)
+    rm(test_dir, recursive = true, force = true)
 end

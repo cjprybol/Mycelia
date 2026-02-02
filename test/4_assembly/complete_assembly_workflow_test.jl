@@ -30,7 +30,6 @@ import Kmers
 import Random
 
 Test.@testset "Complete Assembly Workflow Tests" begin
-
     Test.@testset "Linear Genome - Perfect Reconstruction" begin
         # Simple case: linear genome with no branches, should reconstruct perfectly
         mktempdir() do dir
@@ -41,11 +40,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
             fastq = joinpath(dir, "reads.fastq")
             quality = fill(UInt8(40), length(reference))  # High quality
             rec = FASTX.FASTQ.Record("read1", reference, quality)
-            Mycelia.write_fastq(outfile=fastq, records=[rec])
+            Mycelia.write_fastq(outfile = fastq, records = [rec])
 
             # Step 1: Build qualmer graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :singlestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # Step 2: Find Eulerian paths
@@ -80,11 +79,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
                 rec = FASTX.FASTQ.Record("read$i", reference, quality)
                 push!(records, rec)
             end
-            Mycelia.write_fastq(outfile=fastq, records=records)
+            Mycelia.write_fastq(outfile = fastq, records = records)
 
             # Build qualmer graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :singlestrand)
 
             # Verify higher coverage in evidence
             for label in MetaGraphsNext.labels(graph)
@@ -118,11 +117,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
                 FASTX.FASTQ.Record("forward", forward, fill(UInt8(30), length(forward))),
                 FASTX.FASTQ.Record("reverse", reverse_comp, fill(UInt8(30), length(reverse_comp)))
             ]
-            Mycelia.write_fastq(outfile=fastq, records=records)
+            Mycelia.write_fastq(outfile = fastq, records = records)
 
             # Build doublestrand qualmer graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :doublestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # In doublestrand mode, forward and reverse complement k-mers remain distinct
@@ -147,11 +146,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             fastq = joinpath(dir, "reads.fastq")
             rec = FASTX.FASTQ.Record("read1", reference, fill(UInt8(35), length(reference)))
-            Mycelia.write_fastq(outfile=fastq, records=[rec])
+            Mycelia.write_fastq(outfile = fastq, records = [rec])
 
             # Build canonical qualmer graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:canonical)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :canonical)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # Find paths
@@ -174,11 +173,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             fasta = joinpath(dir, "reads.fasta")
             rec = FASTX.FASTA.Record("read1", reference)
-            Mycelia.write_fasta(outfile=fasta, records=[rec])
+            Mycelia.write_fasta(outfile = fasta, records = [rec])
 
             # Build k-mer graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode = :singlestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # Find paths
@@ -201,10 +200,10 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             fasta = joinpath(dir, "reads.fasta")
             rec = FASTX.FASTA.Record("read1", reference)
-            Mycelia.write_fasta(outfile=fasta, records=[rec])
+            Mycelia.write_fasta(outfile = fasta, records = [rec])
 
             k = 5
-            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode = :singlestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
@@ -236,17 +235,17 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             # Write reads to file
             fastq = joinpath(dir, "simulated.fastq")
-            Mycelia.write_fastq(outfile=fastq, records=reads)
+            Mycelia.write_fastq(outfile = fastq, records = reads)
 
             # Build qualmer graph and assemble
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :singlestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # Find paths
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
             if isempty(paths)
-                paths = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1)
+                paths = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
             end
             Test.@test paths isa Vector
 
@@ -277,11 +276,11 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             fastq = joinpath(dir, "reads.fastq")
             rec = FASTX.FASTQ.Record("read1", reference, fill(UInt8(35), length(reference)))
-            Mycelia.write_fastq(outfile=fastq, records=[rec])
+            Mycelia.write_fastq(outfile = fastq, records = [rec])
 
             # Build graph
             k = 5
-            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :singlestrand)
 
             # Find paths
             paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
@@ -292,8 +291,10 @@ Test.@testset "Complete Assembly Workflow Tests" begin
             Test.@test isfile(gfa_path)
 
             # Read back and verify
-            roundtrip = Mycelia.Rhizomorph.read_gfa_next(gfa_path, Kmers.DNAKmer{5}, Mycelia.Rhizomorph.SingleStrand)
-            Test.@test Set(MetaGraphsNext.labels(roundtrip)) == Set(MetaGraphsNext.labels(graph))
+            roundtrip = Mycelia.Rhizomorph.read_gfa_next(
+                gfa_path, Kmers.DNAKmer{5}, Mycelia.Rhizomorph.SingleStrand)
+            Test.@test Set(MetaGraphsNext.labels(roundtrip)) ==
+                       Set(MetaGraphsNext.labels(graph))
         end
     end
 
@@ -301,11 +302,12 @@ Test.@testset "Complete Assembly Workflow Tests" begin
         mktempdir() do dir
             # Empty FASTQ file
             fastq = joinpath(dir, "empty.fastq")
-            Mycelia.write_fastq(outfile=fastq, records=FASTX.FASTQ.Record[])
+            Mycelia.write_fastq(outfile = fastq, records = FASTX.FASTQ.Record[])
 
             # Building graph from empty file should handle gracefully
             k = 5
-            Test.@test_throws ArgumentError Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+            Test.@test_throws ArgumentError Mycelia.Rhizomorph.build_qualmer_graph_from_file(
+                fastq, k; mode = :singlestrand)
         end
     end
 
@@ -315,12 +317,12 @@ Test.@testset "Complete Assembly Workflow Tests" begin
 
             fastq = joinpath(dir, "reads.fastq")
             rec = FASTX.FASTQ.Record("read1", reference, fill(UInt8(35), length(reference)))
-            Mycelia.write_fastq(outfile=fastq, records=[rec])
+            Mycelia.write_fastq(outfile = fastq, records = [rec])
 
             # Test different k-mer sizes
             for k in [3, 5, 7, 11]
                 if k < length(reference)  # k must be less than sequence length
-                    graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode=:singlestrand)
+                    graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(fastq, k; mode = :singlestrand)
                     Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
                     paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
@@ -347,19 +349,19 @@ Test.@testset "Complete Assembly Workflow Tests" begin
             hq_fastq = joinpath(dir, "high_quality.fastq")
             hq_quality = fill(UInt8(40), length(reference))
             hq_rec = FASTX.FASTQ.Record("hq_read", reference, hq_quality)
-            Mycelia.write_fastq(outfile=hq_fastq, records=[hq_rec])
+            Mycelia.write_fastq(outfile = hq_fastq, records = [hq_rec])
 
             # Low quality reads
             lq_fastq = joinpath(dir, "low_quality.fastq")
             lq_quality = fill(UInt8(10), length(reference))
             lq_rec = FASTX.FASTQ.Record("lq_read", reference, lq_quality)
-            Mycelia.write_fastq(outfile=lq_fastq, records=[lq_rec])
+            Mycelia.write_fastq(outfile = lq_fastq, records = [lq_rec])
 
             k = 5
 
             # Build graphs
-            hq_graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(hq_fastq, k; mode=:singlestrand)
-            lq_graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(lq_fastq, k; mode=:singlestrand)
+            hq_graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(hq_fastq, k; mode = :singlestrand)
+            lq_graph = Mycelia.Rhizomorph.build_qualmer_graph_from_file(lq_fastq, k; mode = :singlestrand)
 
             # Both should produce graphs
             Test.@test !isempty(collect(MetaGraphsNext.labels(hq_graph)))
@@ -387,14 +389,15 @@ Test.@testset "Complete Assembly Workflow Tests" begin
                 FASTX.FASTA.Record("seq1", seq1),
                 FASTX.FASTA.Record("seq2", seq2)
             ]
-            Mycelia.write_fasta(outfile=fasta, records=recs)
+            Mycelia.write_fasta(outfile = fasta, records = recs)
 
             k = 3
-            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph_from_file(fasta, k; mode = :singlestrand)
             Test.@test !isempty(collect(MetaGraphsNext.labels(graph)))
 
             # Detect bubbles
-            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=1, max_bubble_length=10)
+            bubbles = Mycelia.Rhizomorph.detect_bubbles_next(
+                graph; min_bubble_length = 1, max_bubble_length = 10)
             Test.@test bubbles isa Vector{<:Mycelia.Rhizomorph.BubbleStructure}
 
             # Simplify if bubbles found

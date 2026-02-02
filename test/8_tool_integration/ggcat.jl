@@ -53,8 +53,8 @@ Test.@testset "GGCAT Tool Integration" begin
                         input_fasta,
                         joinpath(workdir, "graph.fasta.lz4"),
                         k_len;
-                        threads=1,
-                        min_multiplicity=1,
+                        threads = 1,
+                        min_multiplicity = 1
                     )
                     Test.@test isfile(graph_output)
                     Test.@test filesize(graph_output) > 0
@@ -70,12 +70,12 @@ Test.@testset "GGCAT Tool Integration" begin
                         query_fasta,
                         joinpath(workdir, "query_results.txt"),
                         k_len;
-                        threads=1,
+                        threads = 1
                     )
                     Test.@test isfile(query_output)
                     Test.@test filesize(query_output) > 0
                 finally
-                    rm(workdir; recursive=true, force=true)
+                    rm(workdir; recursive = true, force = true)
                 end
             end
         end

@@ -36,7 +36,7 @@ Test.@testset "Alignment Parsing Helpers" begin
             Test.@test coords[1, "ref_start"] == 1
             Test.@test coords[1, "identity"] == 99.5
 
-            summary = Mycelia.summarize_mummer_coords(coords; reference_length=1000, query_length=900)
+            summary = Mycelia.summarize_mummer_coords(coords; reference_length = 1000, query_length = 900)
             Test.@test summary.num_alignments == 1
             Test.@test summary.aligned_bases_ref == 100
             Test.@test summary.distance ≈ 0.005
@@ -60,7 +60,7 @@ Test.@testset "Alignment Parsing Helpers" begin
     end
 
     Test.@testset "Minimap and label helpers" begin
-        size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb=8.0, denominator=4.0)
+        size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb = 8.0, denominator = 4.0)
         Test.@test size == "2G"
 
         tag = Mycelia.build_sample_tag("foo bar.fastq.gz")

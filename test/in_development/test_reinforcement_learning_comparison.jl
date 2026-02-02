@@ -32,42 +32,42 @@ println("Loading reinforcement learning modules...")
 Test.@testset "Individual RL Approaches" begin
     # Generate small test dataset
     test_reads = ["ATCGATCG", "TCGATCGA", "CGATCGAT", "GATCGATC", "ATCGATCG"]
-    
+
     Test.@testset "Custom RL" begin
         # Test the existing custom implementation
         agent = Mycelia.DQNPolicy()
         env = Mycelia.AssemblyEnvironment(test_reads)
         state = Mycelia.reset!(env)
-        
+
         Test.@test isa(state, Mycelia.AssemblyState)
         Test.@test state.current_k == 19
-        
+
         # Test action selection
         action = Mycelia.select_action(agent, state)
         Test.@test isa(action, Mycelia.AssemblyAction)
         Test.@test action.decision in [:continue_k, :next_k, :terminate]
     end
-    
+
     Test.@testset "ReinforcementLearning.jl" begin
         # Test RL.jl environment
         env = Mycelia.AssemblyEnvRL()
         state = ReinforcementLearning.state(env)
-        
+
         Test.@test isa(state, Mycelia.AssemblyState)
         Test.@test length(ReinforcementLearning.action_space(env)) == 3
-        
+
         # Test action execution
         ReinforcementLearning.act!(env, :continue_k)
         Test.@test !isempty(env.reward_history)
     end
-    
+
     Test.@testset "POMDPs.jl" begin
         # Test POMDPs.jl MDP
         mdp = Mycelia.AssemblyMDP()
-        
+
         Test.@test POMDPs.discount(mdp) == 0.99
         Test.@test mdp.initial_k == 19
-        
+
         # Test initial state
         init_state = Random.rand(POMDPs.initialstate(mdp))
         Test.@test isa(init_state, Mycelia.AssemblyState)
@@ -80,24 +80,24 @@ Test.@testset "RL Comparison Framework" begin
     # Small dataset for quick testing
     test_reads = [
         "ATCGATCGATCG",
-        "TCGATCGATCGA", 
+        "TCGATCGATCGA",
         "CGATCGATCGAT",
         "GATCGATCGATC",
         "ATCGATCGATCG"
     ]
-    
+
     # Test individual wrapper functions
     Test.@testset "Wrapper Functions" begin
         # Custom RL wrapper
-        custom_history = Mycelia.run_custom_rl(test_reads, verbose=false)
+        custom_history = Mycelia.run_custom_rl(test_reads, verbose = false)
         Test.@test isa(custom_history, Mycelia.UnifiedAssemblyHistory)
         Test.@test custom_history.approach == "custom"
         Test.@test length(custom_history.k_values) > 0
-        
+
         # Note: Full RL.jl and POMDPs.jl tests would require more setup
         # and longer runtime, so we test the structure instead
     end
-    
+
     # Test comparison metrics calculation
     Test.@testset "Comparison Metrics" begin
         # Create mock histories for testing
@@ -129,14 +129,14 @@ Test.@testset "RL Comparison Framework" begin
                 1050
             )
         )
-        
+
         metrics = Mycelia.calculate_comparison_metrics(mock_results)
-        
+
         Test.@test haskey(metrics, "final_quality")
         Test.@test haskey(metrics, "average_quality")
         Test.@test haskey(metrics, "total_time")
         Test.@test haskey(metrics, "convergence_speed")
-        
+
         Test.@test metrics["final_quality"]["custom"] == 0.9
         Test.@test metrics["final_quality"]["rljl"] == 0.95
         Test.@test metrics["total_time"]["custom"] == 1.5
@@ -149,17 +149,17 @@ end
 Test.@testset "Full Comparison Integration" begin
     # Very small dataset for integration test
     mini_reads = ["ATCG", "TCGA", "CGAT", "GATC"]
-    
+
     # Run comparison with only custom approach for speed
     comparison = Mycelia.compare_rl_approaches(
         mini_reads,
-        approaches=[:custom],
-        dataset_name="test_integration",
-        training_episodes=10,
-        verbose=false,
-        save_results=false
+        approaches = [:custom],
+        dataset_name = "test_integration",
+        training_episodes = 10,
+        verbose = false,
+        save_results = false
     )
-    
+
     Test.@test isa(comparison, Mycelia.RLComparison)
     Test.@test comparison.dataset_name == "test_integration"
     Test.@test !isnothing(comparison.custom_results)
@@ -171,7 +171,7 @@ Test.@testset "Usage Examples" begin
     println("\n" * "="^60)
     println("Example Usage of RL Approaches")
     println("="^60)
-    
+
     # Generate example data
     example_reads = [
         "ATCGATCGATCGATCG",
@@ -180,22 +180,22 @@ Test.@testset "Usage Examples" begin
         "GATCGATCGATCGATC",
         "ATCGATCGATCGATCG"
     ]
-    
+
     println("\n1. Custom RL Approach (Rule-based placeholder):")
     println("   - Fast execution")
     println("   - No training required")
     println("   - Good baseline for comparison")
-    
+
     println("\n2. ReinforcementLearning.jl Approach:")
     println("   - Access to DQN, PPO, A2C, etc.")
     println("   - Experience replay and neural networks")
     println("   - Well-tested implementations")
-    
+
     println("\n3. POMDPs.jl Approach:")
     println("   - Formal MDP/POMDP specification")
     println("   - Value iteration, MCTS, belief tracking")
     println("   - Handles partial observability")
-    
+
     println("\n" * "="^60)
 end
 

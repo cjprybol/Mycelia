@@ -25,14 +25,16 @@ that consider both sequence content and sequencing quality information.
 """
 struct Qualmer{KmerT, K}
     kmer::KmerT
-    qualities::NTuple{K,UInt8}
-    function Qualmer(kmer::KmerT, qualities::NTuple{K,UInt8}) where {KmerT<:Kmers.Kmer, K}
+    qualities::NTuple{K, UInt8}
+    function Qualmer(kmer::KmerT, qualities::NTuple{
+            K, UInt8}) where {KmerT <: Kmers.Kmer, K}
         @assert K == length(kmer) "Quality length must match kmer length"
-        return new{KmerT,K}(kmer, qualities)
+        return new{KmerT, K}(kmer, qualities)
     end
 end
 
-function Qualmer(kmer::KmerT, qualities::AbstractVector{<:Integer}) where {KmerT<:Kmers.Kmer}
+function Qualmer(kmer::KmerT, qualities::AbstractVector{<:Integer}) where {KmerT <:
+                                                                           Kmers.Kmer}
     @assert length(kmer) == length(qualities) "Quality length must match kmer length"
     k = length(kmer)
     Qualmer(kmer, NTuple{k, UInt8}(UInt8.(qualities)))
@@ -41,7 +43,7 @@ end
 # Basic methods
 Base.length(q::Qualmer) = length(q.kmer)
 Base.getindex(q::Qualmer, i::Integer) = (q.kmer[i], q.qualities[i])
-Base.:(==)(a::T, b::T) where {T<:Qualmer} = a.kmer == b.kmer && a.qualities == b.qualities
+Base.:(==)(a::T, b::T) where {T <: Qualmer} = a.kmer == b.kmer && a.qualities == b.qualities
 Base.hash(q::Qualmer, h::UInt) = hash(q.qualities, hash(q.kmer, h))
 
 """
@@ -51,9 +53,10 @@ Get the canonical representation of a DNA qualmer, considering both sequence and
 For DNA/RNA, this involves potentially reverse-complementing the k-mer and reversing
 the quality scores accordingly.
 """
-function canonical(qmer::Qualmer{KmerT}) where {KmerT<:Union{Kmers.DNAKmer, Kmers.RNAKmer}}
+function canonical(qmer::Qualmer{KmerT}) where {KmerT <:
+                                                Union{Kmers.DNAKmer, Kmers.RNAKmer}}
     canon_kmer = BioSequences.canonical(qmer.kmer)
-    
+
     # If the canonical form is different from the original, it means we reverse-complemented
     # In that case, we need to reverse the quality scores
     if canon_kmer != qmer.kmer
@@ -66,9 +69,10 @@ function canonical(qmer::Qualmer{KmerT}) where {KmerT<:Union{Kmers.DNAKmer, Kmer
 end
 
 # Additional method for the Mer types from FwKmers
-function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.DNAAlphabet{N}}} where N
+function canonical(qmer::Qualmer{KmerT}) where {
+        K, KmerT <: Kmers.Mer{K, BioSequences.DNAAlphabet{N}}} where {N}
     canon_kmer = BioSequences.canonical(qmer.kmer)
-    
+
     # If the canonical form is different from the original, it means we reverse-complemented
     # In that case, we need to reverse the quality scores
     if canon_kmer != qmer.kmer
@@ -80,9 +84,10 @@ function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequen
 end
 
 # Additional method for RNA Mer types
-function canonical(qmer::Qualmer{KmerT}) where {K, KmerT<:Kmers.Mer{K, BioSequences.RNAAlphabet{N}}} where N
+function canonical(qmer::Qualmer{KmerT}) where {
+        K, KmerT <: Kmers.Mer{K, BioSequences.RNAAlphabet{N}}} where {N}
     canon_kmer = BioSequences.canonical(qmer.kmer)
-    
+
     # If the canonical form is different from the original, it means we reverse-complemented
     # In that case, we need to reverse the quality scores
     if canon_kmer != qmer.kmer
@@ -109,12 +114,13 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Create an iterator that yields DNA qualmers from the given sequence and quality scores.
 """
-function qualmers_fw(sequence::BioSequences.LongSequence{A}, quality::AbstractVector{<:Integer}, ::Val{K}) where {A,K}
+function qualmers_fw(sequence::BioSequences.LongSequence{A},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {A, K}
     return (
         (Qualmer(
-            kmer, 
-            quality[pos:pos+K-1]
-        ), pos) for (pos, kmer) in enumerate(Kmers.FwKmers{A, K}(sequence))
+                kmer,
+                quality[pos:(pos + K - 1)]
+            ), pos) for (pos, kmer) in enumerate(Kmers.FwKmers{A, K}(sequence))
     )
 end
 
@@ -133,12 +139,14 @@ Skips k-mers containing ambiguous bases like N.
 # Returns
 - Iterator yielding (Qualmer, position) tuples for each unambiguous k-mer
 """
-function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
+function qualmers_unambiguous(
+        sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {N, K}
     return (
         (Qualmer(
-            kmer,
-            quality[pos:pos+K-1]
-        ), pos) for (kmer, pos) in Kmers.UnambiguousDNAMers{K}(sequence)
+                kmer,
+                quality[pos:(pos + K - 1)]
+            ), pos) for (kmer, pos) in Kmers.UnambiguousDNAMers{K}(sequence)
     )
 end
 
@@ -157,12 +165,14 @@ Skips k-mers containing ambiguous bases like N.
 # Returns
 - Iterator yielding (Qualmer, position) tuples for each unambiguous k-mer
 """
-function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.RNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
+function qualmers_unambiguous(
+        sequence::BioSequences.LongSequence{BioSequences.RNAAlphabet{N}},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {N, K}
     return (
         (Qualmer(
-            kmer,
-            NTuple{K,UInt8}(quality[pos:pos+K-1])
-        ), pos) for (kmer, pos) in Kmers.UnambiguousRNAMers{K}(sequence)
+                kmer,
+                NTuple{K, UInt8}(quality[pos:(pos + K - 1)])
+            ), pos) for (kmer, pos) in Kmers.UnambiguousRNAMers{K}(sequence)
     )
 end
 
@@ -181,7 +191,9 @@ falls back to the forward qualmer generation.
 # Returns
 - Iterator yielding (Qualmer, position) tuples for each k-mer
 """
-function qualmers_unambiguous(sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet}, quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
+function qualmers_unambiguous(
+        sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
     return qualmers_fw(sequence, quality, Val(K))
 end
 
@@ -200,12 +212,15 @@ reverse complement, ensuring consistent representation regardless of strand.
 # Returns
 - Iterator yielding (Qualmer, position) tuples with canonical k-mer representation
 """
-function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}}, quality::AbstractVector{<:Integer}, ::Val{K}) where {N,K}
+function qualmers_canonical(
+        sequence::BioSequences.LongSequence{BioSequences.DNAAlphabet{N}},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {N, K}
     return (
         (canonical(Qualmer(
-            kmer,
-            quality[pos:pos+K-1]
-        )), pos) for (pos, kmer) in enumerate(Kmers.FwKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
+                kmer,
+                quality[pos:(pos + K - 1)]
+            )), pos) for (pos, kmer) in
+                         enumerate(Kmers.FwKmers{BioSequences.DNAAlphabet{N}, K}(sequence))
     )
 end
 
@@ -224,7 +239,9 @@ representation since proteins don't have reverse complements.
 # Returns
 - Iterator yielding (Qualmer, position) tuples for each k-mer
 """
-function qualmers_canonical(sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet}, quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
+function qualmers_canonical(
+        sequence::BioSequences.LongSequence{BioSequences.AminoAcidAlphabet},
+        quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
     return qualmers_fw(sequence, quality, Val(K))
 end
 
@@ -298,7 +315,8 @@ representation to each one.
 # Also update functions that consume these results, like qualmers_unambiguous_canonical
 function qualmers_unambiguous_canonical(sequence, quality::AbstractVector{<:Integer}, ::Val{K}) where {K}
     # Return both canonical qualmer and position
-    return ((canonical(qmer), pos) for (qmer, pos) in qualmers_unambiguous(sequence, quality, Val(K)))
+    return ((canonical(qmer), pos) for (qmer, pos) in
+                                       qualmers_unambiguous(sequence, quality, Val(K)))
 end
 
 """
@@ -333,10 +351,12 @@ function _collect_quality_scores(record::FASTX.FASTQ.Record)
     return collect(UInt8, FASTX.quality_scores(record))
 end
 
-function _count_qualmers_impl(::Type{KMER_TYPE}, sequence, quality::AbstractVector{<:Integer}; canonical::Bool=false) where {KMER_TYPE<:Kmers.Kmer}
+function _count_qualmers_impl(
+        ::Type{KMER_TYPE}, sequence, quality::AbstractVector{<:Integer};
+        canonical::Bool = false) where {KMER_TYPE <: Kmers.Kmer}
     k = qualmer_kmer_length(KMER_TYPE)
     iterator = canonical ? qualmers_unambiguous_canonical(sequence, quality, Val(k)) :
-                           qualmers_unambiguous(sequence, quality, Val(k))
+               qualmers_unambiguous(sequence, quality, Val(k))
     kmer_counts = StatsBase.countmap([qmer.kmer for (qmer, _) in iterator])
     return sort!(OrderedCollections.OrderedDict(kmer_counts))
 end
@@ -346,11 +366,12 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count qualmers for a single FASTQ record.
 """
-function count_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE<:Kmers.Kmer}
+function count_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE <:
+                                                                              Kmers.Kmer}
     sequence_type = _sequence_type_for_kmer(KMER_TYPE)
     sequence = FASTX.sequence(sequence_type, record)
     quality = _collect_quality_scores(record)
-    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical=false)
+    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical = false)
 end
 
 """
@@ -358,11 +379,12 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count canonical qualmers for a single FASTQ record.
 """
-function count_canonical_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE<:Kmers.Kmer}
+function count_canonical_qualmers(::Type{KMER_TYPE}, record::FASTX.FASTQ.Record) where {KMER_TYPE <:
+                                                                                        Kmers.Kmer}
     sequence_type = _sequence_type_for_kmer(KMER_TYPE)
     sequence = FASTX.sequence(sequence_type, record)
     quality = _collect_quality_scores(record)
-    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical=true)
+    return _count_qualmers_impl(KMER_TYPE, sequence, quality; canonical = true)
 end
 
 """
@@ -370,7 +392,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count qualmers for a collection of FASTQ records.
 """
-function count_qualmers(::Type{KMER_TYPE}, records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE<:Kmers.Kmer}
+function count_qualmers(::Type{KMER_TYPE},
+        records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE <: Kmers.Kmer}
     combined = Dict{KMER_TYPE, Int}()
     for record in records
         for (kmer, count) in count_qualmers(KMER_TYPE, record)
@@ -385,7 +408,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count canonical qualmers for a collection of FASTQ records.
 """
-function count_canonical_qualmers(::Type{KMER_TYPE}, records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE<:Kmers.Kmer}
+function count_canonical_qualmers(::Type{KMER_TYPE},
+        records::AbstractVector{<:FASTX.FASTQ.Record}) where {KMER_TYPE <: Kmers.Kmer}
     combined = Dict{KMER_TYPE, Int}()
     for record in records
         for (kmer, count) in count_canonical_qualmers(KMER_TYPE, record)
@@ -400,7 +424,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count qualmers from a FASTQ reader.
 """
-function count_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE<:Kmers.Kmer}
+function count_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE <:
+                                                                              Kmers.Kmer}
     return count_qualmers(KMER_TYPE, collect(reader))
 end
 
@@ -409,7 +434,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count canonical qualmers from a FASTQ reader.
 """
-function count_canonical_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE<:Kmers.Kmer}
+function count_canonical_qualmers(::Type{KMER_TYPE}, reader::FASTX.FASTQ.Reader) where {KMER_TYPE <:
+                                                                                        Kmers.Kmer}
     return count_canonical_qualmers(KMER_TYPE, collect(reader))
 end
 
@@ -418,7 +444,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count qualmers in a FASTQ file.
 """
-function count_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE<:Kmers.Kmer}
+function count_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE <:
+                                                                              Kmers.Kmer}
     open(fastq_file) do io
         reader = FASTX.FASTQ.Reader(io)
         return count_qualmers(KMER_TYPE, reader)
@@ -430,7 +457,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Count canonical qualmers in a FASTQ file.
 """
-function count_canonical_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE<:Kmers.Kmer}
+function count_canonical_qualmers(::Type{KMER_TYPE}, fastq_file::AbstractString) where {KMER_TYPE <:
+                                                                                        Kmers.Kmer}
     open(fastq_file) do io
         reader = FASTX.FASTQ.Reader(io)
         return count_canonical_qualmers(KMER_TYPE, reader)
@@ -455,7 +483,7 @@ function phred_to_probability(phred_score::UInt8)
     # P_correct = 1 - P_error = 1 - 10^(-Q/10)
     error_prob = 10.0^(-Float64(phred_score) / 10.0)
     correct_prob = 1.0 - error_prob
-    
+
     # Ensure we don't return negative probabilities
     return max(0.0, min(1.0, correct_prob))
 end
@@ -499,11 +527,11 @@ confidence that the k-mer truly exists in the data.
 # Returns
 - Float64: Joint probability that all observations are correct
 """
-function joint_qualmer_probability(qualmers::Vector{<:Qualmer}; use_log_space::Bool=true)
+function joint_qualmer_probability(qualmers::Vector{<:Qualmer}; use_log_space::Bool = true)
     if isempty(qualmers)
         return 0.0
     end
-    
+
     # Verify all qualmers have the same k-mer sequence
     kmer_seq = qualmers[1].kmer
     for qmer in qualmers[2:end]
@@ -511,7 +539,7 @@ function joint_qualmer_probability(qualmers::Vector{<:Qualmer}; use_log_space::B
             throw(ArgumentError("All qualmers must have the same k-mer sequence"))
         end
     end
-    
+
     if use_log_space
         log_joint_prob = 0.0
         for qmer in qualmers
@@ -542,13 +570,13 @@ the quality at each position across all observations.
 # Returns
 - Float64: Position-wise joint probability
 """
-function position_wise_joint_probability(qualmers::Vector{<:Qualmer}; use_log_space::Bool=true)
+function position_wise_joint_probability(qualmers::Vector{<:Qualmer}; use_log_space::Bool = true)
     if isempty(qualmers)
         return 0.0
     end
-    
+
     k = length(qualmers[1])
-    
+
     # Verify all qualmers have the same length and k-mer sequence
     kmer_seq = qualmers[1].kmer
     for qmer in qualmers[2:end]
@@ -556,7 +584,7 @@ function position_wise_joint_probability(qualmers::Vector{<:Qualmer}; use_log_sp
             throw(ArgumentError("All qualmers must have the same k-mer sequence and length"))
         end
     end
-    
+
     if use_log_space
         log_joint_prob = 0.0
         for pos in 1:k
@@ -610,18 +638,18 @@ function joint_base_quality_score(error_probabilities::Vector{Float64})
     if isempty(error_probabilities)
         return 0.0  # No data available
     end
-    
+
     # Work in log space to avoid underflow
     log_p_all_wrong = sum(log.(error_probabilities))
-    
+
     # Convert back from log space
     p_all_wrong = exp(log_p_all_wrong)
-    
+
     # Prevent underflow/overflow
     if p_all_wrong <= eps(Float64)
         return 999.0  # Cap at a very high quality score
     end
-    
+
     # Convert to Phred score
     return Mycelia.error_rate_to_q_value(p_all_wrong)
 end
@@ -644,11 +672,11 @@ Available methods:
 # Returns
 - `Float64`: Overall quality score for the kmer
 """
-function kmer_quality_score(base_qualities::Vector{Float64}, method::Symbol=:min)
+function kmer_quality_score(base_qualities::Vector{Float64}, method::Symbol = :min)
     if isempty(base_qualities)
         return 0.0
     end
-    
+
     if method == :min
         return minimum(base_qualities)
     elseif method == :mean

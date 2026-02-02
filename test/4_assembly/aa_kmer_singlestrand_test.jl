@@ -33,9 +33,9 @@ Test.@testset "AA K-mer SingleStrand Graph (Rhizomorph)" begin
     graph = Mycelia.Rhizomorph.build_kmer_graph(
         reads,
         3;
-        dataset_id=dataset_id,
-        mode=:singlestrand,
-        type_hint=:AA,
+        dataset_id = dataset_id,
+        mode = :singlestrand,
+        type_hint = :AA
     )
 
     vertices = collect(MetaGraphsNext.labels(graph))
@@ -57,10 +57,8 @@ Test.@testset "AA K-mer SingleStrand Graph (Rhizomorph)" begin
     paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
     Test.@test !isempty(paths)
 
-    walk_steps = [
-        Mycelia.Rhizomorph.WalkStep(vertex, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
-        for (i, vertex) in enumerate(first(paths))
-    ]
+    walk_steps = [Mycelia.Rhizomorph.WalkStep(vertex, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                  for (i, vertex) in enumerate(first(paths))]
     graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
     reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
     Test.@test string(reconstructed) == "MKTV"

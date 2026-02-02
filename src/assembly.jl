@@ -24,7 +24,8 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200, k_list="21,29,39,59,79,99,119,141", threads=get_default_threads())
+function run_megahit(; fastq1, fastq2 = nothing, outdir = nothing, min_contig_len = 200,
+        k_list = "21,29,39,59,79,99,119,141", threads = get_default_threads())
     Mycelia.add_bioconda_env("megahit")
     # Default output directory derived from FASTQ prefix
     if isnothing(outdir)
@@ -56,15 +57,15 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
         @assert length(unique_ks) == 1 "Expected a single final k-mer size, found $(unique_ks)"
         return first(unique_ks)
     end
-    
+
     # MEGAHIT requires the output directory to not exist, so check output file first
     contigs_path = joinpath(outdir, "final.contigs.fa")
     if !isfile(contigs_path)
         # Remove output directory if it exists (MEGAHIT will create it)
         if isdir(outdir)
-            rm(outdir, recursive=true)
+            rm(outdir, recursive = true)
         end
-        
+
         if isnothing(fastq2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit -r $(fastq1) -o $(outdir) --min-contig-len $(min_contig_len) --k-list $(k_list) -t $(threads)`)
         else
@@ -79,7 +80,9 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
     fastg_path = replace(contigs_path, ".fa" => ".fastg")
     if !isfile(fastg_path)
         final_k = infer_final_k(contigs_path)
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_core contig2fastg $(final_k) $(contigs_path)`, fastg_path))
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n megahit megahit_core contig2fastg $(final_k) $(contigs_path)`,
+            fastg_path))
         @assert isfile(fastg_path)
         @assert filesize(fastg_path) > 0
     end
@@ -88,14 +91,16 @@ function run_megahit(;fastq1, fastq2=nothing, outdir=nothing, min_contig_len=200
     if !isfile(gfa_path)
         # if isfile(fastg_path) && (filesize(fastg_path) > 0)
         Mycelia.add_bioconda_env("gfatools")
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`, gfa_path))
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`,
+            gfa_path))
         # else
         #     @warn "final.contigs.fastg not found, skipping gfatools step"
         #     gfa_path = missing
         # end
     end
 
-    return (;outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
+    return (; outdir, contigs = contigs_path, fastg = fastg_path, gfa = gfa_path)
 end
 
 """
@@ -147,12 +152,12 @@ Named tuple containing:
 - The MEGAHIT environment is ensured on the Julia side via `Mycelia.add_bioconda_env`.
 """
 function megahit_cmd(;
-    fastq1,
-    fastq2::Union{Nothing,String}=nothing,
-    outdir::Union{Nothing,String}=nothing,
-    min_contig_len::Int=200,
-    k_list::String="21,29,39,59,79,99,119,141",
-    threads::Int=get_default_threads(),
+        fastq1,
+        fastq2::Union{Nothing, String} = nothing,
+        outdir::Union{Nothing, String} = nothing,
+        min_contig_len::Int = 200,
+        k_list::String = "21,29,39,59,79,99,119,141",
+        threads::Int = get_default_threads()
 )
     # Ensure environments exist (shared filesystem, so compute nodes will see them)
     Mycelia.add_bioconda_env("megahit")
@@ -174,8 +179,8 @@ function megahit_cmd(;
     end
 
     contigs_path = joinpath(outdir, "final.contigs.fa")
-    fastg_path   = replace(contigs_path, ".fa" => ".fastg")
-    gfa_path     = fastg_path * ".gfa"
+    fastg_path = replace(contigs_path, ".fa" => ".fastg")
+    gfa_path = fastg_path * ".gfa"
 
     lines = String[]
 
@@ -239,9 +244,8 @@ function megahit_cmd(;
     push!(lines, "fi")
 
     cmd = join(lines, "\n")
-    return (; cmd, outdir, contigs=contigs_path, fastg=fastg_path, gfa=gfa_path)
+    return (; cmd, outdir, contigs = contigs_path, fastg = fastg_path, gfa = gfa_path)
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -268,10 +272,12 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_list="21,33,55,77", threads = get_default_threads(), only_assembler::Bool=false)
+function run_metaspades(;
+        fastq1, fastq2 = nothing, outdir = "metaspades_output", k_list = "21,33,55,77",
+        threads = get_default_threads(), only_assembler::Bool = false)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
-    
+
     if !isfile(joinpath(outdir, "contigs.fasta"))
         cmd_args = ["metaspades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
         only_assembler && push!(cmd_args, "--only-assembler")
@@ -282,7 +288,9 @@ function run_metaspades(;fastq1, fastq2=nothing, outdir="metaspades_output", k_l
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`)
     end
-    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
+    return (; outdir, contigs = joinpath(outdir, "contigs.fasta"),
+        scaffolds = joinpath(outdir, "scaffolds.fasta"),
+        graph = joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
 
 """
@@ -311,10 +319,12 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,33,55,77", threads = get_default_threads(), only_assembler::Bool=false)
+function run_spades(;
+        fastq1, fastq2 = nothing, outdir = "spades_output", k_list = "21,33,55,77",
+        threads = get_default_threads(), only_assembler::Bool = false)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
-    
+
     if !isfile(joinpath(outdir, "contigs.fasta"))
         cmd_args = ["spades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
         only_assembler && push!(cmd_args, "--only-assembler")
@@ -325,7 +335,9 @@ function run_spades(;fastq1, fastq2=nothing, outdir="spades_output", k_list="21,
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`)
     end
-    return (;outdir, contigs=joinpath(outdir, "contigs.fasta"), scaffolds=joinpath(outdir, "scaffolds.fasta"), graph=joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
+    return (; outdir, contigs = joinpath(outdir, "contigs.fasta"),
+        scaffolds = joinpath(outdir, "scaffolds.fasta"),
+        graph = joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
 end
 
 """
@@ -351,10 +363,11 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_skesa(;fastq1, fastq2=nothing, outdir="skesa_output", min_contig_len=200, threads = get_default_threads())
+function run_skesa(; fastq1, fastq2 = nothing, outdir = "skesa_output",
+        min_contig_len = 200, threads = get_default_threads())
     Mycelia.add_bioconda_env("skesa")
     mkpath(outdir)
-    
+
     contigs_file = joinpath(outdir, "contigs.fa")
     if !isfile(contigs_file)
         if isnothing(fastq2)
@@ -363,7 +376,7 @@ function run_skesa(;fastq1, fastq2=nothing, outdir="skesa_output", min_contig_le
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n skesa skesa --reads $(fastq1),$(fastq2) --contigs_out $(contigs_file) --cores $(threads) --min_contig $(min_contig_len)`)
         end
     end
-    return (;outdir, contigs=contigs_file)
+    return (; outdir, contigs = contigs_file)
 end
 
 # """
@@ -396,18 +409,18 @@ end
 # function run_idba_ud(;fastq1, fastq2, outdir="idba_ud_output", min_k=20, max_k=100, step=20)
 #     Mycelia.add_bioconda_env("idba")
 #     mkpath(outdir)
-    
+
 #     # IDBA-UD requires paired reads in fasta format
 #     merged_fasta = joinpath(outdir, "merged_reads.fa")
 #     contig_file = joinpath(outdir, "contig.fa")
 #     scaffold_file = joinpath(outdir, "scaffold.fa")
-    
+
 #     if !isfile(contig_file)
 #         # Convert and merge FASTQ to FASTA format for IDBA-UD
 #         if !isfile(merged_fasta)
 #             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba fq2fa --merge $(fastq1) $(fastq2) $(merged_fasta)`)
 #         end
-        
+
 #         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n idba idba_ud -r $(merged_fasta) -o $(outdir) --mink $(min_k) --maxk $(max_k) --step $(step) --num_threads $(Sys.CPU_THREADS)`)
 #     end
 #     return (;outdir, contigs=contig_file, scaffolds=scaffold_file)
@@ -437,12 +450,15 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
-function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="pacbio-hifi", min_overlap=nothing, threads = min(get_default_threads(), FLYE_MAX_THREADS))
+function run_flye(;
+        fastq, outdir = "flye_output", genome_size = nothing, read_type = "pacbio-hifi",
+        min_overlap = nothing, threads = min(get_default_threads(), FLYE_MAX_THREADS))
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(threads)]
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
+            outdir, "--threads", string(threads)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
@@ -451,7 +467,8 @@ function run_flye(;fastq, outdir="flye_output", genome_size=nothing, read_type="
         end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly_graph.gfa"))
+    return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+        graph = joinpath(outdir, "assembly_graph.gfa"))
 end
 
 """
@@ -481,12 +498,15 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
-function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, read_type="pacbio-hifi", meta=true, min_overlap=nothing, threads = min(get_default_threads(), FLYE_MAX_THREADS))
+function run_metaflye(; fastq, outdir = "metaflye_output", genome_size = nothing,
+        read_type = "pacbio-hifi", meta = true, min_overlap = nothing,
+        threads = min(get_default_threads(), FLYE_MAX_THREADS))
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
-        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir", outdir, "--threads", string(threads)]
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
+            outdir, "--threads", string(threads)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
@@ -501,7 +521,8 @@ function run_metaflye(;fastq, outdir="metaflye_output", genome_size=nothing, rea
 
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly_graph.gfa"))
+    return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+        graph = joinpath(outdir, "assembly_graph.gfa"))
 end
 
 """
@@ -534,7 +555,8 @@ Named tuple containing:
 - Uses `saveReads=false` to skip saving intermediate corrected/trimmed reads (avoids gzip issues on some filesystems)
 - Uses `useGrid=false` to disable automatic SLURM/grid job submission
 """
-function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio", stopOnLowCoverage=10, threads = get_default_threads(), cor_threads = threads)
+function run_canu(; fastq, outdir = "canu_output", genome_size, read_type = "pacbio",
+        stopOnLowCoverage = 10, threads = get_default_threads(), cor_threads = threads)
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     threads = max(threads, 1)
@@ -550,7 +572,8 @@ function run_canu(;fastq, outdir="canu_output", genome_size, read_type="pacbio",
             error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
         end
     end
-    return (;outdir, assembly=joinpath(outdir, "$(prefix).contigs.fasta"), graph=joinpath(outdir, "$(prefix).contigs.gfa"))
+    return (; outdir, assembly = joinpath(outdir, "$(prefix).contigs.fasta"),
+        graph = joinpath(outdir, "$(prefix).contigs.gfa"))
 end
 
 """
@@ -575,23 +598,27 @@ Named tuple containing:
 - Utilizes all available CPU threads
 - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
 """
-function run_hifiasm(;fastq, outdir=basename(fastq) * "_hifiasm", bloom_filter=-1, threads = get_default_threads())
+function run_hifiasm(; fastq, outdir = basename(fastq) * "_hifiasm",
+        bloom_filter = -1, threads = get_default_threads())
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
     # Check if output directory exists before trying to read it
-    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
+    hifiasm_outputs = isdir(outdir) ?
+                      filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join = true)) :
+                      String[]
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
         mkpath(outdir)
         # Build command with optional bloom filter flag
-        cmd_args = ["hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(threads)]
+        cmd_args = [
+            "hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(threads)]
         if bloom_filter >= 0
             push!(cmd_args, "-f$(bloom_filter)")
         end
         push!(cmd_args, fastq)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`)
     end
-    return (;outdir, hifiasm_outprefix)
+    return (; outdir, hifiasm_outprefix)
 end
 
 """
@@ -652,11 +679,15 @@ Named tuple containing:
 - Bloom filter can be disabled (`-f0`) for small genomes to reduce memory usage from ~16GB
 - Read selection (`-S`) can be enabled for mock/small datasets to handle low complexity data
 """
-function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloom_filter=-1, read_selection=false, threads = get_default_threads())
+function run_hifiasm_meta(;
+        fastq, outdir = basename(fastq) * "_hifiasm_meta", bloom_filter = -1,
+        read_selection = false, threads = get_default_threads())
     Mycelia.add_bioconda_env("hifiasm_meta")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
     # Check if output directory exists before trying to read it
-    hifiasm_outputs = isdir(outdir) ? filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join=true)) : String[]
+    hifiasm_outputs = isdir(outdir) ?
+                      filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join = true)) :
+                      String[]
 
     if isempty(hifiasm_outputs)
         mkpath(outdir)
@@ -671,7 +702,7 @@ function run_hifiasm_meta(;fastq, outdir=basename(fastq) * "_hifiasm_meta", bloo
         push!(cmd_args, fastq)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`)
     end
-    return (;outdir, hifiasm_outprefix)
+    return (; outdir, hifiasm_outprefix)
 end
 
 """
@@ -700,17 +731,21 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_output", threads = get_default_threads(), spades_options::Union{Nothing,String}=nothing, kmers::Union{Nothing,String}=nothing)
+function run_unicycler(;
+        short_1, short_2 = nothing, long_reads, outdir = "unicycler_output",
+        threads = get_default_threads(), spades_options::Union{Nothing, String} = nothing,
+        kmers::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("unicycler")
-    
+
     # Unicycler requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "assembly.fasta"))
         # Remove output directory if it exists (Unicycler will create it)
         if isdir(outdir)
-            rm(outdir, recursive=true)
+            rm(outdir, recursive = true)
         end
-        
-        spades_args = isnothing(spades_options) ? String[] : ["--spades_options=$(spades_options)"]
+
+        spades_args = isnothing(spades_options) ? String[] :
+                      ["--spades_options=$(spades_options)"]
         kmer_args = isnothing(kmers) ? String[] : ["--kmers=$(kmers)"]
         if isnothing(short_2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`)
@@ -721,7 +756,8 @@ function run_unicycler(;short_1, short_2=nothing, long_reads, outdir="unicycler_
         # If output already exists, ensure directory exists for return value
         mkpath(outdir)
     end
-    return (;outdir, assembly=joinpath(outdir, "assembly.fasta"), graph=joinpath(outdir, "assembly.gfa"))
+    return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+        graph = joinpath(outdir, "assembly.gfa"))
 end
 
 # ============================================================================
@@ -742,14 +778,14 @@ Install the Hybracter databases in `db_dir` if missing.
 # Returns
 - `String`: Path to the database directory.
 """
-function install_hybracter_db(db_dir::AbstractString; force::Bool=false)
+function install_hybracter_db(db_dir::AbstractString; force::Bool = false)
     db_dir = abspath(String(db_dir))
     if isdir(db_dir) && !force && !isempty(readdir(db_dir))
         @info "Hybracter database already present; skipping download." db_dir
         return db_dir
     end
     if force && isdir(db_dir)
-        rm(db_dir; recursive=true, force=true)
+        rm(db_dir; recursive = true, force = true)
     end
     mkpath(db_dir)
     Mycelia.add_bioconda_env("hybracter")
@@ -784,15 +820,15 @@ Named tuple containing:
 - `final_fasta::String`: Final assembly FASTA path.
 """
 function run_hybracter_hybrid_single(long_reads::AbstractString,
-                                     read1::AbstractString,
-                                     read2::AbstractString,
-                                     chrom_size::Int;
-                                     sample_name::AbstractString,
-                                     outdir::AbstractString,
-                                     db_dir::Union{Nothing,AbstractString}=nothing,
-                                     threads::Int=get_default_threads(),
-                                     extra_args::Vector{String}=String[],
-                                     force::Bool=false)
+        read1::AbstractString,
+        read2::AbstractString,
+        chrom_size::Int;
+        sample_name::AbstractString,
+        outdir::AbstractString,
+        db_dir::Union{Nothing, AbstractString} = nothing,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[],
+        force::Bool = false)
     isfile(long_reads) || error("Long read file not found: $(long_reads)")
     isfile(read1) || error("Read 1 file not found: $(read1)")
     isfile(read2) || error("Read 2 file not found: $(read2)")
@@ -800,51 +836,60 @@ function run_hybracter_hybrid_single(long_reads::AbstractString,
 
     outdir = abspath(String(outdir))
     sample_dir = joinpath(outdir, sample_name)
-    complete_final = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name * "_final.fasta")
-    incomplete_final = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name * "_final.fasta")
+    complete_final = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name *
+                                                                  "_final.fasta")
+    incomplete_final = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name *
+                                                                      "_final.fasta")
     legacy_final = joinpath(sample_dir, "final_assembly.fasta")
-    complete_summary = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name * "_summary.tsv")
-    incomplete_summary = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name * "_summary.tsv")
+    complete_summary = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name *
+                                                                    "_summary.tsv")
+    incomplete_summary = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name *
+                                                                        "_summary.tsv")
     legacy_summary = joinpath(sample_dir, "summary.tsv")
 
-    if !force && (isfile(complete_final) || isfile(incomplete_final) || isfile(legacy_final))
-        final_fasta = isfile(complete_final) ? complete_final : (isfile(incomplete_final) ? incomplete_final : legacy_final)
-        summary_tsv = isfile(complete_summary) ? complete_summary : (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
-        return (;outdir, sample_dir, summary_tsv, final_fasta)
+    if !force &&
+       (isfile(complete_final) || isfile(incomplete_final) || isfile(legacy_final))
+        final_fasta = isfile(complete_final) ? complete_final :
+                      (isfile(incomplete_final) ? incomplete_final : legacy_final)
+        summary_tsv = isfile(complete_summary) ? complete_summary :
+                      (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
+        return (; outdir, sample_dir, summary_tsv, final_fasta)
     end
 
     if force && isdir(sample_dir)
-        rm(sample_dir; recursive=true, force=true)
+        rm(sample_dir; recursive = true, force = true)
     end
 
     if db_dir === nothing || isempty(db_dir)
         db_dir = joinpath(homedir(), "workspace", ".hybracter")
     end
     if !isdir(db_dir) || isempty(readdir(db_dir))
-        install_hybracter_db(db_dir; force=force)
+        install_hybracter_db(db_dir; force = force)
     end
 
     Mycelia.add_bioconda_env("hybracter")
 
     cmd_args = String[
-        "hybrid-single",
-        "--longreads", long_reads,
-        "--short_one", read1,
-        "--short_two", read2,
-        "--chromosome", string(chrom_size),
-        "--sample", sample_name,
-        "--output", outdir,
-        "--databases", db_dir
-    ]
+    "hybrid-single",
+    "--longreads", long_reads,
+    "--short_one", read1,
+    "--short_two", read2,
+    "--chromosome", string(chrom_size),
+    "--sample", sample_name,
+    "--output", outdir,
+    "--databases", db_dir
+]
     if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
         push!(cmd_args, "--threads", string(max(threads, 1)))
     end
     append!(cmd_args, extra_args)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hybracter hybracter $(cmd_args)`)
-    final_fasta = isfile(complete_final) ? complete_final : (isfile(incomplete_final) ? incomplete_final : legacy_final)
-    summary_tsv = isfile(complete_summary) ? complete_summary : (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
-    return (;outdir, sample_dir, summary_tsv, final_fasta)
+    final_fasta = isfile(complete_final) ? complete_final :
+                  (isfile(incomplete_final) ? incomplete_final : legacy_final)
+    summary_tsv = isfile(complete_summary) ? complete_summary :
+                  (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
+    return (; outdir, sample_dir, summary_tsv, final_fasta)
 end
 
 """
@@ -872,61 +917,70 @@ Named tuple containing:
 - `final_fasta::String`: Final assembly FASTA path.
 """
 function run_hybracter_long_single(long_reads::AbstractString,
-                                   chrom_size::Int;
-                                   sample_name::AbstractString,
-                                   outdir::AbstractString,
-                                   db_dir::Union{Nothing,AbstractString}=nothing,
-                                   threads::Int=get_default_threads(),
-                                   extra_args::Vector{String}=String[],
-                                   force::Bool=false)
+        chrom_size::Int;
+        sample_name::AbstractString,
+        outdir::AbstractString,
+        db_dir::Union{Nothing, AbstractString} = nothing,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[],
+        force::Bool = false)
     isfile(long_reads) || error("Long read file not found: $(long_reads)")
     isempty(sample_name) && error("sample_name cannot be empty")
 
     outdir = abspath(String(outdir))
     sample_dir = joinpath(outdir, sample_name)
-    complete_final = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name * "_final.fasta")
-    incomplete_final = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name * "_final.fasta")
+    complete_final = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name *
+                                                                  "_final.fasta")
+    incomplete_final = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name *
+                                                                      "_final.fasta")
     legacy_final = joinpath(sample_dir, "final_assembly.fasta")
-    complete_summary = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name * "_summary.tsv")
-    incomplete_summary = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name * "_summary.tsv")
+    complete_summary = joinpath(outdir, "FINAL_OUTPUT", "complete", sample_name *
+                                                                    "_summary.tsv")
+    incomplete_summary = joinpath(outdir, "FINAL_OUTPUT", "incomplete", sample_name *
+                                                                        "_summary.tsv")
     legacy_summary = joinpath(sample_dir, "summary.tsv")
 
-    if !force && (isfile(complete_final) || isfile(incomplete_final) || isfile(legacy_final))
-        final_fasta = isfile(complete_final) ? complete_final : (isfile(incomplete_final) ? incomplete_final : legacy_final)
-        summary_tsv = isfile(complete_summary) ? complete_summary : (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
-        return (;outdir, sample_dir, summary_tsv, final_fasta)
+    if !force &&
+       (isfile(complete_final) || isfile(incomplete_final) || isfile(legacy_final))
+        final_fasta = isfile(complete_final) ? complete_final :
+                      (isfile(incomplete_final) ? incomplete_final : legacy_final)
+        summary_tsv = isfile(complete_summary) ? complete_summary :
+                      (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
+        return (; outdir, sample_dir, summary_tsv, final_fasta)
     end
 
     if force && isdir(sample_dir)
-        rm(sample_dir; recursive=true, force=true)
+        rm(sample_dir; recursive = true, force = true)
     end
 
     if db_dir === nothing || isempty(db_dir)
         db_dir = joinpath(homedir(), "workspace", ".hybracter")
     end
     if !isdir(db_dir) || isempty(readdir(db_dir))
-        install_hybracter_db(db_dir; force=force)
+        install_hybracter_db(db_dir; force = force)
     end
 
     Mycelia.add_bioconda_env("hybracter")
 
     cmd_args = String[
-        "long-single",
-        "--longreads", long_reads,
-        "--chromosome", string(chrom_size),
-        "--sample", sample_name,
-        "--output", outdir,
-        "--databases", db_dir
-    ]
+    "long-single",
+    "--longreads", long_reads,
+    "--chromosome", string(chrom_size),
+    "--sample", sample_name,
+    "--output", outdir,
+    "--databases", db_dir
+]
     if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
         push!(cmd_args, "--threads", string(max(threads, 1)))
     end
     append!(cmd_args, extra_args)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hybracter hybracter $(cmd_args)`)
-    final_fasta = isfile(complete_final) ? complete_final : (isfile(incomplete_final) ? incomplete_final : legacy_final)
-    summary_tsv = isfile(complete_summary) ? complete_summary : (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
-    return (;outdir, sample_dir, summary_tsv, final_fasta)
+    final_fasta = isfile(complete_final) ? complete_final :
+                  (isfile(incomplete_final) ? incomplete_final : legacy_final)
+    summary_tsv = isfile(complete_summary) ? complete_summary :
+                  (isfile(incomplete_summary) ? incomplete_summary : legacy_summary)
+    return (; outdir, sample_dir, summary_tsv, final_fasta)
 end
 
 """
@@ -950,32 +1004,33 @@ Named tuple containing:
 - `reoriented::String`: Expected reoriented contig file path.
 """
 function run_dnaapler_all(input_file::AbstractString;
-                          outdir::AbstractString,
-                          prefix::AbstractString="dnaapler",
-                          threads::Int=get_default_threads(),
-                          extra_args::Vector{String}=String[],
-                          force::Bool=false)
+        outdir::AbstractString,
+        prefix::AbstractString = "dnaapler",
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[],
+        force::Bool = false)
     isfile(input_file) || error("Input file not found: $(input_file)")
 
     outdir = abspath(String(outdir))
     mkpath(outdir)
 
     lower_name = lowercase(input_file)
-    ext = (endswith(lower_name, ".gfa") || endswith(lower_name, ".gfa.gz")) ? ".gfa" : ".fasta"
+    ext = (endswith(lower_name, ".gfa") || endswith(lower_name, ".gfa.gz")) ? ".gfa" :
+          ".fasta"
     reoriented = joinpath(outdir, "$(prefix)_reoriented$(ext)")
 
     if !force && isfile(reoriented)
-        return (;outdir, reoriented)
+        return (; outdir, reoriented)
     end
 
     Mycelia.add_bioconda_env("dnaapler")
 
     cmd_args = String[
-        "all",
-        "--input", input_file,
-        "--output", outdir,
-        "--prefix", prefix
-    ]
+    "all",
+    "--input", input_file,
+    "--output", outdir,
+    "--prefix", prefix
+]
     if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
         push!(cmd_args, "--threads", string(max(threads, 1)))
     end
@@ -985,11 +1040,12 @@ function run_dnaapler_all(input_file::AbstractString;
     append!(cmd_args, extra_args)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n dnaapler dnaapler $(cmd_args)`)
-    return (;outdir, reoriented)
+    return (; outdir, reoriented)
 end
 
 function _plassembler_db_ready(db_dir::AbstractString)
-    return isdir(db_dir) && any(path -> endswith(path, ".msh"), readdir(db_dir; join=true))
+    return isdir(db_dir) &&
+           any(path -> endswith(path, ".msh"), readdir(db_dir; join = true))
 end
 
 """
@@ -1006,7 +1062,7 @@ Install the Plassembler database in `db_dir` if missing.
 # Returns
 - `String`: Path to the database directory.
 """
-function install_plassembler_db(db_dir::AbstractString; force::Bool=false)
+function install_plassembler_db(db_dir::AbstractString; force::Bool = false)
     db_dir = abspath(String(db_dir))
     db_ready = _plassembler_db_ready(db_dir)
     if db_ready && !force
@@ -1014,27 +1070,28 @@ function install_plassembler_db(db_dir::AbstractString; force::Bool=false)
         return db_dir
     end
     if isdir(db_dir) && (!db_ready || force)
-        rm(db_dir; recursive=true, force=true)
+        rm(db_dir; recursive = true, force = true)
     end
     mkpath(db_dir)
     Mycelia.add_bioconda_env("plassembler")
     try
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler download -d $(db_dir) --force`)
     catch e
-        tarballs = filter(path -> endswith(path, ".tar.gz"), readdir(db_dir; join=true))
+        tarballs = filter(path -> endswith(path, ".tar.gz"), readdir(db_dir; join = true))
         if isempty(tarballs)
             rethrow(e)
         end
         tarball = length(tarballs) == 1 ? tarballs[1] : sort(tarballs)[end]
-        @warn "Plassembler download failed; attempting manual extraction." exception=(e, catch_backtrace())
+        @warn "Plassembler download failed; attempting manual extraction." exception=(
+            e, catch_backtrace())
         tmp_dir = mktempdir(dirname(db_dir))
         try
             Tar.extract(tarball, tmp_dir)
         catch extract_error
-            rm(tmp_dir; recursive=true, force=true)
+            rm(tmp_dir; recursive = true, force = true)
             rethrow(extract_error)
         end
-        rm(db_dir; recursive=true, force=true)
+        rm(db_dir; recursive = true, force = true)
         mv(tmp_dir, db_dir)
     end
     if !_plassembler_db_ready(db_dir)
@@ -1069,14 +1126,14 @@ Named tuple containing:
 - `summary_tsv::String`: Summary TSV path.
 """
 function run_plassembler(long_reads::AbstractString,
-                         read1::AbstractString,
-                         read2::AbstractString,
-                         chrom_size::Int;
-                         outdir::AbstractString,
-                         db_dir::Union{Nothing,AbstractString}=nothing,
-                         threads::Int=get_default_threads(),
-                         extra_args::Vector{String}=String[],
-                         force::Bool=false)
+        read1::AbstractString,
+        read2::AbstractString,
+        chrom_size::Int;
+        outdir::AbstractString,
+        db_dir::Union{Nothing, AbstractString} = nothing,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[],
+        force::Bool = false)
     isfile(long_reads) || error("Long read file not found: $(long_reads)")
     isfile(read1) || error("Read 1 file not found: $(read1)")
     isfile(read2) || error("Read 2 file not found: $(read2)")
@@ -1087,11 +1144,11 @@ function run_plassembler(long_reads::AbstractString,
     summary_tsv = joinpath(outdir, "plassembler_summary.tsv")
 
     if !force && isfile(plasmids_fasta)
-        return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+        return (; outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
     end
 
     if force && isdir(outdir)
-        rm(outdir; recursive=true, force=true)
+        rm(outdir; recursive = true, force = true)
     end
     mkpath(dirname(outdir))
 
@@ -1099,20 +1156,20 @@ function run_plassembler(long_reads::AbstractString,
         db_dir = joinpath(homedir(), "workspace", ".plassembler")
     end
     if !_plassembler_db_ready(db_dir)
-        install_plassembler_db(db_dir; force=force)
+        install_plassembler_db(db_dir; force = force)
     end
 
     Mycelia.add_bioconda_env("plassembler")
 
     cmd_args = String[
-        "run",
-        "-l", long_reads,
-        "-1", read1,
-        "-2", read2,
-        "-c", string(chrom_size),
-        "-o", outdir,
-        "-d", db_dir
-    ]
+    "run",
+    "-l", long_reads,
+    "-1", read1,
+    "-2", read2,
+    "-c", string(chrom_size),
+    "-o", outdir,
+    "-d", db_dir
+]
     if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
         push!(cmd_args, "-t", string(max(threads, 1)))
     end
@@ -1122,7 +1179,7 @@ function run_plassembler(long_reads::AbstractString,
     append!(cmd_args, extra_args)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler $(cmd_args)`)
-    return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+    return (; outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
 end
 
 """
@@ -1149,12 +1206,12 @@ Named tuple containing:
 - `summary_tsv::String`: Summary TSV path.
 """
 function run_plassembler_long(long_reads::AbstractString,
-                              chrom_size::Int;
-                              outdir::AbstractString,
-                              db_dir::Union{Nothing,AbstractString}=nothing,
-                              threads::Int=get_default_threads(),
-                              extra_args::Vector{String}=String[],
-                              force::Bool=false)
+        chrom_size::Int;
+        outdir::AbstractString,
+        db_dir::Union{Nothing, AbstractString} = nothing,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[],
+        force::Bool = false)
     isfile(long_reads) || error("Long read file not found: $(long_reads)")
 
     outdir = abspath(String(outdir))
@@ -1163,11 +1220,11 @@ function run_plassembler_long(long_reads::AbstractString,
     summary_tsv = joinpath(outdir, "plassembler_summary.tsv")
 
     if !force && isfile(plasmids_fasta)
-        return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+        return (; outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
     end
 
     if force && isdir(outdir)
-        rm(outdir; recursive=true, force=true)
+        rm(outdir; recursive = true, force = true)
     end
     mkpath(dirname(outdir))
 
@@ -1175,18 +1232,18 @@ function run_plassembler_long(long_reads::AbstractString,
         db_dir = joinpath(homedir(), "workspace", ".plassembler")
     end
     if !_plassembler_db_ready(db_dir)
-        install_plassembler_db(db_dir; force=force)
+        install_plassembler_db(db_dir; force = force)
     end
 
     Mycelia.add_bioconda_env("plassembler")
 
     cmd_args = String[
-        "long",
-        "-l", long_reads,
-        "-c", string(chrom_size),
-        "-o", outdir,
-        "-d", db_dir
-    ]
+    "long",
+    "-l", long_reads,
+    "-c", string(chrom_size),
+    "-o", outdir,
+    "-d", db_dir
+]
     if !any(arg -> arg == "-t" || arg == "--threads" || startswith(arg, "--threads="), extra_args)
         push!(cmd_args, "-t", string(max(threads, 1)))
     end
@@ -1196,7 +1253,7 @@ function run_plassembler_long(long_reads::AbstractString,
     append!(cmd_args, extra_args)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plassembler plassembler $(cmd_args)`)
-    return (;outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
+    return (; outdir, plasmids_fasta, chromosome_fasta, summary_tsv)
 end
 
 # ============================================================================
@@ -1225,10 +1282,11 @@ Named tuple with:
 - `assembly::String`: Protein assembly output path
 - `tmpdir::String`: Temporary working directory used by PLASS
 """
-function run_plass_assemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="plass_output",
-    min_seq_id::Union{Real,Nothing}=nothing, min_length::Union{Int,Nothing}=nothing, evalue::Union{Real,Nothing}=nothing,
-    num_iterations::Union{Int,Nothing}=nothing, filter_proteins::Bool=true, threads::Int=get_default_threads())
-
+function run_plass_assemble(; reads1::String, reads2::Union{String, Nothing} = nothing,
+        outdir::String = "plass_output",
+        min_seq_id::Union{Real, Nothing} = nothing, min_length::Union{Int, Nothing} = nothing, evalue::Union{
+            Real, Nothing} = nothing,
+        num_iterations::Union{Int, Nothing} = nothing, filter_proteins::Bool = true, threads::Int = get_default_threads())
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1270,7 +1328,7 @@ function run_plass_assemble(;reads1::String, reads2::Union{String,Nothing}=nothi
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
-    return (;outdir, assembly=assembly_out, tmpdir)
+    return (; outdir, assembly = assembly_out, tmpdir)
 end
 
 """
@@ -1290,8 +1348,10 @@ Named tuple with:
 - `assembly::String`: Nucleotide assembly output path
 - `tmpdir::String`: Temporary working directory
 """
-function run_penguin_guided_nuclassemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="penguin_guided_output",
-    threads::Int=get_default_threads())
+function run_penguin_guided_nuclassemble(;
+        reads1::String, reads2::Union{String, Nothing} = nothing,
+        outdir::String = "penguin_guided_output",
+        threads::Int = get_default_threads())
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1317,7 +1377,7 @@ function run_penguin_guided_nuclassemble(;reads1::String, reads2::Union{String,N
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
-    return (;outdir, assembly=assembly_out, tmpdir)
+    return (; outdir, assembly = assembly_out, tmpdir)
 end
 
 """
@@ -1337,8 +1397,10 @@ Named tuple with:
 - `assembly::String`: Nucleotide assembly output path
 - `tmpdir::String`: Temporary working directory
 """
-function run_penguin_nuclassemble(;reads1::String, reads2::Union{String,Nothing}=nothing, outdir::String="penguin_output",
-    threads::Int=get_default_threads())
+function run_penguin_nuclassemble(;
+        reads1::String, reads2::Union{String, Nothing} = nothing,
+        outdir::String = "penguin_output",
+        threads::Int = get_default_threads())
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1364,7 +1426,7 @@ function run_penguin_nuclassemble(;reads1::String, reads2::Union{String,Nothing}
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
-    return (;outdir, assembly=assembly_out, tmpdir)
+    return (; outdir, assembly = assembly_out, tmpdir)
 end
 
 # ISN'T AVAILABLE IN BIOCONDA
@@ -1396,14 +1458,14 @@ end
 # function run_quickmerge(self_assembly::String, ref_assembly::String; outdir::String="quickmerge_output", hco::Float64=5.0, c::Float64=1.5, l::Int=5000)
 #     Mycelia.add_bioconda_env("bioconda::quickmerge")
 #     mkpath(outdir)
-    
+
 #     merged_assembly = joinpath(outdir, "merged.fasta")
-    
+
 #     if !isfile(merged_assembly)
 #         # Run QuickMerge
 #         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n quickmerge merge_wrapper.py $(self_assembly) $(ref_assembly) -pre $(outdir)/merged -hco $(hco) -c $(c) -l $(l)`)
 #     end
-    
+
 #     return (;outdir, merged_assembly)
 # end
 
@@ -1430,17 +1492,19 @@ Named tuple containing:
 - Falls back to Racon polishing when the Apollo CLI is unavailable
 - Skips analysis if output files already exist
 """
-function run_apollo(assembly_file::String, reads_file::String; outdir::String=assembly_file * "_apollo")
+function run_apollo(assembly_file::String, reads_file::String; outdir::String = assembly_file *
+                                                                                "_apollo")
     Mycelia.add_bioconda_env("apollo")
     Mycelia.add_bioconda_env("minimap2")
     Mycelia.add_bioconda_env("samtools")
     mkpath(outdir)
-    
+
     basename_assembly = splitext(basename(assembly_file))[1]
     polished_assembly = joinpath(outdir, basename_assembly * "_polished.fasta")
-    
+
     apollo_prefix = _conda_env_prefix("apollo")
-    apollo_bin = apollo_prefix === nothing ? nothing : joinpath(apollo_prefix, "bin", "apollo")
+    apollo_bin = apollo_prefix === nothing ? nothing :
+                 joinpath(apollo_prefix, "bin", "apollo")
     apollo_available = apollo_bin !== nothing && isfile(apollo_bin)
 
     if !isfile(polished_assembly)
@@ -1459,7 +1523,8 @@ function run_apollo(assembly_file::String, reads_file::String; outdir::String=as
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n apollo apollo polish -a $(assembly_file) -b $(bam_file) -o $(polished_assembly)`)
         else
             unicycler_prefix = _conda_env_prefix("unicycler")
-            if unicycler_prefix !== nothing && isfile(joinpath(unicycler_prefix, "bin", "racon"))
+            if unicycler_prefix !== nothing &&
+               isfile(joinpath(unicycler_prefix, "bin", "racon"))
                 racon_env = "unicycler"
             else
                 Mycelia.add_bioconda_env("racon")
@@ -1472,12 +1537,12 @@ function run_apollo(assembly_file::String, reads_file::String; outdir::String=as
             end
             racon_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(racon_env) racon $(reads_file) $(overlaps_file) $(assembly_file)`
             open(polished_assembly, "w") do io
-                run(pipeline(racon_cmd, stdout=io))
+                run(pipeline(racon_cmd, stdout = io))
             end
         end
     end
-    
-    return (;outdir, polished_assembly)
+
+    return (; outdir, polished_assembly)
 end
 
 """
@@ -1543,13 +1608,15 @@ function _find_homopolish_model_path(model_name::String)
     return nothing
 end
 
-function run_homopolish(assembly_file::String, local_db_path::String; outdir::String=assembly_file * "_homopolish", model_path::String="", threads = get_default_threads(), sketch_path::String="")
+function run_homopolish(assembly_file::String, local_db_path::String;
+        outdir::String = assembly_file * "_homopolish", model_path::String = "",
+        threads = get_default_threads(), sketch_path::String = "")
     Mycelia.add_bioconda_env("homopolish")
     mkpath(outdir)
-    
+
     basename_assembly = splitext(basename(assembly_file))[1]
     polished_assembly = joinpath(outdir, basename_assembly * "_homopolished.fasta")
-    
+
     if isempty(model_path)
         model_path = _find_homopolish_model_path("pb.pkl")
         if model_path === nothing
@@ -1570,19 +1637,20 @@ function run_homopolish(assembly_file::String, local_db_path::String; outdir::St
     end
 
     if !isfile(polished_assembly)
-        cmd_args = ["homopolish", "polish", "-a", assembly_file, "-s", sketch_path, "-m", model_path, "-o", outdir, "-t", string(threads)]
-        
+        cmd_args = ["homopolish", "polish", "-a", assembly_file, "-s", sketch_path,
+            "-m", model_path, "-o", outdir, "-t", string(threads)]
+
         # Run Homopolish
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n homopolish $(cmd_args)`)
-        
+
         # Move output to expected location if needed
         homopolish_output = joinpath(outdir, "homopolished_" * basename_assembly)
         if isfile(homopolish_output) && !isfile(polished_assembly)
             mv(homopolish_output, polished_assembly)
         end
     end
-    
-    return (;outdir, polished_assembly)
+
+    return (; outdir, polished_assembly)
 end
 
 """
@@ -1621,17 +1689,17 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 """
 function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::String;
-    outdir::String="hylight_output",
-    threads = get_default_threads(),
-    nsplit::Union{Nothing,Int}=nothing,
-    min_identity::Union{Nothing,Float64}=nothing,
-    min_ovlp_len::Union{Nothing,Int}=nothing,
-    size::Union{Nothing,Int}=nothing,
-    max_tip_len::Union{Nothing,Int}=nothing,
-    insert_size::Union{Nothing,Int}=nothing,
-    average_read_len::Union{Nothing,Int}=nothing,
-    corrected::Bool=false,
-    low_q::Bool=false
+        outdir::String = "hylight_output",
+        threads = get_default_threads(),
+        nsplit::Union{Nothing, Int} = nothing,
+        min_identity::Union{Nothing, Float64} = nothing,
+        min_ovlp_len::Union{Nothing, Int} = nothing,
+        size::Union{Nothing, Int} = nothing,
+        max_tip_len::Union{Nothing, Int} = nothing,
+        insert_size::Union{Nothing, Int} = nothing,
+        average_read_len::Union{Nothing, Int} = nothing,
+        corrected::Bool = false,
+        low_q::Bool = false
 )
     isfile(short_reads_1) || error("Short read 1 file not found: $(short_reads_1)")
     isfile(short_reads_2) || error("Short read 2 file not found: $(short_reads_2)")
@@ -1639,7 +1707,7 @@ function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::S
 
     Mycelia.add_bioconda_env("hylight")
     mkpath(outdir)
-    
+
     # HyLight expects a single short-read FASTQ; combine paired inputs.
     short_reads = joinpath(outdir, "short_reads.fq")
     open(short_reads, "w") do io
@@ -1651,7 +1719,7 @@ function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::S
     end
 
     strain_assemblies = joinpath(outdir, "strain_assemblies")
-    
+
     if !isdir(strain_assemblies)
         # Run HyLight assembly
         cmd_args = [
@@ -1669,12 +1737,13 @@ function run_hylight(short_reads_1::String, short_reads_2::String, long_reads::S
         isnothing(size) || push!(cmd_args, "--size", string(size))
         isnothing(max_tip_len) || push!(cmd_args, "--max_tip_len", string(max_tip_len))
         isnothing(insert_size) || push!(cmd_args, "--insert_size", string(insert_size))
-        isnothing(average_read_len) || push!(cmd_args, "--average_read_len", string(average_read_len))
+        isnothing(average_read_len) ||
+            push!(cmd_args, "--average_read_len", string(average_read_len))
 
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hylight $(cmd_args)`)
     end
-    
-    return (;outdir, strain_assemblies)
+
+    return (; outdir, strain_assemblies)
 end
 
 """
@@ -1700,24 +1769,25 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with strong
 - Skips analysis if output files already exist
 """
-function run_strong(assembly_graph::String, reads_file::String; outdir::String="strong_output", nb_strains::Int=0)
+function run_strong(assembly_graph::String, reads_file::String;
+        outdir::String = "strong_output", nb_strains::Int = 0)
     Mycelia.add_bioconda_env("strong")
     mkpath(outdir)
-    
+
     strain_unitigs = joinpath(outdir, "strain_unitigs.fasta")
-    
+
     if !isfile(strain_unitigs)
         cmd_args = ["STRONG", assembly_graph, reads_file, "-o", outdir]
-        
+
         if nb_strains > 0
             push!(cmd_args, "-s", string(nb_strains))
         end
-        
+
         # Run STRONG
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strong $(cmd_args)`)
     end
-    
-    return (;outdir, strain_unitigs)
+
+    return (; outdir, strain_unitigs)
 end
 
 # """
@@ -1747,14 +1817,14 @@ end
 # function run_ray(reads_files::Vector{String}; outdir::String="ray_output", k::Int=31, min_contig_length::Int=200)
 #     Mycelia.add_bioconda_env("ray")
 #     mkpath(outdir)
-    
+
 #     contigs_file = joinpath(outdir, "Contigs.fasta")
 #     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
-    
+
 #     if !isfile(contigs_file)
 #         # Build Ray command arguments
 #         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
-        
+
 #         # Add reads files - Ray auto-detects paired vs single-end
 #         if length(reads_files) == 2
 #             # Paired-end reads
@@ -1768,10 +1838,10 @@ end
 #                 push!(cmd_args, "-s", reads_file)
 #             end
 #         end
-        
+
 #         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
 #     end
-    
+
 #     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
 # end
 
@@ -1803,21 +1873,21 @@ end
 # function run_ray_meta(reads_files::Vector{String}; outdir::String="ray_meta_output", k::Int=31, min_contig_length::Int=200, enable_communities::Bool=true)
 #     Mycelia.add_bioconda_env("ray")
 #     mkpath(outdir)
-    
+
 #     contigs_file = joinpath(outdir, "Contigs.fasta")
 #     scaffolds_file = joinpath(outdir, "Scaffolds.fasta")
-    
+
 #     if !isfile(contigs_file)
 #         # Build Ray Meta command arguments
 #         cmd_args = ["Ray", "-k", string(k), "-o", outdir, "-minimum-contig-length", string(min_contig_length)]
-        
+
 #         # Enable metagenomic mode
 #         push!(cmd_args, "-enable-neighbourhoods")
-        
+
 #         if enable_communities
 #             push!(cmd_args, "-enable-neighbourhoods")
 #         end
-        
+
 #         # Add reads files
 #         if length(reads_files) == 2
 #             # Paired-end reads
@@ -1831,10 +1901,10 @@ end
 #                 push!(cmd_args, "-s", reads_file)
 #             end
 #         end
-        
+
 #         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ray $(cmd_args)`)
 #     end
-    
+
 #     return (;outdir, contigs=contigs_file, scaffolds=scaffolds_file)
 # end
 
@@ -1863,12 +1933,14 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with velvet
 - Skips assembly if output directory already exists
 """
-function run_velvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdir::String="velvet_output", k::Int=31, exp_cov::String="auto", min_contig_lgth::Int=200)
+function run_velvet(fastq1::String; fastq2::Union{String, Nothing} = nothing,
+        outdir::String = "velvet_output", k::Int = 31,
+        exp_cov::String = "auto", min_contig_lgth::Int = 200)
     Mycelia.add_bioconda_env("velvet")
     mkpath(outdir)
-    
+
     contigs_file = joinpath(outdir, "contigs.fa")
-    
+
     if !isfile(contigs_file)
         # Step 1: velveth (k-mer hashing and indexing)
         if isnothing(fastq2)
@@ -1878,18 +1950,18 @@ function run_velvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdi
             # Paired-end reads
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -shortPaired -fastq -separate $(fastq1) $(fastq2)`)
         end
-        
+
         # Step 2: velvetg (graph construction and traversal)
         cmd_args = ["velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
-        
+
         if exp_cov != "auto"
             push!(cmd_args, "-exp_cov", exp_cov)
         end
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet $(cmd_args)`)
     end
-    
-    return (;outdir, contigs=contigs_file)
+
+    return (; outdir, contigs = contigs_file)
 end
 
 """
@@ -1917,13 +1989,15 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with velvet
 - Skips assembly if output directory already exists
 """
-function run_metavelvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, outdir::String="metavelvet_output", k::Int=31, exp_cov::String="auto", min_contig_lgth::Int=200)
+function run_metavelvet(fastq1::String; fastq2::Union{String, Nothing} = nothing,
+        outdir::String = "metavelvet_output", k::Int = 31,
+        exp_cov::String = "auto", min_contig_lgth::Int = 200)
     Mycelia.add_bioconda_env("velvet")
     Mycelia.add_bioconda_env("metavelvet")
     mkpath(outdir)
-    
+
     contigs_file = joinpath(outdir, "meta-velvetg.contigs.fa")
-    
+
     if !isfile(contigs_file)
         # Step 1: velveth (k-mer hashing and indexing) - same as regular velvet
         if isnothing(fastq2)
@@ -1933,9 +2007,10 @@ function run_metavelvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, o
             # Paired-end reads
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet velveth $(outdir) $(k) -shortPaired -fastq -separate $(fastq1) $(fastq2)`)
         end
-        
+
         # Step 2: velvetg with read tracking (required by meta-velvetg)
-        velvetg_args = ["velvetg", outdir, "-read_trkg", "yes", "-min_contig_lgth", string(min_contig_lgth)]
+        velvetg_args = ["velvetg", outdir, "-read_trkg", "yes",
+            "-min_contig_lgth", string(min_contig_lgth)]
         if exp_cov != "auto"
             push!(velvetg_args, "-exp_cov", exp_cov)
         end
@@ -1943,15 +2018,15 @@ function run_metavelvet(fastq1::String; fastq2::Union{String,Nothing}=nothing, o
 
         # Step 3: meta-velvetg (metagenomic graph construction and traversal)
         cmd_args = ["meta-velvetg", outdir, "-min_contig_lgth", string(min_contig_lgth)]
-        
+
         if exp_cov != "auto"
             push!(cmd_args, "-exp_cov", exp_cov)
         end
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metavelvet $(cmd_args)`)
     end
-    
-    return (;outdir, contigs=contigs_file)
+
+    return (; outdir, contigs = contigs_file)
 end
 
 """
@@ -1979,49 +2054,52 @@ Named tuple containing:
 - Can be run on existing velveth output
 - Automatically creates and uses a conda environment with velvet
 """
-function run_velvetg(velvet_dir::String; outdir::String=velvet_dir, exp_cov::Union{String,Float64}="auto", cov_cutoff::Union{String,Float64}="auto", min_contig_lgth::Int=200, scaffolding::Bool=true)
+function run_velvetg(velvet_dir::String; outdir::String = velvet_dir,
+        exp_cov::Union{String, Float64} = "auto",
+        cov_cutoff::Union{String, Float64} = "auto",
+        min_contig_lgth::Int = 200, scaffolding::Bool = true)
     Mycelia.add_bioconda_env("velvet")
-    
+
     contigs_file = joinpath(outdir, "contigs.fa")
     stats_file = joinpath(outdir, "stats.txt")
-    
+
     # Build velvetg command
     cmd_args = ["velvetg", velvet_dir, "-min_contig_lgth", string(min_contig_lgth)]
-    
+
     if exp_cov != "auto"
         push!(cmd_args, "-exp_cov", string(exp_cov))
     end
-    
+
     if cov_cutoff != "auto"
         push!(cmd_args, "-cov_cutoff", string(cov_cutoff))
     end
-    
+
     if scaffolding
         push!(cmd_args, "-scaffolding", "yes")
     else
         push!(cmd_args, "-scaffolding", "no")
     end
-    
+
     # Copy output to specified directory if different
     if outdir != velvet_dir
         mkpath(outdir)
         push!(cmd_args, "-read_trkg", "yes")  # Enable read tracking for copying
     end
-    
+
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n velvet $(cmd_args)`)
-    
+
     # Copy results if needed
     if outdir != velvet_dir
         for file in ["contigs.fa", "stats.txt", "Graph", "LastGraph"]
             src_file = joinpath(velvet_dir, file)
             dst_file = joinpath(outdir, file)
             if isfile(src_file)
-                cp(src_file, dst_file, force=true)
+                cp(src_file, dst_file, force = true)
             end
         end
     end
-    
-    return (;outdir, contigs=contigs_file, stats=stats_file)
+
+    return (; outdir, contigs = contigs_file, stats = stats_file)
 end
 
 """
@@ -2054,28 +2132,28 @@ Named tuple containing:
 - Automatically creates and uses a conda environment with metamdbg
 - Skips assembly if output directory already exists
 """
-function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing,
-                      ont_reads::Union{String,Vector{String},Nothing}=nothing,
-                      outdir::String="metamdbg_output",
-                      abundance_min::Int=3,
-                      threads::Int=get_default_threads(),
-                      graph_k::Int=21)
-    
+function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
+        ont_reads::Union{String, Vector{String}, Nothing} = nothing,
+        outdir::String = "metamdbg_output",
+        abundance_min::Int = 3,
+        threads::Int = get_default_threads(),
+        graph_k::Int = 21)
+
     # Validate input - must have at least one read type
     if isnothing(hifi_reads) && isnothing(ont_reads)
         error("Must provide either hifi_reads, ont_reads, or both")
     end
-    
+
     Mycelia.add_bioconda_env("metamdbg")
     mkpath(outdir)
-    
+
     contigs_file = joinpath(outdir, "contigs.fasta")
     graph_file = joinpath(outdir, "graph.gfa")
-    
+
     if !isfile(contigs_file)
         # Build command arguments
         cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
-        
+
         # Add HiFi reads if provided
         if !isnothing(hifi_reads)
             push!(cmd_args, "--in-hifi")
@@ -2085,7 +2163,7 @@ function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing
                 append!(cmd_args, hifi_reads)
             end
         end
-        
+
         # Add ONT reads if provided
         if !isnothing(ont_reads)
             push!(cmd_args, "--in-ont")
@@ -2095,13 +2173,13 @@ function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing
                 append!(cmd_args, ont_reads)
             end
         end
-        
+
         # Add other parameters
         push!(cmd_args, "--min-abundance", string(abundance_min))
         push!(cmd_args, "--threads", string(threads))
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(cmd_args)`)
-        
+
         # Generate assembly graph using metaMDBG gfa command
         gfa_cmd_args = [
             "metaMDBG", "gfa",
@@ -2109,24 +2187,25 @@ function run_metamdbg(; hifi_reads::Union{String,Vector{String},Nothing}=nothing
             "--k", string(graph_k),
             "--threads", string(threads)
         ]
-        
+
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`)
-        
+
         # Set expected output file names
         contigs_file = joinpath(outdir, "contigs.fasta.gz")  # metaMDBG compresses output
-        
+
         # Find the generated graph file (format: assemblyGraph_k{k}_{length}bps.gfa)
-        graph_files = filter(f -> startswith(basename(f), "assemblyGraph_k") && endswith(f, ".gfa"), 
-                           readdir(outdir, join=true))
-        
+        graph_files = filter(
+            f -> startswith(basename(f), "assemblyGraph_k") && endswith(f, ".gfa"),
+            readdir(outdir, join = true))
+
         if isempty(graph_files)
             error("metaMDBG failed to generate assembly graph file. Expected file pattern: assemblyGraph_k*.gfa in $outdir")
         end
-        
+
         graph_file = first(graph_files)
     end
-    
-    return (;outdir, contigs=contigs_file, graph=graph_file)
+
+    return (; outdir, contigs = contigs_file, graph = graph_file)
 end
 
 """
@@ -2154,23 +2233,27 @@ Named tuple containing:
 - Utilizes requested CPU threads for read mapping
 - Skips analysis if output files already exist
 """
-function run_strainy(assembly_file::String, long_reads::String; outdir::String="strainy_output", mode::String="phase", threads = get_default_threads())
+function run_strainy(
+        assembly_file::String, long_reads::String; outdir::String = "strainy_output",
+        mode::String = "phase", threads = get_default_threads())
     Mycelia.add_bioconda_env("strainy")
     mkpath(outdir)
-    
+
     strain_assemblies = joinpath(outdir, "strain_assemblies.fasta")
-    
+
     if !isfile(strain_assemblies)
         # First map reads to assembly
         bam_file = joinpath(outdir, "mapped_reads.bam")
         if !isfile(bam_file)
-            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`, `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`))
+            run(pipeline(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`,
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`))
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`)
         end
-        
+
         # Run Strainy
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`)
     end
-    
-    return (;outdir, strain_assemblies)
+
+    return (; outdir, strain_assemblies)
 end

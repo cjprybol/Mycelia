@@ -92,18 +92,18 @@ graph = build_fasta_graph(seqs; min_overlap=9)
 - `get_fasta_graph_statistics`: Get graph statistics
 """
 function build_fasta_graph(
-    records::Vector{FASTX.FASTA.Record};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTA.Record};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     return build_fasta_graph_olc(
         records;
-        dataset_id=dataset_id,
-        min_overlap=min_overlap,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        min_overlap = min_overlap,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 end
 
@@ -144,11 +144,11 @@ graph = build_fasta_graph_from_file("assembly.fasta.gz"; min_overlap=9)
 ```
 """
 function build_fasta_graph_from_file(
-    filepath::String;
-    dataset_id::Union{String,Nothing}=nothing,
-    min_overlap::Int=3,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepath::String;
+        dataset_id::Union{String, Nothing} = nothing,
+        min_overlap::Int = 3,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -176,10 +176,10 @@ function build_fasta_graph_from_file(
 
     return build_fasta_graph(
         records;
-        dataset_id=dataset_id,
-        min_overlap=min_overlap,
-        type_hint=final_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        min_overlap = min_overlap,
+        type_hint = final_hint,
+        ambiguous_action = ambiguous_action
     )
 end
 
@@ -219,10 +219,10 @@ end
 ```
 """
 function build_fasta_graph_from_files(
-    filepaths::Vector{String};
-    min_overlap::Int=3,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        filepaths::Vector{String};
+        min_overlap::Int = 3,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(filepaths)
         error("No files provided")
@@ -253,9 +253,9 @@ function build_fasta_graph_from_files(
     # Build graph from first file
     graph = build_fasta_graph_from_file(
         filepaths[1];
-        min_overlap=min_overlap,
-        type_hint=final_hint,
-        ambiguous_action=ambiguous_action
+        min_overlap = min_overlap,
+        type_hint = final_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Get Mycelia module for open_fastx

@@ -30,15 +30,15 @@ if run_external
         mktempdir() do dir
             fasta = joinpath(dir, "sample.fna")
             record = FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT"))
-            Mycelia.write_fasta(outfile=fasta, records=[record])
+            Mycelia.write_fasta(outfile = fasta, records = [record])
             db_prefix = Mycelia.ensure_blast_db(
-                fasta=fasta,
-                dbtype="nucl",
-                output_dir=dir,
-                db_name="sample_db",
-                title="sample_db",
-                parse_seqids=true,
-                force=true
+                fasta = fasta,
+                dbtype = "nucl",
+                output_dir = dir,
+                db_name = "sample_db",
+                title = "sample_db",
+                parse_seqids = true,
+                force = true
             )
             Test.@test isfile(db_prefix * ".nsq") || isfile(db_prefix * ".00.nsq")
         end

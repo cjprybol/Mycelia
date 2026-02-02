@@ -19,7 +19,7 @@ Test.@testset "Alphabet Inference" begin
         Test.@test_throws ArgumentError Mycelia.Rhizomorph.build_kmer_graph(
             records,
             3;
-            ambiguous_action=:error
+            ambiguous_action = :error
         )
     end
 

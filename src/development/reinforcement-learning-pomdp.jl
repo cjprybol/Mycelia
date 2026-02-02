@@ -67,7 +67,7 @@
 # function POMDPs.actions(mdp::AssemblyMDP)
 #     # Define action space
 #     actions = AssemblyAction[]
-    
+
 #     # Discrete high-level decisions
 #     for decision in [:continue_k, :next_k, :terminate]
 #         # Continuous parameter ranges (discretized)
@@ -79,7 +79,7 @@
 #                         :emission_weight => emis_w,
 #                         :quality_weight => qual_w
 #                     )
-                    
+
 #                     for corr_thresh in [0.9, 0.95, 0.99]
 #                         for batch_size in [100, 500, 1000]
 #                             push!(actions, AssemblyAction(
@@ -95,7 +95,7 @@
 #             end
 #         end
 #     end
-    
+
 #     return actions
 # end
 
@@ -104,15 +104,15 @@
 # function POMDPs.transition(mdp::AssemblyMDP, s::AssemblyState, a::AssemblyAction)
 #     # Return a distribution over next states
 #     # For simplicity, we'll use a deterministic transition with noise
-    
+
 #     next_states = AssemblyState[]
 #     probs = Float64[]
-    
+
 #     # Primary transition (80% probability)
 #     primary_next, _ = execute_assembly_action(s, a, mdp.max_k, mdp.memory_limit)
 #     push!(next_states, primary_next)
 #     push!(probs, 1.0 - mdp.transition_noise)
-    
+
 #     # Noisy transitions (20% probability split)
 #     # Simulate uncertainty in assembly outcomes
 #     for noise_factor in [0.9, 1.1]
@@ -132,7 +132,7 @@
 #         push!(next_states, noisy_state)
 #         push!(probs, mdp.transition_noise / 2)
 #     end
-    
+
 #     return POMDPs.SparseCat(next_states, probs)
 # end
 
@@ -141,29 +141,29 @@
 #     reward_components = RewardComponents(
 #         # Accuracy reward (primary objective)
 #         1000.0 * (sp.assembly_quality - s.assembly_quality),
-        
+
 #         # Efficiency reward
 #         10.0 * (1.0 - sp.time_elapsed / 3600.0),  # Normalize to 1 hour
-        
+
 #         # Error penalty
 #         -500.0 * max(0.0, s.correction_rate - sp.correction_rate),
-        
+
 #         # Progress bonus
 #         50.0 * (sp.corrections_made > s.corrections_made ? 1.0 : 0.0),
-        
+
 #         # Connectivity bonus
 #         100.0 * (sp.graph_connectivity - s.graph_connectivity),
-        
+
 #         # Memory penalty
 #         -200.0 * max(0.0, sp.memory_usage - mdp.memory_limit),
-        
+
 #         # Sparsity bonus
 #         25.0 * sp.error_signal_clarity,
-        
+
 #         # Termination reward
 #         a.decision == :terminate ? 500.0 * sp.assembly_quality : 0.0
 #     )
-    
+
 #     return calculate_total_reward(reward_components)
 # end
 
@@ -226,7 +226,7 @@
 #     noise_quality = pomdp.observation_noise * (Random.rand() - 0.5)
 #     noise_correction = pomdp.observation_noise * (Random.rand() - 0.5)
 #     noise_connectivity = pomdp.observation_noise * (Random.rand() - 0.5)
-    
+
 #     obs = AssemblyObservation(
 #         clamp(sp.assembly_quality + noise_quality, 0.0, 1.0),
 #         clamp(sp.correction_rate + noise_correction, 0.0, 1.0),
@@ -234,7 +234,7 @@
 #         sp.current_k,
 #         sp.memory_usage
 #     )
-    
+
 #     return POMDPs.Deterministic(obs)
 # end
 
@@ -255,7 +255,7 @@
 #     else
 #         error("Unknown solver: $solver")
 #     end
-    
+
 #     policy = POMDPs.solve(solver_obj, mdp)
 #     return policy
 # end
@@ -277,7 +277,7 @@
 #     else
 #         error("Unknown POMDP solver: $solver")
 #     end
-    
+
 #     policy = POMDPs.solve(solver_obj, pomdp)
 #     return policy
 # end
@@ -302,7 +302,7 @@
 # )
 #     # Create MDP
 #     mdp = AssemblyMDP()
-    
+
 #     if use_pomdp
 #         # Wrap in POMDP for partial observability
 #         problem = AssemblyPOMDP(mdp, observation_noise)
@@ -311,12 +311,12 @@
 #         # Solve as fully observable MDP
 #         policy = solve_assembly_mdp(mdp, solver=solver)
 #     end
-    
+
 #     # Save policy if requested
 #     if !isempty(save_path)
 #         JLD2.save(save_path, "policy", policy, "mdp", mdp)
 #     end
-    
+
 #     return policy, mdp
 # end
 
@@ -345,33 +345,33 @@
 #         Int[initial_k],
 #         0, 0.0
 #     )
-    
+
 #     assembly_history = AssemblyHistory()
-    
+
 #     while !POMDPs.isterminal(mdp, state)
 #         # Get action from policy
 #         action = POMDPs.action(policy, state)
-        
+
 #         # Execute action in real environment
 #         new_state, reward_components = execute_assembly_action(
 #             state, action, mdp.max_k, mdp.memory_limit
 #         )
-        
+
 #         # Log progress
 #         if verbose
 #             println("K: $(state.current_k), Action: $(action.decision), " *
 #                    "Quality: $(round(new_state.assembly_quality, digits=2))")
 #         end
-        
+
 #         # Record history
 #         push!(assembly_history.k_values, state.current_k)
 #         push!(assembly_history.quality_scores, new_state.assembly_quality)
 #         push!(assembly_history.actions_taken, action.decision)
 #         push!(assembly_history.rewards, calculate_total_reward(reward_components))
-        
+
 #         state = new_state
 #     end
-    
+
 #     return assembly_history
 # end
 
@@ -393,16 +393,16 @@
 #     # This is a simplified implementation
 #     particles = POMDPs.particles(b)
 #     weights = POMDPs.weights(b)
-    
+
 #     new_particles = AssemblyState[]
 #     new_weights = Float64[]
-    
+
 #     for (p, w) in zip(particles, weights)
 #         # Propagate particle through transition
 #         next_dist = POMDPs.transition(up.pomdp.mdp, p, a)
 #         for _ in 1:ceil(Int, up.n_particles * w)
 #             sp = Random.rand(next_dist)
-            
+
 #             # Weight by observation likelihood
 #             obs_likelihood = observation_likelihood(up.pomdp, sp, o)
 #             if obs_likelihood > 0
@@ -411,10 +411,10 @@
 #             end
 #         end
 #     end
-    
+
 #     # Normalize weights
 #     new_weights ./= sum(new_weights)
-    
+
 #     return POMDPs.ParticleCollection(new_particles, new_weights)
 # end
 
@@ -423,10 +423,10 @@
 #     quality_diff = abs(s.assembly_quality - o.observed_quality)
 #     correction_diff = abs(s.correction_rate - o.observed_correction_rate)
 #     connectivity_diff = abs(s.graph_connectivity - o.observed_connectivity)
-    
+
 #     likelihood = exp(-(quality_diff^2 + correction_diff^2 + connectivity_diff^2) / 
 #                      (2 * pomdp.observation_noise^2))
-    
+
 #     return likelihood
 # end
 
@@ -465,20 +465,20 @@
 #             use_pomdp=use_pomdp
 #         )
 #     end
-    
+
 #     # Apply policy to full dataset
 #     assembly_history = apply_pomdp_policy(
 #         policy, mdp, reads,
 #         verbose=verbose
 #     )
-    
+
 #     # Get final assembly using best k
 #     best_k_idx = argmax(assembly_history.quality_scores)
 #     best_k = assembly_history.k_values[best_k_idx]
-    
+
 #     # Run assembly with optimal k
 #     final_assembly = assemble_with_k(reads, best_k; kwargs...)
-    
+
 #     return final_assembly, assembly_history
 # end
 
@@ -493,7 +493,7 @@
 #     # Sample states and show policy decisions
 #     sample_states = AssemblyState[]
 #     policy_actions = Symbol[]
-    
+
 #     for k in mdp.k_primes[1:5:end]
 #         for quality in [0.2, 0.5, 0.8]
 #             for correction_rate in [0.1, 0.5, 0.9]
@@ -503,13 +503,13 @@
 #                     Float64[], Int[k], 100, 60.0
 #                 )
 #                 push!(sample_states, state)
-                
+
 #                 action = POMDPs.action(policy, state)
 #                 push!(policy_actions, action.decision)
 #             end
 #         end
 #     end
-    
+
 #     # Create visualization data
 #     df = DataFrames.DataFrame(
 #         k = [s.current_k for s in sample_states],
@@ -517,6 +517,6 @@
 #         correction_rate = [s.correction_rate for s in sample_states],
 #         action = policy_actions
 #     )
-    
+
 #     return df
 # end

@@ -30,14 +30,14 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
 
         reads = [
             FASTX.FASTA.Record("forward", reference_seq),
-            FASTX.FASTA.Record("reverse", reverse_comp),
+            FASTX.FASTA.Record("reverse", reverse_comp)
         ]
 
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             reads,
             5;
-            dataset_id="canon_ds",
-            mode=:doublestrand,
+            dataset_id = "canon_ds",
+            mode = :doublestrand
         )
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -48,10 +48,13 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
         for label in MetaGraphsNext.labels(graph)
             vertex_data = graph[label]
             Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
-            dataset_evidence = values(get(vertex_data.evidence, "canon_ds", Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
+            dataset_evidence = values(get(
+                vertex_data.evidence, "canon_ds", Dict{
+                    String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
             total_evidence += sum(length, dataset_evidence)
             strands = Set(obs.strand for obs in Iterators.flatten(dataset_evidence))
-            if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
+            if Mycelia.Rhizomorph.Forward in strands &&
+               Mycelia.Rhizomorph.Reverse in strands
                 has_both_orientations = true
             end
         end
@@ -67,8 +70,8 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             reads,
             5;
-            dataset_id="canon_ss",
-            mode=:singlestrand,
+            dataset_id = "canon_ss",
+            mode = :singlestrand
         )
 
         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -79,13 +82,16 @@ Test.@testset "K-mer Canonicalization Consistency Tests (Rhizomorph)" begin
         for label in MetaGraphsNext.labels(graph)
             vertex_data = graph[label]
             Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
-            dataset_evidence = values(get(vertex_data.evidence, "canon_ss", Dict{String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
+            dataset_evidence = values(get(
+                vertex_data.evidence, "canon_ss", Dict{
+                    String, Set{Mycelia.Rhizomorph.EvidenceEntry}}()))
             total_evidence += sum(length, dataset_evidence)
             strands = Set(obs.strand for obs in Iterators.flatten(dataset_evidence))
             if isempty(strands)
                 all_forward = false
             else
-                all_forward &= all(strand == Mycelia.Rhizomorph.Forward for strand in strands)
+                all_forward &= all(strand == Mycelia.Rhizomorph.Forward
+                for strand in strands)
             end
         end
 

@@ -33,7 +33,6 @@ import FASTX
 import MetaGraphsNext
 
 Test.@testset "Strand-Specific Graph Construction - Basic K-mer Extraction" begin
-
     Test.@testset "Extract k-mers from simple sequence" begin
         # Simple DNA sequence
         seq = BioSequences.LongDNA{4}("ATCGATCG")
@@ -58,7 +57,8 @@ Test.@testset "Strand-Specific Graph Construction - Basic K-mer Extraction" begi
         seq = BioSequences.LongDNA{4}("ATCGATCG")
         k = 3
 
-        kmers_with_positions = [(kmer, pos) for (kmer, pos) in Kmers.UnambiguousDNAMers{k}(seq)]
+        kmers_with_positions = [(kmer, pos)
+                                for (kmer, pos) in Kmers.UnambiguousDNAMers{k}(seq)]
 
         # Each k-mer should know its position (1-indexed)
         Test.@test kmers_with_positions[1][1] == Kmers.DNAKmer{3}("ATC")
@@ -85,7 +85,8 @@ Test.@testset "Strand-Specific Graph Construction - Basic K-mer Extraction" begi
         Test.@test String(kmers[4]) == "CAT"
 
         # ATG RC is CAT - but we store both as observed
-        Test.@test Kmers.DNAKmer{3}("ATG") != BioSequences.reverse_complement(Kmers.DNAKmer{3}("ATG"))
+        Test.@test Kmers.DNAKmer{3}("ATG") !=
+                   BioSequences.reverse_complement(Kmers.DNAKmer{3}("ATG"))
         Test.@test String(BioSequences.reverse_complement(Kmers.DNAKmer{3}("ATG"))) == "CAT"
     end
 
@@ -94,7 +95,8 @@ Test.@testset "Strand-Specific Graph Construction - Basic K-mer Extraction" begi
         seq = BioSequences.LongDNA{4}("ATNGCAT")  # N at position 3
         k = 3
 
-        kmers_with_positions = [(kmer, pos) for (kmer, pos) in Kmers.UnambiguousDNAMers{k}(seq)]
+        kmers_with_positions = [(kmer, pos)
+                                for (kmer, pos) in Kmers.UnambiguousDNAMers{k}(seq)]
 
         # Should skip: ATN (pos 1), TNG (pos 2), NGC (pos 3)
         # Should keep: GCA (pos 5), CAT (pos 6)
@@ -112,7 +114,6 @@ Test.@testset "Strand-Specific Graph Construction - Basic K-mer Extraction" begi
 end
 
 Test.@testset "Strand-Specific Graph Construction - Single Read" begin
-
     Test.@testset "Build graph from single short read" begin
         # Create a simple FASTQ record
         seq = BioSequences.LongDNA{4}("ATCGATCG")
@@ -124,7 +125,7 @@ Test.@testset "Strand-Specific Graph Construction - Single Read" begin
 
         # Build strand-specific k-mer graph
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
-            [record], k; dataset_id=dataset_id
+            [record], k; dataset_id = dataset_id
         )
 
         # Graph should have vertices for observed k-mers
@@ -167,7 +168,7 @@ Test.@testset "Strand-Specific Graph Construction - Single Read" begin
         dataset_id = "test_dataset"
 
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
-            [record], k; dataset_id=dataset_id
+            [record], k; dataset_id = dataset_id
         )
 
         # Get vertex data for first k-mer (ATC)
@@ -188,7 +189,6 @@ Test.@testset "Strand-Specific Graph Construction - Single Read" begin
 end
 
 Test.@testset "Strand-Specific Graph Construction - Multiple Reads" begin
-
     Test.@testset "Build graph from multiple reads" begin
         # Two reads observing same k-mers
         seq1 = BioSequences.LongDNA{4}("ATCGAT")
@@ -202,7 +202,7 @@ Test.@testset "Strand-Specific Graph Construction - Multiple Reads" begin
         dataset_id = "test_dataset"
 
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
-            [record1, record2], k; dataset_id=dataset_id
+            [record1, record2], k; dataset_id = dataset_id
         )
 
         # Should have combined evidence from both reads
@@ -244,7 +244,6 @@ Test.@testset "Strand-Specific Graph Construction - Multiple Reads" begin
 end
 
 Test.@testset "Strand-Specific Graph Construction - Forward vs Reverse" begin
-
     Test.@testset "Forward and reverse complement k-mers are separate" begin
         # Read on forward strand
         seq_fwd = BioSequences.LongDNA{4}("ATGCCC")
@@ -297,7 +296,6 @@ Test.@testset "Strand-Specific Graph Construction - Forward vs Reverse" begin
 end
 
 Test.@testset "Strand-Specific Graph Construction - Edge Creation" begin
-
     Test.@testset "Edges connect overlapping k-mers" begin
         seq = BioSequences.LongDNA{4}("ATCG")
         qual = fill(UInt8(30), 4)
@@ -322,7 +320,7 @@ Test.@testset "Strand-Specific Graph Construction - Edge Creation" begin
         k = 3
         dataset_id = "test_dataset"
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
-            [record], k; dataset_id=dataset_id
+            [record], k; dataset_id = dataset_id
         )
 
         atc_kmer = Kmers.DNAKmer{3}("ATC")
@@ -368,7 +366,6 @@ Test.@testset "Strand-Specific Graph Construction - Edge Creation" begin
 end
 
 Test.@testset "Strand-Specific Graph Construction - Multiple Datasets" begin
-
     Test.@testset "Build graph from multiple datasets" begin
         seq1 = BioSequences.LongDNA{4}("ATCGAT")
         seq2 = BioSequences.LongDNA{4}("ATCGAT")
@@ -381,12 +378,12 @@ Test.@testset "Strand-Specific Graph Construction - Multiple Datasets" begin
 
         # Build from dataset 1
         graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
-            [record1], k; dataset_id="dataset_01"
+            [record1], k; dataset_id = "dataset_01"
         )
 
         # Add dataset 2
         Mycelia.Rhizomorph.add_observations_to_graph!(
-            graph, [record2], k; dataset_id="dataset_02"
+            graph, [record2], k; dataset_id = "dataset_02"
         )
 
         # Should have evidence from both datasets

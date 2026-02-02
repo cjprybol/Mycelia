@@ -35,34 +35,34 @@ Test.@testset "CoverM integration (extended)" begin
             rng = StableRNGs.StableRNG(7)
 
             # Fetch a small NCBI genome (fallbacks to simulated if download fails)
-            genome_info = Mycelia.get_test_genome_fasta(use_ncbi=true)
+            genome_info = Mycelia.get_test_genome_fasta(use_ncbi = true)
             assembly = genome_info.fasta
 
             try
                 # Simulate reads and map to BAM
                 reads = Mycelia.simulate_illumina_reads(
-                    fasta=assembly,
-                    read_count=1_000,
-                    read_length=150,
-                    rndSeed=rand(rng, 0:typemax(Int)),
-                    quiet=true
+                    fasta = assembly,
+                    read_count = 1_000,
+                    read_length = 150,
+                    rndSeed = rand(rng, 0:typemax(Int)),
+                    quiet = true
                 )
                 map_result = Mycelia.minimap_map(
-                    fasta=assembly,
-                    fastq=reads.forward_reads,
-                    mapping_type="sr",
-                    threads=2
+                    fasta = assembly,
+                    fastq = reads.forward_reads,
+                    mapping_type = "sr",
+                    threads = 2
                 )
                 run(map_result.cmd)
-                bam_path, _ = Mycelia.index_bam(map_result.outfile; threads=2)
+                bam_path, _ = Mycelia.index_bam(map_result.outfile; threads = 2)
 
                 # Contig mode
                 contig_df = Mycelia.run_coverm_contig(
-                    bam_files=[bam_path],
-                    methods=["mean", "covered_fraction"],
-                    threads=2,
-                    outdir=joinpath(tmp, "coverm_contig"),
-                    quiet=true
+                    bam_files = [bam_path],
+                    methods = ["mean", "covered_fraction"],
+                    threads = 2,
+                    outdir = joinpath(tmp, "coverm_contig"),
+                    quiet = true
                 )
                 Test.@test DataFrames.nrow(contig_df) >= 1
                 mean_cols = filter(name -> endswith(String(name), "_Mean"), names(contig_df))
@@ -77,12 +77,12 @@ Test.@testset "CoverM integration (extended)" begin
 
                 # Genome mode (single FASTA treated as one bin)
                 genome_df = Mycelia.run_coverm_genome(
-                    bam_files=[bam_path],
-                    genome_fasta_files=[assembly],
-                    methods=["relative_abundance", "mean"],
-                    threads=2,
-                    outdir=joinpath(tmp, "coverm_genome"),
-                    quiet=true
+                    bam_files = [bam_path],
+                    genome_fasta_files = [assembly],
+                    methods = ["relative_abundance", "mean"],
+                    threads = 2,
+                    outdir = joinpath(tmp, "coverm_genome"),
+                    quiet = true
                 )
                 Test.@test DataFrames.nrow(genome_df) >= 1
                 mapped_df = genome_df[genome_df.Genome .!= "unmapped", :]

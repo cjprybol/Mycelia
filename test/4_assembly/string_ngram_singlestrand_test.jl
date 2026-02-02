@@ -28,7 +28,7 @@ Test.@testset "String N-gram SingleStrand Graph" begin
     reads = [FASTX.FASTA.Record("test", test_string)]
     strings = [String(FASTX.sequence(reads[1]))]
 
-    graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 3; dataset_id="test")
+    graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 3; dataset_id = "test")
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) == 4  # ABC, BCD, CDE, DEF
@@ -42,7 +42,8 @@ Test.@testset "String N-gram SingleStrand Graph" begin
             for entries in values(evidence_map)
                 for entry in entries
                     Test.@test entry isa Mycelia.Rhizomorph.EvidenceEntry
-                    Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                    Test.@test entry.strand in (
+                        Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                 end
             end
         end
@@ -58,7 +59,8 @@ Test.@testset "String N-gram SingleStrand Graph" begin
                 vertex_type = typeof(first(path_vector))
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
@@ -81,11 +83,14 @@ Test.@testset "String N-gram SingleStrand Graph" begin
         reduced = Mycelia.reduce_amino_acid_alphabet(full_seq, :CHEMICAL6)  # includes '-' and '+'
         records = [FASTX.FASTA.Record("reduced_seq", reduced)]
 
-        graph_reduced = Mycelia.Rhizomorph.build_ngram_graph([String(FASTX.sequence(records[1]))], 3; dataset_id="reduced_seq")
+        graph_reduced = Mycelia.Rhizomorph.build_ngram_graph(
+            [String(FASTX.sequence(records[1]))], 3; dataset_id = "reduced_seq")
         vertices_reduced = collect(MetaGraphsNext.labels(graph_reduced))
 
         Test.@test !isempty(vertices_reduced)
         # Ensure characters from reduced alphabet appear in labels
-        Test.@test any(label -> occursin("+", String(label)) || occursin("-", String(label)), vertices_reduced)
+        Test.@test any(
+            label -> occursin("+", String(label)) ||
+                     occursin("-", String(label)), vertices_reduced)
     end
 end

@@ -61,11 +61,11 @@ println("Removed \$(stats[:tips_removed]) tips from \$(stats[:connected_componen
 Based on 2021-02-02-tip-clipping.ipynb from Mycelia-Dev research demonstrating
 coverage-based statistical tip removal for assembly graph cleanup.
 """
-function statistical_tip_clipping(graph; 
-                                 min_coverage_threshold::Int = 1,
-                                 std_dev_multiplier::Float64 = 3.0,
-                                 preserve_high_quality::Bool = true)
-    
+function statistical_tip_clipping(graph;
+        min_coverage_threshold::Int = 1,
+        std_dev_multiplier::Float64 = 3.0,
+        preserve_high_quality::Bool = true)
+
     # Initialize statistics tracking
     stats = Dict{Symbol, Any}(
         :tips_removed => 0,
@@ -74,24 +74,24 @@ function statistical_tip_clipping(graph;
         :statistical_threshold_removed => 0,
         :high_quality_preserved => 0
     )
-    
+
     # Find all connected components
     connected_components = find_connected_components(graph)
     stats[:connected_components] = length(connected_components)
-    
+
     # Process each connected component independently
     for component in connected_components
         component_stats = process_connected_component_tips(
             graph, component, min_coverage_threshold, std_dev_multiplier, preserve_high_quality
         )
-        
+
         # Aggregate statistics
         stats[:tips_removed] += component_stats[:tips_removed]
         stats[:single_coverage_removed] += component_stats[:single_coverage_removed]
         stats[:statistical_threshold_removed] += component_stats[:statistical_threshold_removed]
         stats[:high_quality_preserved] += component_stats[:high_quality_preserved]
     end
-    
+
     return graph, stats
 end
 
@@ -111,69 +111,68 @@ Process tip clipping for a single connected component.
 - `Dict`: Statistics for this component's tip clipping
 """
 function process_connected_component_tips(graph, component::Vector{Int},
-                                        min_coverage_threshold::Int,
-                                        std_dev_multiplier::Float64,
-                                        preserve_high_quality::Bool)
-    
+        min_coverage_threshold::Int,
+        std_dev_multiplier::Float64,
+        preserve_high_quality::Bool)
     stats = Dict{Symbol, Int}(
         :tips_removed => 0,
         :single_coverage_removed => 0,
         :statistical_threshold_removed => 0,
         :high_quality_preserved => 0
     )
-    
+
     # Extract coverage values for this connected component
     coverage_values = get_coverage_values(graph, component)
-    
+
     if length(coverage_values) < 2
         # Skip components that are too small for statistical analysis
         return stats
     end
-    
+
     # Calculate coverage statistics
     median_coverage = Statistics.median(coverage_values)
     coverage_std = Statistics.std(coverage_values)
     statistical_threshold = median_coverage - std_dev_multiplier * coverage_std
-    
+
     # Identify tips (degree-1 nodes) in this component
     tips = identify_tips_in_component(graph, component)
-    
+
     # Process each tip
     for tip_node in tips
         tip_coverage = get_node_coverage(graph, tip_node)
         tip_degree = get_node_degree(graph, tip_node)
-        
+
         # Confirm this is actually a tip (degree = 1)
         if tip_degree != 1
             continue
         end
-        
+
         # Determine if tip should be removed
         should_remove = false
         removal_reason = :none
-        
+
         # Hard minimum coverage threshold
         if tip_coverage <= min_coverage_threshold
             should_remove = true
             removal_reason = :single_coverage
-        
-        # Statistical threshold based on component distribution
+
+            # Statistical threshold based on component distribution
         elseif tip_coverage < statistical_threshold
             should_remove = true
             removal_reason = :statistical_threshold
         end
-        
+
         # Check for high-quality preservation
         if should_remove && preserve_high_quality && is_high_quality_tip(graph, tip_node)
             should_remove = false
             stats[:high_quality_preserved] += 1
         end
-        
+
         # Remove the tip if criteria are met
         if should_remove
             remove_graph_node!(graph, tip_node)
             stats[:tips_removed] += 1
-            
+
             if removal_reason == :single_coverage
                 stats[:single_coverage_removed] += 1
             elseif removal_reason == :statistical_threshold
@@ -181,7 +180,7 @@ function process_connected_component_tips(graph, component::Vector{Int},
             end
         end
     end
-    
+
     return stats
 end
 
@@ -205,7 +204,7 @@ Check if a tip should be preserved due to high quality indicators.
 function is_high_quality_tip(graph, tip_node::Int)::Bool
     # Get node properties
     node_data = get_node_data(graph, tip_node)
-    
+
     # Check for high-quality sequence (low N content, reasonable complexity)
     sequence = if node_data isa AbstractDict
         get(node_data, :sequence, nothing)
@@ -221,7 +220,7 @@ function is_high_quality_tip(graph, tip_node::Int)::Bool
             return true
         end
     end
-    
+
     # Check for strong connecting edge
     edge_weights = if node_data isa AbstractDict
         get(node_data, :edge_weights, nothing)
@@ -237,7 +236,7 @@ function is_high_quality_tip(graph, tip_node::Int)::Bool
             return true
         end
     end
-    
+
     # Check for long-read support (if available)
     long_read_support = if node_data isa AbstractDict
         get(node_data, :long_read_support, nothing)
@@ -250,7 +249,7 @@ function is_high_quality_tip(graph, tip_node::Int)::Bool
     if long_read_support !== nothing && long_read_support > 5
         return true
     end
-    
+
     return false
 end
 
@@ -278,20 +277,20 @@ println("Found \$(length(components)) connected components")
 function find_connected_components(graph)::Vector{Vector{Int}}
     # This would use the graph structure to identify connected components
     # Implementation depends on the specific graph representation
-    
+
     # Placeholder implementation - would use actual graph traversal
     components = Vector{Vector{Int}}()
-    
+
     # Example: if graph has an adjacency list representation
     visited = Set{Int}()
-    
+
     for node in get_all_nodes(graph)
         if node ∉ visited
             component = depth_first_search_component(graph, node, visited)
             push!(components, component)
         end
     end
-    
+
     return components
 end
 
@@ -309,13 +308,13 @@ Identify tip nodes (degree-1) within a connected component.
 """
 function identify_tips_in_component(graph, component::Vector{Int})::Vector{Int}
     tips = Int[]
-    
+
     for node in component
         if get_node_degree(graph, node) == 1
             push!(tips, node)
         end
     end
-    
+
     return tips
 end
 
@@ -335,14 +334,14 @@ Perform depth-first search to find all nodes in a connected component.
 function depth_first_search_component(graph, start_node::Int, visited::Set{Int})::Vector{Int}
     component = Int[]
     stack = Int[start_node]
-    
+
     while !isempty(stack)
         current_node = pop!(stack)
-        
+
         if current_node ∉ visited
             push!(visited, current_node)
             push!(component, current_node)
-            
+
             # Add all neighbors to stack
             for neighbor in get_node_neighbors(graph, current_node)
                 if neighbor ∉ visited
@@ -351,7 +350,7 @@ function depth_first_search_component(graph, start_node::Int, visited::Set{Int})
             end
         end
     end
-    
+
     return component
 end
 
@@ -390,31 +389,30 @@ cleaned_graph, bubble_stats = remove_simple_bubbles(graph, 15, 0.25)
 println("Removed \$(bubble_stats[:bubbles_removed]) bubbles")
 ```
 """
-function remove_simple_bubbles(graph; 
-                              max_bubble_length::Int = 10,
-                              coverage_ratio_threshold::Float64 = 0.3)
-    
+function remove_simple_bubbles(graph;
+        max_bubble_length::Int = 10,
+        coverage_ratio_threshold::Float64 = 0.3)
     stats = Dict{Symbol, Int}(
         :bubbles_removed => 0,
         :nodes_removed => 0,
         :bubbles_examined => 0
     )
-    
+
     # Find all potential bubble start points (nodes with out-degree > 1)
     bubble_starts = find_bubble_start_candidates(graph)
-    
+
     for start_node in bubble_starts
         bubble_result = identify_and_remove_bubble(
             graph, start_node, max_bubble_length, coverage_ratio_threshold
         )
-        
+
         stats[:bubbles_examined] += 1
         if bubble_result[:removed]
             stats[:bubbles_removed] += 1
             stats[:nodes_removed] += bubble_result[:nodes_removed]
         end
     end
-    
+
     return graph, stats
 end
 
@@ -432,39 +430,38 @@ Identify and potentially remove a bubble starting from a given node.
 # Returns
 - `Dict`: Information about bubble detection and removal
 """
-function identify_and_remove_bubble(graph, start_node::Int, max_length::Int, 
-                                   coverage_threshold::Float64)::Dict{Symbol, Any}
-    
+function identify_and_remove_bubble(graph, start_node::Int, max_length::Int,
+        coverage_threshold::Float64)::Dict{Symbol, Any}
     result = Dict{Symbol, Any}(
         :removed => false,
         :nodes_removed => 0,
         :bubble_detected => false,
         :coverage_ratio => 0.0
     )
-    
+
     # Get alternative paths from start node
     out_neighbors = get_node_neighbors(graph, start_node, :out)
-    
+
     if length(out_neighbors) != 2
         # Not a simple bubble candidate
         return result
     end
-    
+
     # Trace both paths up to max_length
     path1 = trace_path(graph, out_neighbors[1], max_length)
     path2 = trace_path(graph, out_neighbors[2], max_length)
-    
+
     # Check if paths reconverge
     if !paths_reconverge(path1, path2)
         return result
     end
-    
+
     result[:bubble_detected] = true
-    
+
     # Calculate coverage for both paths
     coverage1 = calculate_path_coverage(graph, path1)
     coverage2 = calculate_path_coverage(graph, path2)
-    
+
     # Determine which path to remove
     if coverage1 > coverage2
         ratio = coverage2 / coverage1
@@ -473,18 +470,18 @@ function identify_and_remove_bubble(graph, start_node::Int, max_length::Int,
         ratio = coverage1 / coverage2
         path_to_remove = path1
     end
-    
+
     result[:coverage_ratio] = ratio
-    
+
     # Remove lower-coverage path if ratio is below threshold
     if ratio < coverage_threshold
-        for node in path_to_remove[2:end-1]  # Exclude start and end nodes
+        for node in path_to_remove[2:(end - 1)]  # Exclude start and end nodes
             remove_graph_node!(graph, node)
             result[:nodes_removed] += 1
         end
         result[:removed] = true
     end
-    
+
     return result
 end
 
@@ -626,14 +623,14 @@ end
 function find_bubble_start_candidates(graph)::Vector{Int}
     # Find nodes with out-degree > 1 (potential bubble starts)
     candidates = Int[]
-    
+
     for node in get_all_nodes(graph)
         out_neighbors = get_node_neighbors(graph, node, :out)
         if length(out_neighbors) > 1
             push!(candidates, node)
         end
     end
-    
+
     return candidates
 end
 
@@ -641,20 +638,20 @@ function trace_path(graph, start_node::Int, max_length::Int)::Vector{Int}
     # Trace a path from start_node up to max_length
     path = [start_node]
     current_node = start_node
-    
+
     for _ in 1:max_length
         neighbors = get_node_neighbors(graph, current_node, :out)
-        
+
         if length(neighbors) != 1
             # Path branches or ends
             break
         end
-        
+
         next_node = neighbors[1]
         push!(path, next_node)
         current_node = next_node
     end
-    
+
     return path
 end
 
@@ -668,7 +665,7 @@ function calculate_path_coverage(graph, path::Vector{Int})::Float64
     if isempty(path)
         return 0.0
     end
-    
+
     total_coverage = sum(get_node_coverage(graph, node) for node in path)
     return total_coverage / length(path)
 end

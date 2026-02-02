@@ -22,7 +22,6 @@ import BioSequences
 import DataFrames
 
 Test.@testset "SentencePiece Integration Tests" begin
-
     Test.@testset "Sequence Conversion Functions" begin
         # Test sentencepiece_biosequence_to_string with DNA
         dna = BioSequences.LongDNA{4}("ACGT")
@@ -75,29 +74,29 @@ Test.@testset "SentencePiece Integration Tests" begin
 
             # vocab_size must be positive
             Test.@test_throws AssertionError Mycelia.train_sentencepiece_model(
-                input_file=temp_file,
-                model_prefix=tempname(),
-                vocab_size=0
+                input_file = temp_file,
+                model_prefix = tempname(),
+                vocab_size = 0
             )
 
             # model_type must be valid
             Test.@test_throws AssertionError Mycelia.train_sentencepiece_model(
-                input_file=temp_file,
-                model_prefix=tempname(),
-                model_type=:invalid
+                input_file = temp_file,
+                model_prefix = tempname(),
+                model_type = :invalid
             )
 
             # character_coverage must be in (0, 1]
             Test.@test_throws AssertionError Mycelia.train_sentencepiece_model(
-                input_file=temp_file,
-                model_prefix=tempname(),
-                character_coverage=0.0
+                input_file = temp_file,
+                model_prefix = tempname(),
+                character_coverage = 0.0
             )
 
             Test.@test_throws AssertionError Mycelia.train_sentencepiece_model(
-                input_file=temp_file,
-                model_prefix=tempname(),
-                character_coverage=1.5
+                input_file = temp_file,
+                model_prefix = tempname(),
+                character_coverage = 1.5
             )
         finally
             isfile(temp_file) && rm(temp_file)
@@ -107,14 +106,14 @@ Test.@testset "SentencePiece Integration Tests" begin
     Test.@testset "File Validation" begin
         # Test that non-existent input file triggers assertion
         Test.@test_throws AssertionError Mycelia.train_sentencepiece_model(
-            input_file="/nonexistent/path/file.txt",
-            model_prefix=tempname()
+            input_file = "/nonexistent/path/file.txt",
+            model_prefix = tempname()
         )
 
         # Test sequences vector cannot be empty
         Test.@test_throws AssertionError Mycelia.train_sentencepiece_model_from_sequences(
-            sequences=String[],
-            model_prefix=tempname()
+            sequences = String[],
+            model_prefix = tempname()
         )
     end
 
@@ -202,7 +201,6 @@ Test.@testset "SentencePiece Integration Tests" begin
 
     if run_external
         Test.@testset "SentencePiece Integration (Requires Installation)" begin
-
             Test.@testset "Environment Setup" begin
                 # Test that we can set up the environment
                 Mycelia._setup_sentencepiece_environment()
@@ -216,17 +214,17 @@ Test.@testset "SentencePiece Integration Tests" begin
                     BioSequences.LongDNA{4}("GCTAGCTAGCTAGCTA"),
                     BioSequences.LongDNA{4}("ATATATATATATATAT"),
                     BioSequences.LongDNA{4}("GCGCGCGCGCGCGCGC"),
-                    BioSequences.LongDNA{4}("ACGTACGTACGTACGTACGTACGT"),
+                    BioSequences.LongDNA{4}("ACGTACGTACGTACGTACGTACGT")
                 ]
 
                 model_prefix = tempname()
                 try
                     # Train model
                     result = Mycelia.train_sentencepiece_model_from_sequences(
-                        sequences=dna_seqs,
-                        model_prefix=model_prefix,
-                        vocab_size=50,
-                        model_type=:bpe
+                        sequences = dna_seqs,
+                        model_prefix = model_prefix,
+                        vocab_size = 50,
+                        model_type = :bpe
                     )
 
                     Test.@test isfile(result.model_file)
@@ -235,31 +233,31 @@ Test.@testset "SentencePiece Integration Tests" begin
                     # Test encoding
                     test_seq = "ACGTACGT"
                     pieces = Mycelia.encode_sentencepiece(
-                        model_file=result.model_file,
-                        input=test_seq,
-                        output_format=:pieces
+                        model_file = result.model_file,
+                        input = test_seq,
+                        output_format = :pieces
                     )
                     Test.@test pieces isa Vector{String}
                     Test.@test !isempty(pieces)
 
                     ids = Mycelia.encode_sentencepiece(
-                        model_file=result.model_file,
-                        input=test_seq,
-                        output_format=:ids
+                        model_file = result.model_file,
+                        input = test_seq,
+                        output_format = :ids
                     )
                     Test.@test ids isa Vector{Int}
                     Test.@test !isempty(ids)
 
                     # Test decoding
                     decoded_from_pieces = Mycelia.decode_sentencepiece(
-                        model_file=result.model_file,
-                        input=pieces
+                        model_file = result.model_file,
+                        input = pieces
                     )
                     Test.@test decoded_from_pieces == test_seq
 
                     decoded_from_ids = Mycelia.decode_sentencepiece(
-                        model_file=result.model_file,
-                        input=ids
+                        model_file = result.model_file,
+                        input = ids
                     )
                     Test.@test decoded_from_ids == test_seq
 
@@ -277,25 +275,23 @@ Test.@testset "SentencePiece Integration Tests" begin
                 model_prefix = tempname()
                 try
                     result = Mycelia.train_sentencepiece_model_from_sequences(
-                        sequences=seqs,
-                        model_prefix=model_prefix,
-                        vocab_size=10,
-                        model_type=:unigram
+                        sequences = seqs,
+                        model_prefix = model_prefix,
+                        vocab_size = 10,
+                        model_type = :unigram
                     )
 
                     test_seq = "ACGTACGT"
 
                     # Run multiple encodings with sampling enabled
-                    encodings = [
-                        Mycelia.encode_sentencepiece(
-                            model_file=result.model_file,
-                            input=test_seq,
-                            output_format=:pieces,
-                            enable_sampling=true,
-                            alpha=0.1,
-                            nbest_size=-1
-                        ) for _ in 1:10
-                    ]
+                    encodings = [Mycelia.encode_sentencepiece(
+                                     model_file = result.model_file,
+                                     input = test_seq,
+                                     output_format = :pieces,
+                                     enable_sampling = true,
+                                     alpha = 0.1,
+                                     nbest_size = -1
+                                 ) for _ in 1:10]
 
                     # With sampling, we may get different encodings
                     # (though this isn't guaranteed for very small vocabs)
@@ -313,9 +309,9 @@ Test.@testset "SentencePiece Integration Tests" begin
                 model_prefix = tempname()
                 try
                     result = Mycelia.train_sentencepiece_model_from_sequences(
-                        sequences=seqs,
-                        model_prefix=model_prefix,
-                        vocab_size=16
+                        sequences = seqs,
+                        model_prefix = model_prefix,
+                        vocab_size = 16
                     )
 
                     # Test vocab size
@@ -354,25 +350,25 @@ Test.@testset "SentencePiece Integration Tests" begin
                 model_prefix = tempname()
                 try
                     result = Mycelia.train_sentencepiece_model_from_sequences(
-                        sequences=seqs,
-                        model_prefix=model_prefix,
-                        vocab_size=16
+                        sequences = seqs,
+                        model_prefix = model_prefix,
+                        vocab_size = 16
                     )
 
                     # Test batch encoding
                     batch_input = ["ACGT", "GCTA", "ACGTACGT"]
                     batch_pieces = Mycelia.encode_sentencepiece(
-                        model_file=result.model_file,
-                        input=batch_input,
-                        output_format=:pieces
+                        model_file = result.model_file,
+                        input = batch_input,
+                        output_format = :pieces
                     )
                     Test.@test batch_pieces isa Vector{Vector{String}}
                     Test.@test length(batch_pieces) == 3
 
                     # Test batch decoding
                     decoded = Mycelia.decode_sentencepiece(
-                        model_file=result.model_file,
-                        input=batch_pieces
+                        model_file = result.model_file,
+                        input = batch_pieces
                     )
                     Test.@test decoded isa Vector{<:AbstractString}
                     Test.@test length(decoded) == 3

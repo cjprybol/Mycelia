@@ -72,8 +72,8 @@ Returns a named tuple with:
 - `overrepresented` (vector of named tuples with sequence, count, fraction)
 """
 function duplication_stats(records::AbstractVector{<:FASTX.FASTQ.Record};
-                           min_fraction::Float64=0.05,
-                           top_n::Int=5)
+        min_fraction::Float64 = 0.05,
+        top_n::Int = 5)
     counts = Dict{String, Int}()
     for record in records
         seq = String(FASTX.sequence(record))
@@ -82,13 +82,15 @@ function duplication_stats(records::AbstractVector{<:FASTX.FASTQ.Record};
     total_reads = length(records)
     duplicate_reads = sum(v - 1 for v in values(counts))
     duplicate_fraction = total_reads == 0 ? 0.0 : duplicate_reads / total_reads
-    overrepresented = NamedTuple{(:sequence, :count, :fraction), Tuple{String, Int, Float64}}[]
+    overrepresented = NamedTuple{
+        (:sequence, :count, :fraction), Tuple{String, Int, Float64}}[]
     for (seq, count) in counts
         if total_reads > 0 && count / total_reads >= min_fraction
-            push!(overrepresented, (sequence=seq, count=count, fraction=count / total_reads))
+            push!(overrepresented, (
+                sequence = seq, count = count, fraction = count / total_reads))
         end
     end
-    sort!(overrepresented, by=x -> x.count, rev=true)
+    sort!(overrepresented, by = x -> x.count, rev = true)
     return (
         unique_sequences = length(counts),
         duplicate_reads = duplicate_reads,
@@ -126,5 +128,5 @@ function summarize_fastq(label, fastq_file, genome_size)
     println("    estimated coverage: $(round(coverage, digits=2))x")
     println("    estimated error rate: $(round(error_rate_est * 100, digits=3))%")
 
-    return (;quality_stats, read_lengths, coverage, error_rate_est)
+    return (; quality_stats, read_lengths, coverage, error_rate_est)
 end

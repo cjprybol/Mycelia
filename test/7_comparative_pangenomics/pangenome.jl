@@ -31,7 +31,7 @@ Test.@testset "pangenome construction" begin
     rec1 = Mycelia.random_fasta_record(moltype = :DNA, seed = 1, L = 15)
     rec2 = Mycelia.random_fasta_record(moltype = :DNA, seed = 2, L = 15)
 
-    graph = Mycelia.Rhizomorph.build_kmer_graph([rec1, rec2], 3; mode=:doublestrand)
+    graph = Mycelia.Rhizomorph.build_kmer_graph([rec1, rec2], 3; mode = :doublestrand)
 
     # Collect observed k-mers from both records (strand-specific) and add reverse complements
     function collect_kmers(record)

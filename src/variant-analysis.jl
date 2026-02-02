@@ -17,7 +17,7 @@ Normalize a VCF file using bcftools norm, with automated handling of compression
 - Skips processing if output file already exists
 - Performs left-alignment and normalization of variants
 """
-function normalize_vcf(;reference_fasta, vcf_file)
+function normalize_vcf(; reference_fasta, vcf_file)
     add_bioconda_env("htslib")
     add_bioconda_env("tabix")
     add_bioconda_env("bcftools")
@@ -28,13 +28,17 @@ function normalize_vcf(;reference_fasta, vcf_file)
             gzipped_vcf = vcf_file
         else
             gzipped_vcf = "$(vcf_file).gz"
-            run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip -c $(vcf_file)`, gzipped_vcf))
+            run(pipeline(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip -c $(vcf_file)`,
+                gzipped_vcf))
         end
         tabix_index = "$(gzipped_vcf).tbi"
         if !isfile(tabix_index)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(gzipped_vcf)`)
         end
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(reference_fasta) $(gzipped_vcf)`, normalized_vcf))
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(reference_fasta) $(gzipped_vcf)`,
+            normalized_vcf))
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(normalized_vcf)`)
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -p vcf $(out_vcf)`)
     end
@@ -62,7 +66,8 @@ Requires bioconda packages: htslib, tabix, bcftools
 # Returns
 Path to the output FASTA file containing the modified sequence
 """
-function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, ".vcf" => ".normalized.vcf.fna"))
+function update_fasta_with_vcf(;
+        in_fasta, vcf_file, out_fasta = replace(vcf_file, ".vcf" => ".normalized.vcf.fna"))
     add_bioconda_env("htslib")
     add_bioconda_env("tabix")
     add_bioconda_env("bcftools")
@@ -71,7 +76,9 @@ function update_fasta_with_vcf(;in_fasta, vcf_file, out_fasta=replace(vcf_file, 
     normalized_vcf_file = replace(vcf_file, ".vcf" => ".normalized.vcf")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(vcf_file)`)
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
-    run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`, normalized_vcf_file))
+    run(pipeline(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`,
+        normalized_vcf_file))
     rm("$(vcf_file).gz")
     rm("$(vcf_file).gz.tbi")
     isfile("$(normalized_vcf_file).gz") && rm("$(normalized_vcf_file).gz")
@@ -98,26 +105,25 @@ Automatically filters out equivalent variants where REF == ALT.
 Includes standard VCF headers for substitutions, insertions, deletions, and inversions.
 Adds GT (Genotype) and GQ (Genotype Quality) format fields.
 """
-function write_vcf_table(;vcf_file, vcf_table, fasta_file)
+function write_vcf_table(; vcf_file, vcf_table, fasta_file)
     true_variant = vcf_table[!, "REF"] .!= vcf_table[!, "ALT"]
     if !all(true_variant)
         @warn "filtering equivalent variants"
         vcf_table = vcf_table[true_variant, :]
     end
     open(vcf_file, "w") do io
-        VCF_HEADER = 
-        """
-        ##fileformat=VCFv4.3
-        ##fileDate=$(Dates.today())
-        ##source=simulated-variants
-        ##reference=$(fasta_file)
-        ##FILTER=<ID=substitution,Description="substitution variant">
-        ##FILTER=<ID=insertion,Description="insertion variant">
-        ##FILTER=<ID=deletion,Description="deletion variant">
-        ##FILTER=<ID=inversion,Description="inversion variant">
-        ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
-        ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">
-        """
+        VCF_HEADER = """
+                     ##fileformat=VCFv4.3
+                     ##fileDate=$(Dates.today())
+                     ##source=simulated-variants
+                     ##reference=$(fasta_file)
+                     ##FILTER=<ID=substitution,Description="substitution variant">
+                     ##FILTER=<ID=insertion,Description="insertion variant">
+                     ##FILTER=<ID=deletion,Description="deletion variant">
+                     ##FILTER=<ID=inversion,Description="inversion variant">
+                     ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
+                     ##FORMAT=<ID=GQ,Number=1,Type=Integer,Description="Genotype Quality">
+                     """
         print(io, VCF_HEADER)
         println(io, join(names(vcf_table), '\t'))
         for row in DataFrames.eachrow(vcf_table)
@@ -155,7 +161,7 @@ function parse_rtg_eval_output(f)
     if isempty(data_lines)
         data = [Float64[] for i in 1:length(header)]
     else
-        data, h = uCSV.read(IOBuffer(join(data_lines, '\n')), delim='\t')
+        data, h = uCSV.read(IOBuffer(join(data_lines, '\n')), delim = '\t')
     end
     # data = [[parse(Float64, x)] for x in split(last(flines), '\t')]
     # @show data, header
@@ -196,20 +202,21 @@ results = Mycelia.run_vcfeval(
 )
 ```
 """
-function run_vcfeval(baseline_vcf::String, calls_vcf::String, reference_fasta::String, output_dir::String;
-                    threads::Int=1, memory_gb::Int=8, squash_ploidy::Bool=true, all_records::Bool=true,
-                    score_field::String="QUAL")
-    
+function run_vcfeval(baseline_vcf::String, calls_vcf::String,
+        reference_fasta::String, output_dir::String;
+        threads::Int = 1, memory_gb::Int = 8, squash_ploidy::Bool = true, all_records::Bool = true,
+        score_field::String = "QUAL")
+
     # Validate input files
     for file in [baseline_vcf, calls_vcf, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     # Ensure RTG Tools environment exists
     add_bioconda_env("rtg-tools")
-    
+
     # Prepare reference template if not already formatted
     template_dir = reference_fasta * "_RTG"
     if !isdir(template_dir)
@@ -221,14 +228,14 @@ function run_vcfeval(baseline_vcf::String, calls_vcf::String, reference_fasta::S
             error("RTG format failed: $(e)")
         end
     end
-    
+
     # Prepare VCF files - ensure they are sorted, compressed, and indexed
     processed_baseline = prepare_vcf_for_rtg(baseline_vcf)
     processed_calls = prepare_vcf_for_rtg(calls_vcf)
-    
+
     # Create output directory
     mkpath(output_dir)
-    
+
     # Build vcfeval command
     vcfeval_args = [
         "RTG_MEM=$(memory_gb)G", "vcfeval",
@@ -239,7 +246,7 @@ function run_vcfeval(baseline_vcf::String, calls_vcf::String, reference_fasta::S
         "--threads", string(threads),
         "--vcf-score-field", score_field
     ]
-    
+
     # Add optional flags
     if all_records
         push!(vcfeval_args, "--all-records")
@@ -247,34 +254,34 @@ function run_vcfeval(baseline_vcf::String, calls_vcf::String, reference_fasta::S
     if squash_ploidy
         push!(vcfeval_args, "--squash-ploidy")
     end
-    
+
     println("Running RTG vcfeval...")
     println("  Baseline: $(basename(baseline_vcf))")
     println("  Calls: $(basename(calls_vcf))")
     println("  Output: $(output_dir)")
-    
+
     cmd = `$(CONDA_RUNNER) run --live-stream -n rtg-tools rtg $(vcfeval_args)`
-    
+
     try
         run(cmd)
     catch e
         error("RTG vcfeval failed: $(e)")
     end
-    
+
     # Collect output files
     output_files = Dict{String, String}()
-    
+
     # Standard vcfeval outputs
     standard_outputs = [
         "summary.txt",
-        "snp_roc.tsv.gz", 
+        "snp_roc.tsv.gz",
         "non_snp_roc.tsv.gz",
         "weighted_roc.tsv.gz",
         "tp.vcf.gz",      # True positives
         "fp.vcf.gz",      # False positives  
         "fn.vcf.gz"       # False negatives
     ]
-    
+
     for output in standard_outputs
         file_path = joinpath(output_dir, output)
         if isfile(file_path)
@@ -282,10 +289,10 @@ function run_vcfeval(baseline_vcf::String, calls_vcf::String, reference_fasta::S
             output_files[key] = file_path
         end
     end
-    
+
     println("vcfeval completed successfully.")
     println("Output files: $(length(output_files))")
-    
+
     return output_files
 end
 
@@ -309,47 +316,46 @@ processed_vcf = Mycelia.prepare_vcf_for_rtg("variants.vcf")
 ```
 """
 function prepare_vcf_for_rtg(vcf_file::String)
-    
     if !isfile(vcf_file)
         error("VCF file does not exist: $(vcf_file)")
     end
-    
+
     # Ensure required tools are available
     add_bioconda_env("bcftools")
     add_bioconda_env("htslib")
     add_bioconda_env("rtg-tools")
-    
+
     # Determine output filename
     base_name = replace(vcf_file, r"\.vcf(\.gz)?$" => "")
     sorted_vcf = base_name * ".sorted.vcf"
     output_vcf = sorted_vcf * ".gz"
-    
+
     # Skip if already processed
     if isfile(output_vcf) && isfile(output_vcf * ".tbi")
         return output_vcf
     end
-    
+
     # Sort VCF file
     if !isfile(sorted_vcf)
         println("Sorting VCF file: $(vcf_file)")
         cmd = `$(CONDA_RUNNER) run --live-stream -n bcftools bcftools sort $(vcf_file) --output $(sorted_vcf)`
         run(cmd)
     end
-    
+
     # Compress with RTG's bgzip
     if !isfile(output_vcf)
         println("Compressing VCF file: $(sorted_vcf)")
         cmd = `$(CONDA_RUNNER) run --live-stream -n rtg-tools rtg bgzip $(sorted_vcf)`
         run(cmd)
     end
-    
+
     # Index with RTG's index command
     if !isfile(output_vcf * ".tbi")
         println("Indexing VCF file: $(output_vcf)")
         cmd = `$(CONDA_RUNNER) run --live-stream -n rtg-tools rtg index $(output_vcf)`
         run(cmd)
     end
-    
+
     return output_vcf
 end
 
@@ -373,53 +379,53 @@ using the standard output files from RTG vcfeval.
 plots = Mycelia.generate_roc_plots("vcfeval_results", output_formats=["png", "svg", "pdf"])
 ```
 """
-function generate_roc_plots(vcfeval_output_dir::String; output_formats::Vector{String}=["png", "svg"])
-    
+function generate_roc_plots(vcfeval_output_dir::String; output_formats::Vector{String} = [
+        "png", "svg"])
     if !isdir(vcfeval_output_dir)
         error("vcfeval output directory does not exist: $(vcfeval_output_dir)")
     end
-    
+
     # Check for required ROC files
     roc_files = ["snp_roc.tsv.gz", "non_snp_roc.tsv.gz", "weighted_roc.tsv.gz"]
     missing_files = String[]
-    
+
     for roc_file in roc_files
         file_path = joinpath(vcfeval_output_dir, roc_file)
         if !isfile(file_path)
             push!(missing_files, roc_file)
         end
     end
-    
+
     if !isempty(missing_files)
         error("Missing ROC files: $(join(missing_files, ", "))")
     end
-    
+
     # Ensure RTG Tools environment exists
     add_bioconda_env("rtg-tools")
-    
+
     # Generate plots for each requested format
     plot_files = Dict{String, String}()
-    
+
     for format in output_formats
         if !(format in ["png", "svg", "pdf"])
             @warn "Unsupported format: $(format). Skipping."
             continue
         end
-        
+
         output_file = joinpath(vcfeval_output_dir, "roc.$(format)")
-        
+
         # Build rocplot command
         cmd_args = [
             "RTG_MEM=4G", "rocplot",
             "--$(format)", output_file,
             "--curve", "$(joinpath(vcfeval_output_dir, "non_snp_roc.tsv.gz"))=Non-SNP",
-            "--curve", "$(joinpath(vcfeval_output_dir, "snp_roc.tsv.gz"))=SNP", 
+            "--curve", "$(joinpath(vcfeval_output_dir, "snp_roc.tsv.gz"))=SNP",
             "--curve", "$(joinpath(vcfeval_output_dir, "weighted_roc.tsv.gz"))=Weighted"
         ]
-        
+
         println("Generating $(format) ROC plot...")
         cmd = `$(CONDA_RUNNER) run --live-stream -n rtg-tools rtg $(cmd_args)`
-        
+
         try
             run(cmd)
             plot_files[format] = output_file
@@ -428,7 +434,7 @@ function generate_roc_plots(vcfeval_output_dir::String; output_formats::Vector{S
             @warn "Failed to generate $(format) plot: $(e)"
         end
     end
-    
+
     return plot_files
 end
 
@@ -468,20 +474,21 @@ snp_roc = results.parsed_results["snp_roc"]
 println("SNP precision: \$(maximum(snp_roc.Precision))")
 ```
 """
-function evaluate_variant_calling_accuracy(baseline_vcf::String, calls_vcf::String, 
-                                         reference_fasta::String, output_dir::String;
-                                         generate_plots::Bool=true, 
-                                         plot_formats::Vector{String}=["png", "svg"],
-                                         kwargs...)
-    
+function evaluate_variant_calling_accuracy(baseline_vcf::String, calls_vcf::String,
+        reference_fasta::String, output_dir::String;
+        generate_plots::Bool = true,
+        plot_formats::Vector{String} = ["png", "svg"],
+        kwargs...)
+
     # Run vcfeval
     println("Step 1: Running RTG vcfeval...")
-    vcfeval_files = run_vcfeval(baseline_vcf, calls_vcf, reference_fasta, output_dir; kwargs...)
-    
+    vcfeval_files = run_vcfeval(
+        baseline_vcf, calls_vcf, reference_fasta, output_dir; kwargs...)
+
     # Parse results
     println("Step 2: Parsing vcfeval results...")
     parsed_results = Dict{String, DataFrames.DataFrame}()
-    
+
     for (key, file_path) in vcfeval_files
         if endswith(file_path, ".tsv.gz")
             try
@@ -492,24 +499,24 @@ function evaluate_variant_calling_accuracy(baseline_vcf::String, calls_vcf::Stri
             end
         end
     end
-    
+
     # Generate plots if requested
     plot_files = Dict{String, String}()
     if generate_plots && haskey(vcfeval_files, "snp_roc")
         println("Step 3: Generating ROC plots...")
         try
-            plot_files = generate_roc_plots(output_dir, output_formats=plot_formats)
+            plot_files = generate_roc_plots(output_dir, output_formats = plot_formats)
         catch e
             @warn "Failed to generate plots: $(e)"
         end
     end
-    
+
     # Calculate summary statistics
     summary_stats = calculate_evaluation_summary(parsed_results)
-    
+
     println("Variant calling evaluation completed successfully!")
     println("Output directory: $(output_dir)")
-    
+
     return (
         vcfeval_files = vcfeval_files,
         parsed_results = parsed_results,
@@ -540,31 +547,32 @@ println("Best SNP F1: \$(summary.snp_max_f1)")
 ```
 """
 function calculate_evaluation_summary(parsed_results::Dict{String, DataFrames.DataFrame})
-    
     summary_stats = Dict{String, Any}()
-    
+
     for (roc_type, data) in parsed_results
         if endswith(roc_type, "_roc") && DataFrames.nrow(data) > 0
             # Calculate key metrics if columns exist
             metrics = Dict{String, Float64}()
-            
+
             if "Precision" in names(data) && "Recall" in names(data)
                 # Calculate F1 scores
                 precision = data[!, "Precision"]
                 recall = data[!, "Recall"]
-                
+
                 # Avoid division by zero
                 valid_indices = (precision .+ recall) .> 0
                 if any(valid_indices)
                     f1_scores = similar(precision, Float64)
-                    f1_scores[valid_indices] = 2 .* (precision[valid_indices] .* recall[valid_indices]) ./ 
-                                              (precision[valid_indices] .+ recall[valid_indices])
+                    f1_scores[valid_indices] = 2 .* (precision[valid_indices] .*
+                                                recall[valid_indices]) ./
+                                               (precision[valid_indices] .+
+                                                recall[valid_indices])
                     f1_scores[.!valid_indices] .= 0.0
-                    
+
                     metrics["max_f1"] = maximum(f1_scores)
                     metrics["max_precision"] = maximum(precision)
                     metrics["max_recall"] = maximum(recall)
-                    
+
                     # Find threshold at max F1
                     if "Score" in names(data)
                         max_f1_idx = argmax(f1_scores)
@@ -572,28 +580,30 @@ function calculate_evaluation_summary(parsed_results::Dict{String, DataFrames.Da
                     end
                 end
             end
-            
+
             # Store area under curve estimate (simple trapezoidal)
-            if "Precision" in names(data) && "Recall" in names(data) && DataFrames.nrow(data) > 1
+            if "Precision" in names(data) && "Recall" in names(data) &&
+               DataFrames.nrow(data) > 1
                 recall_vals = sort(data[!, "Recall"])
                 precision_vals = data[sortperm(data[!, "Recall"]), "Precision"]
-                
+
                 if length(recall_vals) > 1
                     auc = 0.0
                     for i in 2:length(recall_vals)
-                        width = recall_vals[i] - recall_vals[i-1]
-                        height = (precision_vals[i] + precision_vals[i-1]) / 2
+                        width = recall_vals[i] - recall_vals[i - 1]
+                        height = (precision_vals[i] + precision_vals[i - 1]) / 2
                         auc += width * height
                     end
                     metrics["auc_estimate"] = auc
                 end
             end
-            
+
             summary_stats[roc_type] = metrics
         end
     end
-    
-    return NamedTuple(Symbol(k) => NamedTuple(Symbol(k2) => v2 for (k2, v2) in v) for (k, v) in summary_stats)
+
+    return NamedTuple(Symbol(k) => NamedTuple(Symbol(k2) => v2 for (k2, v2) in v)
+    for (k, v) in summary_stats)
 end
 
 # Variant Caller Integration Functions
@@ -628,21 +638,22 @@ vcf_file = Mycelia.run_gatk_haplotypecaller(
 )
 ```
 """
-function run_gatk_haplotypecaller(bam_file::String, reference_fasta::String, output_vcf::String;
-                                 ploidy::Int=1, memory_gb::Int=8, threads::Int=1,
-                                 additional_args::Vector{String}=String[])
-    
+function run_gatk_haplotypecaller(
+        bam_file::String, reference_fasta::String, output_vcf::String;
+        ploidy::Int = 1, memory_gb::Int = 8, threads::Int = 1,
+        additional_args::Vector{String} = String[])
+
     # Validate input files
     for file in [bam_file, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     # Ensure required tools are available
     add_bioconda_env("gatk4")
     add_bioconda_env("picard")
-    
+
     # Create sequence dictionary if it doesn't exist
     dict_file = replace(reference_fasta, r"\.(fasta|fa|fna)$" => ".dict")
     if !isfile(dict_file)
@@ -650,7 +661,7 @@ function run_gatk_haplotypecaller(bam_file::String, reference_fasta::String, out
         cmd = `$(CONDA_RUNNER) run --live-stream -n picard picard CreateSequenceDictionary REFERENCE=$(reference_fasta) OUTPUT=$(dict_file)`
         run(cmd)
     end
-    
+
     # Ensure BAM is indexed
     bam_index = bam_file * ".bai"
     if !isfile(bam_index)
@@ -658,10 +669,10 @@ function run_gatk_haplotypecaller(bam_file::String, reference_fasta::String, out
         add_bioconda_env("samtools")
         run(`$(CONDA_RUNNER) run --live-stream -n samtools samtools index $(bam_file)`)
     end
-    
+
     # Create output directory
     mkpath(dirname(output_vcf))
-    
+
     # Build GATK command
     gatk_args = [
         "--java-options", "-Xmx$(memory_gb)G",
@@ -671,26 +682,26 @@ function run_gatk_haplotypecaller(bam_file::String, reference_fasta::String, out
         "--input", bam_file,
         "--output", output_vcf
     ]
-    
+
     # Add additional arguments
     append!(gatk_args, additional_args)
-    
+
     println("Running GATK HaplotypeCaller...")
     println("  BAM: $(basename(bam_file))")
     println("  Reference: $(basename(reference_fasta))")
     println("  Ploidy: $(ploidy)")
     println("  Output: $(output_vcf)")
-    
+
     cmd = `$(CONDA_RUNNER) run --live-stream -n gatk4 gatk $(gatk_args)`
-    
+
     try
         run(cmd)
     catch e
         error("GATK HaplotypeCaller failed: $(e)")
     end
-    
+
     println("GATK variant calling completed: $(output_vcf)")
-    
+
     return output_vcf
 end
 
@@ -724,22 +735,22 @@ vcf_file = Mycelia.run_freebayes(
 ```
 """
 function run_freebayes(bam_file::String, reference_fasta::String, output_vcf::String;
-                      ploidy::Int=1, best_n_alleles::Int=1, 
-                      additional_args::Vector{String}=String[])
-    
+        ploidy::Int = 1, best_n_alleles::Int = 1,
+        additional_args::Vector{String} = String[])
+
     # Validate input files
     for file in [bam_file, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     # Ensure Freebayes environment exists
     add_bioconda_env("freebayes")
-    
+
     # Create output directory
     mkpath(dirname(output_vcf))
-    
+
     # Build Freebayes command
     freebayes_args = [
         "--ploidy", string(ploidy),
@@ -748,26 +759,26 @@ function run_freebayes(bam_file::String, reference_fasta::String, output_vcf::St
         "--bam", bam_file,
         "--vcf", output_vcf
     ]
-    
+
     # Add additional arguments
     append!(freebayes_args, additional_args)
-    
+
     println("Running Freebayes...")
     println("  BAM: $(basename(bam_file))")
     println("  Reference: $(basename(reference_fasta))")
     println("  Ploidy: $(ploidy)")
     println("  Output: $(output_vcf)")
-    
+
     cmd = `$(CONDA_RUNNER) run --live-stream -n freebayes freebayes $(freebayes_args)`
-    
+
     try
         run(cmd)
     catch e
         error("Freebayes failed: $(e)")
     end
-    
+
     println("Freebayes variant calling completed: $(output_vcf)")
-    
+
     return output_vcf
 end
 
@@ -803,21 +814,21 @@ vcf_file = Mycelia.run_clair3(
 ```
 """
 function run_clair3(bam_file::String, reference_fasta::String, output_dir::String;
-                   platform::String="ilmn", threads::Int=4, haploid_precise::Bool=true,
-                   model_path::String="", additional_args::Vector{String}=String[])
-    
+        platform::String = "ilmn", threads::Int = 4, haploid_precise::Bool = true,
+        model_path::String = "", additional_args::Vector{String} = String[])
+
     # Validate input files
     for file in [bam_file, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     # Validate platform
     if !(platform in ["ilmn", "ont"])
         error("Platform must be 'ilmn' or 'ont', got: $(platform)")
     end
-    
+
     # Ensure required tools are available
     if platform == "ilmn"
         add_bioconda_env("clair3-illumina")
@@ -827,14 +838,14 @@ function run_clair3(bam_file::String, reference_fasta::String, output_dir::Strin
         env_name = "clair3"
     end
     add_bioconda_env("samtools")
-    
+
     # Ensure BAM is indexed
     bam_index = bam_file * ".bai"
     if !isfile(bam_index)
         println("Indexing BAM file...")
         run(`$(CONDA_RUNNER) run --live-stream -n samtools samtools index $(bam_file)`)
     end
-    
+
     # Set model path if not provided
     if isempty(model_path)
         if platform == "ilmn"
@@ -849,10 +860,10 @@ function run_clair3(bam_file::String, reference_fasta::String, output_dir::Strin
             model_path = joinpath(conda_prefix, "bin", "models", "r941_prom_sup_g5014")
         end
     end
-    
+
     # Create output directory
     mkpath(output_dir)
-    
+
     # Build Clair3 command
     clair3_args = [
         "--bam_fn", bam_file,
@@ -864,39 +875,39 @@ function run_clair3(bam_file::String, reference_fasta::String, output_dir::Strin
         "--include_all_ctgs",
         "--no_phasing_for_fa"
     ]
-    
+
     # Add haploid mode if requested
     if haploid_precise
         push!(clair3_args, "--haploid_precise")
     end
-    
+
     # Add additional arguments
     append!(clair3_args, additional_args)
-    
+
     println("Running Clair3...")
     println("  BAM: $(basename(bam_file))")
     println("  Reference: $(basename(reference_fasta))")
     println("  Platform: $(platform)")
     println("  Threads: $(threads)")
     println("  Output: $(output_dir)")
-    
+
     cmd = `$(CONDA_RUNNER) run --live-stream -n $(env_name) run_clair3.sh $(clair3_args)`
-    
+
     try
         run(cmd)
     catch e
         error("Clair3 failed: $(e)")
     end
-    
+
     # Return path to main output VCF
     output_vcf = joinpath(output_dir, "merge_output.vcf.gz")
-    
+
     if !isfile(output_vcf)
         error("Clair3 output VCF not found: $(output_vcf)")
     end
-    
+
     println("Clair3 variant calling completed: $(output_vcf)")
-    
+
     return output_vcf
 end
 
@@ -933,23 +944,23 @@ vcf_file = Mycelia.run_bcftools_call(
 ```
 """
 function run_bcftools_call(bam_file::String, reference_fasta::String, output_vcf::String;
-                          threads::Int=4, multiallelic::Bool=true, variants_only::Bool=true,
-                          additional_mpileup_args::Vector{String}=String[],
-                          additional_call_args::Vector{String}=String[])
-    
+        threads::Int = 4, multiallelic::Bool = true, variants_only::Bool = true,
+        additional_mpileup_args::Vector{String} = String[],
+        additional_call_args::Vector{String} = String[])
+
     # Validate input files
     for file in [bam_file, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     # Ensure BCFtools environment exists
     add_bioconda_env("bcftools")
-    
+
     # Create output directory
     mkpath(dirname(output_vcf))
-    
+
     # Build mpileup arguments
     mpileup_args = [
         "mpileup",
@@ -959,7 +970,7 @@ function run_bcftools_call(bam_file::String, reference_fasta::String, output_vcf
     ]
     append!(mpileup_args, additional_mpileup_args)
     push!(mpileup_args, bam_file)
-    
+
     # Build call arguments
     call_args = [
         "call",
@@ -967,35 +978,35 @@ function run_bcftools_call(bam_file::String, reference_fasta::String, output_vcf
         "--output-type", "v",  # VCF format
         "--output", output_vcf
     ]
-    
+
     if multiallelic
         push!(call_args, "--multiallelic-caller")
     end
-    
+
     if variants_only
         push!(call_args, "--variants-only")
     end
-    
+
     append!(call_args, additional_call_args)
-    
+
     println("Running BCFtools mpileup | call pipeline...")
     println("  BAM: $(basename(bam_file))")
     println("  Reference: $(basename(reference_fasta))")
     println("  Threads: $(threads)")
     println("  Output: $(output_vcf)")
-    
+
     # Build pipeline command
     mpileup_cmd = `$(CONDA_RUNNER) run --live-stream -n bcftools bcftools $(mpileup_args)`
     call_cmd = `$(CONDA_RUNNER) run --live-stream -n bcftools bcftools $(call_args)`
-    
+
     try
         run(pipeline(mpileup_cmd, call_cmd))
     catch e
         error("BCFtools pipeline failed: $(e)")
     end
-    
+
     println("BCFtools variant calling completed: $(output_vcf)")
-    
+
     return output_vcf
 end
 
@@ -1032,102 +1043,106 @@ results = Mycelia.run_variant_calling_comparison(
 )
 ```
 """
-function run_variant_calling_comparison(bam_file::String, reference_fasta::String, output_dir::String;
-                                      callers::Vector{String}=["gatk", "freebayes", "clair3", "bcftools"],
-                                      platform::String="ilmn", threads::Int=4, 
-                                      run_evaluation::Bool=true, baseline_vcf::String="")
-    
+function run_variant_calling_comparison(
+        bam_file::String, reference_fasta::String, output_dir::String;
+        callers::Vector{String} = ["gatk", "freebayes", "clair3", "bcftools"],
+        platform::String = "ilmn", threads::Int = 4,
+        run_evaluation::Bool = true, baseline_vcf::String = "")
+
     # Validate inputs
     for file in [bam_file, reference_fasta]
         if !isfile(file)
             error("Input file does not exist: $(file)")
         end
     end
-    
+
     if run_evaluation && isempty(baseline_vcf)
         error("baseline_vcf must be provided when run_evaluation=true")
     end
-    
+
     if run_evaluation && !isfile(baseline_vcf)
         error("Baseline VCF file does not exist: $(baseline_vcf)")
     end
-    
+
     # Create output directory
     mkpath(output_dir)
-    
+
     # Run each variant caller
     caller_outputs = Dict{String, String}()
-    
+
     println("Running variant calling comparison with $(length(callers)) callers...")
-    
+
     for caller in callers
         caller_dir = joinpath(output_dir, caller)
         mkpath(caller_dir)
-        
+
         try
             if caller == "gatk"
                 output_vcf = joinpath(caller_dir, "variants.gatk.vcf")
-                caller_outputs[caller] = run_gatk_haplotypecaller(bam_file, reference_fasta, output_vcf, threads=threads)
-                
+                caller_outputs[caller] = run_gatk_haplotypecaller(
+                    bam_file, reference_fasta, output_vcf, threads = threads)
+
             elseif caller == "freebayes"
                 output_vcf = joinpath(caller_dir, "variants.freebayes.vcf")
                 caller_outputs[caller] = run_freebayes(bam_file, reference_fasta, output_vcf)
-                
+
             elseif caller == "clair3"
-                caller_outputs[caller] = run_clair3(bam_file, reference_fasta, caller_dir, platform=platform, threads=threads)
-                
+                caller_outputs[caller] = run_clair3(bam_file, reference_fasta, caller_dir,
+                    platform = platform, threads = threads)
+
             elseif caller == "bcftools"
                 output_vcf = joinpath(caller_dir, "variants.bcftools.vcf")
-                caller_outputs[caller] = run_bcftools_call(bam_file, reference_fasta, output_vcf, threads=threads)
-                
+                caller_outputs[caller] = run_bcftools_call(
+                    bam_file, reference_fasta, output_vcf, threads = threads)
+
             else
                 @warn "Unknown variant caller: $(caller). Skipping."
                 continue
             end
-            
+
             println("Completed $(caller): $(caller_outputs[caller])")
-            
+
         catch e
             @warn "$(caller) failed: $(e)"
         end
     end
-    
+
     # Run evaluation if requested
     evaluation_results = Dict{String, Any}()
-    
+
     if run_evaluation && !isempty(caller_outputs)
         println("Running vcfeval evaluation against baseline...")
-        
+
         for (caller, vcf_file) in caller_outputs
             eval_dir = joinpath(output_dir, "evaluation", caller)
-            
+
             try
                 # Normalize VCF before evaluation
-                normalized_vcf = normalize_vcf(reference_fasta=reference_fasta, vcf_file=vcf_file)
-                
+                normalized_vcf = normalize_vcf(reference_fasta = reference_fasta, vcf_file = vcf_file)
+
                 # Run evaluation
                 eval_results = evaluate_variant_calling_accuracy(
                     baseline_vcf, normalized_vcf, reference_fasta, eval_dir,
-                    threads=threads
+                    threads = threads
                 )
-                
+
                 evaluation_results[caller] = eval_results
                 println("Evaluation completed for $(caller)")
-                
+
             catch e
                 @warn "Evaluation failed for $(caller): $(e)"
             end
         end
     end
-    
+
     # Generate summary report
     summary_file = joinpath(output_dir, "comparison_summary.txt")
     generate_comparison_summary(caller_outputs, evaluation_results, summary_file)
-    
+
     println("Variant calling comparison completed!")
     println("Output directory: $(output_dir)")
     println("Summary: $(summary_file)")
-    
+
     return (
         caller_outputs = caller_outputs,
         evaluation_results = evaluation_results,
@@ -1156,50 +1171,50 @@ and evaluation metrics across different variant callers.
 Mycelia.generate_comparison_summary(caller_outputs, evaluation_results, "summary.txt")
 ```
 """
-function generate_comparison_summary(caller_outputs::Dict{String, String}, 
-                                   evaluation_results::Dict{String, Any}, 
-                                   summary_file::String)
-    
+function generate_comparison_summary(caller_outputs::Dict{String, String},
+        evaluation_results::Dict{String, Any},
+        summary_file::String)
     open(summary_file, "w") do io
         println(io, "# Variant Calling Comparison Summary")
         println(io, "Generated: $(Dates.now())")
         println(io, "")
-        
+
         # Caller outputs section
         println(io, "## Variant Callers Run")
         for (caller, vcf_file) in caller_outputs
             println(io, "- $(caller): $(basename(vcf_file))")
         end
         println(io, "")
-        
+
         # Evaluation results section
         if !isempty(evaluation_results)
             println(io, "## Evaluation Results")
             println(io, "")
-            
+
             # Create comparison table
             println(io, "| Caller | SNP Max F1 | Non-SNP Max F1 | Weighted Max F1 |")
             println(io, "|--------|------------|-----------------|-----------------|")
-            
+
             for (caller, results) in evaluation_results
-                snp_f1 = haskey(results.summary_stats, :snp_roc) ? 
-                        get(results.summary_stats.snp_roc, :max_f1, "N/A") : "N/A"
-                nonsnp_f1 = haskey(results.summary_stats, :non_snp_roc) ? 
-                           get(results.summary_stats.non_snp_roc, :max_f1, "N/A") : "N/A"
-                weighted_f1 = haskey(results.summary_stats, :weighted_roc) ? 
-                             get(results.summary_stats.weighted_roc, :max_f1, "N/A") : "N/A"
-                
+                snp_f1 = haskey(results.summary_stats, :snp_roc) ?
+                         get(results.summary_stats.snp_roc, :max_f1, "N/A") : "N/A"
+                nonsnp_f1 = haskey(results.summary_stats, :non_snp_roc) ?
+                            get(results.summary_stats.non_snp_roc, :max_f1, "N/A") : "N/A"
+                weighted_f1 = haskey(results.summary_stats, :weighted_roc) ?
+                              get(results.summary_stats.weighted_roc, :max_f1, "N/A") :
+                              "N/A"
+
                 println(io, "| $(caller) | $(snp_f1) | $(nonsnp_f1) | $(weighted_f1) |")
             end
-            
+
             println(io, "")
-            
+
             # Best performer
             best_caller = ""
             best_f1 = 0.0
-            
+
             for (caller, results) in evaluation_results
-                if haskey(results.summary_stats, :weighted_roc) && 
+                if haskey(results.summary_stats, :weighted_roc) &&
                    haskey(results.summary_stats.weighted_roc, :max_f1)
                     f1 = results.summary_stats.weighted_roc.max_f1
                     if f1 > best_f1
@@ -1208,15 +1223,16 @@ function generate_comparison_summary(caller_outputs::Dict{String, String},
                     end
                 end
             end
-            
+
             if !isempty(best_caller)
-                println(io, "**Best Overall Performance**: $(best_caller) (Weighted F1: $(round(best_f1, digits=4)))")
+                println(io,
+                    "**Best Overall Performance**: $(best_caller) (Weighted F1: $(round(best_f1, digits=4)))")
             end
         else
             println(io, "## Evaluation Results")
             println(io, "No evaluation performed (no baseline VCF provided)")
         end
-        
+
         println(io, "")
         println(io, "## Files Generated")
         for (caller, vcf_file) in caller_outputs
@@ -1227,6 +1243,6 @@ function generate_comparison_summary(caller_outputs::Dict{String, String},
             end
         end
     end
-    
+
     println("Summary report written to: $(summary_file)")
 end

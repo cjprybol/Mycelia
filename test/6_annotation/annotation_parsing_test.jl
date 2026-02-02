@@ -7,15 +7,19 @@ Test.@testset "Annotation Parsing" begin
             report_path = joinpath(dir, "ani-tax-report.txt")
             open(report_path, "w") do io
                 println(io, "ANI report for assembly: assembly_1")
-                println(io, "Submitted organism: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
-                println(io, "Predicted organism: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
-                println(io, "Best match: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
+                println(io,
+                    "Submitted organism: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
+                println(io,
+                    "Predicted organism: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
+                println(io,
+                    "Best match: Escherichia coli (taxid = 562, rank = species, lineage = Bacteria;Proteobacteria)")
                 println(io, "Submitted organism has type: Yes")
                 println(io, "Status: CONFIRMED")
                 println(io, "Confidence: HIGH")
                 println(io, "ANI (Coverages)")
                 println(io, "--------------------------------")
-                println(io, "95.5 (98.0 97.0) 0 0 1 OK Escherichia coli (GCF_000005845.2, Escherichia coli)")
+                println(io,
+                    "95.5 (98.0 97.0) 0 0 1 OK Escherichia coli (GCF_000005845.2, Escherichia coli)")
                 println(io, "Table legend:")
             end
 
@@ -70,10 +74,10 @@ Test.@testset "Annotation Parsing" begin
     Test.@testset "tRNA attribute formatting" begin
         df = Mycelia.DataFrames.DataFrame(
             attributes = [
-                "ID=foo-tRNA13-fMetCAT",
-                "ID=bar-tRNA01-UndetNNN",
-                "ID=baz-tRNA02-AlaGGC",
-            ]
+            "ID=foo-tRNA13-fMetCAT",
+            "ID=bar-tRNA01-UndetNNN",
+            "ID=baz-tRNA02-AlaGGC"
+        ]
         )
         updated = Mycelia.add_trna_attributes(df)
         Test.@test occursin("tRNA-fMet", updated[1, "attributes"])

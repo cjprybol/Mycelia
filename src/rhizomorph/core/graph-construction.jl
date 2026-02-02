@@ -65,7 +65,7 @@ function _possible_alphabets(seq_str::AbstractString)
         throw(ArgumentError("Sequence contains characters that do not belong to any known alphabet: $(join(unmatched_chars, ", "))"))
     end
 
-    return (unambiguous=unambiguous, possible=possible)
+    return (unambiguous = unambiguous, possible = possible)
 end
 
 function _resolve_ambiguous_alphabet(possible_alphabets::Set{Symbol}, ambiguous_action::Symbol)
@@ -102,10 +102,10 @@ function _resolve_ambiguous_alphabet(possible_alphabets::Set{Symbol}, ambiguous_
 end
 
 function _resolve_sequence_alphabet(
-    possible_alphabets::Set{Symbol},
-    unambiguous_alphabets::Set{Symbol};
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        possible_alphabets::Set{Symbol},
+        unambiguous_alphabets::Set{Symbol};
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if !isnothing(type_hint)
         hint = _normalize_alphabet_symbol(type_hint)
@@ -127,9 +127,9 @@ function _resolve_sequence_alphabet(
 end
 
 function _infer_sequence_alphabet(
-    records::Vector{<:FASTX.Record};
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{<:FASTX.Record};
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot infer sequence type from empty record set"))
@@ -157,8 +157,8 @@ function _infer_sequence_alphabet(
     return _resolve_sequence_alphabet(
         inferred_alphabet,
         unambiguous_alphabet;
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 end
 
@@ -184,11 +184,11 @@ This is the PRIMARY graph construction function. Constructs a graph where:
 - `MetaGraphsNext.MetaGraph`: Strand-specific k-mer graph with evidence
 """
 function build_kmer_graph_singlestrand(
-    records::Vector{<:FASTX.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -197,17 +197,17 @@ function build_kmer_graph_singlestrand(
     # Convert FASTQ to FASTA if needed (k-mer graphs don't use quality)
     fasta_records = if records[1] isa FASTX.FASTQ.Record
         [FASTX.FASTA.Record(
-            FASTX.identifier(r),
-            FASTX.sequence(r)
-        ) for r in records]
+             FASTX.identifier(r),
+             FASTX.sequence(r)
+         ) for r in records]
     else
         records
     end
 
     sequence_alphabet = _infer_sequence_alphabet(
         fasta_records;
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Validate all records are compatible with the dataset alphabet.
@@ -237,10 +237,10 @@ Type-stable core function for k-mer graph construction.
 - `KmerType`: Concrete k-mer type (DNAKmer{k}, RNAKmer{k}, or AAKmer{k})
 """
 function _build_kmer_graph_core(
-    records::Vector{FASTX.FASTA.Record},
-    ::Val{K},
-    ::Type{KmerType},
-    dataset_id::String
+        records::Vector{FASTX.FASTA.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
 ) where {K, KmerType <: Kmers.Kmer}
     # Determine sequence type and iterator based on KmerType
     if KmerType <: Kmers.DNAKmer
@@ -283,10 +283,10 @@ function _build_kmer_graph_core(
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=ActualKmerType,
-        vertex_data_type=KmerVertexData{ActualKmerType},
-        edge_data_type=KmerEdgeData,
-        weight_function=compute_edge_weight
+        label_type = ActualKmerType,
+        vertex_data_type = KmerVertexData{ActualKmerType},
+        edge_data_type = KmerEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Process each record
@@ -315,7 +315,7 @@ function _build_kmer_graph_core(
             # Add evidence to vertex
             vertex_data = graph[kmer]
             add_evidence!(vertex_data, dataset_id, observation_id,
-                         EvidenceEntry(position, Forward))
+                EvidenceEntry(position, Forward))
         end
 
         # Add edges between consecutive k-mers
@@ -334,7 +334,7 @@ function _build_kmer_graph_core(
                 # Add evidence to edge
                 edge_data = graph[src_kmer, dst_kmer]
                 add_evidence!(edge_data, dataset_id, observation_id,
-                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
             end
         end
     end
@@ -367,11 +367,11 @@ graph = build_kmer_graph_doublestrand(records, 3)
 ```
 """
 function build_kmer_graph_doublestrand(
-    records::Vector{<:FASTX.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -381,9 +381,9 @@ function build_kmer_graph_doublestrand(
     singlestrand_graph = build_kmer_graph_singlestrand(
         records,
         k;
-        dataset_id=dataset_id,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Convert to doublestrand representation (replicate vertices/edges)
@@ -413,11 +413,11 @@ alongside k-mer observations.
 - `MetaGraphsNext.MetaGraph`: Strand-specific qualmer graph with quality-aware evidence
 """
 function build_qualmer_graph_singlestrand(
-    records::Vector{FASTX.FASTQ.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -425,8 +425,8 @@ function build_qualmer_graph_singlestrand(
 
     sequence_alphabet = _infer_sequence_alphabet(
         records;
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Validate all records are compatible with the dataset alphabet.
@@ -456,10 +456,10 @@ Type-stable core function for qualmer graph construction.
 - `KmerType`: Concrete k-mer type (DNAKmer{k}, RNAKmer{k}, or AAKmer{k})
 """
 function _build_qualmer_graph_core(
-    records::Vector{FASTX.FASTQ.Record},
-    ::Val{K},
-    ::Type{KmerType},
-    dataset_id::String
+        records::Vector{FASTX.FASTQ.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
 ) where {K, KmerType <: Kmers.Kmer}
     # Determine sequence type and iterator
     if KmerType <: Kmers.DNAKmer
@@ -495,10 +495,10 @@ function _build_qualmer_graph_core(
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=ActualKmerType,
-        vertex_data_type=QualmerVertexData{ActualKmerType},
-        edge_data_type=QualmerEdgeData,
-        weight_function=compute_edge_weight
+        label_type = ActualKmerType,
+        vertex_data_type = QualmerVertexData{ActualKmerType},
+        edge_data_type = QualmerEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Process each record
@@ -531,7 +531,7 @@ function _build_qualmer_graph_core(
             # Add evidence to vertex
             vertex_data = graph[kmer]
             add_evidence!(vertex_data, dataset_id, observation_id,
-                         QualityEvidenceEntry(position, Forward, kmer_quality))
+                QualityEvidenceEntry(position, Forward, kmer_quality))
         end
 
         # Add edges between consecutive k-mers
@@ -554,8 +554,8 @@ function _build_qualmer_graph_core(
                 # Add evidence to edge
                 edge_data = graph[src_kmer, dst_kmer]
                 add_evidence!(edge_data, dataset_id, observation_id,
-                            EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
-                                                    src_quality, dst_quality))
+                    EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
+                        src_quality, dst_quality))
             end
         end
     end
@@ -579,11 +579,11 @@ RC are added with properly oriented evidence and quality scores.
 - `MetaGraphsNext.MetaGraph`: DoubleStrand qualmer graph (DiGraph with 2x vertices/edges)
 """
 function build_qualmer_graph_doublestrand(
-    records::Vector{FASTX.FASTQ.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -593,9 +593,9 @@ function build_qualmer_graph_doublestrand(
     singlestrand_graph = build_qualmer_graph_singlestrand(
         records,
         k;
-        dataset_id=dataset_id,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Convert to doublestrand representation (replicate vertices/edges)
@@ -621,10 +621,10 @@ Allows incremental graph construction from multiple datasets or batches.
 - `MetaGraphsNext.MetaGraph`: Updated graph with new observations
 """
 function add_observations_to_graph!(
-    graph::MetaGraphsNext.MetaGraph,
-    records::Vector{<:FASTX.Record},
-    k::Int;
-    dataset_id::String="dataset_01"
+        graph::MetaGraphsNext.MetaGraph,
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01"
 )
     if isempty(records)
         return graph
@@ -650,9 +650,9 @@ function add_observations_to_graph!(
     # Convert FASTQ to FASTA for k-mer graphs
     if !is_quality_aware && records[1] isa FASTX.FASTQ.Record
         records = [FASTX.FASTA.Record(
-            FASTX.identifier(r),
-            FASTX.sequence(r)
-        ) for r in records]
+                       FASTX.identifier(r),
+                       FASTX.sequence(r)
+                   ) for r in records]
     end
 
     # Determine sequence type and iterator based on KmerType
@@ -703,10 +703,10 @@ function add_observations_to_graph!(
             if is_quality_aware
                 kmer_quality = quality[position:(position + k - 1)]
                 add_evidence!(vertex_data, dataset_id, observation_id,
-                             QualityEvidenceEntry(position, Forward, kmer_quality))
+                    QualityEvidenceEntry(position, Forward, kmer_quality))
             else
                 add_evidence!(vertex_data, dataset_id, observation_id,
-                             EvidenceEntry(position, Forward))
+                    EvidenceEntry(position, Forward))
             end
         end
 
@@ -734,11 +734,11 @@ function add_observations_to_graph!(
                     src_quality = quality[src_pos:(src_pos + k - 1)]
                     dst_quality = quality[dst_pos:(dst_pos + k - 1)]
                     add_evidence!(edge_data, dataset_id, observation_id,
-                                EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
-                                                        src_quality, dst_quality))
+                        EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
+                            src_quality, dst_quality))
                 else
                     add_evidence!(edge_data, dataset_id, observation_id,
-                                EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                        EdgeEvidenceEntry(src_pos, dst_pos, Forward))
                 end
             end
         end
@@ -767,7 +767,7 @@ end
 """
 Generate observation ID from index (for synthetic data or non-unique read names).
 """
-function get_observation_id_from_index(index::Int, prefix::String="obs")
+function get_observation_id_from_index(index::Int, prefix::String = "obs")
     return "$(prefix)_$(lpad(index, 10, '0'))"
 end
 
@@ -818,11 +818,11 @@ graph = build_kmer_graph_canonical(records, 3)
 ```
 """
 function build_kmer_graph_canonical(
-    records::Vector{<:FASTX.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -832,9 +832,9 @@ function build_kmer_graph_canonical(
     singlestrand_graph = build_kmer_graph_singlestrand(
         records,
         k;
-        dataset_id=dataset_id,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Convert to canonical representation
@@ -855,11 +855,11 @@ Similar to `build_kmer_graph_canonical` but preserves quality information.
 - `MetaGraphsNext.MetaGraph`: Canonical qualmer graph with merged evidence
 """
 function build_qualmer_graph_canonical(
-    records::Vector{FASTX.FASTQ.Record},
-    k::Int;
-    dataset_id::String="dataset_01",
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -869,9 +869,9 @@ function build_qualmer_graph_canonical(
     singlestrand_graph = build_qualmer_graph_singlestrand(
         records,
         k;
-        dataset_id=dataset_id,
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        dataset_id = dataset_id,
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     # Convert to canonical representation
@@ -931,10 +931,10 @@ function convert_to_doublestrand(singlestrand_graph)
     # Create new doublestrand graph (still DiGraph!)
     doublestrand_graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=KmerType,
-        vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType,
-        weight_function=compute_edge_weight
+        label_type = KmerType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
     )
 
     # Add all forward vertices
@@ -1080,10 +1080,10 @@ function convert_to_canonical(singlestrand_graph)
     # Create new canonical graph
     canonical_graph = MetaGraphsNext.MetaGraph(
         Graphs.Graph();
-        label_type=KmerType,
-        vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType,
-        weight_function=compute_edge_weight
+        label_type = KmerType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
     )
 
     # Track which k-mers we've already processed
@@ -1229,11 +1229,11 @@ function convert_to_singlestrand(doublestrand_graph)
     # Create new singlestrand graph
     singlestrand_graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=typeof(first_kmer),
-        vertex_data_type=VertexDataType,
-        edge_data_type=EdgeDataType,
-        graph_data="Singlestrand graph (unfolded from canonical)",
-        weight_function=compute_edge_weight
+        label_type = typeof(first_kmer),
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        graph_data = "Singlestrand graph (unfolded from canonical)",
+        weight_function = compute_edge_weight
     )
 
     # Process each canonical k-mer
@@ -1302,7 +1302,8 @@ function convert_to_singlestrand(doublestrand_graph)
                                 singlestrand_graph[canon_src, canon_dst] = QualmerEdgeData()
                             end
                         end
-                        add_evidence!(singlestrand_graph[canon_src, canon_dst], dataset_id, obs_id, evidence)
+                        add_evidence!(singlestrand_graph[canon_src, canon_dst],
+                            dataset_id, obs_id, evidence)
                     else
                         # Reverse edge: rc_dst → rc_src (note the reversal!)
                         # When unfolding, reverse strand means we're on the RC sequence
@@ -1316,7 +1317,8 @@ function convert_to_singlestrand(doublestrand_graph)
                         end
                         # Flip evidence to Forward since it's now on the RC sequence
                         flipped_evidence = flip_evidence_strand(evidence)
-                        add_evidence!(singlestrand_graph[rc_dst, rc_src], dataset_id, obs_id, flipped_evidence)
+                        add_evidence!(singlestrand_graph[rc_dst, rc_src],
+                            dataset_id, obs_id, flipped_evidence)
                     end
                 end
             end
@@ -1363,9 +1365,9 @@ stats = get_ngram_statistics(graph)
 ```
 """
 function build_ngram_graph_singlestrand(
-    strings::Vector{String},
-    n::Int;
-    dataset_id::String="dataset_01"
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
 )
     if isempty(strings)
         error("Cannot build graph from empty string vector")
@@ -1378,10 +1380,10 @@ function build_ngram_graph_singlestrand(
     # Create empty directed graph with String labels
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=String,
-        vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData,
-        weight_function=compute_edge_weight
+        label_type = String,
+        vertex_data_type = StringVertexData,
+        edge_data_type = StringEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Process each string
@@ -1397,10 +1399,8 @@ function build_ngram_graph_singlestrand(
         end
 
         # Extract n-grams with positions (1-indexed)
-        ngrams_with_positions = [
-            (String(chars[i:i+n-1]), i)
-            for i in 1:(char_count - n + 1)
-        ]
+        ngrams_with_positions = [(String(chars[i:(i + n - 1)]), i)
+                                 for i in 1:(char_count - n + 1)]
 
         # Add vertices and evidence
         for (ngram, position) in ngrams_with_positions
@@ -1413,7 +1413,7 @@ function build_ngram_graph_singlestrand(
             # Add evidence to vertex
             vertex_data = graph[ngram]
             add_evidence!(vertex_data, dataset_id, observation_id,
-                         EvidenceEntry(position, Forward))
+                EvidenceEntry(position, Forward))
         end
 
         # Add edges between consecutive n-grams (n-1 character overlap)
@@ -1434,7 +1434,7 @@ function build_ngram_graph_singlestrand(
                 # Add evidence to edge
                 edge_data = graph[src_ngram, dst_ngram]
                 add_evidence!(edge_data, dataset_id, observation_id,
-                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
             end
         end
     end
@@ -1457,10 +1457,10 @@ Add observations from new strings to existing n-gram graph.
 - Updated graph with new observations
 """
 function add_observations_to_ngram_graph!(
-    graph::MetaGraphsNext.MetaGraph,
-    strings::Vector{String},
-    n::Int;
-    dataset_id::String="dataset_01"
+        graph::MetaGraphsNext.MetaGraph,
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
 )
     if isempty(strings)
         return graph
@@ -1476,10 +1476,8 @@ function add_observations_to_ngram_graph!(
         end
 
         # Extract n-grams with positions
-        ngrams_with_positions = [
-            (input_string[i:i+n-1], i)
-            for i in 1:(length(input_string) - n + 1)
-        ]
+        ngrams_with_positions = [(input_string[i:(i + n - 1)], i)
+                                 for i in 1:(length(input_string) - n + 1)]
 
         # Add vertices and evidence
         for (ngram, position) in ngrams_with_positions
@@ -1492,7 +1490,7 @@ function add_observations_to_ngram_graph!(
             # Add evidence to vertex
             vertex_data = graph[ngram]
             add_evidence!(vertex_data, dataset_id, observation_id,
-                         EvidenceEntry(position, Forward))
+                EvidenceEntry(position, Forward))
         end
 
         # Add edges between consecutive n-grams
@@ -1511,7 +1509,7 @@ function add_observations_to_ngram_graph!(
                 # Add evidence to edge
                 edge_data = graph[src_ngram, dst_ngram]
                 add_evidence!(edge_data, dataset_id, observation_id,
-                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
             end
         end
     end
@@ -1573,9 +1571,9 @@ end
 ```
 """
 function build_string_graph_olc(
-    strings::Vector{String};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3
+        strings::Vector{String};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3
 )
     if isempty(strings)
         error("Cannot build graph from empty string vector")
@@ -1586,10 +1584,10 @@ function build_string_graph_olc(
     # Create empty directed graph with String labels
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=String,
-        vertex_data_type=StringVertexData,
-        edge_data_type=StringEdgeData,
-        weight_function=compute_edge_weight
+        label_type = String,
+        vertex_data_type = StringVertexData,
+        edge_data_type = StringEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Add all strings as vertices
@@ -1605,7 +1603,7 @@ function build_string_graph_olc(
         # Add evidence (position=1 since the vertex IS the full string)
         vertex_data = graph[input_string]
         add_evidence!(vertex_data, dataset_id, observation_id,
-                     EvidenceEntry(1, Forward))
+            EvidenceEntry(1, Forward))
     end
 
     # Find overlaps between all pairs of strings
@@ -1639,7 +1637,7 @@ function build_string_graph_olc(
                 dst_pos = 1
 
                 add_evidence!(edge_data, dataset_id, observation_id_i,
-                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
             end
         end
     end
@@ -1728,11 +1726,11 @@ end
 ```
 """
 function build_fasta_graph_olc(
-    records::Vector{FASTX.FASTA.Record};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3,
-    type_hint::Union{Nothing,Symbol}=nothing,
-    ambiguous_action::Symbol=:dna
+        records::Vector{FASTX.FASTA.Record};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3,
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -1742,8 +1740,8 @@ function build_fasta_graph_olc(
 
     sequence_alphabet = _infer_sequence_alphabet(
         records;
-        type_hint=type_hint,
-        ambiguous_action=ambiguous_action
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
     )
 
     for record in records[1:min(10, length(records))]
@@ -1771,18 +1769,18 @@ Type-stable core function for FASTA OLC graph construction.
 Uses BioSequences as vertex labels, not strings.
 """
 function _build_fasta_graph_olc_core(
-    records::Vector{FASTX.FASTA.Record},
-    ::Type{SeqType},
-    dataset_id::String,
-    min_overlap::Int
+        records::Vector{FASTX.FASTA.Record},
+        ::Type{SeqType},
+        dataset_id::String,
+        min_overlap::Int
 ) where {SeqType <: BioSequences.LongSequence}
     # Create empty directed graph with BioSequence labels
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=SeqType,
-        vertex_data_type=BioSequenceVertexData{SeqType},
-        edge_data_type=BioSequenceEdgeData,
-        weight_function=compute_edge_weight
+        label_type = SeqType,
+        vertex_data_type = BioSequenceVertexData{SeqType},
+        edge_data_type = BioSequenceEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type
@@ -1800,7 +1798,7 @@ function _build_fasta_graph_olc_core(
         # Add evidence (position=1 since the vertex IS the full sequence)
         vertex_data = graph[sequence]
         add_evidence!(vertex_data, dataset_id, observation_id,
-                     EvidenceEntry(1, Forward))
+            EvidenceEntry(1, Forward))
     end
 
     # Find overlaps between all pairs of sequences
@@ -1833,7 +1831,7 @@ function _build_fasta_graph_olc_core(
                 dst_pos = 1
 
                 add_evidence!(edge_data, dataset_id, observation_id_i,
-                            EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
             end
         end
     end
@@ -1857,9 +1855,9 @@ find_biosequence_overlap_length(seq1, seq2, 3)  # Returns 5 (CGATC)
 ```
 """
 function find_biosequence_overlap_length(
-    seq1::BioSequences.LongSequence,
-    seq2::BioSequences.LongSequence,
-    min_overlap::Int
+        seq1::BioSequences.LongSequence,
+        seq2::BioSequences.LongSequence,
+        min_overlap::Int
 )
     max_possible_overlap = min(length(seq1), length(seq2))
 
@@ -1928,9 +1926,9 @@ end
 ```
 """
 function build_fastq_graph_olc(
-    records::Vector{FASTX.FASTQ.Record};
-    dataset_id::String="dataset_01",
-    min_overlap::Int=3
+        records::Vector{FASTX.FASTQ.Record};
+        dataset_id::String = "dataset_01",
+        min_overlap::Int = 3
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -1943,7 +1941,8 @@ function build_fastq_graph_olc(
     biosequence = parentmodule(Rhizomorph).convert_sequence(first_seq_str)
 
     # FASTQ graphs support DNA, RNA, and amino acid sequences
-    if !(biosequence isa Union{BioSequences.LongDNA, BioSequences.LongRNA, BioSequences.LongAA})
+    if !(biosequence isa
+         Union{BioSequences.LongDNA, BioSequences.LongRNA, BioSequences.LongAA})
         error("FASTQ graphs only support DNA, RNA, or AA sequences, got: $(typeof(biosequence))")
     end
 
@@ -1974,18 +1973,18 @@ Type-stable core function for FASTQ OLC graph construction.
 Uses BioSequences as vertex labels with quality information, not strings.
 """
 function _build_fastq_graph_olc_core(
-    records::Vector{FASTX.FASTQ.Record},
-    ::Type{SeqType},
-    dataset_id::String,
-    min_overlap::Int
+        records::Vector{FASTX.FASTQ.Record},
+        ::Type{SeqType},
+        dataset_id::String,
+        min_overlap::Int
 ) where {SeqType <: BioSequences.LongSequence}
     # Create empty directed graph with BioSequence labels
     graph = MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
-        label_type=SeqType,
-        vertex_data_type=QualityBioSequenceVertexData{SeqType},
-        edge_data_type=QualityBioSequenceEdgeData,
-        weight_function=compute_edge_weight
+        label_type = SeqType,
+        vertex_data_type = QualityBioSequenceVertexData{SeqType},
+        edge_data_type = QualityBioSequenceEdgeData,
+        weight_function = compute_edge_weight
     )
 
     # Convert all sequences to proper BioSequence type
@@ -1994,7 +1993,8 @@ function _build_fastq_graph_olc_core(
     qualities = [Vector{UInt8}(FASTX.quality(record)) for record in records]
 
     # Add all sequences as vertices
-    for (seq_idx, (sequence, observation_id, quality)) in enumerate(zip(sequences, identifiers, qualities))
+    for (seq_idx, (sequence, observation_id, quality)) in
+        enumerate(zip(sequences, identifiers, qualities))
         # Create vertex if it doesn't exist
         if !haskey(graph, sequence)
             vertex_data = QualityBioSequenceVertexData(sequence, quality)
@@ -2007,7 +2007,7 @@ function _build_fastq_graph_olc_core(
             append!(vertex_data.quality_scores, quality)
         end
         add_evidence!(vertex_data, dataset_id, observation_id,
-                     QualityEvidenceEntry(1, Forward, quality))
+            QualityEvidenceEntry(1, Forward, quality))
     end
 
     # Find overlaps between all pairs of sequences
@@ -2044,8 +2044,8 @@ function _build_fastq_graph_olc_core(
                 dst_quality = qualities[j][1:overlap_len]  # Prefix quality
 
                 add_evidence!(edge_data, dataset_id, observation_id_i,
-                            EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
-                                                    src_quality, dst_quality))
+                    EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
+                        src_quality, dst_quality))
             end
         end
     end

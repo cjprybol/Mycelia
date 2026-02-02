@@ -27,7 +27,6 @@ import FASTX
 import Kmers
 
 Test.@testset "RNA Qualmer Doublestrand Graph" begin
-
     Test.@testset "Doublestrand Qualmer - Basic" begin
         # RNA sequence with quality scores
         seq = "AUGCAU"
@@ -35,7 +34,7 @@ Test.@testset "RNA Qualmer Doublestrand Graph" begin
         qual_str = String([Char(q + 33) for q in qual])
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         # In "AUGCAU": AUG, UGC, GCA, CAU
         # Doublestrand preserves forward + RC vertices (no canonical merge here)
@@ -48,7 +47,7 @@ Test.@testset "RNA Qualmer Doublestrand Graph" begin
         qual_str = String([Char(q + 33) for q in qual])
         record = FASTX.FASTQ.Record("read_001", seq, qual_str)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3; dataset_id = "test")
 
         canon_aug = BioSequences.canonical(Kmers.RNAKmer{3}("AUG"))
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, canon_aug)
@@ -69,7 +68,7 @@ Test.@testset "RNA Qualmer Doublestrand Graph" begin
         # Reverse read (RC of AUGC is GCAU)
         record2 = FASTX.FASTQ.Record("read_rev", "GCAU", "JJJJ")  # Q41
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record1, record2], 3; dataset_id = "test")
 
         # Both reads should contribute to canonical k-mers
         canon_aug = BioSequences.canonical(Kmers.RNAKmer{3}("AUG"))
@@ -89,7 +88,7 @@ Test.@testset "RNA Qualmer Doublestrand Graph" begin
         qual_str2 = String([Char(q + 33) for q in qual2])
         record2 = FASTX.FASTQ.Record("read_002", seq, qual_str2)
 
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record1, record2], 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record1, record2], 3; dataset_id = "test")
 
         canon_aug = BioSequences.canonical(Kmers.RNAKmer{3}("AUG"))
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, canon_aug)

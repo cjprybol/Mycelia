@@ -63,19 +63,20 @@ Test.@testset "Autocycler Wrapper Tests" begin
 
             if isempty(long_reads)
                 Test.@test_skip "Set MYCELIA_AUTOCYCLER_LONG_READS to run Autocycler pipeline"
-            elseif (isempty(short_reads_1) && !isempty(short_reads_2)) || (!isempty(short_reads_1) && isempty(short_reads_2))
+            elseif (isempty(short_reads_1) && !isempty(short_reads_2)) ||
+                   (!isempty(short_reads_1) && isempty(short_reads_2))
                 Test.@test_skip "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1 and MYCELIA_AUTOCYCLER_SHORT_READS_2 for short reads"
             else
                 mktempdir() do tmp_dir
                     output_dir = joinpath(tmp_dir, "autocycler_out")
                     if isempty(short_reads_1)
-                        Mycelia.run_autocycler(long_reads=long_reads, out_dir=output_dir)
+                        Mycelia.run_autocycler(long_reads = long_reads, out_dir = output_dir)
                     else
                         Mycelia.run_autocycler(
-                            long_reads=long_reads,
-                            out_dir=output_dir,
-                            short_reads_1=short_reads_1,
-                            short_reads_2=short_reads_2
+                            long_reads = long_reads,
+                            out_dir = output_dir,
+                            short_reads_1 = short_reads_1,
+                            short_reads_2 = short_reads_2
                         )
                     end
                     Test.@test isdir(output_dir)

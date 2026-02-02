@@ -27,7 +27,7 @@ import BioSequences
 Test.@testset "Rhizomorph doublestrand traversal" begin
     # DNA k-mer doublestrand
     dna_records = [FASTX.FASTA.Record("dna1", "ATGCA")]
-    dna_ds = Mycelia.Rhizomorph.build_kmer_graph_doublestrand(dna_records, 3; dataset_id="dna")
+    dna_ds = Mycelia.Rhizomorph.build_kmer_graph_doublestrand(dna_records, 3; dataset_id = "dna")
     dna_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(dna_ds)
     Test.@test !isempty(dna_paths)
     recon_ok = false
@@ -42,13 +42,13 @@ Test.@testset "Rhizomorph doublestrand traversal" begin
 
     # RNA k-mer doublestrand
     rna_records = [FASTX.FASTA.Record("rna1", "AUGCA")]
-    rna_ds = Mycelia.Rhizomorph.build_kmer_graph_doublestrand(rna_records, 3; dataset_id="rna")
+    rna_ds = Mycelia.Rhizomorph.build_kmer_graph_doublestrand(rna_records, 3; dataset_id = "rna")
     rna_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(rna_ds)
     Test.@test !isempty(rna_paths)
 
     # DNA qualmer doublestrand
     dq_record = FASTX.FASTQ.Record("dq1", "ATGCA", "IIIII")
-    dq_ds = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([dq_record], 3; dataset_id="dnaq")
+    dq_ds = Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([dq_record], 3; dataset_id = "dnaq")
     dq_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(dq_ds)
     Test.@test !isempty(dq_paths)
     dq_recon_ok = false

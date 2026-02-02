@@ -27,7 +27,6 @@ import FASTX
 import Kmers
 
 Test.@testset "RNA K-mer Graph - Singlestrand" begin
-
     Test.@testset "RNA K-mer Extraction" begin
         # RNA sequence with U instead of T
         rna_seq = BioSequences.LongRNA{4}("AUGCGAUCG")
@@ -46,7 +45,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 3 unique RNA k-mers
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 3
@@ -63,7 +62,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
             FASTX.FASTA.Record("read_001", "AUGCG"),
             FASTX.FASTA.Record("read_002", "AUGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Same k-mers, but observed twice
         kmer = Kmers.RNAKmer{3}("AUG")
@@ -75,7 +74,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="rna_test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "rna_test")
 
         kmer = Kmers.RNAKmer{3}("AUG")
         vertex_data = Mycelia.Rhizomorph.get_vertex_data(graph, kmer)
@@ -98,7 +97,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
             FASTX.FASTA.Record("read_fwd", "AUG"),
             FASTX.FASTA.Record("read_rev", "CAU")  # Reverse complement of AUG
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should have 2 separate vertices (strand-specific)
         Test.@test Mycelia.Rhizomorph.vertex_count(graph) == 2
@@ -111,7 +110,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGNNCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Should only have AUG and NCG is invalid (contains N)
         # Actually, NCG won't be extracted at all
@@ -128,7 +127,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         src = Kmers.RNAKmer{3}("AUG")
         dst = Kmers.RNAKmer{3}("UGC")
@@ -152,7 +151,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGCG")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Get path
         path = [
@@ -172,7 +171,7 @@ Test.@testset "RNA K-mer Graph - Singlestrand" begin
         records = [
             FASTX.FASTA.Record("read_001", "AUGCGAUC")
         ]
-        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id="test")
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(records, 3; dataset_id = "test")
 
         # Test source/sink detection
         sources = Mycelia.Rhizomorph.get_all_sources(graph)

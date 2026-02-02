@@ -28,7 +28,7 @@ Test.@testset "AA BioSequence SingleStrand Graph" begin
     test_aa = BioSequences.aa"MKTV"
     reads = [FASTX.FASTA.Record("test", test_aa)]
 
-    graph = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id="aa_fasta_test", min_overlap=3)
+    graph = Mycelia.Rhizomorph.build_fasta_graph(reads; dataset_id = "aa_fasta_test", min_overlap = 3)
 
     vertices = collect(MetaGraphsNext.labels(graph))
     Test.@test length(vertices) == 1
@@ -61,7 +61,8 @@ Test.@testset "AA BioSequence SingleStrand Graph" begin
                 vertex_type = typeof(first(path_vector))
                 walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
                 for (i, vertex_label) in enumerate(path_vector)
-                    step = Mycelia.Rhizomorph.WalkStep(vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
+                    step = Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
                     push!(walk_steps, step)
                 end
                 graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)

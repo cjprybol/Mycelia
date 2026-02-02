@@ -17,7 +17,8 @@ Generate a Mash sketch from a list of FASTA files.
 - Uses the Mash conda environment
 - Skips sketching if the output already exists
 """
-function generate_mash_sketch(;input_fasta_list::Vector{String}, output_sketch_path_prefix::String="mash_sketch", threads=get_default_threads())
+function generate_mash_sketch(; input_fasta_list::Vector{String},
+        output_sketch_path_prefix::String = "mash_sketch", threads = get_default_threads())
     sketch_output = output_sketch_path_prefix * ".msh"
     if !isfile(sketch_output)
         mash_input_sketch_list_file = tempname() * ".mash_input.txt"
@@ -57,15 +58,15 @@ Compute a pairwise Mash distance matrix for a set of FASTA files.
 - Utilizes the Mash conda environment for both sketching and distance calculation
 """
 function pairwise_mash_distance_matrix(;
-    input_fasta_list::Vector{String},
-    cleanup_sketch_output::Bool = true,
-    threads=get_default_threads()
+        input_fasta_list::Vector{String},
+        cleanup_sketch_output::Bool = true,
+        threads = get_default_threads()
 )
-    mash_sketch_file = generate_mash_sketch(input_fasta_list=input_fasta_list)
+    mash_sketch_file = generate_mash_sketch(input_fasta_list = input_fasta_list)
     pairwise_mash_results = CSV.read(
         open(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash dist -p $(threads) $(mash_sketch_file) $(mash_sketch_file)`),
         DataFrames.DataFrame,
-        delim='\t',
+        delim = '\t',
         header = ["reference", "query", "mash_distance", "p_value", "matching_hashes"]
     )
     if cleanup_sketch_output && isfile(mash_sketch_file)
@@ -86,7 +87,6 @@ function pairwise_mash_distance_matrix(;
     return mash_distance_matrix
 end
 
-
 """
 Compute the Jaccard distance between columns of a binary matrix.
 
@@ -100,7 +100,7 @@ function jaccard_distance(M::AbstractMatrix{<:Integer})
     n_samples = size(M, 2)
     D = zeros(Float64, n_samples, n_samples)
     for i in 1:n_samples
-        for j in i+1:n_samples
+        for j in (i + 1):n_samples
             intersection = sum(M[:, i] .& M[:, j])
             union = sum(M[:, i] .| M[:, j])
             D[i, j] = 1 - intersection / union
@@ -123,7 +123,7 @@ function bray_curtis_distance(M::AbstractMatrix{<:Integer})
     n_samples = size(M, 2)
     D = zeros(Float64, n_samples, n_samples)
     for i in 1:n_samples
-        for j in i+1:n_samples
+        for j in (i + 1):n_samples
             sum_abs_diff = sum(abs.(M[:, i] - M[:, j]))
             sum_total = sum(M[:, i]) + sum(M[:, j])
             D[i, j] = sum_abs_diff / sum_total
@@ -187,7 +187,6 @@ function kmer_counts_to_js_divergence(kmer_counts_1, kmer_counts_2)
     # Distances.js_divergence(a, b) != Distances.js_divergence(a ./ sum(a), b ./ sum(b))
     return Distances.js_divergence(a_norm, b_norm)
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -328,10 +327,10 @@ Performs hierarchical clustering using the UPGMA (average linkage) method and
 converts the resulting dendrogram into Newick tree format. The branch lengths 
 in the tree represent the heights from the clustering.
 """
-function distance_matrix_to_newick(;distance_matrix, labels, outfile)
+function distance_matrix_to_newick(; distance_matrix, labels, outfile)
     # phage_names = phage_host_table[indices, :name]
     # this is equivalent to UPGMA
-    tree = Clustering.hclust(distance_matrix, linkage=:average, branchorder=:optimal)
+    tree = Clustering.hclust(distance_matrix, linkage = :average, branchorder = :optimal)
     # reference_phage_indices = findall(x -> x in reference_phages, phage_names)
     newick = Dict()
     for row in 1:size(tree.merges, 1)
@@ -375,19 +374,20 @@ Compute a symmetric pairwise distance matrix between columns of `matrix` using t
 - Symmetric N×N matrix of pairwise distances between columns (entities)
 """
 function pairwise_distance_matrix(
-    matrix;
-    dist_func = Distances.euclidean,
-    show_progress = true,
-    progress_desc = "Computing distances"
+        matrix;
+        dist_func = Distances.euclidean,
+        show_progress = true,
+        progress_desc = "Computing distances"
 )
     n_entities = size(matrix, 2)
     distance_matrix = zeros(n_entities, n_entities)
     total_pairs = n_entities * (n_entities - 1) ÷ 2
 
-    progress = show_progress ? ProgressMeter.Progress(total_pairs, desc = progress_desc, dt = 0.1) : nothing
+    progress = show_progress ?
+               ProgressMeter.Progress(total_pairs, desc = progress_desc, dt = 0.1) : nothing
 
     Threads.@threads for entity_1_index in 1:n_entities
-        for entity_2_index in entity_1_index+1:n_entities
+        for entity_2_index in (entity_1_index + 1):n_entities
             a = @view matrix[:, entity_1_index]
             b = @view matrix[:, entity_2_index]
             dist = dist_func(a, b)
@@ -412,16 +412,20 @@ end
 
 Pairwise Euclidean distance between columns of `counts_table`.
 """
-frequency_matrix_to_euclidean_distance_matrix(counts_table) =
-    pairwise_distance_matrix(counts_table; dist_func = Distances.euclidean, progress_desc = "Euclidean distances")
+function frequency_matrix_to_euclidean_distance_matrix(counts_table)
+    pairwise_distance_matrix(counts_table; dist_func = Distances.euclidean,
+        progress_desc = "Euclidean distances")
+end
 
 """
     frequency_matrix_to_cosine_distance_matrix(probability_matrix)
 
 Pairwise cosine distance between columns of `probability_matrix`.
 """
-frequency_matrix_to_cosine_distance_matrix(probability_matrix) =
-    pairwise_distance_matrix(probability_matrix; dist_func = Distances.cosine_dist, progress_desc = "Cosine distances")
+function frequency_matrix_to_cosine_distance_matrix(probability_matrix)
+    pairwise_distance_matrix(probability_matrix; dist_func = Distances.cosine_dist,
+        progress_desc = "Cosine distances")
+end
 
 """
     binary_matrix_to_jaccard_distance_matrix(binary_matrix::Union{BitMatrix, Matrix{Bool}})
@@ -429,8 +433,10 @@ frequency_matrix_to_cosine_distance_matrix(probability_matrix) =
 Pairwise Jaccard distance between columns of a binary matrix (BitMatrix or Matrix{Bool}).
 Throws an error if the input is not strictly a binary matrix.
 """
-function binary_matrix_to_jaccard_distance_matrix(binary_matrix::Union{BitMatrix, Matrix{Bool}})
-    return pairwise_distance_matrix(binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
+function binary_matrix_to_jaccard_distance_matrix(binary_matrix::Union{
+        BitMatrix, Matrix{Bool}})
+    return pairwise_distance_matrix(
+        binary_matrix; dist_func = Distances.jaccard, progress_desc = "Jaccard distances")
 end
 
 """
@@ -450,8 +456,10 @@ end
 
 Pairwise Bray-Curtis distance between columns of `counts_table`.
 """
-frequency_matrix_to_bray_curtis_distance_matrix(counts_table) =
-    pairwise_distance_matrix(counts_table; dist_func = Distances.braycurtis, progress_desc = "Bray-Curtis distances")
+function frequency_matrix_to_bray_curtis_distance_matrix(counts_table)
+    pairwise_distance_matrix(counts_table; dist_func = Distances.braycurtis,
+        progress_desc = "Bray-Curtis distances")
+end
 
 """
     frequency_matrix_to_jensen_shannon_distance_matrix(probability_matrix)
@@ -700,7 +708,6 @@ end
 #     return d2_star_matrix, d2_star_norm_matrix
 # end
 
-
 # =============================================================================
 # Distance Matrix Imputation and Validation Functions
 # =============================================================================
@@ -720,7 +727,6 @@ Imputation methods for handling missing values in distance calculations.
     IMPUTE_MEAN
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -738,8 +744,8 @@ The imputation is symmetric: the same value is used for D[i,j] and D[j,i].
 Diagonal values (self-distances) are always set to 0.0.
 """
 function impute_distances(
-    distance_matrix::Matrix{Float64};
-    method::ImputationMethod = IMPUTE_MAX_OBSERVED
+        distance_matrix::Matrix{Float64};
+        method::ImputationMethod = IMPUTE_MAX_OBSERVED
 )
     result = copy(distance_matrix)
     n = size(result, 1)
@@ -754,7 +760,7 @@ function impute_distances(
     ## Extract valid (non-missing, non-diagonal) values
     valid_values = Float64[]
     for i in 1:n
-        for j in (i+1):n
+        for j in (i + 1):n
             val = result[i, j]
             if !isnan(val) && !isinf(val)
                 push!(valid_values, val)
@@ -782,7 +788,7 @@ function impute_distances(
 
     ## Apply imputation symmetrically
     for i in 1:n
-        for j in (i+1):n
+        for j in (i + 1):n
             if isnan(result[i, j]) || isinf(result[i, j])
                 result[i, j] = fill_value
                 result[j, i] = fill_value
@@ -800,7 +806,6 @@ function impute_distances(
 
     return result
 end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -832,10 +837,10 @@ Gower, J. C. (1971). A general coefficient of similarity and some of its propert
 Biometrics, 27(4), 857-871.
 """
 function gower_distance(
-    matrix::AbstractMatrix;
-    feature_types::Union{Nothing, Vector{Symbol}} = nothing,
-    feature_ranges::Union{Nothing, Vector{Float64}} = nothing,
-    min_shared_features::Int = 1
+        matrix::AbstractMatrix;
+        feature_types::Union{Nothing, Vector{Symbol}} = nothing,
+        feature_ranges::Union{Nothing, Vector{Float64}} = nothing,
+        min_shared_features::Int = 1
 )
     n_samples, n_features = size(matrix)
 
@@ -874,7 +879,7 @@ function gower_distance(
     distance_matrix = zeros(Float64, n_samples, n_samples)
 
     for i in 1:n_samples
-        for j in (i+1):n_samples
+        for j in (i + 1):n_samples
             sum_dist = 0.0
             count = 0
 
@@ -911,7 +916,6 @@ function gower_distance(
     return distance_matrix
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -927,14 +931,14 @@ Ranks are normalized to [0, 1] where 0 is the smallest distance and 1 is the lar
 - `Matrix{Float64}`: Rank-normalized distance matrix with values in [0, 1]
 """
 function normalize_ranks(
-    distance_matrix::Matrix{Float64};
-    handle_ties::Symbol = :average
+        distance_matrix::Matrix{Float64};
+        handle_ties::Symbol = :average
 )
     n = size(distance_matrix, 1)
     @assert size(distance_matrix, 2) == n "Distance matrix must be square"
 
     ## Extract upper triangle values and their indices
-    upper_indices = [(i, j) for i in 1:n for j in (i+1):n]
+    upper_indices = [(i, j) for i in 1:n for j in (i + 1):n]
     values = [distance_matrix[i, j] for (i, j) in upper_indices]
 
     ## Handle NaN values: they stay as NaN in the output
@@ -966,7 +970,8 @@ function normalize_ranks(
         i = 1
         while i <= n_valid
             j = i
-            while j < n_valid && valid_values[sorted_order[j]] == valid_values[sorted_order[j+1]]
+            while j < n_valid &&
+                valid_values[sorted_order[j]] == valid_values[sorted_order[j + 1]]
                 j += 1
             end
             ## All tied values get the maximum rank in the group
@@ -1006,7 +1011,6 @@ function normalize_ranks(
     return result
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1030,11 +1034,11 @@ result.is_valid  # true
 ```
 """
 function validate_distance_matrix(
-    distance_matrix::Matrix{Float64};
-    check_symmetry::Bool = true,
-    check_diagonal::Bool = true,
-    check_nonnegative::Bool = true,
-    tolerance::Float64 = 1e-10
+        distance_matrix::Matrix{Float64};
+        check_symmetry::Bool = true,
+        check_diagonal::Bool = true,
+        check_nonnegative::Bool = true,
+        tolerance::Float64 = 1e-10
 )
     n = size(distance_matrix, 1)
 
@@ -1056,7 +1060,7 @@ function validate_distance_matrix(
     is_symmetric = true
     if check_symmetry
         for i in 1:n
-            for j in (i+1):n
+            for j in (i + 1):n
                 d_ij = distance_matrix[i, j]
                 d_ji = distance_matrix[j, i]
                 ## Both NaN is symmetric, otherwise compare values
@@ -1109,7 +1113,7 @@ function validate_distance_matrix(
     ## Off-diagonal NaN pairs (each appears twice in the matrix)
     n_nan_pairs = 0
     for i in 1:n
-        for j in (i+1):n
+        for j in (i + 1):n
             if isnan(distance_matrix[i, j])
                 n_nan_pairs += 1
             end
@@ -1378,9 +1382,9 @@ beta = calculate_beta_diversity(abundance, samples, metric=:bray_curtis)
 ```
 """
 function calculate_beta_diversity(
-    abundance_matrix::AbstractMatrix,
-    sample_names::AbstractVector;
-    metric::Symbol=:bray_curtis
+        abundance_matrix::AbstractMatrix,
+        sample_names::AbstractVector;
+        metric::Symbol = :bray_curtis
 )
     dist_func = if metric == :bray_curtis
         bray_curtis_dissimilarity
@@ -1394,14 +1398,14 @@ function calculate_beta_diversity(
     dist_matrix = zeros(n_samples, n_samples)
 
     for i in 1:n_samples
-        for j in (i+1):n_samples
+        for j in (i + 1):n_samples
             d = dist_func(abundance_matrix[:, i], abundance_matrix[:, j])
             dist_matrix[i, j] = d
             dist_matrix[j, i] = d
         end
     end
 
-    return (distance_matrix=dist_matrix, sample_names=collect(sample_names))
+    return (distance_matrix = dist_matrix, sample_names = collect(sample_names))
 end
 
 """
@@ -1459,17 +1463,17 @@ StatsPlots.scatter(result.pcoa_df.PC1, result.pcoa_df.PC2,
 ```
 """
 function beta_diversity_pcoa(
-    abundance_matrix::AbstractMatrix,
-    sample_names::AbstractVector;
-    metric::Symbol=:bray_curtis,
-    maxoutdim::Int=3,
-    metadata::Union{Nothing, DataFrames.DataFrame}=nothing
+        abundance_matrix::AbstractMatrix,
+        sample_names::AbstractVector;
+        metric::Symbol = :bray_curtis,
+        maxoutdim::Int = 3,
+        metadata::Union{Nothing, DataFrames.DataFrame} = nothing
 )
     # Calculate distance matrix
-    beta = calculate_beta_diversity(abundance_matrix, sample_names; metric=metric)
+    beta = calculate_beta_diversity(abundance_matrix, sample_names; metric = metric)
 
     # Run PCoA
-    pcoa = pcoa_from_dist(beta.distance_matrix; maxoutdim=maxoutdim)
+    pcoa = pcoa_from_dist(beta.distance_matrix; maxoutdim = maxoutdim)
 
     # Calculate variance explained
     eigenvalues = MultivariateStats.eigvals(pcoa.model)
@@ -1477,7 +1481,7 @@ function beta_diversity_pcoa(
     variance_explained = abs.(eigenvalues) ./ total_var
 
     # Convert to DataFrame
-    pcoa_df = pcoa_to_dataframe(pcoa, sample_names; metadata=metadata)
+    pcoa_df = pcoa_to_dataframe(pcoa, sample_names; metadata = metadata)
 
     return (
         distance_matrix = beta.distance_matrix,

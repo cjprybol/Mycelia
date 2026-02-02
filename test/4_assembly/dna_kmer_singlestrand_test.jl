@@ -33,8 +33,8 @@ Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
     graph = Mycelia.Rhizomorph.build_kmer_graph(
         reads,
         3;
-        dataset_id=dataset_id,
-        mode=:singlestrand,
+        dataset_id = dataset_id,
+        mode = :singlestrand
     )
 
     vertices = collect(MetaGraphsNext.labels(graph))
@@ -42,7 +42,7 @@ Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
         Kmers.DNAKmer{3}("ATC"),
         Kmers.DNAKmer{3}("TCG"),
         Kmers.DNAKmer{3}("CGA"),
-        Kmers.DNAKmer{3}("GAT"),
+        Kmers.DNAKmer{3}("GAT")
     ])
     Test.@test MetaGraphsNext.ne(graph) == 4
 
@@ -63,8 +63,8 @@ Test.@testset "DNA K-mer SingleStrand Graph (Rhizomorph)" begin
         kmer_graph = Mycelia.Rhizomorph.build_kmer_graph(
             reads,
             k;
-            dataset_id=dataset_id,
-            mode=:singlestrand,
+            dataset_id = dataset_id,
+            mode = :singlestrand
         )
         kmer_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(kmer_graph)
         Test.@test !isempty(kmer_paths)

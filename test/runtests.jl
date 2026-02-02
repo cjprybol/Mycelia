@@ -1,13 +1,24 @@
 # Mycelia Test Suite - Tiered Testing System
 #
-# curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
+# Test Tiers:
+#   1. Core (default): Pure Julia tests - no network, no external tools
+#   2. External: Tests requiring Bioconda tools, NCBI downloads, HPC resources
+#
 # Usage:
-#   Core tests:                 julia --project=. -e "import Pkg; Pkg.test()"
-#   Full pipeline tests (all):  MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Full pipeline tests (alt):  MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Full pipeline - portable:   LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   Core tests (CI/local):      julia --project=. -e "import Pkg; Pkg.test()"
+#   Full tests (HPC):           MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full tests (alt):           MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full tests (portable):      LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
+#
+# External dependencies (skipped by default):
+#   - NCBI datasets CLI, SRA tools (prefetch, fasterq_dump)
+#   - Bioconda tools: QUAST, BUSCO, CheckM, CoverM, mosdepth, MEGAHIT, SPAdes, etc.
+#   - BLAST databases, reference genome downloads
+#   - Bandage (visualization), minimap2 (alignment)
+#
+# Install Julia LTS: curl -fsSL https://install.julialang.org | sh -s -- --yes --default-channel lts
 
 const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
@@ -35,22 +46,61 @@ end
 
 atexit(cleanup_test_artifacts)
 
+# Files requiring external tools, network downloads, or HPC resources.
+# These are skipped by default; enable with MYCELIA_RUN_EXTERNAL=true.
+const EXTERNAL_DEPENDENCY_FILES = Set([
+    # Dir 1: Data acquisition (NCBI downloads, SRA tools)
+    "ncbi_download.jl",
+    "simulation_fastq.jl",  # PacBio simulation, NCBI downloads
+    "un_parallel_corpus.jl",
+    # Dir 2: Preprocessing (SRA tools)
+    "preprocessing.jl",
+    # Dir 4: Assembly (external assemblers, Bandage, MEGAHIT)
+    "bandage_integration.jl",
+    "megahit_phix_workflow.jl",
+    "assembly_merging.jl",
+    "hpc_assembly_wrappers_test.jl",
+    # Dir 5: Validation (QUAST, BUSCO, CheckM, CoverM, mosdepth)
+    "quast_busco_wrappers_test.jl",
+    "checkm_tools.jl",
+    "coverm_wrappers.jl",
+    "coverm_integration_extended.jl",
+    "mosdepth_coverage_qc.jl",
+    "coverage_taxonomy_integration.jl",
+    # Dir 6: Annotation (Prodigal ORF caller)
+    "orf_callers.jl",
+    # Dir 7: Comparative (BLAST, minimap2, external datasets)
+    "blastdb_integration.jl",
+    "gold_standard_genome_comparison.jl",
+    "multiomics_alignment.jl",
+    "sequence_comparison.jl"
+])
+
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
     test_count = 0
+    skipped_count = 0
     for (root, dirs, files) in walkdir(dir)
         if occursin(".ipynb_checkpoints", root)
             continue
         end
         for file in sort(files)
             if endswith(file, ".jl")
-                if !MYCELIA_RUN_EXTERNAL && occursin("third_party_assemblers", file)
-                    continue
+                # Skip external dependency files unless MYCELIA_RUN_EXTERNAL is set
+                if !MYCELIA_RUN_EXTERNAL
+                    if occursin("third_party_assemblers", file) ||
+                       file in EXTERNAL_DEPENDENCY_FILES
+                        skipped_count += 1
+                        continue
+                    end
                 end
                 include(joinpath(root, file))
                 test_count += 1
             end
         end
+    end
+    if skipped_count > 0 && !MYCELIA_RUN_EXTERNAL
+        @info "Skipped $skipped_count test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
     end
     return test_count
 end

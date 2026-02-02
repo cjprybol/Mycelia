@@ -44,11 +44,11 @@ no-op and simply returns the existing output path.
 - `outfile::String`: Path to the generated (or existing) FASTA file.
 """
 function blastdb_to_fasta(; blastdb::AbstractString,
-                            entries::AbstractVector{<:AbstractString} = String[],
-                            taxids::AbstractVector{<:Integer} = Int[],
-                            outfile::AbstractString = "",
-                            force::Bool = true,
-                            max_cores::Integer = 16)
+        entries::AbstractVector{<:AbstractString} = String[],
+        taxids::AbstractVector{<:Integer} = Int[],
+        outfile::AbstractString = "",
+        force::Bool = true,
+        max_cores::Integer = 16)
 
     # Validate mutually exclusive options
     if !isempty(entries) && !isempty(taxids)
@@ -135,25 +135,25 @@ function blastdb_to_fasta(; blastdb::AbstractString,
     return String(outfile)
 end
 
-
 # not sure how to use this - doesn't seem super helpful?
 # function get_blastdb_dups(;blastdb)
 #     Mycelia.add_bioconda_env("blast")
 #     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -get_dups -entry all`)
 # end
 
-function get_blastdb_info(;blastdb)
+function get_blastdb_info(; blastdb)
     Mycelia.add_bioconda_env("blast")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -info`)
 end
 
-function get_blastdb_metadata(;blastdb)
+function get_blastdb_metadata(; blastdb)
     Mycelia.add_bioconda_env("blast")
     # need to read this into a json object and return it
-    JSON.parse(read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -metadata`, String))
+    JSON.parse(read(
+        `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -metadata`, String))
 end
 
-function get_blastdb_tax_info(;blastdb, entries = String[], taxids = Int[])
+function get_blastdb_tax_info(; blastdb, entries = String[], taxids = Int[])
     Mycelia.add_bioconda_env("blast")
     if !isempty(entries) && !isempty(taxids)
         error("Can only specify entries OR taxids, not both")
@@ -166,7 +166,8 @@ function get_blastdb_tax_info(;blastdb, entries = String[], taxids = Int[])
     # %B means BLAST name
     # %n means num of seqs
     temp_file = ""
-    col_names = ["taxid", "scientific name", "common taxonomic name", "taxonomic super kingdom", "BLAST name", "num of seqs"]
+    col_names = ["taxid", "scientific name", "common taxonomic name",
+        "taxonomic super kingdom", "BLAST name", "num of seqs"]
     if isempty(entries) && isempty(taxids)
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -tax_info -outfmt '%T	%S	%L	%K	%B	%n'`
     elseif !isempty(entries)
@@ -181,12 +182,12 @@ function get_blastdb_tax_info(;blastdb, entries = String[], taxids = Int[])
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -tax_info -outfmt '%T	%S	%L	%K	%B	%n'`
     end
     df = CSV.read(
-              open(cmd),
-              DataFrames.DataFrame;
-              header=col_names,
-              delim='\t',
-              comment="#"
-          )
+        open(cmd),
+        DataFrames.DataFrame;
+        header = col_names,
+        delim = '\t',
+        comment = "#"
+    )
 end
 
 # """
@@ -303,7 +304,7 @@ end
 
 #     total_sequences = blast_db_info["number of sequences"]
 #     progress = ProgressMeter.Progress(total_sequences, desc="Converting BLAST DB to Arrow: ", dt=1.0)
-    
+
 #     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
 #     open(Arrow.Writer, outfile) do writer
 #         for (i, line) in enumerate(eachline(cmd))
@@ -347,7 +348,7 @@ end
 #                 # sequence = mapped["sequence"]
 #             )
 #             Arrow.write(writer, row)
-            
+
 #             # Update progress meter
 #             ProgressMeter.next!(progress; showvalues = [
 #                 (:completed, i),
@@ -445,7 +446,7 @@ end
 #         sequence_length = true
 #         sequence = true
 #     end
-    
+
 #     Mycelia.add_bioconda_env("blast")
 #     blast_db_info = Mycelia.local_blast_database_info()
 #     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== blastdb, :]
@@ -502,48 +503,48 @@ end
 
 #     # Create field name mapping for processing
 #     format_to_colname = Dict(fmt => colname for (fmt, colname, _, _) in field_config)
-    
+
 #     # Create list of field names to include in final output
 #     output_columns = []
 #     if sequence_sha256
 #         push!(output_columns, "sequence_sha256")
 #     end
-    
+
 #     for (_, colname, include, _) in field_config
 #         if include && colname != "sequence"  # Handle sequence separately
 #             push!(output_columns, colname)
 #         end
 #     end
-    
+
 #     if sequence
 #         push!(output_columns, "sequence")
 #     end
 
 #     # Create DataFrame to hold results
 #     result_df = DataFrames.DataFrame()
-    
+
 #     total_sequences = blast_db_info["number of sequences"]
 #     progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
-    
+
 #     # Run blastdbcmd to get data
 #     cmd = `$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -db $(blastdb) -entry all -outfmt $(outfmt_string)`
-    
+
 #     # Process results and build DataFrame
 #     rows = []
-    
+
 #     for (i, line) in enumerate(eachline(cmd))
 #         fields = split(strip(line), '\t')
 #         # Pad fields with empty strings if necessary
 #         if length(fields) < length(formats_to_fetch)
 #             fields = vcat(fields, fill("", length(formats_to_fetch) - length(fields)))
 #         end
-        
+
 #         # Map fields to column names
 #         field_map = Dict{String, String}()
 #         for (j, fmt) in enumerate(formats_to_fetch)
 #             field_map[format_to_colname[fmt]] = fields[j]
 #         end
-        
+
 #         # Process sequence if needed (for SHA256 or to include in output)
 #         seq_sha256 = ""
 #         if needs_sequence
@@ -552,29 +553,29 @@ end
 #                 seq_sha256 = Mycelia.seq2sha256(seq)
 #             end
 #         end
-        
+
 #         # Create a Dict for this row
 #         row = Dict{String, String}()
-        
+
 #         # Add sequence_sha256 if requested
 #         if sequence_sha256
 #             row["sequence_sha256"] = seq_sha256
 #         end
-        
+
 #         # Add other fields if requested
 #         for (_, colname, include, _) in field_config
 #             if include && colname != "sequence"  # Handle sequence separately
 #                 row[colname] = field_map[colname]
 #             end
 #         end
-        
+
 #         # Add sequence if requested
 #         if sequence
 #             row["sequence"] = field_map["sequence"]
 #         end
-        
+
 #         push!(rows, row)
-        
+
 #         # Update progress meter
 #         ProgressMeter.next!(progress; showvalues = [
 #             (:completed, i),
@@ -582,14 +583,14 @@ end
 #             (:percent, round(i/total_sequences*100, digits=1))
 #         ])
 #     end
-    
+
 #     # Convert rows to DataFrame
 #     result_df = DataFrames.DataFrame(rows)
-    
+
 #     # Reorder columns if necessary to match expected order
 #     final_columns = filter(col -> col in names(result_df), output_columns)
 #     result_df = result_df[:, final_columns]
-    
+
 #     ProgressMeter.finish!(progress)
 #     return result_df
 # end
@@ -629,30 +630,30 @@ Convert a BLAST database to an in-memory table with sequence and taxonomy inform
 - `DataFrame`: DataFrame containing the requested columns from the BLAST database
 """
 function blastdb2table(;
-    blastdb::String,
-    blastdbs_dir::Union{Nothing, String}=nothing,
-    # Master field selection flag
-    ALL_FIELDS::Bool=true,
-    # Individual field selection flags
-    sequence_sha256::Bool=false,
-    sequence_hash::Bool=false,
-    sequence_id::Bool=false,
-    accession::Bool=false,
-    gi::Bool=false,
-    sequence_title::Bool=false,
-    blast_name::Bool=false,
-    taxid::Bool=false,
-    taxonomic_super_kingdom::Bool=false,
-    scientific_name::Bool=false,
-    scientific_names_leaf_nodes::Bool=false,
-    common_taxonomic_name::Bool=false,
-    common_names_leaf_nodes::Bool=false,
-    leaf_node_taxids::Bool=false,
-    membership_integer::Bool=false,
-    ordinal_id::Bool=false,
-    pig::Bool=false,
-    sequence_length::Bool=false,
-    sequence::Bool=false
+        blastdb::String,
+        blastdbs_dir::Union{Nothing, String} = nothing,
+        # Master field selection flag
+        ALL_FIELDS::Bool = true,
+        # Individual field selection flags
+        sequence_sha256::Bool = false,
+        sequence_hash::Bool = false,
+        sequence_id::Bool = false,
+        accession::Bool = false,
+        gi::Bool = false,
+        sequence_title::Bool = false,
+        blast_name::Bool = false,
+        taxid::Bool = false,
+        taxonomic_super_kingdom::Bool = false,
+        scientific_name::Bool = false,
+        scientific_names_leaf_nodes::Bool = false,
+        common_taxonomic_name::Bool = false,
+        common_names_leaf_nodes::Bool = false,
+        leaf_node_taxids::Bool = false,
+        membership_integer::Bool = false,
+        ordinal_id::Bool = false,
+        pig::Bool = false,
+        sequence_length::Bool = false,
+        sequence::Bool = false
 )
 
     # If ALL_FIELDS is true, override all field flags to true
@@ -746,7 +747,7 @@ function blastdb2table(;
     db_dir = abspath(db_dir)
     target_db = isabspath(blastdb) ? blastdb : joinpath(db_dir, basename(blastdb))
 
-    blast_db_info = Mycelia.local_blast_database_info(; blastdbs_dir=db_dir)
+    blast_db_info = Mycelia.local_blast_database_info(; blastdbs_dir = db_dir)
     filtered = blast_db_info[blast_db_info[!, "BLAST database path"] .== target_db, :]
     if DataFrames.nrow(filtered) != 1
         @info "BLAST database not found in local listing; returning empty table" blastdb target_db DataFrames.nrow(filtered)
@@ -773,9 +774,9 @@ function blastdb2table(;
     # For progress bar, try to get total sequences, else fallback to nothing
     total_sequences = get(blast_db_info, "number of sequences", nothing)
     if total_sequences !== nothing
-        progress = ProgressMeter.Progress(total_sequences, desc="Processing BLAST DB: ", dt=1.0)
+        progress = ProgressMeter.Progress(total_sequences, desc = "Processing BLAST DB: ", dt = 1.0)
     else
-        progress = ProgressMeter.Progress(desc="Processing BLAST DB: ", dt=1.0)
+        progress = ProgressMeter.Progress(desc = "Processing BLAST DB: ", dt = 1.0)
     end
 
     # Run blastdbcmd to get data
@@ -823,11 +824,12 @@ function blastdb2table(;
 
         # Update progress meter
         if total_sequences !== nothing
-            ProgressMeter.next!(progress; showvalues = [
-                (:completed, nseqs),
-                (:total, total_sequences),
-                (:percent, round(nseqs/total_sequences*100, digits=1))
-            ])
+            ProgressMeter.next!(progress;
+                showvalues = [
+                    (:completed, nseqs),
+                    (:total, total_sequences),
+                    (:percent, round(nseqs/total_sequences*100, digits = 1))
+                ])
         else
             ProgressMeter.next!(progress)
         end
@@ -905,7 +907,6 @@ end
 #     return CSV.read(open(cmd), DataFrames.DataFrame, delim='\t', header=collect(values(symbol_header_map)))
 # end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -920,7 +921,7 @@ Downloads Sequence Read Archive (SRA) data using the prefetch tool from sra-tool
 - Downloads are saved in .sra format
 - Internet connection required
 """
-function prefetch(;SRR, outdir=pwd())
+function prefetch(; SRR, outdir = pwd())
     Mycelia.add_bioconda_env("sra-tools")
     final_dir = joinpath(outdir, SRR)
     sra_archive = joinpath(final_dir, "$(SRR).sra")
@@ -965,23 +966,23 @@ Requires:
 - Skips technical reads
 - Handles both paired-end and single-end data automatically
 """
-function fasterq_dump(;outdir=pwd(), srr_identifier="")
+function fasterq_dump(; outdir = pwd(), srr_identifier = "")
     Mycelia.add_bioconda_env("sra-tools")
-    prefetch_results = Mycelia.prefetch(SRR=srr_identifier, outdir=outdir)
-    
+    prefetch_results = Mycelia.prefetch(SRR = srr_identifier, outdir = outdir)
+
     final_outdir = prefetch_results.directory
 
     forward_reads = joinpath(final_outdir, "$(srr_identifier)_1.fastq")
     reverse_reads = joinpath(final_outdir, "$(srr_identifier)_2.fastq")
     unpaired_reads = joinpath(final_outdir, "$(srr_identifier).fastq")
-    
+
     forward_reads_gz = forward_reads * ".gz"
     reverse_reads_gz = reverse_reads * ".gz"
     unpaired_reads_gz = unpaired_reads * ".gz"
 
     forward_and_reverse_present = isfile(forward_reads_gz) && isfile(reverse_reads_gz)
     unpaired_present = isfile(unpaired_reads_gz)
-    
+
     if !(forward_and_reverse_present || unpaired_present)
         # --progress doesn't work well for jupyter output
         fasterq_dump_cmd = `
@@ -1058,19 +1059,19 @@ else
 end
 ```
 """
-function download_sra_data(srr_identifier::String; outdir::String=pwd())
+function download_sra_data(srr_identifier::String; outdir::String = pwd())
     if isempty(srr_identifier)
         error("SRA identifier cannot be empty")
     end
-    
+
     @info "Downloading SRA data: $(srr_identifier)"
-    fasterq_dump(outdir=outdir, srr_identifier=srr_identifier)
-    
+    fasterq_dump(outdir = outdir, srr_identifier = srr_identifier)
+
     # Check what files were created to determine data type
     forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
     reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
     single_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
-    
+
     if isfile(forward_reads) && isfile(reverse_reads)
         # Paired-end data
         return (
@@ -1112,42 +1113,42 @@ runs = ["SRR1234567", "SRR1234568", "SRR1234569"]
 results = Mycelia.prefetch_sra_runs(runs, outdir="./sra_data")
 ```
 """
-function prefetch_sra_runs(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=4)
+function prefetch_sra_runs(srr_identifiers::Vector{String}; outdir::String = pwd(), max_parallel::Int = 4)
     if isempty(srr_identifiers)
         error("No SRA identifiers provided")
     end
-    
+
     results = []
-    
+
     @info "Prefetching $(length(srr_identifiers)) SRA runs with max $(max_parallel) parallel downloads"
-    
+
     # Process in chunks to respect max_parallel limit
     for chunk in Iterators.partition(srr_identifiers, max_parallel)
         chunk_tasks = []
-        
+
         for srr_id in chunk
             task = Threads.@spawn begin
                 try
                     @info "Prefetching $(srr_id)"
-                    result = prefetch(SRR=srr_id, outdir=outdir)
+                    result = prefetch(SRR = srr_id, outdir = outdir)
                     @info "Completed prefetch for $(srr_id)"
-                    (srr_id=srr_id, success=true, result=result, error=nothing)
+                    (srr_id = srr_id, success = true, result = result, error = nothing)
                 catch e
                     @error "Failed to prefetch $(srr_id): $(e)"
-                    (srr_id=srr_id, success=false, result=nothing, error=string(e))
+                    (srr_id = srr_id, success = false, result = nothing, error = string(e))
                 end
             end
             push!(chunk_tasks, task)
         end
-        
+
         # Wait for chunk to complete
         chunk_results = [fetch(task) for task in chunk_tasks]
         append!(results, chunk_results)
     end
-    
+
     successful = sum([r.success for r in results])
     @info "Prefetch completed: $(successful)/$(length(srr_identifiers)) successful"
-    
+
     return results
 end
 
@@ -1171,62 +1172,63 @@ runs = ["SRR1234567", "SRR1234568"]
 results = Mycelia.fasterq_dump_parallel(runs, outdir="./fastq_data")
 ```
 """
-function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String=pwd(), max_parallel::Int=2)
+function fasterq_dump_parallel(srr_identifiers::Vector{String}; outdir::String = pwd(), max_parallel::Int = 2)
     if isempty(srr_identifiers)
         error("No SRA identifiers provided")
     end
-    
+
     results = []
-    
+
     @info "Converting $(length(srr_identifiers)) SRA runs to FASTQ with max $(max_parallel) parallel processes"
-    
+
     # Process in chunks - fewer parallel for fasterq-dump as it's more resource intensive
     for chunk in Iterators.partition(srr_identifiers, max_parallel)
         chunk_tasks = []
-        
+
         for srr_id in chunk
             task = Threads.@spawn begin
                 try
                     @info "Converting $(srr_id) to FASTQ"
-                    fasterq_dump(outdir=outdir, srr_identifier=srr_id)
+                    fasterq_dump(outdir = outdir, srr_identifier = srr_id)
                     @info "Completed FASTQ conversion for $(srr_id)"
-                    (srr_id=srr_id, success=true, error=nothing)
+                    (srr_id = srr_id, success = true, error = nothing)
                 catch e
                     @error "Failed to convert $(srr_id): $(e)"
-                    (srr_id=srr_id, success=false, error=string(e))
+                    (srr_id = srr_id, success = false, error = string(e))
                 end
             end
             push!(chunk_tasks, task)
         end
-        
+
         # Wait for chunk to complete
         chunk_results = [fetch(task) for task in chunk_tasks]
         append!(results, chunk_results)
     end
-    
+
     successful = sum([r.success for r in results])
     @info "FASTQ conversion completed: $(successful)/$(length(srr_identifiers)) successful"
-    
+
     return results
 end
 
 function _un_request(url::AbstractString, method::AbstractString;
-    headers::Dict{String,String}=Dict{String,String}(),
-    max_redirects::Int=5
+        headers::Dict{String, String} = Dict{String, String}(),
+        max_redirects::Int = 5
 )
-    response = HTTP.request(method, url; headers=headers, status_exception=false)
+    response = HTTP.request(method, url; headers = headers, status_exception = false)
     if response.status in (301, 302, 303, 307, 308)
         max_redirects > 0 || error("Too many redirects for $(url)")
         location = HTTP.header(response, "Location")
         location === nothing && error("Redirect without Location for $(url)")
-        return _un_request(location, method; headers=headers, max_redirects=max_redirects - 1)
+        return _un_request(location, method; headers = headers, max_redirects = max_redirects -
+                                                                                1)
     end
     return response
 end
 
 function _un_part_exists(url::AbstractString)
     base_headers = Dict("User-Agent" => UN_CORPUS_USER_AGENT)
-    response = _un_request(url, "HEAD"; headers=base_headers)
+    response = _un_request(url, "HEAD"; headers = base_headers)
     if response.status == 404
         return false
     elseif 200 <= response.status < 300
@@ -1235,7 +1237,7 @@ function _un_part_exists(url::AbstractString)
         response = _un_request(
             url,
             "GET";
-            headers=merge(base_headers, Dict("Range" => "bytes=0-0"))
+            headers = merge(base_headers, Dict("Range" => "bytes=0-0"))
         )
         if response.status == 404
             return false
@@ -1251,7 +1253,7 @@ end
 
 function _un_download(url::AbstractString, outfile::AbstractString)
     with_retry() do
-        Downloads.download(url, outfile; headers=Dict("User-Agent" => UN_CORPUS_USER_AGENT))
+        Downloads.download(url, outfile; headers = Dict("User-Agent" => UN_CORPUS_USER_AGENT))
     end
     return outfile
 end
@@ -1275,18 +1277,18 @@ function _merge_un_archive_parts(parts::Vector{String}, merged_archive::Abstract
 end
 
 function _download_and_extract_split_archive(
-    base_name::AbstractString,
-    url_base::AbstractString,
-    outdir::AbstractString;
-    force::Bool=false,
-    verbose_extract::Bool=false
+        base_name::AbstractString,
+        url_base::AbstractString,
+        outdir::AbstractString;
+        force::Bool = false,
+        verbose_extract::Bool = false
 )
     mkpath(outdir)
     merged_archive = joinpath(outdir, base_name)
 
     if isfile(merged_archive) && !force
         @info "Using existing merged archive: $(merged_archive)"
-        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir, verbose=verbose_extract)
+        Mycelia.tar_extract(tarchive = merged_archive, directory = outdir, verbose = verbose_extract)
         return outdir
     end
 
@@ -1326,11 +1328,11 @@ function _download_and_extract_split_archive(
 
             extracted = false
             try
-                Mycelia.tar_extract(tarchive=outfile, directory=outdir, verbose=verbose_extract)
+                Mycelia.tar_extract(tarchive = outfile, directory = outdir, verbose = verbose_extract)
                 extracted = true
             finally
                 if extracted
-                    isfile(outfile) && rm(outfile; force=true)
+                    isfile(outfile) && rm(outfile; force = true)
                 else
                     @warn "Extraction failed; keeping downloaded archive for inspection."
                 end
@@ -1345,14 +1347,14 @@ function _download_and_extract_split_archive(
     try
         @info "Merging $(length(parts)) archive parts into $(merged_archive)"
         _merge_un_archive_parts(parts, merged_archive)
-        Mycelia.tar_extract(tarchive=merged_archive, directory=outdir, verbose=verbose_extract)
+        Mycelia.tar_extract(tarchive = merged_archive, directory = outdir, verbose = verbose_extract)
         extracted = true
     finally
         if extracted
             for part in parts
-                isfile(part) && rm(part; force=true)
+                isfile(part) && rm(part; force = true)
             end
-            isfile(merged_archive) && rm(merged_archive; force=true)
+            isfile(merged_archive) && rm(merged_archive; force = true)
         else
             @warn "Extraction failed; keeping downloaded archive parts for inspection."
         end
@@ -1435,7 +1437,8 @@ function _resolve_un_archives(subsets::Vector{String}, formats::Vector{String})
     want_xml = all_requested ? true : ("xml" in normalized_formats)
 
     if !all_requested
-        if (("bitext" in explicit_tokens) || ("6way" in explicit_tokens) || !isempty(pairs)) && !want_txt
+        if (("bitext" in explicit_tokens) || ("6way" in explicit_tokens) ||
+            !isempty(pairs)) && !want_txt
             error("Bitext/6-way downloads require formats to include \"txt\".")
         end
         if ("tei" in explicit_tokens) && !want_xml
@@ -1504,12 +1507,12 @@ Mycelia.download_un_parallel_corpus(outdir="./data", subsets=["all"], formats=["
 ```
 """
 function download_un_parallel_corpus(;
-    outdir::String=pwd(),
-    subsets::Vector{String}=["all"],
-    formats::Vector{String}=["txt"],
-    base_url::String=UN_CORPUS_BASE_URL,
-    force::Bool=false,
-    verbose_extract::Bool=false
+        outdir::String = pwd(),
+        subsets::Vector{String} = ["all"],
+        formats::Vector{String} = ["txt"],
+        base_url::String = UN_CORPUS_BASE_URL,
+        force::Bool = false,
+        verbose_extract::Bool = false
 )
     archives = _resolve_un_archives(subsets, formats)
 
@@ -1523,8 +1526,8 @@ function download_un_parallel_corpus(;
             archive,
             url_base,
             corpus_dir;
-            force=force,
-            verbose_extract=verbose_extract
+            force = force,
+            verbose_extract = verbose_extract
         )
     end
 
@@ -1546,10 +1549,10 @@ Download and extract the United Nations Parallel Corpus v1.0 test sets.
 - `String`: Path to the test set directory.
 """
 function download_un_parallel_corpus_testset(;
-    outdir::String=pwd(),
-    base_url::String=UN_CORPUS_BASE_URL,
-    force::Bool=false,
-    verbose_extract::Bool=false
+        outdir::String = pwd(),
+        base_url::String = UN_CORPUS_BASE_URL,
+        force::Bool = false,
+        verbose_extract::Bool = false
 )
     testset_dir = joinpath(outdir, "un_corpus_testsets")
     mkpath(testset_dir)
@@ -1559,8 +1562,8 @@ function download_un_parallel_corpus_testset(;
         archive,
         url_base,
         testset_dir;
-        force=force,
-        verbose_extract=verbose_extract
+        force = force,
+        verbose_extract = verbose_extract
     )
     return testset_dir
 end
@@ -1583,7 +1586,8 @@ function collect_un_language_files(corpus_root::String; subsets::Vector{String})
     for (root, _dirs, files) in walkdir(corpus_root)
         for filename in files
             filepath = joinpath(root, filename)
-            if endswith(filename, ".xml") || endswith(filename, ".gz") || endswith(filename, ".tar")
+            if endswith(filename, ".xml") || endswith(filename, ".gz") ||
+               endswith(filename, ".tar")
                 continue
             end
             if !occursin("UNv1.0", filename)
@@ -1628,7 +1632,7 @@ Downloads a genomic sequence from NCBI's nucleotide database by its accession nu
 # Returns
 - `String`: Path to the downloaded file (.fna or .fna.gz)
 """
-function download_genome_by_accession(;accession, outdir=pwd(), compressed = true)
+function download_genome_by_accession(; accession, outdir = pwd(), compressed = true)
     temp_fasta = joinpath(outdir, accession * ".fna")
     if compressed
         outfile = temp_fasta * ".gz"
@@ -1637,7 +1641,8 @@ function download_genome_by_accession(;accession, outdir=pwd(), compressed = tru
     end
     if !isfile(outfile)
         try
-            Mycelia.write_fasta(outfile = outfile, records = Mycelia.get_sequence(db = "nuccore", accession = accession))
+            Mycelia.write_fasta(outfile = outfile,
+                records = Mycelia.get_sequence(db = "nuccore", accession = accession))
         catch e
             println("An error occurred: ", e)
         end
@@ -1661,8 +1666,8 @@ Downloads a genome file from NCBI FTP server to the specified directory.
 - If the target file already exists, returns the existing file path without re-downloading
 - Downloads the genomic.fna.gz version of the genome
 """
-function download_genome_by_ftp(;ftp, outdir=pwd())
-    url = Mycelia.ncbi_ftp_path_to_url(ftp_path=ftp, extension="genomic.fna.gz")
+function download_genome_by_ftp(; ftp, outdir = pwd())
+    url = Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp, extension = "genomic.fna.gz")
     outfile = joinpath(outdir, basename(url))
     if !isfile(outfile)
         return Downloads.download(url, outfile)
@@ -1672,20 +1677,20 @@ function download_genome_by_ftp(;ftp, outdir=pwd())
 end
 
 function download_genomes_by_ftp(;
-    ftp_paths,
-    outdir=pwd()
+        ftp_paths,
+        outdir = pwd()
 )
-    results = DataFrames.DataFrame(ftp_path=String[], fna_path=String[])
+    results = DataFrames.DataFrame(ftp_path = String[], fna_path = String[])
     n = length(ftp_paths)
-    p = ProgressMeter.Progress(n; desc="Downloading genomes: ", dt=0.5)
+    p = ProgressMeter.Progress(n; desc = "Downloading genomes: ", dt = 0.5)
     prog_lock = Threads.ReentrantLock()
     df_lock = Threads.ReentrantLock()
 
     Threads.@threads for i in 1:n
         ftp = ftp_paths[i]
-        fna_file = Mycelia.download_genome_by_ftp(ftp=ftp, outdir=outdir)
+        fna_file = Mycelia.download_genome_by_ftp(ftp = ftp, outdir = outdir)
         Threads.lock(df_lock) do
-            push!(results, (ftp_path=ftp, fna_path=fna_file))
+            push!(results, (ftp_path = ftp, fna_path = fna_file))
         end
         Threads.lock(prog_lock) do
             ProgressMeter.next!(p)
@@ -1695,13 +1700,12 @@ function download_genomes_by_ftp(;
     return results
 end
 
-
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Lists available BLAST databases from the specified source.
 """
-function list_blastdbs(;source::String="")
+function list_blastdbs(; source::String = "")
     Mycelia.add_bioconda_env("blast")
     @assert source in Set(["", "ncbi", "aws", "gcp"])
     blast_table_data = readlines(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast update_blastdb.pl --showall tsv`)
@@ -1711,10 +1715,12 @@ function list_blastdbs(;source::String="")
     else
         io = IOBuffer(join(blast_table_data, '\n'))
     end
-    data, header = uCSV.read(io, delim='\t', typedetectrows=100, comment="#")
+    data, header = uCSV.read(io, delim = '\t', typedetectrows = 100, comment = "#")
     header = ["NAME", "DESCRIPTION", "SIZE (GB)", "LAST_UPDATED"]
     blast_database_table = DataFrames.DataFrame(data, header)
-    blast_database_table[!, "LAST_UPDATED"] = map(x -> Dates.Date(first(split(x, "T")), Dates.DateFormat("yyyy-mm-dd")), blast_database_table[!, "LAST_UPDATED"])
+    blast_database_table[!, "LAST_UPDATED"] = map(
+        x -> Dates.Date(first(split(x, "T")), Dates.DateFormat("yyyy-mm-dd")),
+        blast_database_table[!, "LAST_UPDATED"])
     return blast_database_table
 end
 
@@ -1773,7 +1779,7 @@ Requires NCBI BLAST+ tools. Will attempt to install via apt-get if not present.
 - May install system packages (ncbi-blast+, perl-doc) using sudo/apt-get
 - Filters out numbered database fragments from results
 """
-function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
+function local_blast_database_info(; blastdbs_dir = Mycelia.DEFAULT_BLASTDB_PATH)
     Mycelia.add_bioconda_env("blast")
     # try
     #     run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
@@ -1799,7 +1805,10 @@ function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
         "%v" => "BLAST database format version"
     )
     outfmt_string = join(collect(keys(symbol_header_map)), "\t")
-    data, header = uCSV.read(open(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`), delim='\t')
+    data,
+    header = uCSV.read(
+        open(`$(CONDA_RUNNER) run --live-stream -n blast blastdbcmd -list $(blastdbs_dir) -list_outfmt $(outfmt_string)`),
+        delim = '\t')
     header = collect(values(symbol_header_map))
     if isempty(data)
         # Return empty DataFrame with expected columns to avoid DimensionMismatch when no DBs are present
@@ -1814,7 +1823,7 @@ function local_blast_database_info(;blastdbs_dir=Mycelia.DEFAULT_BLASTDB_PATH)
     return df
 end
 
-function _blastdb_url_reachable(url::AbstractString; connect_timeout::Integer=5, max_time::Integer=10)
+function _blastdb_url_reachable(url::AbstractString; connect_timeout::Integer = 5, max_time::Integer = 10)
     cmd = `$(CONDA_RUNNER) run -n blast curl -sfI --connect-timeout $(connect_timeout) --max-time $(max_time) $(url)`
     return success(cmd)
 end
@@ -1858,7 +1867,7 @@ Downloads and sets up BLAST databases from various sources.
 # Returns
 - String path to the downloaded database directory
 """
-function download_blast_db(;db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH, source="", wait=true)
+function download_blast_db(; db, dbdir = Mycelia.DEFAULT_BLASTDB_PATH, source = "", wait = true)
     Mycelia.add_bioconda_env("blast")
     # try
     #     run(`sudo apt-get install ncbi-blast+ perl-doc -y`)
@@ -1890,7 +1899,7 @@ function download_blast_db(;db, dbdir=Mycelia.DEFAULT_BLASTDB_PATH, source="", w
                 # cmd = `update_blastdb --decompress --source $(source) $(db)`
             end
         end
-        run(cmd, wait=wait)
+        run(cmd, wait = wait)
     finally
         cd(current_directory)
     end
@@ -2321,7 +2330,6 @@ end
 #              # CSV.jl handles extra columns by inferring types.
 #         end
 
-
 #         # Parse using CSV.File
 #         csv_file = CSV.File(
 #             buffer;
@@ -2367,13 +2375,13 @@ function parse_ncbi_metadata_file(filepath::String)
     if !isfile(filepath)
         error("File not found: $filepath")
     end
-    
+
     if filesize(filepath) == 0
         error("File is empty: $filepath")
     end
-    
+
     @info "Parsing NCBI metadata from: $filepath"
-    
+
     try
         # Manually read the first two lines to get the correct header
         header_symbols = Symbol[]
@@ -2415,23 +2423,24 @@ function parse_ncbi_metadata_file(filepath::String)
         # Parse using CSV.File directly from the filepath
         csv_file = CSV.File(
             filepath;
-            skipto=3,             # Skip the comment and header lines we already processed
-            header=header_symbols, # Provide the headers we extracted
-            delim='\t',
-            missingstring=["na", "NA", ""],
-            types=types_dict,
-            pool=true,
-            strict=true
+            skipto = 3,             # Skip the comment and header lines we already processed
+            header = header_symbols, # Provide the headers we extracted
+            delim = '\t',
+            missingstring = ["na", "NA", ""],
+            types = types_dict,
+            pool = true,
+            strict = true
         )
 
         # Materialize into a DataFrame
-        ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols=true)
+        ncbi_summary_table = DataFrames.DataFrame(csv_file; copycols = true)
         @info "Successfully parsed NCBI assembly summary into a DataFrame from $filepath"
 
         return ncbi_summary_table
 
     catch e
-        @error "Failed to parse NCBI metadata file: $filepath" exception=(e, catch_backtrace())
+        @error "Failed to parse NCBI metadata file: $filepath" exception=(
+            e, catch_backtrace())
         rethrow(e)
     end
 end
@@ -2461,7 +2470,7 @@ previous version for the *same day*), and then parses the cached file.
 - Throws error if specific date is requested but not found in cache.
 - Rethrows errors from `Downloads.download` or CSV parsing.
 """
-function load_ncbi_metadata(db::String; date::Union{Dates.Date,Nothing}=nothing)
+function load_ncbi_metadata(db::String; date::Union{Dates.Date, Nothing} = nothing)
     # Validate database input
     if !(db in ["genbank", "refseq"])
         throw(ArgumentError("Invalid database specified: '$db'. Must be 'genbank' or 'refseq'."))
@@ -2480,7 +2489,8 @@ function load_ncbi_metadata(db::String; date::Union{Dates.Date,Nothing}=nothing)
     try
         mkpath(cache_dir)
     catch e
-        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+        @error "Failed to create cache directory at $cache_dir" exception=(
+            e, catch_backtrace())
         rethrow(e)
     end
 
@@ -2525,7 +2535,8 @@ function load_ncbi_metadata(db::String; date::Union{Dates.Date,Nothing}=nothing)
                     @error "Download completed but resulted in an empty or missing file at $cached_filepath."
                 end
             catch e
-                @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(e, catch_backtrace())
+                @error "Failed to download NCBI metadata from $ncbi_summary_url to $cached_filepath" exception=(
+                    e, catch_backtrace())
             end
         end
 
@@ -2554,8 +2565,8 @@ of genomic, transcript and protein sequences.
 - `DataFrames.DataFrame`: Contains metadata columns including accession numbers, taxonomic information,
 and sequence details from RefSeq.
 """
-function load_refseq_metadata(; date::Union{Dates.Date,Nothing}=nothing)
-    return load_ncbi_metadata("refseq"; date=date)
+function load_refseq_metadata(; date::Union{Dates.Date, Nothing} = nothing)
+    return load_ncbi_metadata("refseq"; date = date)
 end
 
 """
@@ -2574,8 +2585,8 @@ specifically loads metadata from the GenBank database.
 - `DataFrames.DataFrame`: Contains metadata fields like accession numbers, taxonomy,
 and sequence information from GenBank.
 """
-function load_genbank_metadata(; date::Union{Dates.Date,Nothing}=nothing)
-    return load_ncbi_metadata("genbank"; date=date)
+function load_genbank_metadata(; date::Union{Dates.Date, Nothing} = nothing)
+    return load_ncbi_metadata("genbank"; date = date)
 end
 
 """
@@ -2604,7 +2615,7 @@ Extensions include:
 - protein.gpff.gz
 - translated_cds.faa.gz
 """
-function ncbi_ftp_path_to_url(;ftp_path, extension)
+function ncbi_ftp_path_to_url(; ftp_path, extension)
     # genomic.fna.gz
     # genomic.gff.gz
     # protein.faa.gz
@@ -2686,9 +2697,9 @@ Downloads and constructs a MetaDiGraph representation of the NCBI taxonomy datab
 Requires internet connection for initial download. Uses DataFrames, MetaGraphsNext, and ProgressMeter.
 """
 function load_ncbi_taxonomy(;
-        path_to_taxdump=joinpath(Mycelia.DEFAULT_BLASTDB_PATH, "taxdump")
-        # path_to_prebuilt_graph="$(path_to_taxdump)/ncbi_taxonomy.jld2"
-    )
+        path_to_taxdump = joinpath(Mycelia.DEFAULT_BLASTDB_PATH, "taxdump")
+    # path_to_prebuilt_graph="$(path_to_taxdump)/ncbi_taxonomy.jld2"
+)
     taxdump_url = "https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz"
     taxdump_local_tarball = joinpath(dirname(path_to_taxdump), basename(taxdump_url))
     taxdump_out = replace(taxdump_local_tarball, ".tar.gz" => "")
@@ -2711,22 +2722,23 @@ function load_ncbi_taxonomy(;
         unique_name = String[],
         name_class = String[]
     )
-    ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/names.dmp"), String), "\t|\n")
+    ProgressMeter.@showprogress for line in
+                                    split(read(open("$(taxdump_out)/names.dmp"), String), "\t|\n")
         if isempty(line)
             continue
         else
             (tax_id_string, name_txt, unique_name, name_class) = split(line, "\t|\t")
             tax_id = parse(Int, tax_id_string)
-            row = (;tax_id, name_txt, unique_name, name_class)
+            row = (; tax_id, name_txt, unique_name, name_class)
             push!(names_dmp, row)
         end
     end
     ncbi_taxonomy = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph();
-        label_type=Int,
-        vertex_data_type=Dict{Symbol, Any},
-        edge_data_type=Nothing,
-        graph_data=Dict{Symbol, Any}(),
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing,
+        graph_data = Dict{Symbol, Any}()
     )
     ProgressMeter.@showprogress for group in DataFrames.groupby(names_dmp, "tax_id")
         tax_id = group[1, "tax_id"]
@@ -2762,7 +2774,8 @@ function load_ncbi_taxonomy(;
     end
     divisions
 
-    ProgressMeter.@showprogress for line in split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
+    ProgressMeter.@showprogress for line in
+                                    split(read(open("$(taxdump_out)/nodes.dmp"), String), "\t|\n")
         if isempty(line)
             continue
         else
@@ -2841,7 +2854,7 @@ Return the NCBI translation table ID for a taxonomy node.
 # Returns
 `Int` translation table ID, or `missing` if not found.
 """
-function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol=:genomic, inherit::Bool=true)
+function get_ncbi_genetic_code(ncbi_taxonomy, tax_id::Int; type::Symbol = :genomic, inherit::Bool = true)
     prop = if type === :genomic
         :genetic_code_id
     elseif type === :mitochondrial
@@ -2918,7 +2931,7 @@ function ncbi_genome_download_accession(;
         include_string = "gff3,rna,cds,protein,genome,seq-report",
         max_attempts::Int = 3,
         initial_retry_delay::Float64 = 10.0
-    )
+)
     outfolder = joinpath(outdir, accession)
     if !isdir(outfolder)
         add_bioconda_env("ncbi-datasets-cli")
@@ -2928,9 +2941,11 @@ function ncbi_genome_download_accession(;
             mkpath(outdir)
             # Use retry logic to handle transient NCBI API failures
             with_retry(
-                max_attempts=max_attempts, 
-                initial_delay=initial_retry_delay,
-                on_retry=(attempt, ex, delay) -> @warn "NCBI download attempt $attempt/$max_attempts for $accession failed, retrying in $(delay)s..." exception=ex
+                max_attempts = max_attempts,
+                initial_delay = initial_retry_delay,
+                on_retry = (attempt,
+                    ex,
+                    delay) -> @warn "NCBI download attempt $attempt/$max_attempts for $accession failed, retrying in $(delay)s..." exception=ex
             ) do
                 run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome accession $(accession) --include $(include_string) --filename $(outpath) --no-progressbar`)
             end
@@ -2948,7 +2963,10 @@ function ncbi_genome_download_accession(;
     seqreport_value = nothing
     for included_item in include_items
         if included_item == "genome"
-            candidate_genomes = filter(x -> occursin(accession, basename(x)) && occursin(Mycelia.FASTA_REGEX, basename(x)), readdir(final_outfolder, join=true))
+            candidate_genomes = filter(
+                x -> occursin(accession, basename(x)) &&
+                     occursin(Mycelia.FASTA_REGEX, basename(x)),
+                readdir(final_outfolder, join = true))
             @assert length(candidate_genomes) == 1
             genome_value = first(candidate_genomes)
             @assert isfile(genome_value)
@@ -3005,7 +3023,7 @@ Retrieve GenBank records from NCBI or directly from an FTP site.
 When using NCBI queries (`db` and `accession`), the function implements rate limiting 
 (0.5s sleep) to comply with NCBI's API restrictions of max 2 requests per second.
 """
-function get_genbank(;db=""::String, accession=""::String, ftp=""::String)
+function get_genbank(; db = ""::String, accession = ""::String, ftp = ""::String)
     if !isempty(db) && !isempty(accession)
         # API will block if we request more than 3 times per second, so set a 1/2 second sleep to set max of 2 requests per second when looping
         sleep(0.5)
@@ -3053,14 +3071,13 @@ This is a prerequisite for using taxonkit-based taxonomy functions.
 - `SystemError` if download fails or if unable to create directory
 - `ErrorException` if tar extraction fails
 """
-function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=30)
-    
+function setup_taxonkit_taxonomy(; force_update::Bool = false, max_age_days::Int = 30)
     taxonkit_dir = joinpath(homedir(), ".taxonkit")
     timestamp_file = joinpath(taxonkit_dir, ".last_updated")
-    
+
     # Check if we need to download/update
     needs_update = force_update
-    
+
     if !needs_update
         # Check if directory exists and has files
         if !isdir(taxonkit_dir) || isempty(readdir(taxonkit_dir))
@@ -3070,8 +3087,9 @@ function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=3
             if isfile(timestamp_file)
                 try
                     last_updated = Dates.DateTime(read(timestamp_file, String))
-                    age_days = Dates.value(Dates.now() - last_updated) / (1000 * 60 * 60 * 24)
-                    
+                    age_days = Dates.value(Dates.now() - last_updated) /
+                               (1000 * 60 * 60 * 24)
+
                     if age_days > max_age_days
                         @warn "Taxonkit taxonomy data is $(round(age_days, digits=1)) days old (> $max_age_days days). Consider updating with force_update=true."
                     end
@@ -3083,33 +3101,33 @@ function setup_taxonkit_taxonomy(; force_update::Bool=false, max_age_days::Int=3
             end
         end
     end
-    
+
     # Download and extract if needed
     if needs_update
         @info "Downloading NCBI taxonomy database..."
-        
+
         # Clean up existing directory if it exists
         if isdir(taxonkit_dir)
             @info "Removing existing taxonkit directory..."
-            rm(taxonkit_dir, recursive=true)
+            rm(taxonkit_dir, recursive = true)
         end
-        
+
         # Create fresh directory
         mkpath(taxonkit_dir)
-        
+
         # Download in a temporary location first
         temp_file = tempname() * ".tar.gz"
         try
             run(`wget -q -O $temp_file ftp://ftp.ncbi.nih.gov/pub/taxonomy/taxdump.tar.gz`)
-            
+
             # Extract to taxonkit directory
-            Mycelia.tar_extract(tarchive=temp_file, directory=taxonkit_dir)
-            
+            Mycelia.tar_extract(tarchive = temp_file, directory = taxonkit_dir)
+
             # Write timestamp
             write(timestamp_file, string(Dates.now()))
-            
+
             @info "Taxonkit taxonomy database updated successfully"
-            
+
         finally
             # Clean up temporary file
             isfile(temp_file) && rm(temp_file)
@@ -3143,21 +3161,22 @@ are joined on the genome_id column.
 - Throws error if data cannot be obtained from cache or download.
 - Rethrows errors from `Downloads.download` or CSV parsing.
 """
-function load_bvbrc_genome_metadata(; 
-    date::Union{Dates.Date,Nothing}=nothing,
-    summary_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
-    metadata_url::String="ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"
+function load_bvbrc_genome_metadata(;
+        date::Union{Dates.Date, Nothing} = nothing,
+        summary_url::String = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_summary",
+        metadata_url::String = "ftp://ftp.bvbrc.org/RELEASE_NOTES/genome_metadata"
 )
     # --- Cache Path Setup ---
     cache_dir = joinpath(homedir(), "workspace", ".bvbrc")
-    
+
     try
         mkpath(cache_dir)
     catch e
-        @error "Failed to create cache directory at $cache_dir" exception=(e, catch_backtrace())
+        @error "Failed to create cache directory at $cache_dir" exception=(
+            e, catch_backtrace())
         rethrow(e)
     end
-    
+
     target_date = isnothing(date) ? Dates.today() : date
     date_str = Dates.format(target_date, "yyyy-mm-dd")
     summary_cache = joinpath(cache_dir, "$(date_str).genome_summary.tsv")
@@ -3170,7 +3189,7 @@ function load_bvbrc_genome_metadata(;
     # --- Data Acquisition Logic ---
     summary_file = summary_cache
     metadata_file = metadata_cache
-    
+
     # If a specific date was requested, only use cache (no download)
     if !isnothing(date)
         if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
@@ -3189,7 +3208,7 @@ function load_bvbrc_genome_metadata(;
                 Downloads.download(summary_url, summary_cache)
                 @info "Downloading BVBRC genome metadata from $metadata_url"
                 Downloads.download(metadata_url, metadata_cache)
-                
+
                 if is_valid_file(summary_cache) && is_valid_file(metadata_cache)
                     @info "Successfully downloaded and cached BVBRC metadata"
                 else
@@ -3198,19 +3217,19 @@ function load_bvbrc_genome_metadata(;
                 end
             catch e
                 @warn "Failed to download BVBRC metadata" exception=(e, catch_backtrace())
-                
+
                 # Fallback: find most recent previous cache
                 cached_summary_files = sort(
-                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_summary\.tsv", f), 
-                           readdir(cache_dir; join=true)), 
-                    rev=true
+                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_summary\.tsv", f),
+                        readdir(cache_dir; join = true)),
+                    rev = true
                 )
                 cached_metadata_files = sort(
-                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_metadata\.tsv", f), 
-                           readdir(cache_dir; join=true)), 
-                    rev=true
+                    filter(f -> occursin(r"\d{4}-\d{2}-\d{2}\.genome_metadata\.tsv", f),
+                        readdir(cache_dir; join = true)),
+                    rev = true
                 )
-                
+
                 if !isempty(cached_summary_files) && !isempty(cached_metadata_files)
                     summary_file = cached_summary_files[1]
                     metadata_file = cached_metadata_files[1]
@@ -3227,34 +3246,34 @@ function load_bvbrc_genome_metadata(;
     try
         @info "Reading genome summary file: $summary_file"
         genome_summary = CSV.read(
-            summary_file, 
-            DataFrames.DataFrame, 
-            delim='\t', 
-            header=1, 
-            types=Dict("genome_id" => String)
+            summary_file,
+            DataFrames.DataFrame,
+            delim = '\t',
+            header = 1,
+            types = Dict("genome_id" => String)
         )
-        
+
         @info "Reading genome metadata file: $metadata_file"
         genome_metadata = CSV.read(
-            metadata_file, 
-            DataFrames.DataFrame, 
-            delim='\t', 
-            header=1, 
-            types=Dict("genome_id" => String)
+            metadata_file,
+            DataFrames.DataFrame,
+            delim = '\t',
+            header = 1,
+            types = Dict("genome_id" => String)
         )
 
         # Join the DataFrames
         @info "Joining genome summary and metadata on genome_id"
         bvbrc_genome_summary = DataFrames.innerjoin(
-            genome_summary, 
-            genome_metadata, 
-            on="genome_id", 
-            makeunique=true
+            genome_summary,
+            genome_metadata,
+            on = "genome_id",
+            makeunique = true
         )
-        
+
         @info "Successfully loaded and joined BVBRC genome metadata"
         return bvbrc_genome_summary
-        
+
     catch e
         @error "Failed to parse BVBRC metadata files" exception=(e, catch_backtrace())
         rethrow(e)
@@ -3276,11 +3295,15 @@ The output is automatically compressed using `pigz`.
 If the output file already exists, the function will skip extraction.
 
 """
-function export_blast_db(;path_to_db, fasta = path_to_db * ".fna.gz")
+function export_blast_db(; path_to_db, fasta = path_to_db * ".fna.gz")
     Mycelia.add_bioconda_env("blast")
     if !isfile(fasta)
         # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
-        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt '%f' -db $(path_to_db)`, `pigz`), fasta))
+        @time run(pipeline(
+            pipeline(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt '%f' -db $(path_to_db)`,
+                `pigz`),
+            fasta))
     else
         @info "$(fasta) already present"
     end
@@ -3303,8 +3326,8 @@ function ncbi_taxon_summary(taxa_id)
     p = pipeline(
         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets datasets summary taxonomy taxon $(taxa_id) --as-json-lines`,
         `$(Mycelia.CONDA_RUNNER) run --live-stream -n ncbi-datasets dataformat tsv taxonomy --template tax-summary`
-        )
-    return DataFrames.DataFrame(uCSV.read(open(p), delim='\t', header=1))
+    )
+    return DataFrames.DataFrame(uCSV.read(open(p), delim = '\t', header = 1))
 end
 
 """
@@ -3327,11 +3350,16 @@ If the output file already exists, returns the path without regenerating.
 # Dependencies
 Requires BLAST+ tools installed via Bioconda.
 """
-function export_blast_db_taxonomy_table(;path_to_db, outfile = path_to_db * ".seqid2taxid.txt.gz")
+function export_blast_db_taxonomy_table(; path_to_db, outfile = path_to_db *
+                                                                ".seqid2taxid.txt.gz")
     Mycelia.add_bioconda_env("blast")
     if !isfile(outfile)
         # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
-        @time run(pipeline(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt "%a %T" -db $(path_to_db)`, `gzip`), outfile))
+        @time run(pipeline(
+            pipeline(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd  -entry all -outfmt "%a %T" -db $(path_to_db)`,
+                `gzip`),
+            outfile))
     else
         @info "$(outfile) already present"
     end
@@ -3355,7 +3383,9 @@ Input file should be a space-delimited text file (gzipped) with two columns:
 2. taxonomy identifier (taxid)
 """
 function load_blast_db_taxonomy_table(compressed_blast_db_taxonomy_table_file)
-    return CSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ', header=["sequence_id", "taxid"], DataFrames.DataFrame)
+    return CSV.read(
+        CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)),
+        delim = ' ', header = ["sequence_id", "taxid"], DataFrames.DataFrame)
     # data, header = uCSV.read(CodecZlib.GzipDecompressorStream(open(compressed_blast_db_taxonomy_table_file)), delim=' ')
     # header = ["sequence_id", "taxid"]
     # DataFrames.DataFrame(data, header)
@@ -3380,17 +3410,17 @@ Build a reference table from a BLAST database with taxonomy lineage and sequence
 - `DataFrames.DataFrame` with sequence_id, taxid, lineage columns, and length.
 """
 function prepare_blast_reference_table(;
-    blastdb::String,
-    blastdbs_dir::String=Mycelia.DEFAULT_BLASTDB_PATH,
-    download_if_missing::Bool=false,
-    reference_fasta::String="",
-    taxonomy_map_out::String="",
-    table_out::String="",
-    arrow_out::String="",
-    force::Bool=false
+        blastdb::String,
+        blastdbs_dir::String = Mycelia.DEFAULT_BLASTDB_PATH,
+        download_if_missing::Bool = false,
+        reference_fasta::String = "",
+        taxonomy_map_out::String = "",
+        table_out::String = "",
+        arrow_out::String = "",
+        force::Bool = false
 )
     db_path = if download_if_missing
-        Mycelia.download_blast_db(db=blastdb, dbdir=blastdbs_dir)
+        Mycelia.download_blast_db(db = blastdb, dbdir = blastdbs_dir)
     elseif occursin('/', blastdb) || occursin('\\', blastdb)
         blastdb
     else
@@ -3400,21 +3430,22 @@ function prepare_blast_reference_table(;
     if isempty(reference_fasta)
         reference_fasta = joinpath(blastdbs_dir, "$(basename(db_path)).fna.gz")
     end
-    Mycelia.blastdb_to_fasta(blastdb=db_path, outfile=reference_fasta, force=force)
+    Mycelia.blastdb_to_fasta(blastdb = db_path, outfile = reference_fasta, force = force)
 
     if isempty(taxonomy_map_out)
         taxonomy_map_out = db_path * ".seqid2taxid.txt.gz"
     end
-    Mycelia.export_blast_db_taxonomy_table(path_to_db=db_path, outfile=taxonomy_map_out)
+    Mycelia.export_blast_db_taxonomy_table(path_to_db = db_path, outfile = taxonomy_map_out)
     accession_table = Mycelia.load_blast_db_taxonomy_table(taxonomy_map_out)
     lineage = Mycelia.taxids2taxonkit_summarized_lineage_table(unique(accession_table.taxid))
-    reference_table = DataFrames.leftjoin(accession_table, lineage, on=:taxid)
+    reference_table = DataFrames.leftjoin(accession_table, lineage, on = :taxid)
 
-    lengths = Dict{String,Int}()
+    lengths = Dict{String, Int}()
     for record in Mycelia.open_fastx(reference_fasta)
         lengths[String(FASTX.identifier(record))] = length(FASTX.sequence(record))
     end
-    reference_table[!, :length] = [get(lengths, id, missing) for id in reference_table.sequence_id]
+    reference_table[!, :length] = [get(lengths, id, missing)
+                                   for id in reference_table.sequence_id]
 
     if !isempty(table_out)
         CSV.write(table_out, reference_table)
@@ -3490,7 +3521,7 @@ end
 
 #     # Base command
 #     command = "$(CONDA_RUNNER) run --live-stream -n ncbi-datasets-cli datasets download genome "
-    
+
 #     if !ismissing(taxon) && !ismissing(accession)
 #         @error "can only provide taxon or accession, not both" taxon accession
 #     elseif ismissing(taxon) && ismissing(accession)
@@ -3506,9 +3537,9 @@ end
 #             filename = string(accession) * ".zip"
 #         end
 #     end
-    
+
 #     @assert occursin(r"\.zip$", filename)
-    
+
 #     if !isempty(outdir)
 #         filename = joinpath(outdir, filename)
 #     end
@@ -3542,7 +3573,6 @@ end
 #     end
 #     return true
 # end
-
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
@@ -3598,7 +3628,7 @@ Downloads and sets up MMseqs2 reference databases for sequence searching and ana
 - Kalamari              Nucleotide           yes        https://github.com/lskatz/Kalamari
 ```
 """
-function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=false, wait=true)
+function download_mmseqs_db(; db, dbdir = "$(homedir())/workspace/mmseqs", force = false, wait = true)
     Mycelia.add_bioconda_env("mmseqs2")
     mkpath(dbdir)
     # sanitized_db = replace(db, "/" => "_")
@@ -3606,7 +3636,7 @@ function download_mmseqs_db(;db, dbdir="$(homedir())/workspace/mmseqs", force=fa
     mkpath(dirname(db_path))
     if !isfile(db_path) || force
         cmd = `$(CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs databases --compressed 1 $(db) --remove-tmp-files 1 $(dbdir)/$(db) $(dbdir)/tmp`
-        @time run(cmd, wait=wait)
+        @time run(cmd, wait = wait)
     else
         @info "db $db @ $(db_path) already exists, set force=true to overwrite"
     end
@@ -3622,27 +3652,27 @@ function ids_to_accessions(ids::Vector{String}, database::String)
     if isempty(ids)
         return String[]
     end
-    
+
     # Batch convert IDs to accessions
     fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
     id_string = join(ids, ",")
-    
+
     params = [
         "db" => database,
         "id" => id_string,
         "rettype" => "acc",
         "retmode" => "text"
     ]
-    
+
     sleep(0.34)  # Rate limiting
-    
+
     try
-        response = HTTP.get(fetch_url, query=params)
+        response = HTTP.get(fetch_url, query = params)
         content = String(response.body)
-        
+
         # Split by newlines and filter out empty lines
         accessions = filter(!isempty, split(strip(content), '\n'))
-        
+
         return accessions
     catch e
         @error "Failed to convert IDs to accessions: $e"
@@ -3666,13 +3696,13 @@ Download a sequence from NCBI by accession number with flexible format options.
 # Returns
 - `String`: Path to the downloaded file
 """
-function download_sequence_by_accession(;accession::String, 
-                                       outdir::String=pwd(),
-                                       database::String="nuccore",
-                                       format::String="fasta",
-                                       suffix::String=".fasta",
-                                       compressed::Bool=true)
-    
+function download_sequence_by_accession(; accession::String,
+        outdir::String = pwd(),
+        database::String = "nuccore",
+        format::String = "fasta",
+        suffix::String = ".fasta",
+        compressed::Bool = true)
+
     # Construct output filename
     base_filename = accession * suffix
     if compressed && !endswith(suffix, ".gz")
@@ -3682,17 +3712,17 @@ function download_sequence_by_accession(;accession::String,
         outfile = joinpath(outdir, base_filename)
         temp_file = outfile
     end
-    
+
     # Skip if file already exists
     if isfile(outfile)
         @info "File already exists: $outfile"
         return outfile
     end
-    
+
     # Download using NCBI E-utilities
     try
         @info "Downloading $accession from $database (format: $format)"
-        
+
         # Use efetch to get the sequence
         fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
         params = [
@@ -3701,22 +3731,22 @@ function download_sequence_by_accession(;accession::String,
             "rettype" => format,
             "retmode" => "text"
         ]
-        
+
         sleep(0.34)  # Rate limiting
-        
-        response = HTTP.get(fetch_url, query=params)
+
+        response = HTTP.get(fetch_url, query = params)
         content = String(response.body)
-        
+
         # Write to file
         open(temp_file, "w") do io
             write(io, content)
         end
-        
+
         # Compress if requested
         if compressed && temp_file != outfile
             run(`gzip $(temp_file)`)
         end
-        
+
         # Verify file was created
         if isfile(outfile) && filesize(outfile) > 0
             @info "Successfully downloaded: $outfile"
@@ -3725,7 +3755,7 @@ function download_sequence_by_accession(;accession::String,
             @error "Download failed or resulted in empty file: $outfile"
             return ""
         end
-        
+
     catch e
         @error "Failed to download $accession: $e"
         return ""

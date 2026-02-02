@@ -29,10 +29,10 @@ add_evidence!(vertex, "dataset_01", "read_001", EvidenceEntry(5, Forward))
 ```
 """
 function add_evidence!(
-    vertex::Union{KmerVertexData, BioSequenceVertexData, StringVertexData},
-    dataset_id::String,
-    observation_id::String,
-    entry::EvidenceEntry
+        vertex::Union{KmerVertexData, BioSequenceVertexData, StringVertexData},
+        dataset_id::String,
+        observation_id::String,
+        entry::EvidenceEntry
 )
     # Initialize dataset if needed
     if !haskey(vertex.evidence, dataset_id)
@@ -56,10 +56,11 @@ end
 Add a quality evidence entry to a quality-aware vertex.
 """
 function add_evidence!(
-    vertex::Union{QualmerVertexData, QualityBioSequenceVertexData, QualityStringVertexData},
-    dataset_id::String,
-    observation_id::String,
-    entry::QualityEvidenceEntry
+        vertex::Union{
+            QualmerVertexData, QualityBioSequenceVertexData, QualityStringVertexData},
+        dataset_id::String,
+        observation_id::String,
+        entry::QualityEvidenceEntry
 )
     # Initialize dataset if needed
     if !haskey(vertex.evidence, dataset_id)
@@ -83,10 +84,10 @@ end
 Add an edge evidence entry to an edge.
 """
 function add_evidence!(
-    edge::Union{KmerEdgeData, BioSequenceEdgeData, StringEdgeData},
-    dataset_id::String,
-    observation_id::String,
-    entry::EdgeEvidenceEntry
+        edge::Union{KmerEdgeData, BioSequenceEdgeData, StringEdgeData},
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeEvidenceEntry
 )
     # Initialize dataset if needed
     if !haskey(edge.evidence, dataset_id)
@@ -110,10 +111,10 @@ end
 Add a quality edge evidence entry to a quality-aware edge.
 """
 function add_evidence!(
-    edge::Union{QualmerEdgeData, QualityBioSequenceEdgeData, QualityStringEdgeData},
-    dataset_id::String,
-    observation_id::String,
-    entry::EdgeQualityEvidenceEntry
+        edge::Union{QualmerEdgeData, QualityBioSequenceEdgeData, QualityStringEdgeData},
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeQualityEvidenceEntry
 )
     # Initialize dataset if needed
     if !haskey(edge.evidence, dataset_id)
@@ -216,9 +217,9 @@ position_5_evidence = get_position_evidence(vertex, "dataset_01", 5)
 ```
 """
 function get_position_evidence(
-    vertex::Union{KmerVertexData, BioSequenceVertexData, StringVertexData},
-    dataset_id::String,
-    position::Int
+        vertex::Union{KmerVertexData, BioSequenceVertexData, StringVertexData},
+        dataset_id::String,
+        position::Int
 )
     dataset_evidence = get_dataset_evidence(vertex, dataset_id)
     if isnothing(dataset_evidence)
@@ -252,9 +253,9 @@ merged = merge_evidence_sets(evidence1, evidence2)
 ```
 """
 function merge_evidence_sets(
-    set1::Set{T},
-    set2::Set{T}
-) where {T<:Union{EvidenceEntry, QualityEvidenceEntry}}
+        set1::Set{T},
+        set2::Set{T}
+) where {T <: Union{EvidenceEntry, QualityEvidenceEntry}}
     return union(set1, set2)
 end
 
@@ -332,7 +333,8 @@ function flip_evidence_strand(entry::EdgeQualityEvidenceEntry)
     new_strand = entry.strand == Forward ? Reverse : Forward
     reversed_from_quality = reverse(entry.from_quality)
     reversed_to_quality = reverse(entry.to_quality)
-    return EdgeQualityEvidenceEntry(entry.from_position, entry.to_position, new_strand, reversed_from_quality, reversed_to_quality)
+    return EdgeQualityEvidenceEntry(entry.from_position, entry.to_position, new_strand,
+        reversed_from_quality, reversed_to_quality)
 end
 
 # ============================================================================
@@ -440,7 +442,7 @@ end
 Return the first strand orientation found in an evidence map.
 Falls back to `default` if no strand field is present.
 """
-function first_evidence_strand(evidence_map; default::StrandOrientation=Forward)
+function first_evidence_strand(evidence_map; default::StrandOrientation = Forward)
     for dataset_evidence in values(evidence_map)
         for evidence_set in values(dataset_evidence)
             for entry in evidence_set
@@ -468,8 +470,8 @@ forward_only = filter_evidence_by_strand(vertex, Forward)
 ```
 """
 function filter_evidence_by_strand(
-    vertex::KmerVertexData{T},
-    strand::StrandOrientation
+        vertex::KmerVertexData{T},
+        strand::StrandOrientation
 ) where {T}
     filtered = KmerVertexData(vertex.Kmer)
 
@@ -496,12 +498,13 @@ end
 Normalize evidence to a single strand by flipping entries on the opposite strand
 and merging them. Topology is unchanged; only evidence orientation is unified.
 """
-function merge_strand_evidence!(vertex_or_edge; target_strand::StrandOrientation=Forward)
+function merge_strand_evidence!(vertex_or_edge; target_strand::StrandOrientation = Forward)
     for (dataset_id, dataset_evidence) in vertex_or_edge.evidence
         for (obs_id, evidence_set) in dataset_evidence
             merged_set = Set{eltype(evidence_set)}()
             for entry in evidence_set
-                normalized = entry.strand == target_strand ? entry : flip_evidence_strand(entry)
+                normalized = entry.strand == target_strand ? entry :
+                             flip_evidence_strand(entry)
                 push!(merged_set, normalized)
             end
             dataset_evidence[obs_id] = merged_set
@@ -517,13 +520,13 @@ end
 Apply `merge_strand_evidence!` to all vertices and edges, useful for
 non-strand-specific analyses without altering graph structure.
 """
-function merge_strands!(graph::MetaGraphsNext.MetaGraph; target_strand::StrandOrientation=Forward)
+function merge_strands!(graph::MetaGraphsNext.MetaGraph; target_strand::StrandOrientation = Forward)
     for vertex in MetaGraphsNext.labels(graph)
-        merge_strand_evidence!(graph[vertex]; target_strand=target_strand)
+        merge_strand_evidence!(graph[vertex]; target_strand = target_strand)
     end
 
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        merge_strand_evidence!(graph[src, dst]; target_strand=target_strand)
+        merge_strand_evidence!(graph[src, dst]; target_strand = target_strand)
     end
 
     return graph

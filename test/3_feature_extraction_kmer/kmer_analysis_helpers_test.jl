@@ -12,11 +12,11 @@ Test.@testset "Kmer Analysis Helpers" begin
         Test.@test vec_hist[1] == 2
         Test.@test vec_hist[2] == 3
 
-        peak = Mycelia.coverage_peak_from_hist(hist; min_coverage=2)
+        peak = Mycelia.coverage_peak_from_hist(hist; min_coverage = 2)
         Test.@test peak.coverage == 2
         Test.@test peak.kmers == 2
 
-        analysis = Mycelia.analyze_kmer_frequency_spectrum(counts; min_coverage=2)
+        analysis = Mycelia.analyze_kmer_frequency_spectrum(counts; min_coverage = 2)
         Test.@test analysis.total_kmers == 7
         Test.@test analysis.unique_kmers == 3
     end
@@ -31,7 +31,8 @@ Test.@testset "Kmer Analysis Helpers" begin
 
         strobes = Mycelia.strobemers(sequence, 3, 1, 1)
         Test.@test length(strobes) == 3
-        Test.@test strobes[1] == (Mycelia.Kmers.DNAKmer{3}("ATG"), Mycelia.Kmers.DNAKmer{3}("TGC"))
+        Test.@test strobes[1] ==
+                   (Mycelia.Kmers.DNAKmer{3}("ATG"), Mycelia.Kmers.DNAKmer{3}("TGC"))
     end
 
     Test.@testset "Canonicalization and counting" begin
@@ -63,7 +64,8 @@ Test.@testset "Kmer Analysis Helpers" begin
         Test.@test Mycelia.Kmers.DNAKmer{1}("A") in possible
 
         canonical = Mycelia.generate_all_possible_canonical_kmers(1, Mycelia.DNA_ALPHABET)
-        Test.@test length(canonical) == Mycelia.determine_max_canonical_kmers(1, Mycelia.DNA_ALPHABET)
+        Test.@test length(canonical) ==
+                   Mycelia.determine_max_canonical_kmers(1, Mycelia.DNA_ALPHABET)
     end
 
     Test.@testset "Genome size estimates" begin
@@ -89,8 +91,8 @@ Test.@testset "Kmer Analysis Helpers" begin
         fasta_a = joinpath(temp_dir, "a.fna")
         fasta_b = joinpath(temp_dir, "b.fna")
         records = [Mycelia.FASTX.FASTA.Record("seq1", "ATGC")]
-        Mycelia.write_fasta(outfile=fasta_a, records=records, gzip=false, show_progress=false)
-        Mycelia.write_fasta(outfile=fasta_b, records=records, gzip=false, show_progress=false)
+        Mycelia.write_fasta(outfile = fasta_a, records = records, gzip = false, show_progress = false)
+        Mycelia.write_fasta(outfile = fasta_b, records = records, gzip = false, show_progress = false)
 
         file_counts = Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{2}, [fasta_a, fasta_b])
         Test.@test file_counts[Mycelia.Kmers.DNAKmer{2}("AT")] == 2

@@ -32,7 +32,7 @@ Test.@testset "Rhizomorph doublestrand from files" begin
             println(io, ">seq1")
             println(io, "ATGCAT")
         end
-        graph = Mycelia.Rhizomorph.build_kmer_graph_from_files([fasta], 3; mode=:doublestrand)
+        graph = Mycelia.Rhizomorph.build_kmer_graph_from_files([fasta], 3; mode = :doublestrand)
 
         # Expect both forward and reverse-complement k-mers
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("ATG"))
@@ -46,7 +46,7 @@ Test.@testset "Rhizomorph doublestrand from files" begin
         open(FASTX.FASTQ.Writer, fastq) do writer
             write(writer, record)
         end
-        graph = Mycelia.Rhizomorph.build_qualmer_graph_from_files([fastq], 3; mode=:doublestrand)
+        graph = Mycelia.Rhizomorph.build_qualmer_graph_from_files([fastq], 3; mode = :doublestrand)
 
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("ATG"))
         Test.@test Mycelia.Rhizomorph.has_vertex(graph, Kmers.DNAKmer{3}("CAT"))

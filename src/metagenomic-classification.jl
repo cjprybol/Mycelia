@@ -47,7 +47,7 @@
 #     num_mismatches::Int
 #     is_primary::Bool
 #     secondary_scores::Vector{Float64}  # For ambiguity assessment
-    
+
 #     function TaxonomicAssignment(read_id::String, taxonomic_id::String, 
 #                                taxonomic_level::Symbol, alignment_score::Float64,
 #                                mapq_score::Int, alignment_length::Int, num_mismatches::Int,
@@ -80,13 +80,13 @@
 #     total_reads::Int
 #     unclassified_reads::Int
 #     ambiguous_reads::Int  # MAPQ=0 reads that were retained and weighted
-    
+
 #     function MetagenomicProfile(assignments::Vector{TaxonomicAssignment})
 #         abundance_matrix = calculate_weighted_abundances(assignments)
 #         total_reads = length(assignments)
 #         unclassified_reads = 0  # Would be calculated separately
 #         ambiguous_reads = count(a -> a.mapq_score == 0, assignments)
-        
+
 #         new(assignments, abundance_matrix, total_reads, unclassified_reads, ambiguous_reads)
 #     end
 # end
@@ -135,9 +135,9 @@
 #                                  taxonomic_database::Dict{String, String};
 #                                  min_alignment_score::Float64 = 50.0,
 #                                  min_alignment_length::Int = 50)::Vector{TaxonomicAssignment}
-    
+
 #     assignments = TaxonomicAssignment[]
-    
+
 #     for record in alignment_records
 #         # Extract key alignment properties (pseudo-code interface)
 #         read_id = get_read_id(record)
@@ -147,27 +147,27 @@
 #         alignment_length = get_alignment_length(record)
 #         num_mismatches = get_num_mismatches(record)
 #         is_primary = is_primary_alignment(record)
-        
+
 #         # Apply quality filters based on alignment properties, NOT MAPQ
 #         if alignment_score < min_alignment_score || alignment_length < min_alignment_length
 #             continue
 #         end
-        
+
 #         # Look up taxonomic assignment
 #         if haskey(taxonomic_database, reference_id)
 #             taxonomic_id = taxonomic_database[reference_id]
-            
+
 #             # Create assignment with alignment score weighting
 #             assignment = TaxonomicAssignment(
 #                 read_id, taxonomic_id, :species,  # Default to species level
 #                 alignment_score, mapq_score, alignment_length, 
 #                 num_mismatches, is_primary
 #             )
-            
+
 #             push!(assignments, assignment)
 #         end
 #     end
-    
+
 #     return assignments
 # end
 
@@ -201,7 +201,7 @@
 # function calculate_weighted_abundances(assignments::Vector{TaxonomicAssignment})::Dict{String, Float64}
 #     # Group by taxonomic ID and sum alignment scores
 #     taxonomic_scores = Dict{String, Float64}()
-    
+
 #     for assignment in assignments
 #         if haskey(taxonomic_scores, assignment.taxonomic_id)
 #             taxonomic_scores[assignment.taxonomic_id] += assignment.alignment_score
@@ -209,16 +209,16 @@
 #             taxonomic_scores[assignment.taxonomic_id] = assignment.alignment_score
 #         end
 #     end
-    
+
 #     # Calculate total score for normalization
 #     total_score = sum(values(taxonomic_scores))
-    
+
 #     # Normalize to relative abundances
 #     abundance_matrix = Dict{String, Float64}()
 #     for (taxonomic_id, score) in taxonomic_scores
 #         abundance_matrix[taxonomic_id] = score / total_score
 #     end
-    
+
 #     return abundance_matrix
 # end
 
@@ -251,7 +251,7 @@
 #                                        ambiguity_threshold::Float64 = 0.9)::Vector{String}
 #     # Group assignments by read ID
 #     read_assignments = Dict{String, Vector{TaxonomicAssignment}}()
-    
+
 #     for assignment in assignments
 #         if haskey(read_assignments, assignment.read_id)
 #             push!(read_assignments[assignment.read_id], assignment)
@@ -259,25 +259,25 @@
 #             read_assignments[assignment.read_id] = [assignment]
 #         end
 #     end
-    
+
 #     ambiguous_reads = String[]
-    
+
 #     for (read_id, read_assigns) in read_assignments
 #         if length(read_assigns) >= 2
 #             # Sort by alignment score (descending)
 #             sorted_assigns = sort(read_assigns, by = a -> a.alignment_score, rev = true)
-            
+
 #             # Calculate ratio of second-best to best score
 #             if length(sorted_assigns) >= 2
 #                 score_ratio = sorted_assigns[2].alignment_score / sorted_assigns[1].alignment_score
-                
+
 #                 if score_ratio >= ambiguity_threshold
 #                     push!(ambiguous_reads, read_id)
 #                 end
 #             end
 #         end
 #     end
-    
+
 #     return ambiguous_reads
 # end
 
@@ -362,48 +362,48 @@
 #                                        output_dir::String;
 #                                        threads::Int = 8,
 #                                        available_memory_gb::Int = 16)::Vector{MetagenomicProfile}
-    
+
 #     if !isdir(output_dir)
 #         mkpath(output_dir)
 #     end
-    
+
 #     profiles = MetagenomicProfile[]
 #     current_reads = fastq_file
-    
+
 #     for (i, partition) in enumerate(database_partitions)
 #         @info "Processing database partition: $(partition.name)"
-        
+
 #         # Check memory requirements
 #         required_memory_gb = partition.memory_requirement ÷ 1_000_000_000
 #         if required_memory_gb > available_memory_gb
 #             @warn "Partition $(partition.name) requires $(required_memory_gb)GB but only $(available_memory_gb)GB available"
 #         end
-        
+
 #         # Map reads against current partition
 #         mapped_sam = joinpath(output_dir, "$(partition.name)_mapped.sam")
 #         unmapped_fastq = joinpath(output_dir, "$(partition.name)_unmapped.fastq")
-        
+
 #         # Run mapping (pseudo-code - would use actual mapping tool)
 #         mapping_cmd = build_mapping_command(
 #             current_reads, partition.reference_file, mapped_sam, unmapped_fastq, threads
 #         )
 #         run(mapping_cmd)
-        
+
 #         # Process mapping results
 #         alignment_records = load_sam_records(mapped_sam)
 #         assignments = process_alignment_records(alignment_records, partition.taxonomic_mapping)
 #         profile = MetagenomicProfile(assignments)
-        
+
 #         push!(profiles, profile)
-        
+
 #         # Use unmapped reads for next partition
 #         if i < length(database_partitions) && isfile(unmapped_fastq)
 #             current_reads = unmapped_fastq
 #         end
-        
+
 #         @info "Partition $(partition.name): $(length(assignments)) reads classified"
 #     end
-    
+
 #     return profiles
 # end
 
@@ -441,11 +441,11 @@
 #                                   ani_threshold::Float64 = 99.5,
 #                                   output_dir::String = "fastani_clustering",
 #                                   threads::Int = 8)::Dict{String, String}
-    
+
 #     if !isdir(output_dir)
 #         mkpath(output_dir)
 #     end
-    
+
 #     # Create genome list file for FastANI
 #     genome_list = joinpath(output_dir, "genome_list.txt")
 #     open(genome_list, "w") do io
@@ -453,30 +453,30 @@
 #             println(io, genome_file)
 #         end
 #     end
-    
+
 #     # Run all-vs-all FastANI comparison
 #     fastani_output = joinpath(output_dir, "fastani_matrix.txt")
 #     fastani_cmd = `fastani --ql $genome_list --rl $genome_list -o $fastani_output -t $threads --matrix`
-    
+
 #     @info "Running FastANI all-vs-all comparison"
 #     run(fastani_cmd)
-    
+
 #     # Parse ANI matrix
 #     ani_matrix = parse_fastani_matrix(fastani_output, genome_files)
-    
+
 #     # Convert to distance matrix
 #     distance_matrix = 1.0 .- (ani_matrix ./ 100.0)
-    
+
 #     # Perform hierarchical clustering
 #     clusters = hierarchical_cluster_ani(distance_matrix, (100 - ani_threshold) / 100.0)
-    
+
 #     # Create cluster assignments
 #     cluster_mapping = Dict{String, String}()
 #     for (i, genome_file) in enumerate(genome_files)
 #         cluster_id = "cluster_$(clusters[i])"
 #         cluster_mapping[genome_file] = cluster_id
 #     end
-    
+
 #     return cluster_mapping
 # end
 
@@ -490,10 +490,10 @@
 # function parse_fastani_matrix(fastani_output::String, genome_files::Vector{String})::Matrix{Float64}
 #     n = length(genome_files)
 #     ani_matrix = zeros(Float64, n, n)
-    
+
 #     # Implementation would parse actual FastANI output format
 #     # This is a placeholder showing the expected structure
-    
+
 #     return ani_matrix
 # end
 
@@ -503,7 +503,7 @@
 # function hierarchical_cluster_ani(distance_matrix::Matrix{Float64}, threshold::Float64)::Vector{Int}
 #     # Implementation would use actual hierarchical clustering
 #     # This is a placeholder showing the expected interface
-    
+
 #     n = size(distance_matrix, 1)
 #     return collect(1:n)  # Placeholder: each genome in its own cluster
 # end
@@ -600,17 +600,16 @@ Set `METABULI_DB_NAME` to choose a named download (default: `$(Mycelia.DEFAULT_M
 overcommitting memory on smaller machines.
 """
 function run_metabuli_classify(reads1::AbstractString;
-        reads2::Union{Nothing,AbstractString}=nothing,
-        dbdir::Union{Nothing,AbstractString}=nothing,
+        reads2::Union{Nothing, AbstractString} = nothing,
+        dbdir::Union{Nothing, AbstractString} = nothing,
         outdir::AbstractString,
         jobid::AbstractString,
-        read_platform::Symbol=:illumina,
-        precision_mode::Bool=true,
-        threads::Int=Threads.nthreads(),
-        max_ram_gb::Union{Nothing, Int}=nothing,
-        additional_args::Vector{String}=String[],
-        force::Bool=false)
-
+        read_platform::Symbol = :illumina,
+        precision_mode::Bool = true,
+        threads::Int = Threads.nthreads(),
+        max_ram_gb::Union{Nothing, Int} = nothing,
+        additional_args::Vector{String} = String[],
+        force::Bool = false)
     if dbdir === nothing || isempty(dbdir)
         dbdir = Mycelia.get_metabuli_db_path()
     end
@@ -622,7 +621,8 @@ function run_metabuli_classify(reads1::AbstractString;
     isdir(dbdir) || error("Database directory not found: $(dbdir)")
 
     valid_platforms = (:illumina, :pacbio_hifi, :pacbio_sequel2, :ont, :contig)
-    read_platform in valid_platforms || error("read_platform must be one of $(valid_platforms)")
+    read_platform in valid_platforms ||
+        error("read_platform must be one of $(valid_platforms)")
 
     mkpath(outdir)
     classifications_tsv = joinpath(outdir, jobid * "_classifications.tsv")
@@ -631,12 +631,15 @@ function run_metabuli_classify(reads1::AbstractString;
     expected_outputs = [classifications_tsv, report_tsv, krona_html]
 
     if !force && all(isfile.(expected_outputs)) && all(filesize.(expected_outputs) .> 0)
-        classifications_df = CSV.read(classifications_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
-        report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
-        return MetabuliResult(classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
+        classifications_df = CSV.read(
+            classifications_tsv, DataFrames.DataFrame; delim = '\t', normalizenames = true)
+        report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim = '\t', normalizenames = true)
+        return MetabuliResult(
+            classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
     end
 
-    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() : max_ram_gb
+    max_ram_value = max_ram_gb === nothing ? Mycelia._default_metabuli_max_ram_gb() :
+                    max_ram_gb
     max_ram_value > 0 || error("max_ram_gb must be positive (got $(max_ram_value)).")
 
     Mycelia.add_bioconda_env("metabuli")
@@ -676,14 +679,16 @@ function run_metabuli_classify(reads1::AbstractString;
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli $cmd_args`
     run(cmd)
 
-    classifications_df = CSV.read(classifications_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
-    report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true)
-    return MetabuliResult(classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
+    classifications_df = CSV.read(
+        classifications_tsv, DataFrames.DataFrame; delim = '\t', normalizenames = true)
+    report_df = CSV.read(report_tsv, DataFrames.DataFrame; delim = '\t', normalizenames = true)
+    return MetabuliResult(
+        classifications_tsv, report_tsv, krona_html, classifications_df, report_df)
 end
 
 struct MetaPhlAnResult
     profile_tsv::String
-    map_output::Union{Nothing,String}
+    map_output::Union{Nothing, String}
     table::DataFrames.DataFrame
 end
 
@@ -711,23 +716,22 @@ existing outputs unless `force=true`.
 METAPHLAN_DB_INDEX is set. If not set, MetaPhlAn will download its default
 database. `bowtie2db` is deprecated; prefer `db_dir`.
 """
-function run_metaphlan(reads1::Union{String,Vector{String}};
-        reads2::Union{Nothing,String,Vector{String}}=nothing,
+function run_metaphlan(reads1::Union{String, Vector{String}};
+        reads2::Union{Nothing, String, Vector{String}} = nothing,
         sample_name::AbstractString,
         outdir::AbstractString,
-        db_dir::Union{Nothing,String}=nothing,
-        db_index::Union{Nothing,String}=nothing,
-        bowtie2db::Union{Nothing,String}=nothing,
-        input_type::Symbol=:fastq,
-        long_reads::Bool=false,
-        threads::Int=Threads.nthreads(),
-        mapout::Bool=true,
-        additional_args::Vector{String}=String[],
-        force::Bool=false)
-
+        db_dir::Union{Nothing, String} = nothing,
+        db_index::Union{Nothing, String} = nothing,
+        bowtie2db::Union{Nothing, String} = nothing,
+        input_type::Symbol = :fastq,
+        long_reads::Bool = false,
+        threads::Int = Threads.nthreads(),
+        mapout::Bool = true,
+        additional_args::Vector{String} = String[],
+        force::Bool = false)
     normalize_reads(x) = x isa Vector{String} ? join(x, ",") : String(x)
 
-    function ensure_files_exist(paths::Union{String,Vector{String}})
+    function ensure_files_exist(paths::Union{String, Vector{String}})
         files = paths isa Vector{String} ? paths : [String(paths)]
         for f in files
             isfile(f) || error("Input file not found: $(f)")
@@ -746,12 +750,13 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
         @warn "bowtie2db is deprecated; use db_dir instead."
         db_dir = bowtie2db
     end
-    db_index_val, index_explicit = Mycelia.resolve_metaphlan_db_index(db_index=db_index)
+    db_index_val, index_explicit = Mycelia.resolve_metaphlan_db_index(db_index = db_index)
     if db_dir === nothing || isempty(db_dir)
-        db_dir = Mycelia.get_metaphlan_db_path(db_index=db_index_val)
+        db_dir = Mycelia.get_metaphlan_db_path(db_index = db_index_val)
     end
     if long_reads && db_dir !== nothing && !isempty(db_dir)
-        function resolve_db_index_name(db_dir::String, db_index_val::Union{Nothing,String}, index_explicit::Bool)
+        function resolve_db_index_name(
+                db_dir::String, db_index_val::Union{Nothing, String}, index_explicit::Bool)
             if index_explicit && db_index_val !== nothing && !isempty(db_index_val)
                 return db_index_val
             end
@@ -777,7 +782,7 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
                     end
                     if isfile(candidate)
                         temp_db = mktempdir()
-                        for entry in readdir(db_dir; join=true)
+                        for entry in readdir(db_dir; join = true)
                             if startswith(basename(entry), index_name)
                                 symlink(entry, joinpath(temp_db, basename(entry)))
                             end
@@ -799,7 +804,8 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     mkpath(outdir)
     base = joinpath(outdir, sample_name)
     profile_tsv = base * "_metaphlan_profile.tsv"
-    mapout_path = mapout ? (long_reads ? base * "_mapout.bam" : base * "_bowtie2out.bz2") : nothing
+    mapout_path = mapout ? (long_reads ? base * "_mapout.bam" : base * "_bowtie2out.bz2") :
+                  nothing
 
     expected = [profile_tsv]
     if mapout_path !== nothing
@@ -807,7 +813,8 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     end
 
     if !force && all(isfile.(expected)) && all(filesize.(expected) .> 0)
-        table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment="#")
+        table = CSV.read(profile_tsv, DataFrames.DataFrame; delim = '\t',
+            normalizenames = true, comment = "#")
         return MetaPhlAnResult(profile_tsv, mapout_path, table)
     end
 
@@ -852,7 +859,8 @@ function run_metaphlan(reads1::Union{String,Vector{String}};
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan metaphlan $cmd_args`
     run(cmd)
 
-    table = CSV.read(profile_tsv, DataFrames.DataFrame; delim='\t', normalizenames=true, comment="#")
+    table = CSV.read(profile_tsv, DataFrames.DataFrame; delim = '\t',
+        normalizenames = true, comment = "#")
     return MetaPhlAnResult(profile_tsv, mapout_path, table)
 end
 
@@ -873,21 +881,23 @@ end
 Extract marker FASTAs from MetaPhlAn mapping outputs for downstream StrainPhlAn.
 """
 function run_sample2markers(map_files::Vector{String};
-        sample_ids::Union{Nothing,Vector{String}}=nothing,
+        sample_ids::Union{Nothing, Vector{String}} = nothing,
         outdir::AbstractString,
-        threads::Int=Threads.nthreads(),
-        long_reads::Bool=false,
-        additional_args::Vector{String}=String[],
-        force::Bool=false)
-
+        threads::Int = Threads.nthreads(),
+        long_reads::Bool = false,
+        additional_args::Vector{String} = String[],
+        force::Bool = false)
     isempty(map_files) && error("map_files must be non-empty")
     for f in map_files
         isfile(f) || error("Mapping output not found: $(f)")
     end
 
     mkpath(outdir)
-    ids = isnothing(sample_ids) ? [replace(basename(f), r"\.(bowtie2out\.bz2|mapout\.bam|mapout\.sam)$"i => "") for f in map_files] : sample_ids
-    length(ids) == length(map_files) || error("sample_ids length must match map_files length")
+    ids = isnothing(sample_ids) ?
+          [replace(basename(f), r"\.(bowtie2out\.bz2|mapout\.bam|mapout\.sam)$"i => "")
+           for f in map_files] : sample_ids
+    length(ids) == length(map_files) ||
+        error("sample_ids length must match map_files length")
 
     marker_fastas = [joinpath(outdir, "$(id).markers.fasta") for id in ids]
     if !force && all(isfile.(marker_fastas)) && all(filesize.(marker_fastas) .> 0)
@@ -908,7 +918,7 @@ function run_sample2markers(map_files::Vector{String};
     run(cmd)
 
     # Collect generated marker FASTAs (fall back to expected names)
-    generated = filter(f -> endswith(f, ".markers.fasta"), readdir(outdir; join=true))
+    generated = filter(f -> endswith(f, ".markers.fasta"), readdir(outdir; join = true))
     if !isempty(generated)
         marker_fastas = generated
     end
@@ -917,9 +927,9 @@ end
 
 struct StrainPhlAnResult
     output_dir::String
-    tree_file::Union{Nothing,String}
-    marker_alignment::Union{Nothing,String}
-    log_file::Union{Nothing,String}
+    tree_file::Union{Nothing, String}
+    marker_alignment::Union{Nothing, String}
+    log_file::Union{Nothing, String}
 end
 
 """
@@ -935,14 +945,13 @@ end
 Run StrainPhlAn 4 on marker FASTAs produced by `sample2markers`.
 """
 function run_strainphlan(marker_fastas::Vector{String};
-        sample_ids::Union{Nothing,Vector{String}}=nothing,
+        sample_ids::Union{Nothing, Vector{String}} = nothing,
         outdir::AbstractString,
         clade::AbstractString,
-        reference_genomes::Vector{String}=String[],
-        threads::Int=Threads.nthreads(),
-        additional_args::Vector{String}=String[],
-        force::Bool=false)
-
+        reference_genomes::Vector{String} = String[],
+        threads::Int = Threads.nthreads(),
+        additional_args::Vector{String} = String[],
+        force::Bool = false)
     isempty(marker_fastas) && error("marker_fastas must be non-empty")
     for f in marker_fastas
         isfile(f) || error("Marker FASTA not found: $(f)")
@@ -955,7 +964,11 @@ function run_strainphlan(marker_fastas::Vector{String};
     expected = [expected_tree, expected_aln]
 
     if !force && all(isfile.(expected)) && all(filesize.(expected) .> 0)
-        log_file = first(filter(f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"), readdir(outdir; join=true)), nothing)
+        log_file = first(
+            filter(
+                f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"),
+                readdir(outdir; join = true)),
+            nothing)
         return StrainPhlAnResult(outdir, expected_tree, expected_aln, log_file)
     end
 
@@ -963,7 +976,8 @@ function run_strainphlan(marker_fastas::Vector{String};
 
     cmd_args = String["--ifn_samples"]
     append!(cmd_args, marker_fastas)
-    append!(cmd_args, ["--output_dir", outdir, "--clade", clade, "--nprocs", string(threads)])
+    append!(cmd_args, [
+        "--output_dir", outdir, "--clade", clade, "--nprocs", string(threads)])
 
     if !isempty(reference_genomes)
         push!(cmd_args, "--reference_genomes")
@@ -980,8 +994,19 @@ function run_strainphlan(marker_fastas::Vector{String};
     cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metaphlan strainphlan $cmd_args`
     run(cmd)
 
-    tree_file = if isfile(expected_tree) expected_tree else nothing end
-    alignment = if isfile(expected_aln) expected_aln else nothing end
-    log_file = first(filter(f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"), readdir(outdir; join=true)), nothing)
+    tree_file = if isfile(expected_tree)
+        expected_tree
+    else
+        nothing
+    end
+    alignment = if isfile(expected_aln)
+        expected_aln
+    else
+        nothing
+    end
+    log_file = first(
+        filter(f -> occursin("strainphlan", lowercase(basename(f))) && endswith(f, ".log"),
+            readdir(outdir; join = true)),
+        nothing)
     return StrainPhlAnResult(outdir, tree_file, alignment, log_file)
 end

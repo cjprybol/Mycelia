@@ -25,11 +25,11 @@ struct RepeatRegion{T}
     confidence::Float64
 
     function RepeatRegion(vertices::Vector{T},
-                          incoming::Vector{Tuple{T, T}},
-                          outgoing::Vector{Tuple{T, T}},
-                          copy_num::Float64,
-                          rep_type::Symbol,
-                          conf::Float64) where {T}
+            incoming::Vector{Tuple{T, T}},
+            outgoing::Vector{Tuple{T, T}},
+            copy_num::Float64,
+            rep_type::Symbol,
+            conf::Float64) where {T}
         @assert rep_type in (:tandem, :interspersed, :palindromic) "Invalid repeat type"
         @assert 0.0 <= conf <= 1.0 "Confidence must be in [0,1]"
         new{T}(vertices, incoming, outgoing, copy_num, rep_type, conf)
@@ -42,7 +42,7 @@ end
 Identify and characterize repetitive regions in the assembly graph.
 Returns a vector of `RepeatRegion` objects specific to the graph's vertex label type.
 """
-function resolve_repeats_next(graph::MetaGraphsNext.MetaGraph; min_repeat_length::Int=10)
+function resolve_repeats_next(graph::MetaGraphsNext.MetaGraph; min_repeat_length::Int = 10)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
         return RepeatRegion{Any}[]
@@ -67,7 +67,8 @@ end
 """
 Calculate in-degrees and out-degrees for all vertices.
 """
-function calculate_degrees(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where {T}
+function calculate_degrees(graph::MetaGraphsNext.MetaGraph{
+        <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where {T}
     vertices = collect(MetaGraphsNext.labels(graph))
     in_degrees = Dict{T, Int}()
     out_degrees = Dict{T, Int}()
@@ -89,7 +90,8 @@ end
 """
 Find vertices that could be part of repeat regions.
 """
-function find_repeat_candidates(in_degrees::Dict{T, Int}, out_degrees::Dict{T, Int}) where {T}
+function find_repeat_candidates(in_degrees::Dict{T, Int}, out_degrees::Dict{
+        T, Int}) where {T}
     candidates = T[]
 
     for vertex in keys(in_degrees)
@@ -105,9 +107,11 @@ end
 """
 Analyze a potential repeat region starting from a vertex.
 """
-function analyze_repeat_region(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
-                               start_vertex::T,
-                               min_length::Int) where {T}
+function analyze_repeat_region(
+        graph::MetaGraphsNext.MetaGraph{
+            <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
+        start_vertex::T,
+        min_length::Int) where {T}
     local_vertices = get_local_subgraph(graph, start_vertex, min_length)
 
     if length(local_vertices) < min_length
@@ -139,15 +143,17 @@ function analyze_repeat_region(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any,
     confidence = calculate_repeat_confidence(graph, local_vertices, copy_number)
 
     return RepeatRegion(local_vertices, incoming_edges, outgoing_edges,
-                        copy_number, repeat_type, confidence)
+        copy_number, repeat_type, confidence)
 end
 
 """
 Get local subgraph around a vertex within the provided radius.
 """
-function get_local_subgraph(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
-                            center_vertex::T,
-                            radius::Int) where {T}
+function get_local_subgraph(
+        graph::MetaGraphsNext.MetaGraph{
+            <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
+        center_vertex::T,
+        radius::Int) where {T}
     visited = Set{T}()
     queue = DataStructures.Queue{Tuple{T, Int}}()
     DataStructures.enqueue!(queue, (center_vertex, 0))
@@ -180,8 +186,10 @@ end
 """
 Estimate copy number for repeat region based on evidence counts.
 """
-function estimate_copy_number(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
-                              vertices::Vector{T}) where {T}
+function estimate_copy_number(
+        graph::MetaGraphsNext.MetaGraph{
+            <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
+        vertices::Vector{T}) where {T}
     if isempty(vertices)
         return 1.0
     end
@@ -203,10 +211,12 @@ end
 """
 Classify the type of repeat based on connectivity.
 """
-function classify_repeat_type(graph::MetaGraphsNext.MetaGraph{<:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
-                              vertices::Vector{T},
-                              incoming_edges::Vector{Tuple{T, T}},
-                              outgoing_edges::Vector{Tuple{T, T}}) where {T}
+function classify_repeat_type(
+        graph::MetaGraphsNext.MetaGraph{
+            <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any},
+        vertices::Vector{T},
+        incoming_edges::Vector{Tuple{T, T}},
+        outgoing_edges::Vector{Tuple{T, T}}) where {T}
     n_incoming = length(incoming_edges)
     n_outgoing = length(outgoing_edges)
 
@@ -223,8 +233,8 @@ end
 Calculate confidence in repeat identification.
 """
 function calculate_repeat_confidence(graph::MetaGraphsNext.MetaGraph,
-                                     vertices::Vector,
-                                     copy_number::Float64)
+        vertices::Vector,
+        copy_number::Float64)
     size_score = min(1.0, length(vertices) / 20.0)
     copy_score = min(1.0, (copy_number - 1.0) / 5.0)
 
@@ -258,7 +268,8 @@ function merge_overlapping_repeats(repeats::Vector{RepeatRegion{T}}) where {T}
         end
 
         if length(overlapping_indices) > 1
-            merged_repeat = merge_repeat_regions([repeats[idx] for idx in overlapping_indices])
+            merged_repeat = merge_repeat_regions([repeats[idx]
+                                                  for idx in overlapping_indices])
             push!(merged, merged_repeat)
         else
             push!(merged, current_repeat)
@@ -300,7 +311,7 @@ function merge_repeat_regions(regions::Vector{RepeatRegion{T}}) where {T}
     repeat_type = _mode_symbol([r.repeat_type for r in regions])
 
     return RepeatRegion(unique_vertices, unique_incoming, unique_outgoing,
-                        avg_copy_number, repeat_type, avg_confidence)
+        avg_copy_number, repeat_type, avg_confidence)
 end
 
 """

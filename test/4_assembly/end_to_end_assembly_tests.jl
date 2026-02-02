@@ -32,27 +32,27 @@ const ERROR_RATES = [0.0, 0.01]  # 0%, 1%
 const COVERAGE_DEPTHS = [5, 20]
 
 Test.@testset "End-to-End Assembly Tests" begin
-    
     Test.@testset "Base Case: Reference Sequence Graph Round-trip" begin
         Test.@testset "String Graph Base Case" begin
             # Test with simple strings
             for seq_length in TEST_LENGTHS
                 reference_string = Random.randstring(seq_length)
-                
+
                 # Create graph from reference
-                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Test basic graph properties
-                Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
-                
+                Test.@test length(MetaGraphsNext.labels(graph)) <=
+                           length(reference_string) - 3 + 1
+
                 # Test graph connectivity
                 components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
-        
+
         Test.@testset "Sequence Graph Next Base Case - DNA" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = BioSequences.randdnaseq(seq_length)
@@ -60,7 +60,8 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                 # Test DoubleStrand mode
                 kmer_type = Kmers.DNAKmer{5}
-                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:doublestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    [reference_record], 5; dataset_id = "test", mode = :doublestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -72,11 +73,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
 
                 # Test that we can write and read GFA
-                Test.@test hasmethod(Mycelia.Rhizomorph.write_gfa_next, (typeof(graph), String))
+                Test.@test hasmethod(Mycelia.Rhizomorph.write_gfa_next, (
+                    typeof(graph), String))
                 Test.@test hasmethod(Mycelia.Rhizomorph.read_gfa_next, (String,))
             end
         end
-        
+
         Test.@testset "Sequence Graph Next Base Case - RNA" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = string(BioSequences.randrnaseq(seq_length))
@@ -87,7 +89,8 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                 # Test SingleStrand mode for RNA
                 kmer_type = Kmers.RNAKmer{5}
-                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:singlestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    [reference_record], 5; dataset_id = "test", mode = :singlestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -102,7 +105,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
             end
         end
-        
+
         Test.@testset "Sequence Graph Next Base Case - Amino Acids" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = BioSequences.randaaseq(seq_length)
@@ -110,7 +113,8 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                 # Test SingleStrand mode for amino acids
                 kmer_type = Kmers.AAKmer{5}
-                graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:singlestrand)
+                graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    [reference_record], 5; dataset_id = "test", mode = :singlestrand)
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -119,7 +123,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                     vertex_data = graph[label]
                     Test.@test vertex_data isa Mycelia.Rhizomorph.KmerVertexData
                     # Check that all characters are valid amino acids
-                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_CHARSET for c in string(vertex_data.Kmer))
+                    Test.@test all(c in Mycelia.UNAMBIGUOUS_AA_CHARSET
+                    for c in string(vertex_data.Kmer))
                 end
             end
         end
@@ -127,20 +132,22 @@ Test.@testset "End-to-End Assembly Tests" begin
         Test.@testset "String Graph Base Case - ASCII Greek" begin
             for seq_length in TEST_LENGTHS
                 reference_string = Mycelia.rand_ascii_greek_string(seq_length)
-                
+
                 # Create graph from reference
-                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Test basic graph properties
-                Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
-                
+                Test.@test length(MetaGraphsNext.labels(graph)) <=
+                           length(reference_string) - 3 + 1
+
                 # Test assembly - should recover non-empty result
                 paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
-                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph)
+                            for path in paths]
                 Test.@test !isempty(assembly)
-                
+
                 # Test graph connectivity
                 components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
@@ -150,20 +157,22 @@ Test.@testset "End-to-End Assembly Tests" begin
         Test.@testset "String Graph Base Case - Latin1" begin
             for seq_length in TEST_LENGTHS
                 reference_string = Mycelia.rand_latin1_string(seq_length)
-                
+
                 # Create graph from reference
-                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Test basic graph properties
-                Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
-                
+                Test.@test length(MetaGraphsNext.labels(graph)) <=
+                           length(reference_string) - 3 + 1
+
                 # Test assembly - should recover non-empty result
                 paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
-                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph)
+                            for path in paths]
                 Test.@test !isempty(assembly)
-                
+
                 # Test graph connectivity
                 components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
@@ -173,20 +182,22 @@ Test.@testset "End-to-End Assembly Tests" begin
         Test.@testset "String Graph Base Case - BMP Printable" begin
             for seq_length in TEST_LENGTHS
                 reference_string = Mycelia.rand_bmp_printable_string(seq_length)
-                
+
                 # Create graph from reference
-                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Test basic graph properties
-                Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
-                
+                Test.@test length(MetaGraphsNext.labels(graph)) <=
+                           length(reference_string) - 3 + 1
+
                 # Test assembly - should recover non-empty result
                 paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
-                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph)
+                            for path in paths]
                 Test.@test !isempty(assembly)
-                
+
                 # Test graph connectivity
                 components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
@@ -196,75 +207,79 @@ Test.@testset "End-to-End Assembly Tests" begin
         Test.@testset "String Graph Base Case - Printable Unicode" begin
             for seq_length in TEST_LENGTHS
                 reference_string = Mycelia.rand_printable_unicode_string(seq_length)
-                
+
                 # Create graph from reference
-                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
+                graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Test basic graph properties
-                Test.@test length(MetaGraphsNext.labels(graph)) <= length(reference_string) - 3 + 1
-                
+                Test.@test length(MetaGraphsNext.labels(graph)) <=
+                           length(reference_string) - 3 + 1
+
                 # Test assembly - should recover non-empty result
                 paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
-                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph) for path in paths]
+                assembly = [Mycelia.Rhizomorph.path_to_sequence(path, graph)
+                            for path in paths]
                 Test.@test !isempty(assembly)
-                
+
                 # Test graph connectivity
                 components = Graphs.connected_components(graph)
                 Test.@test !isempty(components)
             end
         end
     end
-    
+
     Test.@testset "String Graph Assembly with Error Rates and Coverage" begin
         Test.@testset "Basic String Assembly" begin
             for seq_length in TEST_LENGTHS
                 reference_string = Random.randstring(seq_length)
-                
+
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
                         # Create simulated reads with errors
                         mutated_strings = String[]
                         for i in 1:coverage
-                            mutated_str = Mycelia.mutate_string(reference_string, error_rate=error_rate)
+                            mutated_str = Mycelia.mutate_string(reference_string, error_rate = error_rate)
                             push!(mutated_strings, mutated_str)
                         end
-                        
+
                         # Build graph from all mutated strings
-                        graph = Mycelia.Rhizomorph.build_ngram_graph(mutated_strings, 3; dataset_id="test")
-                        
+                        graph = Mycelia.Rhizomorph.build_ngram_graph(mutated_strings, 3; dataset_id = "test")
+
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
-                        
+
                         # Test assembly process
                         collapsed_graph = graph
                         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(collapsed_graph)
                         if isempty(paths)
-                            paths = Mycelia.Rhizomorph.find_contigs_next(collapsed_graph; min_contig_length=1)
+                            paths = Mycelia.Rhizomorph.find_contigs_next(collapsed_graph; min_contig_length = 1)
                         end
                         assemblies = String[]
                         for path_entry in paths
                             if path_entry isa Mycelia.Rhizomorph.ContigPath
                                 push!(assemblies, string(path_entry.sequence))
                             elseif !isempty(path_entry)
-                                push!(assemblies, string(Mycelia.Rhizomorph.path_to_sequence(path_entry, collapsed_graph)))
+                                push!(assemblies,
+                                    string(Mycelia.Rhizomorph.path_to_sequence(path_entry, collapsed_graph)))
                             end
                         end
-                        
+
                         Test.@test !isempty(assemblies)
                         Test.@test all(asm isa String for asm in assemblies)
-                        
+
                         # For low error rates, assembly should be reasonable
                         if error_rate == 0.0
-                            Test.@test any(length(asm) >= length(reference_string) ÷ 4 for asm in assemblies)
+                            Test.@test any(length(asm) >= length(reference_string) ÷ 4
+                            for asm in assemblies)
                         end
                     end
                 end
             end
         end
     end
-    
+
     Test.@testset "Strand-Specific Sequence Graph Next Assembly" begin
         Test.@testset "DNA SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
@@ -280,8 +295,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         graph = Mycelia.Rhizomorph.build_kmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:singlestrand
+                            dataset_id = "test",
+                            mode = :singlestrand
                         )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -292,7 +307,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                             vertex_data = graph[label]
                             evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
                             Test.@test !isempty(evidence_entries)
-                            Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
+                            Test.@test all(
+                                entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
                         end
 
                         # Test that edges respect strand constraints
@@ -302,7 +318,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                                 Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
                                 evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
                                 Test.@test !isempty(evidence_entries)
-                                Test.@test all(entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
+                                Test.@test all(
+                                    entry -> entry.strand == Mycelia.Rhizomorph.Forward, evidence_entries)
                             end
                         end
 
@@ -311,8 +328,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:singlestrand
+                            dataset_id = "test",
+                            mode = :singlestrand
                         )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
@@ -323,7 +340,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Validate that assembled sequences are proper DNA
                         for label in MetaGraphsNext.labels(quality_graph)
                             vertex_data = quality_graph[label]
-                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            Test.@test vertex_data isa
+                                       Mycelia.Rhizomorph.QualityBioSequenceVertexData
                             sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
@@ -342,7 +360,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
             end
         end
-        
+
         Test.@testset "RNA SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = string(BioSequences.randrnaseq(seq_length))
@@ -357,9 +375,9 @@ Test.@testset "End-to-End Assembly Tests" begin
                         graph = Mycelia.Rhizomorph.build_kmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:singlestrand,
-                            type_hint=:RNA
+                            dataset_id = "test",
+                            mode = :singlestrand,
+                            type_hint = :RNA
                         )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -397,9 +415,9 @@ Test.@testset "End-to-End Assembly Tests" begin
                         qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:singlestrand,
-                            type_hint=:RNA
+                            dataset_id = "test",
+                            mode = :singlestrand,
+                            type_hint = :RNA
                         )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
@@ -410,7 +428,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Validate that assembled sequences are proper RNA
                         for label in MetaGraphsNext.labels(quality_graph)
                             vertex_data = quality_graph[label]
-                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            Test.@test vertex_data isa
+                                       Mycelia.Rhizomorph.QualityBioSequenceVertexData
                             sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
@@ -433,7 +452,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
             end
         end
-        
+
         Test.@testset "Amino Acid SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = BioSequences.randaaseq(seq_length)
@@ -445,7 +464,8 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.AAKmer{3}  # Shorter k-mers for AA
-                        graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+                        graph = Mycelia.Rhizomorph.build_kmer_graph(
+                            reads, 3; dataset_id = "test", mode = :singlestrand)
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -460,9 +480,10 @@ Test.@testset "End-to-End Assembly Tests" begin
                             # Test sequence type validation using existing functions
                             kmer_string = string(vertex_data.Kmer)
                             detected_alphabet = Mycelia.detect_alphabet(kmer_string)
-                            has_non_nucleotide = any(c -> !(c in Mycelia.AMBIGUOUS_DNA_CHARSET) &&
-                                                         !(c in Mycelia.AMBIGUOUS_RNA_CHARSET),
-                                                     kmer_string)
+                            has_non_nucleotide = any(
+                                c -> !(c in Mycelia.AMBIGUOUS_DNA_CHARSET) &&
+                                     !(c in Mycelia.AMBIGUOUS_RNA_CHARSET),
+                                kmer_string)
                             if has_non_nucleotide
                                 Test.@test detected_alphabet == :AA
                             end
@@ -473,7 +494,8 @@ Test.@testset "End-to-End Assembly Tests" begin
 
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
-                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(reads, 3; dataset_id="test", mode=:singlestrand)
+                        qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                            reads, 3; dataset_id = "test", mode = :singlestrand)
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
@@ -483,13 +505,15 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Validate that assembled sequences are proper amino acids
                         for label in MetaGraphsNext.labels(quality_graph)
                             vertex_data = quality_graph[label]
-                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            Test.@test vertex_data isa
+                                       Mycelia.Rhizomorph.QualityBioSequenceVertexData
                             sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
-                                has_non_nucleotide = any(c -> !(c in Mycelia.AMBIGUOUS_DNA_CHARSET) &&
-                                                             !(c in Mycelia.AMBIGUOUS_RNA_CHARSET),
-                                                         sequence_str)
+                                has_non_nucleotide = any(
+                                    c -> !(c in Mycelia.AMBIGUOUS_DNA_CHARSET) &&
+                                         !(c in Mycelia.AMBIGUOUS_RNA_CHARSET),
+                                    sequence_str)
                                 if has_non_nucleotide
                                     Test.@test detected_type == :AA
                                 end
@@ -508,7 +532,7 @@ Test.@testset "End-to-End Assembly Tests" begin
             end
         end
     end
-    
+
     Test.@testset "Canonical/Double-Stranded Sequence Graph Next Assembly" begin
         Test.@testset "DNA DoubleStrand Mode" begin
             for seq_length in TEST_LENGTHS
@@ -524,8 +548,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         graph = Mycelia.Rhizomorph.build_kmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:doublestrand
+                            dataset_id = "test",
+                            mode = :doublestrand
                         )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -556,7 +580,10 @@ Test.@testset "End-to-End Assembly Tests" begin
                                 Test.@test edge_data isa Mycelia.Rhizomorph.KmerEdgeData
                                 evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(edge_data.evidence)
                                 Test.@test !isempty(evidence_entries)
-                                Test.@test all(entry -> entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse), evidence_entries)
+                                Test.@test all(
+                                    entry -> entry.strand in (Mycelia.Rhizomorph.Forward,
+                                        Mycelia.Rhizomorph.Reverse),
+                                    evidence_entries)
                             end
                         end
 
@@ -565,8 +592,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:doublestrand
+                            dataset_id = "test",
+                            mode = :doublestrand
                         )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
@@ -577,7 +604,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Validate that assembled sequences are proper DNA
                         for label in MetaGraphsNext.labels(quality_graph)
                             vertex_data = quality_graph[label]
-                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            Test.@test vertex_data isa
+                                       Mycelia.Rhizomorph.QualityBioSequenceVertexData
                             sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
@@ -587,7 +615,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                             evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
                             Test.@test !isempty(evidence_entries)
                             for entry in evidence_entries
-                                Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                                Test.@test entry.strand in (
+                                    Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                                 Test.@test !isempty(entry.quality_scores)
                                 Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
@@ -596,7 +625,7 @@ Test.@testset "End-to-End Assembly Tests" begin
                 end
             end
         end
-        
+
         Test.@testset "RNA DoubleStrand Mode" begin
             for seq_length in TEST_LENGTHS
                 reference_seq = string(BioSequences.randrnaseq(seq_length))
@@ -611,9 +640,9 @@ Test.@testset "End-to-End Assembly Tests" begin
                         graph = Mycelia.Rhizomorph.build_kmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:doublestrand,
-                            type_hint=:RNA
+                            dataset_id = "test",
+                            mode = :doublestrand,
+                            type_hint = :RNA
                         )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
@@ -650,9 +679,9 @@ Test.@testset "End-to-End Assembly Tests" begin
                         qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
                             reads,
                             5;
-                            dataset_id="test",
-                            mode=:doublestrand,
-                            type_hint=:RNA
+                            dataset_id = "test",
+                            mode = :doublestrand,
+                            type_hint = :RNA
                         )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
@@ -663,7 +692,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Validate that assembled sequences are proper RNA
                         for label in MetaGraphsNext.labels(quality_graph)
                             vertex_data = quality_graph[label]
-                            Test.@test vertex_data isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+                            Test.@test vertex_data isa
+                                       Mycelia.Rhizomorph.QualityBioSequenceVertexData
                             sequence_str = string(vertex_data.sequence)
                             if !isempty(sequence_str)
                                 detected_type = Mycelia.detect_alphabet(sequence_str)
@@ -677,7 +707,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                             evidence_entries = Mycelia.Rhizomorph.collect_evidence_entries(vertex_data.evidence)
                             Test.@test !isempty(evidence_entries)
                             for entry in evidence_entries
-                                Test.@test entry.strand in (Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
+                                Test.@test entry.strand in (
+                                    Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Reverse)
                                 Test.@test !isempty(entry.quality_scores)
                                 Test.@test all(q >= 0 for q in entry.quality_scores)  # Valid quality scores
                             end
@@ -687,72 +718,77 @@ Test.@testset "End-to-End Assembly Tests" begin
             end
         end
     end
-    
+
     Test.@testset "GFA I/O Round-trip Tests" begin
         Test.@testset "String Graph GFA I/O" begin
             reference_string = Mycelia.rand_ascii_greek_string(100)
-            graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id="test")
-            
+            graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
+
             # Test that we can work with the graph (basic functionality)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
             Test.@test graph isa MetaGraphsNext.MetaGraph
         end
-        
+
         Test.@testset "Sequence Graph Next GFA I/O" begin
             reference_seq = string(BioSequences.randdnaseq(100))
             reference_record = FASTX.FASTA.Record("reference", reference_seq)
-            
+
             kmer_type = Kmers.DNAKmer{5}
-            graph = Mycelia.Rhizomorph.build_kmer_graph([reference_record], 5; dataset_id="test", mode=:doublestrand)
-            
+            graph = Mycelia.Rhizomorph.build_kmer_graph(
+                [reference_record], 5; dataset_id = "test", mode = :doublestrand)
+
             # Test that we can work with the graph (basic functionality)
             Test.@test !isempty(MetaGraphsNext.labels(graph))
             Test.@test graph isa MetaGraphsNext.MetaGraph
-            
+
             # Test that GFA I/O functions exist
             Test.@test hasmethod(Mycelia.Rhizomorph.write_gfa_next, (typeof(graph), String))
             Test.@test hasmethod(Mycelia.Rhizomorph.read_gfa_next, (String,))
         end
     end
-    
+
     Test.@testset "Assembly Performance and Scaling" begin
         Test.@testset "Memory Usage Scaling" begin
             # Test with small toy sequences (unit-test scale)
             for seq_length in [50, 100]
                 reference_seq = string(BioSequences.randdnaseq(seq_length))
                 reads = Mycelia.create_test_reads(reference_seq, 20, 0.01)
-                
+
                 # Build graphs and verify they don't crash
                 kmer_type = Kmers.DNAKmer{5}
-                
+
                 # Test both modes
-                single_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
-                double_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
-                
+                single_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    reads, 5; dataset_id = "test", mode = :singlestrand)
+                double_graph = Mycelia.Rhizomorph.build_kmer_graph(
+                    reads, 5; dataset_id = "test", mode = :doublestrand)
+
                 Test.@test single_graph isa MetaGraphsNext.MetaGraph
                 Test.@test double_graph isa MetaGraphsNext.MetaGraph
-                
+
                 # DoubleStrand should include forward and reverse-complement k-mers
                 Test.@test !isempty(MetaGraphsNext.labels(single_graph))
                 Test.@test !isempty(MetaGraphsNext.labels(double_graph))
-                Test.@test length(MetaGraphsNext.labels(double_graph)) >= length(MetaGraphsNext.labels(single_graph))
+                Test.@test length(MetaGraphsNext.labels(double_graph)) >=
+                           length(MetaGraphsNext.labels(single_graph))
             end
         end
-        
+
         Test.@testset "Coverage Impact on Assembly Quality" begin
             reference_seq = string(BioSequences.randdnaseq(50))
             error_rate = 0.01
-            
+
             for coverage in [5, 20]
                 reads = Mycelia.create_test_reads(reference_seq, coverage, error_rate)
-                
+
                 kmer_type = Kmers.DNAKmer{5}
-                graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
-                
+                graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id = "test", mode = :doublestrand)
+
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
-                
+
                 # Higher coverage should generally result in more robust graphs
-                total_evidence = sum(Mycelia.Rhizomorph.count_evidence(graph[label]) for label in MetaGraphsNext.labels(graph))
+                total_evidence = sum(Mycelia.Rhizomorph.count_evidence(graph[label])
+                for label in MetaGraphsNext.labels(graph))
                 Test.@test total_evidence > 0
             end
         end
@@ -775,7 +811,7 @@ Test.@testset "End-to-End Assembly Tests" begin
             ]
 
             kmer_type = Kmers.DNAKmer{5}
-            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:doublestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id = "test", mode = :doublestrand)
 
             Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -790,7 +826,8 @@ Test.@testset "End-to-End Assembly Tests" begin
                 total_evidence_entries += length(strands)
 
                 # Check if we see both orientations (should happen with reverse complements)
-                if Mycelia.Rhizomorph.Forward in strands && Mycelia.Rhizomorph.Reverse in strands
+                if Mycelia.Rhizomorph.Forward in strands &&
+                   Mycelia.Rhizomorph.Reverse in strands
                     has_both_orientations = true
                 end
             end
@@ -805,7 +842,7 @@ Test.@testset "End-to-End Assembly Tests" begin
             reads = [FASTX.FASTA.Record("rna", reference_seq)]
 
             kmer_type = Kmers.RNAKmer{5}
-            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id="test", mode=:singlestrand)
+            graph = Mycelia.Rhizomorph.build_kmer_graph(reads, 5; dataset_id = "test", mode = :singlestrand)
 
             Test.@test !isempty(MetaGraphsNext.labels(graph))
 

@@ -61,7 +61,7 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
     alignment_score = Union{Int, Missing}[]
     mismatches = Union{Int, Missing}[]
     # aux_tags = Vector{Dict{String,Any}}()
-    
+
     # Process each record
     for record in reader
         try
@@ -121,7 +121,8 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         end
 
         try
-            push!(rnexts, MODULE.nextposition(record) == 0 ? missing : MODULE.nextrefname(record))
+            push!(rnexts, MODULE.nextposition(record) == 0 ? missing :
+                          MODULE.nextrefname(record))
         catch err
             println("Error extracting rnext from record: ", record)
             rethrow(err)
@@ -179,12 +180,12 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         end
 
         try
-            push!(mismatches,  MODULE.ismapped(record) ? record["NM"] : missing)
+            push!(mismatches, MODULE.ismapped(record) ? record["NM"] : missing)
         catch err
             println("Error extracting mismatches from record: ", record)
             rethrow(err)
         end
-        
+
         # not currently working?
         # # Extract auxiliary tags
         # tags = Dict{String,Any}()
@@ -194,7 +195,7 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         # end
         # push!(aux_tags, tags)
     end
-    
+
     # Create and return the DataFrame
     return DataFrames.DataFrame(
         template = templates,
@@ -213,8 +214,7 @@ function _xam_to_dataframe_common(reader, MODULE)::DataFrames.DataFrame
         qual = quals,
         alignlength = alignlengths,
         alignment_score = alignment_score,
-        mismatches = mismatches,
-        # aux_tags = aux_tags
+        mismatches = mismatches        # aux_tags = aux_tags
     )
 end
 
@@ -236,7 +236,7 @@ end
 #         tag_name = String(tag.tag)
 #         tags[tag_name] = tag.value
 #     end
-    
+
 #     # Return as a named tuple
 #     return (
 #         qname = XAM.SAM.tempname(record),
@@ -297,7 +297,7 @@ Open a XAM (SAM/BAM/CRAM) file with the specified parser.
 - samtools parser handles all formats including CRAM and provides additional validation
 - samtools parser always returns XAM.SAM.Reader regardless of input format
 """
-function open_xam(xam; header=false, parser=:auto)
+function open_xam(xam; header = false, parser = :auto)
     if !isfile(xam)
         error("File not found: ", xam)
     end
@@ -311,9 +311,9 @@ function open_xam(xam; header=false, parser=:auto)
     end
 
     if parser == :xamjl
-        return open_xam_xamjl(xam; header=header)
+        return open_xam_xamjl(xam; header = header)
     elseif parser == :samtools
-        return open_xam_samtools(xam; header=header)
+        return open_xam_samtools(xam; header = header)
     else
         error("Invalid parser: $parser. Use :auto, :xamjl, or :samtools")
     end
@@ -336,7 +336,8 @@ function detect_xam_format(xam)
     filename_lower = lowercase(xam)
 
     # Check for compressed SAM formats by extension first
-    if endswith(filename_lower, ".sam.gz") || endswith(filename_lower, ".sam.bgz") || ext == ".bgz"
+    if endswith(filename_lower, ".sam.gz") || endswith(filename_lower, ".sam.bgz") ||
+       ext == ".bgz"
         return :sam_gz
     elseif ext == ".bam"
         return :bam
@@ -355,15 +356,15 @@ function detect_xam_format(xam)
             # CRAM format: starts with "CRAM"
             if length(header) >= 4 && String(header[1:4]) == "CRAM"
                 return :cram
-            # BGZF compressed formats: starts with specific magic bytes
+                # BGZF compressed formats: starts with specific magic bytes
             elseif header[1:4] == UInt8[0x1f, 0x8b, 0x08, 0x04]
                 # BGZF format - could be BAM or compressed SAM
                 # Without extension context, assume BAM (more common)
                 return :bam
-            # Standard gzip: starts with gzip magic bytes
+                # Standard gzip: starts with gzip magic bytes
             elseif header[1:2] == UInt8[0x1f, 0x8b]
                 return :sam_gz
-            # SAM format: typically starts with '@' (header) or read name
+                # SAM format: typically starts with '@' (header) or read name
             elseif header[1] == UInt8('@')
                 return :sam
             end
@@ -380,7 +381,7 @@ Open a XAM file using XAM.jl direct parsing.
 Supports SAM, SAM.gz, and BAM files.
 Returns appropriate XAM.SAM.Reader or XAM.BAM.Reader.
 """
-function open_xam_xamjl(xam; header=false)
+function open_xam_xamjl(xam; header = false)
     format = detect_xam_format(xam)
 
     try
@@ -425,7 +426,7 @@ Open a XAM file using samtools view.
 Supports SAM, BAM, and CRAM files with validation.
 Always returns XAM.SAM.Reader regardless of input format.
 """
-function open_xam_samtools(xam; header=false)
+function open_xam_samtools(xam; header = false)
     Mycelia.add_bioconda_env("samtools")
 
     # First validate the file by testing samtools can read the header
@@ -476,10 +477,12 @@ Runs samtools flagstat to calculate statistics on the alignment file, including:
 - Requires samtools to be available via Bioconda
 - Input file must be in SAM, BAM or CRAM format
 """
-function run_samtools_flagstat(xam, samtools_flagstat=xam * ".samtools-flagstat.txt")
+function run_samtools_flagstat(xam, samtools_flagstat = xam * ".samtools-flagstat.txt")
     Mycelia.add_bioconda_env("samtools")
     if !isfile(samtools_flagstat)
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`, samtools_flagstat))
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools flagstat $(xam)`,
+            samtools_flagstat))
     end
     return samtools_flagstat
 end
@@ -500,13 +503,17 @@ DataFrame with columns:
 - `total_aligned_bases`: Total number of bases aligned to reference
 - `mean_depth`: Average depth of coverage (total_aligned_bases/contig_length)
 """
-function fasta_xam_mapping_stats(;fasta, xam)
+function fasta_xam_mapping_stats(; fasta, xam)
     fastx_contig_lengths = fastx_to_contig_lengths(fasta)
     xam_stats = xam_to_contig_mapping_stats(xam)
     fastx_contig_lengths = fastx_to_contig_lengths(fasta)
-    fastx_contig_lengths_table = DataFrames.DataFrame(contig = collect(keys(fastx_contig_lengths)), contig_length = collect(values(fastx_contig_lengths)))
-    fastx_contig_mapping_stats_table = DataFrames.innerjoin(fastx_contig_lengths_table, xam_stats, on="contig" => "reference")
-    mean_depth = fastx_contig_mapping_stats_table[!, "total_aligned_bases"] ./ fastx_contig_mapping_stats_table[!, "contig_length"]
+    fastx_contig_lengths_table = DataFrames.DataFrame(
+        contig = collect(keys(fastx_contig_lengths)),
+        contig_length = collect(values(fastx_contig_lengths)))
+    fastx_contig_mapping_stats_table = DataFrames.innerjoin(
+        fastx_contig_lengths_table, xam_stats, on = "contig" => "reference")
+    mean_depth = fastx_contig_mapping_stats_table[!, "total_aligned_bases"] ./
+                 fastx_contig_mapping_stats_table[!, "contig_length"]
     DataFrames.insertcols!(fastx_contig_mapping_stats_table, 4, :mean_depth => mean_depth)
     return fastx_contig_mapping_stats_table
 end
@@ -536,7 +543,7 @@ function xam_to_contig_mapping_stats(xam)
     xam_results = xam_results[xam_results[!, "isprimary"] .& xam_results[!, "ismapped"], :]
     # Calculate the percentage of mismatches
     xam_results.percent_mismatches = xam_results.mismatches ./ xam_results.alignlength * 100
-    
+
     # Group by the 'reference' column and calculate the summary statistics
     contig_mapping_stats = DataFrames.combine(DataFrames.groupby(xam_results, :reference)) do subdf
         mappingquality_stats = StatsBase.summarystats(subdf.mappingquality)
@@ -546,37 +553,36 @@ function xam_to_contig_mapping_stats(xam)
         percent_mismatches_stats = StatsBase.summarystats(subdf.percent_mismatches)
 
         (n_aligned_reads = length(subdf[!, "alignlength"]),
-         total_aligned_bases = sum(subdf[!, "alignlength"]),
-         total_alignment_score = sum(subdf[!, "alignment_score"]),
-         mappingquality_mean = mappingquality_stats.mean,
-         mappingquality_std = mappingquality_stats.sd,
-         # mappingquality_min = mappingquality_stats.min,
-         mappingquality_median = mappingquality_stats.median,
-         # mappingquality_max = mappingquality_stats.max,
+            total_aligned_bases = sum(subdf[!, "alignlength"]),
+            total_alignment_score = sum(subdf[!, "alignment_score"]),
+            mappingquality_mean = mappingquality_stats.mean,
+            mappingquality_std = mappingquality_stats.sd,
+            # mappingquality_min = mappingquality_stats.min,
+            mappingquality_median = mappingquality_stats.median,
+            # mappingquality_max = mappingquality_stats.max,
 
-         alignlength_mean = alignlength_stats.mean,
-         alignlength_std = alignlength_stats.sd,
-         # alignlength_min = alignlength_stats.min,
-         alignlength_median = alignlength_stats.median,
-         # alignlength_max = alignlength_stats.max,
+            alignlength_mean = alignlength_stats.mean,
+            alignlength_std = alignlength_stats.sd,
+            # alignlength_min = alignlength_stats.min,
+            alignlength_median = alignlength_stats.median,
+            # alignlength_max = alignlength_stats.max,
 
-         alignment_score_mean = alignment_score_stats.mean,
-         alignment_score_std = alignment_score_stats.sd,
-         # alignment_score_min = alignment_score_stats.min,
-         alignment_score_median = alignment_score_stats.median,
-         # alignment_score_max = alignment_score_stats.max,
+            alignment_score_mean = alignment_score_stats.mean,
+            alignment_score_std = alignment_score_stats.sd,
+            # alignment_score_min = alignment_score_stats.min,
+            alignment_score_median = alignment_score_stats.median,
+            # alignment_score_max = alignment_score_stats.max,
 
-         # mismatches_mean = mismatches_stats.mean,
-         # mismatches_std = mismatches_stats.sd,
-         # mismatches_min = mismatches_stats.min,
-         # mismatches_median = mismatches_stats.median,
-         # mismatches_max = mismatches_stats.max,
+            # mismatches_mean = mismatches_stats.mean,
+            # mismatches_std = mismatches_stats.sd,
+            # mismatches_min = mismatches_stats.min,
+            # mismatches_median = mismatches_stats.median,
+            # mismatches_max = mismatches_stats.max,
 
-         percent_mismatches_mean = percent_mismatches_stats.mean,
-         percent_mismatches_std = percent_mismatches_stats.sd,
-         # percent_mismatches_min = percent_mismatches_stats.min,
-         percent_mismatches_median = percent_mismatches_stats.median,
-         # percent_mismatches_max = percent_mismatches_stats.max)
+            percent_mismatches_mean = percent_mismatches_stats.mean,
+            percent_mismatches_std = percent_mismatches_stats.sd,
+            # percent_mismatches_min = percent_mismatches_stats.min,
+            percent_mismatches_median = percent_mismatches_stats.median            # percent_mismatches_max = percent_mismatches_stats.max)
         )
     end
     return contig_mapping_stats
@@ -604,16 +610,18 @@ function determine_fasta_coverage_from_bam(bam)
     Mycelia.add_bioconda_env("bedtools")
     genome_coverage_file = bam * ".coverage.txt"
     if !isfile(genome_coverage_file)
-        run(pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`, genome_coverage_file))
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n bedtools bedtools genomecov -d -ibam $(bam)`,
+            genome_coverage_file))
     end
     # Read the coverage file into a DataFrame
     if isfile(genome_coverage_file) && filesize(genome_coverage_file) > 0
         coverage_df = CSV.read(genome_coverage_file, DataFrames.DataFrame;
-                              header=[:chromosome, :position, :coverage_depth], delim='\t')
+            header = [:chromosome, :position, :coverage_depth], delim = '\t')
         return coverage_df
     else
         # Return empty DataFrame with expected columns if no coverage data
-        return DataFrames.DataFrame(chromosome=String[], position=Int[], coverage_depth=Int[])
+        return DataFrames.DataFrame(chromosome = String[], position = Int[], coverage_depth = Int[])
     end
 end
 
@@ -626,13 +634,13 @@ Build the CLI arguments for running CoverM in contig mode.
 Returns a `Vector{String}` suitable for interpolation into a `coverm` command.
 """
 function _build_coverm_contig_args(; bam_files::Vector{String},
-                                   reference_fasta::Union{Nothing,String},
-                                   methods::Vector{String},
-                                   threads::Int,
-                                   min_read_percent_identity::Union{Nothing,Float64},
-                                   min_covered_fraction::Union{Nothing,Float64},
-                                   out_path::String,
-                                   additional_args::Vector{String})
+        reference_fasta::Union{Nothing, String},
+        methods::Vector{String},
+        threads::Int,
+        min_read_percent_identity::Union{Nothing, Float64},
+        min_covered_fraction::Union{Nothing, Float64},
+        out_path::String,
+        additional_args::Vector{String})
     args = String[]
     push!(args, "contig")
     push!(args, "--bam-files")
@@ -680,15 +688,15 @@ Run CoverM in *contig* mode to compute per-contig coverage statistics.
 `DataFrames.DataFrame` parsed from the CoverM contig output.
 """
 function run_coverm_contig(; bam_files::Vector{String},
-                           reference_fasta::Union{Nothing,String}=nothing,
-                           outdir::Union{Nothing,String}=nothing,
-                           methods::Vector{String}=["mean", "covered_fraction"],
-                           threads::Int=Sys.CPU_THREADS,
-                           min_covered_fraction::Union{Nothing,Float64}=nothing,
-                           min_read_percent_identity::Union{Nothing,Float64}=nothing,
-                           output_tsv::Union{Nothing,String}=nothing,
-                           additional_args::Vector{String}=String[],
-                           quiet::Bool=true)
+        reference_fasta::Union{Nothing, String} = nothing,
+        outdir::Union{Nothing, String} = nothing,
+        methods::Vector{String} = ["mean", "covered_fraction"],
+        threads::Int = Sys.CPU_THREADS,
+        min_covered_fraction::Union{Nothing, Float64} = nothing,
+        min_read_percent_identity::Union{Nothing, Float64} = nothing,
+        output_tsv::Union{Nothing, String} = nothing,
+        additional_args::Vector{String} = String[],
+        quiet::Bool = true)
     @assert !isempty(bam_files) "bam_files must be non-empty"
     for bam in bam_files
         @assert isfile(bam) "BAM file does not exist: $(bam)"
@@ -710,19 +718,22 @@ function run_coverm_contig(; bam_files::Vector{String},
         resolved_reference = nothing
     end
 
-    resolved_outdir = isnothing(outdir) ? joinpath(dirname(first(bam_files)), "coverm_contig") : outdir
-    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_contig.tsv") : output_tsv
+    resolved_outdir = isnothing(outdir) ?
+                      joinpath(dirname(first(bam_files)), "coverm_contig") : outdir
+    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_contig.tsv") :
+               output_tsv
     mkpath(dirname(out_path))
 
     should_run = !isfile(out_path) || filesize(out_path) == 0
     if should_run
         Mycelia.add_bioconda_env("coverm")
-        args = _build_coverm_contig_args(; bam_files, reference_fasta=resolved_reference, methods, threads,
-                                         min_read_percent_identity, min_covered_fraction,
-                                         out_path, additional_args)
+        args = _build_coverm_contig_args(;
+            bam_files, reference_fasta = resolved_reference, methods, threads,
+            min_read_percent_identity, min_covered_fraction,
+            out_path, additional_args)
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n coverm coverm $args`
         if quiet
-            run(pipeline(cmd, stdout=devnull, stderr=devnull))
+            run(pipeline(cmd, stdout = devnull, stderr = devnull))
         else
             run(cmd)
         end
@@ -730,7 +741,7 @@ function run_coverm_contig(; bam_files::Vector{String},
         @assert filesize(out_path) > 0 "CoverM contig output file is empty: $(out_path)"
     end
 
-    return CSV.read(out_path, DataFrames.DataFrame; delim='\t', normalizenames=true)
+    return CSV.read(out_path, DataFrames.DataFrame; delim = '\t', normalizenames = true)
 end
 
 """
@@ -742,13 +753,13 @@ Build the CLI arguments for running CoverM in genome mode.
 Returns a `Vector{String}` suitable for interpolation into a `coverm` command.
 """
 function _build_coverm_genome_args(; bam_files::Vector{String},
-                                   genome_fasta_files::Union{Nothing,Vector{String}},
-                                   genome_directory::Union{Nothing,String},
-                                   genome_extension::String,
-                                   methods::Vector{String},
-                                   threads::Int,
-                                   out_path::String,
-                                   additional_args::Vector{String})
+        genome_fasta_files::Union{Nothing, Vector{String}},
+        genome_directory::Union{Nothing, String},
+        genome_extension::String,
+        methods::Vector{String},
+        threads::Int,
+        out_path::String,
+        additional_args::Vector{String})
     args = String[]
     push!(args, "genome")
     push!(args, "--bam-files")
@@ -792,15 +803,15 @@ Run CoverM in *genome* mode to compute per-genome/bin coverage and abundance.
 `DataFrames.DataFrame` parsed from the CoverM genome output.
 """
 function run_coverm_genome(; bam_files::Vector{String},
-                           genome_fasta_files::Union{Nothing,Vector{String}}=nothing,
-                           genome_directory::Union{Nothing,String}=nothing,
-                           genome_extension::String="fa",
-                           outdir::Union{Nothing,String}=nothing,
-                           methods::Vector{String}=["relative_abundance", "mean"],
-                           threads::Int=Sys.CPU_THREADS,
-                           output_tsv::Union{Nothing,String}=nothing,
-                           additional_args::Vector{String}=String[],
-                           quiet::Bool=true)
+        genome_fasta_files::Union{Nothing, Vector{String}} = nothing,
+        genome_directory::Union{Nothing, String} = nothing,
+        genome_extension::String = "fa",
+        outdir::Union{Nothing, String} = nothing,
+        methods::Vector{String} = ["relative_abundance", "mean"],
+        threads::Int = Sys.CPU_THREADS,
+        output_tsv::Union{Nothing, String} = nothing,
+        additional_args::Vector{String} = String[],
+        quiet::Bool = true)
     @assert !isempty(bam_files) "bam_files must be non-empty"
     for bam in bam_files
         @assert isfile(bam) "BAM file does not exist: $(bam)"
@@ -828,18 +839,20 @@ function run_coverm_genome(; bam_files::Vector{String},
     @assert all(!isempty, methods) "CoverM methods cannot contain empty strings"
     @assert !isempty(genome_extension) "genome_extension must be non-empty"
 
-    resolved_outdir = isnothing(outdir) ? joinpath(dirname(first(bam_files)), "coverm_genome") : outdir
-    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_genome.tsv") : output_tsv
+    resolved_outdir = isnothing(outdir) ?
+                      joinpath(dirname(first(bam_files)), "coverm_genome") : outdir
+    out_path = isnothing(output_tsv) ? joinpath(resolved_outdir, "coverm_genome.tsv") :
+               output_tsv
     mkpath(dirname(out_path))
 
     should_run = !isfile(out_path) || filesize(out_path) == 0
     if should_run
         Mycelia.add_bioconda_env("coverm")
         args = _build_coverm_genome_args(; bam_files, genome_fasta_files, genome_directory,
-                                         genome_extension, methods, threads, out_path, additional_args)
+            genome_extension, methods, threads, out_path, additional_args)
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n coverm coverm $args`
         if quiet
-            run(pipeline(cmd, stdout=devnull, stderr=devnull))
+            run(pipeline(cmd, stdout = devnull, stderr = devnull))
         else
             run(cmd)
         end
@@ -847,7 +860,7 @@ function run_coverm_genome(; bam_files::Vector{String},
         @assert filesize(out_path) > 0 "CoverM genome output file is empty: $(out_path)"
     end
 
-    return CSV.read(out_path, DataFrames.DataFrame; delim='\t', normalizenames=true)
+    return CSV.read(out_path, DataFrames.DataFrame; delim = '\t', normalizenames = true)
 end
 
 """
@@ -869,7 +882,7 @@ Convert a BAM file to FASTQ format with gzip compression.
 - Requires samtools to be available via conda
 
 """
-function bam_to_fastq(;bam, fastq=bam * ".fq.gz")
+function bam_to_fastq(; bam, fastq = bam * ".fq.gz")
     if !isfile(fastq)
         Mycelia.add_bioconda_env("samtools")
         p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`, `gzip`)
@@ -994,8 +1007,8 @@ function parse_xam_to_summary_table(xam)
                 # alignment = XAM.SAM.alignment(record),
                 alignment_score = record["AS"],
                 mismatches = record["NM"]
-                )
-            push!(record_table, row, promote=true)
+            )
+            push!(record_table, row, promote = true)
         end
     end
     # records = sort(collect(record_iterator), by=x->[MODULE.refname(x), MODULE.position(x)])
@@ -1019,25 +1032,25 @@ function is_bam_coordinate_sorted(bam::String)
     try
         Mycelia.add_bioconda_env("samtools")
         header_lines = Base.readlines(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools view -H $(bam)`)
-        
+
         # If we have a header with SO:coordinate, trust it
         if Base.any(line -> Base.occursin(r"@HD.*SO:coordinate", line), header_lines)
             @info "BAM header indicates coordinate sorting" bam
             return true
         end
-        
+
         # If header explicitly says NOT coordinate sorted, trust that too
         if Base.any(line -> Base.occursin(r"@HD.*SO:(queryname|unsorted)", line), header_lines)
             @info "BAM header indicates NOT coordinate sorted" bam
             return false
         end
-        
+
         # Header exists but no SO tag or empty header - need to validate
         @info "BAM header missing or incomplete, validating sort order..." bam
     catch e
         @warn "Failed to read BAM header, validating sort order..." exception=e
     end
-    
+
     # Thorough check: read through file and verify sort order
     try
         reader = Mycelia.open_xam(bam)
@@ -1045,7 +1058,7 @@ function is_bam_coordinate_sorted(bam::String)
         prev_pos = -1
         record_count = 0
         max_check = 100_000  # Only check first 100k records for performance
-        
+
         for record in reader
             record_count += 1
             if record_count > max_check
@@ -1053,26 +1066,26 @@ function is_bam_coordinate_sorted(bam::String)
                 Base.close(reader)
                 return true
             end
-            
+
             # Skip unmapped reads
             if !XAM.BAM.ismapped(record)
                 continue
             end
-            
+
             refid = XAM.BAM.refid(record)
             pos = XAM.BAM.position(record)
-            
+
             # Check if sort order is violated
             if refid < prev_refid || (refid == prev_refid && pos < prev_pos)
                 @info "BAM file is NOT coordinate-sorted (violation at record $record_count)" bam
                 Base.close(reader)
                 return false
             end
-            
+
             prev_refid = refid
             prev_pos = pos
         end
-        
+
         Base.close(reader)
         @info "BAM file validated as coordinate-sorted" bam
         return true
@@ -1092,15 +1105,17 @@ Keyword Arguments:
 - threads: Number of threads to use for sorting (default: all available CPUs)
 - output_path: Path for the sorted BAM file (default: input with .sorted.bam suffix)
 """
-function sort_bam(input_bam::String; threads::Int=get_default_threads(), output_path::Union{String,Nothing}=nothing)
-    sorted_bam = Base.isnothing(output_path) ? Base.replace(input_bam, ".bam" => ".sorted.bam") : output_path
+function sort_bam(input_bam::String; threads::Int = get_default_threads(),
+        output_path::Union{String, Nothing} = nothing)
+    sorted_bam = Base.isnothing(output_path) ?
+                 Base.replace(input_bam, ".bam" => ".sorted.bam") : output_path
     if !isfile(sorted_bam)
         Mycelia.add_bioconda_env("samtools")
         @info "Sorting BAM file..." input_bam sorted_bam threads
         Base.run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools sort -@ $(threads) -T $(sorted_bam).sort.tmp -o $(sorted_bam) $(input_bam)`)
     else
         @info "Target sorted BAM file already exists at: $(sorted_bam)"
-    end    
+    end
     return sorted_bam
 end
 
@@ -1118,8 +1133,7 @@ Keyword Arguments:
 - threads: Number of threads to use for sorting (default: all available CPUs)
 - skip_sort_check: Skip pre-check for sort order and attempt indexing directly (default: false)
 """
-function index_bam(bam_path::String; threads::Int=get_default_threads(), skip_sort_check::Bool=false)
-
+function index_bam(bam_path::String; threads::Int = get_default_threads(), skip_sort_check::Bool = false)
     bai_path = bam_path * ".bai"
     # Check if index already exists
     if Base.isfile(bai_path)
@@ -1131,17 +1145,17 @@ function index_bam(bam_path::String; threads::Int=get_default_threads(), skip_so
     # Optionally check sort order first (useful for large files where we want to avoid failed index attempts)
     if !skip_sort_check
         if !is_bam_coordinate_sorted(current_bam)
-            current_bam = sort_bam(current_bam; threads=threads)
+            current_bam = sort_bam(current_bam; threads = threads)
         end
     end
     bai_path = current_bam * ".bai"
-    
+
     # Check if index already exists
     if Base.isfile(bai_path)
         @info "BAM index already exists at: $bai_path"
         return (current_bam, bai_path)
     end
-    
+
     # Try to generate the index
     Mycelia.add_bioconda_env("samtools")
     @info "Generating BAM index for: $current_bam"
@@ -1151,11 +1165,11 @@ function index_bam(bam_path::String; threads::Int=get_default_threads(), skip_so
     catch e
         # Check if error is due to sort order
         error_msg = Base.string(e)
-        if Base.occursin(r"NO_COOR.*not in a single block", error_msg) || 
+        if Base.occursin(r"NO_COOR.*not in a single block", error_msg) ||
            Base.occursin(r"cannot be indexed", error_msg)
             @warn "Indexing failed due to sort order, sorting BAM file now..." current_bam
-            current_bam = sort_bam(current_bam; threads=threads)
-            
+            current_bam = sort_bam(current_bam; threads = threads)
+
             # Try indexing the sorted file
             bai_path = current_bam * ".bai"
             @info "Generating BAM index for sorted file: $current_bam"
@@ -1241,21 +1255,19 @@ The function automatically:
 - `{prefix}.thresholds.bed.gz`: Threshold coverage (if thresholds is specified)
 """
 function run_mosdepth(bam::String;
-                      prefix::String="",
-                      threads::Int=0,
-                      use_median::Bool=false,
-                      fast_mode::Bool=false,
-                      no_per_base::Bool=false,
-                      by::String="",
-                      quantize::String="",
-                      thresholds::String="",
-                      mapq::Int=0,
-                      flag::Int=0,
-                      include_flag::Int=0,
-                      fasta::String="",
-                      force::Bool=false)
-
-
+        prefix::String = "",
+        threads::Int = 0,
+        use_median::Bool = false,
+        fast_mode::Bool = false,
+        no_per_base::Bool = false,
+        by::String = "",
+        quantize::String = "",
+        thresholds::String = "",
+        mapq::Int = 0,
+        flag::Int = 0,
+        include_flag::Int = 0,
+        fasta::String = "",
+        force::Bool = false)
     if isempty(prefix)
         prefix = bam
     end
@@ -1264,18 +1276,18 @@ function run_mosdepth(bam::String;
     if isfile(summary_file) && !force
         @info "mosdepth output already exists at: $(summary_file)"
         return (;
-            prefix=prefix,
-            global_dist=prefix * ".mosdepth.global.dist.txt",
-            summary=summary_file,
-            per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
-            regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
-            quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
-            thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+            prefix = prefix,
+            global_dist = prefix * ".mosdepth.global.dist.txt",
+            summary = summary_file,
+            per_base = no_per_base ? "" : prefix * ".per-base.bed.gz",
+            regions = isempty(by) ? "" : prefix * ".regions.bed.gz",
+            quantized = isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+            thresholds_file = isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
         )
     end
-    
+
     # Ensure BAM is sorted and indexed
-    sorted_bam, bai_path = Mycelia.index_bam(bam, threads=threads)
+    sorted_bam, bai_path = Mycelia.index_bam(bam, threads = threads)
     if isempty(prefix) || ((prefix == bam) && (sorted_bam != bam))
         prefix = sorted_bam
         # re-check if output already exists
@@ -1283,71 +1295,71 @@ function run_mosdepth(bam::String;
         if isfile(summary_file) && !force
             @info "mosdepth output already exists at: $(summary_file)"
             return (;
-                prefix=prefix,
-                global_dist=prefix * ".mosdepth.global.dist.txt",
-                summary=summary_file,
-                per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
-                regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
-                quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
-                thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+                prefix = prefix,
+                global_dist = prefix * ".mosdepth.global.dist.txt",
+                summary = summary_file,
+                per_base = no_per_base ? "" : prefix * ".per-base.bed.gz",
+                regions = isempty(by) ? "" : prefix * ".regions.bed.gz",
+                quantized = isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+                thresholds_file = isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
             )
         end
     end
-    
+
     # Build command arguments
     cmd_args = String["mosdepth"]
-    
+
     # Add flags
     push!(cmd_args, "--threads", string(threads))
     push!(cmd_args, "--flag", string(flag))
     push!(cmd_args, "--include-flag", string(include_flag))
     push!(cmd_args, "--mapq", string(mapq))
-    
+
     if use_median
         push!(cmd_args, "--use-median")
     end
-    
+
     if fast_mode
         push!(cmd_args, "--fast-mode")
     end
-    
+
     if no_per_base
         push!(cmd_args, "--no-per-base")
     end
-    
+
     if !isempty(by)
         push!(cmd_args, "--by", by)
     end
-    
+
     if !isempty(quantize)
         push!(cmd_args, "--quantize", quantize)
     end
-    
+
     if !isempty(thresholds)
         push!(cmd_args, "--thresholds", thresholds)
     end
-    
+
     if !isempty(fasta)
         push!(cmd_args, "--fasta", fasta)
     end
-    
+
     # Add positional arguments
     push!(cmd_args, prefix, sorted_bam)
-    
+
     # Run mosdepth
     @info "Running mosdepth on $(sorted_bam)"
     # Ensure mosdepth is installed
     Mycelia.add_bioconda_env("mosdepth")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mosdepth $(cmd_args)`)
-    
+
     return (;
-        prefix=prefix,
-        global_dist=prefix * ".mosdepth.global.dist.txt",
-        summary=summary_file,
-        per_base=no_per_base ? "" : prefix * ".per-base.bed.gz",
-        regions=isempty(by) ? "" : prefix * ".regions.bed.gz",
-        quantized=isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
-        thresholds_file=isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
+        prefix = prefix,
+        global_dist = prefix * ".mosdepth.global.dist.txt",
+        summary = summary_file,
+        per_base = no_per_base ? "" : prefix * ".per-base.bed.gz",
+        regions = isempty(by) ? "" : prefix * ".regions.bed.gz",
+        quantized = isempty(quantize) ? "" : prefix * ".quantized.bed.gz",
+        thresholds_file = isempty(thresholds) ? "" : prefix * ".thresholds.bed.gz"
     )
 end
 
@@ -1381,12 +1393,12 @@ function parse_mosdepth_distribution(dist_file::String)
     if !isfile(dist_file)
         error("Distribution file does not exist: $(dist_file)")
     end
-    
+
     df = CSV.read(dist_file, DataFrames.DataFrame;
-                  header=[:chromosome, :coverage, :proportion],
-                  delim='\t',
-                  comment="#")
-    
+        header = [:chromosome, :coverage, :proportion],
+        delim = '\t',
+        comment = "#")
+
     return df
 end
 
@@ -1415,9 +1427,9 @@ function parse_mosdepth_summary(summary_file::String)
     if !isfile(summary_file)
         error("Summary file does not exist: $(summary_file)")
     end
-    
-    df = CSV.read(summary_file, DataFrames.DataFrame; delim='\t')
-    
+
+    df = CSV.read(summary_file, DataFrames.DataFrame; delim = '\t')
+
     return df
 end
 
@@ -1449,18 +1461,18 @@ function parse_mosdepth_thresholds(thresholds_file::String)
     if !isfile(thresholds_file)
         error("Thresholds file does not exist: $(thresholds_file)")
     end
-    
+
     # Read with automatic header detection
     # mosdepth writes a header line starting with #
-    df = CSV.read(thresholds_file, DataFrames.DataFrame; 
-                  delim='\t',
-                  comment="#")
-    
+    df = CSV.read(thresholds_file, DataFrames.DataFrame;
+        delim = '\t',
+        comment = "#")
+
     # If no header was found, mosdepth uses these column names
     if isempty(names(df))
         error("Unable to parse thresholds file - check file format")
     end
-    
+
     return df
 end
 
@@ -1486,28 +1498,28 @@ For whole genome sequencing QC, typical expectations are:
 - ≥10X: >90% (sufficient for variant calling)
 - ≥30X: >80% (high confidence variant calling)
 """
-function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame; 
-                               thresholds::Vector{Int}=[1, 3, 5, 10, 30, 50, 100, 300, 500, 1000])
-    
+function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame;
+        thresholds::Vector{Int} = [1, 3, 5, 10, 30, 50, 100, 300, 500, 1000])
+
     # Get unique chromosomes
     chroms = unique(dist_df.chromosome)
-    
+
     # Initialize result dataframe with columns that can hold missing values
-    result = DataFrames.DataFrame(chromosome=String[])
+    result = DataFrames.DataFrame(chromosome = String[])
     for threshold in thresholds
         result[!, Symbol("coverage_$(threshold)X")] = Union{Float64, Missing}[]
     end
-    
+
     # For each chromosome, find the proportion at each threshold
     for chrom in chroms
         chrom_data = DataFrames.subset(dist_df, :chromosome => x -> x .== chrom)
-        
+
         row_data = Dict{Symbol, Any}(:chromosome => chrom)
-        
+
         for threshold in thresholds
             # Find the row with this exact coverage value
             matching_rows = DataFrames.subset(chrom_data, :coverage => x -> x .== threshold)
-            
+
             if DataFrames.nrow(matching_rows) > 0
                 row_data[Symbol("coverage_$(threshold)X")] = matching_rows[1, :proportion]
             else
@@ -1515,9 +1527,9 @@ function summarize_mosdepth_qc(dist_df::DataFrames.DataFrame;
                 row_data[Symbol("coverage_$(threshold)X")] = missing
             end
         end
-        
+
         push!(result, row_data)
     end
-    
+
     return result
 end
