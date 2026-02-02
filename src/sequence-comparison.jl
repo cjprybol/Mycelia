@@ -198,6 +198,7 @@ end
                    threads::Int=3,
                    min_af::Union{Nothing,Float64}=nothing,
                    output_file::Union{Nothing,String}=nothing,
+                   force::Bool=false,
                    additional_args::Vector{String}=String[])
 
 Perform pairwise all-vs-all ANI/AF comparison using skani triangle.
@@ -210,6 +211,8 @@ Perform pairwise all-vs-all ANI/AF comparison using skani triangle.
 - `threads::Int=3`: Number of threads to use
 - `min_af::Union{Nothing,Float64}=nothing`: Minimum aligned fraction threshold
 - `output_file::Union{Nothing,String}=nothing`: Output file path. If nothing, returns stdout as string
+- `force::Bool=false`: If true, recompute even if output_file exists. If false (default),
+  skip computation and return the existing file path when output_file already exists.
 - `additional_args::Vector{String}=String[]`: Additional command-line arguments to pass to skani
 
 # Returns
@@ -226,11 +229,18 @@ function skani_triangle(fasta_files::Vector{String};
         threads::Int = 3,
         min_af::Union{Nothing, Float64} = nothing,
         output_file::Union{Nothing, String} = nothing,
+        force::Bool = false,
         additional_args::Vector{String} = String[])
     for file in fasta_files
         if !isfile(file)
             error("File not found: $file")
         end
+    end
+
+    # Early return if output file exists and force is false
+    if !isnothing(output_file) && isfile(output_file) && !force
+        @info "Output file already exists, skipping calculation: $output_file"
+        return output_file
     end
 
     # Auto-detect sparse mode based on genome count (skani recommends sparse for >500 genomes)
