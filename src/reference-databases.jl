@@ -1576,11 +1576,13 @@ Collect UN Parallel Corpus plain-text files by language.
 # Arguments
 - `corpus_root::String`: Root directory containing extracted UN corpus files.
 - `subsets::Vector{String}`: Subset filters (e.g. `["all"]`, `["en-fr"]`, `["6way"]`).
+- `strict_naming::Bool`: If `true` (default), require "UNv1.0" and pair naming ("-" or "6way")
+  in filenames. Set to `false` for testset/devset files that use simpler naming conventions.
 
 # Returns
 - `Dict{String, Vector{String}}`: Map of language code to file paths.
 """
-function collect_un_language_files(corpus_root::String; subsets::Vector{String})
+function collect_un_language_files(corpus_root::String; subsets::Vector{String}, strict_naming::Bool = true)
     language_files = Dict{String, Vector{String}}()
     use_all = "all" in subsets
     for (root, _dirs, files) in walkdir(corpus_root)
@@ -1590,11 +1592,13 @@ function collect_un_language_files(corpus_root::String; subsets::Vector{String})
                endswith(filename, ".tar")
                 continue
             end
-            if !occursin("UNv1.0", filename)
-                continue
-            end
-            if !occursin("-", filename) && !occursin("6way", filename)
-                continue
+            if strict_naming
+                if !occursin("UNv1.0", filename)
+                    continue
+                end
+                if !occursin("-", filename) && !occursin("6way", filename)
+                    continue
+                end
             end
             parts = split(filename, '.')
             if length(parts) < 2
