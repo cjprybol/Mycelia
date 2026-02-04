@@ -3292,16 +3292,17 @@ Export sequences from a BLAST database to a gzipped FASTA file.
 # Arguments
 - `path_to_db`: Path to the BLAST database
 - `fasta`: Output path for the gzipped FASTA file (default: `path_to_db * ".fna.gz"`)
+- `force::Bool=false`: If true, regenerate even if output file already exists
 
 # Details
 Uses conda's BLAST environment to extract sequences using `blastdbcmd`.
 The output is automatically compressed using `pigz`.
-If the output file already exists, the function will skip extraction.
+If the output file already exists and `force=false`, the function will skip extraction.
 
 """
-function export_blast_db(; path_to_db, fasta = path_to_db * ".fna.gz")
+function export_blast_db(; path_to_db, fasta = path_to_db * ".fna.gz", force::Bool = false)
     Mycelia.add_bioconda_env("blast")
-    if !isfile(fasta)
+    if !isfile(fasta) || force
         # -long_seqids adds GI identifiers - these are cross-referenceable through other means so I'm dropping
         @time run(pipeline(
             pipeline(
