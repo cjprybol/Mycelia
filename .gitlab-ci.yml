@@ -1,0 +1,64 @@
+# Mycelia CI/CD — Runs on Lovelace GitLab Runner
+# foundry-lovelace.lbl.gov (dedicated server, 2TB RAM, 100TB storage)
+
+stages:
+  - test
+  - integration
+  - benchmark
+  - report
+
+# --- Stage 1: Unit Tests ---
+unit-tests:
+  stage: test
+  tags: [lovelace]
+  script:
+    - julia --project -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+
+# --- Stage 2: Memgraph Integration Tests ---
+memgraph-integration:
+  stage: integration
+  tags: [lovelace]
+  script:
+    - julia --project -e 'include("test/memgraph_tests.jl")'
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
+  allow_failure: true  # Until Memgraph tests are stable
+
+# --- Stage 3: Benchmarks (main branch only) ---
+benchmarks:
+  stage: benchmark
+  tags: [lovelace]
+  script:
+    - julia --project -e 'include("benchmarking/run_benchmarks.jl")'
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  artifacts:
+    paths:
+      - benchmarking/results/
+    expire_in: 30 days
+
+# --- Stage 4: Lawrencium Dispatch (main branch, manual) ---
+lawrencium-batch:
+  stage: benchmark
+  tags: [lovelace]
+  script:
+    - ssh lrc "cd ~/workspace/Mycelia/main && git pull"
+    - ssh lrc "cd ~/workspace/Mycelia/main && sbatch --wait ci/hpc/run_hpc_ci.sh"
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+      when: manual
+  allow_failure: true
+
+# --- Stage 5: Report Generation ---
+generate-report:
+  stage: report
+  tags: [lovelace]
+  script:
+    - julia --project -e 'include("ci/generate_report.jl")'
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+  dependencies:
+    - benchmarks
+  allow_failure: true
