@@ -315,6 +315,76 @@ function nersc_sbatch(;
 
     return true
 end
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Execute a command directly on the Lovelace dedicated server (no SLURM).
+
+Lovelace (foundry-lovelace.lbl.gov) is a dedicated 2TB RAM, 100TB storage
+server with admin access. Unlike HPC clusters, it does not use a job scheduler,
+so commands run directly via shell execution.
+
+# Arguments
+- `cmd::String`: Shell command to execute
+- `logdir::String`: Directory for output logs (default: "~/workspace/slurmlogs")
+- `job_name::String`: Identifier for logging purposes (default: "lovelace-job")
+
+# Returns
+- `true` if execution succeeds, `false` otherwise
+"""
+function lovelace_run(;
+        cmd::String,
+        logdir::String = mkpath(joinpath(homedir(), "workspace/slurmlogs")),
+        job_name::String = "lovelace-job"
+)
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
+    log_out = joinpath(logdir, "$(timestamp).$(job_name).out")
+    log_err = joinpath(logdir, "$(timestamp).$(job_name).err")
+
+    try
+        run(pipeline(`bash -c $cmd`; stdout = log_out, stderr = log_err))
+    catch e
+        @error "Lovelace job '$(job_name)' failed: $e"
+        return false
+    end
+    return true
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Dispatch a job to the appropriate compute backend based on `SITE_TAG` environment variable.
+
+Routes to the correct submission function:
+- `"lawrencium"` → `lawrencium_sbatch()`
+- `"lovelace"` → `lovelace_run()` (direct execution, no SLURM)
+- `"nersc"` → `nersc_sbatch()`
+- `"stanford_scg"` → `scg_sbatch()`
+
+# Arguments
+- `site::String`: Override for `SITE_TAG` (default: reads from ENV)
+- `kwargs...`: Keyword arguments passed through to the site-specific function
+
+# Returns
+- Result from the dispatched function
+
+# Throws
+- `ErrorException` if `site` doesn't match any known backend
+"""
+function submit_job(; site::String = get(ENV, "SITE_TAG", "default"), kwargs...)
+    if site == "lawrencium"
+        return lawrencium_sbatch(; kwargs...)
+    elseif site == "lovelace"
+        return lovelace_run(; kwargs...)
+    elseif site == "nersc"
+        return nersc_sbatch(; kwargs...)
+    elseif site == "stanford_scg"
+        return scg_sbatch(; kwargs...)
+    else
+        error("Unknown SITE_TAG: $site. Expected one of: lawrencium, lovelace, nersc, stanford_scg")
+    end
+end
+
 # function nersc_sbatch_regular(;
 #         job_name::String,
 #         mail_user::String,
