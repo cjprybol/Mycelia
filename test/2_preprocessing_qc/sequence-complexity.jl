@@ -289,6 +289,77 @@ Test.@testset "Sequence Comparison Functions" begin
         end
     end
 
+    Test.@testset "topological_entropy" begin
+        Test.@testset "DNA and RNA alphabets" begin
+            dna_seq = BioSequences.LongDNA{4}("ACGTACGTACGTACGT")
+            dna_default = Mycelia.topological_entropy(dna_seq)
+            dna_with_constant = Mycelia.topological_entropy(
+                dna_seq, alphabet = Mycelia.DNA_ALPHABET)
+            dna_with_symbol = Mycelia.topological_entropy(dna_seq, alphabet = :DNA)
+
+            Test.@test 0.0 ≤ dna_default ≤ 1.0
+            Test.@test dna_default ≈ dna_with_constant
+            Test.@test dna_default ≈ dna_with_symbol
+
+            rna_seq = BioSequences.LongRNA{4}("AUCGAUCGAUCGAUCG")
+            rna_default = Mycelia.topological_entropy(rna_seq)
+            rna_with_constant = Mycelia.topological_entropy(
+                rna_seq, alphabet = Mycelia.RNA_ALPHABET)
+            rna_with_symbol = Mycelia.topological_entropy(rna_seq, alphabet = :RNA)
+
+            Test.@test 0.0 ≤ rna_default ≤ 1.0
+            Test.@test rna_default ≈ rna_with_constant
+            Test.@test rna_default ≈ rna_with_symbol
+        end
+
+        Test.@testset "Amino acids and reduced alphabets" begin
+            aa_seq = BioSequences.LongAA("ARNDCEQGHILKMFPSTWYVARND")
+            aa_default = Mycelia.topological_entropy(aa_seq)
+            aa_with_constant = Mycelia.topological_entropy(
+                aa_seq, alphabet = Mycelia.AA_ALPHABET)
+            reduced = Mycelia.topological_entropy(
+                aa_seq, alphabet = Mycelia.REDUCED_ALPHABET_HP2)
+
+            Test.@test 0.0 ≤ aa_default ≤ 1.0
+            Test.@test aa_default ≈ aa_with_constant
+            Test.@test 0.0 ≤ reduced ≤ 1.0
+        end
+
+        Test.@testset "Unicode and collection alphabets" begin
+            unicode_seq = "🙂🙃🙂😉🙂🙃🙂😉"
+            unicode_alphabet = ['🙂', '🙃', '😉']
+            unicode_entropy = Mycelia.topological_entropy(
+                unicode_seq, alphabet = unicode_alphabet)
+            unicode_symbol_entropy = Mycelia.topological_entropy(
+                unicode_seq, alphabet = :UNICODE)
+
+            Test.@test 0.0 ≤ unicode_entropy ≤ 1.0
+            Test.@test 0.0 ≤ unicode_symbol_entropy ≤ 1.0
+        end
+
+        Test.@testset "Sliding window behavior" begin
+            seq = "abababa"
+            entropy_step1 = Mycelia.topological_entropy(
+                seq, alphabet = ['a', 'b'], step_size = 1)
+            entropy_step2 = Mycelia.topological_entropy(
+                seq, alphabet = ['a', 'b'], step_size = 2)
+
+            Test.@test entropy_step1 ≈ 0.5
+            Test.@test entropy_step2 ≈ 0.5
+        end
+
+        Test.@testset "Parameter validation and edge cases" begin
+            Test.@test Mycelia.topological_entropy("") == 0.0
+            Test.@test_throws ArgumentError Mycelia.topological_entropy("abc", alphabet = 1)
+            Test.@test_throws ArgumentError Mycelia.topological_entropy(
+                "abc", alphabet = 3, step_size = 0)
+
+            default_entropy = Mycelia.topological_entropy("aba")
+            forced_entropy = Mycelia.topological_entropy("aba", alphabet = 4)
+            Test.@test forced_entropy < default_entropy
+        end
+    end
+
     Test.@testset "Integration tests" begin
         Test.@testset "Consistency between functions" begin
             # Test that functions give consistent results for same input

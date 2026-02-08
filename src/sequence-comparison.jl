@@ -572,6 +572,130 @@ function linguistic_complexity(seq; kmax = nothing, alphabet = nothing, reducer 
     return prof, reducer(prof)
 end
 
+function _resolve_alphabet_size(seq, alphabet)::Int
+    alphabet_size = if isnothing(alphabet)
+        if seq isa BioSequences.LongDNA
+            length(DNA_ALPHABET)
+        elseif seq isa BioSequences.LongRNA
+            length(RNA_ALPHABET)
+        elseif seq isa BioSequences.LongAA
+            length(AA_ALPHABET)
+        else
+            length(Set(string(seq)))
+        end
+    elseif alphabet isa Integer
+        Int(alphabet)
+    elseif alphabet isa Symbol
+        lookup_key = Symbol(uppercase(String(alphabet)))
+        lookup = Dict(
+            :DNA => length(DNA_ALPHABET),
+            :RNA => length(RNA_ALPHABET),
+            :AA => length(AA_ALPHABET),
+            :ASCII => length(PRINTABLE_ASCII_ALPHABET),
+            :LATIN1 => length(PRINTABLE_LATIN1_ALPHABET),
+            :GREEK => length(PRINTABLE_GREEK_ALPHABET),
+            :UNICODE => length(PRINTABLE_UNICODE_ALPHABET),
+            :BMP => length(PRINTABLE_BMP_ALPHABET))
+        if haskey(lookup, lookup_key)
+            lookup[lookup_key]
+        else
+            throw(ArgumentError("Unsupported alphabet symbol $(alphabet)."))
+        end
+    elseif alphabet isa AbstractDict
+        length(Set(values(alphabet)))
+    else
+        length(Set(alphabet))
+    end
+
+    if alphabet_size < 2
+        throw(ArgumentError("Alphabet size must be at least 2, got $(alphabet_size)."))
+    end
+    return alphabet_size
+end
+
+function _topological_entropy_order(sequence_length::Int, alphabet_size::Int)::Int
+    if sequence_length < alphabet_size
+        return 1
+    end
+
+    n = 1
+    sequence_length_big = big(sequence_length)
+    alphabet_size_big = big(alphabet_size)
+    while (alphabet_size_big^(n + 1) + n) <= sequence_length_big
+        n += 1
+    end
+    return n
+end
+
+function _topological_entropy_window_size(n::Int, alphabet_size::Int)::Int
+    window_size = big(alphabet_size)^n + n - 1
+    if window_size > typemax(Int)
+        return typemax(Int)
+    end
+    return Int(window_size)
+end
+
+function _topological_entropy_for_window(window::AbstractString, n::Int, alphabet_size::Int)::Float64
+    if length(window) < n
+        return 0.0
+    end
+
+    unique_subwords = length(unique(ngrams(window, n)))
+    if unique_subwords == 0
+        return 0.0
+    end
+    return (log(unique_subwords) / log(alphabet_size)) / n
+end
+
+"""
+    topological_entropy(seq; alphabet=nothing, step_size::Int=1)
+
+Compute the normalized topological entropy of a finite sequence using an
+alphabet-generalized variant of the Koslicki formulation.
+
+The alphabet can be provided as:
+- `nothing` (infer from sequence type or observed symbols)
+- integer alphabet size
+- symbol (`:DNA`, `:RNA`, `:AA`, `:ASCII`, `:LATIN1`, `:GREEK`, `:UNICODE`, `:BMP`)
+- collection of alphabet symbols (uses unique element count)
+- dictionary (uses unique values count; useful for reduced-alphabet maps)
+
+For long sequences, entropy is averaged across sliding windows of size
+`A^n + n - 1`, where `A` is alphabet size and `n` is the largest value
+satisfying `A^n + n - 1 <= L`.
+"""
+function topological_entropy(seq; alphabet = nothing, step_size::Int = 1)
+    if step_size < 1
+        throw(ArgumentError("step_size must be >= 1, got $(step_size)."))
+    end
+
+    sequence_string = string(seq)
+    sequence_length = length(sequence_string)
+    if sequence_length == 0
+        return 0.0
+    end
+
+    alphabet_size = _resolve_alphabet_size(seq, alphabet)
+    n = _topological_entropy_order(sequence_length, alphabet_size)
+    window_size = min(sequence_length, _topological_entropy_window_size(n, alphabet_size))
+
+    if window_size < n
+        return 0.0
+    end
+
+    char_indices = collect(eachindex(sequence_string))
+    entropy_sum = 0.0
+    window_count = 0
+    for start in 1:step_size:(sequence_length - window_size + 1)
+        start_index = char_indices[start]
+        stop_index = char_indices[start + window_size - 1]
+        window = SubString(sequence_string, start_index, stop_index)
+        entropy_sum += _topological_entropy_for_window(window, n, alphabet_size)
+        window_count += 1
+    end
+    return entropy_sum / window_count
+end
+
 """
     merge_and_map_single_end_samples(; 
         fasta_reference::AbstractString, 
