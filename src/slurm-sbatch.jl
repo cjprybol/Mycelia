@@ -3,26 +3,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Submit a job to SLURM scheduler on Lawrence Berkeley Lab's Lawrencium cluster.
 
-# Arguments
-- `job_name`: Name identifier for the SLURM job
-- `mail_user`: Email address for job notifications
-- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", or "NONE")
-- `logdir`: Directory for SLURM output and error logs
-- `partition`: Lawrencium compute partition
-- `qos`: Quality of Service level
-- `account`: Project account for billing
-- `nodes`: Number of nodes to allocate
-- `ntasks`: Number of tasks to spawn
-- `time`: Wall time limit in format "days-hours:minutes:seconds"
-- `cpus_per_task`: CPU cores per task
-- `mem_gb`: Memory per node in GB
-- `cmd`: Shell command to execute
-
-# Returns
-- `true` if submission was successful
-
-# Note
-Function includes 5-second delays before and after submission for queue stability.
+This function preserves the historical public API and now routes through
+`JobSpec` + template rendering.
 """
 function lawrencium_sbatch(;
         job_name::String,
@@ -37,62 +19,52 @@ function lawrencium_sbatch(;
         time::String = "3-00:00:00",
         cpus_per_task::Int = 16,
         mem_gb::Int = 64,
-        cmd::String
+        cmd::String,
+        dry_run::Bool = false
 )
-    submission = `sbatch
-                 --job-name=$(job_name)
-                 --mail-user=$(mail_user)
-                 --mail-type=$(mail_type)
-                 --error=$(logdir)/%j.%x.err
-                 --output=$(logdir)/%j.%x.out
-                 --partition=$(partition)
-                 --qos=$(qos)
-                 --account=$(account)
-                 --nodes=$(nodes)
-                 --ntasks=$(ntasks)
-                 --time=$(time)   
-                 --cpus-per-task=$(cpus_per_task)
-                 --mem=$(mem_gb)G
-                 --wrap $(cmd)
-                 `
+    job = JobSpec(
+        job_name = job_name,
+        cmd = cmd,
+        site = :lawrencium,
+        time_limit = time,
+        partition = partition,
+        qos = qos,
+        account = account,
+        nodes = nodes,
+        ntasks = ntasks,
+        cpus_per_task = cpus_per_task,
+        mem_gb = mem_gb,
+        output_path = joinpath(logdir, "%j.%x.out"),
+        error_path = joinpath(logdir, "%j.%x.err"),
+        mail_user = mail_user,
+        mail_type = mail_type
+    )
+
     sleep(5)
-    run(submission)
+    result = submit(job; dry_run = dry_run)
     sleep(5)
+
+    if !result.ok
+        @error "Lawrencium submission failed" errors = result.errors warnings = result.warnings
+        return false
+    end
+
     return true
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a job to SLURM using sbatch with specified parameters.
+Submit a job to Stanford SCG via SLURM.
 
-# Arguments
-- `job_name::String`: Name identifier for the SLURM job
-- `mail_user::String`: Email address for job notifications
-- `mail_type::String`: Type of mail notifications (default: "ALL")
-- `logdir::String`: Directory for error and output logs (default: "~/workspace/slurmlogs")
-- `partition::String`: SLURM partition to submit job to
-- `account::String`: Account to charge for compute resources
-- `nodes::Int`: Number of nodes to allocate (default: 1)
-- `ntasks::Int`: Number of tasks to run (default: 1)
-- `time::String`: Maximum wall time in format "days-hours:minutes:seconds" (default: "1-00:00:00")
-- `cpus_per_task::Int`: CPUs per task (default: 12)
-- `mem_gb::Int`: Memory in GB, defaults to 96GB
-- `cmd::String`: Command to execute
-
-# Returns
-- `Bool`: Returns true if submission succeeds
-
-# Notes
-- Function includes 5-second delays before and after submission
-- Memory is automatically scaled with CPU count
-- Log files are named with job ID (%j) and job name (%x)
+This function preserves the historical public API and now routes through
+`JobSpec` + template rendering.
 """
 function scg_sbatch(;
         job_name::String,
         mail_user::String,
         mail_type::String = "ALL",
-        logdir::String = mkpath("$(homedir())/workspace/slurmlogs"),
+        logdir::String = mkpath(joinpath(homedir(), "workspace/slurmlogs")),
         partition::String = "nih_s10",
         account::String,
         nodes::Int = 1,
@@ -100,82 +72,50 @@ function scg_sbatch(;
         time::String = "7-00:00:00",
         cpus_per_task::Int = 12,
         mem_gb::Int = 96,
-        cmd::String
+        cmd::String,
+        dry_run::Bool = false
 )
-    submission = `sbatch
-                 --job-name=$(job_name)
-                 --mail-user=$(mail_user)
-                 --mail-type=$(mail_type)
-                 --error=$(logdir)/%j.%x.err
-                 --output=$(logdir)/%j.%x.out
-                 --partition=$(partition)
-                 --account=$(account)
-                 --nodes=$(nodes)
-                 --ntasks=$(ntasks)
-                 --time=$(time)   
-                 --cpus-per-task=$(cpus_per_task)
-                 --mem=$(mem_gb)G
-                 --wrap $(cmd)
-                 `
+    job = JobSpec(
+        job_name = job_name,
+        cmd = cmd,
+        site = :scg,
+        time_limit = time,
+        partition = partition,
+        account = account,
+        nodes = nodes,
+        ntasks = ntasks,
+        cpus_per_task = cpus_per_task,
+        mem_gb = mem_gb,
+        output_path = joinpath(logdir, "%j.%x.out"),
+        error_path = joinpath(logdir, "%j.%x.err"),
+        mail_user = mail_user,
+        mail_type = mail_type
+    )
+
     sleep(5)
-    run(submission)
+    result = submit(job; dry_run = dry_run)
     sleep(5)
+
+    if !result.ok
+        @error "SCG submission failed" errors = result.errors warnings = result.warnings
+        return false
+    end
+
     return true
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Submit a job to NERSC's SLURM scheduler using the shared QOS (Quality of Service).
+Submit a job to NERSC's shared QoS profile.
 
-# Arguments
-- `job_name`: Identifier for the job
-- `mail_user`: Email address for job notifications
-- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", "REQUEUE", "STAGE_OUT")
-- `logdir`: Directory for storing job output and error logs
-- `qos`: Quality of Service level ("shared", "regular", "preempt", "premium")
-- `nodes`: Number of nodes to allocate
-- `ntasks`: Number of tasks to run
-- `time`: Maximum wall time in format "days-hours:minutes:seconds"
-- `cpus_per_task`: Number of CPUs per task
-- `mem_gb`: Memory per node in GB (default: 2GB per CPU)
-- `cmd`: Command to execute
-- `constraint`: Node type constraint ("cpu" or "gpu")
-
-# Resource Limits
-- Maximum memory per node: 512GB
-- Maximum cores per node: 128
-- Default memory allocation: 2GB per CPU requested
-
-# QOS Options
-- shared: Default QOS for shared node usage
-- regular: Standard priority
-- preempt: Reduced credit usage but preemptible
-- premium: 5x throughput priority (limited usage)
-
-# Returns
-`true` if job submission succeeds
-
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priority runs limited to 5x throughput)
-
-max request is 512Gb memory and 128 cores per node
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
+This compatibility wrapper calls `nersc_sbatch` with `qos="shared"`.
 """
 function nersc_sbatch_shared(;
         job_name::String,
         mail_user::String,
         mail_type::String = "ALL",
-        logdir::String = mkpath("$(homedir())/workspace/slurmlogs"),
+        logdir::String = mkpath(joinpath(homedir(), "workspace/slurmlogs")),
         qos::String = "shared",
         nodes::Int = 1,
         ntasks::Int = 1,
@@ -183,27 +123,31 @@ function nersc_sbatch_shared(;
         cpus_per_task::Int = 1,
         mem_gb::Int = cpus_per_task * 2,
         cmd::String,
-        constraint::String = "cpu"
+        constraint::String = "cpu",
+        account::Union{Nothing, String} = nothing,
+        dry_run::Bool = false
 )
-    submission = `sbatch
-                 --job-name=$(job_name)
-                 --mail-user=$(mail_user)
-                 --mail-type=$(mail_type)
-                 --error=$(logdir)/%j.%x.err
-                 --output=$(logdir)/%j.%x.out
-                 --qos=$(qos)
-                 --nodes=$(nodes)
-                 --ntasks=$(ntasks)
-                 --time=$(time)   
-                 --cpus-per-task=$(cpus_per_task)
-                 --mem=$(mem_gb)G
-                 --constraint=cpu
-                 --wrap $(cmd)
-                 `
-    sleep(5)
-    run(submission)
-    sleep(5)
-    return true
+    resolved_account = account === nothing ? get(ENV, "NERSC_ACCOUNT", nothing) : account
+    if resolved_account === nothing
+        error("NERSC account is required. Pass account=... or set ENV[\"NERSC_ACCOUNT\"].")
+    end
+
+    return nersc_sbatch(
+        job_name = job_name,
+        mail_user = mail_user,
+        mail_type = mail_type,
+        logdir = logdir,
+        qos = qos,
+        nodes = nodes,
+        ntasks = ntasks,
+        time = time,
+        cpus_per_task = cpus_per_task,
+        mem_gb = mem_gb,
+        cmd = cmd,
+        constraint = constraint,
+        account = resolved_account,
+        dry_run = dry_run
+    )
 end
 
 """
@@ -211,42 +155,8 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Submit a batch job to NERSC's SLURM workload manager.
 
-# Arguments
-- `job_name`: Identifier for the SLURM job
-- `mail_user`: Email address for job notifications
-- `mail_type`: Notification type ("ALL", "BEGIN", "END", "FAIL", or "NONE")
-- `logdir`: Directory for storing job output/error logs
-- `scriptdir`: Directory for storing generated SLURM scripts
-- `qos`: Quality of Service level ("regular", "premium", or "preempt")
-- `nodes`: Number of nodes to allocate
-- `ntasks`: Number of tasks to run
-- `time`: Maximum wall time in format "days-HH:MM:SS"
-- `cpus_per_task`: CPU cores per task
-- `mem_gb`: Memory per node in GB
-- `cmd`: Command(s) to execute (String or Vector{String})
-- `constraint`: Node type constraint ("cpu" or "gpu")
-
-# Returns
-- `true` if job submission succeeds
-- `false` if submission fails
-
-# QoS Options
-- regular: Standard priority queue
-- premium: High priority queue (5x throughput limit)
-- preempt: Reduced credit usage but jobs may be interrupted
-
-
-https://docs.nersc.gov/jobs/policy/
-https://docs.nersc.gov/systems/perlmutter/architecture/#cpu-nodes
-
-default is to use shared qos
-
-use
-- regular
-- preempt (reduced credit usage but not guaranteed to finish)
-- premium (priorty runs limited to 5x throughput)
-
-https://docs.nersc.gov/systems/perlmutter/running-jobs/#tips-and-tricks
+This function preserves historical defaults and now delegates rendering/
+submission to the template system.
 """
 function nersc_sbatch(;
         job_name::String,
@@ -261,76 +171,67 @@ function nersc_sbatch(;
         cpus_per_task::Int = Mycelia.NERSC_CPU,
         mem_gb::Int = Mycelia.NERSC_MEM,
         cmd::Union{String, Vector{String}},
-        constraint::String = "cpu"
+        constraint::String = "cpu",
+        account::Union{Nothing, String} = nothing,
+        gpus_per_node::Union{Nothing, Int} = nothing,
+        gpus_per_task::Union{Nothing, Int} = nothing,
+        gpu_bind::Union{Nothing, String} = nothing,
+        requeue::Bool = false,
+        dry_run::Bool = false
 )
+    resolved_account = account === nothing ? get(ENV, "NERSC_ACCOUNT", nothing) : account
+    if resolved_account === nothing
+        error("NERSC account is required. Pass account=... or set ENV[\"NERSC_ACCOUNT\"].")
+    end
 
-    # Generate timestamp
+    cmd_block = if cmd isa String
+        cmd
+    else
+        join(cmd, "\n")
+    end
+
     timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
-
-    # Create script filename
     script_name = "$(timestamp)-$(job_name).sh"
     script_path = joinpath(scriptdir, script_name)
 
-    # Process commands
-    cmd_block = if isa(cmd, String)
-        cmd  # Single command as is
-    else
-        join(cmd, "\n")  # Multiple commands joined with newlines
-    end
+    job = JobSpec(
+        job_name = job_name,
+        cmd = cmd_block,
+        site = :nersc,
+        time_limit = time,
+        qos = qos,
+        account = resolved_account,
+        nodes = nodes,
+        ntasks = ntasks,
+        cpus_per_task = cpus_per_task,
+        mem_gb = mem_gb,
+        constraint = constraint,
+        gpus_per_node = gpus_per_node,
+        gpus_per_task = gpus_per_task,
+        gpu_bind = gpu_bind,
+        requeue = requeue,
+        output_path = joinpath(logdir, "%j.%x.out"),
+        error_path = joinpath(logdir, "%j.%x.err"),
+        mail_user = mail_user,
+        mail_type = mail_type
+    )
 
-    # Create script content
-    script_content = """
-    #!/bin/bash
-    #SBATCH --job-name=$(job_name)
-    #SBATCH --mail-user=$(mail_user)
-    #SBATCH --mail-type=$(mail_type)
-    #SBATCH --error=$(logdir)/%j.%x.err
-    #SBATCH --output=$(logdir)/%j.%x.out
-    #SBATCH --qos=$(qos)
-    #SBATCH --nodes=$(nodes)
-    #SBATCH --ntasks=$(ntasks)
-    #SBATCH --time=$(time)
-    #SBATCH --cpus-per-task=$(cpus_per_task)
-    #SBATCH --mem=$(mem_gb)G
-    #SBATCH --constraint=$(constraint)
-
-    $cmd_block
-    """
-
-    # Write script to file
-    write(script_path, script_content)
-
-    # Make script executable
-    chmod(script_path, 0o755)
-
-    # Submit the job
     sleep(5)
-    try
-        run(`sbatch $script_path`)
-    catch e
-        @error "Failed to submit job with sbatch: $e"
+    result = submit(job; dry_run = dry_run, path = script_path)
+    sleep(5)
+
+    if !result.ok
+        @error "NERSC submission failed" errors = result.errors warnings = result.warnings
         return false
     end
-    sleep(5)
 
     return true
 end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Execute a command directly on the Lovelace dedicated server (no SLURM).
-
-Lovelace (foundry-lovelace.lbl.gov) is a dedicated 2TB RAM, 100TB storage
-server with admin access. Unlike HPC clusters, it does not use a job scheduler,
-so commands run directly via shell execution.
-
-# Arguments
-- `cmd::String`: Shell command to execute
-- `logdir::String`: Directory for output logs (default: "~/workspace/slurmlogs")
-- `job_name::String`: Identifier for logging purposes (default: "lovelace-job")
-
-# Returns
-- `true` if execution succeeds, `false` otherwise
 """
 function lovelace_run(;
         cmd::String,
@@ -353,70 +254,25 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Dispatch a job to the appropriate compute backend based on `SITE_TAG` environment variable.
+Dispatch a job to the appropriate compute backend based on `SITE_TAG`.
 
-Routes to the correct submission function:
-- `"lawrencium"` → `lawrencium_sbatch()`
-- `"lovelace"` → `lovelace_run()` (direct execution, no SLURM)
-- `"nersc"` → `nersc_sbatch()`
-- `"stanford_scg"` → `scg_sbatch()`
-
-# Arguments
-- `site::String`: Override for `SITE_TAG` (default: reads from ENV)
-- `kwargs...`: Keyword arguments passed through to the site-specific function
-
-# Returns
-- Result from the dispatched function
-
-# Throws
-- `ErrorException` if `site` doesn't match any known backend
+Routes to:
+- `lawrencium` -> `lawrencium_sbatch`
+- `lovelace` -> `lovelace_run`
+- `nersc` -> `nersc_sbatch`
+- `stanford_scg` / `scg` -> `scg_sbatch`
 """
 function submit_job(; site::String = get(ENV, "SITE_TAG", "default"), kwargs...)
-    if site == "lawrencium"
+    normalized_site = lowercase(site)
+    if normalized_site == "lawrencium"
         return lawrencium_sbatch(; kwargs...)
-    elseif site == "lovelace"
+    elseif normalized_site == "lovelace"
         return lovelace_run(; kwargs...)
-    elseif site == "nersc"
+    elseif normalized_site == "nersc"
         return nersc_sbatch(; kwargs...)
-    elseif site == "stanford_scg"
+    elseif normalized_site == "stanford_scg" || normalized_site == "scg"
         return scg_sbatch(; kwargs...)
     else
-        error("Unknown SITE_TAG: $site. Expected one of: lawrencium, lovelace, nersc, stanford_scg")
+        error("Unknown SITE_TAG: $site. Expected one of: lawrencium, lovelace, nersc, stanford_scg, scg")
     end
 end
-
-# function nersc_sbatch_regular(;
-#         job_name::String,
-#         mail_user::String,
-#         mail_type::String="ALL",
-#         logdir::String=mkpath("$(homedir())/workspace/slurmlogs"),
-#         qos::String="regular",
-#         nodes::Int=1,
-#         ntasks::Int=1,
-#         time::String="2-00:00:00",
-#         cpus_per_task::Int=Mycelia.NERSC_CPU,
-#         mem_gb::Int=Mycelia.NERSC_MEM,
-#         cmd::String,
-#         constraint::String="cpu"
-#     )
-#     submission = 
-#     `sbatch
-#     --job-name=$(job_name)
-#     --mail-user=$(mail_user)
-#     --mail-type=$(mail_type)
-#     --error=$(logdir)/%j.%x.err
-#     --output=$(logdir)/%j.%x.out
-#     --qos=$(qos)
-#     --nodes=$(nodes)
-#     --ntasks=$(ntasks)
-#     --time=$(time)   
-#     --cpus-per-task=$(cpus_per_task)
-#     --mem=$(mem_gb)G
-#     --constraint=cpu
-#     --wrap $(cmd)
-#     `
-#     sleep(5)
-#     run(submission)
-#     sleep(5)
-#     return true
-# end

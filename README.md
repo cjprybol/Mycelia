@@ -53,7 +53,30 @@ import Mycelia
 - **[API Reference](https://cjprybol.github.io/Mycelia/dev/)** - Complete function documentation
 - **[Tutorials](https://cjprybol.github.io/Mycelia/dev/tutorials/)** - Step-by-step workflows
 - **[Workflow & Tool Map](docs/src/workflow-map.md)** - Quick links from inputs to tools, outputs, and tutorials
+- **[HPC Job Templates](docs/src/hpc-job-templates.md)** - Portable `JobSpec` rendering for NERSC, Lawrencium, SCG, Docker, and Cloud Build
+- **[Migration Guide](MIGRATION.md)** - Old SLURM wrapper usage to new `JobSpec` workflows
 - **[References](https://cjprybol.github.io/Mycelia/dev/references/)** - Citation guidance for Mycelia and external tools
+
+## HPC Submission Templates
+
+Mycelia includes a validated templating system for multi-site SLURM and container portability:
+
+```julia
+job = Mycelia.JobSpec(
+    job_name="example",
+    cmd="julia pipeline.jl",
+    site=:scg,
+    partition="nih_s10",
+    account="PI_SUNetID",
+    time_limit="12:00:00",
+    nodes=1,
+    cpus_per_task=12,
+    mem_gb=96
+)
+
+Mycelia.submit(job; dry_run=true)    # render + print submit command
+Mycelia.submit(job; dry_run=false)   # submit
+```
 
 ## Installation
 

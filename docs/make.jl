@@ -168,6 +168,7 @@ Documenter.makedocs(
         "Installation" => "installation.md",
         "Concepts" => "concepts.md",
         "Workflow Map" => "workflow-map.md",
+        "HPC Job Templates" => "hpc-job-templates.md",
         "Metagenomic Workflow" => "metagenomic-workflow.md",
         "Microbiome Visualization" => "microbiome-visualization.md",
         "Tutorials" => vcat(

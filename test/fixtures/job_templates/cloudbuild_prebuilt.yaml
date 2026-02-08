@@ -1,0 +1,14 @@
+# TEMPLATE_ID=cloudbuild/cloudbuild.yaml
+steps:
+- id: run-job
+  name: ${_IMAGE_URI}
+  entrypoint: bash
+  args: ['-lc', 'python batch.py --quick']
+  env:
+  - 'MY_MODE=ci'
+options:
+  logging: CLOUD_LOGGING_ONLY
+substitutions:
+  _IMAGE_NAME: mycelia-job
+  _IMAGE_TAG: latest
+  _IMAGE_URI: 'gcr.io/my-project/example:sha-deadbeef'
