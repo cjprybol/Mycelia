@@ -5,6 +5,7 @@
 # - mash: MinHash sketching and containment screening
 # - metaphlan: Marker-based taxonomic profiling
 # - metabuli: Fast metagenomic classification
+# - kraken2: k-mer based taxonomic classification
 #
 # All tools use conda/mamba environments for dependency management.
 
@@ -1442,4 +1443,299 @@ Convenience wrapper for running Kleborate on a single file.
 """
 function run_kleborate(assembly_file::String; kwargs...)
     return run_kleborate([assembly_file]; kwargs...)
+end
+
+# ============================================================================
+# Kraken2 - k-mer based taxonomic classification
+# ============================================================================
+
+"""
+    list_kraken2_databases()
+
+List all available pre-built Kraken2 databases from the AWS index.
+
+Returns a Dict mapping database name to download URL.
+"""
+function list_kraken2_databases()
+    println("Available Kraken2 pre-built databases (Oct 2025):")
+    println("="^70)
+    for (name, url) in sort(collect(Mycelia.KRAKEN2_DB_URLS))
+        println("  $name")
+        println("    → $url")
+    end
+    println("="^70)
+    return Mycelia.KRAKEN2_DB_URLS
+end
+
+"""
+    _kraken2_db_present(db_dir::AbstractString)::Bool
+
+Check whether a Kraken2 database directory contains the required index files.
+A valid Kraken2 database has `hash.k2d`, `opts.k2d`, and `taxo.k2d` files.
+"""
+function _kraken2_db_present(db_dir::AbstractString)::Bool
+    if !isdir(db_dir)
+        return false
+    end
+    required = ["hash.k2d", "opts.k2d", "taxo.k2d"]
+    return all(f -> isfile(joinpath(db_dir, f)), required)
+end
+
+"""
+    download_kraken2_db(; db_name, db_root, force, keep_archive)
+
+Download a pre-built Kraken2 database from the AWS index.
+
+# Arguments
+- `db_name::AbstractString`: Database name (e.g. "standard", "core_nt", "pluspf").
+  See `list_kraken2_databases()` for options.
+- `db_root::AbstractString`: Root directory for Kraken2 databases
+  (default: `$(Mycelia.DEFAULT_KRAKEN2_DB_PATH)`).
+  The database will be placed in `db_root/db_name/`.
+- `force::Bool`: Re-download even if database already exists (default: false).
+- `keep_archive::Bool`: Keep the `.tar.gz` archive after extraction (default: false).
+
+# Returns
+- `String`: Path to the database directory.
+"""
+function download_kraken2_db(;
+        db_name::AbstractString = Mycelia.DEFAULT_KRAKEN2_DB_NAME,
+        db_root::AbstractString = Mycelia.DEFAULT_KRAKEN2_DB_PATH,
+        force::Bool = false,
+        keep_archive::Bool = false)
+    url = get(Mycelia.KRAKEN2_DB_URLS, db_name, nothing)
+    if url === nothing
+        valid = join(sort(collect(keys(Mycelia.KRAKEN2_DB_URLS))), ", ")
+        error("Unknown Kraken2 database '$(db_name)'. Available: $(valid).")
+    end
+
+    db_dir = joinpath(db_root, db_name)
+    mkpath(db_dir)
+
+    if !force && _kraken2_db_present(db_dir)
+        @info "Kraken2 database '$(db_name)' already present at $(db_dir)"
+        return db_dir
+    end
+
+    archive_name = basename(url)
+    archive_path = joinpath(db_root, archive_name)
+
+    @info "Downloading Kraken2 database '$(db_name)' from $(url)..."
+    if force || !isfile(archive_path) || filesize(archive_path) == 0
+        Mycelia.with_retry() do
+            Downloads.download(url, archive_path)
+        end
+    end
+
+    @info "Extracting to $(db_dir)..."
+    Mycelia.tar_extract(tarchive = archive_path, directory = db_dir)
+
+    if !_kraken2_db_present(db_dir)
+        error("Kraken2 database extraction completed but required files (hash.k2d, opts.k2d, taxo.k2d) not found in $(db_dir).")
+    end
+
+    if !keep_archive && isfile(archive_path)
+        rm(archive_path; force = true)
+    end
+
+    @info "Kraken2 database '$(db_name)' ready at $(db_dir)"
+    return db_dir
+end
+
+"""
+    get_kraken2_db_path(; require, db_name, db_root, download)
+
+Resolve the path to a Kraken2 database, downloading if needed.
+
+Checks environment variables `KRAKEN2_DB` and `KRAKEN2_DB_PATH` first,
+then falls back to `db_root/db_name`.
+
+# Arguments
+- `require::Bool`: Error if database not found (default: true).
+- `db_name::Union{Nothing, String}`: Database name. Falls back to
+  env `KRAKEN2_DB_NAME` or `$(Mycelia.DEFAULT_KRAKEN2_DB_NAME)`.
+- `db_root::Union{Nothing, String}`: Root directory. Falls back to
+  env `KRAKEN2_DB_ROOT` or `$(Mycelia.DEFAULT_KRAKEN2_DB_PATH)`.
+- `download::Bool`: Auto-download if not found (default: true).
+
+# Returns
+- `String` or `nothing`: Path to the database directory.
+"""
+function get_kraken2_db_path(;
+        require::Bool = true,
+        db_name::Union{Nothing, String} = nothing,
+        db_root::Union{Nothing, String} = nothing,
+        download::Bool = true)
+    # Check explicit env vars for direct path
+    for key in ("KRAKEN2_DB", "KRAKEN2_DB_PATH")
+        value = get(ENV, key, "")
+        if !isempty(value)
+            if _kraken2_db_present(value)
+                return value
+            end
+            if require
+                error("Kraken2 database not found at $(value) (from $(key)).")
+            end
+            return nothing
+        end
+    end
+
+    # Resolve root and name
+    root_value = get(ENV, "KRAKEN2_DB_ROOT", "")
+    resolved_root = db_root === nothing ?
+                    (isempty(root_value) ? Mycelia.DEFAULT_KRAKEN2_DB_PATH : root_value) :
+                    db_root
+    name_value = get(ENV, "KRAKEN2_DB_NAME", "")
+    resolved_name = db_name === nothing ?
+                    (isempty(name_value) ? Mycelia.DEFAULT_KRAKEN2_DB_NAME : name_value) :
+                    db_name
+
+    candidate = joinpath(resolved_root, resolved_name)
+    if _kraken2_db_present(candidate)
+        return candidate
+    end
+
+    if download
+        return download_kraken2_db(db_name = resolved_name, db_root = resolved_root)
+    end
+
+    if require
+        error("Kraken2 database not found at $(candidate). Use download_kraken2_db() or set KRAKEN2_DB_PATH.")
+    end
+    return nothing
+end
+
+"""
+    run_kraken2_classify(; input_files, outdir, database_path, threads,
+                          confidence, minimum_hit_groups, paired, gzip_compressed,
+                          report_minimizer_data, additional_args)
+
+Run Kraken2 for k-mer based taxonomic classification.
+
+# Arguments
+- `input_files::Vector{String}`: Input FASTA/FASTQ files.
+- `outdir::String`: Output directory.
+- `database_path::Union{Nothing, String}`: Path to Kraken2 database. If not provided,
+  uses `get_kraken2_db_path()` to resolve/download.
+- `threads::Int`: Number of threads (default: `get_default_threads()`).
+- `confidence::Float64`: Confidence threshold (default: 0.0).
+- `minimum_hit_groups::Int`: Minimum hit groups for classification (default: 2).
+- `paired::Bool`: Input files are paired-end (default: false).
+- `gzip_compressed::Bool`: Input files are gzip compressed (default: auto-detect).
+- `report_minimizer_data::Bool`: Include minimizer data in report (default: false).
+- `additional_args::Vector{String}`: Extra arguments passed to kraken2.
+
+# Returns
+Named tuple with:
+- `outdir`: Output directory
+- `output_file`: Per-read classification output
+- `report_file`: Kraken2-style report
+"""
+function run_kraken2_classify(;
+        input_files::Vector{String},
+        outdir::String,
+        database_path::Union{Nothing, String} = nothing,
+        threads::Int = get_default_threads(),
+        confidence::Float64 = 0.0,
+        minimum_hit_groups::Int = 2,
+        paired::Bool = false,
+        gzip_compressed::Union{Nothing, Bool} = nothing,
+        report_minimizer_data::Bool = false,
+        additional_args::Vector{String} = String[])
+    if isempty(input_files)
+        error("No input files provided for Kraken2.")
+    end
+    for f in input_files
+        isfile(f) || error("Input file not found: $(f)")
+    end
+
+    mkpath(outdir)
+
+    # Resolve database
+    if database_path === nothing || isempty(database_path)
+        database_path = get_kraken2_db_path()
+    end
+    _kraken2_db_present(database_path) ||
+        error("Kraken2 database not valid at $(database_path)")
+
+    # Determine output filenames
+    sample_base = replace(basename(first(input_files)), r"\.(fa|fasta|fq|fastq)(\.gz)?$"i => "")
+    output_file = joinpath(outdir, "$(sample_base)_kraken2_output.txt")
+    report_file = joinpath(outdir, "$(sample_base)_kraken2_report.txt")
+
+    # Skip if already done
+    if isfile(output_file) && isfile(report_file) && filesize(report_file) > 0
+        @info "Kraken2 output already exists for $(sample_base), skipping."
+        return (outdir = outdir, output_file = output_file, report_file = report_file)
+    end
+
+    Mycelia.add_bioconda_env("kraken2")
+
+    cmd_args = String[
+    "kraken2",
+    "--db", database_path,
+    "--threads", string(threads),
+    "--confidence", string(confidence),
+    "--minimum-hit-groups", string(minimum_hit_groups),
+    "--output", output_file,
+    "--report", report_file
+]
+
+    if paired
+        push!(cmd_args, "--paired")
+    end
+
+    # Auto-detect gzip
+    is_gz = gzip_compressed === nothing ? endswith(first(input_files), ".gz") :
+            gzip_compressed
+    if is_gz
+        push!(cmd_args, "--gzip-compressed")
+    end
+
+    if report_minimizer_data
+        push!(cmd_args, "--report-minimizer-data")
+    end
+
+    append!(cmd_args, additional_args)
+    append!(cmd_args, input_files)
+
+    @info "Running Kraken2 on $(length(input_files)) file(s)..."
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kraken2 $cmd_args`)
+
+    return (outdir = outdir, output_file = output_file, report_file = report_file)
+end
+
+"""
+    parse_kraken2_report(report_file::String)::DataFrames.DataFrame
+
+Parse a Kraken2 taxonomic report into a DataFrame.
+
+# Arguments
+- `report_file::String`: Path to a Kraken2 report file.
+
+# Returns
+DataFrame with columns:
+- `percentage`: Percentage of fragments at or below this taxon
+- `num_reads`: Number of fragments at or below this taxon
+- `num_direct_reads`: Number of fragments assigned directly to this taxon
+- `rank`: Taxonomic rank code (U, R, D, P, C, O, F, G, S, etc.)
+- `taxid`: NCBI taxonomy ID
+- `name`: Scientific name (whitespace-stripped)
+"""
+function parse_kraken2_report(report_file::String)::DataFrames.DataFrame
+    isfile(report_file) || error("Kraken2 report file not found: $(report_file)")
+
+    header = [
+        "percentage",
+        "num_reads",
+        "num_direct_reads",
+        "rank",
+        "taxid",
+        "name"
+    ]
+
+    data, _ = uCSV.read(report_file, delim = '\t')
+    df = DataFrames.DataFrame(data, header)
+    df[!, "name"] = string.(strip.(df[!, "name"]))
+    return df
 end

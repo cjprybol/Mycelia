@@ -12,6 +12,25 @@ const METABULI_DB_URLS = Dict(
 )
 const DEFAULT_METAPHLAN_DB_PATH = "$(homedir())/workspace/metaphlan"
 
+# Kraken2 pre-built database configuration
+# URLs from https://benlangmead.github.io/aws-indexes/k2
+const DEFAULT_KRAKEN2_DB_PATH = "$(homedir())/workspace/kraken2"
+const DEFAULT_KRAKEN2_DB_NAME = "standard"
+const KRAKEN2_DB_URLS = Dict(
+    "viral" => "https://genome-idx.s3.amazonaws.com/kraken/k2_viral_20251015.tar.gz",
+    "minusb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_minusb_20251015.tar.gz",
+    "standard" => "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_20251015.tar.gz",
+    "standard_08gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_08gb_20251015.tar.gz",
+    "standard_16gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_standard_16gb_20251015.tar.gz",
+    "pluspf" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspf_20251015.tar.gz",
+    "pluspf_08gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspf_08gb_20251015.tar.gz",
+    "pluspf_16gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspf_16gb_20251015.tar.gz",
+    "pluspfp" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_20251015.tar.gz",
+    "pluspfp_08gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_08gb_20251015.tar.gz",
+    "pluspfp_16gb" => "https://genome-idx.s3.amazonaws.com/kraken/k2_pluspfp_16gb_20251015.tar.gz",
+    "core_nt" => "https://genome-idx.s3.amazonaws.com/kraken/k2_core_nt_20251015.tar.gz"
+)
+
 # fix new error
 # ENV["MAMBA_ROOT_PREFIX"] = joinpath(DEPOT_PATH[1], "conda", "3", "x86_64")
 
