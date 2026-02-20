@@ -3650,6 +3650,22 @@ function PointSeries(idx, lbl, col; marker = :circle, size = 10.0, z_order = 1)
 end
 
 """
+    build_pcoa_group_legend_elements(series_list)
+
+Create `CairoMakie.MarkerElement` entries for PCoA source legend groups,
+preserving each series marker shape.
+"""
+function build_pcoa_group_legend_elements(series_list::Vector{PointSeries})
+    [CairoMakie.MarkerElement(
+        color = s.color,
+        marker = s.marker,
+        markersize = 10,
+        strokewidth = 0.5,
+        strokecolor = :black
+    ) for s in series_list]
+end
+
+"""
     EllipseConfig(indices, label, color; anchor=:top, align=(:center, :bottom), offset=(0.0, 5.0))
 
 Defines a target for drawing a confidence ellipse and its label.
@@ -3878,10 +3894,7 @@ function plot_generalized_pcoa(
     # 8. Generate Legends (Only if not in subplot mode)
     if !isnothing(legend_layout)
         # -- Source/Group Legend --
-        group_elements = [CairoMakie.MarkerElement(
-                              color = s.color, marker = :circle, markersize = 10,
-                              strokewidth = 0.5, strokecolor = :black)
-                          for s in series_list]
+        group_elements = build_pcoa_group_legend_elements(series_list)
         group_labels = [s.label for s in series_list]
 
         CairoMakie.Legend(

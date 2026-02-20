@@ -54,6 +54,16 @@ Test.@testset "PCoA Visualization Utils" begin
     # Check that a Figure was returned
     Test.@test fig isa CairoMakie.Figure
 
+    # 2b. Legend marker shapes follow PointSeries markers
+    legend_series = [
+        Mycelia.PointSeries([1], "Circle Group", :blue; marker = :circle),
+        Mycelia.PointSeries([2], "Diamond Group", :red; marker = :diamond)
+    ]
+    legend_elements = Mycelia.build_pcoa_group_legend_elements(legend_series)
+    Test.@test length(legend_elements) == 2
+    Test.@test legend_elements[1].marker[] == :circle
+    Test.@test legend_elements[2].marker[] == :diamond
+
     # 3. Test Empty Data Handling
     # Should handle empty ellipse points gracefully
     empty_x = Float64[]
