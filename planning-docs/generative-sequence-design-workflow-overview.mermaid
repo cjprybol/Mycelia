@@ -1,0 +1,89 @@
+```mermaid
+%%{init: {
+  'theme': 'base',
+  'themeVariables': {
+    'background': '#FFFFFF',
+    'primaryColor': '#0077BB',
+    'primaryTextColor': '#FFFFFF',
+    'primaryBorderColor': '#005588',
+    'lineColor': '#333333',
+    'secondaryColor': '#009988',
+    'tertiaryColor': '#EE7733',
+    'fontSize': '16px',
+    'fontFamily': 'arial, sans-serif'
+  }
+}}%%
+flowchart LR
+    subgraph INPUT["Input"]
+        direction TB
+        DATA["Biological Sequence Data<br/>+ Phenotypic Assays"]
+    end
+
+    subgraph GRAPHS["Sequence Graphs<br/>(Mycelia Rhizomorph)"]
+        direction TB
+        DNA["DNA Layer"]
+        RNA["RNA Layer"]
+        PROT["Protein Layer"]
+        DNA --> RNA --> PROT
+    end
+
+    subgraph WEIGHTS["Weighting"]
+        direction TB
+        GENO["Genotypic<br/>(Abundance)"]
+        PHENO["Phenotypic<br/>(Julia ML Pipeline)"]
+        JOINT["Joint Weights"]
+        GENO --> JOINT
+        PHENO --> JOINT
+    end
+
+    subgraph AI["AI Models"]
+        direction TB
+        EVO["Evo2<br/>DNA Generation"]
+        ESM["ESM-2<br/>Protein Embeddings"]
+        FOLD["ESMFold<br/>Structure"]
+    end
+
+    subgraph OPT["Optimization"]
+        direction TB
+        TRAVERSE["Graph Traversal<br/>A* / Beam / MCMC"]
+        CONS["Consensus<br/>Assembly"]
+        TRAVERSE --> CONS
+    end
+
+    subgraph OUT["Output"]
+        direction TB
+        CAND["Ranked Candidate<br/>Genomes"]
+        FILES["FASTA + GFF3<br/>+ Predictions"]
+        CAND --> FILES
+    end
+
+    subgraph VAL["Validation"]
+        direction TB
+        SYNTH["Synthesis"]
+        TEST["Experimental Testing"]
+        SYNTH --> TEST
+    end
+
+    %% Main flow
+    INPUT --> GRAPHS
+    GRAPHS --> WEIGHTS
+    WEIGHTS --> OPT
+    AI <--> GRAPHS
+    AI --> OPT
+    OPT --> OUT
+    OUT --> VAL
+    VAL -->|"feedback"| INPUT
+
+    %% Styling - Colorblind-friendly palette with high contrast
+    classDef dataLayer fill:#0077BB,stroke:#005588,color:#FFFFFF,stroke-width:2px
+    classDef aiModel fill:#009988,stroke:#006655,color:#FFFFFF,stroke-width:2px
+    classDef optimization fill:#EE7733,stroke:#CC5500,color:#000000,stroke-width:2px
+    classDef output fill:#AA3377,stroke:#882255,color:#FFFFFF,stroke-width:2px
+    classDef infra fill:#555555,stroke:#333333,color:#FFFFFF,stroke-width:2px
+
+    class DATA,DNA,RNA,PROT,GENO,PHENO,JOINT dataLayer
+    class EVO,ESM,FOLD aiModel
+    class TRAVERSE,CONS optimization
+    class CAND,FILES output
+    class SYNTH,TEST infra
+```
