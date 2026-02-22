@@ -56,3 +56,6 @@ hpc-ci/hpc-results.json
 
 # Agent worktrees
 trees/
+
+# Ephemeral AI handoff files
+.handoff/
