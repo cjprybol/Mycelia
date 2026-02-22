@@ -4,26 +4,33 @@ Comprehensive guidance for AI agents working in this repository.
 
 ## Quick Reference
 
-| Task | Command |
-|------|---------|
-| Run tests | `julia --project=. -e "import Pkg; Pkg.test()"` |
-| Run all tests | `MYCELIA_RUN_ALL=true julia --project=. -e "import Pkg; Pkg.test()"` |
-| Build docs | `julia --project=docs -e 'include("docs/make.jl")'` |
-| Static analysis | `julia --project=. test/jet.jl` |
-| Install deps | `julia --project=. -e "import Pkg; Pkg.instantiate()"` |
+| Task            | Command                                                              |
+| --------------- | -------------------------------------------------------------------- |
+| Run tests       | `julia --project=. -e "import Pkg; Pkg.test()"`                      |
+| Run all tests   | `MYCELIA_RUN_ALL=true julia --project=. -e "import Pkg; Pkg.test()"` |
+| Build docs      | `julia --project=docs -e 'include("docs/make.jl")'`                  |
+| Static analysis | `julia --project=. test/jet.jl`                                      |
+| Install deps    | `julia --project=. -e "import Pkg; Pkg.instantiate()"`               |
 
 ---
 
 ## Repository Overview
 
-Mycelia is a Julia package for bioinformatics and computational biology, providing tools for sequence analysis, genome assembly, annotation, and comparative genomics. The core assembly system is **Rhizomorph** - a probabilistic graph-based genome assembler.
+Mycelia is a Julia package for bioinformatics and computational biology,
+providing tools for sequence analysis, genome assembly, annotation, and
+comparative genomics. The core assembly system is **Rhizomorph** - a
+probabilistic graph-based genome assembler.
 
 ### Key Architectural Principles
 
-1. **No `using` statements** - Always `import Package` and use qualified names (`DataFrames.DataFrame()`)
-2. **No exports** - All symbols accessed via `Mycelia.function_name()` or `Mycelia.Rhizomorph.function_name()`
-3. **Avoid unnecessary type conversions** - Use BioSequences for DNA/RNA/protein; plain strings for NLP/text
-4. **Test-first development** - All features require tests before claiming completion
+1. **No `using` statements** - Always `import Package` and use qualified names
+   (`DataFrames.DataFrame()`)
+2. **No exports** - All symbols accessed via `Mycelia.function_name()` or
+   `Mycelia.Rhizomorph.function_name()`
+3. **Avoid unnecessary type conversions** - Use BioSequences for
+   DNA/RNA/protein; plain strings for NLP/text
+4. **Test-first development** - All features require tests before claiming
+   completion
 
 ---
 
@@ -32,71 +39,78 @@ Mycelia is a Julia package for bioinformatics and computational biology, providi
 ### Source Files (`src/`) - 53 modules
 
 #### Core Infrastructure
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `Mycelia.jl` | Main module, auto-includes all files | 2 |
-| `constants.jl` | Shared constants | 1 |
-| `alphabets.jl` | Sequence alphabet utilities | 4 |
-| `utility-functions.jl` | Shared helpers, memory estimation | 160 |
-| `checkpointing.jl` | JLD2-based stage caching for workflows | 5 |
+
+| Module                 | Purpose                                | Functions |
+| ---------------------- | -------------------------------------- | --------- |
+| `Mycelia.jl`           | Main module, auto-includes all files   | 2         |
+| `constants.jl`         | Shared constants                       | 1         |
+| `alphabets.jl`         | Sequence alphabet utilities            | 4         |
+| `utility-functions.jl` | Shared helpers, memory estimation      | 160       |
+| `checkpointing.jl`     | JLD2-based stage caching for workflows | 5         |
 
 #### Sequence I/O & Processing
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `fastx.jl` | FASTA/FASTQ reading, normalization | 85 |
-| `xam.jl` | BAM/CRAM processing, coverage | 37 |
-| `genome-features.jl` | GFF/GTF parsing | 18 |
+
+| Module               | Purpose                            | Functions |
+| -------------------- | ---------------------------------- | --------- |
+| `fastx.jl`           | FASTA/FASTQ reading, normalization | 85        |
+| `xam.jl`             | BAM/CRAM processing, coverage      | 37        |
+| `genome-features.jl` | GFF/GTF parsing                    | 18        |
 
 #### K-mer & Graph Analysis
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `kmer-analysis.jl` | K-mer counting, spectrum analysis | 58 |
-| `kmer-saturation-analysis.jl` | Sequencing depth estimation | 8 |
-| `qualmer-analysis.jl` | Quality-weighted k-mers | 21 |
-| `distance-metrics.jl` | Mash, Jaccard, JS divergence | 21 |
-| `coverage-clustering.jl` | Coverage-based binning | 7 |
+
+| Module                        | Purpose                           | Functions |
+| ----------------------------- | --------------------------------- | --------- |
+| `kmer-analysis.jl`            | K-mer counting, spectrum analysis | 58        |
+| `kmer-saturation-analysis.jl` | Sequencing depth estimation       | 8         |
+| `qualmer-analysis.jl`         | Quality-weighted k-mers           | 21        |
+| `distance-metrics.jl`         | Mash, Jaccard, JS divergence      | 21        |
+| `coverage-clustering.jl`      | Coverage-based binning            | 7         |
 
 #### Assembly (Rhizomorph System)
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `rhizomorph/rhizomorph.jl` | Submodule entry point | 2 |
-| `rhizomorph/core/*.jl` | Graph types, evidence, quality | ~120 |
-| `rhizomorph/fixed-length/*.jl` | K-mer, qualmer, n-gram graphs | ~30 |
-| `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ | ~30 |
-| `rhizomorph/algorithms/*.jl` | Path-finding, simplification, repeats | ~80 |
-| `rhizomorph/assembly.jl` | High-level assembly orchestration | 54 |
-| `assembly.jl` | External assembler wrappers | 62 |
-| `graph-cleanup.jl` | Graph simplification utilities | 22 |
-| `iterative-assembly.jl` | Iterative refinement methods | 70 |
+
+| Module                            | Purpose                               | Functions |
+| --------------------------------- | ------------------------------------- | --------- |
+| `rhizomorph/rhizomorph.jl`        | Submodule entry point                 | 2         |
+| `rhizomorph/core/*.jl`            | Graph types, evidence, quality        | ~120      |
+| `rhizomorph/fixed-length/*.jl`    | K-mer, qualmer, n-gram graphs         | ~30       |
+| `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ           | ~30       |
+| `rhizomorph/algorithms/*.jl`      | Path-finding, simplification, repeats | ~80       |
+| `rhizomorph/assembly.jl`          | High-level assembly orchestration     | 54        |
+| `assembly.jl`                     | External assembler wrappers           | 62        |
+| `graph-cleanup.jl`                | Graph simplification utilities        | 22        |
+| `iterative-assembly.jl`           | Iterative refinement methods          | 70        |
 
 #### External Tool Wrappers
-| Module | Tool(s) | Status |
-|--------|---------|--------|
-| `alignments-and-mapping.jl` | BLAST, DIAMOND, MMSeqs2, minimap2 | Tested |
-| `annotation.jl` | Prokka, Bakta, eggNOG-mapper | Tested |
-| `quality-control-and-benchmarking.jl` | QUAST, BUSCO, fastp | Tested |
-| `classification.jl` | Kraken2, MetaPhlAn, Sylph | Tested |
-| `binning.jl` | MetaBAT2, CONCOCT, SemiBin | Tested |
-| `pangenome-analysis.jl` | PGGB, Cactus | Tested |
-| `autocycler.jl`, `bcalm.jl`, `ggcat.jl` | Specialized assemblers | Opt-in |
+
+| Module                                  | Tool(s)                           | Status |
+| --------------------------------------- | --------------------------------- | ------ |
+| `alignments-and-mapping.jl`             | BLAST, DIAMOND, MMSeqs2, minimap2 | Tested |
+| `annotation.jl`                         | Prokka, Bakta, eggNOG-mapper      | Tested |
+| `quality-control-and-benchmarking.jl`   | QUAST, BUSCO, fastp               | Tested |
+| `classification.jl`                     | Kraken2, MetaPhlAn, Sylph         | Tested |
+| `binning.jl`                            | MetaBAT2, CONCOCT, SemiBin        | Tested |
+| `pangenome-analysis.jl`                 | PGGB, Cactus                      | Tested |
+| `autocycler.jl`, `bcalm.jl`, `ggcat.jl` | Specialized assemblers            | Opt-in |
 
 #### Analysis & Visualization
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `clustering.jl` | Sequence clustering | 21 |
-| `dimensionality-reduction.jl` | PCA, UMAP, t-SNE | 8 |
-| `taxonomy-and-trees.jl` | Taxonomy classification, trees | 52 |
-| `plotting-and-visualization.jl` | Makie/Plots visualization | 68 |
-| `simulation.jl` | Read simulation | 73 |
+
+| Module                          | Purpose                        | Functions |
+| ------------------------------- | ------------------------------ | --------- |
+| `clustering.jl`                 | Sequence clustering            | 21        |
+| `dimensionality-reduction.jl`   | PCA, UMAP, t-SNE               | 8         |
+| `taxonomy-and-trees.jl`         | Taxonomy classification, trees | 52        |
+| `plotting-and-visualization.jl` | Makie/Plots visualization      | 68        |
+| `simulation.jl`                 | Read simulation                | 73        |
 
 #### Infrastructure
-| Module | Purpose | Functions |
-|--------|---------|-----------|
-| `reference-databases.jl` | NCBI/SRA downloads, database setup | 84 |
-| `ncbi-datasets-cli.jl` | NCBI datasets API | 44 |
-| `bioconda.jl` | Conda environment management | 10 |
-| `slurm-sbatch.jl` | SLURM job submission | 8 |
-| `rclone.jl` | Cloud storage sync | 9 |
+
+| Module                   | Purpose                            | Functions |
+| ------------------------ | ---------------------------------- | --------- |
+| `reference-databases.jl` | NCBI/SRA downloads, database setup | 84        |
+| `ncbi-datasets-cli.jl`   | NCBI datasets API                  | 44        |
+| `bioconda.jl`            | Conda environment management       | 10        |
+| `slurm-sbatch.jl`        | SLURM job submission               | 8         |
+| `rclone.jl`              | Cloud storage sync                 | 9         |
 
 ---
 
@@ -121,6 +135,7 @@ test/
 ### Test Categories
 
 **Julia-Only (Fast, Local)** - Safe for parallel agents:
+
 - `test/2_preprocessing_qc/alphabets.jl`
 - `test/2_preprocessing_qc/constants.jl`
 - `test/3_feature_extraction_kmer/*.jl`
@@ -130,11 +145,13 @@ test/
 - `test/4_assembly/dna_kmer_*_test.jl`
 
 **External Tool Required** - Need `MYCELIA_RUN_EXTERNAL=true`:
+
 - `test/5_validation/*.jl` (QUAST, BUSCO)
 - `test/6_annotation/*.jl` (Prokka, Bakta)
 - `test/8_tool_integration/*.jl` (all wrapper tests)
 
 **Identifying Julia-Only Tests**:
+
 - No `run_*` wrapper functions (e.g., `run_megahit`, `run_minimap2`)
 - No `Base.run` or `Mycelia.run` calls
 - Only Julia stdlib + registered packages
@@ -146,11 +163,13 @@ test/
 ### 1. TODO Comment Cleanup
 
 **Find TODOs:**
+
 ```bash
 grep -r "TODO\|FIXME\|XXX\|HACK" src/ --include="*.jl"
 ```
 
 **Current TODOs (17 across 11 files):**
+
 - `sequence-comparison.jl` (4) - Use constants instead of hardcoding
 - `kmer-analysis.jl` (2) - Ambiguity handling, sequence type inference
 - `annotation.jl` (1) - EGAPx wrapper placeholder
@@ -159,6 +178,7 @@ grep -r "TODO\|FIXME\|XXX\|HACK" src/ --include="*.jl"
 - `plotting-and-visualization.jl` (1) - Incomplete write function
 
 **Approach:**
+
 1. Simple TODOs: Resolve directly
 2. Complex TODOs: Create Beads issue with `workspace:mycelia` label
 3. Stale TODOs: Remove if already implemented
@@ -166,17 +186,20 @@ grep -r "TODO\|FIXME\|XXX\|HACK" src/ --include="*.jl"
 ### 2. Test Expansion
 
 **Run existing tests:**
+
 ```bash
 julia --project=. -e "import Pkg; Pkg.test()"
 ```
 
 **Add new test:**
+
 1. Create file in appropriate stage directory (e.g., `test/4_assembly/`)
 2. Use `Test.@testset` with descriptive name
 3. Use small fixtures from `assembly_test_data/` or `test/metadata/`
 4. Use `StableRNGs` for deterministic seeds
 
 **Test template:**
+
 ```julia
 import Test
 import StableRNGs
@@ -195,17 +218,20 @@ end
 ### 3. Documentation Updates
 
 **Build docs:**
+
 ```bash
 julia --project=docs -e 'include("docs/make.jl")'
 ```
 
 **Documentation structure:**
+
 - `docs/src/tutorials/` - Literate.jl tutorials (8 stages)
 - `docs/src/api/` - API reference (auto-generated)
 - `docs/src/workflow-map.md` - Tool/capability matrix
 
 **Docstring format:**
-```julia
+
+````julia
 """
     function_name(arg1, arg2; kwarg=default)
 
@@ -221,12 +247,11 @@ Brief description of what the function does.
 # Example
 ```julia
 result = Mycelia.function_name(x, y)
-```
-"""
-function function_name(arg1, arg2; kwarg=default)
-    # implementation
-end
-```
+````
+
+""" function function_name(arg1, arg2; kwarg=default) # implementation end
+
+````
 
 ### 4. Code Formatting
 
@@ -239,7 +264,7 @@ end
 **Apply Runic formatting (if configured):**
 ```bash
 julia --project=. -e "import Runic; Runic.format(\"src/\")"
-```
+````
 
 ---
 
@@ -247,7 +272,8 @@ julia --project=. -e "import Runic; Runic.format(\"src/\")"
 
 ### Task Tracking
 
-Mycelia work is tracked in Beads at `~/workspace/todo/.beads/`. Filter by `[B]` prefix.
+Mycelia work is tracked in Beads at `~/workspace/todo/.beads/`. Filter by `[B]`
+prefix.
 
 ```bash
 cd ~/workspace/todo && bd list --json | jq '.[] | select(.title | test("\\[B\\]"))'
@@ -255,19 +281,25 @@ cd ~/workspace/todo && bd list --json | jq '.[] | select(.title | test("\\[B\\]"
 
 ### Reference Documents (planning-docs/)
 
-| Document | Purpose |
-|----------|---------|
-| `RHIZOMORPH_SUPPORT_MATRIX.md` | Graph type × alphabet × strand matrix |
-| `FUNCTION_COVERAGE_AUDIT.md` | Module→doc mapping (auto-generated) |
-| `TOOL_WRAPPER_STATUS.md` | External tool coverage table |
-| `COMPREHENSIVE_TESTING_FRAMEWORK.md` | Test organization spec |
-| `COMPREHENSIVE_ROADMAP.md` | Strategic 5-phase vision |
-| `rhizomorph-graph-ecosystem-plan.md` | Deep Rhizomorph technical spec |
-| `TDA_INTEGRATION_PLAN.md` | TDA design (beads: td-mncc → td-q5qa) |
-| `GOLD_STANDARD_GENOME_COMPARISON_PLAN.md` | Comparison design (beads: td-guxl, td-5xxf) |
-| `HPC_CI_PLAN.md` | SLURM CI/CD architecture |
+| Document                                                | Purpose                                            |
+| ------------------------------------------------------- | -------------------------------------------------- |
+| `RHIZOMORPH_SUPPORT_MATRIX.md`                          | Graph type × alphabet × strand matrix              |
+| `FUNCTION_COVERAGE_AUDIT.md`                            | Module→doc mapping (auto-generated)                |
+| `TOOL_WRAPPER_STATUS.md`                                | External tool coverage table                       |
+| `COMPREHENSIVE_TESTING_FRAMEWORK.md`                    | Test organization spec                             |
+| `COMPREHENSIVE_ROADMAP.md`                              | Strategic 5-phase vision                           |
+| `rhizomorph-graph-ecosystem-plan.md`                    | Deep Rhizomorph technical spec                     |
+| `TDA_INTEGRATION_PLAN.md`                               | TDA design (beads: td-mncc → td-q5qa)              |
+| `GOLD_STANDARD_GENOME_COMPARISON_PLAN.md`               | Comparison design (beads: td-guxl, td-5xxf)        |
+| `HPC_CI_PLAN.md`                                        | SLURM CI/CD architecture                           |
+| `GENERATIVE_SEQUENCE_DESIGN_PLAN.md`                    | Phase 6 canonical technical spec (graph + ML + AI) |
+| `GENERATIVE_SEQUENCE_DESIGN_OVERVIEW.md`                | Phase 6 stakeholder summary                        |
+| `GENERATIVE_SEQUENCE_DESIGN_ROADMAP.md`                 | Phase 6 open-source development roadmap            |
+| `generative-sequence-design-workflow-overview.mermaid`  | Phase 6 simple workflow diagram                    |
+| `generative-sequence-design-workflow-detail.mermaid.md` | Phase 6 detailed component diagram                 |
 
-**Deleted (2026-01-30)**: TODO.md, DEVELOPMENT_TRIAGE.md, STARTUP_PERFORMANCE_PLAN.md, WORKFLOW_COVERAGE_NOTES.md (migrated to beads)
+**Deleted (2026-01-30)**: TODO.md, DEVELOPMENT_TRIAGE.md,
+STARTUP_PERFORMANCE_PLAN.md, WORKFLOW_COVERAGE_NOTES.md (migrated to beads)
 
 ---
 
@@ -293,25 +325,25 @@ cd ~/workspace/todo && bd list --json | jq '.[] | select(.title | test("\\[B\\]"
 
 ### Strand Modes
 
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| SingleStrand | Forward only | Proteins, directed graphs, text/NLP |
-| DoubleStrand | Forward + RC separate | Strand-specific RNA-seq |
-| Canonical | Forward + RC merged | DNA assembly (default) |
+| Mode         | Description           | Use Case                            |
+| ------------ | --------------------- | ----------------------------------- |
+| SingleStrand | Forward only          | Proteins, directed graphs, text/NLP |
+| DoubleStrand | Forward + RC separate | Strand-specific RNA-seq             |
+| Canonical    | Forward + RC merged   | DNA assembly (default)              |
 
 ### Support Matrix (Graph × Alphabet × Strand)
 
-| Graph Type | DNA | RNA | AA | String/Unicode |
-|------------|-----|-----|-----|----------------|
-| **K-mer** | S/D/C | S/D/C | S only | - |
-| **Qualmer** | S/D/C | S/D/C | - | - |
-| **N-gram** | - | - | - | S only |
-| **FASTA OLC** | S/D/C | S/D/C | S only | S only |
-| **FASTQ OLC** | S/D/C | S/D/C | - | - |
-| **String OLC** | - | - | - | S only |
+| Graph Type     | DNA   | RNA   | AA     | String/Unicode |
+| -------------- | ----- | ----- | ------ | -------------- |
+| **K-mer**      | S/D/C | S/D/C | S only | -              |
+| **Qualmer**    | S/D/C | S/D/C | -      | -              |
+| **N-gram**     | -     | -     | -      | S only         |
+| **FASTA OLC**  | S/D/C | S/D/C | S only | S only         |
+| **FASTQ OLC**  | S/D/C | S/D/C | -      | -              |
+| **String OLC** | -     | -     | -      | S only         |
 
-*S = SingleStrand, D = DoubleStrand, C = Canonical*
-*Reverse complement only applies to DNA/RNA; AA and String use SingleStrand only*
+_S = SingleStrand, D = DoubleStrand, C = Canonical_ _Reverse complement only
+applies to DNA/RNA; AA and String use SingleStrand only_
 
 ### Key API Patterns
 
@@ -333,6 +365,7 @@ simplified = Mycelia.Rhizomorph.simplify_graph(graph)
 ## Coding Conventions
 
 ### Import Style (Strict)
+
 ```julia
 # CORRECT
 import BioSequences
@@ -347,7 +380,8 @@ using DataFrames: DataFrame
 
 ### Sequence Types
 
-**Principle:** Avoid unnecessary conversions. Use the appropriate type for the domain.
+**Principle:** Avoid unnecessary conversions. Use the appropriate type for the
+domain.
 
 ```julia
 # DNA/RNA sequences - Use BioSequences for efficiency
@@ -362,11 +396,14 @@ ngram_graph = Mycelia.Rhizomorph.build_ngram_graph([text], n=3)
 string_graph = Mycelia.Rhizomorph.build_string_graph(sentences)
 ```
 
-**When to use BioSequences:** DNA, RNA, protein sequences where k-mer operations, reverse complement, or biological alphabet constraints apply.
+**When to use BioSequences:** DNA, RNA, protein sequences where k-mer
+operations, reverse complement, or biological alphabet constraints apply.
 
-**When to use strings:** N-gram graphs for NLP, text analysis, or any non-biological sequence data.
+**When to use strings:** N-gram graphs for NLP, text analysis, or any
+non-biological sequence data.
 
 ### Function Calls
+
 ```julia
 # CORRECT - Fully qualified
 result = Mycelia.function_name(args...)
@@ -386,6 +423,7 @@ result = R.build_kmer_graph_canonical(seqs, k)
 Types: `add`, `fix`, `update`, `remove`, `refactor`
 
 **Examples:**
+
 ```
 add: checkpointing utilities for JLD2-based stage caching
 fix: path_to_sequence API mismatch in Rhizomorph
@@ -394,6 +432,7 @@ refactor: extract validation logic to separate module
 ```
 
 **Rules:**
+
 - Short present-tense subjects (~72 chars)
 - Include what/why in body if needed
 - Link related issues
@@ -406,17 +445,20 @@ refactor: extract validation logic to separate module
 Mycelia tasks are tracked in the central todo repo (`~/workspace/todo/.beads/`).
 
 **Labels:**
+
 - `workspace:mycelia` - All Mycelia tasks
 - `compute:local` - Can run on laptop
 - `compute:scg|lrc|nersc` - Needs HPC
 
 **Finding Mycelia work:**
+
 ```bash
 cd ~/workspace/todo
 bd ready --json | jq '.[] | select(.title | test("Mycelia|\\[B\\]"))'
 ```
 
 **Existing issues:**
+
 - `td-29s` - Add comprehensive AGENTS.md (this task)
 - `td-mqo` - Systematize work tracking from planning docs
 - `td-q5f` - Systematic test coverage expansion
@@ -430,19 +472,23 @@ bd ready --json | jq '.[] | select(.title | test("Mycelia|\\[B\\]"))'
 ### Common Issues
 
 **"Function not found"**
+
 - Check you're using fully qualified name: `Mycelia.function_name()`
 - Check the function is included in `src/Mycelia.jl`
 
 **"Type mismatch with BioSequences"**
+
 - Ensure using `BioSequences.LongDNA{4}`, not `LongDNA`
 - For FASTQ: `FASTX.sequence(BioSequences.LongDNA{4}, record)`
 
 **"Tests pass locally but fail in CI"**
+
 - Check if test needs `MYCELIA_RUN_EXTERNAL=true`
 - Check for hardcoded paths
 - Use `StableRNGs` for determinism
 
 **"External tool not found"**
+
 - Install via Bioconda: `Mycelia.ensure_conda_environment()`
 - Or use system install and update PATH
 
@@ -457,14 +503,17 @@ bd ready --json | jq '.[] | select(.title | test("Mycelia|\\[B\\]"))'
 ## Agentic Quality Infrastructure
 
 This workspace inherits global hooks from `~/.claude/settings.json`:
+
 - **Audit logging:** All bash commands logged to `~/.claude/audit.log`
-- **Auto-formatting:** Julia (`.jl`) and Markdown (`.md`) files formatted on save
+- **Auto-formatting:** Julia (`.jl`) and Markdown (`.md`) files formatted on
+  save
 - **Stop verification:** End-of-session prompts for git status, beads sync
 - **Dangerous op blocking:** Prevents `rm -rf`, `sudo`, etc.
 
 ### Quality Protocols (Central Reference)
 
 See `~/workspace/todo/protocols/` for detailed guidance:
+
 - `agentic-quality-gates.md` - Three-layer review model (automated + AI + human)
 - `permission-tiers.md` - Crawl→Walk→Run trust escalation
 - `anti-patterns.md` - Common failure modes to avoid
@@ -472,6 +521,7 @@ See `~/workspace/todo/protocols/` for detailed guidance:
 ### Trust Tier
 
 This workspace operates at **development** tier:
+
 - Full read/write access
 - Git operations allowed
 - Julia/Python execution allowed
