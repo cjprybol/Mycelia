@@ -27,7 +27,16 @@ function run_diamond_search(;
         threads::Int = get_default_threads(),
         evalue::Float64 = 1e-3,
         block_size::Float64 = floor(Sys.total_memory() / 1e9 / 8), # Auto-calculate from memory
-        sensitivity::String = "--iterate"
+        sensitivity::String = "--iterate",
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "diamond_search",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -69,6 +78,42 @@ function run_diamond_search(;
         "Expect value", "Bit score", "Alignment length", "Percentage of identical matches",
         "Number of identical matches", "Number of mismatches", "Number of gap openings"
     ]
+
+    if executor !== nothing
+        header_string = join(outfmt_headers, '\t')
+        makedb_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond makedb --in $(reference_fasta) --db $(diamond_db)`
+        )
+        search_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file).tmp --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(makedb_cmd)",
+            "  $(search_cmd)",
+            "  printf '%s\\n' \"$(header_string)\" > \"$(results_file)\"",
+            "  cat \"$(results_file).tmp\" >> \"$(results_file)\"",
+            "  rm -f \"$(results_file).tmp\"",
+            "fi",
+            "rm -f \"$(diamond_db)\""
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return results_file
+    end
 
     try
         # Create DIAMOND database
@@ -190,7 +235,16 @@ function run_blastp_search(;
                              "_blastp",
         threads::Int = get_default_threads(),
         evalue::Float64 = 1e-3,
-        max_target_seqs::Int = 500
+        max_target_seqs::Int = 500,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "blastp_search",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -218,6 +272,39 @@ function run_blastp_search(;
 
     # Ensure BLAST environment exists
     Mycelia.add_bioconda_env("blast")
+
+    if executor !== nothing
+        outfmt = "7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid"
+        make_db_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(reference_fasta) -dbtype prot -out $(blast_db)`
+        )
+        search_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(threads) -outfmt "$(outfmt)"`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(make_db_cmd)",
+            "  $(search_cmd)",
+            "fi",
+            "rm -f \"$(blast_db).phr\" \"$(blast_db).pin\" \"$(blast_db).psq\""
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return results_file
+    end
 
     try
         # Create BLAST database
@@ -272,7 +359,16 @@ function run_mmseqs_search(;
                              "_mmseqs",
         threads::Int = get_default_threads(),
         evalue::Float64 = 1e-3,
-        sensitivity::Float64 = 4.0
+        sensitivity::Float64 = 4.0,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mmseqs_search",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -302,6 +398,35 @@ function run_mmseqs_search(;
 
     # Ensure MMseqs2 environment exists
     Mycelia.add_bioconda_env("mmseqs2")
+
+    if executor !== nothing
+        mmseqs_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search $(query_fasta) $(reference_fasta) $(results_file) $(tmp_dir) --format-mode 4 --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "mkdir -p \"$(tmp_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(mmseqs_cmd)",
+            "fi",
+            "rm -rf \"$(tmp_dir)\""
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return results_file
+    end
 
     try
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search

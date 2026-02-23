@@ -129,16 +129,57 @@ minimum coverage threshold of 80% (-c 0.8). The output TSV file format contains
 tab-separated cluster representative and member sequences.
 """
 # --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
-function mmseqs_easy_cluster(; fasta, output = fasta*".mmseqs_easy_cluster", tmp = mktempdir())
+function mmseqs_easy_cluster(;
+        fasta,
+        output = fasta * ".mmseqs_easy_cluster",
+        tmp = mktempdir(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mmseqs_easy_cluster",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     outfile = "$(output)_cluster.tsv"
+    if executor !== nothing
+        Mycelia.add_bioconda_env("mmseqs2")
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "if [ ! -f \"$(outfile)\" ]; then",
+            "  $(cmd)",
+            "fi",
+            "rm -rf \"$(tmp)\""
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = 1,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        rm(tmp, recursive = true, force = true)
+        return outfile
+    end
+
     if !isfile(outfile)
         Mycelia.add_bioconda_env("mmseqs2")
         # at least 50% equivalent
         # --min-seq-id 0.5 -c 0.8
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
     end
-    rm(tmp, recursive = true)
-    return "$(output)_cluster.tsv"
+    rm(tmp, recursive = true, force = true)
+    return outfile
 end
 
 """
