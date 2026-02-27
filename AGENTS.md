@@ -74,7 +74,8 @@ probabilistic graph-based genome assembler.
 | `rhizomorph/core/*.jl`            | Graph types, evidence, quality        | ~120      |
 | `rhizomorph/fixed-length/*.jl`    | K-mer, qualmer, n-gram graphs         | ~30       |
 | `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ           | ~30       |
-| `rhizomorph/algorithms/*.jl`      | Path-finding, simplification, repeats | ~80       |
+| `rhizomorph/algorithms/*.jl`      | Path-finding, generation, metrics, error correction | ~100 |
+| `rhizomorph/analysis/*.jl`        | Information theory, sequence quality  | ~20       |
 | `rhizomorph/assembly.jl`          | High-level assembly orchestration     | 54        |
 | `assembly.jl`                     | External assembler wrappers           | 62        |
 | `graph-cleanup.jl`                | Graph simplification utilities        | 22        |
@@ -358,7 +359,36 @@ sequence = Mycelia.Rhizomorph.path_to_sequence(path, graph)
 
 # Simplify
 simplified = Mycelia.Rhizomorph.simplify_graph(graph)
+
+# Generate sequences
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+results = Mycelia.Rhizomorph.generate_sequences(weighted, 10; walk_length=200, seed=42)
+
+# Graph metrics
+β0, β1 = Mycelia.Rhizomorph.compute_betti_numbers(graph)
+centrality = Mycelia.Rhizomorph.compute_eigenvector_centrality(graph)
+
+# Information theory
+entropy = Mycelia.Rhizomorph.graph_transition_entropy(weighted)
+jsd = Mycelia.Rhizomorph.jensen_shannon_divergence(dist_a, dist_b)
+
+# Quality evaluation
+quality = Mycelia.Rhizomorph.evaluate_generation_quality(sequences, graph)
 ```
+
+### DRY Principle for Notebooks
+
+All reusable graph algorithms, metrics, and analysis functions MUST live in
+Mycelia's Rhizomorph module. Experiment notebooks in downstream repos
+(panlingual-metagraphs, Stanford-Virome, etc.) should ONLY call Mycelia
+functions — never re-implement graph algorithms inline.
+
+When adding new capabilities:
+
+1. Implement in `src/rhizomorph/algorithms/` or `src/rhizomorph/analysis/`
+2. Add `include()` to `rhizomorph.jl`
+3. Write tests in `test/4_assembly/`
+4. Downstream notebooks import via `Pkg.develop(Mycelia)`
 
 ---
 

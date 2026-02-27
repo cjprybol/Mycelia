@@ -27,6 +27,12 @@ edges are added only when observed.
   - `path-finding.jl`: Eulerian paths and sequence reconstruction
   - `io.jl`: GFA and serialization I/O
   - `simplification.jl`: Bubble detection and graph simplification
+  - `generation.jl`: Batch sequence generation via random walks
+  - `metrics.jl`: Graph metrics (centrality, modularity, Betti numbers)
+  - `error-correction.jl`: Greedy error correction via k-mer graph
+- `analysis/`: Statistical analysis functions
+  - `information-theory.jl`: Entropy, divergence, Zipf estimation
+  - `sequence-quality.jl`: GC content, k-mer profiles, quality evaluation
 """
 module Rhizomorph
 
@@ -59,6 +65,13 @@ include("algorithms/io.jl")
 include("algorithms/simplification.jl")
 include("algorithms/repeats.jl")
 include("algorithms/contigs.jl")
+include("algorithms/generation.jl")
+include("algorithms/metrics.jl")
+include("algorithms/error-correction.jl")
+
+# Load analysis modules
+include("analysis/information-theory.jl")
+include("analysis/sequence-quality.jl")
 
 # Load graph builders
 include("fixed-length/kmer-graphs.jl")
