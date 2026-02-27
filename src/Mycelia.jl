@@ -182,4 +182,16 @@ include("xam.jl")
 # This must be included last, after all other definitions are loaded
 include("precompile_workload.jl")
 
+function __init__()
+    # Clear LD_LIBRARY_PATH to prevent system shared libraries from conflicting
+    # with Julia's bundled libraries. This is a common issue on Linux where
+    # visualization packages (CairoMakie, Makie, Plots, etc.) link against
+    # incompatible system versions of libstdc++, Mesa, and other libraries.
+    if Sys.islinux() && haskey(ENV, "LD_LIBRARY_PATH") && !isempty(ENV["LD_LIBRARY_PATH"])
+        Logging.@warn "Mycelia: Clearing LD_LIBRARY_PATH to avoid library conflicts with Julia packages. " *
+            "Previous value: $(ENV["LD_LIBRARY_PATH"])"
+        ENV["LD_LIBRARY_PATH"] = ""
+    end
+end
+
 end # module
