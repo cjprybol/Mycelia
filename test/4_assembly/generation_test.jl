@@ -270,10 +270,11 @@ end
 
 Test.@testset "Metrics - modularity" begin
     graph = _build_test_ngram_graph()
-    mod_val = Mycelia.Rhizomorph.compute_modularity(graph)
+    mod_val, communities = Mycelia.Rhizomorph.compute_modularity(graph)
 
     # Modularity is between -0.5 and 1.0 for undirected; can vary for directed
     Test.@test isfinite(mod_val)
+    Test.@test length(communities) == MetaGraphsNext.nv(graph)
 end
 
 Test.@testset "Metrics - closeness_centrality" begin
@@ -286,13 +287,11 @@ end
 
 Test.@testset "Metrics - betti_numbers" begin
     graph = _build_test_ngram_graph()
-    betti = Mycelia.Rhizomorph.compute_betti_numbers(graph)
+    beta_0, beta_1 = Mycelia.Rhizomorph.compute_betti_numbers(graph)
 
-    Test.@test haskey(betti, :beta_0)
-    Test.@test haskey(betti, :beta_1)
     # Linear chain: 1 connected component, 0 independent cycles
-    Test.@test betti[:beta_0] >= 1
-    Test.@test betti[:beta_1] >= 0
+    Test.@test beta_0 >= 1
+    Test.@test beta_1 >= 0
 end
 
 # ============================================================================
@@ -321,15 +320,19 @@ Test.@testset "Error Correction - correct_sequence_greedy (Dict)" begin
         kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
     end
 
-    edge_counts = Dict{String, Int}()
+    # Edge keys are Tuple{String, String} (not underscore-separated strings)
+    edge_counts = Dict{Tuple{String, String}, Int}()
     for i in 1:(length(kmers) - 1)
-        edge_key = "$(kmers[i])_$(kmers[i + 1])"
+        edge_key = (kmers[i], kmers[i + 1])
         edge_counts[edge_key] = get(edge_counts, edge_key, 0) + 1
     end
 
     # Introduce a 1-character error
     bad_seq = "ABXDEF"
-    corrected = Mycelia.Rhizomorph.correct_sequence_greedy(bad_seq, k, kmer_counts, edge_counts)
-    Test.@test corrected isa AbstractString
-    Test.@test length(corrected) == length(bad_seq)
+    corrected_seq,
+    correction_positions = Mycelia.Rhizomorph.correct_sequence_greedy(
+        bad_seq, k, kmer_counts, edge_counts)
+    Test.@test corrected_seq isa AbstractString
+    Test.@test length(corrected_seq) == length(bad_seq)
+    Test.@test correction_positions isa Vector{Int}
 end
