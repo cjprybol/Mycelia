@@ -173,6 +173,118 @@ function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
 end
 
 """
+    TOOL_VERSION_REGISTRY
+
+Registry mapping tool environment names to their version-check commands and
+expected major versions. Used by [`verify_tool_version`](@ref) for pre-flight
+version validation.
+
+Each entry maps `env_name => (cmd_parts, expected_major)`.
+"""
+const TOOL_VERSION_REGISTRY = Dict{String, Tuple{Vector{String}, Int}}(
+    "metaphlan" => (["metaphlan", "--version"], 4),
+    "kraken2" => (["kraken2", "--version"], 2),
+    "megahit" => (["megahit", "--version"], 1),
+    "spades" => (["spades.py", "--version"], 4),
+    "busco" => (["busco", "--version"], 5),
+    "checkm2" => (["checkm2", "--version"], 1),
+    "diamond" => (["diamond", "version"], 2),
+    "blast" => (["blastn", "-version"], 2),
+    "minimap2" => (["minimap2", "--version"], 2),
+    "samtools" => (["samtools", "--version"], 1),
+    "fastp" => (["fastp", "--version"], 0),
+    "prodigal" => (["prodigal", "-v"], 2),
+    "bakta" => (["bakta", "--version"], 1)
+)
+
+"""
+    verify_tool_version(env_name::AbstractString; expected_major::Union{Nothing, Integer} = nothing, throw_on_mismatch::Bool = true)
+
+Check the installed version of a conda tool against an expected major version.
+Returns a named tuple `(; version_string, major, minor, patch, ok)`.
+
+When `expected_major` is `nothing`, looks up the tool in [`TOOL_VERSION_REGISTRY`](@ref).
+If the tool is not in the registry and no `expected_major` is given, returns the
+parsed version without comparison (`ok = true`).
+
+Throws `ErrorException` on major-version mismatch when `throw_on_mismatch` is true;
+otherwise logs a warning and returns `ok = false`.
+
+# Examples
+```julia
+# Using registry (metaphlan expects major=4)
+result = verify_tool_version("metaphlan")
+
+# Explicit expected version
+result = verify_tool_version("metaphlan"; expected_major = 4)
+
+# Just parse, don't enforce
+result = verify_tool_version("some_tool"; throw_on_mismatch = false)
+```
+"""
+function verify_tool_version(env_name::AbstractString;
+        expected_major::Union{Nothing, Integer} = nothing,
+        throw_on_mismatch::Bool = true)
+    # Resolve version check command and expected major from registry if needed
+    if haskey(TOOL_VERSION_REGISTRY, env_name)
+        registry_cmd, registry_major = TOOL_VERSION_REGISTRY[env_name]
+        cmd_parts = registry_cmd
+        if expected_major === nothing
+            expected_major = registry_major
+        end
+    else
+        # Unknown tool — try generic --version
+        cmd_parts = [env_name, "--version"]
+    end
+
+    version_string = conda_tool_version(env_name, cmd_parts)
+    if version_string === missing
+        msg = "Could not determine version for '$env_name' (environment may not exist)"
+        if throw_on_mismatch
+            error(msg)
+        else
+            @warn msg
+            return (; version_string = missing, major = nothing, minor = nothing,
+                patch = nothing, ok = false)
+        end
+    end
+
+    # Parse first version-like pattern (handles diverse formats like
+    # "MetaPhlAn version 4.1.0", "blastn: 2.14.0+", "4.0.0rc1")
+    m = match(r"(\d+)\.(\d+)(?:\.(\d+))?", version_string)
+    if m === nothing
+        msg = "Could not parse version from '$env_name' output: $version_string"
+        if throw_on_mismatch
+            error(msg)
+        else
+            @warn msg
+            return (; version_string, major = nothing, minor = nothing,
+                patch = nothing, ok = false)
+        end
+    end
+
+    major = parse(Int, m.captures[1])
+    minor = parse(Int, m.captures[2])
+    patch = m.captures[3] !== nothing ? parse(Int, m.captures[3]) : nothing
+
+    ok = true
+    if expected_major !== nothing && major != expected_major
+        ok = false
+        msg = "Version mismatch for '$env_name': installed $version_string " *
+              "(major=$major), expected major=$expected_major"
+        if throw_on_mismatch
+            error(msg)
+        else
+            @warn msg
+        end
+    else
+        @info "Verified '$env_name' version: $version_string (major=$major)"
+    end
+
+    return (; version_string, major, minor, patch, ok)
+end
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Check whether a named Bioconda environment already exists.
