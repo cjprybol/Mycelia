@@ -1518,6 +1518,800 @@ function add_observations_to_ngram_graph!(
 end
 
 # ============================================================================
+# Lightweight Graph Construction
+#
+# These builders create graphs with LightweightVertexData/LightweightEdgeData
+# instead of full evidence-tracking types. The graph topology is identical;
+# only per-observation evidence storage is replaced by integer counters.
+# ============================================================================
+
+"""
+Build lightweight k-mer graph that stores only topology + aggregated counts.
+
+Core loop mirrors `_build_kmer_graph_core` but creates `LightweightKmerVertexData`
+vertices and `LightweightEdgeData` edges, reducing memory by ~1875x for
+high-observation datasets.
+"""
+function _build_kmer_graph_core_lightweight(
+        records::Vector{FASTX.FASTA.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
+) where {K, KmerType <: Kmers.Kmer}
+    if KmerType <: Kmers.DNAKmer
+        SeqType = BioSequences.LongDNA{4}
+        KmerIterator = Kmers.UnambiguousDNAMers{K}
+    elseif KmerType <: Kmers.RNAKmer
+        SeqType = BioSequences.LongRNA{4}
+        KmerIterator = Kmers.UnambiguousRNAMers{K}
+    elseif KmerType <: Kmers.AAKmer
+        SeqType = BioSequences.LongAA
+        KmerIterator = try
+            Kmers.UnambiguousAAMers{K}
+        catch
+            Kmers.FwAAMers{K}
+        end
+    else
+        error("Unsupported k-mer type: $KmerType")
+    end
+
+    is_aa = KmerType <: Kmers.AAKmer
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
+    end
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = ActualKmerType,
+        vertex_data_type = LightweightKmerVertexData{ActualKmerType},
+        edge_data_type = LightweightEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for record in records
+        observation_id = String(split(FASTX.identifier(record), ' ')[1])
+        sequence = FASTX.sequence(SeqType, record)
+
+        kmers_with_positions = if is_aa
+            [(kmer, i) for (i, kmer) in enumerate(KmerIterator(sequence))]
+        else
+            collect(KmerIterator(sequence))
+        end
+
+        for (kmer, position) in kmers_with_positions
+            if !haskey(graph, kmer)
+                graph[kmer] = LightweightKmerVertexData(kmer)
+            end
+            add_evidence!(graph[kmer], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(kmers_with_positions) - 1)
+            src_kmer, src_pos = kmers_with_positions[i]
+            dst_kmer, dst_pos = kmers_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_kmer, dst_kmer)
+                    graph[src_kmer, dst_kmer] = LightweightEdgeData()
+                end
+                add_evidence!(graph[src_kmer, dst_kmer], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+Build lightweight strand-specific k-mer graph (outer wrapper with type detection).
+"""
+function build_kmer_graph_singlestrand_lightweight(
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    fasta_records = if records[1] isa FASTX.FASTQ.Record
+        [FASTX.FASTA.Record(
+             FASTX.identifier(r),
+             FASTX.sequence(r)
+         ) for r in records]
+    else
+        records
+    end
+
+    sequence_alphabet = _infer_sequence_alphabet(
+        fasta_records;
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
+    )
+
+    if sequence_alphabet == :DNA
+        return _build_kmer_graph_core_lightweight(
+            fasta_records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :RNA
+        return _build_kmer_graph_core_lightweight(
+            fasta_records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :AA
+        return _build_kmer_graph_core_lightweight(
+            fasta_records, Val(k), Kmers.AAKmer{k}, dataset_id)
+    else
+        error("Unsupported sequence type for k-mer graph: $sequence_alphabet")
+    end
+end
+
+"""
+Build lightweight n-gram graph that stores only topology + aggregated counts.
+
+Core loop mirrors `build_ngram_graph_singlestrand` but creates
+`LightweightStringVertexData` vertices and `LightweightEdgeData` edges.
+"""
+function build_ngram_graph_singlestrand_lightweight(
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
+)
+    if isempty(strings)
+        error("Cannot build graph from empty string vector")
+    end
+
+    if n < 1
+        error("N-gram size must be positive, got: $n")
+    end
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = String,
+        vertex_data_type = LightweightStringVertexData,
+        edge_data_type = LightweightEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for (string_idx, input_string) in enumerate(strings)
+        observation_id = "string_$(lpad(string_idx, 6, '0'))"
+
+        chars = collect(input_string)
+        char_count = length(chars)
+
+        if char_count < n
+            continue
+        end
+
+        ngrams_with_positions = [(String(chars[i:(i + n - 1)]), i)
+                                 for i in 1:(char_count - n + 1)]
+
+        for (ngram, position) in ngrams_with_positions
+            if !haskey(graph, ngram)
+                graph[ngram] = LightweightStringVertexData(ngram)
+            end
+            add_evidence!(graph[ngram], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(ngrams_with_positions) - 1)
+            src_ngram, src_pos = ngrams_with_positions[i]
+            dst_ngram, dst_pos = ngrams_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_ngram, dst_ngram)
+                    graph[src_ngram, dst_ngram] = LightweightEdgeData(n - 1)
+                end
+                add_evidence!(graph[src_ngram, dst_ngram], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+    add_observations_to_ngram_graph_lightweight!(graph, strings, n; dataset_id)
+
+Add observations from new strings to an existing lightweight n-gram graph.
+"""
+function add_observations_to_ngram_graph_lightweight!(
+        graph::MetaGraphsNext.MetaGraph,
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
+)
+    if isempty(strings)
+        return graph
+    end
+
+    for (string_idx, input_string) in enumerate(strings)
+        observation_id = "string_$(lpad(string_idx, 6, '0'))"
+
+        if length(input_string) < n
+            continue
+        end
+
+        ngrams_with_positions = [(input_string[i:(i + n - 1)], i)
+                                 for i in 1:(length(input_string) - n + 1)]
+
+        for (ngram, position) in ngrams_with_positions
+            if !haskey(graph, ngram)
+                graph[ngram] = LightweightStringVertexData(ngram)
+            end
+            add_evidence!(graph[ngram], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(ngrams_with_positions) - 1)
+            src_ngram, src_pos = ngrams_with_positions[i]
+            dst_ngram, dst_pos = ngrams_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_ngram, dst_ngram)
+                    graph[src_ngram, dst_ngram] = LightweightEdgeData(n - 1)
+                end
+                add_evidence!(graph[src_ngram, dst_ngram], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+# ============================================================================
+# Ultralight Graph Construction
+#
+# These builders create graphs with UltralightVertexData/UltralightEdgeData
+# instead of full or lightweight types. No observation ID tracking — only
+# topology + aggregated counts per dataset.
+# ============================================================================
+
+"""
+Build ultralight k-mer graph that stores only topology + aggregated counts.
+
+Core loop mirrors `_build_kmer_graph_core_lightweight` but creates
+`UltralightKmerVertexData` vertices and `UltralightEdgeData` edges.
+No observation ID tracking (unlike lightweight).
+"""
+function _build_kmer_graph_core_ultralight(
+        records::Vector{FASTX.FASTA.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
+) where {K, KmerType <: Kmers.Kmer}
+    if KmerType <: Kmers.DNAKmer
+        SeqType = BioSequences.LongDNA{4}
+        KmerIterator = Kmers.UnambiguousDNAMers{K}
+    elseif KmerType <: Kmers.RNAKmer
+        SeqType = BioSequences.LongRNA{4}
+        KmerIterator = Kmers.UnambiguousRNAMers{K}
+    elseif KmerType <: Kmers.AAKmer
+        SeqType = BioSequences.LongAA
+        KmerIterator = try
+            Kmers.UnambiguousAAMers{K}
+        catch
+            Kmers.FwAAMers{K}
+        end
+    else
+        error("Unsupported k-mer type: $KmerType")
+    end
+
+    is_aa = KmerType <: Kmers.AAKmer
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
+    end
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = ActualKmerType,
+        vertex_data_type = UltralightKmerVertexData{ActualKmerType},
+        edge_data_type = UltralightEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for record in records
+        observation_id = String(split(FASTX.identifier(record), ' ')[1])
+        sequence = FASTX.sequence(SeqType, record)
+
+        kmers_with_positions = if is_aa
+            [(kmer, i) for (i, kmer) in enumerate(KmerIterator(sequence))]
+        else
+            collect(KmerIterator(sequence))
+        end
+
+        for (kmer, position) in kmers_with_positions
+            if !haskey(graph, kmer)
+                graph[kmer] = UltralightKmerVertexData(kmer)
+            end
+            add_evidence!(graph[kmer], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(kmers_with_positions) - 1)
+            src_kmer, src_pos = kmers_with_positions[i]
+            dst_kmer, dst_pos = kmers_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_kmer, dst_kmer)
+                    graph[src_kmer, dst_kmer] = UltralightEdgeData()
+                end
+                add_evidence!(graph[src_kmer, dst_kmer], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+Build ultralight strand-specific k-mer graph (outer wrapper with type detection).
+"""
+function build_kmer_graph_singlestrand_ultralight(
+        records::Vector{<:FASTX.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    fasta_records = if records[1] isa FASTX.FASTQ.Record
+        [FASTX.FASTA.Record(
+             FASTX.identifier(r),
+             FASTX.sequence(r)
+         ) for r in records]
+    else
+        records
+    end
+
+    sequence_alphabet = _infer_sequence_alphabet(
+        fasta_records;
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
+    )
+
+    if sequence_alphabet == :DNA
+        return _build_kmer_graph_core_ultralight(
+            fasta_records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :RNA
+        return _build_kmer_graph_core_ultralight(
+            fasta_records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :AA
+        return _build_kmer_graph_core_ultralight(
+            fasta_records, Val(k), Kmers.AAKmer{k}, dataset_id)
+    else
+        error("Unsupported sequence type for k-mer graph: $sequence_alphabet")
+    end
+end
+
+"""
+Build ultralight n-gram graph that stores only topology + aggregated counts.
+No observation ID tracking.
+"""
+function build_ngram_graph_singlestrand_ultralight(
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
+)
+    if isempty(strings)
+        error("Cannot build graph from empty string vector")
+    end
+
+    if n < 1
+        error("N-gram size must be positive, got: $n")
+    end
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = String,
+        vertex_data_type = UltralightStringVertexData,
+        edge_data_type = UltralightEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for (string_idx, input_string) in enumerate(strings)
+        observation_id = "string_$(lpad(string_idx, 6, '0'))"
+
+        chars = collect(input_string)
+        char_count = length(chars)
+
+        if char_count < n
+            continue
+        end
+
+        ngrams_with_positions = [(String(chars[i:(i + n - 1)]), i)
+                                 for i in 1:(char_count - n + 1)]
+
+        for (ngram, position) in ngrams_with_positions
+            if !haskey(graph, ngram)
+                graph[ngram] = UltralightStringVertexData(ngram)
+            end
+            add_evidence!(graph[ngram], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(ngrams_with_positions) - 1)
+            src_ngram, src_pos = ngrams_with_positions[i]
+            dst_ngram, dst_pos = ngrams_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_ngram, dst_ngram)
+                    graph[src_ngram, dst_ngram] = UltralightEdgeData(n - 1)
+                end
+                add_evidence!(graph[src_ngram, dst_ngram], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+    add_observations_to_ngram_graph_ultralight!(graph, strings, n; dataset_id)
+
+Add observations from new strings to an existing ultralight n-gram graph.
+"""
+function add_observations_to_ngram_graph_ultralight!(
+        graph::MetaGraphsNext.MetaGraph,
+        strings::Vector{String},
+        n::Int;
+        dataset_id::String = "dataset_01"
+)
+    if isempty(strings)
+        return graph
+    end
+
+    for (string_idx, input_string) in enumerate(strings)
+        observation_id = "string_$(lpad(string_idx, 6, '0'))"
+
+        if length(input_string) < n
+            continue
+        end
+
+        ngrams_with_positions = [(input_string[i:(i + n - 1)], i)
+                                 for i in 1:(length(input_string) - n + 1)]
+
+        for (ngram, position) in ngrams_with_positions
+            if !haskey(graph, ngram)
+                graph[ngram] = UltralightStringVertexData(ngram)
+            end
+            add_evidence!(graph[ngram], dataset_id, observation_id,
+                EvidenceEntry(position, Forward))
+        end
+
+        for i in 1:(length(ngrams_with_positions) - 1)
+            src_ngram, src_pos = ngrams_with_positions[i]
+            dst_ngram, dst_pos = ngrams_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_ngram, dst_ngram)
+                    graph[src_ngram, dst_ngram] = UltralightEdgeData(n - 1)
+                end
+                add_evidence!(graph[src_ngram, dst_ngram], dataset_id, observation_id,
+                    EdgeEvidenceEntry(src_pos, dst_pos, Forward))
+            end
+        end
+    end
+
+    return graph
+end
+
+# ============================================================================
+# Ultralight Quality Graph Construction
+#
+# These builders create graphs with quality-aware ultralight types.
+# Quality scores are aggregated incrementally during construction.
+# Requires FASTQ input (quality scores come from reads).
+# ============================================================================
+
+"""
+Build ultralight quality k-mer graph from FASTQ records.
+
+Aggregates quality scores incrementally during construction using Phred score
+addition. Requires FASTQ input — will error on FASTA.
+"""
+function _build_kmer_graph_core_ultralight_quality(
+        records::Vector{FASTX.FASTQ.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
+) where {K, KmerType <: Kmers.Kmer}
+    if KmerType <: Kmers.DNAKmer
+        SeqType = BioSequences.LongDNA{4}
+        KmerIterator = Kmers.UnambiguousDNAMers{K}
+    elseif KmerType <: Kmers.RNAKmer
+        SeqType = BioSequences.LongRNA{4}
+        KmerIterator = Kmers.UnambiguousRNAMers{K}
+    elseif KmerType <: Kmers.AAKmer
+        SeqType = BioSequences.LongAA
+        KmerIterator = try
+            Kmers.UnambiguousAAMers{K}
+        catch
+            Kmers.FwAAMers{K}
+        end
+    else
+        error("Unsupported k-mer type: $KmerType")
+    end
+
+    is_aa = KmerType <: Kmers.AAKmer
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
+    end
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = ActualKmerType,
+        vertex_data_type = UltralightQualityKmerVertexData{ActualKmerType},
+        edge_data_type = UltralightQualityEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for record in records
+        observation_id = String(split(FASTX.identifier(record), ' ')[1])
+        sequence = FASTX.sequence(SeqType, record)
+        quality = Vector{UInt8}(FASTX.quality(record))
+
+        kmers_with_positions = if is_aa
+            [(kmer, i) for (i, kmer) in enumerate(KmerIterator(sequence))]
+        else
+            collect(KmerIterator(sequence))
+        end
+
+        for (kmer, position) in kmers_with_positions
+            if !haskey(graph, kmer)
+                graph[kmer] = UltralightQualityKmerVertexData(kmer)
+            end
+
+            kmer_quality = quality[position:(position + K - 1)]
+            add_evidence!(graph[kmer], dataset_id, observation_id,
+                QualityEvidenceEntry(position, Forward, kmer_quality))
+        end
+
+        for i in 1:(length(kmers_with_positions) - 1)
+            src_kmer, src_pos = kmers_with_positions[i]
+            dst_kmer, dst_pos = kmers_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_kmer, dst_kmer)
+                    graph[src_kmer, dst_kmer] = UltralightQualityEdgeData()
+                end
+
+                src_quality = quality[src_pos:(src_pos + K - 1)]
+                dst_quality = quality[dst_pos:(dst_pos + K - 1)]
+                add_evidence!(graph[src_kmer, dst_kmer], dataset_id, observation_id,
+                    EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
+                        src_quality, dst_quality))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+Build ultralight quality strand-specific k-mer graph (outer wrapper).
+Requires FASTQ input.
+"""
+function build_kmer_graph_singlestrand_ultralight_quality(
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    # Infer alphabet from FASTQ records (need FASTA for inference)
+    fasta_records = [FASTX.FASTA.Record(
+                         FASTX.identifier(r),
+                         FASTX.sequence(r)
+                     ) for r in records]
+
+    sequence_alphabet = _infer_sequence_alphabet(
+        fasta_records;
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
+    )
+
+    if sequence_alphabet == :DNA
+        return _build_kmer_graph_core_ultralight_quality(
+            records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :RNA
+        return _build_kmer_graph_core_ultralight_quality(
+            records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :AA
+        return _build_kmer_graph_core_ultralight_quality(
+            records, Val(k), Kmers.AAKmer{k}, dataset_id)
+    else
+        error("Unsupported sequence type for k-mer graph: $sequence_alphabet")
+    end
+end
+
+# ============================================================================
+# Lightweight Quality Graph Construction
+#
+# These builders create graphs with lightweight quality types.
+# Combines observation ID tracking with quality aggregation.
+# Requires FASTQ input.
+# ============================================================================
+
+"""
+Build lightweight quality k-mer graph from FASTQ records.
+
+Tracks observation IDs AND aggregates quality scores incrementally.
+"""
+function _build_kmer_graph_core_lightweight_quality(
+        records::Vector{FASTX.FASTQ.Record},
+        ::Val{K},
+        ::Type{KmerType},
+        dataset_id::String
+) where {K, KmerType <: Kmers.Kmer}
+    if KmerType <: Kmers.DNAKmer
+        SeqType = BioSequences.LongDNA{4}
+        KmerIterator = Kmers.UnambiguousDNAMers{K}
+    elseif KmerType <: Kmers.RNAKmer
+        SeqType = BioSequences.LongRNA{4}
+        KmerIterator = Kmers.UnambiguousRNAMers{K}
+    elseif KmerType <: Kmers.AAKmer
+        SeqType = BioSequences.LongAA
+        KmerIterator = try
+            Kmers.UnambiguousAAMers{K}
+        catch
+            Kmers.FwAAMers{K}
+        end
+    else
+        error("Unsupported k-mer type: $KmerType")
+    end
+
+    is_aa = KmerType <: Kmers.AAKmer
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
+    end
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
+
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = ActualKmerType,
+        vertex_data_type = LightweightQualityKmerVertexData{ActualKmerType},
+        edge_data_type = LightweightQualityEdgeData,
+        weight_function = compute_edge_weight
+    )
+
+    for record in records
+        observation_id = String(split(FASTX.identifier(record), ' ')[1])
+        sequence = FASTX.sequence(SeqType, record)
+        quality = Vector{UInt8}(FASTX.quality(record))
+
+        kmers_with_positions = if is_aa
+            [(kmer, i) for (i, kmer) in enumerate(KmerIterator(sequence))]
+        else
+            collect(KmerIterator(sequence))
+        end
+
+        for (kmer, position) in kmers_with_positions
+            if !haskey(graph, kmer)
+                graph[kmer] = LightweightQualityKmerVertexData(kmer)
+            end
+
+            kmer_quality = quality[position:(position + K - 1)]
+            add_evidence!(graph[kmer], dataset_id, observation_id,
+                QualityEvidenceEntry(position, Forward, kmer_quality))
+        end
+
+        for i in 1:(length(kmers_with_positions) - 1)
+            src_kmer, src_pos = kmers_with_positions[i]
+            dst_kmer, dst_pos = kmers_with_positions[i + 1]
+
+            if dst_pos == src_pos + 1
+                if !haskey(graph, src_kmer, dst_kmer)
+                    graph[src_kmer, dst_kmer] = LightweightQualityEdgeData()
+                end
+
+                src_quality = quality[src_pos:(src_pos + K - 1)]
+                dst_quality = quality[dst_pos:(dst_pos + K - 1)]
+                add_evidence!(graph[src_kmer, dst_kmer], dataset_id, observation_id,
+                    EdgeQualityEvidenceEntry(src_pos, dst_pos, Forward,
+                        src_quality, dst_quality))
+            end
+        end
+    end
+
+    return graph
+end
+
+"""
+Build lightweight quality strand-specific k-mer graph (outer wrapper).
+Requires FASTQ input.
+"""
+function build_kmer_graph_singlestrand_lightweight_quality(
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int;
+        dataset_id::String = "dataset_01",
+        type_hint::Union{Nothing, Symbol} = nothing,
+        ambiguous_action::Symbol = :dna
+)
+    if isempty(records)
+        throw(ArgumentError("Cannot build graph from empty record set"))
+    end
+
+    fasta_records = [FASTX.FASTA.Record(
+                         FASTX.identifier(r),
+                         FASTX.sequence(r)
+                     ) for r in records]
+
+    sequence_alphabet = _infer_sequence_alphabet(
+        fasta_records;
+        type_hint = type_hint,
+        ambiguous_action = ambiguous_action
+    )
+
+    if sequence_alphabet == :DNA
+        return _build_kmer_graph_core_lightweight_quality(
+            records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :RNA
+        return _build_kmer_graph_core_lightweight_quality(
+            records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+    elseif sequence_alphabet == :AA
+        return _build_kmer_graph_core_lightweight_quality(
+            records, Val(k), Kmers.AAKmer{k}, dataset_id)
+    else
+        error("Unsupported sequence type for k-mer graph: $sequence_alphabet")
+    end
+end
+
+# ============================================================================
 # Variable-length String Graph Construction (OLC approach)
 # ============================================================================
 

@@ -604,3 +604,606 @@ coverage = compute_edge_coverage(edge)
 function compute_edge_coverage(edge)
     return count_total_observations(edge)
 end
+
+# ============================================================================
+# Lightweight Type Overloads
+#
+# These methods enable lightweight vertex/edge types to satisfy the same
+# evidence interface as full types. Algorithms that use count_total_observations,
+# count_evidence_entries, get_all_dataset_ids, etc. work unchanged.
+# ============================================================================
+
+# Union types for dispatch
+const LightweightVertexData = Union{
+    LightweightKmerVertexData,
+    LightweightBioSequenceVertexData,
+    LightweightStringVertexData
+}
+
+const LightweightData = Union{LightweightVertexData, LightweightEdgeData}
+
+# --- Adding Evidence (increment counters + track observation IDs) ---
+
+function add_evidence!(
+        vertex::LightweightVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+    # Track unique observation IDs per dataset
+    if !haskey(vertex.dataset_observations, dataset_id)
+        vertex.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(vertex.dataset_observations[dataset_id], observation_id)
+    return vertex
+end
+
+function add_evidence!(
+        edge::LightweightEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+    # Track unique observation IDs per dataset
+    if !haskey(edge.dataset_observations, dataset_id)
+        edge.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(edge.dataset_observations[dataset_id], observation_id)
+    return edge
+end
+
+# --- Counting Functions ---
+#
+# SEMANTIC EQUIVALENCE: These return identical values in full and lightweight modes.
+# - count_total_observations: unique observation IDs across all datasets
+# - count_evidence_entries: total entries (each add_evidence! call = one entry)
+# - count_evidence: alias for count_evidence_entries
+
+function count_total_observations(data::LightweightData)
+    total = 0
+    for obs_set in values(data.dataset_observations)
+        total += length(obs_set)
+    end
+    return total
+end
+
+count_evidence_entries(data::LightweightData) = data.total_count
+count_evidence(data::LightweightData) = data.total_count
+
+function count_dataset_observations(data::LightweightData, dataset_id::String)
+    obs_set = get(data.dataset_observations, dataset_id, nothing)
+    if isnothing(obs_set)
+        return 0
+    end
+    return length(obs_set)
+end
+
+# --- ID Collection ---
+
+get_all_dataset_ids(data::LightweightData) = collect(keys(data.dataset_counts))
+
+function get_all_observation_ids(data::LightweightData, dataset_id::String)
+    obs_set = get(data.dataset_observations, dataset_id, nothing)
+    if isnothing(obs_set)
+        return String[]
+    end
+    return collect(obs_set)
+end
+
+# --- Evidence Querying (returns empty/nothing for lightweight) ---
+
+function get_dataset_evidence(data::LightweightData, dataset_id::AbstractString)
+    return nothing
+end
+
+function get_observation_evidence(
+        data::LightweightData,
+        dataset_id::AbstractString,
+        observation_id::AbstractString
+)
+    return nothing
+end
+
+# --- Evidence Collection Helpers ---
+
+collect_evidence_entries(data::LightweightData) = Any[]
+collect_evidence_strands(data::LightweightData) = StrandOrientation[]
+
+function first_evidence_strand(data::LightweightData; default::StrandOrientation = Forward)
+    return default
+end
+
+# --- Weight/Coverage ---
+
+compute_edge_weight(edge::LightweightEdgeData) = Float64(edge.total_count)
+compute_edge_coverage(edge::LightweightEdgeData) = edge.total_count
+
+# ============================================================================
+# Ultralight Type Overloads
+#
+# Ultralight types store only counts (no observation ID tracking).
+# count_total_observations returns total_count (not unique obs count).
+# get_all_observation_ids returns nothing.
+# ============================================================================
+
+# Union types for dispatch
+const UltralightVertexData = Union{
+    UltralightKmerVertexData,
+    UltralightBioSequenceVertexData,
+    UltralightStringVertexData
+}
+
+const UltralightData = Union{UltralightVertexData, UltralightEdgeData}
+
+# --- Adding Evidence (increment counters only — no obs ID tracking) ---
+
+function add_evidence!(
+        vertex::UltralightVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+    return vertex
+end
+
+function add_evidence!(
+        edge::UltralightEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+    return edge
+end
+
+# --- Counting Functions ---
+#
+# SEMANTIC DIFFERENCE from lightweight:
+# - count_total_observations: returns total_count (every add_evidence! call),
+#   NOT unique observation IDs. For most workflows these are identical.
+# - count_evidence_entries: same as lightweight (total_count)
+
+count_total_observations(data::UltralightData) = data.total_count
+count_evidence_entries(data::UltralightData) = data.total_count
+count_evidence(data::UltralightData) = data.total_count
+
+function count_dataset_observations(data::UltralightData, dataset_id::String)
+    return get(data.dataset_counts, dataset_id, 0)
+end
+
+# --- ID Collection ---
+
+get_all_dataset_ids(data::UltralightData) = collect(keys(data.dataset_counts))
+
+function get_all_observation_ids(data::UltralightData, dataset_id::String)
+    return nothing
+end
+
+# --- Evidence Querying (returns empty/nothing) ---
+
+function get_dataset_evidence(data::UltralightData, dataset_id::AbstractString)
+    return nothing
+end
+
+function get_observation_evidence(
+        data::UltralightData,
+        dataset_id::AbstractString,
+        observation_id::AbstractString
+)
+    return nothing
+end
+
+# --- Evidence Collection Helpers ---
+
+collect_evidence_entries(data::UltralightData) = Any[]
+collect_evidence_strands(data::UltralightData) = StrandOrientation[]
+
+function first_evidence_strand(data::UltralightData; default::StrandOrientation = Forward)
+    return default
+end
+
+# --- Weight/Coverage ---
+
+compute_edge_weight(edge::UltralightEdgeData) = Float64(edge.total_count)
+compute_edge_coverage(edge::UltralightEdgeData) = edge.total_count
+
+# ============================================================================
+# Ultralight Quality Type Overloads
+#
+# Ultralight quality types store counts + joint quality scores but NO
+# observation ID tracking. Quality aggregation happens incrementally during
+# add_evidence! via Phred score addition.
+# ============================================================================
+
+# Union types for dispatch
+const UltralightQualityVertexData = Union{
+    UltralightQualityKmerVertexData,
+    UltralightQualityBioSequenceVertexData
+}
+
+const UltralightQualityData = Union{UltralightQualityVertexData, UltralightQualityEdgeData}
+
+# --- Adding Evidence (increment counters + aggregate quality) ---
+
+function add_evidence!(
+        vertex::UltralightQualityVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::QualityEvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+
+    # Aggregate quality scores (Phred addition is exact)
+    scores = entry.quality_scores
+    if !isempty(scores)
+        # Decode from Phred+33 to raw Phred before aggregation
+        if isempty(vertex.joint_quality)
+            append!(vertex.joint_quality, [s - UInt8(33) for s in scores])
+        else
+            for i in eachindex(scores)
+                raw = Int(scores[i]) - 33
+                vertex.joint_quality[i] = UInt8(clamp(
+                    Int(vertex.joint_quality[i]) + raw, 0, 255))
+            end
+        end
+        # Per-dataset quality
+        ds_qual = get!(vertex.dataset_joint_quality, dataset_id) do
+            zeros(UInt8, length(scores))
+        end
+        for i in eachindex(scores)
+            raw = Int(scores[i]) - 33
+            ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
+        end
+    end
+
+    return vertex
+end
+
+# Also accept EvidenceEntry (non-quality) for ultralight quality vertices —
+# just increment counts, no quality to aggregate
+function add_evidence!(
+        vertex::UltralightQualityVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+    return vertex
+end
+
+function add_evidence!(
+        edge::UltralightQualityEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeQualityEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+
+    # Aggregate quality scores for source and destination k-mers
+    if !isempty(entry.from_quality)
+        # Decode from Phred+33 before aggregation
+        if isempty(edge.from_joint_quality)
+            append!(edge.from_joint_quality, [s - UInt8(33) for s in entry.from_quality])
+        else
+            for i in eachindex(entry.from_quality)
+                raw = Int(entry.from_quality[i]) - 33
+                edge.from_joint_quality[i] = UInt8(clamp(
+                    Int(edge.from_joint_quality[i]) + raw, 0, 255))
+            end
+        end
+    end
+    if !isempty(entry.to_quality)
+        if isempty(edge.to_joint_quality)
+            append!(edge.to_joint_quality, [s - UInt8(33) for s in entry.to_quality])
+        else
+            for i in eachindex(entry.to_quality)
+                raw = Int(entry.to_quality[i]) - 33
+                edge.to_joint_quality[i] = UInt8(clamp(
+                    Int(edge.to_joint_quality[i]) + raw, 0, 255))
+            end
+        end
+    end
+
+    return edge
+end
+
+function add_evidence!(
+        edge::UltralightQualityEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+    return edge
+end
+
+# --- Counting Functions (same semantics as ultralight) ---
+
+count_total_observations(data::UltralightQualityData) = data.total_count
+count_evidence_entries(data::UltralightQualityData) = data.total_count
+count_evidence(data::UltralightQualityData) = data.total_count
+
+function count_dataset_observations(data::UltralightQualityData, dataset_id::String)
+    return get(data.dataset_counts, dataset_id, 0)
+end
+
+# --- ID Collection ---
+
+get_all_dataset_ids(data::UltralightQualityData) = collect(keys(data.dataset_counts))
+
+function get_all_observation_ids(data::UltralightQualityData, dataset_id::String)
+    return nothing
+end
+
+# --- Evidence Querying (returns nothing) ---
+
+function get_dataset_evidence(data::UltralightQualityData, dataset_id::AbstractString)
+    return nothing
+end
+
+function get_observation_evidence(
+        data::UltralightQualityData,
+        dataset_id::AbstractString,
+        observation_id::AbstractString
+)
+    return nothing
+end
+
+# --- Evidence Collection Helpers ---
+
+collect_evidence_entries(data::UltralightQualityData) = Any[]
+collect_evidence_strands(data::UltralightQualityData) = StrandOrientation[]
+
+function first_evidence_strand(
+        data::UltralightQualityData; default::StrandOrientation = Forward)
+    return default
+end
+
+# --- Weight/Coverage ---
+
+compute_edge_weight(edge::UltralightQualityEdgeData) = Float64(edge.total_count)
+compute_edge_coverage(edge::UltralightQualityEdgeData) = edge.total_count
+
+# --- Quality Query Functions for Ultralight Quality ---
+
+function get_vertex_joint_quality(data::UltralightQualityVertexData, dataset_id::String)
+    return get(data.dataset_joint_quality, dataset_id, nothing)
+end
+
+function get_vertex_joint_quality(data::UltralightQualityVertexData)
+    return isempty(data.joint_quality) ? nothing : data.joint_quality
+end
+
+# ============================================================================
+# Lightweight Quality Type Overloads
+#
+# These combine lightweight (obs ID tracking) with quality aggregation.
+# count_total_observations returns unique obs count (like lightweight).
+# All quality functions work (like ultralight quality).
+# ============================================================================
+
+# Union types for dispatch
+const LightweightQualityVertexData = Union{
+    LightweightQualityKmerVertexData,
+    LightweightQualityBioSequenceVertexData
+}
+
+const LightweightQualityData = Union{
+    LightweightQualityVertexData, LightweightQualityEdgeData}
+
+# --- Adding Evidence (increment counters + track obs IDs + aggregate quality) ---
+
+function add_evidence!(
+        vertex::LightweightQualityVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::QualityEvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+    # Track unique observation IDs per dataset
+    if !haskey(vertex.dataset_observations, dataset_id)
+        vertex.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(vertex.dataset_observations[dataset_id], observation_id)
+
+    # Aggregate quality scores (same as ultralight quality)
+    scores = entry.quality_scores
+    if !isempty(scores)
+        if isempty(vertex.joint_quality)
+            append!(vertex.joint_quality, [s - UInt8(33) for s in scores])
+        else
+            for i in eachindex(scores)
+                raw = Int(scores[i]) - 33
+                vertex.joint_quality[i] = UInt8(clamp(
+                    Int(vertex.joint_quality[i]) + raw, 0, 255))
+            end
+        end
+        ds_qual = get!(vertex.dataset_joint_quality, dataset_id) do
+            zeros(UInt8, length(scores))
+        end
+        for i in eachindex(scores)
+            raw = Int(scores[i]) - 33
+            ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
+        end
+    end
+
+    return vertex
+end
+
+function add_evidence!(
+        vertex::LightweightQualityVertexData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EvidenceEntry
+)
+    vertex.total_count += 1
+    vertex.dataset_counts[dataset_id] = get(vertex.dataset_counts, dataset_id, 0) + 1
+    if !haskey(vertex.dataset_observations, dataset_id)
+        vertex.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(vertex.dataset_observations[dataset_id], observation_id)
+    return vertex
+end
+
+function add_evidence!(
+        edge::LightweightQualityEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeQualityEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+    if !haskey(edge.dataset_observations, dataset_id)
+        edge.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(edge.dataset_observations[dataset_id], observation_id)
+
+    # Aggregate quality for source and destination
+    if !isempty(entry.from_quality)
+        if isempty(edge.from_joint_quality)
+            append!(edge.from_joint_quality, [s - UInt8(33) for s in entry.from_quality])
+        else
+            for i in eachindex(entry.from_quality)
+                raw = Int(entry.from_quality[i]) - 33
+                edge.from_joint_quality[i] = UInt8(clamp(
+                    Int(edge.from_joint_quality[i]) + raw, 0, 255))
+            end
+        end
+    end
+    if !isempty(entry.to_quality)
+        if isempty(edge.to_joint_quality)
+            append!(edge.to_joint_quality, [s - UInt8(33) for s in entry.to_quality])
+        else
+            for i in eachindex(entry.to_quality)
+                raw = Int(entry.to_quality[i]) - 33
+                edge.to_joint_quality[i] = UInt8(clamp(
+                    Int(edge.to_joint_quality[i]) + raw, 0, 255))
+            end
+        end
+    end
+
+    return edge
+end
+
+function add_evidence!(
+        edge::LightweightQualityEdgeData,
+        dataset_id::String,
+        observation_id::String,
+        entry::EdgeEvidenceEntry
+)
+    edge.total_count += 1
+    edge.dataset_counts[dataset_id] = get(edge.dataset_counts, dataset_id, 0) + 1
+    if !haskey(edge.dataset_observations, dataset_id)
+        edge.dataset_observations[dataset_id] = Set{String}()
+    end
+    push!(edge.dataset_observations[dataset_id], observation_id)
+    return edge
+end
+
+# --- Counting Functions (unique obs count, like lightweight) ---
+
+function count_total_observations(data::LightweightQualityData)
+    total = 0
+    for obs_set in values(data.dataset_observations)
+        total += length(obs_set)
+    end
+    return total
+end
+
+count_evidence_entries(data::LightweightQualityData) = data.total_count
+count_evidence(data::LightweightQualityData) = data.total_count
+
+function count_dataset_observations(data::LightweightQualityData, dataset_id::String)
+    obs_set = get(data.dataset_observations, dataset_id, nothing)
+    if isnothing(obs_set)
+        return 0
+    end
+    return length(obs_set)
+end
+
+# --- ID Collection ---
+
+get_all_dataset_ids(data::LightweightQualityData) = collect(keys(data.dataset_counts))
+
+function get_all_observation_ids(data::LightweightQualityData, dataset_id::String)
+    obs_set = get(data.dataset_observations, dataset_id, nothing)
+    if isnothing(obs_set)
+        return String[]
+    end
+    return collect(obs_set)
+end
+
+# --- Evidence Querying (returns nothing) ---
+
+function get_dataset_evidence(data::LightweightQualityData, dataset_id::AbstractString)
+    return nothing
+end
+
+function get_observation_evidence(
+        data::LightweightQualityData,
+        dataset_id::AbstractString,
+        observation_id::AbstractString
+)
+    return nothing
+end
+
+# --- Evidence Collection Helpers ---
+
+collect_evidence_entries(data::LightweightQualityData) = Any[]
+collect_evidence_strands(data::LightweightQualityData) = StrandOrientation[]
+
+function first_evidence_strand(
+        data::LightweightQualityData; default::StrandOrientation = Forward)
+    return default
+end
+
+# --- Weight/Coverage ---
+
+compute_edge_weight(edge::LightweightQualityEdgeData) = Float64(edge.total_count)
+compute_edge_coverage(edge::LightweightQualityEdgeData) = edge.total_count
+
+# --- Quality Query Functions for Lightweight Quality ---
+
+function get_vertex_joint_quality(data::LightweightQualityVertexData, dataset_id::String)
+    return get(data.dataset_joint_quality, dataset_id, nothing)
+end
+
+function get_vertex_joint_quality(data::LightweightQualityVertexData)
+    return isempty(data.joint_quality) ? nothing : data.joint_quality
+end
+
+# ============================================================================
+# Super-Union Types for Shared Dispatch
+# ============================================================================
+
+# All reduced data types (everything non-full)
+const AllReducedVertexData = Union{
+    LightweightVertexData, UltralightVertexData,
+    UltralightQualityVertexData, LightweightQualityVertexData
+}
+const AllReducedEdgeData = Union{
+    LightweightEdgeData, UltralightEdgeData,
+    UltralightQualityEdgeData, LightweightQualityEdgeData
+}
+const AllReducedData = Union{AllReducedVertexData, AllReducedEdgeData}
+
+# All quality-aware reduced types
+const QualityReducedVertexData = Union{
+    UltralightQualityVertexData, LightweightQualityVertexData
+}
+const QualityReducedEdgeData = Union{
+    UltralightQualityEdgeData, LightweightQualityEdgeData
+}
+const QualityReducedData = Union{QualityReducedVertexData, QualityReducedEdgeData}

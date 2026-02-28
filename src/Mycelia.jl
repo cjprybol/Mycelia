@@ -192,14 +192,26 @@ include("xam.jl")
 # This must be included last, after all other definitions are loaded
 include("precompile_workload.jl")
 
-function __init__()
-    # Re-clear LD_LIBRARY_PATH at load time.  The top-level clearing (above the
-    # imports) handles precompilation, but when loading from a cached .ji file
-    # that top-level code does not re-execute.  This ensures subprocesses
-    # launched after `import Mycelia` (e.g. external tool wrappers) also see a
-    # clean library path.
-    if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
+"""
+    _clear_ld_library_path!()
+
+Clear `LD_LIBRARY_PATH` environment variable to prevent system shared libraries
+from conflicting with Julia's bundled libraries.
+
+Emits a warning with the previous value when clearing. No-op if the variable
+is unset or already empty.
+"""
+function _clear_ld_library_path!()
+    if haskey(ENV, "LD_LIBRARY_PATH") && !isempty(ENV["LD_LIBRARY_PATH"])
+        Logging.@warn "Mycelia: Clearing LD_LIBRARY_PATH to avoid library conflicts with Julia packages. " *
+                      "Previous value: $(ENV["LD_LIBRARY_PATH"])"
         ENV["LD_LIBRARY_PATH"] = ""
+    end
+end
+
+function __init__()
+    if Sys.islinux()
+        _clear_ld_library_path!()
     end
 end
 
