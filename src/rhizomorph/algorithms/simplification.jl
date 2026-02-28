@@ -475,8 +475,11 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
         end
 
         first_vertex_data = graph[path[1]]
-        if !hasfield(typeof(first_vertex_data), :sequence)
-            # Only collapse variable-length graphs for now
+        if hasfield(typeof(first_vertex_data), :Kmer)
+            # K-mer graphs cannot be collapsed in-place: the assembled sequence
+            # is longer than k, so the label type changes from Kmer to BioSequence,
+            # violating MetaGraphsNext's parametric label_type constraint.
+            # Use convert_fixed_to_variable() first, then collapse.
             continue
         end
 
@@ -517,10 +520,25 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
     return graph
 end
 
+"""
+    _get_vertex_content(vertex_data)
+
+Extract the core content (sequence or string) from any vertex data type.
+Works for BioSequence types (`.sequence` field) and String types (`.string_value` field).
+"""
+function _get_vertex_content(vertex_data)
+    if hasfield(typeof(vertex_data), :sequence)
+        return vertex_data.sequence
+    elseif hasfield(typeof(vertex_data), :string_value)
+        return vertex_data.string_value
+    else
+        error("Cannot extract content from vertex data type: $(typeof(vertex_data))")
+    end
+end
+
 function _assemble_linear_chain_sequence(graph, path::Vector)
     first_data = graph[path[1]]
-    sequence = first_data.sequence
-    SequenceType = typeof(sequence)
+    sequence = _get_vertex_content(first_data)
     offsets = Dict{eltype(path), Int}()
     offsets[path[1]] = 0
 
@@ -528,9 +546,9 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
         src = path[i - 1]
         dst = path[i]
         overlap = _edge_overlap_length(graph, src, dst)
-        append_sequence = graph[dst].sequence
+        append_sequence = _get_vertex_content(graph[dst])
 
-        offset = offsets[src] + length(graph[src].sequence) - overlap
+        offset = offsets[src] + length(_get_vertex_content(graph[src])) - overlap
         offsets[dst] = offset
 
         if overlap < length(append_sequence)
@@ -542,7 +560,8 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
 end
 
 function _build_collapsed_vertex(first_vertex_data, sequence)
-    # TYPE-CHECK-AUDIT: factory dispatch — add branch for each new BioSequence vertex type
+    # TYPE-CHECK-AUDIT: factory dispatch — add branch for each new vertex type
+    # BioSequence vertex types
     if first_vertex_data isa BioSequenceVertexData
         return BioSequenceVertexData(sequence)
     elseif first_vertex_data isa QualityBioSequenceVertexData
@@ -555,6 +574,13 @@ function _build_collapsed_vertex(first_vertex_data, sequence)
         return UltralightQualityBioSequenceVertexData(sequence)
     elseif first_vertex_data isa LightweightQualityBioSequenceVertexData
         return LightweightQualityBioSequenceVertexData(sequence)
+        # String vertex types
+    elseif first_vertex_data isa StringVertexData
+        return StringVertexData(sequence)
+    elseif first_vertex_data isa LightweightStringVertexData
+        return LightweightStringVertexData(sequence)
+    elseif first_vertex_data isa UltralightStringVertexData
+        return UltralightStringVertexData(sequence)
     else
         error("Unsupported vertex data type for collapsing: $(typeof(first_vertex_data))")
     end

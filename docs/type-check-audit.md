@@ -191,11 +191,17 @@ grep -n "_build_collapsed_vertex\|_build_collapsed_edge" src/ -r --include="*.jl
 Current site:
 
 ```
-src/rhizomorph/algorithms/simplification.jl:544-554
+src/rhizomorph/algorithms/simplification.jl:_build_collapsed_vertex
 ```
 
-If the new type is a vertex type, add an `elseif` branch that returns an
-instance of the new type.
+This function covers BioSequence vertex types (6 branches) and String vertex
+types (3 branches). Kmer vertex types are excluded — they cannot be collapsed
+in-place due to MetaGraphsNext's parametric label type constraint (the assembled
+sequence changes type from Kmer to BioSequence). Use
+`convert_fixed_to_variable()` before collapsing kmer graphs.
+
+If the new type is a vertex type with a `.sequence` or `.string_value` field,
+add an `elseif` branch that returns an instance of the new type.
 
 ### Step 8: Run the test suite
 
