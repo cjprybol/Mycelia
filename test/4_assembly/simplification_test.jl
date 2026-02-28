@@ -898,6 +898,75 @@ Test.@testset "Linear Chain Collapsing (collapse_linear_chains!)" begin
             vdata = graph[expected]
             Test.@test vdata isa Mycelia.Rhizomorph.UltralightBioSequenceVertexData
         end
+
+        Test.@testset "QualityBioSequenceVertexData" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.QualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.QualityBioSequenceEdgeData
+            )
+            graph[seq1] = Mycelia.Rhizomorph.QualityBioSequenceVertexData(seq1)
+            graph[seq2] = Mycelia.Rhizomorph.QualityBioSequenceVertexData(seq2)
+            graph[seq1, seq2] = Mycelia.Rhizomorph.QualityBioSequenceEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test Graphs.nv(graph.graph) == 1
+            Test.@test haskey(graph, expected)
+            vdata = graph[expected]
+            Test.@test vdata isa Mycelia.Rhizomorph.QualityBioSequenceVertexData
+            Test.@test vdata.sequence == expected
+        end
+
+        Test.@testset "UltralightQualityBioSequenceVertexData" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.UltralightQualityEdgeData
+            )
+            graph[seq1] = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData(seq1)
+            graph[seq2] = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData(seq2)
+            graph[seq1, seq2] = Mycelia.Rhizomorph.UltralightQualityEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test Graphs.nv(graph.graph) == 1
+            Test.@test haskey(graph, expected)
+            vdata = graph[expected]
+            Test.@test vdata isa Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData
+            Test.@test vdata.sequence == expected
+        end
+
+        Test.@testset "LightweightQualityBioSequenceVertexData" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.LightweightQualityEdgeData
+            )
+            graph[seq1] = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData(seq1)
+            graph[seq2] = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData(seq2)
+            graph[seq1, seq2] = Mycelia.Rhizomorph.LightweightQualityEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test Graphs.nv(graph.graph) == 1
+            Test.@test haskey(graph, expected)
+            vdata = graph[expected]
+            Test.@test vdata isa Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData
+            Test.@test vdata.sequence == expected
+        end
     end
 
     Test.@testset "Evidence Merging" begin
@@ -987,6 +1056,189 @@ Test.@testset "Linear Chain Collapsing (collapse_linear_chains!)" begin
             Test.@test collapsed.dataset_counts["ds1"] == 3
             # Ultralight has no dataset_observations field
             Test.@test !hasfield(typeof(collapsed), :dataset_observations)
+        end
+
+        Test.@testset "UltralightQuality type - counts + joint quality merged" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.UltralightQualityEdgeData
+            )
+            v1 = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData(seq1)
+            v2 = Mycelia.Rhizomorph.UltralightQualityBioSequenceVertexData(seq2)
+
+            # Add quality evidence: Phred+33 encoded scores
+            # v1: Q10, Q15, Q12 → raw [10, 15, 12]
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs1",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[43, 48, 45]))
+            # v1 second observation: Q20, Q20, Q20 → raw [20, 20, 20]
+            # joint_quality after: [10+20, 15+20, 12+20] = [30, 35, 32]
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs2",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[53, 53, 53]))
+
+            # v2: Q5, Q10, Q8 → raw [5, 10, 8]
+            Mycelia.Rhizomorph.add_evidence!(
+                v2, "ds1", "obs3",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[38, 43, 41]))
+
+            graph[seq1] = v1
+            graph[seq2] = v2
+            graph[seq1, seq2] = Mycelia.Rhizomorph.UltralightQualityEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test haskey(graph, expected)
+            collapsed = graph[expected]
+
+            # Counts merged: v1 had 2, v2 had 1
+            Test.@test collapsed.total_count == 3
+            Test.@test collapsed.dataset_counts["ds1"] == 3
+
+            # Joint quality: first vertex copied [30, 35, 32],
+            # then second vertex added element-wise [5, 10, 8]
+            # Result: [35, 45, 40]
+            Test.@test length(collapsed.joint_quality) == 3
+            Test.@test collapsed.joint_quality == UInt8[35, 45, 40]
+
+            # Ultralight quality has no dataset_observations
+            Test.@test !hasfield(typeof(collapsed), :dataset_observations)
+        end
+
+        Test.@testset "LightweightQuality type - counts + obs IDs + joint quality merged" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.LightweightQualityEdgeData
+            )
+            v1 = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData(seq1)
+            v2 = Mycelia.Rhizomorph.LightweightQualityBioSequenceVertexData(seq2)
+
+            # v1: 3 observations from ds1, 1 from ds2
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs1",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[43, 48, 45]))
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs2",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[53, 53, 53]))
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs3",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[36, 36, 36]))
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds2", "obs4",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[63, 63, 63]))
+
+            # v2: 2 observations from ds1 (one shared obs ID with v1)
+            Mycelia.Rhizomorph.add_evidence!(
+                v2, "ds1", "obs1",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[43, 43, 43]))
+            Mycelia.Rhizomorph.add_evidence!(
+                v2, "ds1", "obs5",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[53, 53, 53]))
+
+            graph[seq1] = v1
+            graph[seq2] = v2
+            graph[seq1, seq2] = Mycelia.Rhizomorph.LightweightQualityEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test haskey(graph, expected)
+            collapsed = graph[expected]
+
+            # Counts merged: v1 had 4, v2 had 2
+            Test.@test collapsed.total_count == 6
+            Test.@test collapsed.dataset_counts["ds1"] == 5
+            Test.@test collapsed.dataset_counts["ds2"] == 1
+
+            # Observation IDs: union of all obs per dataset
+            Test.@test "obs1" in collapsed.dataset_observations["ds1"]
+            Test.@test "obs2" in collapsed.dataset_observations["ds1"]
+            Test.@test "obs3" in collapsed.dataset_observations["ds1"]
+            Test.@test "obs5" in collapsed.dataset_observations["ds1"]
+            Test.@test "obs4" in collapsed.dataset_observations["ds2"]
+
+            # Joint quality merged:
+            # v1 joint_quality after 3 ds1 obs + 1 ds2 obs:
+            #   ds1: (43-33)+(53-33)+(36-33) = 10+20+3 = 33 per position → [33, 38, 35]
+            #   ds2: 63-33 = 30 → adds [30, 30, 30]
+            #   total joint: [33+30, 38+30, 35+30] = [63, 68, 65]
+            #   Wait - joint_quality is the global sum, not per-dataset
+            #   obs1: [10, 15, 12], obs2: [20, 20, 20], obs3: [3, 3, 3], obs4: [30, 30, 30]
+            #   v1 joint = [10+20+3+30, 15+20+3+30, 12+20+3+30] = [63, 68, 65]
+            # v2 joint_quality after 2 ds1 obs:
+            #   obs1: [10, 10, 10], obs5: [20, 20, 20]
+            #   v2 joint = [30, 30, 30]
+            # Merged: first vertex copied [63, 68, 65],
+            #   then second vertex added [30, 30, 30]
+            # Result: [93, 98, 95]
+            Test.@test length(collapsed.joint_quality) == 3
+            Test.@test collapsed.joint_quality == UInt8[93, 98, 95]
+        end
+
+        Test.@testset "QualityBioSequence type - quality evidence entries shifted" begin
+            seq1 = BioSequences.LongDNA{4}("ATG")
+            seq2 = BioSequences.LongDNA{4}("TGC")
+            graph = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = BioSequences.LongDNA{4},
+                vertex_data_type = Mycelia.Rhizomorph.QualityBioSequenceVertexData{BioSequences.LongDNA{4}},
+                edge_data_type = Mycelia.Rhizomorph.QualityBioSequenceEdgeData
+            )
+            v1 = Mycelia.Rhizomorph.QualityBioSequenceVertexData(seq1)
+            v2 = Mycelia.Rhizomorph.QualityBioSequenceVertexData(seq2)
+
+            # Add quality evidence at position 1 for both
+            Mycelia.Rhizomorph.add_evidence!(
+                v1, "ds1", "obs1",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[43, 48, 45]))
+            Mycelia.Rhizomorph.add_evidence!(
+                v2, "ds1", "obs2",
+                Mycelia.Rhizomorph.QualityEvidenceEntry(
+                    1, Mycelia.Rhizomorph.Forward, UInt8[53, 53, 53]))
+
+            graph[seq1] = v1
+            graph[seq2] = v2
+            graph[seq1, seq2] = Mycelia.Rhizomorph.QualityBioSequenceEdgeData(2)
+
+            Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+
+            expected = BioSequences.LongDNA{4}("ATGC")
+            Test.@test haskey(graph, expected)
+            collapsed = graph[expected]
+
+            # Full quality type uses the evidence dict (not reduced path)
+            # v1 at offset 0: position 1 + 0 = 1
+            # v2 at offset 1: position 1 + 1 = 2
+            ds1_evidence = collapsed.evidence["ds1"]
+            obs1_entries = ds1_evidence["obs1"]
+            obs2_entries = ds1_evidence["obs2"]
+            Test.@test any(e -> e.position == 1, obs1_entries)
+            Test.@test any(e -> e.position == 2, obs2_entries)
+
+            # Quality scores preserved in shifted entries
+            shifted_obs1 = first(filter(e -> e.position == 1, obs1_entries))
+            shifted_obs2 = first(filter(e -> e.position == 2, obs2_entries))
+            Test.@test shifted_obs1.quality_scores == UInt8[43, 48, 45]
+            Test.@test shifted_obs2.quality_scores == UInt8[53, 53, 53]
         end
 
         Test.@testset "Full type - evidence entries shifted" begin
