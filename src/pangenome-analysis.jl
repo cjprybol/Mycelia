@@ -329,7 +329,16 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
         block_length::Int = 3*segment_length,
         mash_kmer::Int = 16, min_match_length::Int = 19,
         transclose_batch::Int = 10000000,
-        additional_args::Vector{String} = String[])
+        additional_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "pggb",
+        time_limit::String = "4-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
 
     # Validate input files
     for file in genome_files
@@ -341,17 +350,6 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
     # Create joint FASTA file for PGGB input
     joint_fasta = joinpath(output_dir, "joint_genomes.fasta")
     mkpath(dirname(joint_fasta))
-
-    # Concatenate genome files (don't merge to preserve identifiers)
-    concatenate_files(files = genome_files, file = joint_fasta)
-
-    # Index the joint FASTA if not already indexed
-    if !isfile(joint_fasta * ".fai")
-        samtools_index_fasta(fasta = joint_fasta)
-    end
-
-    # Ensure PGGB conda environment exists
-    add_bioconda_env("pggb")
 
     # Build PGGB command
     pggb_args = [
@@ -368,10 +366,49 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
 
     # Add any additional arguments
     append!(pggb_args, additional_args)
+    cmd = `$(CONDA_RUNNER) run --live-stream -n pggb pggb $(pggb_args)`
+
+    if executor !== nothing
+        add_bioconda_env("pggb")
+        quoted_inputs = join(["\"$(file)\"" for file in genome_files], " ")
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "cat $(quoted_inputs) > \"$(joint_fasta)\"",
+            "if [ ! -f \"$(joint_fasta).fai\" ]; then",
+            "  $(CONDA_RUNNER) run --live-stream -n pggb samtools faidx \"$(joint_fasta)\"",
+            "fi",
+            Mycelia.command_string(cmd)
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return joinpath(output_dir, "pangenome.gfa")
+    end
+
+    # Concatenate genome files (don't merge to preserve identifiers)
+    concatenate_files(files = genome_files, file = joint_fasta)
+
+    # Index the joint FASTA if not already indexed
+    if !isfile(joint_fasta * ".fai")
+        samtools_index_fasta(fasta = joint_fasta)
+    end
+
+    # Ensure PGGB conda environment exists
+    add_bioconda_env("pggb")
 
     # Run PGGB
     println("Running PGGB pangenome construction with $(length(genome_files)) genomes...")
-    cmd = `$(CONDA_RUNNER) run --live-stream -n pggb pggb $(pggb_args)`
 
     try
         run(cmd)
@@ -491,7 +528,16 @@ function construct_pangenome_cactus(
         genome_files::Vector{String}, genome_names::Vector{String},
         output_dir::String, reference_name::String;
         max_cores::Int = 8, max_memory_gb::Int = 32,
-        output_formats::Vector{String} = ["gbz", "gfa", "vcf", "odgi"])
+        output_formats::Vector{String} = ["gbz", "gfa", "vcf", "odgi"],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "cactus_pangenome",
+        time_limit::String = "8-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
 
     # Validate inputs
     if length(genome_files) != length(genome_names)
@@ -563,6 +609,32 @@ function construct_pangenome_cactus(
 
     # Set up logging
     log_file = joinpath(output_dir, "cactus.log")
+
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "$(Mycelia.command_string(cmd)) > \"$(log_file)\" 2>&1"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = max_cores,
+            mem_gb = isnothing(mem_gb) ? max_memory_gb : mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        output_files = Dict{String, String}()
+        for format in output_formats
+            output_files[format] = joinpath(output_dir, "$(output_name).$(format)")
+        end
+        return output_files
+    end
 
     try
         run(pipeline(cmd, stdout = log_file, stderr = log_file))

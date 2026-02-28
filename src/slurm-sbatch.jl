@@ -20,7 +20,8 @@ function lawrencium_sbatch(;
         cpus_per_task::Int = 16,
         mem_gb::Int = 64,
         cmd::String,
-        dry_run::Bool = false
+        dry_run::Bool = false,
+        executor = nothing
 )
     job = JobSpec(
         job_name = job_name,
@@ -39,6 +40,14 @@ function lawrencium_sbatch(;
         mail_user = mail_user,
         mail_type = mail_type
     )
+
+    if executor !== nothing
+        resolved_executor = resolve_executor(executor)
+        if dry_run && resolved_executor isa SlurmExecutor
+            resolved_executor = SlurmExecutor(dry_run = true)
+        end
+        return execute(job, resolved_executor)
+    end
 
     sleep(5)
     result = submit(job; dry_run = dry_run)
@@ -73,7 +82,8 @@ function scg_sbatch(;
         cpus_per_task::Int = 12,
         mem_gb::Int = 96,
         cmd::String,
-        dry_run::Bool = false
+        dry_run::Bool = false,
+        executor = nothing
 )
     job = JobSpec(
         job_name = job_name,
@@ -91,6 +101,14 @@ function scg_sbatch(;
         mail_user = mail_user,
         mail_type = mail_type
     )
+
+    if executor !== nothing
+        resolved_executor = resolve_executor(executor)
+        if dry_run && resolved_executor isa SlurmExecutor
+            resolved_executor = SlurmExecutor(dry_run = true)
+        end
+        return execute(job, resolved_executor)
+    end
 
     sleep(5)
     result = submit(job; dry_run = dry_run)
@@ -125,7 +143,8 @@ function nersc_sbatch_shared(;
         cmd::String,
         constraint::String = "cpu",
         account::Union{Nothing, String} = nothing,
-        dry_run::Bool = false
+        dry_run::Bool = false,
+        executor = nothing
 )
     resolved_account = account === nothing ? get(ENV, "NERSC_ACCOUNT", nothing) : account
     if resolved_account === nothing
@@ -146,7 +165,8 @@ function nersc_sbatch_shared(;
         cmd = cmd,
         constraint = constraint,
         account = resolved_account,
-        dry_run = dry_run
+        dry_run = dry_run,
+        executor = executor
     )
 end
 
@@ -177,7 +197,8 @@ function nersc_sbatch(;
         gpus_per_task::Union{Nothing, Int} = nothing,
         gpu_bind::Union{Nothing, String} = nothing,
         requeue::Bool = false,
-        dry_run::Bool = false
+        dry_run::Bool = false,
+        executor = nothing
 )
     resolved_account = account === nothing ? get(ENV, "NERSC_ACCOUNT", nothing) : account
     if resolved_account === nothing
@@ -215,6 +236,14 @@ function nersc_sbatch(;
         mail_user = mail_user,
         mail_type = mail_type
     )
+
+    if executor !== nothing
+        resolved_executor = resolve_executor(executor)
+        if dry_run && resolved_executor isa SlurmExecutor
+            resolved_executor = SlurmExecutor(dry_run = true)
+        end
+        return execute(job, resolved_executor)
+    end
 
     sleep(5)
     result = submit(job; dry_run = dry_run, path = script_path)

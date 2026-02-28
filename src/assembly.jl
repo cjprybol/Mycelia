@@ -24,8 +24,22 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_megahit(; fastq1, fastq2 = nothing, outdir = nothing, min_contig_len = 200,
-        k_list = "21,29,39,59,79,99,119,141", threads = get_default_threads())
+function run_megahit(;
+        fastq1,
+        fastq2 = nothing,
+        outdir = nothing,
+        min_contig_len = 200,
+        k_list = "21,29,39,59,79,99,119,141",
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "megahit",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("megahit")
     # Default output directory derived from FASTQ prefix
     if isnothing(outdir)
@@ -41,6 +55,37 @@ function run_megahit(; fastq1, fastq2 = nothing, outdir = nothing, min_contig_le
         end
         outdir = prefix * "_megahit"
     end
+
+    if executor !== nothing
+        command_parts = megahit_cmd(
+            fastq1 = fastq1,
+            fastq2 = fastq2,
+            outdir = outdir,
+            min_contig_len = min_contig_len,
+            k_list = k_list,
+            threads = threads
+        )
+        job = Mycelia.build_execution_job(
+            cmd = command_parts.cmd,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (;
+            outdir = command_parts.outdir,
+            contigs = command_parts.contigs,
+            fastg = command_parts.fastg,
+            gfa = command_parts.gfa
+        )
+    end
+
     # Infer the final k-mer size from contig identifiers produced by MEGAHIT
     infer_final_k(contigs_path) = begin
         ks = Int[]
@@ -273,10 +318,59 @@ Named tuple containing:
 - Utilizes all available CPU threads
 """
 function run_metaspades(;
-        fastq1, fastq2 = nothing, outdir = "metaspades_output", k_list = "21,33,55,77",
-        threads = get_default_threads(), only_assembler::Bool = false)
+        fastq1,
+        fastq2 = nothing,
+        outdir = "metaspades_output",
+        k_list = "21,33,55,77",
+        threads::Int = get_default_threads(),
+        only_assembler::Bool = false,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metaspades",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
+
+    if executor !== nothing
+        cmd_args = ["metaspades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
+        only_assembler && push!(cmd_args, "--only-assembler")
+        if isnothing(fastq2)
+            push!(cmd_args, "-s", fastq1)
+        else
+            push!(cmd_args, "-1", fastq1, "-2", fastq2)
+        end
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "contigs.fasta"))\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, contigs = joinpath(outdir, "contigs.fasta"),
+            scaffolds = joinpath(outdir, "scaffolds.fasta"),
+            graph = joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
+    end
 
     if !isfile(joinpath(outdir, "contigs.fasta"))
         cmd_args = ["metaspades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
@@ -320,10 +414,59 @@ Named tuple containing:
 - Utilizes all available CPU threads
 """
 function run_spades(;
-        fastq1, fastq2 = nothing, outdir = "spades_output", k_list = "21,33,55,77",
-        threads = get_default_threads(), only_assembler::Bool = false)
+        fastq1,
+        fastq2 = nothing,
+        outdir = "spades_output",
+        k_list = "21,33,55,77",
+        threads::Int = get_default_threads(),
+        only_assembler::Bool = false,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "spades",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("spades")
     mkpath(outdir)
+
+    if executor !== nothing
+        cmd_args = ["spades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
+        only_assembler && push!(cmd_args, "--only-assembler")
+        if isnothing(fastq2)
+            push!(cmd_args, "-s", fastq1)
+        else
+            push!(cmd_args, "-1", fastq1, "-2", fastq2)
+        end
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n spades $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "contigs.fasta"))\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, contigs = joinpath(outdir, "contigs.fasta"),
+            scaffolds = joinpath(outdir, "scaffolds.fasta"),
+            graph = joinpath(outdir, "assembly_graph_with_scaffolds.gfa"))
+    end
 
     if !isfile(joinpath(outdir, "contigs.fasta"))
         cmd_args = ["spades.py", "-o", outdir, "-k", k_list, "-t", string(threads)]
@@ -363,12 +506,58 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Utilizes all available CPU threads
 """
-function run_skesa(; fastq1, fastq2 = nothing, outdir = "skesa_output",
-        min_contig_len = 200, threads = get_default_threads())
+function run_skesa(;
+        fastq1,
+        fastq2 = nothing,
+        outdir = "skesa_output",
+        min_contig_len = 200,
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "skesa",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("skesa")
     mkpath(outdir)
 
     contigs_file = joinpath(outdir, "contigs.fa")
+    if executor !== nothing
+        cmd = if isnothing(fastq2)
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n skesa skesa --reads $(fastq1) --contigs_out $(contigs_file) --cores $(threads) --min_contig $(min_contig_len)`
+            )
+        else
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n skesa skesa --reads $(fastq1),$(fastq2) --contigs_out $(contigs_file) --cores $(threads) --min_contig $(min_contig_len)`
+            )
+        end
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(contigs_file)\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, contigs = contigs_file)
+    end
+
     if !isfile(contigs_file)
         if isnothing(fastq2)
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n skesa skesa --reads $(fastq1) --contigs_out $(contigs_file) --cores $(threads) --min_contig $(min_contig_len)`)
@@ -451,10 +640,59 @@ Named tuple containing:
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
 function run_flye(;
-        fastq, outdir = "flye_output", genome_size = nothing, read_type = "pacbio-hifi",
-        min_overlap = nothing, threads = min(get_default_threads(), FLYE_MAX_THREADS))
+        fastq,
+        outdir = "flye_output",
+        genome_size = nothing,
+        read_type = "pacbio-hifi",
+        min_overlap = nothing,
+        threads::Int = min(get_default_threads(), FLYE_MAX_THREADS),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "flye",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
+
+    if executor !== nothing
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
+            outdir, "--threads", string(threads)]
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        if !isnothing(min_overlap)
+            push!(cmd_args, "--min-overlap", string(min_overlap))
+        end
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "assembly.fasta"))\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+            graph = joinpath(outdir, "assembly_graph.gfa"))
+    end
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
@@ -498,11 +736,64 @@ Named tuple containing:
 - Skips assembly if output directory already exists
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
-function run_metaflye(; fastq, outdir = "metaflye_output", genome_size = nothing,
-        read_type = "pacbio-hifi", meta = true, min_overlap = nothing,
-        threads = min(get_default_threads(), FLYE_MAX_THREADS))
+function run_metaflye(;
+        fastq,
+        outdir = "metaflye_output",
+        genome_size = nothing,
+        read_type = "pacbio-hifi",
+        meta = true,
+        min_overlap = nothing,
+        threads::Int = min(get_default_threads(), FLYE_MAX_THREADS),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metaflye",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("flye")
     mkpath(outdir)
+
+    if executor !== nothing
+        cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
+            outdir, "--threads", string(threads)]
+        if !isnothing(genome_size)
+            push!(cmd_args, "--genome-size", string(genome_size))
+        end
+        if meta
+            push!(cmd_args, "--meta")
+        end
+        if !isnothing(min_overlap)
+            push!(cmd_args, "--min-overlap", string(min_overlap))
+        end
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n flye $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "assembly.fasta"))\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+            graph = joinpath(outdir, "assembly_graph.gfa"))
+    end
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
@@ -555,14 +846,65 @@ Named tuple containing:
 - Uses `saveReads=false` to skip saving intermediate corrected/trimmed reads (avoids gzip issues on some filesystems)
 - Uses `useGrid=false` to disable automatic SLURM/grid job submission
 """
-function run_canu(; fastq, outdir = "canu_output", genome_size, read_type = "pacbio",
-        stopOnLowCoverage = 10, threads = get_default_threads(), cor_threads = threads)
+function run_canu(;
+        fastq,
+        outdir = "canu_output",
+        genome_size,
+        read_type = "pacbio",
+        stopOnLowCoverage = 10,
+        threads::Int = get_default_threads(),
+        cor_threads::Int = threads,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "canu",
+        time_limit::String = "3-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("canu")
     mkpath(outdir)
     threads = max(threads, 1)
     cor_threads = clamp(cor_threads, 1, threads)
 
     prefix = splitext(basename(fastq))[1]
+    if executor !== nothing
+        cmd = if read_type == "pacbio"
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(threads) corThreads=$(cor_threads) stopOnLowCoverage=$(stopOnLowCoverage) saveReads=false useGrid=false`
+            )
+        elseif read_type == "nanopore"
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -nanopore $(fastq) maxThreads=$(threads) corThreads=$(cor_threads) stopOnLowCoverage=$(stopOnLowCoverage) saveReads=false useGrid=false`
+            )
+        else
+            error("Unsupported read type: $(read_type). Use 'pacbio' or 'nanopore'.")
+        end
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "$(prefix).contigs.fasta"))\" ]; then",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = joinpath(outdir, "$(prefix).contigs.fasta"),
+            graph = joinpath(outdir, "$(prefix).contigs.gfa"))
+    end
+
     if !isfile(joinpath(outdir, "$(prefix).contigs.fasta"))
         if read_type == "pacbio"
             run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n canu canu -p $(prefix) -d $(outdir) genomeSize=$(genome_size) -pacbio $(fastq) maxThreads=$(threads) corThreads=$(cor_threads) stopOnLowCoverage=$(stopOnLowCoverage) saveReads=false useGrid=false`)
@@ -598,14 +940,59 @@ Named tuple containing:
 - Utilizes all available CPU threads
 - Bloom filter can be disabled (-f0) for small genomes to reduce memory usage from 16GB
 """
-function run_hifiasm(; fastq, outdir = basename(fastq) * "_hifiasm",
-        bloom_filter = -1, threads = get_default_threads())
+function run_hifiasm(;
+        fastq,
+        outdir = basename(fastq) * "_hifiasm",
+        bloom_filter = -1,
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "hifiasm",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("hifiasm")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm")
     # Check if output directory exists before trying to read it
     hifiasm_outputs = isdir(outdir) ?
                       filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join = true)) :
                       String[]
+    if executor !== nothing
+        cmd_args = [
+            "hifiasm", "--primary", "-l0", "-o", hifiasm_outprefix, "-t", string(threads)]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        push!(cmd_args, fastq)
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "if ! compgen -G \"$(hifiasm_outprefix)*\" > /dev/null; then",
+            "  mkdir -p \"$(outdir)\"",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, hifiasm_outprefix)
+    end
+
     # https://hifiasm.readthedocs.io/en/latest/faq.html#are-inbred-homozygous-genomes-supported
     if isempty(hifiasm_outputs)
         mkpath(outdir)
@@ -680,14 +1067,61 @@ Named tuple containing:
 - Read selection (`-S`) can be enabled for mock/small datasets to handle low complexity data
 """
 function run_hifiasm_meta(;
-        fastq, outdir = basename(fastq) * "_hifiasm_meta", bloom_filter = -1,
-        read_selection = false, threads = get_default_threads())
+        fastq,
+        outdir = basename(fastq) * "_hifiasm_meta",
+        bloom_filter = -1,
+        read_selection = false,
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "hifiasm_meta",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("hifiasm_meta")
     hifiasm_outprefix = joinpath(outdir, basename(fastq) * ".hifiasm_meta")
     # Check if output directory exists before trying to read it
     hifiasm_outputs = isdir(outdir) ?
                       filter(x -> occursin(hifiasm_outprefix, x), readdir(outdir, join = true)) :
                       String[]
+
+    if executor !== nothing
+        cmd_args = ["hifiasm_meta", "-t", string(threads), "-o", hifiasm_outprefix]
+        if bloom_filter >= 0
+            push!(cmd_args, "-f$(bloom_filter)")
+        end
+        if read_selection
+            push!(cmd_args, "-S")
+        end
+        push!(cmd_args, fastq)
+        cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n hifiasm_meta $(cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "if ! compgen -G \"$(hifiasm_outprefix)*\" > /dev/null; then",
+            "  mkdir -p \"$(outdir)\"",
+            "  $(cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, hifiasm_outprefix)
+    end
 
     if isempty(hifiasm_outputs)
         mkpath(outdir)
@@ -732,10 +1166,61 @@ Named tuple containing:
 - Utilizes all available CPU threads
 """
 function run_unicycler(;
-        short_1, short_2 = nothing, long_reads, outdir = "unicycler_output",
-        threads = get_default_threads(), spades_options::Union{Nothing, String} = nothing,
-        kmers::Union{Nothing, String} = nothing)
+        short_1,
+        short_2 = nothing,
+        long_reads,
+        outdir = "unicycler_output",
+        threads::Int = get_default_threads(),
+        spades_options::Union{Nothing, String} = nothing,
+        kmers::Union{Nothing, String} = nothing,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "unicycler",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("unicycler")
+
+    if executor !== nothing
+        spades_args = isnothing(spades_options) ? String[] :
+                      ["--spades_options=$(spades_options)"]
+        kmer_args = isnothing(kmers) ? String[] : ["--kmers=$(kmers)"]
+        cmd = if isnothing(short_2)
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`
+            )
+        else
+            Mycelia.command_string(
+                `$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -1 $(short_1) -2 $(short_2) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`
+            )
+        end
+        script = join([
+            "set -euo pipefail",
+            "if [ ! -f \"$(joinpath(outdir, "assembly.fasta"))\" ]; then",
+            "  rm -rf \"$(outdir)\" || true",
+            "  $(cmd)",
+            "fi",
+            "mkdir -p \"$(outdir)\""
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
+            graph = joinpath(outdir, "assembly.gfa"))
+    end
 
     # Unicycler requires the output directory to not exist, so check output file first
     if !isfile(joinpath(outdir, "assembly.fasta"))
@@ -1286,7 +1771,17 @@ function run_plass_assemble(; reads1::String, reads2::Union{String, Nothing} = n
         outdir::String = "plass_output",
         min_seq_id::Union{Real, Nothing} = nothing, min_length::Union{Int, Nothing} = nothing, evalue::Union{
             Real, Nothing} = nothing,
-        num_iterations::Union{Int, Nothing} = nothing, filter_proteins::Bool = true, threads::Int = get_default_threads())
+        num_iterations::Union{Int, Nothing} = nothing, filter_proteins::Bool = true,
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "plass_assemble",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1326,6 +1821,26 @@ function run_plass_assemble(; reads1::String, reads2::Union{String, Nothing} = n
     end
     push!(cmd, "--threads", string(threads))
 
+    if executor !== nothing
+        cmd_string = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`
+        )
+        job = Mycelia.build_execution_job(
+            cmd = cmd_string,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = assembly_out, tmpdir)
+    end
+
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
     return (; outdir, assembly = assembly_out, tmpdir)
@@ -1351,7 +1866,16 @@ Named tuple with:
 function run_penguin_guided_nuclassemble(;
         reads1::String, reads2::Union{String, Nothing} = nothing,
         outdir::String = "penguin_guided_output",
-        threads::Int = get_default_threads())
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "penguin_guided_nuclassemble",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1374,6 +1898,26 @@ function run_penguin_guided_nuclassemble(;
     push!(cmd, assembly_out, tmpdir)
 
     push!(cmd, "--threads", string(threads))
+
+    if executor !== nothing
+        cmd_string = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`
+        )
+        job = Mycelia.build_execution_job(
+            cmd = cmd_string,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = assembly_out, tmpdir)
+    end
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
@@ -1400,7 +1944,16 @@ Named tuple with:
 function run_penguin_nuclassemble(;
         reads1::String, reads2::Union{String, Nothing} = nothing,
         outdir::String = "penguin_output",
-        threads::Int = get_default_threads())
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "penguin_nuclassemble",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("plass")
 
     if !isfile(reads1)
@@ -1423,6 +1976,26 @@ function run_penguin_nuclassemble(;
     push!(cmd, assembly_out, tmpdir)
 
     push!(cmd, "--threads", string(threads))
+
+    if executor !== nothing
+        cmd_string = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`
+        )
+        job = Mycelia.build_execution_job(
+            cmd = cmd_string,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, assembly = assembly_out, tmpdir)
+    end
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n plass $cmd`)
 
@@ -2137,7 +2710,16 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
         outdir::String = "metamdbg_output",
         abundance_min::Int = 3,
         threads::Int = get_default_threads(),
-        graph_k::Int = 21)
+        graph_k::Int = 21,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metamdbg",
+        time_limit::String = "3-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
 
     # Validate input - must have at least one read type
     if isnothing(hifi_reads) && isnothing(ont_reads)
@@ -2149,6 +2731,71 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
 
     contigs_file = joinpath(outdir, "contigs.fasta")
     graph_file = joinpath(outdir, "graph.gfa")
+
+    if executor !== nothing
+        asm_cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
+
+        if !isnothing(hifi_reads)
+            push!(asm_cmd_args, "--in-hifi")
+            if isa(hifi_reads, String)
+                push!(asm_cmd_args, hifi_reads)
+            else
+                append!(asm_cmd_args, hifi_reads)
+            end
+        end
+
+        if !isnothing(ont_reads)
+            push!(asm_cmd_args, "--in-ont")
+            if isa(ont_reads, String)
+                push!(asm_cmd_args, ont_reads)
+            else
+                append!(asm_cmd_args, ont_reads)
+            end
+        end
+
+        push!(asm_cmd_args, "--min-abundance", string(abundance_min))
+        push!(asm_cmd_args, "--threads", string(threads))
+
+        gfa_cmd_args = [
+            "metaMDBG", "gfa",
+            "--assembly-dir", outdir,
+            "--k", string(graph_k),
+            "--threads", string(threads)
+        ]
+
+        asm_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(asm_cmd_args)`
+        )
+        gfa_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "contigs.fasta"))\" ] && [ ! -f \"$(joinpath(outdir, "contigs.fasta.gz"))\" ]; then",
+            "  $(asm_cmd)",
+            "fi",
+            "$(gfa_cmd)"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (;
+            outdir,
+            contigs = joinpath(outdir, "contigs.fasta.gz"),
+            graph = joinpath(outdir, "assemblyGraph_k$(graph_k).gfa")
+        )
+    end
 
     if !isfile(contigs_file)
         # Build command arguments
@@ -2235,11 +2882,61 @@ Named tuple containing:
 """
 function run_strainy(
         assembly_file::String, long_reads::String; outdir::String = "strainy_output",
-        mode::String = "phase", threads = get_default_threads())
+        mode::String = "phase",
+        threads::Int = get_default_threads(),
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "strainy",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     Mycelia.add_bioconda_env("strainy")
     mkpath(outdir)
 
     strain_assemblies = joinpath(outdir, "strain_assemblies.fasta")
+    if executor !== nothing
+        bam_file = joinpath(outdir, "mapped_reads.bam")
+        minimap_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`
+        )
+        sort_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`
+        )
+        index_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`
+        )
+        strainy_cmd = Mycelia.command_string(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`
+        )
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(strain_assemblies)\" ]; then",
+            "  if [ ! -f \"$(bam_file)\" ]; then",
+            "    $(minimap_cmd) | $(sort_cmd)",
+            "    $(index_cmd)",
+            "  fi",
+            "  $(strainy_cmd)",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, strain_assemblies)
+    end
 
     if !isfile(strain_assemblies)
         # First map reads to assembly

@@ -50,7 +50,16 @@ function run_sourmash_sketch(;
         scaled::Int = 1000,
         molecule::String = "dna",
         singleton::Bool = false,
-        name::Union{Nothing, String} = nothing)
+        name::Union{Nothing, String} = nothing,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "sourmash_sketch",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
 
     # Validate inputs
     for f in input_files
@@ -62,6 +71,43 @@ function run_sourmash_sketch(;
     mkpath(outdir)
 
     signatures = String[]
+    if executor !== nothing
+        command_lines = String["set -euo pipefail", "mkdir -p \"$(outdir)\""]
+        for input_file in input_files
+            basename_clean = replace(basename(input_file), r"\.(fa|fasta|fq|fastq)(\.gz)?$"i => "")
+            sig_file = joinpath(outdir, "$(basename_clean).sig")
+            push!(signatures, sig_file)
+            k_param = join(["k=$(k)" for k in k_sizes], ",")
+            cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sourmash sourmash sketch $(molecule)
+                -p $(k_param),scaled=$(scaled)
+                -o $(sig_file)
+                $(input_file)`
+            if singleton
+                cmd = `$(cmd) --singleton`
+            end
+            if !isnothing(name)
+                cmd = `$(cmd) --name $(name)`
+            end
+            push!(command_lines, "if [ ! -f \"$(sig_file)\" ]; then")
+            push!(command_lines, "  $(Mycelia.command_string(cmd))")
+            push!(command_lines, "fi")
+        end
+        job = Mycelia.build_execution_job(
+            cmd = join(command_lines, "\n"),
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = 1,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, signatures)
+    end
+
     for input_file in input_files
         basename_clean = replace(basename(input_file), r"\.(fa|fasta|fq|fastq)(\.gz)?$"i => "")
         sig_file = joinpath(outdir, "$(basename_clean).sig")
@@ -116,7 +162,16 @@ function run_sourmash_search(;
         threshold::Float64 = 0.1,
         k_size::Int = 31,
         best_only::Bool = false,
-        num_results::Union{Nothing, Int} = nothing)
+        num_results::Union{Nothing, Int} = nothing,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "sourmash_search",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(query_sig) || error("Query signature not found: $(query_sig)")
     (isfile(database_sig) || isdir(database_sig)) ||
         error("Database not found: $(database_sig)")
@@ -141,7 +196,30 @@ function run_sourmash_search(;
             cmd = `$(cmd) -n $(num_results)`
         end
 
-        run(cmd)
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(outdir)\"",
+                "if [ ! -f \"$(results_csv)\" ]; then",
+                "  $(Mycelia.command_string(cmd))",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = 1,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            run(cmd)
+        end
     end
 
     return (; outdir, results_csv)
@@ -171,7 +249,16 @@ function run_sourmash_gather(;
         database_sig::String,
         outdir::String,
         k_size::Int = 31,
-        threshold_bp::Int = 50000)
+        threshold_bp::Int = 50000,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "sourmash_gather",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(query_sig) || error("Query signature not found: $(query_sig)")
     (isfile(database_sig) || isdir(database_sig)) ||
         error("Database not found: $(database_sig)")
@@ -184,12 +271,36 @@ function run_sourmash_gather(;
     results_matches = joinpath(outdir, "$(query_basename)_gather_matches.sig")
 
     if !isfile(results_csv)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n sourmash sourmash gather
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n sourmash sourmash gather
             $(query_sig) $(database_sig)
             -k $(k_size)
             --threshold-bp $(threshold_bp)
             -o $(results_csv)
-            --save-matches $(results_matches)`)
+            --save-matches $(results_matches)`
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(outdir)\"",
+                "if [ ! -f \"$(results_csv)\" ]; then",
+                "  $(Mycelia.command_string(cmd))",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = 1,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            run(cmd)
+        end
     end
 
     return (; outdir, results_csv, results_matches)
@@ -635,7 +746,16 @@ function run_metaphlan(;
         db_index::Union{Nothing, String} = nothing,
         unknown_estimation::Bool = true,
         stat_q::Float64 = 0.2,
-        long_reads::Bool = false)
+        long_reads::Bool = false,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metaphlan",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(input_file) || error("Input file not found: $(input_file)")
     input_type in ["fastq", "fasta", "mapout", "sam"] ||
         error("Invalid input_type: $(input_type)")
@@ -681,7 +801,30 @@ function run_metaphlan(;
             push!(cmd_args, "--long_reads")
         end
 
-        run(Cmd(cmd_args))
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(outdir)\"",
+                "if [ ! -f \"$(profile_txt)\" ]; then",
+                "  $(Mycelia.command_string(Cmd(cmd_args)))",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = nprocs,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            run(Cmd(cmd_args))
+        end
     end
 
     return (; outdir, profile_txt, mapout = mapout_file)
@@ -933,7 +1076,16 @@ function run_metabuli_classify(;
         threads::Int = get_default_threads(),
         min_score::Union{Nothing, Float64} = nothing,
         min_sp_score::Union{Nothing, Float64} = nothing,
-        max_ram_gb::Union{Nothing, Int} = nothing)
+        max_ram_gb::Union{Nothing, Int} = nothing,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metabuli_classify",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
 
     # Validate inputs
     for f in input_files
@@ -983,7 +1135,30 @@ function run_metabuli_classify(;
             push!(cmd_args, string(min_sp_score))
         end
 
-        run(Cmd(cmd_args))
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(outdir)\"",
+                "if [ ! -f \"$(report_file)\" ]; then",
+                "  $(Mycelia.command_string(Cmd(cmd_args)))",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = threads,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            run(Cmd(cmd_args))
+        end
     end
 
     return (; outdir, report_file, classifications_file)
@@ -1011,7 +1186,16 @@ function run_metabuli_build_db(;
         taxonomy_dir::String,
         outdir::String,
         threads::Int = get_default_threads(),
-        split_num::Int = 4096)
+        split_num::Int = 4096,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metabuli_build_db",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(reference_fasta) || error("Reference FASTA not found: $(reference_fasta)")
     isdir(taxonomy_dir) || error("Taxonomy directory not found: $(taxonomy_dir)")
 
@@ -1022,6 +1206,36 @@ function run_metabuli_build_db(;
     for required in ["names.dmp", "nodes.dmp"]
         f = joinpath(taxonomy_dir, required)
         isfile(f) || error("Required taxonomy file not found: $(f)")
+    end
+
+    if executor !== nothing
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metabuli metabuli build
+            $(reference_fasta)
+            $(taxonomy_dir)
+            $(outdir)
+            --threads $(threads)
+            --split-num $(split_num)`
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(joinpath(outdir, "db.info"))\" ] && [ ! -f \"$(joinpath(outdir, "info"))\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; database_path = outdir)
     end
 
     if !_metabuli_db_present(outdir)
