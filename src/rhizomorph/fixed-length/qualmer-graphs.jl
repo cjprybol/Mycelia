@@ -88,8 +88,28 @@ function build_qualmer_graph(
         dataset_id::String = "dataset_01",
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        memory_profile::Symbol = :full
 )
+    # Reduced quality profiles route through build_kmer_graph
+    if memory_profile == :ultralight_quality
+        return build_kmer_graph_singlestrand_ultralight_quality(
+            records, k;
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
+        )
+    elseif memory_profile == :lightweight_quality
+        return build_kmer_graph_singlestrand_lightweight_quality(
+            records, k;
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
+        )
+    elseif memory_profile != :full
+        error("Invalid memory_profile for qualmer graph: :$memory_profile. Use :full, :ultralight_quality, or :lightweight_quality")
+    end
+
     if mode == :singlestrand
         return build_qualmer_graph_singlestrand(
             records,

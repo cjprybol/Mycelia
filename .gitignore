@@ -59,3 +59,28 @@ trees/
 
 # Ephemeral AI handoff files
 .handoff/
+
+# Codex runtime artifacts (not portable; skills/ is tracked)
+.codex/auth.json
+.codex/config.toml
+.codex/history.jsonl
+.codex/models_cache.json
+.codex/cloud-requirements-cache.json
+.codex/log/
+.codex/policy/
+.codex/sessions/
+.codex/tmp/
+.codex/version.json
+.codex/skills/.system
+.codex/.codex-global-state.json
+.codex/.personality_migration
+.codex/sqlite/
+.codex/vendor_imports/
+.codex/shell_snapshots/*
+.codex/archived_sessions/
+.codex/worktrees/
+.codex/mirror-manifest.json
+.codex/mirror-report.md
+.codex/mirror-dirty
+.codex/prompts/MIGRATION_STATUS.md
+.codex/state_*.sqlite*

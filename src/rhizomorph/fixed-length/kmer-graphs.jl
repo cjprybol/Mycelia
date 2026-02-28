@@ -19,7 +19,8 @@
 
 """
     build_kmer_graph(records, k; dataset_id="dataset_01", mode=:singlestrand,
-                     type_hint=nothing, ambiguous_action=:dna)
+                     type_hint=nothing, ambiguous_action=:dna,
+                     memory_profile=:full, lightweight=nothing)
 
 Build a k-mer de Bruijn graph from FASTA or FASTQ records.
 
@@ -31,7 +32,15 @@ This is the main user-facing function for k-mer graph construction.
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
 - `mode::Symbol=:singlestrand`: Graph mode (:singlestrand, :doublestrand, or :canonical)
 - `type_hint::Union{Nothing,Symbol}=nothing`: Optional alphabet hint (:DNA, :RNA, :AA)
-- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets (:dna, :rna, :aa, :error)
+- `ambiguous_action::Symbol=:dna`: Resolution for ambiguous alphabets
+- `memory_profile::Symbol=:full`: Memory profile controlling information retention:
+  - `:full` — Full evidence (positions, strands, per-observation)
+  - `:lightweight` — Counts + observation ID tracking (no positions)
+  - `:ultralight` — Counts only (no observation IDs, no positions)
+  - `:ultralight_quality` — Counts + aggregated quality scores (FASTQ only)
+  - `:lightweight_quality` — Counts + obs IDs + aggregated quality (FASTQ only)
+- `lightweight::Union{Nothing,Bool}=nothing`: Deprecated. Use `memory_profile` instead.
+  `lightweight=true` maps to `memory_profile=:lightweight`.
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: K-mer de Bruijn graph with evidence
@@ -39,32 +48,35 @@ This is the main user-facing function for k-mer graph construction.
 # Graph Modes
 - `:singlestrand` - Records k-mers exactly as observed (strand-specific)
 - `:doublestrand` - Adds reverse-complement strand with directed edges (DNA/RNA only)
-- `:canonical` - Merges reverse-complement pairs into canonical vertices with undirected edges (DNA/RNA only)
+- `:canonical` - Merges reverse-complement pairs into canonical vertices (DNA/RNA only)
+
+# Memory Profile Selection Guide
+```
+Need individual read positions/strands?
+  YES → :full
+  NO  → Need to know WHICH reads observed each k-mer?
+          YES → Need quality scores?
+                  YES → :lightweight_quality
+                  NO  → :lightweight
+          NO  → Need quality scores?
+                  YES → :ultralight_quality
+                  NO  → :ultralight (maximum scalability)
+```
 
 # Examples
 ```julia
-# Load FASTA records
-records = collect(open_fastx("reads.fasta"))
-
-# Build strand-specific graph (default)
+# Build full graph (default)
 graph = build_kmer_graph(records, 31)
 
-# Build doublestrand graph
-graph_doublestrand = build_kmer_graph(records, 31; mode=:doublestrand)
+# Build ultralight graph (maximum memory savings)
+graph = build_kmer_graph(records, 31; memory_profile=:ultralight)
 
-# Build canonical graph
-graph_canonical = build_kmer_graph(records, 31; mode=:canonical)
+# Build quality-aware ultralight graph from FASTQ
+graph = build_kmer_graph(fastq_records, 31; memory_profile=:ultralight_quality)
 
-# Multiple datasets
-graph = build_kmer_graph(records1, 31; dataset_id="sample_A")
-add_observations_to_graph!(graph, records2, 31; dataset_id="sample_B")
+# Backward compatible
+graph = build_kmer_graph(records, 31; lightweight=true)
 ```
-
-# Notes
-- Automatically detects sequence type (DNA, RNA, or amino acid)
-- Uses type-stable core functions for performance
-- FASTQ quality scores are ignored (use build_qualmer_graph for quality-aware graphs)
-- All k-mers stored as observed, not canonical (unless mode=:doublestrand)
 
 # See Also
 - `build_qualmer_graph`: Quality-aware version for FASTQ data
@@ -76,35 +88,91 @@ function build_kmer_graph(
         dataset_id::String = "dataset_01",
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
-    if mode == :singlestrand
-        return build_kmer_graph_singlestrand(
-            records,
-            k;
+    # Backward compatibility: lightweight kwarg maps to memory_profile
+    if !isnothing(lightweight)
+        if lightweight
+            memory_profile = :lightweight
+        else
+            memory_profile = :full
+        end
+    end
+
+    # Reduced profiles only support :singlestrand
+    if memory_profile != :full && mode != :singlestrand
+        error("Memory profile :$memory_profile currently only supports :singlestrand mode, got :$mode")
+    end
+
+    # Quality profiles require FASTQ input
+    if memory_profile in (:ultralight_quality, :lightweight_quality)
+        if isempty(records)
+            throw(ArgumentError("Cannot build graph from empty record set"))
+        end
+        if !(records[1] isa FASTX.FASTQ.Record)
+            error("Memory profile :$memory_profile requires FASTQ input (quality scores needed)")
+        end
+    end
+
+    # Dispatch based on memory_profile
+    if memory_profile == :ultralight
+        return build_kmer_graph_singlestrand_ultralight(
+            records, k;
             dataset_id = dataset_id,
             type_hint = type_hint,
             ambiguous_action = ambiguous_action
         )
-    elseif mode == :doublestrand
-        return build_kmer_graph_doublestrand(
-            records,
-            k;
+    elseif memory_profile == :lightweight
+        return build_kmer_graph_singlestrand_lightweight(
+            records, k;
             dataset_id = dataset_id,
             type_hint = type_hint,
             ambiguous_action = ambiguous_action
         )
-    elseif mode == :canonical
-        singlestrand_graph = build_kmer_graph_singlestrand(
-            records,
-            k;
+    elseif memory_profile == :ultralight_quality
+        return build_kmer_graph_singlestrand_ultralight_quality(
+            records, k;
             dataset_id = dataset_id,
             type_hint = type_hint,
             ambiguous_action = ambiguous_action
         )
-        return convert_to_canonical(singlestrand_graph)
+    elseif memory_profile == :lightweight_quality
+        return build_kmer_graph_singlestrand_lightweight_quality(
+            records, k;
+            dataset_id = dataset_id,
+            type_hint = type_hint,
+            ambiguous_action = ambiguous_action
+        )
+    elseif memory_profile == :full
+        if mode == :singlestrand
+            return build_kmer_graph_singlestrand(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        elseif mode == :doublestrand
+            return build_kmer_graph_doublestrand(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        elseif mode == :canonical
+            singlestrand_graph = build_kmer_graph_singlestrand(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+            return convert_to_canonical(singlestrand_graph)
+        else
+            error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
+        end
     else
-        error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
+        error("Invalid memory_profile: :$memory_profile. Must be :full, :lightweight, :ultralight, :ultralight_quality, or :lightweight_quality")
     end
 end
 
@@ -156,7 +224,9 @@ function build_kmer_graph_from_file(
         dataset_id::Union{String, Nothing} = nothing,
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -180,7 +250,9 @@ function build_kmer_graph_from_file(
         dataset_id = dataset_id,
         mode = mode,
         type_hint = final_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        memory_profile = memory_profile,
+        lightweight = lightweight
     )
 end
 
@@ -221,10 +293,21 @@ function build_kmer_graph_from_files(
         k::Int;
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
     if isempty(filepaths)
         error("No files provided")
+    end
+
+    # Backward compatibility
+    if !isnothing(lightweight)
+        memory_profile = lightweight ? :lightweight : :full
+    end
+
+    if memory_profile != :full && mode != :singlestrand
+        error("Memory profile :$memory_profile currently only supports :singlestrand mode, got :$mode")
     end
 
     if !(mode in (:singlestrand, :doublestrand, :canonical))
@@ -259,7 +342,8 @@ function build_kmer_graph_from_files(
         k;
         mode = :singlestrand,
         type_hint = final_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        memory_profile = memory_profile
     )
 
     # Get Mycelia module for open_fastx
@@ -272,12 +356,28 @@ function build_kmer_graph_from_files(
         # Use open_fastx which handles compression and format detection
         records = collect(Mycelia_module.open_fastx(filepath))
 
-        # Add observations
-        add_observations_to_graph!(graph, records, k; dataset_id = dataset_id)
+        # Reduced mode graphs don't support add_observations_to_graph!
+        # so we build a temporary graph and merge.
+        if memory_profile != :full
+            file_hint = _alphabet_hint_from_path(filepath)
+            file_final_hint = isnothing(type_hint) ?
+                              (isnothing(file_hint) ? final_hint : file_hint) : type_hint
+            temp_graph = build_kmer_graph(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = file_final_hint,
+                ambiguous_action = ambiguous_action,
+                memory_profile = memory_profile
+            )
+            # Merge temp_graph into main graph
+            _merge_reduced_graphs!(graph, temp_graph, memory_profile)
+        else
+            add_observations_to_graph!(graph, records, k; dataset_id = dataset_id)
+        end
     end
 
     # Determine if canonical/doublestrand conversion is valid for the k-mer type
-    if !isempty(MetaGraphsNext.labels(graph))
+    if memory_profile == :full && !isempty(MetaGraphsNext.labels(graph))
         first_label = first(MetaGraphsNext.labels(graph))
         if mode != :singlestrand &&
            !(first_label isa Kmers.DNAKmer || first_label isa Kmers.RNAKmer)
@@ -293,6 +393,127 @@ function build_kmer_graph_from_files(
     end
 
     return graph
+end
+
+"""
+    _merge_reduced_graphs!(main_graph, temp_graph, memory_profile)
+
+Merge a temporary reduced-mode graph into a main graph. Handles vertex/edge
+count merging for all reduced memory profiles.
+"""
+function _merge_reduced_graphs!(main_graph, temp_graph, memory_profile::Symbol)
+    for label in MetaGraphsNext.labels(temp_graph)
+        temp_vdata = temp_graph[label]
+        if !haskey(main_graph, label)
+            # Create a new vertex with the same type
+            main_graph[label] = _create_reduced_vertex(label, memory_profile)
+        end
+        vdata = main_graph[label]
+        vdata.total_count += temp_vdata.total_count
+        for (ds_id, ds_count) in temp_vdata.dataset_counts
+            vdata.dataset_counts[ds_id] = get(vdata.dataset_counts, ds_id, 0) + ds_count
+        end
+        # Merge observation IDs if the type has them
+        if hasfield(typeof(vdata), :dataset_observations)
+            for (ds_id, obs_set) in temp_vdata.dataset_observations
+                if !haskey(vdata.dataset_observations, ds_id)
+                    vdata.dataset_observations[ds_id] = Set{String}()
+                end
+                union!(vdata.dataset_observations[ds_id], obs_set)
+            end
+        end
+        # Merge quality scores if the type has them
+        if hasfield(typeof(vdata), :joint_quality)
+            if !isempty(temp_vdata.joint_quality)
+                if isempty(vdata.joint_quality)
+                    append!(vdata.joint_quality, temp_vdata.joint_quality)
+                else
+                    for i in eachindex(temp_vdata.joint_quality)
+                        vdata.joint_quality[i] = UInt8(clamp(
+                            Int(vdata.joint_quality[i]) + Int(temp_vdata.joint_quality[i]),
+                            0, 255))
+                    end
+                end
+            end
+            if hasfield(typeof(vdata), :dataset_joint_quality)
+                for (ds_id, ds_qual) in temp_vdata.dataset_joint_quality
+                    existing = get(vdata.dataset_joint_quality, ds_id, nothing)
+                    if isnothing(existing)
+                        vdata.dataset_joint_quality[ds_id] = copy(ds_qual)
+                    else
+                        for i in eachindex(ds_qual)
+                            existing[i] = UInt8(clamp(
+                                Int(existing[i]) + Int(ds_qual[i]), 0, 255))
+                        end
+                    end
+                end
+            end
+        end
+    end
+    for (src, dst) in MetaGraphsNext.edge_labels(temp_graph)
+        temp_edata = temp_graph[src, dst]
+        if !haskey(main_graph, src, dst)
+            main_graph[src, dst] = _create_reduced_edge(
+                temp_edata.overlap_length, memory_profile)
+        end
+        edata = main_graph[src, dst]
+        edata.total_count += temp_edata.total_count
+        for (ds_id, ds_count) in temp_edata.dataset_counts
+            edata.dataset_counts[ds_id] = get(edata.dataset_counts, ds_id, 0) + ds_count
+        end
+        if hasfield(typeof(edata), :dataset_observations)
+            for (ds_id, obs_set) in temp_edata.dataset_observations
+                if !haskey(edata.dataset_observations, ds_id)
+                    edata.dataset_observations[ds_id] = Set{String}()
+                end
+                union!(edata.dataset_observations[ds_id], obs_set)
+            end
+        end
+        if hasfield(typeof(edata), :from_joint_quality)
+            _merge_quality_vector!(edata.from_joint_quality, temp_edata.from_joint_quality)
+            _merge_quality_vector!(edata.to_joint_quality, temp_edata.to_joint_quality)
+        end
+    end
+end
+
+function _merge_quality_vector!(dest::Vector{UInt8}, src::Vector{UInt8})
+    if !isempty(src)
+        if isempty(dest)
+            append!(dest, src)
+        else
+            for i in eachindex(src)
+                dest[i] = UInt8(clamp(Int(dest[i]) + Int(src[i]), 0, 255))
+            end
+        end
+    end
+end
+
+function _create_reduced_vertex(kmer, memory_profile::Symbol)
+    if memory_profile == :ultralight
+        return UltralightKmerVertexData(kmer)
+    elseif memory_profile == :lightweight
+        return LightweightKmerVertexData(kmer)
+    elseif memory_profile == :ultralight_quality
+        return UltralightQualityKmerVertexData(kmer)
+    elseif memory_profile == :lightweight_quality
+        return LightweightQualityKmerVertexData(kmer)
+    else
+        error("Unknown memory_profile: $memory_profile")
+    end
+end
+
+function _create_reduced_edge(overlap_length::Int, memory_profile::Symbol)
+    if memory_profile == :ultralight
+        return UltralightEdgeData(overlap_length)
+    elseif memory_profile == :lightweight
+        return LightweightEdgeData(overlap_length)
+    elseif memory_profile == :ultralight_quality
+        return UltralightQualityEdgeData(overlap_length)
+    elseif memory_profile == :lightweight_quality
+        return LightweightQualityEdgeData(overlap_length)
+    else
+        error("Unknown memory_profile: $memory_profile")
+    end
 end
 
 # ============================================================================
@@ -354,7 +575,10 @@ function get_kmer_statistics(graph::MetaGraphsNext.MetaGraph)
 
     for kmer in MetaGraphsNext.labels(graph)
         vertex_data = graph[kmer]
-        union!(all_dataset_ids, keys(vertex_data.evidence))
+        # Use get_all_dataset_ids for compatibility with both full and lightweight types
+        for ds_id in get_all_dataset_ids(vertex_data)
+            push!(all_dataset_ids, ds_id)
+        end
         total_observations += count_total_observations(vertex_data)
     end
 

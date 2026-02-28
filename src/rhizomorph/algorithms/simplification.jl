@@ -475,8 +475,11 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
         end
 
         first_vertex_data = graph[path[1]]
-        if !hasfield(typeof(first_vertex_data), :sequence)
-            # Only collapse variable-length graphs for now
+        if hasfield(typeof(first_vertex_data), :Kmer)
+            # K-mer graphs cannot be collapsed in-place: the assembled sequence
+            # is longer than k, so the label type changes from Kmer to BioSequence,
+            # violating MetaGraphsNext's parametric label_type constraint.
+            # Use convert_fixed_to_variable() first, then collapse.
             continue
         end
 
@@ -487,16 +490,19 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
         # Capture external edges before removal
         edge_copies = Dict{Tuple{eltype(path), eltype(path)}, Any}()
         for (src, dst) in MetaGraphsNext.edge_labels(graph)
-            in_src = src in offsets
-            in_dst = dst in offsets
+            in_src = haskey(offsets, src)
+            in_dst = haskey(offsets, dst)
             if xor(in_src, in_dst)
                 edge_copies[(src, dst)] = graph[src, dst]
             end
         end
 
         # Remove internal vertices (and their edges)
+        # Must use code_for() since rem_vertex! takes integer codes, not labels.
+        # Re-lookup each time because removal reassigns vertex codes.
         for v in path
-            MetaGraphsNext.rem_vertex!(graph, v)
+            idx = MetaGraphsNext.code_for(graph, v)
+            MetaGraphsNext.rem_vertex!(graph, idx)
         end
 
         new_label = new_sequence
@@ -517,10 +523,25 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
     return graph
 end
 
+"""
+    _get_vertex_content(vertex_data)
+
+Extract the core content (sequence or string) from any vertex data type.
+Works for BioSequence types (`.sequence` field) and String types (`.string_value` field).
+"""
+function _get_vertex_content(vertex_data)
+    if hasfield(typeof(vertex_data), :sequence)
+        return vertex_data.sequence
+    elseif hasfield(typeof(vertex_data), :string_value)
+        return vertex_data.string_value
+    else
+        error("Cannot extract content from vertex data type: $(typeof(vertex_data))")
+    end
+end
+
 function _assemble_linear_chain_sequence(graph, path::Vector)
     first_data = graph[path[1]]
-    sequence = first_data.sequence
-    SequenceType = typeof(sequence)
+    sequence = _get_vertex_content(first_data)
     offsets = Dict{eltype(path), Int}()
     offsets[path[1]] = 0
 
@@ -528,9 +549,9 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
         src = path[i - 1]
         dst = path[i]
         overlap = _edge_overlap_length(graph, src, dst)
-        append_sequence = graph[dst].sequence
+        append_sequence = _get_vertex_content(graph[dst])
 
-        offset = offsets[src] + length(graph[src].sequence) - overlap
+        offset = offsets[src] + length(_get_vertex_content(graph[src])) - overlap
         offsets[dst] = offset
 
         if overlap < length(append_sequence)
@@ -542,10 +563,27 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
 end
 
 function _build_collapsed_vertex(first_vertex_data, sequence)
+    # TYPE-CHECK-AUDIT: factory dispatch — add branch for each new vertex type
+    # BioSequence vertex types
     if first_vertex_data isa BioSequenceVertexData
         return BioSequenceVertexData(sequence)
     elseif first_vertex_data isa QualityBioSequenceVertexData
         return QualityBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa LightweightBioSequenceVertexData
+        return LightweightBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa UltralightBioSequenceVertexData
+        return UltralightBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa UltralightQualityBioSequenceVertexData
+        return UltralightQualityBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa LightweightQualityBioSequenceVertexData
+        return LightweightQualityBioSequenceVertexData(sequence)
+        # String vertex types
+    elseif first_vertex_data isa StringVertexData
+        return StringVertexData(sequence)
+    elseif first_vertex_data isa LightweightStringVertexData
+        return LightweightStringVertexData(sequence)
+    elseif first_vertex_data isa UltralightStringVertexData
+        return UltralightStringVertexData(sequence)
     else
         error("Unsupported vertex data type for collapsing: $(typeof(first_vertex_data))")
     end
@@ -556,11 +594,40 @@ function _merge_path_evidence!(target_vertex, graph, path, offsets)
         vertex_data = graph[vertex]
         offset = offsets[vertex]
 
-        for (dataset_id, dataset_evidence) in vertex_data.evidence
-            for (obs_id, evidence_set) in dataset_evidence
-                for entry in evidence_set
-                    shifted_entry = _shift_evidence_entry(entry, offset)
-                    add_evidence!(target_vertex, dataset_id, obs_id, shifted_entry)
+        # TYPE-CHECK-AUDIT: super-union guard — must cover all reduced vertex types
+        if vertex_data isa AllReducedVertexData
+            target_vertex.total_count += vertex_data.total_count
+            for (ds_id, ds_count) in vertex_data.dataset_counts
+                target_vertex.dataset_counts[ds_id] = get(
+                    target_vertex.dataset_counts, ds_id, 0) + ds_count
+            end
+            if hasfield(typeof(vertex_data), :dataset_observations)
+                for (ds_id, obs_set) in vertex_data.dataset_observations
+                    if !haskey(target_vertex.dataset_observations, ds_id)
+                        target_vertex.dataset_observations[ds_id] = Set{String}()
+                    end
+                    union!(target_vertex.dataset_observations[ds_id], obs_set)
+                end
+            end
+            if hasfield(typeof(vertex_data), :joint_quality) &&
+               hasfield(typeof(target_vertex), :joint_quality)
+                if isempty(target_vertex.joint_quality)
+                    append!(target_vertex.joint_quality, vertex_data.joint_quality)
+                elseif !isempty(vertex_data.joint_quality)
+                    for i in eachindex(vertex_data.joint_quality)
+                        target_vertex.joint_quality[i] = UInt8(clamp(
+                            Int(target_vertex.joint_quality[i]) +
+                            Int(vertex_data.joint_quality[i]), 0, 255))
+                    end
+                end
+            end
+        else
+            for (dataset_id, dataset_evidence) in vertex_data.evidence
+                for (obs_id, evidence_set) in dataset_evidence
+                    for entry in evidence_set
+                        shifted_entry = _shift_evidence_entry(entry, offset)
+                        add_evidence!(target_vertex, dataset_id, obs_id, shifted_entry)
+                    end
                 end
             end
         end
@@ -576,6 +643,29 @@ function _shift_evidence_entry(entry::QualityEvidenceEntry, offset::Int)
 end
 
 function _shift_edge_data(edge_data, offset::Int; shift_from::Bool = false, shift_to::Bool = false)
+    # TYPE-CHECK-AUDIT: super-union guard — must cover all reduced edge types
+    if edge_data isa AllReducedEdgeData
+        new_edge = if hasfield(typeof(edge_data), :overlap_length)
+            typeof(edge_data)(edge_data.overlap_length)
+        else
+            typeof(edge_data)()
+        end
+        new_edge.total_count = edge_data.total_count
+        for (ds_id, ds_count) in edge_data.dataset_counts
+            new_edge.dataset_counts[ds_id] = ds_count
+        end
+        if hasfield(typeof(edge_data), :dataset_observations)
+            for (ds_id, obs_set) in edge_data.dataset_observations
+                new_edge.dataset_observations[ds_id] = copy(obs_set)
+            end
+        end
+        if hasfield(typeof(edge_data), :from_joint_quality)
+            append!(new_edge.from_joint_quality, edge_data.from_joint_quality)
+            append!(new_edge.to_joint_quality, edge_data.to_joint_quality)
+        end
+        return new_edge
+    end
+
     if hasfield(typeof(edge_data), :overlap_length)
         new_edge = typeof(edge_data)(edge_data.overlap_length)
     else

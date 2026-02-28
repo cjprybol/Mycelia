@@ -3,6 +3,16 @@ module Mycelia
 # Enable precompilation for faster loading; set JULIA_PKG_PRECOMPILE=0 to skip
 __precompile__()
 
+# Sanitize LD_LIBRARY_PATH before importing any dependencies.
+# This must happen here (top-level, before imports) so that during precompilation
+# the dynamic linker does not pick up incompatible system libraries (libstdc++,
+# Mesa, libGL, etc.) when Julia's JLL packages call dlopen().
+# The __init__() function below re-applies this at load time to protect any
+# subprocesses spawned after the module is loaded.
+if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
+    ENV["LD_LIBRARY_PATH"] = ""
+end
+
 import AlgebraOfGraphics
 import Arrow
 import Base58
@@ -182,5 +192,28 @@ include("xam.jl")
 # PrecompileTools workload for faster startup
 # This must be included last, after all other definitions are loaded
 include("precompile_workload.jl")
+
+"""
+    _clear_ld_library_path!()
+
+Clear `LD_LIBRARY_PATH` environment variable to prevent system shared libraries
+from conflicting with Julia's bundled libraries.
+
+Emits a warning with the previous value when clearing. No-op if the variable
+is unset or already empty.
+"""
+function _clear_ld_library_path!()
+    if haskey(ENV, "LD_LIBRARY_PATH") && !isempty(ENV["LD_LIBRARY_PATH"])
+        Logging.@warn "Mycelia: Clearing LD_LIBRARY_PATH to avoid library conflicts with Julia packages. " *
+                      "Previous value: $(ENV["LD_LIBRARY_PATH"])"
+        ENV["LD_LIBRARY_PATH"] = ""
+    end
+end
+
+function __init__()
+    if Sys.islinux()
+        _clear_ld_library_path!()
+    end
+end
 
 end # module
