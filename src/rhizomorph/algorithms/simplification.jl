@@ -490,16 +490,19 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
         # Capture external edges before removal
         edge_copies = Dict{Tuple{eltype(path), eltype(path)}, Any}()
         for (src, dst) in MetaGraphsNext.edge_labels(graph)
-            in_src = src in offsets
-            in_dst = dst in offsets
+            in_src = haskey(offsets, src)
+            in_dst = haskey(offsets, dst)
             if xor(in_src, in_dst)
                 edge_copies[(src, dst)] = graph[src, dst]
             end
         end
 
         # Remove internal vertices (and their edges)
+        # Must use code_for() since rem_vertex! takes integer codes, not labels.
+        # Re-lookup each time because removal reassigns vertex codes.
         for v in path
-            MetaGraphsNext.rem_vertex!(graph, v)
+            idx = MetaGraphsNext.code_for(graph, v)
+            MetaGraphsNext.rem_vertex!(graph, idx)
         end
 
         new_label = new_sequence
