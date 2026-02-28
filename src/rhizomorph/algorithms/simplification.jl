@@ -542,12 +542,19 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
 end
 
 function _build_collapsed_vertex(first_vertex_data, sequence)
+    # TYPE-CHECK-AUDIT: factory dispatch — add branch for each new BioSequence vertex type
     if first_vertex_data isa BioSequenceVertexData
         return BioSequenceVertexData(sequence)
     elseif first_vertex_data isa QualityBioSequenceVertexData
         return QualityBioSequenceVertexData(sequence)
     elseif first_vertex_data isa LightweightBioSequenceVertexData
         return LightweightBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa UltralightBioSequenceVertexData
+        return UltralightBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa UltralightQualityBioSequenceVertexData
+        return UltralightQualityBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa LightweightQualityBioSequenceVertexData
+        return LightweightQualityBioSequenceVertexData(sequence)
     else
         error("Unsupported vertex data type for collapsing: $(typeof(first_vertex_data))")
     end
@@ -558,7 +565,7 @@ function _merge_path_evidence!(target_vertex, graph, path, offsets)
         vertex_data = graph[vertex]
         offset = offsets[vertex]
 
-        # Reduced types don't store individual entries — merge counts and metadata
+        # TYPE-CHECK-AUDIT: super-union guard — must cover all reduced vertex types
         if vertex_data isa AllReducedVertexData
             target_vertex.total_count += vertex_data.total_count
             for (ds_id, ds_count) in vertex_data.dataset_counts
@@ -607,7 +614,7 @@ function _shift_evidence_entry(entry::QualityEvidenceEntry, offset::Int)
 end
 
 function _shift_edge_data(edge_data, offset::Int; shift_from::Bool = false, shift_to::Bool = false)
-    # Reduced types don't store individual evidence entries — copy counts and metadata
+    # TYPE-CHECK-AUDIT: super-union guard — must cover all reduced edge types
     if edge_data isa AllReducedEdgeData
         new_edge = if hasfield(typeof(edge_data), :overlap_length)
             typeof(edge_data)(edge_data.overlap_length)
