@@ -3,6 +3,16 @@ module Mycelia
 # Enable precompilation for faster loading; set JULIA_PKG_PRECOMPILE=0 to skip
 __precompile__()
 
+# Sanitize LD_LIBRARY_PATH before importing any dependencies.
+# This must happen here (top-level, before imports) so that during precompilation
+# the dynamic linker does not pick up incompatible system libraries (libstdc++,
+# Mesa, libGL, etc.) when Julia's JLL packages call dlopen().
+# The __init__() function below re-applies this at load time to protect any
+# subprocesses spawned after the module is loaded.
+if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
+    ENV["LD_LIBRARY_PATH"] = ""
+end
+
 import AlgebraOfGraphics
 import Arrow
 import Base58
@@ -183,13 +193,12 @@ include("xam.jl")
 include("precompile_workload.jl")
 
 function __init__()
-    # Clear LD_LIBRARY_PATH to prevent system shared libraries from conflicting
-    # with Julia's bundled libraries. This is a common issue on Linux where
-    # visualization packages (CairoMakie, Makie, Plots, etc.) link against
-    # incompatible system versions of libstdc++, Mesa, and other libraries.
-    if Sys.islinux() && haskey(ENV, "LD_LIBRARY_PATH") && !isempty(ENV["LD_LIBRARY_PATH"])
-        Logging.@warn "Mycelia: Clearing LD_LIBRARY_PATH to avoid library conflicts with Julia packages. " *
-            "Previous value: $(ENV["LD_LIBRARY_PATH"])"
+    # Re-clear LD_LIBRARY_PATH at load time.  The top-level clearing (above the
+    # imports) handles precompilation, but when loading from a cached .ji file
+    # that top-level code does not re-execute.  This ensures subprocesses
+    # launched after `import Mycelia` (e.g. external tool wrappers) also see a
+    # clean library path.
+    if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
         ENV["LD_LIBRARY_PATH"] = ""
     end
 end
