@@ -69,6 +69,10 @@ Compute an edge weight from quality evidence when available.
 Falls back to evidence counts for non-quality edges.
 """
 function edge_quality_weight(edge_data)
+    # Reduced types don't store individual entries; fall back to count-based weight
+    if edge_data isa AllReducedEdgeData
+        return Float64(count_evidence(edge_data))
+    end
     entries = collect_evidence_entries(edge_data.evidence)
     if isempty(entries)
         return 0.0
@@ -132,7 +136,11 @@ function weighted_graph_from_rhizomorph(
         edge_data = source_graph[src, dst]
         weight_value = Float64(edge_weight(edge_data))
         weight = weight_value > 0 ? weight_value : default_weight
-        strand = first_evidence_strand(edge_data.evidence; default = Forward)
+        strand = if edge_data isa AllReducedEdgeData
+            Forward  # Reduced types don't track strand
+        else
+            first_evidence_strand(edge_data.evidence; default = Forward)
+        end
         weighted[src, dst] = StrandWeightedEdgeData(weight, strand, strand)
         if !is_directed
             weighted[dst, src] = StrandWeightedEdgeData(weight, strand, strand)

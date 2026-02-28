@@ -546,6 +546,8 @@ function _build_collapsed_vertex(first_vertex_data, sequence)
         return BioSequenceVertexData(sequence)
     elseif first_vertex_data isa QualityBioSequenceVertexData
         return QualityBioSequenceVertexData(sequence)
+    elseif first_vertex_data isa LightweightBioSequenceVertexData
+        return LightweightBioSequenceVertexData(sequence)
     else
         error("Unsupported vertex data type for collapsing: $(typeof(first_vertex_data))")
     end
@@ -556,11 +558,40 @@ function _merge_path_evidence!(target_vertex, graph, path, offsets)
         vertex_data = graph[vertex]
         offset = offsets[vertex]
 
-        for (dataset_id, dataset_evidence) in vertex_data.evidence
-            for (obs_id, evidence_set) in dataset_evidence
-                for entry in evidence_set
-                    shifted_entry = _shift_evidence_entry(entry, offset)
-                    add_evidence!(target_vertex, dataset_id, obs_id, shifted_entry)
+        # Reduced types don't store individual entries — merge counts and metadata
+        if vertex_data isa AllReducedVertexData
+            target_vertex.total_count += vertex_data.total_count
+            for (ds_id, ds_count) in vertex_data.dataset_counts
+                target_vertex.dataset_counts[ds_id] = get(
+                    target_vertex.dataset_counts, ds_id, 0) + ds_count
+            end
+            if hasfield(typeof(vertex_data), :dataset_observations)
+                for (ds_id, obs_set) in vertex_data.dataset_observations
+                    if !haskey(target_vertex.dataset_observations, ds_id)
+                        target_vertex.dataset_observations[ds_id] = Set{String}()
+                    end
+                    union!(target_vertex.dataset_observations[ds_id], obs_set)
+                end
+            end
+            if hasfield(typeof(vertex_data), :joint_quality) &&
+               hasfield(typeof(target_vertex), :joint_quality)
+                if isempty(target_vertex.joint_quality)
+                    append!(target_vertex.joint_quality, vertex_data.joint_quality)
+                elseif !isempty(vertex_data.joint_quality)
+                    for i in eachindex(vertex_data.joint_quality)
+                        target_vertex.joint_quality[i] = UInt8(clamp(
+                            Int(target_vertex.joint_quality[i]) +
+                            Int(vertex_data.joint_quality[i]), 0, 255))
+                    end
+                end
+            end
+        else
+            for (dataset_id, dataset_evidence) in vertex_data.evidence
+                for (obs_id, evidence_set) in dataset_evidence
+                    for entry in evidence_set
+                        shifted_entry = _shift_evidence_entry(entry, offset)
+                        add_evidence!(target_vertex, dataset_id, obs_id, shifted_entry)
+                    end
                 end
             end
         end
@@ -576,6 +607,29 @@ function _shift_evidence_entry(entry::QualityEvidenceEntry, offset::Int)
 end
 
 function _shift_edge_data(edge_data, offset::Int; shift_from::Bool = false, shift_to::Bool = false)
+    # Reduced types don't store individual evidence entries — copy counts and metadata
+    if edge_data isa AllReducedEdgeData
+        new_edge = if hasfield(typeof(edge_data), :overlap_length)
+            typeof(edge_data)(edge_data.overlap_length)
+        else
+            typeof(edge_data)()
+        end
+        new_edge.total_count = edge_data.total_count
+        for (ds_id, ds_count) in edge_data.dataset_counts
+            new_edge.dataset_counts[ds_id] = ds_count
+        end
+        if hasfield(typeof(edge_data), :dataset_observations)
+            for (ds_id, obs_set) in edge_data.dataset_observations
+                new_edge.dataset_observations[ds_id] = copy(obs_set)
+            end
+        end
+        if hasfield(typeof(edge_data), :from_joint_quality)
+            append!(new_edge.from_joint_quality, edge_data.from_joint_quality)
+            append!(new_edge.to_joint_quality, edge_data.to_joint_quality)
+        end
+        return new_edge
+    end
+
     if hasfield(typeof(edge_data), :overlap_length)
         new_edge = typeof(edge_data)(edge_data.overlap_length)
     else

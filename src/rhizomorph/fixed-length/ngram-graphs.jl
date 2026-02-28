@@ -24,7 +24,8 @@
 # ============================================================================
 
 """
-    build_ngram_graph(strings, n; dataset_id="dataset_01")
+    build_ngram_graph(strings, n; dataset_id="dataset_01", memory_profile=:full,
+                      lightweight=nothing)
 
 Build an n-gram de Bruijn graph from Unicode strings.
 
@@ -35,14 +36,12 @@ N-grams are fixed-length character sequences with (n-1) character overlap.
 - `strings::Vector{String}`: Input strings to analyze
 - `n::Int`: N-gram size (number of characters)
 - `dataset_id::String="dataset_01"`: Dataset identifier for evidence tracking
+- `memory_profile::Symbol=:full`: Memory profile (:full, :lightweight, :ultralight).
+  Quality profiles are not supported for n-gram graphs (text has no quality scores).
+- `lightweight::Union{Nothing,Bool}=nothing`: Deprecated. Use `memory_profile` instead.
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: N-gram de Bruijn graph with evidence
-
-# Key Concepts
-- **N-gram**: Fixed-length substring of n characters
-- **Edges**: Connect n-grams with (n-1) character overlap
-- **Evidence**: Tracks which input strings contain each n-gram and where
 
 # Examples
 ```julia
@@ -50,38 +49,11 @@ N-grams are fixed-length character sequences with (n-1) character overlap.
 texts = ["hello world", "world peace", "hello there"]
 graph = build_ngram_graph(texts, 3)
 
-# Get statistics
-stats = get_ngram_statistics(graph)
-println("Found \$(stats[:num_vertices]) unique 3-grams")
+# Ultralight mode for maximum scalability
+graph = build_ngram_graph(texts, 3; memory_profile=:ultralight)
 
-# Find high-frequency patterns
-common_ngrams = find_high_coverage_ngrams(graph, 2)
-```
-
-# Use Cases
-
-**Natural Language Processing:**
-```julia
-# Analyze character patterns in words
-words = ["programming", "algorithm", "logarithm"]
-graph = build_ngram_graph(words, 3)
-# Finds common patterns like "gra", "rit", "thm"
-```
-
-**Code Analysis:**
-```julia
-# Find common code patterns
-code_snippets = ["function foo()", "function bar()", "function baz()"]
-graph = build_ngram_graph(code_snippets, 8)
-# Identifies "function" as common pattern
-```
-
-**Pattern Detection:**
-```julia
-# Detect repeated sequences
-sequences = ["ABCABC", "BCABCA", "CABCAB"]
-graph = build_ngram_graph(sequences, 3)
-# ABC appears multiple times with high coverage
+# Backward compatible
+graph = build_ngram_graph(texts, 3; lightweight=true)
 ```
 
 # See Also
@@ -92,9 +64,29 @@ graph = build_ngram_graph(sequences, 3)
 function build_ngram_graph(
         strings::Vector{String},
         n::Int;
-        dataset_id::String = "dataset_01"
+        dataset_id::String = "dataset_01",
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
-    return build_ngram_graph_singlestrand(strings, n; dataset_id = dataset_id)
+    # Backward compatibility
+    if !isnothing(lightweight)
+        memory_profile = lightweight ? :lightweight : :full
+    end
+
+    # Quality profiles don't apply to text n-grams
+    if memory_profile in (:ultralight_quality, :lightweight_quality)
+        error("Quality memory profiles are not supported for n-gram graphs (text has no quality scores)")
+    end
+
+    if memory_profile == :ultralight
+        return build_ngram_graph_singlestrand_ultralight(strings, n; dataset_id = dataset_id)
+    elseif memory_profile == :lightweight
+        return build_ngram_graph_singlestrand_lightweight(strings, n; dataset_id = dataset_id)
+    elseif memory_profile == :full
+        return build_ngram_graph_singlestrand(strings, n; dataset_id = dataset_id)
+    else
+        error("Invalid memory_profile: :$memory_profile. Must be :full, :lightweight, or :ultralight")
+    end
 end
 
 # Note: The core implementation (build_ngram_graph_singlestrand,
@@ -133,7 +125,9 @@ graph = build_ngram_graph_from_file("source.jl", 10)
 function build_ngram_graph_from_file(
         filepath::String,
         n::Int;
-        dataset_id::Union{String, Nothing} = nothing
+        dataset_id::Union{String, Nothing} = nothing,
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
     if !isfile(filepath)
         error("File not found: $filepath")
@@ -154,7 +148,8 @@ function build_ngram_graph_from_file(
         error("No non-empty lines found in file: $filepath")
     end
 
-    return build_ngram_graph(strings, n; dataset_id = dataset_id)
+    return build_ngram_graph(strings, n; dataset_id = dataset_id,
+        memory_profile = memory_profile, lightweight = lightweight)
 end
 
 """
@@ -189,14 +184,21 @@ end
 """
 function build_ngram_graph_from_files(
         filepaths::Vector{String},
-        n::Int
+        n::Int;
+        memory_profile::Symbol = :full,
+        lightweight::Union{Nothing, Bool} = nothing
 )
     if isempty(filepaths)
         error("No files provided")
     end
 
+    # Backward compatibility
+    if !isnothing(lightweight)
+        memory_profile = lightweight ? :lightweight : :full
+    end
+
     # Build graph from first file
-    graph = build_ngram_graph_from_file(filepaths[1], n)
+    graph = build_ngram_graph_from_file(filepaths[1], n; memory_profile = memory_profile)
 
     # Add observations from remaining files
     for filepath in filepaths[2:end]
@@ -206,8 +208,16 @@ function build_ngram_graph_from_files(
         strings = readlines(filepath)
         strings = filter(!isempty, strings)
 
-        # Add observations
-        add_observations_to_ngram_graph!(graph, strings, n; dataset_id = dataset_id)
+        # Add observations using appropriate function for graph type
+        if memory_profile == :lightweight
+            add_observations_to_ngram_graph_lightweight!(
+                graph, strings, n; dataset_id = dataset_id)
+        elseif memory_profile == :ultralight
+            add_observations_to_ngram_graph_ultralight!(
+                graph, strings, n; dataset_id = dataset_id)
+        else
+            add_observations_to_ngram_graph!(graph, strings, n; dataset_id = dataset_id)
+        end
     end
 
     return graph
@@ -262,7 +272,10 @@ function get_ngram_statistics(graph::MetaGraphsNext.MetaGraph)
 
     for ngram in MetaGraphsNext.labels(graph)
         vertex_data = graph[ngram]
-        union!(all_dataset_ids, keys(vertex_data.evidence))
+        # Use get_all_dataset_ids for compatibility with both full and lightweight types
+        for ds_id in get_all_dataset_ids(vertex_data)
+            push!(all_dataset_ids, ds_id)
+        end
         obs_count = count_total_observations(vertex_data)
         total_observations += obs_count
 
