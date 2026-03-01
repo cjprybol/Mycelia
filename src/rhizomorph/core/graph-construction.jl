@@ -920,6 +920,13 @@ function convert_to_doublestrand(singlestrand_graph)
         error("Cannot create doublestrand graph for amino acid sequences (no reverse complement)")
     end
 
+    # Check if this is a reduced (non-full) graph
+    is_reduced = !hasfield(VertexDataType, :evidence)
+
+    if is_reduced
+        return _convert_to_doublestrand_reduced(singlestrand_graph)
+    end
+
     # Determine edge data type
     EdgeDataType = if !isempty(MetaGraphsNext.edge_labels(singlestrand_graph))
         src, dst = first(MetaGraphsNext.edge_labels(singlestrand_graph))
@@ -1066,6 +1073,13 @@ function convert_to_canonical(singlestrand_graph)
     # Amino acids don't have reverse complement
     if KmerType <: Kmers.AAKmer
         error("Cannot create doublestrand graph for amino acid sequences (no reverse complement)")
+    end
+
+    # Check if this is a reduced (non-full) graph
+    is_reduced = !hasfield(VertexDataType, :evidence)
+
+    if is_reduced
+        return _convert_to_canonical_reduced(singlestrand_graph)
     end
 
     # Determine edge data type
@@ -2845,4 +2859,369 @@ function _build_fastq_graph_olc_core(
     end
 
     return graph
+end
+
+# ============================================================================
+# Reduced Memory Profile Conversion Helpers
+# ============================================================================
+
+"""
+    _detect_reduced_memory_profile(vertex_data)
+
+Detect memory profile symbol from a reduced vertex data type.
+Returns a Symbol for dispatch to `_create_reduced_vertex`, or `nothing` for full types.
+"""
+function _detect_reduced_memory_profile(vertex_data)
+    if vertex_data isa LightweightKmerVertexData
+        return :lightweight
+    elseif vertex_data isa UltralightKmerVertexData
+        return :ultralight
+    elseif vertex_data isa UltralightQualityKmerVertexData
+        return :ultralight_quality
+    elseif vertex_data isa LightweightQualityKmerVertexData
+        return :lightweight_quality
+    else
+        return nothing
+    end
+end
+
+"""
+    _detect_reduced_memory_profile_edge(edge_data)
+
+Detect memory profile symbol from a reduced edge data type.
+"""
+function _detect_reduced_memory_profile_edge(edge_data)
+    if edge_data isa LightweightEdgeData
+        return :lightweight
+    elseif edge_data isa UltralightEdgeData
+        return :ultralight
+    elseif edge_data isa UltralightQualityEdgeData
+        return :ultralight_quality
+    elseif edge_data isa LightweightQualityEdgeData
+        return :lightweight_quality
+    else
+        return nothing
+    end
+end
+
+"""
+    _merge_reduced_vertex_into!(dest, src; reverse_quality=false)
+
+Merge counts/observations/quality from `src` into `dest`.
+When `reverse_quality=true`, reverse quality vectors before merging (for RC strand).
+"""
+function _merge_reduced_vertex_into!(dest, src; reverse_quality::Bool = false)
+    dest.total_count += src.total_count
+    for (ds_id, ds_count) in src.dataset_counts
+        dest.dataset_counts[ds_id] = get(dest.dataset_counts, ds_id, 0) + ds_count
+    end
+    if hasfield(typeof(dest), :dataset_observations)
+        for (ds_id, obs_set) in src.dataset_observations
+            if !haskey(dest.dataset_observations, ds_id)
+                dest.dataset_observations[ds_id] = Set{String}()
+            end
+            union!(dest.dataset_observations[ds_id], obs_set)
+        end
+    end
+    if hasfield(typeof(dest), :joint_quality)
+        src_quality = reverse_quality ? reverse(src.joint_quality) : src.joint_quality
+        _merge_quality_vector!(dest.joint_quality, src_quality)
+        if hasfield(typeof(dest), :dataset_joint_quality)
+            for (ds_id, ds_qual) in src.dataset_joint_quality
+                src_ds_qual = reverse_quality ? reverse(ds_qual) : ds_qual
+                existing = get(dest.dataset_joint_quality, ds_id, nothing)
+                if isnothing(existing)
+                    dest.dataset_joint_quality[ds_id] = collect(src_ds_qual)
+                else
+                    _merge_quality_vector!(existing, collect(src_ds_qual))
+                end
+            end
+        end
+    end
+end
+
+"""
+    _merge_reduced_edge_into!(dest, src; swap_quality=false)
+
+Merge counts/observations/quality from `src` edge into `dest` edge.
+When `swap_quality=true`, swap and reverse from/to quality vectors (for RC edges).
+"""
+function _merge_reduced_edge_into!(dest, src; swap_quality::Bool = false)
+    dest.total_count += src.total_count
+    for (ds_id, ds_count) in src.dataset_counts
+        dest.dataset_counts[ds_id] = get(dest.dataset_counts, ds_id, 0) + ds_count
+    end
+    if hasfield(typeof(dest), :dataset_observations)
+        for (ds_id, obs_set) in src.dataset_observations
+            if !haskey(dest.dataset_observations, ds_id)
+                dest.dataset_observations[ds_id] = Set{String}()
+            end
+            union!(dest.dataset_observations[ds_id], obs_set)
+        end
+    end
+    if hasfield(typeof(dest), :from_joint_quality)
+        if swap_quality
+            _merge_quality_vector!(dest.from_joint_quality, reverse(src.to_joint_quality))
+            _merge_quality_vector!(dest.to_joint_quality, reverse(src.from_joint_quality))
+        else
+            _merge_quality_vector!(dest.from_joint_quality, src.from_joint_quality)
+            _merge_quality_vector!(dest.to_joint_quality, src.to_joint_quality)
+        end
+    end
+end
+
+"""
+    _copy_reduced_vertex_data(src, new_kmer; reverse_quality=false)
+
+Create a new reduced vertex with the same type as `src` but with `new_kmer`,
+copying all count/observation/quality data. When `reverse_quality=true`,
+reverse quality vectors (for RC conversion).
+"""
+function _copy_reduced_vertex_data(src, new_kmer; reverse_quality::Bool = false)
+    profile = _detect_reduced_memory_profile(src)
+    dest = _create_reduced_vertex(new_kmer, profile)
+    dest.total_count = src.total_count
+    merge!(dest.dataset_counts, src.dataset_counts)
+    if hasfield(typeof(dest), :dataset_observations)
+        for (ds_id, obs_set) in src.dataset_observations
+            dest.dataset_observations[ds_id] = copy(obs_set)
+        end
+    end
+    if hasfield(typeof(dest), :joint_quality)
+        q = reverse_quality ? reverse(src.joint_quality) : copy(src.joint_quality)
+        append!(dest.joint_quality, q)
+        if hasfield(typeof(dest), :dataset_joint_quality)
+            for (ds_id, ds_qual) in src.dataset_joint_quality
+                dest.dataset_joint_quality[ds_id] = reverse_quality ?
+                                                    reverse(ds_qual) : copy(ds_qual)
+            end
+        end
+    end
+    return dest
+end
+
+"""
+    _copy_reduced_edge_data(src; swap_quality=false)
+
+Copy edge data with optional quality swap (for RC edges where src/dst flip).
+"""
+function _copy_reduced_edge_data(src; swap_quality::Bool = false)
+    profile = _detect_reduced_memory_profile_edge(src)
+    dest = _create_reduced_edge(src.overlap_length, profile)
+    dest.total_count = src.total_count
+    merge!(dest.dataset_counts, src.dataset_counts)
+    if hasfield(typeof(dest), :dataset_observations)
+        for (ds_id, obs_set) in src.dataset_observations
+            dest.dataset_observations[ds_id] = copy(obs_set)
+        end
+    end
+    if hasfield(typeof(dest), :from_joint_quality)
+        if swap_quality
+            append!(dest.from_joint_quality, reverse(src.to_joint_quality))
+            append!(dest.to_joint_quality, reverse(src.from_joint_quality))
+        else
+            append!(dest.from_joint_quality, copy(src.from_joint_quality))
+            append!(dest.to_joint_quality, copy(src.to_joint_quality))
+        end
+    end
+    return dest
+end
+
+# ============================================================================
+# Reduced Memory Profile Doublestrand/Canonical Conversion
+# ============================================================================
+
+"""
+    _convert_to_doublestrand_reduced(singlestrand_graph)
+
+Convert a singlestrand reduced-type graph to doublestrand representation.
+Purely topological: creates RC vertices with copied counts, no evidence iteration.
+"""
+function _convert_to_doublestrand_reduced(singlestrand_graph)
+    first_label = first(MetaGraphsNext.labels(singlestrand_graph))
+    first_vertex = singlestrand_graph[first_label]
+    KmerType = typeof(first_label)
+    VertexDataType = typeof(first_vertex)
+    profile = _detect_reduced_memory_profile(first_vertex)
+
+    # Determine edge data type
+    EdgeDataType = if !isempty(MetaGraphsNext.edge_labels(singlestrand_graph))
+        src, dst = first(MetaGraphsNext.edge_labels(singlestrand_graph))
+        typeof(singlestrand_graph[src, dst])
+    else
+        if profile == :ultralight
+            UltralightEdgeData
+        elseif profile == :lightweight
+            LightweightEdgeData
+        elseif profile == :ultralight_quality
+            UltralightQualityEdgeData
+        elseif profile == :lightweight_quality
+            LightweightQualityEdgeData
+        end
+    end
+
+    doublestrand_graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = KmerType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
+    )
+
+    # Copy all forward vertices (deep copy to avoid aliasing mutable structs)
+    for kmer in MetaGraphsNext.labels(singlestrand_graph)
+        doublestrand_graph[kmer] = _copy_reduced_vertex_data(
+            singlestrand_graph[kmer], kmer
+        )
+    end
+
+    # Add reverse complement vertices
+    for kmer in MetaGraphsNext.labels(singlestrand_graph)
+        rc_kmer = BioSequences.reverse_complement(kmer)
+
+        # Skip palindromes
+        if rc_kmer == kmer
+            continue
+        end
+
+        vertex_data = singlestrand_graph[kmer]
+
+        if haskey(doublestrand_graph, rc_kmer)
+            # RC already exists (was observed forward) — merge data
+            _merge_reduced_vertex_into!(
+                doublestrand_graph[rc_kmer], vertex_data;
+                reverse_quality = true
+            )
+        else
+            # Create new RC vertex with copied data
+            rc_vertex = _copy_reduced_vertex_data(
+                vertex_data, rc_kmer;
+                reverse_quality = true
+            )
+            doublestrand_graph[rc_kmer] = rc_vertex
+        end
+    end
+
+    # Copy all forward edges (deep copy to avoid aliasing mutable structs)
+    for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
+        doublestrand_graph[src_kmer, dst_kmer] = _copy_reduced_edge_data(
+            singlestrand_graph[src_kmer, dst_kmer]
+        )
+    end
+
+    # Add reverse complement edges (reversed direction: RC(dst) → RC(src))
+    for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
+        rc_src = BioSequences.reverse_complement(dst_kmer)
+        rc_dst = BioSequences.reverse_complement(src_kmer)
+
+        edge_data = singlestrand_graph[src_kmer, dst_kmer]
+
+        if haskey(doublestrand_graph, rc_src, rc_dst)
+            _merge_reduced_edge_into!(
+                doublestrand_graph[rc_src, rc_dst], edge_data;
+                swap_quality = true
+            )
+        else
+            rc_edge = _copy_reduced_edge_data(edge_data; swap_quality = true)
+            doublestrand_graph[rc_src, rc_dst] = rc_edge
+        end
+    end
+
+    return doublestrand_graph
+end
+
+"""
+    _convert_to_canonical_reduced(singlestrand_graph)
+
+Convert a singlestrand reduced-type graph to canonical representation.
+Merges forward and RC k-mers into canonical forms with combined counts.
+Creates an UNDIRECTED graph.
+"""
+function _convert_to_canonical_reduced(singlestrand_graph)
+    first_label = first(MetaGraphsNext.labels(singlestrand_graph))
+    first_vertex = singlestrand_graph[first_label]
+    KmerType = typeof(first_label)
+    VertexDataType = typeof(first_vertex)
+    profile = _detect_reduced_memory_profile(first_vertex)
+
+    # Determine edge data type
+    EdgeDataType = if !isempty(MetaGraphsNext.edge_labels(singlestrand_graph))
+        src, dst = first(MetaGraphsNext.edge_labels(singlestrand_graph))
+        typeof(singlestrand_graph[src, dst])
+    else
+        if profile == :ultralight
+            UltralightEdgeData
+        elseif profile == :lightweight
+            LightweightEdgeData
+        elseif profile == :ultralight_quality
+            UltralightQualityEdgeData
+        elseif profile == :lightweight_quality
+            LightweightQualityEdgeData
+        end
+    end
+
+    # Create undirected canonical graph
+    canonical_graph = MetaGraphsNext.MetaGraph(
+        Graphs.Graph();
+        label_type = KmerType,
+        vertex_data_type = VertexDataType,
+        edge_data_type = EdgeDataType,
+        weight_function = compute_edge_weight
+    )
+
+    # Track processed kmers
+    processed = Set{KmerType}()
+
+    # Process all vertices
+    for kmer in MetaGraphsNext.labels(singlestrand_graph)
+        if kmer in processed
+            continue
+        end
+
+        canon_kmer = BioSequences.canonical(kmer)
+        rc_kmer = BioSequences.reverse_complement(kmer)
+
+        push!(processed, kmer)
+        push!(processed, rc_kmer)
+
+        # Create canonical vertex if it doesn't exist
+        if !haskey(canonical_graph, canon_kmer)
+            canonical_graph[canon_kmer] = _create_reduced_vertex(canon_kmer, profile)
+        end
+
+        # Merge forward data (reverse quality if kmer != canon_kmer)
+        fwd_data = singlestrand_graph[kmer]
+        _merge_reduced_vertex_into!(
+            canonical_graph[canon_kmer], fwd_data;
+            reverse_quality = (kmer != canon_kmer)
+        )
+
+        # Merge RC data if it exists in source graph
+        if rc_kmer != kmer && haskey(singlestrand_graph, rc_kmer)
+            rc_data = singlestrand_graph[rc_kmer]
+            _merge_reduced_vertex_into!(
+                canonical_graph[canon_kmer], rc_data;
+                reverse_quality = (rc_kmer != canon_kmer)
+            )
+        end
+    end
+
+    # Process edges
+    for (src_kmer, dst_kmer) in MetaGraphsNext.edge_labels(singlestrand_graph)
+        canon_src = BioSequences.canonical(src_kmer)
+        canon_dst = BioSequences.canonical(dst_kmer)
+
+        edge_data = singlestrand_graph[src_kmer, dst_kmer]
+
+        if !haskey(canonical_graph, canon_src, canon_dst)
+            canon_edge = _copy_reduced_edge_data(edge_data)
+            canonical_graph[canon_src, canon_dst] = canon_edge
+        else
+            _merge_reduced_edge_into!(
+                canonical_graph[canon_src, canon_dst], edge_data
+            )
+        end
+    end
+
+    return canonical_graph
 end

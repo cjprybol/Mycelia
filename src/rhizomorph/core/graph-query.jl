@@ -497,6 +497,48 @@ end
 # ============================================================================
 
 """
+    is_self_rc_closed(graph)
+
+Check whether a directed graph's edge set is closed under reverse complement.
+For every edge `src→dst`, tests whether the RC edge `RC(dst)→RC(src)` also
+exists in the graph.
+
+This property indicates a self-complementary sequence where the forward
+and reverse complement traversals cover the same edge set. When true,
+doublestrand conversion produces no new edges (only merges counts into
+existing ones).
+
+Returns `false` for undirected graphs or graphs with no edges.
+
+# Examples
+```julia
+# Self-complementary: ATGCAT (ATG↔CAT, TGC↔GCA are RC pairs)
+g = Mycelia.Rhizomorph.build_kmer_graph(records, 3; mode=:singlestrand)
+Mycelia.Rhizomorph.is_self_rc_closed(g)  # true
+
+# Not self-complementary: ATGC (forward only, RC kmers not in graph)
+g2 = Mycelia.Rhizomorph.build_kmer_graph(records2, 3; mode=:singlestrand)
+Mycelia.Rhizomorph.is_self_rc_closed(g2)  # false
+```
+"""
+function is_self_rc_closed(graph)
+    # Only meaningful for directed graphs with edges
+    if !(graph.graph isa Graphs.DiGraph) || Graphs.ne(graph.graph) == 0
+        return false
+    end
+
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        rc_src = BioSequences.reverse_complement(dst)
+        rc_dst = BioSequences.reverse_complement(src)
+        if !haskey(graph, rc_src, rc_dst)
+            return false
+        end
+    end
+
+    return true
+end
+
+"""
     get_all_vertices(graph)
 
 Get all vertex labels (k-mers) in the graph.

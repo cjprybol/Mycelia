@@ -101,11 +101,6 @@ function build_kmer_graph(
         end
     end
 
-    # Reduced profiles only support :singlestrand
-    if memory_profile != :full && mode != :singlestrand
-        error("Memory profile :$memory_profile currently only supports :singlestrand mode, got :$mode")
-    end
-
     # Quality profiles require FASTQ input
     if memory_profile in (:ultralight_quality, :lightweight_quality)
         if isempty(records)
@@ -117,34 +112,49 @@ function build_kmer_graph(
     end
 
     # Dispatch based on memory_profile
-    if memory_profile == :ultralight
-        return build_kmer_graph_singlestrand_ultralight(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
-    elseif memory_profile == :lightweight
-        return build_kmer_graph_singlestrand_lightweight(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
-    elseif memory_profile == :ultralight_quality
-        return build_kmer_graph_singlestrand_ultralight_quality(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
-    elseif memory_profile == :lightweight_quality
-        return build_kmer_graph_singlestrand_lightweight_quality(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
+    if memory_profile != :full
+        # All reduced profiles: build singlestrand, then convert if needed
+        singlestrand_graph = if memory_profile == :ultralight
+            build_kmer_graph_singlestrand_ultralight(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        elseif memory_profile == :lightweight
+            build_kmer_graph_singlestrand_lightweight(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        elseif memory_profile == :ultralight_quality
+            build_kmer_graph_singlestrand_ultralight_quality(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        elseif memory_profile == :lightweight_quality
+            build_kmer_graph_singlestrand_lightweight_quality(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        else
+            error("Invalid memory_profile: :$memory_profile")
+        end
+
+        if mode == :singlestrand
+            return singlestrand_graph
+        elseif mode == :doublestrand
+            return convert_to_doublestrand(singlestrand_graph)
+        elseif mode == :canonical
+            return convert_to_canonical(singlestrand_graph)
+        else
+            error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
+        end
     elseif memory_profile == :full
         if mode == :singlestrand
             return build_kmer_graph_singlestrand(
@@ -306,10 +316,6 @@ function build_kmer_graph_from_files(
         memory_profile = lightweight ? :lightweight : :full
     end
 
-    if memory_profile != :full && mode != :singlestrand
-        error("Memory profile :$memory_profile currently only supports :singlestrand mode, got :$mode")
-    end
-
     if !(mode in (:singlestrand, :doublestrand, :canonical))
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
     end
@@ -377,7 +383,7 @@ function build_kmer_graph_from_files(
     end
 
     # Determine if canonical/doublestrand conversion is valid for the k-mer type
-    if memory_profile == :full && !isempty(MetaGraphsNext.labels(graph))
+    if !isempty(MetaGraphsNext.labels(graph))
         first_label = first(MetaGraphsNext.labels(graph))
         if mode != :singlestrand &&
            !(first_label isa Kmers.DNAKmer || first_label isa Kmers.RNAKmer)

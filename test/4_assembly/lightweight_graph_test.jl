@@ -249,15 +249,20 @@ Test.@testset "Lightweight Graph Mode" begin
         Test.@test stats[:k] == 3
     end
 
-    Test.@testset "Lightweight mode errors on non-singlestrand" begin
+    Test.@testset "Lightweight mode supports all strand modes" begin
         records = [
             Mycelia.FASTX.FASTA.Record("seq1", "ATGATGATG")
         ]
 
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph(
+        ds_graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 3; lightweight = true, mode = :doublestrand)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph(
+        Test.@test Mycelia.Graphs.nv(ds_graph.graph) > 0
+        Test.@test ds_graph.graph isa Mycelia.Graphs.DiGraph
+
+        cn_graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 3; lightweight = true, mode = :canonical)
+        Test.@test Mycelia.Graphs.nv(cn_graph.graph) > 0
+        Test.@test cn_graph.graph isa Mycelia.Graphs.SimpleGraph
     end
 
     Test.@testset "Lightweight K-mer Graph - from file" begin
