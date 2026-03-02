@@ -3,7 +3,7 @@ name: Documentation
 on:
   push:
     branches:
-      - master # update to match your development branch (master, main, dev, trunk, ...)
+      - master
     tags: '*'
   pull_request:
 
@@ -15,6 +15,9 @@ jobs:
       pull-requests: read
       statuses: write
     runs-on: ubuntu-latest
+    env:
+      GKS_WSTYPE: "100"
+      MYCELIA_SHOW_PLOTS: "false"
     steps:
       - uses: actions/checkout@v4
       - uses: julia-actions/setup-julia@v2
@@ -22,11 +25,8 @@ jobs:
           version: 'lts'
       - uses: julia-actions/cache@v2
       - name: Install dependencies
-        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate(); Pkg.build();'
+        run: julia --color=yes --project=docs/ -e 'import Pkg; Pkg.develop(Pkg.PackageSpec(path=pwd())); Pkg.instantiate();'
       - name: Build and deploy
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # If authenticating with GitHub Actions token
-          # DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }} # If authenticating with SSH deploy key
-        run: |
-          julia --project=docs/ -e 'import Pkg; Pkg.instantiate(); Pkg.build()'
-          cd docs && julia --project=. make.jl
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: julia --color=yes --project=docs/ -e 'import Pkg; Pkg.build(); include("docs/make.jl")'

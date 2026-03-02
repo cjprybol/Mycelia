@@ -59,6 +59,7 @@ atexit(cleanup_test_artifacts)
 const EXTERNAL_DEPENDENCY_FILES = Set([
     # Dir 1: Data acquisition (NCBI downloads, SRA tools)
     "ncbi_download.jl",
+    "simulation_fasta.jl",  # NCBI genome/datasets downloads
     "simulation_fastq.jl",  # PacBio simulation, NCBI downloads
     "un_parallel_corpus.jl",
     # Dir 2: Preprocessing (SRA tools)

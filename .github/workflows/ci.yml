@@ -9,6 +9,9 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -18,6 +21,10 @@ jobs:
       matrix:
         julia-version: ['lts']
         # julia-version: ['1', 'lts']
+    env:
+      GKS_WSTYPE: "100"
+      MYCELIA_RUN_EXTERNAL: "false"
+      MYCELIA_SHOW_PLOTS: "false"
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -28,22 +35,20 @@ jobs:
           version: ${{ matrix.julia-version }}
 
       - name: Cache Julia packages
-        id: cache-artifacts
-        uses: actions/cache@v3
-        with:
-          path: ~/.julia/artifacts
-          key: ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-${{ hashFiles('**/Project.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-julia-${{ matrix.julia-version }}-artifacts-
+        uses: julia-actions/cache@v2
 
       - name: Install dependencies
-        if: steps.cache-artifacts.outputs.cache-hit != 'true'
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate();'
+        run: julia --color=yes --project=. -e 'import Pkg; Pkg.instantiate(); Pkg.build();'
 
       - name: Run tests with coverage
-        run: julia --project=. -e 'using Pkg; Pkg.instantiate(); Pkg.build(); Pkg.test(coverage=true);'
+        run: julia --color=yes --project=. -e 'import Pkg; Pkg.test(coverage=true);'
 
-      - name: Submit coverage
-        run: julia --project=. -e 'using Pkg; Pkg.add("Coverage"); using Coverage; Codecov.submit(process_folder())'
-        env:
-          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Process coverage
+        uses: julia-actions/julia-processcoverage@v1
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v5
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
