@@ -193,8 +193,10 @@ try
         output_file = output_file
     )
 
-    # Display result
-    CairoMakie.display(fig)
+    # Display result (suppressed by default during tests)
+    if lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
+        CairoMakie.display(fig)
+    end
 finally
     isfile(output_file) && rm(output_file; force = true)
     rm(example_dir; recursive = true, force = true)

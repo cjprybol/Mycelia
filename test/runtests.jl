@@ -9,6 +9,7 @@
 #   Full tests (HPC):           MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
 #   Full tests (alt):           MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
 #   Full tests (portable):      LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   Show plots interactively:   MYCELIA_SHOW_PLOTS=true julia --project=. -e "import Pkg; Pkg.test()"
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
 #
@@ -23,7 +24,14 @@
 const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
                              lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+const MYCELIA_SHOW_PLOTS = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
+
+# Suppress plot display during tests by default.
+# Set MYCELIA_SHOW_PLOTS=true to enable interactive plot display.
+if !MYCELIA_SHOW_PLOTS
+    ENV["GKS_WSTYPE"] = "100"  # GR backend: render to memory (no windows)
+end
 
 const TEST_ARTIFACT_DIRS = [
     joinpath(PROJECT_ROOT, "busco_downloads"),

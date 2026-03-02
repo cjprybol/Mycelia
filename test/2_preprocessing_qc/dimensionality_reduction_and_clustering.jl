@@ -28,9 +28,9 @@ import Plots
 import Clustering
 import Distances
 
-## Suppress verbose output during CI/automated testing
-const SUPPRESS_VERBOSE_OUTPUT = get(ENV, "CI", "") == "true" ||
-                                get(ENV, "GITHUB_ACTIONS", "") == "true"
+## Suppress verbose output during testing by default.
+## Set MYCELIA_SHOW_PLOTS=true to see plots interactively.
+const SUPPRESS_VERBOSE_OUTPUT = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) != "true"
 
 ## Conditional printing function
 function test_println(args...)
