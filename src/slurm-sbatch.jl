@@ -24,8 +24,24 @@ function lawrencium_sbatch(;
         executor = nothing
 )
     resolved_account = account === nothing ? get(ENV, "LRC_ACCOUNT", LRC_ACCOUNT) : account
-    resolved_mail_user = mail_user === nothing ? get(ENV, "LRC_MAIL_USER", LRC_MAIL_USER) :
-                         mail_user
+    resolved_mail_user = if mail_user !== nothing
+        mail_user
+    elseif haskey(ENV, "SLURM_MAIL_USER")
+        ENV["SLURM_MAIL_USER"]
+    else
+        # Fall back to git user.email if available
+        git_email = try
+            strip(read(`git config user.email`, String))
+        catch
+            ;
+            ""
+        end
+        if !isempty(git_email)
+            git_email
+        else
+            error("mail_user is required. Pass mail_user=..., set ENV[\"SLURM_MAIL_USER\"] in ~/.hpc_env, or configure git user.email.")
+        end
+    end
 
     job = JobSpec(
         job_name = job_name,
@@ -90,8 +106,23 @@ function scg_sbatch(;
         executor = nothing
 )
     resolved_account = account === nothing ? get(ENV, "SCG_ACCOUNT", SCG_ACCOUNT) : account
-    resolved_mail_user = mail_user === nothing ? get(ENV, "SCG_MAIL_USER", SCG_MAIL_USER) :
-                         mail_user
+    resolved_mail_user = if mail_user !== nothing
+        mail_user
+    elseif haskey(ENV, "SLURM_MAIL_USER")
+        ENV["SLURM_MAIL_USER"]
+    else
+        # Fall back to git user.email if available
+        git_email = try
+            strip(read(`git config user.email`, String))
+        catch
+            ""
+        end
+        if !isempty(git_email)
+            git_email
+        else
+            error("mail_user is required. Pass mail_user=..., set ENV[\"SLURM_MAIL_USER\"] in ~/.hpc_env, or configure git user.email.")
+        end
+    end
 
     job = JobSpec(
         job_name = job_name,

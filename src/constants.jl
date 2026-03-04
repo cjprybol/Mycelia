@@ -43,12 +43,10 @@ const NERSC_CPU=240
 
 # SCG (Stanford) defaults — nih_s10 partition
 const SCG_ACCOUNT = "mpsnyder"
-const SCG_MAIL_USER = "cameron.prybol@gmail.com"
 const SCG_THREADS = 12
 
 # Lawrencium (LBNL) defaults
 const LRC_ACCOUNT = "pc_mfnanofabio"
-const LRC_MAIL_USER = "cameron.prybol@gmail.com"
 const LRC_THREADS = 16
 
 # Default thread count for non-HPC environments or when no HPC allocation detected
