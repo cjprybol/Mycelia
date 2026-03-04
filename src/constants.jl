@@ -41,6 +41,16 @@ const NERSC_MEM=460
 # const NERSC_CPU=240
 const NERSC_CPU=240
 
+# SCG (Stanford) defaults — nih_s10 partition
+const SCG_ACCOUNT = "mpsnyder"
+const SCG_MAIL_USER = "cameron.prybol@gmail.com"
+const SCG_THREADS = 12
+
+# Lawrencium (LBNL) defaults
+const LRC_ACCOUNT = "pc_mfnanofabio"
+const LRC_MAIL_USER = "cameron.prybol@gmail.com"
+const LRC_THREADS = 16
+
 # Default thread count for non-HPC environments or when no HPC allocation detected
 # Used as fallback by get_default_threads() function
 const DEFAULT_THREADS = 4

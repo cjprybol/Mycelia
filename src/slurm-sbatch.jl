@@ -8,21 +8,25 @@ This function preserves the historical public API and now routes through
 """
 function lawrencium_sbatch(;
         job_name::String,
-        mail_user::String,
+        mail_user::Union{Nothing, String} = nothing,
         mail_type::String = "ALL",
         logdir::String = mkpath(joinpath(homedir(), "workspace/slurmlogs")),
-        partition::String = "lr4",
+        partition::String = "lr6",
         qos::String = "lr_normal",
-        account::String,
+        account::Union{Nothing, String} = nothing,
         nodes::Int = 1,
         ntasks::Int = 1,
         time::String = "3-00:00:00",
-        cpus_per_task::Int = 16,
+        cpus_per_task::Int = LRC_THREADS,
         mem_gb::Int = 64,
         cmd::String,
         dry_run::Bool = false,
         executor = nothing
 )
+    resolved_account = account === nothing ? get(ENV, "LRC_ACCOUNT", LRC_ACCOUNT) : account
+    resolved_mail_user = mail_user === nothing ? get(ENV, "LRC_MAIL_USER", LRC_MAIL_USER) :
+                         mail_user
+
     job = JobSpec(
         job_name = job_name,
         cmd = cmd,
@@ -30,14 +34,14 @@ function lawrencium_sbatch(;
         time_limit = time,
         partition = partition,
         qos = qos,
-        account = account,
+        account = resolved_account,
         nodes = nodes,
         ntasks = ntasks,
         cpus_per_task = cpus_per_task,
         mem_gb = mem_gb,
         output_path = joinpath(logdir, "%j.%x.out"),
         error_path = joinpath(logdir, "%j.%x.err"),
-        mail_user = mail_user,
+        mail_user = resolved_mail_user,
         mail_type = mail_type
     )
 
@@ -54,7 +58,7 @@ function lawrencium_sbatch(;
     sleep(5)
 
     if !result.ok
-        @error "Lawrencium submission failed" errors = result.errors warnings = result.warnings
+        @error "Lawrencium submission failed" errors=result.errors warnings=result.warnings
         return false
     end
 
@@ -71,34 +75,38 @@ This function preserves the historical public API and now routes through
 """
 function scg_sbatch(;
         job_name::String,
-        mail_user::String,
+        mail_user::Union{Nothing, String} = nothing,
         mail_type::String = "ALL",
         logdir::String = mkpath(joinpath(homedir(), "workspace/slurmlogs")),
         partition::String = "nih_s10",
-        account::String,
+        account::Union{Nothing, String} = nothing,
         nodes::Int = 1,
         ntasks::Int = 1,
         time::String = "7-00:00:00",
-        cpus_per_task::Int = 12,
+        cpus_per_task::Int = SCG_THREADS,
         mem_gb::Int = 96,
         cmd::String,
         dry_run::Bool = false,
         executor = nothing
 )
+    resolved_account = account === nothing ? get(ENV, "SCG_ACCOUNT", SCG_ACCOUNT) : account
+    resolved_mail_user = mail_user === nothing ? get(ENV, "SCG_MAIL_USER", SCG_MAIL_USER) :
+                         mail_user
+
     job = JobSpec(
         job_name = job_name,
         cmd = cmd,
         site = :scg,
         time_limit = time,
         partition = partition,
-        account = account,
+        account = resolved_account,
         nodes = nodes,
         ntasks = ntasks,
         cpus_per_task = cpus_per_task,
         mem_gb = mem_gb,
         output_path = joinpath(logdir, "%j.%x.out"),
         error_path = joinpath(logdir, "%j.%x.err"),
-        mail_user = mail_user,
+        mail_user = resolved_mail_user,
         mail_type = mail_type
     )
 
@@ -115,7 +123,7 @@ function scg_sbatch(;
     sleep(5)
 
     if !result.ok
-        @error "SCG submission failed" errors = result.errors warnings = result.warnings
+        @error "SCG submission failed" errors=result.errors warnings=result.warnings
         return false
     end
 
@@ -250,7 +258,7 @@ function nersc_sbatch(;
     sleep(5)
 
     if !result.ok
-        @error "NERSC submission failed" errors = result.errors warnings = result.warnings
+        @error "NERSC submission failed" errors=result.errors warnings=result.warnings
         return false
     end
 
