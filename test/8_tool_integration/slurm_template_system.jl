@@ -199,6 +199,7 @@ Test.@testset "Template rendering and fixture checks" begin
     Test.@test !occursin("{{", rendered_scg)
     Test.@test !occursin("{{", rendered_docker)
     Test.@test !occursin("{{", rendered_cloud)
+    Test.@test occursin("#SBATCH --dependency=singleton", rendered_scg)
 
     fixture_root = joinpath(dirname(@__DIR__), "fixtures", "job_templates")
 

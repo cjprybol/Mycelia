@@ -14,6 +14,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=96G
+#SBATCH --dependency=singleton
 
 set -euo pipefail
 
