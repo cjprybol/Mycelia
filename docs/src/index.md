@@ -4,14 +4,20 @@
 
 Mycelia is a research-oriented package exploring best-practice methodologies for pan-multi-omics analysis and graph-based assembly with quality-aware sequence processing. Currently in early development, it provides both experimental algorithms and integrations with established bioinformatics tools.
 
+## Status Notes
+
+- Wrapper availability in source code does not always imply default test coverage in CI.
+- Some legacy or resource-heavy tool paths are opt-in and may be temporarily disabled/commented while being refactored.
+- Use [`workflow-map.md`](workflow-map.md) and the staged test directories under `test/` as the current implementation/validation map.
+
 ## Quick Start
 
 New to Mycelia? Start with our [Getting Started Guide](getting-started.md) to install the package and complete your first genomic analysis in minutes.
 
 ## Key Features & Research Areas
 
-### Production-Ready Features
-- **Third-Party Assembly Tools**: Stable wrappers for 15+ established assemblers including MEGAHIT, SPAdes, Flye, hifiasm, Canu, Unicycler, Velvet, and others
+### Core Integrations (Coverage Varies)
+- **Third-Party Assembly Tools**: Wrappers for 15+ established assemblers including MEGAHIT, SPAdes, Flye, hifiasm, Canu, Unicycler, Velvet, and others
 - **Sequence Processing**: FASTA/FASTQ I/O and read simulation (Illumina, PacBio, Nanopore)
 - **K-mer Analysis**: Canonical k-mer counting and distance metrics
 - **Quality Control Tools**: Integration with fastp, filtlong, trim_galore
