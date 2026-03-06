@@ -1,7 +1,7 @@
 # Tool Wrapper Implementation Status (Archived)
 
 **Date**: 2026-01-17 (historical snapshot, refreshed for accuracy)
-**Current source of truth**: `planning-docs/TODO.md` (assembler/QC status) and `planning-docs/TODO.md` “Today's Priority Actions” for next steps.
+**Current source of truth**: Beads issues labeled `workspace:mycelia` plus `docs/src/workflow-map.md` for user-facing workflow coverage.
 **Purpose**: Historical verification of external tool integrations in Mycelia. Retained for provenance; do not rely on counts here.
 
 ---
