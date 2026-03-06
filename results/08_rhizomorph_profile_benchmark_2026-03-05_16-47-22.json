@@ -1,0 +1,157 @@
+{
+  "suite_name": "Rhizomorph Evidence Profiles",
+  "metadata": {
+    "cpu_info": {
+      "model": "Apple M3 Pro",
+      "speed": 2400,
+      "cpu_times!user": 10237160,
+      "cpu_times!nice": 0,
+      "cpu_times!sys": 6807520,
+      "cpu_times!idle": 17005320,
+      "cpu_times!irq": 0
+    },
+    "julia_version": {
+      "major": 1,
+      "minor": 10,
+      "patch": 10,
+      "prerelease": [],
+      "build": []
+    },
+    "memory_total": 19327352832,
+    "timestamp": "2026-03-05T16:42:10.732"
+  },
+  "results": {
+    "phix_fastq_full": {
+      "num_contigs": 325,
+      "std_time": 1.4551373673342666e7,
+      "total_contig_length": 14789,
+      "median_time": 8.5929333e7,
+      "mean_time": 8.5929333e7,
+      "memory": 79300752,
+      "min_time": 7.5639958e7,
+      "max_time": 9.6218708e7,
+      "allocations": 883205
+    },
+    "phix_fastq_ultralight": {
+      "num_contigs": 5,
+      "std_time": 419107.138956735,
+      "total_contig_length": 2670,
+      "median_time": 7.3265625e6,
+      "mean_time": 7.3265625e6,
+      "memory": 13554968,
+      "min_time": 7.030209e6,
+      "max_time": 7.622916e6,
+      "allocations": 190014
+    },
+    "phix_fastq_lightweight": {
+      "num_contigs": 5,
+      "std_time": 148433.73418633649,
+      "total_contig_length": 2670,
+      "median_time": 9.3302085e6,
+      "mean_time": 9.3302085e6,
+      "memory": 18231160,
+      "min_time": 9.22525e6,
+      "max_time": 9.435167e6,
+      "allocations": 230326
+    },
+    "synthetic_fastq_ultralight": {
+      "num_contigs": 1,
+      "std_time": 231429.68552132632,
+      "total_contig_length": 1005,
+      "median_time": 775604.5,
+      "mean_time": 775604.5,
+      "memory": 1366656,
+      "min_time": 611959.0,
+      "max_time": 939250.0,
+      "allocations": 21029
+    },
+    "synthetic_fasta_lightweight": {
+      "num_contigs": 2,
+      "std_time": 312865.05219023745,
+      "total_contig_length": 28,
+      "median_time": 374604.0,
+      "mean_time": 374604.0,
+      "memory": 180544,
+      "min_time": 153375.0,
+      "max_time": 595833.0,
+      "allocations": 2121
+    },
+    "phix_fasta_lightweight": {
+      "num_contigs": 2,
+      "std_time": 1.5141660757422945e7,
+      "total_contig_length": 5100,
+      "median_time": 2.93433646e8,
+      "mean_time": 2.93433646e8,
+      "memory": 35954600,
+      "min_time": 2.82726875e8,
+      "max_time": 3.04140417e8,
+      "allocations": 388931
+    },
+    "synthetic_fasta_ultralight": {
+      "num_contigs": 2,
+      "std_time": 191007.21926801614,
+      "total_contig_length": 28,
+      "median_time": 283520.5,
+      "mean_time": 283520.5,
+      "memory": 124312,
+      "min_time": 148458.0,
+      "max_time": 418583.0,
+      "allocations": 1603
+    },
+    "synthetic_fastq_lightweight": {
+      "num_contigs": 1,
+      "std_time": 158657.0840287316,
+      "total_contig_length": 1005,
+      "median_time": 716187.5,
+      "mean_time": 716187.5,
+      "memory": 1385216,
+      "min_time": 604000.0,
+      "max_time": 828375.0,
+      "allocations": 21189
+    },
+    "synthetic_fastq_full": {
+      "num_contigs": 2,
+      "std_time": 248371.25689177483,
+      "total_contig_length": 2010,
+      "median_time": 2.145958e6,
+      "mean_time": 2.145958e6,
+      "memory": 4134576,
+      "min_time": 1.970333e6,
+      "max_time": 2.321583e6,
+      "allocations": 58034
+    },
+    "phix_fasta_full": {
+      "num_contigs": 2,
+      "std_time": 2.283831230256519e7,
+      "total_contig_length": 5100,
+      "median_time": 2.991040835e8,
+      "mean_time": 2.991040835e8,
+      "memory": 36293008,
+      "min_time": 2.82954958e8,
+      "max_time": 3.15253209e8,
+      "allocations": 337668
+    },
+    "synthetic_fasta_full": {
+      "num_contigs": 2,
+      "std_time": 52149.12511250788,
+      "total_contig_length": 28,
+      "median_time": 346625.0,
+      "mean_time": 346625.0,
+      "memory": 204560,
+      "min_time": 309750.0,
+      "max_time": 383500.0,
+      "allocations": 2100
+    },
+    "phix_fasta_ultralight": {
+      "num_contigs": 2,
+      "std_time": 1.9954843278864657e6,
+      "total_contig_length": 5100,
+      "median_time": 2.764693955e8,
+      "mean_time": 2.764693955e8,
+      "memory": 21764776,
+      "min_time": 2.75058375e8,
+      "max_time": 2.77880416e8,
+      "allocations": 257917
+    }
+  }
+}
