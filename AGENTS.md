@@ -21,6 +21,11 @@ providing tools for sequence analysis, genome assembly, annotation, and
 comparative genomics. The core assembly system is **Rhizomorph** - a
 probabilistic graph-based genome assembler.
 
+## Data Sources
+| Databases | Scope |
+| --------- | ----- |
+| NCBI RefSeq, UniProt/SwissProt, PDB | Reference genomes, curated protein annotations, and 3D macromolecular structures |
+
 ### Key Architectural Principles
 
 1. **No `using` statements** - Always `import Package` and use qualified names
