@@ -20,8 +20,8 @@ Test.@testset "Rhizomorph Assembly Helpers" begin
     Test.@testset "Observation preparation" begin
         fastq_reads = [FASTX.FASTQ.Record("read1", "ATCG", "IIII")]
         observations = Mycelia.Rhizomorph._prepare_observations(fastq_reads)
-        Test.@test observations[1] isa FASTX.FASTA.Record
-        Test.@test FASTX.FASTA.sequence(observations[1]) == "ATCG"
+        Test.@test observations[1] isa FASTX.FASTQ.Record
+        Test.@test FASTX.FASTQ.sequence(observations[1]) == "ATCG"
 
         mktempdir() do dir
             fasta_path = joinpath(dir, "reads.fasta")
@@ -40,6 +40,9 @@ Test.@testset "Rhizomorph Assembly Helpers" begin
         config = Mycelia.Rhizomorph._auto_configure_assembly(fasta_reads; k = 3)
         Test.@test config.graph_mode == Mycelia.Rhizomorph.DoubleStrand
         Test.@test config.use_quality_scores == false
+        Test.@test config.graph_family == :auto
+        Test.@test config.memory_profile == :full
+        Test.@test config.tokenizer == :none
 
         string_reads = ["ABCD"]
         string_config = Mycelia.Rhizomorph._auto_configure_assembly(string_reads; k = 2)

@@ -24,6 +24,15 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+SLURM executor carrying full backend configuration overrides.
+"""
+Base.@kwdef struct ConfiguredSlurmExecutor <: AbstractExecutor
+    backend::SLURMBackend = SLURMBackend()
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Collect jobs without executing them.
 """
 mutable struct CollectExecutor <: AbstractExecutor
@@ -46,6 +55,14 @@ DryRunExecutor() = DryRunExecutor(JobSpec[], SubmitResult[])
 
 function resolve_executor(executor::AbstractExecutor)::AbstractExecutor
     return executor
+end
+
+function resolve_executor(::LocalBackend)::AbstractExecutor
+    return LocalExecutor()
+end
+
+function resolve_executor(backend::SLURMBackend)::AbstractExecutor
+    return ConfiguredSlurmExecutor(backend = backend)
 end
 
 function resolve_executor(::Nothing)::AbstractExecutor
@@ -151,6 +168,51 @@ end
 
 function execute(job::JobSpec, executor::SlurmExecutor)::SubmitResult
     return submit(job; dry_run = executor.dry_run)
+end
+
+function _override_if_set(new_value, current_value)
+    return new_value === nothing ? current_value : new_value
+end
+
+function _job_with_backend(job::JobSpec, backend::SLURMBackend)::JobSpec
+    return JobSpec(
+        job_name = job.job_name,
+        cmd = job.cmd,
+        site = backend.site,
+        time_limit = backend.time_limit,
+        workdir = job.workdir,
+        env = job.env,
+        modules = job.modules,
+        nodes = job.nodes,
+        ntasks = job.ntasks,
+        ntasks_per_node = job.ntasks_per_node,
+        cpus_per_task = backend.cpus_per_task,
+        mem_gb = backend.mem_gb,
+        mem_per_cpu_mb = job.mem_per_cpu_mb,
+        gpus_per_node = job.gpus_per_node,
+        gpus_per_task = job.gpus_per_task,
+        gpu_bind = job.gpu_bind,
+        partition = _override_if_set(backend.partition, job.partition),
+        qos = _override_if_set(backend.qos, job.qos),
+        constraint = job.constraint,
+        account = _override_if_set(backend.account, job.account),
+        output_path = job.output_path,
+        error_path = job.error_path,
+        mail_user = _override_if_set(backend.mail_user, job.mail_user),
+        mail_type = job.mail_type,
+        requeue = job.requeue,
+        container_image = job.container_image,
+        container_args = job.container_args,
+        container_mounts = job.container_mounts,
+        container_workdir = job.container_workdir,
+        container_engine = job.container_engine,
+        template_name = job.template_name
+    )
+end
+
+function execute(job::JobSpec, executor::ConfiguredSlurmExecutor)::SubmitResult
+    configured_job = _job_with_backend(job, executor.backend)
+    return submit(configured_job; dry_run = executor.backend.dry_run)
 end
 
 function execute(job::JobSpec, executor::CollectExecutor)::Int

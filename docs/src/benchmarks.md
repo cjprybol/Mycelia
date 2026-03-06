@@ -35,6 +35,26 @@ Detailed benchmark results including:
 - Assembly quality metrics
 - Accuracy assessments
 
+## Rhizomorph Evidence Profiles
+
+Mycelia includes a dedicated benchmark for Rhizomorph evidence retention modes:
+
+- `:full`
+- `:lightweight`
+- `:ultralight`
+
+Run it locally with:
+
+```bash
+julia --project=. benchmarking/08_rhizomorph_profile_benchmark.jl
+```
+
+To skip the optional PhiX174 download path:
+
+```bash
+MYCELIA_INCLUDE_PHIX=false julia --project=. benchmarking/08_rhizomorph_profile_benchmark.jl
+```
+
 For current benchmarking code and data, see the [benchmarking directory](https://github.com/cjprybol/Mycelia/tree/main/benchmarking) in the repository.
 
 ## Related Documentation

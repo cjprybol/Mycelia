@@ -67,6 +67,23 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - Uses user-supplied contigs/depth/coverage inputs
 - Records wall-clock durations for tool runs
 
+### 8. Rhizomorph Evidence Profile Benchmarks (`08_rhizomorph_profile_benchmark.jl`)
+- Compares `:full`, `:lightweight`, and `:ultralight` memory profiles
+- Benchmarks unified `Mycelia.Rhizomorph.assemble_genome` k-mer workflows
+- Records runtime, memory, and contig summary metrics on synthetic and optional PhiX slices
+
+### 9. Rhizomorph Reconstruction Suite (Isolate) (`09_rhizomorph_reconstruction_suite.jl`)
+- Evaluates reconstruction across Q10-Q60 and coverage levels 10/25/50/100/250/500/1000
+- Uses tiered or full-factorial condition generation with deterministic synthetic genomes
+- Benchmarks k-mer, n-gram, OLC, and token graph families across FASTQ/FASTA/string inputs
+- Emits standardized correctness and resource metrics with profile deltas (`full` vs reduced profiles)
+
+### 10. Rhizomorph Reconstruction Suite (Metagenome) (`10_rhizomorph_metagenome_suite.jl`)
+- Evaluates community reconstruction across complexity tiers (10/25/50 genomes)
+- Supports constant and mixed quality profiles with variable abundance-driven coverage
+- Benchmarks the same graph-family panel with deterministic synthetic metagenome catalogs
+- Emits standardized metagenome reconstruction metrics and profile deltas
+
 ## Usage
 
 ### Prerequisites
@@ -126,6 +143,24 @@ julia --project=. benchmarking/benchmark_runner.jl medium
 
 # Submit to SLURM cluster (recommended for large scale)
 sbatch benchmarking/run_all_benchmarks.sh
+
+# Run only Rhizomorph reconstruction suites with HPC presets
+sbatch benchmarking/run_rhizomorph_suites_hpc.sh medium
+sbatch benchmarking/run_rhizomorph_suites_hpc.sh large
+```
+
+### Rhizomorph Suite Runtime Controls
+
+`09_rhizomorph_reconstruction_suite.jl` and `10_rhizomorph_metagenome_suite.jl`
+support read-capping controls for stability on local/HPC systems:
+
+```bash
+# Isolate suite cap per condition (records across R1+R2)
+export MYCELIA_BENCHMARK_MAX_READS_PER_CONDITION=50000
+
+# Metagenome suite caps
+export MYCELIA_BENCHMARK_MAX_RECORDS_PER_GENOME=15000
+export MYCELIA_BENCHMARK_MAX_TOTAL_RECORDS=120000
 ```
 
 ### Performance Regression Testing

@@ -50,6 +50,15 @@ try
     println("\n=== Binning Benchmark ===")
     include("07_binning_benchmark.jl")
 
+    println("\n=== Rhizomorph Evidence Profile Benchmark ===")
+    include("08_rhizomorph_profile_benchmark.jl")
+
+    println("\n=== Rhizomorph Reconstruction Suite (Isolate) ===")
+    include("09_rhizomorph_reconstruction_suite.jl")
+
+    println("\n=== Rhizomorph Reconstruction Suite (Metagenome) ===")
+    include("10_rhizomorph_metagenome_suite.jl")
+
     println("\n=== Round-Trip Benchmark ===")
     include("15_round_trip_benchmark.jl")
     

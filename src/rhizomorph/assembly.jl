@@ -10,6 +10,7 @@ Assembly method enumeration for unified interface.
     NgramGraph       # N-gram graph assembly (for unicode character analysis)
     KmerGraph        # K-mer graph assembly with DNAKmer/RNAKmer/AAKmer (for FASTA data)
     QualmerGraph     # Quality-aware k-mer graph assembly (for FASTQ data) - PRIMARY METHOD
+    TokenGraph       # Token adjacency graph assembly (SentencePiece/fallback tokenization)
 
     # Variable-length graph types (simplified products)
     StringGraph      # String graph assembly (simplified from N-gram graphs)
@@ -21,6 +22,12 @@ Assembly method enumeration for unified interface.
     MultiK           # Multi-k assembly with merging
 end
 
+const _ALLOWED_GRAPH_FAMILIES = Set([:auto, :kmer, :ngram, :olc, :token])
+const _ALLOWED_MEMORY_PROFILES = Set([
+    :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality
+])
+const _ALLOWED_TOKENIZERS = Set([:none, :bpe, :unigram, :char_fallback])
+
 function _graph_mode_symbol(graph_mode::GraphMode)
     if graph_mode == SingleStrand
         return :singlestrand
@@ -28,6 +35,85 @@ function _graph_mode_symbol(graph_mode::GraphMode)
         return :doublestrand
     end
     return :singlestrand
+end
+
+function _observations_have_quality(observations)
+    return !isempty(observations) && all(obs -> obs isa FASTX.FASTQ.Record, observations)
+end
+
+function _resolve_graph_family(config, observations)
+    if config.graph_family != :auto
+        return config.graph_family
+    end
+
+    if config.sequence_type == String
+        if config.min_overlap !== nothing
+            return :olc
+        end
+        return :ngram
+    end
+
+    if config.min_overlap !== nothing
+        return :olc
+    end
+
+    return :kmer
+end
+
+function _resolve_memory_profile(
+        config, graph_family::Symbol, use_quality_scores::Bool)
+    profile = config.memory_profile
+
+    if graph_family in (:olc, :token) && profile != :full
+        error(
+            "memory_profile=:$(profile) is not supported for graph_family=:$(graph_family). Use :full.")
+    end
+
+    if graph_family == :ngram && profile in (:ultralight_quality, :lightweight_quality)
+        error("N-gram graphs do not support quality memory profiles: :$(profile)")
+    end
+
+    if graph_family == :kmer && use_quality_scores
+        if profile == :lightweight
+            return :lightweight_quality
+        elseif profile == :ultralight
+            return :ultralight_quality
+        end
+    end
+
+    if graph_family == :kmer && !use_quality_scores &&
+       profile in (:ultralight_quality, :lightweight_quality)
+        error(
+            "memory_profile=:$(profile) requires FASTQ/quality-aware input. Use :full/:lightweight/:ultralight.")
+    end
+
+    return profile
+end
+
+function _with_assembly_metadata(
+        result,
+        config;
+        effective_graph_family::Symbol,
+        effective_memory_profile::Symbol,
+        tokenizer_used::Symbol = :none
+)
+    stats = copy(result.assembly_stats)
+    stats["requested_graph_family"] = string(config.graph_family)
+    stats["effective_graph_family"] = string(effective_graph_family)
+    stats["requested_memory_profile"] = string(config.memory_profile)
+    stats["effective_memory_profile"] = string(effective_memory_profile)
+    stats["tokenizer_used"] = string(tokenizer_used)
+
+    return AssemblyResult(
+        result.contigs,
+        result.contig_names;
+        graph = result.graph,
+        simplified_graph = result.simplified_graph,
+        paths = result.paths,
+        assembly_stats = stats,
+        fastq_contigs = result.fastq_contigs,
+        gfa_compatible = result.gfa_compatible
+    )
 end
 
 function _qualmer_vertex_score(vertex_data)
@@ -60,13 +146,24 @@ function _detect_sequence_type(reads)
         return BioSequences.LongDNA{4}  # Default to DNA
     end
 
-    # Get first sequence
     first_seq = if reads[1] isa FASTX.FASTA.Record
         FASTX.FASTA.sequence(reads[1])
     elseif reads[1] isa FASTX.FASTQ.Record
         FASTX.FASTQ.sequence(reads[1])
     elseif reads[1] isa String
-        return String
+        # Distinguish raw string sequences from file paths.
+        if isfile(reads[1])
+            first_record = first(Mycelia.open_fastx(reads[1]))
+            if first_record isa FASTX.FASTA.Record
+                FASTX.FASTA.sequence(first_record)
+            elseif first_record isa FASTX.FASTQ.Record
+                FASTX.FASTQ.sequence(first_record)
+            else
+                error("Unsupported record type in file: $(typeof(first_record))")
+            end
+        else
+            return String
+        end
     else
         error("Unsupported input type: $(typeof(reads[1]))")
     end
@@ -119,6 +216,8 @@ struct AssemblyConfig
     # Input constraints
     sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}}  # Type of input sequences
     graph_mode::GraphMode                                               # SingleStrand or DoubleStrand
+    graph_family::Symbol                                                # :auto, :kmer, :ngram, :olc, :token
+    memory_profile::Symbol                                              # Evidence retention profile
 
     # Assembly parameters
     error_rate::Float64                     # Expected sequencing error rate
@@ -128,6 +227,9 @@ struct AssemblyConfig
     bubble_resolution::Bool                 # Whether to resolve bubble structures
     repeat_resolution::Bool                 # Whether to resolve repeat regions
     verbose::Bool                           # Whether to emit info logs during assembly
+    tokenizer::Symbol                       # :none, :bpe, :unigram, :char_fallback
+    sentencepiece_model::Union{Nothing, String}  # Optional SentencePiece model path
+    sentencepiece_vocab_size::Int           # Optional training target when model is absent
     tda::Union{Nothing, Mycelia.TDAConfig}  # Optional TDA configuration for topology-aware metrics/cleaning
 
     # Constructor with validation
@@ -136,6 +238,8 @@ struct AssemblyConfig
             min_overlap::Union{Int, Nothing} = nothing,
             sequence_type::Union{Type{<:BioSequences.BioSequence}, Type{String}} = BioSequences.LongDNA{4},
             graph_mode::GraphMode = DoubleStrand,
+            graph_family::Symbol = :auto,
+            memory_profile::Symbol = :full,
             error_rate::Float64 = 0.01,
             min_coverage::Int = 3,
             use_quality_scores::Bool = true,
@@ -143,6 +247,9 @@ struct AssemblyConfig
             bubble_resolution::Bool = true,
             repeat_resolution::Bool = true,
             verbose::Bool = false,
+            tokenizer::Symbol = :none,
+            sentencepiece_model::Union{Nothing, String} = nothing,
+            sentencepiece_vocab_size::Int = 8000,
             tda::Union{Nothing, Mycelia.TDAConfig} = nothing
     )
         # Validation: Must specify exactly one of k or min_overlap
@@ -173,12 +280,32 @@ struct AssemblyConfig
         if min_coverage < 1
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
         end
+        if !(graph_family in _ALLOWED_GRAPH_FAMILIES)
+            error(
+                "graph_family must be one of $(collect(_ALLOWED_GRAPH_FAMILIES)), got :$(graph_family)")
+        end
+        if !(memory_profile in _ALLOWED_MEMORY_PROFILES)
+            error(
+                "memory_profile must be one of $(collect(_ALLOWED_MEMORY_PROFILES)), got :$(memory_profile)")
+        end
+        if !(tokenizer in _ALLOWED_TOKENIZERS)
+            error("tokenizer must be one of $(collect(_ALLOWED_TOKENIZERS)), got :$(tokenizer)")
+        end
+        if sentencepiece_vocab_size < 128
+            error("sentencepiece_vocab_size must be >= 128, got $(sentencepiece_vocab_size)")
+        end
+        if !isnothing(sentencepiece_model) && !isempty(sentencepiece_model) && !isfile(
+            sentencepiece_model)
+            @warn "SentencePiece model path does not exist yet: $(sentencepiece_model)"
+        end
 
         new(
             k,
             min_overlap,
             sequence_type,
             graph_mode,
+            graph_family,
+            memory_profile,
             error_rate,
             min_coverage,
             use_quality_scores,
@@ -186,6 +313,9 @@ struct AssemblyConfig
             bubble_resolution,
             repeat_resolution,
             verbose,
+            tokenizer,
+            sentencepiece_model,
+            sentencepiece_vocab_size,
             tda
         )
     end
@@ -406,7 +536,20 @@ function _auto_configure_assembly(
     sequence_type = _detect_sequence_type(reads)
 
     # Determine if quality scores are available
-    use_quality_scores = all(r -> r isa FASTX.FASTQ.Record, reads)
+    use_quality_scores = if isempty(reads)
+        false
+    elseif reads isa Vector{<:FASTX.FASTQ.Record}
+        true
+    elseif reads isa Vector{String}
+        if all(path -> isfile(path), reads)
+            all(path -> lowercase(path) |> p -> endswith(p, ".fastq") || endswith(p, ".fq") ||
+                       endswith(p, ".fastq.gz") || endswith(p, ".fq.gz"), reads)
+        else
+            false
+        end
+    else
+        false
+    end
 
     # Auto-detect graph mode if not specified
     if graph_mode === nothing
@@ -499,30 +642,53 @@ function assemble_genome(reads, config::AssemblyConfig)
     observations = _prepare_observations(reads)
     _log_info(config, "Loaded $(length(observations)) sequence observations")
 
-    # Phase 2: Type-stable dispatch based on config parameters
-    result = if config.sequence_type == String
-        if config.k !== nothing
-            _assemble_ngram_graph(observations, config)  # N-gram
-        else
-            _assemble_string_graph(observations, config)  # String graph (overlap-based)
+    effective_graph_family = _resolve_graph_family(config, observations)
+    quality_observations = _observations_have_quality(observations)
+    effective_memory_profile = _resolve_memory_profile(
+        config,
+        effective_graph_family,
+        quality_observations
+    )
+    tokenizer_used = :none
+
+    # Phase 2: Dispatch by requested/auto-resolved graph family.
+    result = if effective_graph_family == :kmer
+        if config.k === nothing
+            throw(ArgumentError("graph_family=:kmer requires `k` to be set"))
         end
-    elseif config.sequence_type <: BioSequences.BioSequence
-        if config.use_quality_scores
-            if config.k !== nothing
-                _assemble_qualmer_graph(observations, config)  # Qualmer
-            else
-                _assemble_quality_biosequence_graph(observations, config)  # Quality overlap-based
-            end
+        if quality_observations
+            _assemble_qualmer_graph(observations, config, effective_memory_profile)
         else
-            if config.k !== nothing
-                _assemble_kmer_graph(observations, config)  # K-mer
-            else
-                _assemble_biosequence_graph(observations, config)  # BioSequence overlap-based
-            end
+            _assemble_kmer_graph(observations, config, effective_memory_profile)
         end
+    elseif effective_graph_family == :ngram
+        if config.k === nothing
+            throw(ArgumentError("graph_family=:ngram requires `k` to be set"))
+        end
+        _assemble_ngram_graph(observations, config, effective_memory_profile)
+    elseif effective_graph_family == :olc
+        if config.sequence_type == String
+            _assemble_string_graph(observations, config)
+        elseif quality_observations
+            _assemble_quality_biosequence_graph(observations, config)
+        else
+            _assemble_biosequence_graph(observations, config)
+        end
+    elseif effective_graph_family == :token
+        token_result, actual_tokenizer = _assemble_token_graph(observations, config)
+        tokenizer_used = actual_tokenizer
+        token_result
     else
-        throw(ArgumentError("Unsupported sequence type: $(config.sequence_type)"))
+        throw(ArgumentError("Unsupported graph_family: :$(effective_graph_family)"))
     end
+
+    result = _with_assembly_metadata(
+        result,
+        config;
+        effective_graph_family = effective_graph_family,
+        effective_memory_profile = effective_memory_profile,
+        tokenizer_used = tokenizer_used
+    )
 
     _log_info(config, "Assembly completed: $(length(result.contigs)) contigs generated")
     return result
@@ -551,6 +717,7 @@ function polish_assembly(assembly::AssemblyResult, reads; iterations::Int = 3)
     @info "Starting assembly polishing" iterations
 
     observations = _prepare_observations(reads)
+    fasta_observations = _observations_to_fasta_records(observations)
     polished_contigs = copy(assembly.contigs)
 
     for iter in 1:iterations
@@ -558,7 +725,7 @@ function polish_assembly(assembly::AssemblyResult, reads; iterations::Int = 3)
 
         # Build k-mer graph from current contigs + reads
         graph = Rhizomorph.build_kmer_graph(
-            vcat(observations, _contigs_to_records(polished_contigs)),
+            vcat(fasta_observations, _contigs_to_records(polished_contigs)),
             31
         )
 
@@ -641,37 +808,111 @@ Prepare observations from various input formats (FASTA/FASTQ records or file pat
 """
 function _prepare_observations(reads)
     if reads isa Vector{String}
-        # File paths - load FASTA/FASTQ records
-        observations = FASTX.FASTA.Record[]
-        for file_path in reads
-            if endswith(file_path, ".fastq") || endswith(file_path, ".fq")
-                # Load FASTQ and convert to FASTA records
-                open(FASTX.FASTQ.Reader, file_path) do reader
-                    for record in reader
-                        push!(observations,
-                            FASTX.FASTA.Record(FASTX.FASTQ.identifier(record),
-                                FASTX.FASTQ.sequence(record)))
-                    end
-                end
-            else
-                # Load FASTA records
-                open(FASTX.FASTA.Reader, file_path) do reader
-                    for record in reader
-                        push!(observations, record)
-                    end
+        # File paths -> load records, otherwise treat as raw string observations.
+        if all(path -> isfile(path), reads)
+            observations = Any[]
+            for file_path in reads
+                for record in Mycelia.open_fastx(file_path)
+                    push!(observations, record)
                 end
             end
+            return observations
+        elseif any(path -> isfile(path), reads)
+            throw(ArgumentError("Mixed file paths and raw strings are not supported in a single input vector"))
         end
-        return observations
+        return reads
     elseif reads isa Vector{<:FASTX.FASTA.Record}
         return reads
     elseif reads isa Vector{<:FASTX.FASTQ.Record}
-        # Convert FASTQ to FASTA records
-        return [FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record))
-                for record in reads]
+        return reads
     else
         throw(ArgumentError("Unsupported reads format: $(typeof(reads))"))
     end
+end
+
+function _observations_to_strings(observations)
+    strings = String[]
+    for obs in observations
+        if obs isa FASTX.FASTA.Record
+            push!(strings, String(FASTX.FASTA.sequence(obs)))
+        elseif obs isa FASTX.FASTQ.Record
+            push!(strings, String(FASTX.FASTQ.sequence(obs)))
+        elseif obs isa String
+            push!(strings, obs)
+        else
+            throw(ArgumentError("Unsupported observation type for string conversion: $(typeof(obs))"))
+        end
+    end
+    return strings
+end
+
+function _observations_to_fasta_records(observations)
+    fasta_records = FASTX.FASTA.Record[]
+    for (i, obs) in enumerate(observations)
+        if obs isa FASTX.FASTA.Record
+            push!(fasta_records, obs)
+        elseif obs isa FASTX.FASTQ.Record
+            push!(
+                fasta_records,
+                FASTX.FASTA.Record(FASTX.FASTQ.identifier(obs), FASTX.FASTQ.sequence(obs))
+            )
+        elseif obs isa String
+            push!(fasta_records, FASTX.FASTA.Record("sequence_$(i)", obs))
+        else
+            throw(ArgumentError("Unsupported observation type for FASTA conversion: $(typeof(obs))"))
+        end
+    end
+    return fasta_records
+end
+
+function _fallback_tokenize_string(input::String)
+    if isempty(input)
+        return String[]
+    end
+
+    stripped = strip(input)
+    if isempty(stripped)
+        return String[]
+    end
+
+    if occursin(' ', stripped)
+        return split(stripped)
+    end
+
+    return [string(c) for c in collect(stripped)]
+end
+
+function _sentencepiece_available()
+    if !isdefined(Mycelia, Symbol("_check_sentencepiece_installed"))
+        return false
+    end
+    checker = getfield(Mycelia, Symbol("_check_sentencepiece_installed"))
+    try
+        return checker()
+    catch
+        return false
+    end
+end
+
+function _tokenize_sequences(strings::Vector{String}, config::AssemblyConfig)
+    if config.tokenizer in (:bpe, :unigram) &&
+       !isnothing(config.sentencepiece_model) &&
+       isfile(config.sentencepiece_model) &&
+       _sentencepiece_available()
+        model_file = config.sentencepiece_model
+        pieces = Mycelia.encode_sentencepiece(
+            model_file = model_file,
+            input = strings,
+            output_format = :pieces
+        )
+        return Vector{Vector{String}}(pieces), config.tokenizer
+    end
+
+    token_sequences = Vector{Vector{String}}()
+    for seq in strings
+        push!(token_sequences, _fallback_tokenize_string(seq))
+    end
+    return token_sequences, :char_fallback
 end
 
 """
@@ -680,7 +921,7 @@ String graph assembly implementation (variable-length simplified from N-gram gra
 function _assemble_string_graph(observations, config)
     _log_info(config, "Using string graph assembly strategy (variable-length OLC)")
 
-    strings = [String(FASTX.FASTA.sequence(obs)) for obs in observations]
+    strings = _observations_to_strings(observations)
     min_overlap = isnothing(config.min_overlap) ? 1 : config.min_overlap
     string_graph = Rhizomorph.build_string_graph(strings; min_overlap = min_overlap)
 
@@ -710,10 +951,15 @@ end
 """
 K-mer graph assembly implementation (fixed-length k-mer foundation).
 """
-function _assemble_kmer_graph(observations, config)
+function _assemble_kmer_graph(observations, config, memory_profile::Symbol = :full)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_kmer_graph(observations, config.k; mode = mode)
+    graph = Rhizomorph.build_kmer_graph(
+        observations,
+        config.k;
+        mode = mode,
+        memory_profile = memory_profile
+    )
 
     # Apply Phase 2 graph algorithms
     if config.bubble_resolution
@@ -753,6 +999,7 @@ function _assemble_kmer_graph(observations, config)
         "vertex_type" => isempty(MetaGraphsNext.labels(graph)) ? "unknown" :
                          string(typeof(first(MetaGraphsNext.labels(graph)))),
         "k" => config.k,
+        "memory_profile" => string(memory_profile),
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
@@ -766,7 +1013,7 @@ end
 """
 Quality-aware k-mer graph assembly implementation (fixed-length qualmer foundation).
 """
-function _assemble_qualmer_graph(observations, config)
+function _assemble_qualmer_graph(observations, config, memory_profile::Symbol = :full)
     _log_info(config, "Using quality-aware k-mer graph assembly strategy (fixed-length qualmer foundation)")
 
     # Convert observations to FASTQ records for quality processing
@@ -774,7 +1021,12 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+    graph = Rhizomorph.build_qualmer_graph(
+        fastq_records,
+        config.k;
+        mode = mode,
+        memory_profile = memory_profile
+    )
 
     # Apply Phase 2 graph algorithms if enabled
     if config.bubble_resolution
@@ -819,6 +1071,7 @@ function _assemble_qualmer_graph(observations, config)
         "graph_type" => "fixed_length",
         "vertex_type" => "quality_aware_kmers",
         "k" => config.k,
+        "memory_profile" => string(memory_profile),
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "quality_preserved" => true,  # Mark that quality information is preserved
@@ -829,7 +1082,7 @@ function _assemble_qualmer_graph(observations, config)
     )
 
     # Add quality-specific statistics
-    if !isempty(MetaGraphsNext.labels(graph))
+    if memory_profile == :full && !isempty(MetaGraphsNext.labels(graph))
         qualmer_stats = Rhizomorph.get_qualmer_statistics(graph)
         for (key, value) in qualmer_stats
             stats[string(key)] = value
@@ -1448,11 +1701,11 @@ end
 """
 N-gram graph assembly implementation (fixed-length unicode character analysis).
 """
-function _assemble_ngram_graph(observations, config)
+function _assemble_ngram_graph(observations, config, memory_profile::Symbol = :full)
     _log_info(config, "Using N-gram graph assembly strategy (fixed-length unicode analysis)")
 
-    strings = [String(FASTX.FASTA.sequence(obs)) for obs in observations]
-    graph = Rhizomorph.build_ngram_graph(strings, config.k)
+    strings = _observations_to_strings(observations)
+    graph = Rhizomorph.build_ngram_graph(strings, config.k; memory_profile = memory_profile)
 
     if config.bubble_resolution
         _simplify_ngram_graph(graph)
@@ -1478,6 +1731,7 @@ function _assemble_ngram_graph(observations, config)
         "graph_type" => "fixed_length",
         "vertex_type" => "unicode_character_vectors",
         "k" => config.k,
+        "memory_profile" => string(memory_profile),
         "num_input_sequences" => length(observations),
         "assembly_date" => string(Mycelia.Dates.now())
     )
@@ -1486,13 +1740,55 @@ function _assemble_ngram_graph(observations, config)
 end
 
 """
+Token graph assembly implementation (SentencePiece/fallback tokenized adjacency graph).
+"""
+function _assemble_token_graph(observations, config)
+    _log_info(config, "Using token graph assembly strategy")
+
+    strings = _observations_to_strings(observations)
+    token_sequences, tokenizer_used = _tokenize_sequences(strings, config)
+    graph = Rhizomorph.build_token_graph(token_sequences)
+
+    paths = Rhizomorph.find_eulerian_paths_next(graph)
+    contigs = String[]
+    for path in paths
+        if !isempty(path)
+            push!(contigs, join(string.(path), " "))
+        end
+    end
+
+    if isempty(contigs)
+        for tokens in token_sequences
+            if !isempty(tokens)
+                push!(contigs, join(tokens, " "))
+            end
+        end
+    end
+
+    contig_names = ["token_contig_$i" for i in 1:length(contigs)]
+    stats = Dict{String, Any}(
+        "method" => "TokenGraph",
+        "graph_type" => "token_adjacency",
+        "tokenizer" => string(tokenizer_used),
+        "num_input_sequences" => length(observations),
+        "num_vertices" => length(MetaGraphsNext.labels(graph)),
+        "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
+        "assembly_date" => string(Mycelia.Dates.now())
+    )
+
+    result = AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
+    return result, tokenizer_used
+end
+
+"""
 BioSequence graph assembly implementation (variable-length simplified from k-mer graphs).
 """
 function _assemble_biosequence_graph(observations, config)
     _log_info(config, "Using BioSequence graph assembly strategy (variable-length simplified from k-mer)")
 
+    fasta_records = _observations_to_fasta_records(observations)
     min_overlap = isnothing(config.min_overlap) ? 1 : config.min_overlap
-    biosequence_graph = Rhizomorph.build_fasta_graph(observations; min_overlap = min_overlap)
+    biosequence_graph = Rhizomorph.build_fasta_graph(fasta_records; min_overlap = min_overlap)
 
     # Extract sequences from graph vertices
     contigs = String[]

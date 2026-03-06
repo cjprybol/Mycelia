@@ -59,12 +59,16 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
         ("02_kmer_analysis_benchmark.jl", "K-mer Analysis"),
         ("03_assembly_benchmark.jl", "Assembly"),
         ("04_annotation_benchmark.jl", "Annotation"),
+        ("08_rhizomorph_profile_benchmark.jl", "Rhizomorph Evidence Profiles"),
+        ("09_rhizomorph_reconstruction_suite.jl", "Rhizomorph Reconstruction Suite"),
+        ("10_rhizomorph_metagenome_suite.jl", "Rhizomorph Metagenome Suite"),
         # Add other benchmarks as they are implemented
         # ("05_comparative_benchmark.jl", "Comparative Genomics")
     ]
     
     # Run each benchmark
-    benchmark_results = Dict{String, Any}()\n    
+    benchmark_results = Dict{String, Any}()
+
     for (script, description) in benchmark_scripts
         println("\\n" * "-"^40)
         println("Running: $description")

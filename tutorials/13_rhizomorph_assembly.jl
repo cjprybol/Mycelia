@@ -68,16 +68,30 @@ println("Total bases: $total_bases bp")
 # The unified Rhizomorph assembly API auto-detects read type and builds the
 # appropriate graph (qualmer graph for FASTQ).
 
-println("Running Rhizomorph assembly...")
-start_time = time()
-assembly = Mycelia.Rhizomorph.assemble_genome(
-    reads;
-    k=31,
-    error_rate=0.01,
-    min_coverage=3
-)
-elapsed = round(time() - start_time, digits=1)
-println("Assembly completed in $elapsed seconds")
+println("Running Rhizomorph assembly across evidence profiles...")
+profile_results = Dict{Symbol, Any}()
+for profile in (:full, :lightweight, :ultralight)
+    start_time = time()
+    result = Mycelia.Rhizomorph.assemble_genome(
+        reads;
+        graph_family = :kmer,
+        k = 31,
+        memory_profile = profile,
+        error_rate = 0.01,
+        min_coverage = 3
+    )
+    elapsed = round(time() - start_time, digits = 1)
+    profile_results[profile] = Dict(
+        "result" => result,
+        "elapsed_seconds" => elapsed
+    )
+    println(
+        "  $(profile): $(length(result.contigs)) contigs in $(elapsed)s (effective profile=$(result.assembly_stats[\"effective_memory_profile\"]))"
+    )
+end
+
+# Continue tutorial with the full-profile assembly result.
+assembly = profile_results[:full]["result"]
 
 # ## Step 5: Inspect results
 

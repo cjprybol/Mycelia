@@ -25,6 +25,19 @@ Test.@testset "Executor Resolution" begin
     Test.@test !isdefined(Mycelia, :Execution)
 end
 
+Test.@testset "Backend Resolution and Local Backend Execution" begin
+    Test.@test Mycelia.resolve_backend(nothing) isa Mycelia.LocalBackend
+    Test.@test Mycelia.default_backend() isa Mycelia.LocalBackend
+    Test.@test Mycelia.resolve_backend(:scg) isa Mycelia.SLURMBackend
+    Test.@test Mycelia.resolve_backend(:lawrencium) isa Mycelia.SLURMBackend
+
+    tmpdir = mktempdir()
+    outfile = joinpath(tmpdir, "local_backend_result.txt")
+    command = `bash -lc "printf 'backend-ok' > $outfile"`
+    Test.@test Mycelia.execute(Mycelia.LocalBackend(), command)
+    Test.@test read(outfile, String) == "backend-ok"
+end
+
 Test.@testset "Executor Dispatch" begin
     job = Mycelia.JobSpec(
         job_name = "collector-test",
@@ -51,6 +64,41 @@ Test.@testset "Executor Dispatch" begin
     Test.@test result.dry_run
     Test.@test length(dry_executor.jobs) == 1
     Test.@test length(dry_executor.results) == 1
+end
+
+Test.@testset "Configured SLURM Backend Overrides" begin
+    job = Mycelia.JobSpec(
+        job_name = "backend-overrides",
+        cmd = "echo hi",
+        site = :scg,
+        time_limit = "00:10:00",
+        partition = "nih_s10",
+        account = "PI_ORIGINAL",
+        nodes = 1,
+        ntasks = 1,
+        cpus_per_task = 1,
+        mem_gb = 4
+    )
+
+    backend = Mycelia.SLURMBackend(
+        site = :scg,
+        account = "PI_BACKEND",
+        partition = "nih_s10",
+        mail_user = "user@example.org",
+        time_limit = "00:05:00",
+        mem_gb = 8,
+        cpus_per_task = 2,
+        dry_run = true
+    )
+
+    resolved = Mycelia.resolve_executor(backend)
+    Test.@test resolved isa Mycelia.ConfiguredSlurmExecutor
+
+    result = Mycelia.execute(job, resolved)
+    Test.@test result.dry_run
+    Test.@test occursin("#SBATCH --account=PI_BACKEND", something(result.artifact_text, ""))
+    Test.@test occursin("#SBATCH --cpus-per-task=2", something(result.artifact_text, ""))
+    Test.@test occursin("#SBATCH --time=00:05:00", something(result.artifact_text, ""))
 end
 
 Test.@testset "Wrapper Collection Paths" begin
