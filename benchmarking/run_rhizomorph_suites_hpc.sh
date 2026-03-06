@@ -1,13 +1,48 @@
 #!/bin/bash
+# Default SBATCH headers target Lawrencium `lr6`.
+# Override on the `sbatch` CLI for other sites.
 #SBATCH --job-name=mycelia_rhizo_suite
-#SBATCH --partition=compute
-#SBATCH --time=36:00:00
-#SBATCH --mem=128G
-#SBATCH --cpus-per-task=24
+#SBATCH --partition=lr6
+#SBATCH --qos=lr_normal
+#SBATCH --time=24:00:00
+#SBATCH --mem=80G
+#SBATCH --cpus-per-task=32
 #SBATCH --output=rhizo_suite_%j.out
 #SBATCH --error=rhizo_suite_%j.err
 
 set -euo pipefail
+
+detect_hpc_site() {
+    if [[ -n "${MYCELIA_BENCHMARK_HPC_SITE:-}" ]]; then
+        printf '%s\n' "${MYCELIA_BENCHMARK_HPC_SITE}"
+        return
+    fi
+
+    case "${SLURM_JOB_PARTITION:-}" in
+        lr*|es1)
+            printf '%s\n' "lawrencium"
+            ;;
+        nih_*|normal|owners|serc)
+            printf '%s\n' "scg"
+            ;;
+        *)
+            printf '%s\n' "lawrencium"
+            ;;
+    esac
+}
+
+configure_site_environment() {
+    local site="$1"
+
+    module purge || true
+    if [[ "${site}" == "lawrencium" ]]; then
+        module load julia/1.10.10 || module load julia || module load julia/1.9.0 || true
+    else
+        module load julia/1.9.0 || module load julia || module load julia/1.10.10 || true
+    fi
+    module load bioconda || true
+    source activate mycelia-bench || true
+}
 
 PROFILE="${1:-${BENCHMARK_PROFILE:-medium}}"
 if [[ "${PROFILE}" != "medium" && "${PROFILE}" != "large" ]]; then
@@ -15,15 +50,16 @@ if [[ "${PROFILE}" != "medium" && "${PROFILE}" != "large" ]]; then
     exit 1
 fi
 
+HPC_SITE="$(detect_hpc_site)"
+
 echo "=== Mycelia Rhizomorph Suite Launcher ==="
+echo "HPC site: ${HPC_SITE}"
 echo "Profile: ${PROFILE}"
 echo "Job ID: ${SLURM_JOB_ID:-local}"
+echo "Partition: ${SLURM_JOB_PARTITION:-unset}"
 echo "Start time: $(date)"
 
-module purge || true
-module load julia/1.9.0 || true
-module load bioconda || true
-source activate mycelia-bench || true
+configure_site_environment "${HPC_SITE}"
 
 export JULIA_PROJECT=.
 if [[ -n "${SLURM_CPUS_PER_TASK:-}" ]]; then
@@ -56,6 +92,7 @@ export MYCELIA_BENCHMARK_MAX_READS_PER_CONDITION
 export MYCELIA_BENCHMARK_MAX_RECORDS_PER_GENOME
 export MYCELIA_BENCHMARK_MAX_TOTAL_RECORDS
 
+echo "JULIA_NUM_THREADS=${JULIA_NUM_THREADS:-unset}"
 echo "BENCHMARK_SCALE=${BENCHMARK_SCALE}"
 echo "MYCELIA_BENCHMARK_MATRIX_STRATEGY=${MYCELIA_BENCHMARK_MATRIX_STRATEGY}"
 echo "MYCELIA_BENCHMARK_MAX_READS_PER_CONDITION=${MYCELIA_BENCHMARK_MAX_READS_PER_CONDITION}"

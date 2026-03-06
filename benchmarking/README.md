@@ -145,8 +145,17 @@ julia --project=. benchmarking/benchmark_runner.jl medium
 sbatch benchmarking/run_all_benchmarks.sh
 
 # Run only Rhizomorph reconstruction suites with HPC presets
+# Default SBATCH headers target Lawrencium lr6
 sbatch benchmarking/run_rhizomorph_suites_hpc.sh medium
 sbatch benchmarking/run_rhizomorph_suites_hpc.sh large
+
+# Explicit Lawrencium submission
+sbatch --partition=lr6 --qos=lr_normal --cpus-per-task=32 --mem=80G --time=24:00:00 \
+  benchmarking/run_rhizomorph_suites_hpc.sh medium
+
+# SCG submission via explicit overrides
+sbatch --partition=nih_s10 --account="$PI_ACCOUNT" --cpus-per-task=24 --mem=128G --time=36:00:00 \
+  benchmarking/run_rhizomorph_suites_hpc.sh medium
 ```
 
 ### Rhizomorph Suite Runtime Controls
