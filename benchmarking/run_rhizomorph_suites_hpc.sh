@@ -36,9 +36,9 @@ configure_site_environment() {
 
     module purge || true
     if [[ "${site}" == "lawrencium" ]]; then
-        module load julia/1.10.10 || module load julia || module load julia/1.9.0 || true
+        module load julia/1.10.10 >/dev/null 2>&1 || module load julia >/dev/null 2>&1 || module load julia/1.9.0 >/dev/null 2>&1 || true
     else
-        module load julia/1.9.0 || module load julia || module load julia/1.10.10 || true
+        module load julia/1.9.0 >/dev/null 2>&1 || module load julia >/dev/null 2>&1 || module load julia/1.10.10 >/dev/null 2>&1 || true
     fi
     module load bioconda >/dev/null 2>&1 || module --ignore_cache load bioconda >/dev/null 2>&1 || true
 
