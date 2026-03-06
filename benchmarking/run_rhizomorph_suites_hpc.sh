@@ -40,8 +40,17 @@ configure_site_environment() {
     else
         module load julia/1.9.0 || module load julia || module load julia/1.10.10 || true
     fi
-    module load bioconda || true
-    source activate mycelia-bench || true
+    module load bioconda >/dev/null 2>&1 || module --ignore_cache load bioconda >/dev/null 2>&1 || true
+
+    if command -v conda >/dev/null 2>&1; then
+        local conda_base
+        conda_base="$(conda info --base 2>/dev/null || true)"
+        if [[ -n "${conda_base}" && -f "${conda_base}/etc/profile.d/conda.sh" ]]; then
+            # Prefer explicit conda initialization over legacy `source activate`.
+            source "${conda_base}/etc/profile.d/conda.sh"
+            conda activate mycelia-bench >/dev/null 2>&1 || true
+        fi
+    fi
 }
 
 PROFILE="${1:-${BENCHMARK_PROFILE:-medium}}"
