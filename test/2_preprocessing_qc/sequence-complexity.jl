@@ -145,7 +145,7 @@ Test.@testset "Sequence Comparison Functions" begin
             # Test unnormalized
             richness_raw = Mycelia.kmer_richness(dna_seq, 1, normalize = false)
             Test.@test richness_raw isa Integer
-            Test.@test richness_raw > 0
+            Test.@test richness ≈ richness_raw / min(length(dna_seq), length(Mycelia.DNA_ALPHABET))
 
             # Test sequence shorter than k
             Test.@test Mycelia.kmer_richness(BioSequences.LongDNA{4}("AT"), 3, normalize = true) ==
@@ -159,6 +159,7 @@ Test.@testset "Sequence Comparison Functions" begin
             richness = Mycelia.kmer_richness(rna_seq, 1, normalize = true)
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
+            Test.@test richness ≈ 1.0
         end
 
         Test.@testset "Amino acid sequences" begin
@@ -166,6 +167,7 @@ Test.@testset "Sequence Comparison Functions" begin
             richness = Mycelia.kmer_richness(aa_seq, 1, normalize = true)
             Test.@test richness ≤ 1.0
             Test.@test richness > 0.0
+            Test.@test richness ≈ 1.0
 
             # Test with custom alphabet - use subset of AA that has < 25 unique residues
             subset_aa = BioSequences.LongAA("ARNDCQEGHILKMF")  # 14 different AAs
@@ -212,6 +214,12 @@ Test.@testset "Sequence Comparison Functions" begin
             _,
             median_summary = Mycelia.linguistic_complexity(dna_seq, kmax = 5, reducer = Statistics.median)
             Test.@test median_summary != summary
+
+            profile_with_constant,
+            summary_with_constant = Mycelia.linguistic_complexity(
+                dna_seq, kmax = 5, alphabet = length(Mycelia.DNA_ALPHABET))
+            Test.@test profile_with_constant == profile
+            Test.@test summary_with_constant == summary
         end
 
         Test.@testset "RNA sequences" begin
@@ -220,6 +228,12 @@ Test.@testset "Sequence Comparison Functions" begin
 
             Test.@test length(profile) == 4
             Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+
+            profile_with_constant,
+            summary_with_constant = Mycelia.linguistic_complexity(
+                rna_seq, kmax = 4, alphabet = length(Mycelia.RNA_ALPHABET))
+            Test.@test profile_with_constant == profile
+            Test.@test summary_with_constant == summary
         end
 
         Test.@testset "Amino acid sequences" begin
@@ -228,6 +242,12 @@ Test.@testset "Sequence Comparison Functions" begin
 
             Test.@test length(profile) == 3
             Test.@test all(0.0 ≤ x ≤ 1.0 for x in profile)
+
+            profile_with_constant,
+            summary_with_constant = Mycelia.linguistic_complexity(
+                aa_seq, kmax = 3, alphabet = length(Mycelia.AA_ALPHABET))
+            Test.@test profile_with_constant == profile
+            Test.@test summary_with_constant == summary
 
             # Test with custom alphabet
             profile_custom,

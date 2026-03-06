@@ -403,20 +403,7 @@ function shannon_entropy(seq; k::Int = 1, base::Real = 2, alphabet = nothing)
             return 0.0
         end
 
-        # Determine k-mer type and counting function based on sequence alphabet
-        # TODO: use the constants in this repo instead of hardcoding
-        if seq isa BioSequences.LongDNA
-            kmer_type = Kmers.DNAKmer{k}
-            counts = count_kmers(kmer_type, seq)  # Use non-canonical for entropy
-        elseif seq isa BioSequences.LongRNA
-            kmer_type = Kmers.RNAKmer{k}
-            counts = count_kmers(kmer_type, seq)
-        elseif seq isa BioSequences.LongAA
-            kmer_type = Kmers.AAKmer{k}
-            counts = count_kmers(kmer_type, seq)
-        else
-            error("Unsupported sequence type: $(typeof(seq))")
-        end
+        counts = _count_sequence_complexity_kmers(seq, k; canonical = false)
     else
         # Use existing ngram infrastructure for generic strings
         sstr = string(seq)
@@ -448,20 +435,7 @@ function renyi_entropy(seq; k::Int = 1, α::Real = 2, base::Real = 2)
             return 0.0
         end
 
-        # Determine k-mer type and counting function based on sequence alphabet
-        # TODO: use the constants in this repo instead of hardcoding
-        if seq isa BioSequences.LongDNA
-            kmer_type = Kmers.DNAKmer{k}
-            counts = count_kmers(kmer_type, seq)  # Use non-canonical for entropy
-        elseif seq isa BioSequences.LongRNA
-            kmer_type = Kmers.RNAKmer{k}
-            counts = count_kmers(kmer_type, seq)
-        elseif seq isa BioSequences.LongAA
-            kmer_type = Kmers.AAKmer{k}
-            counts = count_kmers(kmer_type, seq)
-        else
-            error("Unsupported sequence type: $(typeof(seq))")
-        end
+        counts = _count_sequence_complexity_kmers(seq, k; canonical = false)
     else
         # Use existing ngram infrastructure for generic strings
         sstr = string(seq)
@@ -493,24 +467,9 @@ function kmer_richness(seq, k; alphabet = nothing, normalize::Bool = true)
             return normalize ? 0.0 : 0
         end
 
-        # Determine k-mer type and counting function based on sequence alphabet
-        # TODO: use the constants in this repo instead of hardcoding
-        if seq isa BioSequences.LongDNA
-            kmer_type = Kmers.DNAKmer{k}
-            kmer_counts = count_canonical_kmers(kmer_type, seq)
-            A = isnothing(alphabet) ? 4 : alphabet
-        elseif seq isa BioSequences.LongRNA
-            kmer_type = Kmers.RNAKmer{k}
-            kmer_counts = count_kmers(kmer_type, seq)
-            A = isnothing(alphabet) ? 4 : alphabet
-        elseif seq isa BioSequences.LongAA
-            kmer_type = Kmers.AAKmer{k}
-            kmer_counts = count_kmers(kmer_type, seq)
-            A = isnothing(alphabet) ? 20 : alphabet
-        else
-            error("Unsupported sequence type: $(typeof(seq))")
-        end
-
+        kmer_counts = _count_sequence_complexity_kmers(
+            seq, k; canonical = seq isa BioSequences.LongDNA)
+        A = isnothing(alphabet) ? _default_sequence_alphabet_size(seq) : alphabet
         uniq = length(kmer_counts)
     else
         # Use existing ngram infrastructure for generic strings
@@ -545,21 +504,7 @@ function linguistic_complexity(seq; kmax = nothing, alphabet = nothing, reducer 
     # Determine sequence type and properties
     if seq isa BioSequences.BioSequence
         L = length(seq)
-        # Infer alphabet size from sequence type if not provided
-        # TODO: use the constants in this repo instead of hardcoding
-        if isnothing(alphabet)
-            if seq isa BioSequences.LongDNA
-                A = 4
-            elseif seq isa BioSequences.LongRNA
-                A = 4
-            elseif seq isa BioSequences.LongAA
-                A = 20
-            else
-                A = 4  # default fallback
-            end
-        else
-            A = alphabet
-        end
+        A = isnothing(alphabet) ? _default_sequence_alphabet_size(seq) : alphabet
     else
         # Generic string case
         sstr = string(seq)
@@ -570,6 +515,44 @@ function linguistic_complexity(seq; kmax = nothing, alphabet = nothing, reducer 
     kmax = isnothing(kmax) ? L : kmax
     prof = [kmer_richness(seq, k; alphabet = A, normalize = true) for k in 1:kmax]
     return prof, reducer(prof)
+end
+
+function _count_sequence_complexity_kmers(seq::BioSequences.LongDNA, k::Int; canonical::Bool)
+    kmer_type = Kmers.DNAKmer{k}
+    if canonical
+        return count_canonical_kmers(kmer_type, seq)
+    end
+    return count_kmers(kmer_type, seq)
+end
+
+function _count_sequence_complexity_kmers(seq::BioSequences.LongRNA, k::Int; canonical::Bool)
+    kmer_type = Kmers.RNAKmer{k}
+    return count_kmers(kmer_type, seq)
+end
+
+function _count_sequence_complexity_kmers(seq::BioSequences.LongAA, k::Int; canonical::Bool)
+    kmer_type = Kmers.AAKmer{k}
+    return count_kmers(kmer_type, seq)
+end
+
+function _count_sequence_complexity_kmers(seq::BioSequences.BioSequence, k::Int; canonical::Bool)
+    error("Unsupported sequence type: $(typeof(seq))")
+end
+
+function _default_sequence_alphabet_size(seq::BioSequences.LongDNA)::Int
+    return length(DNA_ALPHABET)
+end
+
+function _default_sequence_alphabet_size(seq::BioSequences.LongRNA)::Int
+    return length(RNA_ALPHABET)
+end
+
+function _default_sequence_alphabet_size(seq::BioSequences.LongAA)::Int
+    return length(AA_ALPHABET)
+end
+
+function _default_sequence_alphabet_size(seq::BioSequences.BioSequence)::Int
+    return length(DNA_ALPHABET)
 end
 
 function _resolve_alphabet_size(seq, alphabet)::Int
