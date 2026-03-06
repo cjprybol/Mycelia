@@ -31,11 +31,11 @@ recommended citation from each tool's documentation or manuscript.
 - Data access: NCBI datasets, Entrez, SRA Toolkit
 - Infrastructure: SLURM, rclone, Bioconda/conda
 
-## Pending Citations
+## Reduced Amino Acid Alphabet Citations
 
-The following components have placeholders in the code and still need formal citations:
-- Wang J., Wang W. (WW5 reduced amino acid alphabet) in `src/constants.jl`
-- Melo F., Marti-Renom M.A. (MM5 reduced amino acid alphabet) in `src/constants.jl`
+These references correspond to the reduced alphabet schemes used in `src/constants.jl`.
 
-If you can provide the correct references for these items, add them here and
-replace the placeholders in `src/constants.jl`.
+- Wang J., Wang W. (1999). A computational approach to simplifying the protein folding alphabet.
+  *Nature Structural Biology*, 6(11), 1033-1038. https://doi.org/10.1038/14918 (WW5)
+- Melo F., Marti-Renom M.A. (2006). Accuracy of sequence alignment and fold assessment using reduced amino acid alphabets.
+  *Proteins*, 63(4), 986-995. https://doi.org/10.1002/prot.20976 (MM5)

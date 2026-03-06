@@ -427,7 +427,8 @@ Maps amino acids to:
 - 'K': K, N, Q, R, S (Polar/Basic)
 
 # References
-Wang J., Wang W. - Citation pending; see docs/src/references.md
+Wang J., Wang W. (1999) A computational approach to simplifying the protein
+folding alphabet. Nat Struct Biol. 6(11):1033-1038. doi:10.1038/14918
 
 # See Also
 - [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:WW5`
@@ -457,7 +458,9 @@ Maps amino acids to:
 - 'H': H (Histidine)
 
 # References
-Melo F., Marti-Renom M.A. - Citation pending; see docs/src/references.md
+Melo F., Marti-Renom M.A. (2006) Accuracy of sequence alignment and fold
+assessment using reduced amino acid alphabets. Proteins. 63(4):986-995.
+doi:10.1002/prot.20976
 
 # See Also
 - [`reduce_amino_acid_alphabet()`](@ref): Use this mapping with `:MM5`
