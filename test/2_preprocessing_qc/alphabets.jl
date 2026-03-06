@@ -118,6 +118,21 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         Test.@test atug_result isa BioSequences.LongAA
     end
 
+    Test.@testset "validate_alphabet function" begin
+        Test.@test Mycelia.validate_alphabet("ATCGN", :DNA)
+        Test.@test Mycelia.validate_alphabet("aucgn", :RNA)
+        Test.@test Mycelia.validate_alphabet("MKTLX", :AA)
+
+        Test.@test !Mycelia.validate_alphabet("ATCG", :RNA)
+        Test.@test !Mycelia.validate_alphabet("AUCG", :DNA)
+        Test.@test !Mycelia.validate_alphabet("ATUG", :DNA)
+        Test.@test !Mycelia.validate_alphabet("ATUG", :RNA)
+        Test.@test Mycelia.validate_alphabet("AT-CG", :DNA)
+        Test.@test Mycelia.validate_alphabet("", :DNA)
+        Test.@test !Mycelia.validate_alphabet("123", :AA)
+        Test.@test !Mycelia.validate_alphabet("ATCG", :UNKNOWN)
+    end
+
     Test.@testset "Edge cases and error handling" begin
         # Test empty string should throw error
         Test.@test_throws ArgumentError Mycelia.detect_alphabet("")
@@ -133,6 +148,16 @@ Test.@testset "Alphabet Detection and Conversion Tests" begin
         # Test sequences with gaps/unknown characters
         Test.@test Mycelia.detect_alphabet("AT-CG") == :DNA  # Gap character is filtered out in alphabet constants
         Test.@test_throws ArgumentError Mycelia.detect_alphabet("ATCG?")  # Unknown character throws error
+        try
+            Mycelia.detect_alphabet("ATCG?!")
+            Test.@test false
+        catch error
+            Test.@test error isa ArgumentError
+            error_message = sprint(showerror, error)
+            Test.@test occursin("known alphabet", error_message)
+            Test.@test occursin("?", error_message)
+            Test.@test occursin("!", error_message)
+        end
 
         # Test very long sequences
         long_seq = repeat("ATCG", 1000)
