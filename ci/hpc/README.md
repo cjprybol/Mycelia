@@ -37,6 +37,29 @@ bash ci/hpc/run_hpc_ci.sh
 
 Use `--tests-only` or `--benchmarks-only` if you are limited on walltime or memory.
 
+## Publish Results Branch
+
+After `run_hpc_ci.sh` writes `hpc-ci/hpc-results.json`, publish a lightweight
+results branch with badge endpoints:
+
+```bash
+bash ci/hpc/publish_hpc_results.sh
+```
+
+This updates the `hpc-results` branch with:
+- `latest-hpc-results.json`: raw Phase 1/2 summary emitted by `run_hpc_ci.sh`
+- `latest-tests.json`: Shields endpoint JSON for the HPC test badge
+- `latest-benchmarks.json`: Shields endpoint JSON for the HPC benchmark badge
+- `latest-meta.json`: commit/timestamp/cluster metadata
+- `<commit>/...`: archived copies for each published HPC run
+
+Run `bash ci/hpc/publish_hpc_results.sh --no-push` to stage the branch locally
+for inspection before pushing.
+
+To make this part of the same HPC job, export `HPC_RESULTS_PUBLISH=1` before
+running `run_hpc_ci.sh`. The driver will publish the `hpc-results` branch after
+writing `hpc-ci/hpc-results.json`.
+
 ## Lawrencium sbatch Helper
 
 This repo provides a Julia helper that calls the Mycelia Lawrencium wrapper:
@@ -64,9 +87,15 @@ Optional environment knobs (defaults shown):
 - `HPC_CI_COMMIT`: Commit SHA to report in artifacts/Codecov.
 - `HPC_CI_BRANCH`: Branch name to report in artifacts/Codecov.
 - `HPC_CI_CHECKOUT=1`: Fetch/checkout `HPC_CI_COMMIT`/`HPC_CI_BRANCH` first.
+- `HPC_RESULTS_PUBLISH=1`: Automatically run `publish_hpc_results.sh` after summary generation.
+- `HPC_RESULTS_BRANCH`: Branch used by `publish_hpc_results.sh` (default: `hpc-results`).
+- `HPC_RESULTS_REMOTE`: Remote used by `publish_hpc_results.sh` (default: `origin`).
+- `HPC_RESULTS_REPO_URL`: Explicit repo URL for cloning/pushing the results branch.
+- `HPC_RESULTS_REPOSITORY_SLUG`: Explicit `owner/repo` for badge URLs if remote parsing is insufficient.
 
 ## Outputs
 - `hpc-ci/coverage/lcov.info`: LCOV coverage report.
 - `hpc-ci/coverage/summary.json`: Coverage summary.
 - `hpc-ci/logs/*.log`: Test/tutorial/benchmark logs.
 - `hpc-ci/hpc-results.json`: JSON summary for downstream ingestion.
+- `hpc-results/latest-*.json`: published badge endpoints and latest run metadata.
