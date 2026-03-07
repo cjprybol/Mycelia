@@ -4,6 +4,25 @@
 
 Comprehensive benchmarks comparing Mycelia's various approaches on different datasets.
 
+## HPC CI Status
+
+[![HPC Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR&flag=hpc-extended)](https://codecov.io/github/cjprybol/Mycelia?flag=hpc-extended)
+[![HPC Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-tests.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
+[![HPC Benchmarks](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-benchmarks.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
+
+The lightweight GitHub Actions CI on `master` remains the default merge gate.
+Extended HPC validation is published separately from `ci/hpc/run_hpc_ci.sh` via
+`bash ci/hpc/publish_hpc_results.sh`, which updates the `hpc-results` branch with:
+
+- `latest-hpc-results.json` for the full machine-readable run summary
+- `latest-tests.json` for the Shields HPC test badge endpoint
+- `latest-benchmarks.json` for the Shields HPC benchmark badge endpoint
+- `latest-meta.json` for commit, timestamp, and cluster metadata
+
+The raw branch history keeps one archived directory per commit so published
+status can be traced back to a specific HPC run without committing bulky logs or
+benchmark artifacts to the main repository history.
+
 ## Standardized Test Datasets
 
 To ensure rigorous validation across platforms, Mycelia uses the following gold-standard communities:

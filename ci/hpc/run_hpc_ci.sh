@@ -8,6 +8,7 @@
 #   3. Optionally run extended tutorials + benchmarks.
 #   4. Emit hpc-ci/hpc-results.json for downstream ingestion.
 #   5. Optionally upload coverage to Codecov with an hpc-extended flag.
+#   6. Optionally publish branch-hosted summaries + badge endpoints.
 #
 # Environment knobs:
 #   HPC_RESULTS_DIR   Where to write hpc-results.json and artifacts (default: <repo>/hpc-ci).
@@ -17,6 +18,7 @@
 #   HPC_CI_BRANCH     Branch name (default: git rev-parse --abbrev-ref HEAD).
 #   HPC_CI_CHECKOUT   If set to 1, fetch/checkout HPC_CI_COMMIT/HPC_CI_BRANCH first.
 #   HPC_CLUSTER_NAME  Optional logical cluster name for metadata.
+#   HPC_RESULTS_PUBLISH  If set to 1, publish hpc-results branch after summary generation.
 #
 # CLI options:
 #   --tests-only       Run tests + coverage only.
@@ -129,6 +131,7 @@ export HPC_JULIA_VERSION="$(julia --version 2>/dev/null | awk '{print $3}')"
 # Results + artifact locations
 export HPC_RESULTS_DIR="${HPC_RESULTS_DIR:-${REPO_ROOT}/hpc-ci}"
 export HPC_CODECOV_FLAG="${HPC_CODECOV_FLAG:-hpc-extended}"
+export HPC_RESULTS_PUBLISH="${HPC_RESULTS_PUBLISH:-0}"
 
 COVERAGE_DIR="${HPC_RESULTS_DIR}/coverage"
 LOG_DIR="${HPC_RESULTS_DIR}/logs"
@@ -425,6 +428,15 @@ end
 
 println("Wrote HPC results summary to: ", out_path)
 EOF
+
+###############################################################################
+# Phase 5: Optional hpc-results branch publish
+###############################################################################
+if [[ "${HPC_RESULTS_PUBLISH}" -eq 1 ]]; then
+  echo
+  echo ">>> Phase 5: Publishing hpc-results branch summary"
+  bash "${SCRIPT_DIR}/publish_hpc_results.sh" --input "${HPC_RESULTS_DIR}/hpc-results.json"
+fi
 
 echo
 echo "=== Mycelia HPC CI complete ==="
