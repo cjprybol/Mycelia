@@ -2,7 +2,8 @@
 
 ## Overview
 
-Comprehensive benchmarks comparing Mycelia's various approaches on different datasets.
+Comprehensive benchmarks comparing Mycelia's various approaches on different
+datasets.
 
 ## HPC CI Status
 
@@ -12,7 +13,8 @@ Comprehensive benchmarks comparing Mycelia's various approaches on different dat
 
 The lightweight GitHub Actions CI on `master` remains the default merge gate.
 Extended HPC validation is published separately from `ci/hpc/run_hpc_ci.sh` via
-`bash ci/hpc/publish_hpc_results.sh`, which updates the `hpc-results` branch with:
+`bash ci/hpc/publish_hpc_results.sh`, which updates the `hpc-results` branch
+with:
 
 - `latest-hpc-results.json` for the full machine-readable run summary
 - `latest-tests.json` for the Shields HPC test badge endpoint
@@ -23,38 +25,69 @@ The raw branch history keeps one archived directory per commit so published
 status can be traced back to a specific HPC run without committing bulky logs or
 benchmark artifacts to the main repository history.
 
+## Standard Assembler Fixtures
+
+The short-read assembler comparison benchmark now includes two deterministic
+fixtures that can be regenerated locally without external downloads:
+
+| Fixture                     | Type       | Description                                                          | Generation              |
+| --------------------------- | ---------- | -------------------------------------------------------------------- | ----------------------- |
+| `synthetic_isolate_5386`    | Isolate    | Single 5.4 kb synthetic genome for short-read assembly sanity checks | Pure Julia, fixed seed  |
+| `synthetic_metagenome_pair` | Metagenome | Two-genome low-complexity community with uneven coverage             | Pure Julia, fixed seeds |
+
+Run the comparison benchmark with:
+
+```bash
+julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl
+```
+
+This benchmark compares `Mycelia.Rhizomorph.assemble_genome`, `run_megahit`, and
+`run_metaspades` on the same generated FASTQ inputs and writes the run plan plus
+results as CSV files.
+
 ## Standardized Test Datasets
 
-To ensure rigorous validation across platforms, Mycelia uses the following gold-standard communities:
+To ensure rigorous validation across platforms, Mycelia uses the following
+gold-standard communities:
 
 ### Mock Communities (Physical & Sequencing)
-| Source | Product | Complexity | Description |
-|--------|---------|------------|-------------|
-| **Zymo** | [D6331](https://www.zymoresearch.com/products/zymobiomics-gut-microbiome-standard) | Medium | Gut Microbiome Standard (21 strains) |
-| **Zymo** | [D6300](https://www.zymoresearch.com/products/zymobiomics-microbial-community-dna-standard) | Low | Microbial Community Standard (8 bacteria, 2 yeast) |
-| **ATCC** | [MSA-1002](https://www.atcc.org/products/msa-1002) | Medium | 20 Strain Even Mix |
-| **ATCC** | [MSA-1003](https://www.atcc.org/products/msa-1003) | Medium | 20 Strain Staggered Mix |
-| **NIST** | [RM 8376](https://www.nist.gov/programs-projects/rm-8376-microbial-pathogen-dna-standards-detection-and-identification) | High | Microbial Pathogen DNA Standard |
+
+| Source   | Product                                                                                                                 | Complexity | Description                                        |
+| -------- | ----------------------------------------------------------------------------------------------------------------------- | ---------- | -------------------------------------------------- |
+| **Zymo** | [D6331](https://www.zymoresearch.com/products/zymobiomics-gut-microbiome-standard)                                      | Medium     | Gut Microbiome Standard (21 strains)               |
+| **Zymo** | [D6300](https://www.zymoresearch.com/products/zymobiomics-microbial-community-dna-standard)                             | Low        | Microbial Community Standard (8 bacteria, 2 yeast) |
+| **ATCC** | [MSA-1002](https://www.atcc.org/products/msa-1002)                                                                      | Medium     | 20 Strain Even Mix                                 |
+| **ATCC** | [MSA-1003](https://www.atcc.org/products/msa-1003)                                                                      | Medium     | 20 Strain Staggered Mix                            |
+| **NIST** | [RM 8376](https://www.nist.gov/programs-projects/rm-8376-microbial-pathogen-dna-standards-detection-and-identification) | High       | Microbial Pathogen DNA Standard                    |
 
 ### Benchmarking Challenges (Synthetic)
-* **CAMI Challenge**: [Toy Datasets (Low/Med/High Complexity)](https://cami-challenge.org/datasets/)
-* **Genome in a Bottle**: [HG002 (Ashkenazi Trio)](https://github.com/genome-in-a-bottle) - Standard for variant calling.
+
+- **CAMI Challenge**:
+  [Toy Datasets (Low/Med/High Complexity)](https://cami-challenge.org/datasets/)
+- **Genome in a Bottle**:
+  [HG002 (Ashkenazi Trio)](https://github.com/genome-in-a-bottle) - Standard for
+  variant calling.
 
 ### Simulation Targets
+
 For internal testing, we target the following simulation profiles:
-* **Depth**: Low (10x), Medium (100x), High (1000x)
-* **Diversity**: Isolate, Defined Community (10), Complex Community (100+)
-* **Abundance**: Even, Random, Log-normal (staggered)
+
+- **Depth**: Low (10x), Medium (100x), High (1000x)
+- **Diversity**: Isolate, Defined Community (10), Complex Community (100+)
+- **Abundance**: Even, Random, Log-normal (staggered)
 
 ## Coming Soon
 
 Detailed benchmark results including:
+
 - Runtime comparisons
 - Memory usage analysis
 - Assembly quality metrics
 - Accuracy assessments
 
-For current benchmarking code and data, see the [benchmarking directory](https://github.com/cjprybol/Mycelia/tree/main/benchmarking) in the repository.
+For current benchmarking code and data, see the
+[benchmarking directory](https://github.com/cjprybol/Mycelia/tree/main/benchmarking)
+in the repository.
 
 ## Related Documentation
 
