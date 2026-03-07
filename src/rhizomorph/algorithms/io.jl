@@ -61,7 +61,9 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
             end
 
             # Extract sequence from vertex data
-            sequence = if hasfield(typeof(vertex_data), :Kmer)
+            sequence = if label isa Kmers.Kmer || label isa BioSequences.BioSequence || label isa AbstractString
+                string(label)
+            elseif hasfield(typeof(vertex_data), :Kmer)
                 string(vertex_data.Kmer)
             elseif hasfield(typeof(vertex_data), :canonical_kmer)
                 string(vertex_data.canonical_kmer)
@@ -167,6 +169,16 @@ graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode = DoubleStrand)
     lines = readlines(gfa_file)
 
+    function parse_overlap_str(s::AbstractString)
+        m = match(Regex("\\d+"), s)
+        isnothing(m) && return 0
+        try
+            return parse(Int, m.captures[1])
+        catch
+            return 0
+        end
+    end
+
     # Parse GFA file content
     segments = Dict{String, String}()  # id -> sequence
     links = Vector{Tuple{String, Bool, String, Bool, String}}()  # (src_id, src_forward, dst_id, dst_forward, overlap_str)
@@ -209,6 +221,34 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
         else
             @warn "Unknown GFA line type: $line_type in line: $line"
         end
+    end
+
+    if kmer_type == String
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = StringVertexData,
+            edge_data_type = StringEdgeData,
+            weight_function = compute_edge_weight
+        )
+
+        id_to_string = Dict{String, String}()
+        for (seg_id, sequence) in segments
+            graph[sequence] = StringVertexData(sequence)
+            id_to_string[seg_id] = sequence
+        end
+
+        for (src_id, _, dst_id, _, overlap_str) in links
+            if haskey(id_to_string, src_id) && haskey(id_to_string, dst_id)
+                src_string = id_to_string[src_id]
+                dst_string = id_to_string[dst_id]
+                graph[src_string, dst_string] = StringEdgeData(parse_overlap_str(overlap_str))
+            else
+                @warn "Link references unknown segment: $src_id -> $dst_id"
+            end
+        end
+
+        return graph
     end
 
     # Determine vertex data type from kmer_type
@@ -302,6 +342,16 @@ graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
 """
 function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleStrand;
         force_biosequence_graph::Bool = false)
+    function parse_overlap_str(s::AbstractString)
+        m = match(Regex("\\d+"), s)
+        isnothing(m) && return 0
+        try
+            return parse(Int, m.captures[1])
+        catch
+            return 0
+        end
+    end
+
     # Parse GFA to detect segment lengths
     segment_lengths = Set{Int}()
     segments = Dict{String, String}()
@@ -326,13 +376,21 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
         k = first(segment_lengths)
 
         # Detect sequence type from first segment
+        Mycelia_module = parentmodule(Rhizomorph)
         first_seq = first(values(segments))
-        if all(c -> c in ('A', 'C', 'G', 'T'), uppercase(first_seq))
+        detected_alphabet = try
+            Mycelia_module.detect_alphabet(first_seq)
+        catch
+            nothing
+        end
+        if detected_alphabet == :DNA
             kmer_type = Kmers.DNAKmer{k}
-        elseif all(c -> c in ('A', 'C', 'G', 'U'), uppercase(first_seq))
+        elseif detected_alphabet == :RNA
             kmer_type = Kmers.RNAKmer{k}
-        else
+        elseif detected_alphabet == :AA
             kmer_type = Kmers.AAKmer{k}
+        else
+            kmer_type = String
         end
 
         return read_gfa_next(gfa_file, kmer_type, graph_mode)
@@ -343,7 +401,11 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
         seqs = Dict{String, Any}()
         seq_types = Set{DataType}()
         for (seg_id, seq_str) in segments
-            seq = Mycelia_module.convert_sequence(seq_str)
+            seq = try
+                Mycelia_module.convert_sequence(seq_str)
+            catch
+                seq_str
+            end
             seqs[seg_id] = seq
             push!(seq_types, typeof(seq))
         end
@@ -363,27 +425,23 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
 
         SeqType = first(seq_types)
 
+        vertex_data_type = SeqType == String ? StringVertexData : BioSequenceVertexData{SeqType}
+        edge_data_type = SeqType == String ? StringEdgeData : BioSequenceEdgeData
+
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
             label_type = SeqType,
-            vertex_data_type = BioSequenceVertexData{SeqType},
-            edge_data_type = BioSequenceEdgeData,
+            vertex_data_type = vertex_data_type,
+            edge_data_type = edge_data_type,
             weight_function = compute_edge_weight
         )
 
         # Add vertices
         for seq in values(seqs)
-            graph[seq] = BioSequenceVertexData(seq)
-        end
-
-        # Helper to parse overlaps like "12M"
-        function parse_overlap_str(s::AbstractString)
-            m = match(Regex("\\d+"), s)
-            isnothing(m) && return 0
-            try
-                return parse(Int, m.captures[1])
-            catch
-                return 0
+            if SeqType == String
+                graph[seq] = StringVertexData(seq)
+            else
+                graph[seq] = BioSequenceVertexData(seq)
             end
         end
 
@@ -401,7 +459,11 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
             if haskey(seqs, src_id) && haskey(seqs, dst_id)
                 src_seq = seqs[src_id]
                 dst_seq = seqs[dst_id]
-                graph[src_seq, dst_seq] = BioSequenceEdgeData(overlap)
+                if SeqType == String
+                    graph[src_seq, dst_seq] = StringEdgeData(overlap)
+                else
+                    graph[src_seq, dst_seq] = BioSequenceEdgeData(overlap)
+                end
             end
         end
 
