@@ -44,6 +44,12 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - **Resource Usage**: Memory and time scaling with coverage and genome size
 - **Thread Scalability**: Multi-core assembly performance
 
+### Standard Fixture Comparison (`assembler_comparison_standard_fixtures.jl`)
+- **Deterministic fixtures**: Synthetic isolate and low-complexity metagenome inputs
+- **Head-to-head comparison**: Rhizomorph vs MEGAHIT vs metaSPAdes
+- **Portable inputs**: Pure Julia fixture generation with fixed seeds
+- **CSV output**: Benchmark plan and assembly metrics for each run
+
 ### 4. Annotation Benchmarks (`04_annotation_benchmark.jl`)
 - **Pyrodigal Gene Prediction**: Ab initio gene finding performance
 - **Parallel Annotation**: Multi-genome processing with threading
@@ -110,6 +116,12 @@ BENCHMARK_SCALE=medium julia --project=. benchmarking/02_kmer_analysis_benchmark
 
 # Run with performance monitoring and allocation tracking
 julia --project=. --track-allocation=user benchmarking/03_assembly_benchmark.jl
+
+# Run deterministic assembler comparison on the standard fixtures
+julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl
+
+# Restrict comparison to a single fixture
+julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl synthetic_metagenome_pair
 
 # Run annotation benchmark
 julia --project=. benchmarking/04_annotation_benchmark.jl

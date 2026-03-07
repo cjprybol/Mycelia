@@ -4,6 +4,23 @@
 
 Comprehensive benchmarks comparing Mycelia's various approaches on different datasets.
 
+## Standard Assembler Fixtures
+
+The short-read assembler comparison benchmark now includes two deterministic fixtures that can be regenerated locally without external downloads:
+
+| Fixture | Type | Description | Generation |
+|--------|------|-------------|------------|
+| `synthetic_isolate_5386` | Isolate | Single 5.4 kb synthetic genome for short-read assembly sanity checks | Pure Julia, fixed seed |
+| `synthetic_metagenome_pair` | Metagenome | Two-genome low-complexity community with uneven coverage | Pure Julia, fixed seeds |
+
+Run the comparison benchmark with:
+
+```bash
+julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl
+```
+
+This benchmark compares `Mycelia.Rhizomorph.assemble_genome`, `run_megahit`, and `run_metaspades` on the same generated FASTQ inputs and writes the run plan plus results as CSV files.
+
 ## Standardized Test Datasets
 
 To ensure rigorous validation across platforms, Mycelia uses the following gold-standard communities:
