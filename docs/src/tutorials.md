@@ -44,6 +44,7 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 16. [16 UN Corpus Ngram vs Token Graphs](generated/tutorials/16_un_corpus_ngram_vs_token_graphs.md) - Graph comparisons on UN corpus data
 17. [17 Viroid Sketch Round Trip](generated/tutorials/17_viroid_sketch_round_trip.md) - BLAST DB export, sketching, and validation
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
+21. [21 Topological Assembly Optimization](generated/tutorials/21_tda_topological_assembly_optimization.md) - Betti numbers, filtrations, and topology-aware graph scoring
 
 ## Tutorial Gaps (TODO)
 
@@ -53,6 +54,7 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 - TODO: QC outlier filtering and benchmarking workflows (`quality-control-and-benchmarking.jl`)
 - TODO: Rhizomorph graph inspection, traversal, and path-finding beyond assembly (`src/rhizomorph/`)
 - TODO: Iterative assembly handoff and downstream validation integration (`iterative-assembly.jl`)
+- TODO: Persistent homology backend examples once an optional backend is available (`src/tda.jl`)
 
 ## Running Tutorials
 
