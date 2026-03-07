@@ -119,6 +119,7 @@ tutorial_order = [
     ("Step 18: Advanced Assembly Theory and Practice", "18_advanced_assembly_theory_and_practice.md"),
     ("Step 19: Relational Clustering", "19_relational_clustering.md"),
     ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
+    ("Step 21: Topological Assembly Optimization", "21_tda_topological_assembly_optimization.md"),
 ]
 
 # Add tutorials that exist in the specified order
@@ -167,6 +168,7 @@ Documenter.makedocs(
         "Getting Started" => "getting-started.md",
         "Installation" => "installation.md",
         "Concepts" => "concepts.md",
+        "Topological Assembly Optimization" => "topological-assembly-optimization.md",
         "Workflow Map" => "workflow-map.md",
         "HPC Job Templates" => "hpc-job-templates.md",
         "Metagenomic Workflow" => "metagenomic-workflow.md",
