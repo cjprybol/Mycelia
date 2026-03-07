@@ -13,9 +13,13 @@ import BenchmarkTools
 import FASTX
 import Random
 
+include("benchmark_utils.jl")
+
 Random.seed!(42)
 
 println("=== Mash Benchmark ===")
+
+benchmark_suite = BenchmarkSuite("Mash Benchmark")
 
 if get(ENV, "MYCELIA_RUN_EXTERNAL", "false") != "true"
     println("Mash benchmarks require external tools. Set MYCELIA_RUN_EXTERNAL=true to run.")
@@ -36,15 +40,30 @@ for ref_size in reference_sizes
     reference_sketch_path = joinpath(sketch_dir, "reference_$(ref_size).msh")
 
     println("\n--- Sketching reference size $(ref_size) ---")
+    _, sketch_profile = profile_execution(() -> begin
+        rm(reference_sketch_path, force=true)
+        Mycelia.run_mash_sketch(
+            input_files=[reference_fasta],
+            outdir=sketch_dir,
+            k=21,
+            s=1000
+        )
+    end)
     sketch_trial = BenchmarkTools.@benchmark Mycelia.run_mash_sketch(
         input_files=[$reference_fasta],
         outdir=$sketch_dir,
         k=21,
         s=1000
     ) setup=(rm($reference_sketch_path, force=true)) evals=1
+    add_benchmark_result!(
+        benchmark_suite,
+        "mash_sketch_$(ref_size)",
+        sketch_trial,
+        sketch_profile
+    )
     println(sketch_trial)
 
-    println("Allocated bytes (sketch): $(BenchmarkTools.minimum(sketch_trial).memory)")
+    println("Allocated bytes (sketch): $(BenchmarkTools.minimum(sketch_trial).memory); profiled single-run allocation: $(sketch_profile["allocated_bytes"])")
 end
 
 for db_size in database_sizes
@@ -82,13 +101,34 @@ for db_size in database_sizes
     screen_output = joinpath(screen_dir, "$(basename(reference_db))_vs_reads_mash_screen.tsv")
 
     println("\n--- Screening against database size $(db_size) ---")
+    _, screen_profile = profile_execution(() -> begin
+        rm(screen_output, force=true)
+        Mycelia.run_mash_screen(
+            reference=reference_db,
+            query=reads_fastq,
+            outdir=screen_dir,
+            winner_takes_all=true
+        )
+    end)
     screen_trial = BenchmarkTools.@benchmark Mycelia.run_mash_screen(
         reference=$reference_db,
         query=$reads_fastq,
         outdir=$screen_dir,
         winner_takes_all=true
     ) setup=(rm($screen_output, force=true)) evals=1
+    add_benchmark_result!(
+        benchmark_suite,
+        "mash_screen_db$(db_size)",
+        screen_trial,
+        screen_profile
+    )
     println(screen_trial)
 
-    println("Allocated bytes (screen): $(BenchmarkTools.minimum(screen_trial).memory)")
+    println("Allocated bytes (screen): $(BenchmarkTools.minimum(screen_trial).memory); profiled single-run allocation: $(screen_profile["allocated_bytes"])")
 end
+
+results_dir = mkpath("results")
+results_file = joinpath(results_dir, "mash_benchmark_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).json")
+save_benchmark_results(benchmark_suite, results_file)
+format_benchmark_summary(benchmark_suite)
+println("Results saved to: $(results_file)")

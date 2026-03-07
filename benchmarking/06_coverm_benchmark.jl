@@ -29,8 +29,12 @@ import BenchmarkTools
 import Dates
 import StableRNGs
 
+include("benchmark_utils.jl")
+
 println("=== CoverM Coverage Benchmark ===")
 println("Start time: $(Dates.now())")
+
+benchmark_suite = BenchmarkSuite("CoverM Coverage Benchmark")
 
 # Configuration by scale
 small_config = Dict(
@@ -110,7 +114,7 @@ cp(ref_fasta, bin_fasta; force=true)
 
 println("\n--- Running CoverM (contig mode) ---")
 contig_out = joinpath(workdir, "coverm_contig", "coverm_contig.tsv")
-contig_time = @elapsed begin
+_, contig_profile = profile_execution(() -> begin
     Mycelia.run_coverm_contig(
         bam_files=bam_paths,
         reference_fasta=ref_fasta,
@@ -119,12 +123,22 @@ contig_time = @elapsed begin
         output_tsv=contig_out,
         quiet=false
     )
-end
-println("Contig mode runtime: $(round(contig_time, digits=2))s (output: $(contig_out))")
+end)
+add_profiled_result!(
+    benchmark_suite,
+    "coverm_contig",
+    contig_profile;
+    metadata=Dict(
+        "output_tsv" => contig_out,
+        "threads" => config["threads"],
+        "n_samples" => config["n_samples"]
+    )
+)
+println("Contig mode runtime: $(round(contig_profile["wall_time_seconds"], digits=2))s, allocated $(round(contig_profile["allocated_mb"], digits=2)) MB (output: $(contig_out))")
 
 println("\n--- Running CoverM (genome mode) ---")
 genome_out = joinpath(workdir, "coverm_genome", "coverm_genome.tsv")
-genome_time = @elapsed begin
+_, genome_profile = profile_execution(() -> begin
     Mycelia.run_coverm_genome(
         bam_files=bam_paths,
         genome_directory=bins_dir,
@@ -134,7 +148,22 @@ genome_time = @elapsed begin
         output_tsv=genome_out,
         quiet=false
     )
-end
-println("Genome mode runtime: $(round(genome_time, digits=2))s (output: $(genome_out))")
+end)
+add_profiled_result!(
+    benchmark_suite,
+    "coverm_genome",
+    genome_profile;
+    metadata=Dict(
+        "output_tsv" => genome_out,
+        "threads" => config["threads"],
+        "n_samples" => config["n_samples"]
+    )
+)
+println("Genome mode runtime: $(round(genome_profile["wall_time_seconds"], digits=2))s, allocated $(round(genome_profile["allocated_mb"], digits=2)) MB (output: $(genome_out))")
 
+results_dir = mkpath("results")
+results_file = joinpath(results_dir, "coverm_benchmark_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).json")
+save_benchmark_results(benchmark_suite, results_file)
+format_benchmark_summary(benchmark_suite)
 println("\nBenchmark complete at $(Dates.now()). Outputs in $(workdir)")
+println("Results saved to: $(results_file)")
