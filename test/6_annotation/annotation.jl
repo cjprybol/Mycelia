@@ -103,4 +103,26 @@ Test.@testset "Annotation & feature extraction" begin
             Test.@test updated[1, "attributes"] == expected
         end
     end
+
+    Test.@testset "run_egapx reports unsupported status clearly" begin
+        mktempdir() do dir
+            fasta_file = joinpath(dir, "sample.fna")
+            record = FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT"))
+            Mycelia.write_fasta(outfile = fasta_file, records = [record])
+
+            error_message = try
+                Mycelia.run_egapx(
+                    fasta = fasta_file,
+                    organism = "Arabidopsis thaliana"
+                )
+                nothing
+            catch err
+                Test.@test err isa ArgumentError
+                sprint(showerror, err)
+            end
+            Test.@test !isnothing(error_message)
+            Test.@test occursin("not currently supported", error_message)
+            Test.@test occursin("TOOL_WRAPPER_STATUS.md", error_message)
+        end
+    end
 end
