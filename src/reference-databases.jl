@@ -3775,7 +3775,7 @@ rate limiting.
 """
 function http_get_with_retry(; url::AbstractString,
         query = Pair{String, String}[],
-        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        headers = Pair{String, String}["User-Agent" => "Mycelia", "Accept-Encoding" => "identity"],
         readtimeout::Real = 120,
         rate_limit_seconds::Real = 0.0,
         max_attempts::Int = 3)
@@ -3792,7 +3792,7 @@ Fetch text content from a remote endpoint with retry support.
 """
 function http_get_text_with_retry(; url::AbstractString,
         query = Pair{String, String}[],
-        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        headers = Pair{String, String}["User-Agent" => "Mycelia", "Accept-Encoding" => "identity"],
         readtimeout::Real = 120,
         rate_limit_seconds::Real = 0.0,
         max_attempts::Int = 3)
@@ -3806,7 +3806,11 @@ function http_get_text_with_retry(; url::AbstractString,
     )
     content_encoding = lowercase(HTTP.header(response, "Content-Encoding", ""))
     if content_encoding == "gzip"
-        return read(CodecZlib.GzipDecompressorStream(IOBuffer(response.body)), String)
+        try
+            return read(CodecZlib.GzipDecompressorStream(IOBuffer(response.body)), String)
+        catch
+            return String(response.body)
+        end
     else
         return String(response.body)
     end
@@ -3819,7 +3823,7 @@ Fetch JSON content from a remote endpoint with retry support.
 """
 function http_get_json_with_retry(; url::AbstractString,
         query = Pair{String, String}[],
-        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        headers = Pair{String, String}["User-Agent" => "Mycelia", "Accept-Encoding" => "identity"],
         readtimeout::Real = 120,
         rate_limit_seconds::Real = 0.0,
         max_attempts::Int = 3)
