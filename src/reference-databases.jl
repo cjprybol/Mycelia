@@ -3651,6 +3651,76 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Download and cache the Pfam-A HMM library for use with HMMER.
+"""
+function download_pfam_hmm_database(; dbdir::AbstractString = "$(homedir())/workspace/reference-databases/pfam",
+        release::AbstractString = "current_release",
+        force::Bool = false)
+    mkpath(dbdir)
+    gz_path = joinpath(dbdir, "Pfam-A.hmm.gz")
+    hmm_path = joinpath(dbdir, "Pfam-A.hmm")
+    url = "https://ftp.ebi.ac.uk/pub/databases/Pfam/$(release)/Pfam-A.hmm.gz"
+
+    if force || !isfile(gz_path) || filesize(gz_path) == 0
+        Downloads.download(url, gz_path)
+    end
+    if force || !isfile(hmm_path) || filesize(hmm_path) == 0
+        open(hmm_path, "w") do io
+            open(gz_path, "r") do raw
+                write(io, read(CodecZlib.GzipDecompressorStream(raw), String))
+            end
+        end
+    end
+    return hmm_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Download, cache, and press the Pfam-A HMM library for repeated HMMER use.
+"""
+function prepare_pfam_hmm_database(; dbdir::AbstractString = "$(homedir())/workspace/reference-databases/pfam",
+        release::AbstractString = "current_release",
+        force::Bool = false)
+    hmm_path = Mycelia.download_pfam_hmm_database(dbdir = dbdir, release = release, force = force)
+    force && foreach(path -> isfile(path) && rm(path; force = true), ["$(hmm_path).h3f", "$(hmm_path).h3i", "$(hmm_path).h3m", "$(hmm_path).h3p"])
+    Mycelia.run_hmmpress(hmm = hmm_path)
+    return hmm_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run a Pfam-A HMM scan against a FASTA file and return the parsed domain hits.
+"""
+function run_pfam_hmmscan(; fasta::AbstractString,
+        outdir::AbstractString = dirname(fasta),
+        dbdir::AbstractString = "$(homedir())/workspace/reference-databases/pfam",
+        release::AbstractString = "current_release",
+        cpu::Integer = 4,
+        evalue_threshold::Real = 1e-5,
+        force::Bool = false)
+    mkpath(outdir)
+    pfam_hmm = Mycelia.prepare_pfam_hmm_database(dbdir = dbdir, release = release, force = force)
+    domtblout = joinpath(outdir, basename(fasta) * ".pfam.domtblout")
+    tblout = joinpath(outdir, basename(fasta) * ".pfam.tblout")
+    if force
+        for path in [domtblout, tblout]
+            isfile(path) && rm(path; force = true)
+        end
+    end
+    Mycelia.run_hmmsearch(hmm = pfam_hmm, fasta = fasta, domtblout = domtblout, tblout = tblout, cpu = cpu)
+    hits_df = Mycelia.parse_hmmer_domtblout(domtblout)
+    if DataFrames.nrow(hits_df) == 0
+        return hits_df
+    end
+    hits_df = hits_df[hits_df.independent_evalue .<= evalue_threshold, :]
+    return hits_df
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Convert NCBI sequence IDs to accession numbers.
 """
 function ids_to_accessions(ids::Vector{String}, database::String)
