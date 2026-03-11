@@ -3804,7 +3804,12 @@ function http_get_text_with_retry(; url::AbstractString,
         rate_limit_seconds = rate_limit_seconds,
         max_attempts = max_attempts,
     )
-    return String(response.body)
+    content_encoding = lowercase(HTTP.header(response, "Content-Encoding", ""))
+    if content_encoding == "gzip"
+        return read(CodecZlib.GzipDecompressorStream(IOBuffer(response.body)), String)
+    else
+        return String(response.body)
+    end
 end
 
 """
