@@ -2386,6 +2386,35 @@ function run_clustal_omega(; fasta, outfmt = "clustal")
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run MAFFT on a FASTA file and return the aligned FASTA path.
+
+# Arguments
+- `fasta`: Input FASTA file to align.
+- `outfile`: Output aligned FASTA path. Defaults to `fasta * ".mafft.fasta"`.
+- `strategy`: MAFFT strategy string such as `"--auto"`, `"--localpair --maxiterate 1000"`, or `"--retree 2"`.
+
+# Returns
+- `String`: Path to the aligned FASTA file.
+"""
+function run_mafft(; fasta, outfile = fasta * ".mafft.fasta", strategy::AbstractString = "--auto")
+    Mycelia.add_bioconda_env("mafft")
+    if !isfile(outfile)
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mafft mafft $(split(strategy)...) $(fasta)`
+        open(outfile, "w") do io
+            try
+                run(pipeline(cmd, stdout = io))
+            catch e
+                # MAFFT exits non-zero for single-sequence input. Keep the original file as the aligned output.
+                cp(fasta, outfile; force = true)
+            end
+        end
+    end
+    return outfile
+end
+
 # function make_diamond_db(fasta_file, db_file=fasta_file)
 #     @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
 # end

@@ -3766,3 +3766,152 @@ function download_sequence_by_accession(; accession::String,
         return ""
     end
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Perform an HTTP GET with retry support, optional query parameters, and optional
+rate limiting.
+"""
+function http_get_with_retry(; url::AbstractString,
+        query = Pair{String, String}[],
+        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        readtimeout::Real = 120,
+        rate_limit_seconds::Real = 0.0,
+        max_attempts::Int = 3)
+    rate_limit_seconds > 0 && sleep(rate_limit_seconds)
+    return Mycelia.with_retry(max_attempts = max_attempts) do
+        HTTP.get(url, headers; query = collect(query), readtimeout = readtimeout, status_exception = true)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Fetch text content from a remote endpoint with retry support.
+"""
+function http_get_text_with_retry(; url::AbstractString,
+        query = Pair{String, String}[],
+        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        readtimeout::Real = 120,
+        rate_limit_seconds::Real = 0.0,
+        max_attempts::Int = 3)
+    response = Mycelia.http_get_with_retry(
+        url = url,
+        query = query,
+        headers = headers,
+        readtimeout = readtimeout,
+        rate_limit_seconds = rate_limit_seconds,
+        max_attempts = max_attempts,
+    )
+    return String(response.body)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Fetch JSON content from a remote endpoint with retry support.
+"""
+function http_get_json_with_retry(; url::AbstractString,
+        query = Pair{String, String}[],
+        headers = Pair{String, String}["User-Agent" => "Mycelia"],
+        readtimeout::Real = 120,
+        rate_limit_seconds::Real = 0.0,
+        max_attempts::Int = 3)
+    return JSON.parse(
+        Mycelia.http_get_text_with_retry(
+            url = url,
+            query = query,
+            headers = headers,
+            readtimeout = readtimeout,
+            rate_limit_seconds = rate_limit_seconds,
+            max_attempts = max_attempts,
+        ),
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Search UniProtKB or UniRef through the REST API.
+"""
+function uniprot_search(; database::AbstractString = "uniprotkb",
+        query::AbstractString,
+        format::AbstractString = "json",
+        size::Integer = 500,
+        fields::Vector{String} = String[])
+    params = Pair{String, String}["query" => String(query), "format" => String(format), "size" => string(size)]
+    !isempty(fields) && push!(params, "fields" => join(fields, ","))
+    return if format == "json"
+        Mycelia.http_get_json_with_retry(
+            url = "https://rest.uniprot.org/$(database)/search",
+            query = params,
+            headers = ["User-Agent" => "Mycelia/UniProt"],
+        )
+    else
+        Mycelia.http_get_text_with_retry(
+            url = "https://rest.uniprot.org/$(database)/search",
+            query = params,
+            headers = ["User-Agent" => "Mycelia/UniProt"],
+        )
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run an NCBI ESearch query and return the ID list.
+"""
+function ncbi_esearch(; db::AbstractString,
+        term::AbstractString,
+        retmax::Integer = 500,
+        email::AbstractString = get(ENV, "NCBI_EMAIL", "cameron.prybol@example.com"),
+        api_key::AbstractString = get(ENV, "NCBI_API_KEY", ""),
+        rate_limit_seconds::Real = 0.34)
+    params = Pair{String, String}[
+        "db" => String(db),
+        "term" => String(term),
+        "retmax" => string(retmax),
+        "retmode" => "json",
+        "email" => String(email),
+        "tool" => "Mycelia",
+    ]
+    !isempty(api_key) && push!(params, "api_key" => String(api_key))
+    payload = Mycelia.http_get_json_with_retry(
+        url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi",
+        query = params,
+        headers = ["User-Agent" => "Mycelia/NCBI"],
+        rate_limit_seconds = rate_limit_seconds,
+    )
+    return String.(get(get(payload, "esearchresult", Dict{String, Any}()), "idlist", String[]))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Fetch raw text from an NCBI EFetch query.
+"""
+function ncbi_efetch_text(; db::AbstractString,
+        ids::Vector{String},
+        rettype::AbstractString = "fasta",
+        retmode::AbstractString = "text",
+        email::AbstractString = get(ENV, "NCBI_EMAIL", "cameron.prybol@example.com"),
+        api_key::AbstractString = get(ENV, "NCBI_API_KEY", ""),
+        rate_limit_seconds::Real = 0.34)
+    isempty(ids) && return ""
+    params = Pair{String, String}[
+        "db" => String(db),
+        "id" => join(ids, ","),
+        "rettype" => String(rettype),
+        "retmode" => String(retmode),
+        "email" => String(email),
+        "tool" => "Mycelia",
+    ]
+    !isempty(api_key) && push!(params, "api_key" => String(api_key))
+    return Mycelia.http_get_text_with_retry(
+        url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi",
+        query = params,
+        headers = ["User-Agent" => "Mycelia/NCBI"],
+        rate_limit_seconds = rate_limit_seconds,
+    )
+end
