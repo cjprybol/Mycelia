@@ -2415,6 +2415,103 @@ function run_mafft(; fasta, outfile = fasta * ".mafft.fasta", strategy::Abstract
     return outfile
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Build an HMM profile from an aligned protein FASTA file.
+"""
+function run_hmmbuild(; aligned_fasta, outfile = aligned_fasta * ".hmm", name::AbstractString = basename(aligned_fasta))
+    Mycelia.add_bioconda_env("hmmer")
+    if !isfile(outfile)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hmmer hmmbuild -n $(name) $(outfile) $(aligned_fasta)`)
+    end
+    return outfile
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Prepare an HMM database for repeated search.
+"""
+function run_hmmpress(; hmm)
+    Mycelia.add_bioconda_env("hmmer")
+    pressed_files = ["$(hmm).h3f", "$(hmm).h3i", "$(hmm).h3m", "$(hmm).h3p"]
+    if !all(isfile, pressed_files)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hmmer hmmpress $(hmm)`)
+    end
+    return hmm
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Search an HMM profile or profile database against a FASTA file and return the
+`domtblout` path.
+"""
+function run_hmmsearch(; hmm, fasta, domtblout = fasta * ".domtblout", tblout = fasta * ".tblout", cpu::Integer = 1, extra_args::Vector{String} = String[])
+    Mycelia.add_bioconda_env("hmmer")
+    if !isfile(domtblout)
+        cmd = Cmd(vcat([
+            Mycelia.CONDA_RUNNER,
+            "run",
+            "--live-stream",
+            "-n",
+            "hmmer",
+            "hmmsearch",
+            "--cpu",
+            string(cpu),
+            "--domtblout",
+            domtblout,
+            "--tblout",
+            tblout,
+        ], extra_args, [hmm, fasta]))
+        run(cmd)
+    end
+    return domtblout
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Parse an HMMER `domtblout` file into a `DataFrames.DataFrame`.
+"""
+function parse_hmmer_domtblout(path::AbstractString)
+    rows = NamedTuple[]
+    for line in eachline(path)
+        startswith(line, "#") && continue
+        isempty(strip(line)) && continue
+        fields = split(strip(line))
+        length(fields) < 23 && continue
+        description = join(fields[23:end], " ")
+        push!(rows, (
+            target_name = fields[1],
+            target_accession = fields[2],
+            target_length = parse(Int, fields[3]),
+            query_name = fields[4],
+            query_accession = fields[5],
+            query_length = parse(Int, fields[6]),
+            full_sequence_evalue = parse(Float64, fields[7]),
+            full_sequence_score = parse(Float64, fields[8]),
+            full_sequence_bias = parse(Float64, fields[9]),
+            domain_number = parse(Int, fields[10]),
+            domain_count = parse(Int, fields[11]),
+            conditional_evalue = parse(Float64, fields[12]),
+            independent_evalue = parse(Float64, fields[13]),
+            domain_score = parse(Float64, fields[14]),
+            domain_bias = parse(Float64, fields[15]),
+            hmm_from = parse(Int, fields[16]),
+            hmm_to = parse(Int, fields[17]),
+            ali_from = parse(Int, fields[18]),
+            ali_to = parse(Int, fields[19]),
+            env_from = parse(Int, fields[20]),
+            env_to = parse(Int, fields[21]),
+            accuracy = parse(Float64, fields[22]),
+            description = description,
+        ))
+    end
+    return DataFrames.DataFrame(rows)
+end
+
 # function make_diamond_db(fasta_file, db_file=fasta_file)
 #     @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
 # end
