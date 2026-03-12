@@ -1483,7 +1483,10 @@ function bandage_visualize(; gfa, img = nothing, format::Union{Nothing, String} 
     if force || !isfile(target_img)
         cmd_parts = [bandage, "image", gfa, target_img]
         append!(cmd_parts, extra_args)
-        run(Cmd(cmd_parts))
+        # Set QT_QPA_PLATFORM=offscreen for headless rendering (HPC nodes)
+        env = copy(ENV)
+        env["QT_QPA_PLATFORM"] = get(ENV, "QT_QPA_PLATFORM", "offscreen")
+        run(Cmd(Cmd(cmd_parts); env = env))
     end
     return target_img
 end
