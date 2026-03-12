@@ -13,13 +13,17 @@
 # ============================================================================
 
 """
-    write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
+    write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString; segment_naming::Symbol=:numeric)
 
 Export a MetaGraphsNext graph to GFA v1.0 format.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: The graph to export
 - `outfile::AbstractString`: Path to output GFA file
+- `segment_naming::Symbol`: How to assign GFA segment IDs.
+  - `:numeric` (default): Sequential integers (1, 2, 3, ...). Standard GFA convention.
+  - `:sequence`: Use the sequence text as the segment ID. Useful for Bandage
+    visualization with `--names`, which displays the segment ID as the node label.
 
 # Returns
 - `String`: Path to the output file
@@ -31,7 +35,6 @@ Writes:
 - Link (L) lines for each edge with strand orientations and overlap
 
 # Details
-- Vertex IDs are assigned sequentially (1, 2, 3, ...)
 - Depth (DP:f:) is calculated from coverage data
 - Overlap is inferred from k-mer length (k-1) or edge data
 - Strand orientations from edge data (+ for Forward, - for Reverse)
@@ -40,15 +43,21 @@ Writes:
 ```julia
 graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
 write_gfa_next(graph, "assembly.gfa")
+
+# For Bandage visualization with node labels
+write_gfa_next(graph, "assembly_labeled.gfa"; segment_naming=:sequence)
 ```
 """
-function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
+function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString;
+        segment_naming::Symbol = :numeric)
+    segment_naming in (:numeric, :sequence) ||
+        throw(ArgumentError("segment_naming must be :numeric or :sequence, got :$segment_naming"))
+
     open(outfile, "w") do io
         println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Rhizomorph")
 
         vertex_id_map = Dict()
         for (i, label) in enumerate(MetaGraphsNext.labels(graph))
-            vertex_id_map[label] = i
             vertex_data = graph[label]
 
             # Calculate depth from evidence
@@ -61,7 +70,8 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
             end
 
             # Extract sequence from vertex data
-            sequence = if label isa Kmers.Kmer || label isa BioSequences.BioSequence || label isa AbstractString
+            sequence = if label isa Kmers.Kmer || label isa BioSequences.BioSequence ||
+                          label isa AbstractString
                 string(label)
             elseif hasfield(typeof(vertex_data), :Kmer)
                 string(vertex_data.Kmer)
@@ -77,7 +87,10 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
                 string(label)  # Fallback: use label as sequence
             end
 
-            println(io, "S\t$i\t$(sequence)\tDP:f:$depth")
+            seg_id = segment_naming == :sequence ? sequence : string(i)
+            vertex_id_map[label] = seg_id
+
+            println(io, "S\t$(seg_id)\t$(sequence)\tDP:f:$depth")
         end
 
         # Determine overlap length
@@ -425,7 +438,8 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
 
         SeqType = first(seq_types)
 
-        vertex_data_type = SeqType == String ? StringVertexData : BioSequenceVertexData{SeqType}
+        vertex_data_type = SeqType == String ? StringVertexData :
+                           BioSequenceVertexData{SeqType}
         edge_data_type = SeqType == String ? StringEdgeData : BioSequenceEdgeData
 
         graph = MetaGraphsNext.MetaGraph(
