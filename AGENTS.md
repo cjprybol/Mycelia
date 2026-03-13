@@ -12,6 +12,13 @@ Comprehensive guidance for AI agents working in this repository.
 | Static analysis | `julia --project=. test/jet.jl`                                      |
 | Install deps    | `julia --project=. -e "import Pkg; Pkg.instantiate()"`               |
 
+## Repo Sync Rules
+
+- For tracked source files, tests, docs, and other repo content, prefer git sync over `scp`.
+- Default remote workflow: edit locally, commit locally, push to origin, then update the remote clone with `git pull --ff-only`.
+- Reserve `scp` for intentionally untracked, bulky, or transient artifacts that should not be versioned.
+- If `scp` is used as an exception, call it out explicitly in the handoff.
+
 ---
 
 ## Repository Overview

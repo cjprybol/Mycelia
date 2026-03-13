@@ -59,6 +59,83 @@ Test.@testset "Alignment Parsing Helpers" begin
         Test.@test Mycelia.is_equivalent(seq, rc_seq)
     end
 
+    Test.@testset "HMMER parsing and extraction" begin
+        mktempdir() do dir
+            domtbl_path = joinpath(dir, "sample.domtblout")
+            open(domtbl_path, "w") do io
+                println(io, "PF14859 PF14859.1 128 seqA - 300 1e-40 120.0 0.0 1 1 1e-42 1e-42 119.5 0.0 1 120 150 271 148 273 0.98 Colicin_M")
+                println(io, "PF01024 PF01024.1 210 seqB - 520 1e-30 95.0 0.0 1 1 1e-31 1e-31 94.5 0.0 5 205 301 510 298 512 0.95 Colicin")
+                println(io, "PF11504 PF11504.1 180 seqB - 520 1e-10 40.0 0.0 2 2 1e-11 1e-11 39.5 0.0 8 170 40 210 38 212 0.91 Colicin_Ia")
+            end
+
+            fasta_path = joinpath(dir, "sample.faa")
+            records = [
+                Mycelia.FASTX.FASTA.Record("seqA annotated sequence", repeat("A", 300)),
+                Mycelia.FASTX.FASTA.Record("seqB second sequence", repeat("C", 520)),
+            ]
+            Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false)
+
+            parsed = Mycelia.parse_hmmer_domtblout(domtbl_path)
+            Test.@test Mycelia.DataFrames.nrow(parsed) == 3
+            Test.@test parsed[1, :target_name] == "PF14859"
+            Test.@test parsed[1, :independent_evalue] ≈ 1e-42
+
+            per_query = Mycelia.summarize_hmmer_domain_hits(parsed)
+            Test.@test Mycelia.DataFrames.nrow(per_query) == 2
+            Test.@test per_query[per_query.query_name .== "seqB", :n_unique_domains][1] == 2
+
+            boundaries = Mycelia.summarize_hmmer_domain_boundaries(parsed)
+            Test.@test Mycelia.DataFrames.nrow(boundaries) == 3
+            Test.@test boundaries[boundaries.target_name .== "PF01024", :start_min][1] == 301
+
+            extracted = Mycelia.extract_hmmer_domain_sequences(parsed; fasta = fasta_path)
+            Test.@test Mycelia.DataFrames.nrow(extracted) == 3
+            Test.@test extracted[1, :length] == 122
+            Test.@test extracted[1, :domain_sequence] == repeat("A", 122)
+
+            outdir = joinpath(dir, "domains")
+            domain_fastas = Mycelia.write_hmmer_domain_fastas(extracted; outdir = outdir)
+            Test.@test Mycelia.DataFrames.nrow(domain_fastas) == 3
+            Test.@test all(isfile, domain_fastas.fasta)
+        end
+    end
+
+    Test.@testset "Pfam subset extraction" begin
+        mktempdir() do dir
+            pfam_a = joinpath(dir, "Pfam-A.hmm")
+            open(pfam_a, "w") do io
+                println(io, "HMMER3/f [3.4 | Aug 2023]")
+                println(io, "NAME  DomainA")
+                println(io, "ACC   PF00001.1")
+                println(io, "//")
+                println(io, "NAME  DomainB")
+                println(io, "ACC   PF00002.4")
+                println(io, "//")
+                println(io, "NAME  DomainC")
+                println(io, "ACC   PF00003.2")
+                println(io, "//")
+            end
+
+            outdir = joinpath(dir, "subset")
+            combined = joinpath(outdir, "subset.hmm")
+            result = Mycelia.extract_pfam_hmm_subset(
+                pfam_a = pfam_a,
+                accessions = ["PF00003", "PF00001"],
+                outdir = outdir,
+                combined_hmm = combined,
+                press = false,
+            )
+
+            Test.@test length(result.hmm_files) == 2
+            Test.@test all(isfile, result.hmm_files)
+            Test.@test isfile(combined)
+            combined_text = read(combined, String)
+            Test.@test occursin("PF00001.1", combined_text)
+            Test.@test occursin("PF00003.2", combined_text)
+            Test.@test !occursin("PF00002.4", combined_text)
+        end
+    end
+
     Test.@testset "Minimap and label helpers" begin
         size = Mycelia.system_mem_to_minimap_index_size(system_mem_gb = 8.0, denominator = 4.0)
         Test.@test size == "2G"

@@ -2395,20 +2395,51 @@ Run MAFFT on a FASTA file and return the aligned FASTA path.
 - `fasta`: Input FASTA file to align.
 - `outfile`: Output aligned FASTA path. Defaults to `fasta * ".mafft.fasta"`.
 - `strategy`: MAFFT strategy string such as `"--auto"`, `"--localpair --maxiterate 1000"`, or `"--retree 2"`.
+- `quiet`: When `true`, pass `--quiet` to suppress progress output.
+- `progressfile`: Optional absolute path for MAFFT progress output. When omitted and `quiet=false`, MAFFT writes progress to `/dev/null` instead of stderr.
+- `force`: When `true`, rerun even if `outfile` already exists.
 
 # Returns
 - `String`: Path to the aligned FASTA file.
 """
-function run_mafft(; fasta, outfile = fasta * ".mafft.fasta", strategy::AbstractString = "--auto")
+function run_mafft(;
+        fasta,
+        outfile = fasta * ".mafft.fasta",
+        strategy::AbstractString = "--auto",
+        quiet::Bool = false,
+        progressfile::Union{Nothing, AbstractString} = nothing,
+        force::Bool = false
+    )
     Mycelia.add_bioconda_env("mafft")
-    if !isfile(outfile)
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mafft mafft $(split(strategy)...) $(fasta)`
+    if force || !isfile(outfile) || filesize(outfile) == 0
+        cmd_parts = String[
+            Mycelia.CONDA_RUNNER,
+            "run",
+            "--live-stream",
+            "-n",
+            "mafft",
+            "mafft",
+        ]
+        quiet && push!(cmd_parts, "--quiet")
+        effective_progressfile = quiet ? nothing : something(progressfile, "/dev/null")
+        if !isnothing(effective_progressfile)
+            progress_dir = dirname(effective_progressfile)
+            isempty(progress_dir) || mkpath(progress_dir)
+            append!(cmd_parts, ["--progress", abspath(effective_progressfile)])
+        end
+        append!(cmd_parts, split(strategy))
+        push!(cmd_parts, fasta)
+        cmd = Cmd(cmd_parts)
         open(outfile, "w") do io
             try
                 run(pipeline(cmd, stdout = io))
             catch e
                 # MAFFT exits non-zero for single-sequence input. Keep the original file as the aligned output.
-                cp(fasta, outfile; force = true)
+                if Mycelia.count_records(fasta) == 1
+                    cp(fasta, outfile; force = true)
+                else
+                    rethrow(e)
+                end
             end
         end
     end
@@ -2445,6 +2476,102 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Download and unpack `Pfam-A.hmm.gz` to `outdir`, returning the plain-text HMM
+path.
+"""
+function download_pfam_a_hmm(;
+        outdir::AbstractString,
+        url::AbstractString = "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz",
+        gz_path::AbstractString = joinpath(outdir, basename(url)),
+        hmm_path::AbstractString = replace(gz_path, r"\.gz$" => ""),
+        force::Bool = false
+    )
+    mkpath(outdir)
+    if force || !isfile(gz_path)
+        Downloads.download(url, gz_path)
+    end
+    if force || !isfile(hmm_path)
+        open(hmm_path, "w") do io
+            stream = CodecZlib.GzipDecompressorStream(open(gz_path))
+            try
+                write(io, read(stream))
+            finally
+                close(stream)
+            end
+        end
+    end
+    return hmm_path
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract a subset of Pfam HMMs from a `Pfam-A.hmm` file, optionally concatenate
+them into a single database, and optionally `hmmpress` the result.
+"""
+function extract_pfam_hmm_subset(;
+        pfam_a::AbstractString,
+        accessions::Vector{String},
+        outdir::AbstractString,
+        combined_hmm::Union{Nothing, AbstractString} = nothing,
+        press::Bool = true,
+        force::Bool = false
+    )
+    mkpath(outdir)
+    targets = Set(accessions)
+    current_entry = String[]
+    current_accession = nothing
+    written = Set{String}()
+
+    for accession in accessions
+        outfile = joinpath(outdir, string(accession, ".hmm"))
+        if force && isfile(outfile)
+            rm(outfile; force = true)
+        end
+    end
+
+    open(pfam_a) do io
+        for line in eachline(io; keep = true)
+            push!(current_entry, line)
+            if startswith(line, "ACC")
+                current_accession = split(split(strip(line))[2], '.')[1]
+            elseif startswith(line, "//")
+                if !isnothing(current_accession) && current_accession in targets
+                    outfile = joinpath(outdir, string(current_accession, ".hmm"))
+                    if force || !isfile(outfile)
+                        open(outfile, "w") do out_io
+                            write(out_io, join(current_entry))
+                        end
+                    end
+                    push!(written, current_accession)
+                end
+                empty!(current_entry)
+                current_accession = nothing
+            end
+        end
+    end
+
+    missing = setdiff(targets, written)
+    isempty(missing) || error("Missing Pfam HMM entries: $(join(sort!(collect(missing)), ", "))")
+
+    hmm_files = [joinpath(outdir, string(accession, ".hmm")) for accession in accessions]
+    if !isnothing(combined_hmm)
+        if force || !isfile(combined_hmm)
+            open(combined_hmm, "w") do io
+                for hmm_file in hmm_files
+                    write(io, read(hmm_file, String))
+                end
+            end
+        end
+        press && run_hmmpress(hmm = combined_hmm)
+    end
+
+    return (; hmm_files, combined_hmm)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Search an HMM profile or profile database against a FASTA file and return the
 `domtblout` path.
 """
@@ -2468,6 +2595,55 @@ function run_hmmsearch(; hmm, fasta, domtblout = fasta * ".domtblout", tblout = 
         run(cmd)
     end
     return domtblout
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Scan a FASTA file against an HMM database with `hmmscan` and return the output
+paths.
+"""
+function run_hmmscan(;
+        hmm,
+        fasta,
+        domtblout = fasta * ".hmmscan.domtblout",
+        tblout::Union{Nothing, AbstractString} = nothing,
+        stdout = fasta * ".hmmscan.out",
+        cpu::Integer = 1,
+        noali::Bool = true,
+        evalue::Union{Nothing, Real} = nothing,
+        domE::Union{Nothing, Real} = nothing,
+        extra_args::Vector{String} = String[],
+        force::Bool = false
+    )
+    Mycelia.add_bioconda_env("hmmer")
+    outputs = [domtblout, stdout]
+    isnothing(tblout) || push!(outputs, tblout)
+    if force || !all(isfile, outputs)
+        cmd_parts = String[
+            Mycelia.CONDA_RUNNER,
+            "run",
+            "--live-stream",
+            "-n",
+            "hmmer",
+            "hmmscan",
+            "--cpu",
+            string(cpu),
+            "--domtblout",
+            domtblout,
+        ]
+        isnothing(tblout) || append!(cmd_parts, ["--tblout", tblout])
+        noali && push!(cmd_parts, "--noali")
+        isnothing(evalue) || append!(cmd_parts, ["-E", string(evalue)])
+        isnothing(domE) || append!(cmd_parts, ["--domE", string(domE)])
+        append!(cmd_parts, extra_args)
+        append!(cmd_parts, [hmm, fasta])
+        cmd = Cmd(cmd_parts)
+        open(stdout, "w") do io
+            run(pipeline(cmd, stdout = io))
+        end
+    end
+    return (; domtblout, tblout, stdout)
 end
 
 """
@@ -2508,6 +2684,129 @@ function parse_hmmer_domtblout(path::AbstractString)
             accuracy = parse(Float64, fields[22]),
             description = description,
         ))
+    end
+    return DataFrames.DataFrame(rows)
+end
+
+function _hmmer_fasta_lookup(fasta::AbstractString)
+    lookup = Dict{String, NamedTuple{(:header, :description, :sequence, :length), Tuple{String, String, String, Int}}}()
+    for record in Mycelia.open_fastx(fasta)
+        id = String(FASTX.identifier(record))
+        description = String(FASTX.description(record))
+        header = isempty(description) ? id : string(id, ' ', description)
+        sequence = String(FASTX.sequence(record))
+        lookup[id] = (
+            header = header,
+            description = description,
+            sequence = sequence,
+            length = length(sequence),
+        )
+    end
+    return lookup
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Summarize HMMER domain hits at the query-sequence level.
+"""
+function summarize_hmmer_domain_hits(domtbl::DataFrames.AbstractDataFrame)
+    rows = NamedTuple[]
+    for sdf in DataFrames.groupby(domtbl, :query_name)
+        ordered = DataFrames.sort(sdf, [:ali_from, :ali_to, :target_name])
+        domains = String.(ordered.target_name)
+        ranges = [string(row.target_name, ':', row.ali_from, '-', row.ali_to) for row in eachrow(ordered)]
+        push!(rows, (
+            query_name = String(first(ordered.query_name)),
+            query_accession = String(first(ordered.query_accession)),
+            query_length = Int(first(ordered.query_length)),
+            n_hits = DataFrames.nrow(ordered),
+            n_unique_domains = length(unique(domains)),
+            domains = join(domains, ';'),
+            domain_ranges = join(ranges, ';'),
+            best_independent_evalue = minimum(ordered.independent_evalue),
+        ))
+    end
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Summarize HMMER domain boundaries across all hits for each domain model.
+"""
+function summarize_hmmer_domain_boundaries(domtbl::DataFrames.AbstractDataFrame)
+    rows = NamedTuple[]
+    for sdf in DataFrames.groupby(domtbl, :target_name)
+        lengths = sdf.ali_to .- sdf.ali_from .+ 1
+        push!(rows, (
+            target_name = String(first(sdf.target_name)),
+            n_hits = DataFrames.nrow(sdf),
+            n_queries = length(unique(String.(sdf.query_name))),
+            start_min = minimum(sdf.ali_from),
+            start_max = maximum(sdf.ali_from),
+            end_min = minimum(sdf.ali_to),
+            end_max = maximum(sdf.ali_to),
+            length_min = minimum(lengths),
+            length_max = maximum(lengths),
+            length_median = Statistics.median(lengths),
+        ))
+    end
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract domain subsequences from HMMER hits into a tidy table.
+"""
+function extract_hmmer_domain_sequences(domtbl::DataFrames.AbstractDataFrame; fasta::AbstractString)
+    lookup = _hmmer_fasta_lookup(fasta)
+    rows = NamedTuple[]
+    ordered = DataFrames.sort(domtbl, [:query_name, :ali_from, :ali_to, :target_name])
+    for row in eachrow(ordered)
+        query_name = String(row.query_name)
+        haskey(lookup, query_name) || continue
+        record = lookup[query_name]
+        start_pos = Int(row.ali_from)
+        end_pos = Int(row.ali_to)
+        domain_sequence = record.sequence[start_pos:end_pos]
+        push!(rows, (
+            seq_id = query_name,
+            query_header = record.header,
+            query_description = record.description,
+            domain = String(row.target_name),
+            target_accession = String(row.target_accession),
+            start = start_pos,
+            stop = end_pos,
+            length = length(domain_sequence),
+            independent_evalue = Float64(row.independent_evalue),
+            domain_sequence = domain_sequence,
+        ))
+    end
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Write extracted HMMER domain sequences to one FASTA per domain and return a
+table of output paths.
+"""
+function write_hmmer_domain_fastas(domain_sequences::DataFrames.AbstractDataFrame; outdir::AbstractString)
+    mkpath(outdir)
+    grouped = DataFrames.groupby(domain_sequences, :domain)
+    rows = NamedTuple[]
+    for sdf in grouped
+        domain = String(first(sdf.domain))
+        outfile = joinpath(outdir, string(domain, "_domains.fasta"))
+        records = FASTX.FASTA.Record[]
+        for row in eachrow(sdf)
+            identifier = string(row.seq_id, '|', row.domain, '|', row.start, '-', row.stop)
+            push!(records, FASTX.FASTA.Record(identifier, row.domain_sequence))
+        end
+        Mycelia.write_fasta(outfile = outfile, records = records, gzip = false)
+        push!(rows, (domain = domain, fasta = outfile, n_sequences = length(records)))
     end
     return DataFrames.DataFrame(rows)
 end
