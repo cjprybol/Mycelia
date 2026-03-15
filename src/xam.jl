@@ -883,13 +883,29 @@ Convert a BAM file to FASTQ format with gzip compression.
 
 """
 function bam_to_fastq(; bam, fastq = bam * ".fq.gz")
-    if !isfile(fastq)
-        Mycelia.add_bioconda_env("samtools")
-        p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`, `gzip`)
-        @time run(pipeline(p, fastq))
-    else
-        @info "$(fastq) already exists"
+    if isfile(fastq)
+        # Verify existing file is a valid gzip archive
+        try
+            run(pipeline(`gzip -t $(fastq)`, devnull, devnull))
+            @info "$(fastq) already exists"
+            return fastq
+        catch
+            @warn "$(fastq) exists but is corrupt (gzip integrity check failed), regenerating"
+            rm(fastq)
+        end
     end
+    Mycelia.add_bioconda_env("samtools")
+    tmp_fastq = fastq * ".tmp"
+    p = pipeline(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools fastq $(bam)`, `gzip`)
+    @time run(pipeline(p, tmp_fastq))
+    # Verify the output before committing
+    try
+        run(pipeline(`gzip -t $(tmp_fastq)`, devnull, devnull))
+    catch
+        rm(tmp_fastq, force = true)
+        error("BAM to FASTQ conversion produced corrupt gzip output for $(bam)")
+    end
+    mv(tmp_fastq, fastq)
     return fastq
 end
 
