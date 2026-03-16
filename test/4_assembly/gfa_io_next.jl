@@ -30,6 +30,21 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
         return Set(Tuple(edge_label) for edge_label in MetaGraphsNext.edge_labels(graph))
     end
 
+    function parse_gfa_segments_and_links(path)
+        segment_map = Dict{String, String}()
+        links = Tuple{String, String}[]
+        for line in eachline(path)
+            fields = split(line, '\t')
+            isempty(fields) && continue
+            if fields[1] == "S" && length(fields) >= 3
+                segment_map[fields[2]] = fields[3]
+            elseif fields[1] == "L" && length(fields) >= 5
+                push!(links, (fields[2], fields[4]))
+            end
+        end
+        return segment_map, links
+    end
+
     function assert_roundtrip(case_name, graph_builder, graph_reader, expected_label_type)
         original_graph = graph_builder()
         original_labels = Set(MetaGraphsNext.labels(original_graph))
@@ -115,6 +130,45 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
         end
     end
 
+    Test.@testset "Sequence-Based Segment Naming For Bandage Labels" begin
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            dna_fasta_records,
+            3;
+            dataset_id = "gfa_sequence_names",
+            mode = :singlestrand
+        )
+
+        mktempdir() do tmpdir
+            numeric_gfa = joinpath(tmpdir, "numeric.gfa")
+            sequence_gfa = joinpath(tmpdir, "sequence.gfa")
+
+            Mycelia.Rhizomorph.write_gfa_next(graph, numeric_gfa)
+            Mycelia.Rhizomorph.write_gfa_next(
+                graph,
+                sequence_gfa;
+                segment_naming = :sequence
+            )
+
+            numeric_segments, numeric_links = parse_gfa_segments_and_links(numeric_gfa)
+            sequence_segments, sequence_links = parse_gfa_segments_and_links(sequence_gfa)
+
+            Test.@test !isempty(numeric_segments)
+            Test.@test !isempty(sequence_segments)
+            Test.@test all(key != value for (key, value) in numeric_segments)
+            Test.@test all(key == value for (key, value) in sequence_segments)
+
+            numeric_link_sequences = Set(
+                (numeric_segments[src], numeric_segments[dst]) for (src, dst) in numeric_links
+            )
+            sequence_link_sequences = Set(
+                (src, dst) for (src, dst) in sequence_links
+            )
+
+            Test.@test numeric_link_sequences == sequence_link_sequences
+            Test.@test Set(values(numeric_segments)) == Set(keys(sequence_segments))
+        end
+    end
+
     Test.@testset "GFA Reading" begin
         kmer_gfa = """
         H\tVN:Z:1.0
@@ -157,6 +211,54 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
                 Test.@test Set(MetaGraphsNext.labels(graph)) == Set(["ab!", "b!?"])
                 Test.@test graph["ab!", "b!?"] isa Mycelia.Rhizomorph.StringEdgeData
             end
+        end
+    end
+
+    Test.@testset "GFA Read Then Collapse Linear Chains" begin
+        mktempdir() do tmpdir
+            gfa_file = joinpath(tmpdir, "chain.gfa")
+            graph = Mycelia.Rhizomorph.build_ngram_graph(["ab!def"], 4; dataset_id = "chain")
+            Mycelia.Rhizomorph.write_gfa_next(graph, gfa_file)
+
+            roundtrip = Mycelia.Rhizomorph.read_gfa_next(gfa_file)
+            Test.@test roundtrip isa MetaGraphsNext.MetaGraph
+
+            collapsed = deepcopy(roundtrip)
+            Mycelia.Rhizomorph.collapse_linear_chains!(collapsed)
+
+            labels = Set(string(label) for label in MetaGraphsNext.labels(collapsed))
+            Test.@test labels == Set(["ab!def"])
+            Test.@test Graphs.nv(collapsed.graph) == 1
+            Test.@test Graphs.ne(collapsed.graph) == 0
+        end
+
+        mktempdir() do tmpdir
+            gfa_file = joinpath(tmpdir, "unicode_chain.gfa")
+            graph = Mycelia.Rhizomorph.build_ngram_graph(["élan"], 2; dataset_id = "unicode_chain")
+            Mycelia.Rhizomorph.write_gfa_next(graph, gfa_file)
+
+            roundtrip = Mycelia.Rhizomorph.read_gfa_next(gfa_file)
+            collapsed = deepcopy(roundtrip)
+            Mycelia.Rhizomorph.collapse_linear_chains!(collapsed)
+
+            labels = Set(string(label) for label in MetaGraphsNext.labels(collapsed))
+            Test.@test labels == Set(["élan"])
+            Test.@test Graphs.nv(collapsed.graph) == 1
+        end
+
+        mktempdir() do tmpdir
+            gfa_file = joinpath(tmpdir, "cycle.gfa")
+            graph = Mycelia.Rhizomorph.build_ngram_graph(["!x!x"], 2; dataset_id = "cycle")
+            Mycelia.Rhizomorph.write_gfa_next(graph, gfa_file)
+
+            roundtrip = Mycelia.Rhizomorph.read_gfa_next(gfa_file; force_biosequence_graph = true)
+            before_labels = Set(string(label) for label in MetaGraphsNext.labels(roundtrip))
+            collapsed = deepcopy(roundtrip)
+            Mycelia.Rhizomorph.collapse_linear_chains!(collapsed)
+            after_labels = Set(string(label) for label in MetaGraphsNext.labels(collapsed))
+
+            Test.@test before_labels == after_labels
+            Test.@test Graphs.nv(collapsed.graph) == Graphs.nv(roundtrip.graph)
         end
     end
 

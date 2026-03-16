@@ -237,6 +237,14 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
     end
 
     if kmer_type == String
+        segment_lengths = Set(length(sequence) for sequence in values(segments))
+        all_zero_link_overlaps = all(parse_overlap_str(overlap_str) == 0 for (_, _, _, _, overlap_str) in links)
+        default_string_overlap = if length(segment_lengths) == 1 && all_zero_link_overlaps
+            max(first(segment_lengths) - 1, 0)
+        else
+            0
+        end
+
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
             label_type = String,
@@ -255,7 +263,11 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
             if haskey(id_to_string, src_id) && haskey(id_to_string, dst_id)
                 src_string = id_to_string[src_id]
                 dst_string = id_to_string[dst_id]
-                graph[src_string, dst_string] = StringEdgeData(parse_overlap_str(overlap_str))
+                overlap = parse_overlap_str(overlap_str)
+                if overlap == 0 && default_string_overlap > 0
+                    overlap = default_string_overlap
+                end
+                graph[src_string, dst_string] = StringEdgeData(overlap)
             else
                 @warn "Link references unknown segment: $src_id -> $dst_id"
             end

@@ -474,6 +474,12 @@ function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
             continue
         end
 
+        # Cyclic unitigs can revisit the same label (e.g. 2-cycles in string graphs).
+        # Those are not linear chains and should be left untouched.
+        if length(unique(path)) < length(path)
+            continue
+        end
+
         first_vertex_data = graph[path[1]]
         if hasfield(typeof(first_vertex_data), :Kmer)
             # K-mer graphs cannot be collapsed in-place: the assembled sequence
@@ -555,11 +561,27 @@ function _assemble_linear_chain_sequence(graph, path::Vector)
         offsets[dst] = offset
 
         if overlap < length(append_sequence)
-            sequence = sequence * append_sequence[(overlap + 1):end]
+            sequence = sequence * _suffix_after_overlap(append_sequence, overlap)
         end
     end
 
     return sequence, offsets
+end
+
+function _suffix_after_overlap(sequence::AbstractString, overlap::Int)
+    overlap <= 0 && return sequence
+
+    current_index = firstindex(sequence)
+    for _ in 1:overlap
+        current_index > lastindex(sequence) && return ""
+        current_index = nextind(sequence, current_index)
+    end
+
+    return current_index > lastindex(sequence) ? "" : sequence[current_index:end]
+end
+
+function _suffix_after_overlap(sequence, overlap::Int)
+    return overlap < length(sequence) ? sequence[(overlap + 1):end] : typeof(sequence)()
 end
 
 function _build_collapsed_vertex(first_vertex_data, sequence)
