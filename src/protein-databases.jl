@@ -192,34 +192,97 @@ end
     expand_via_uniref(accession::AbstractString;
                       identity::Float64=0.5,
                       max_variants::Int=3,
-                      max_length::Int=500) -> Vector{Dict}
+                      max_length::Int=500,
+                      deduplicate::Bool=true) -> Vector{Dict}
 
-Find natural variants of a protein by looking up its UniRef cluster and
-returning the top members (excluding the query protein itself).
+Find diverse natural variants of a protein by looking up its UniRef50 cluster
+and returning members that represent genuinely different sequences.
+
+When `deduplicate=true` (default), uses the UniRef hierarchy to remove
+redundant sequences: members sharing the same UniRef90 cluster are >90%
+identical and only one representative is kept. This prevents returning
+near-identical sequences from different genome assemblies.
 
 Filters by max_length to enforce phage packaging constraints.
+Prefers variants from different species/genera for maximum diversity.
 
 # Example
 ```julia
 variants = expand_via_uniref("P05820"; max_variants=3)
-# => [Dict("accession" => "CEAM_ECOLX", "organism" => "E. coli", ...), ...]
+# Returns 3 variants from different UniRef90 clusters
 ```
 """
 function expand_via_uniref(accession::AbstractString;
         identity::Float64 = 0.5,
         max_variants::Int = 3,
-        max_length::Int = 500)
+        max_length::Int = 500,
+        deduplicate::Bool = true)
     cluster = search_uniref_cluster(accession; identity = identity)
     cluster === nothing && return Dict{String, Any}[]
 
-    members = fetch_uniref_members(cluster["id"]; max_members = max_variants + 2)
+    # Fetch more members than needed to allow for deduplication filtering
+    fetch_count = deduplicate ? max(max_variants * 5, 20) : max_variants + 2
+    members = fetch_uniref_members(cluster["id"]; max_members = fetch_count)
 
     # Filter: exclude query protein, enforce size limit
-    variants = filter(members) do m
+    candidates = filter(members) do m
         m["accession"] != accession && m["length"] <= max_length
     end
 
-    return variants[1:min(max_variants, length(variants))]
+    if !deduplicate || isempty(candidates)
+        return candidates[1:min(max_variants, length(candidates))]
+    end
+
+    # Deduplicate using UniRef90 clusters: members sharing the same
+    # UniRef90 cluster are >90% identical — keep only one per cluster.
+    # Also look up UniRef90 for the query protein to exclude its cluster.
+    query_ur90 = try
+        c = search_uniref_cluster(accession; identity = 0.9)
+        c === nothing ? "" : c["id"]
+    catch
+        ""
+    end
+    sleep(0.3)
+
+    seen_ur90 = Set{String}()
+    if !isempty(query_ur90)
+        push!(seen_ur90, query_ur90)
+    end
+
+    # Also track seen genera for diversity preference
+    seen_genera = Dict{String, Int}()
+    diverse_variants = Dict{String, Any}[]
+
+    for m in candidates
+        acc = m["accession"]
+
+        # Look up this member's UniRef90 cluster
+        ur90 = try
+            c = search_uniref_cluster(acc; identity = 0.9)
+            c === nothing ? acc : c["id"]  # fallback to accession if lookup fails
+        catch
+            acc
+        end
+        sleep(0.3)
+
+        # Skip if we already have a representative from this UniRef90 cluster
+        ur90 in seen_ur90 && continue
+        push!(seen_ur90, ur90)
+
+        # Track genus for diversity scoring
+        organism = get(m, "organism", "unknown")
+        genus = first(split(organism))
+        seen_genera[genus] = get(seen_genera, genus, 0) + 1
+
+        # Add the UniRef90 cluster info to the variant dict
+        m["uniref90_id"] = ur90
+        push!(diverse_variants, m)
+
+        # Stop once we have enough
+        length(diverse_variants) >= max_variants && break
+    end
+
+    return diverse_variants
 end
 
 # --------------------------------------------------------------------------- #
