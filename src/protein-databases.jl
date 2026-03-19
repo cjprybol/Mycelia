@@ -4,9 +4,21 @@
 # - UniProt: entries, sequences, embeddings
 # - UniRef: cluster membership and member expansion
 # - AlphaFold: predicted structures
-# - FoldSeek: structural similarity search
+# - FoldSeek: structural similarity search (uses existing Mycelia.foldseek_easy_search)
 #
 # All functions use HTTP.jl for API access and return parsed Julia types.
+# Uses JSON.parse (not JSON3) — Mycelia imports JSON, not JSON3.
+
+# Common headers for all API requests — includes Accept-Encoding: identity
+# to prevent gzip-compressed responses that HTTP.jl doesn't auto-decompress.
+const _UNIPROT_HEADERS = [
+    "Accept" => "application/json",
+    "Accept-Encoding" => "identity"
+]
+
+const _IDENTITY_HEADERS = [
+    "Accept-Encoding" => "identity",
+]
 
 """
     fetch_uniprot_entry(accession::AbstractString) -> Dict
@@ -22,7 +34,7 @@ entry["proteinDescription"]["recommendedName"]["fullName"]["value"]
 """
 function fetch_uniprot_entry(accession::AbstractString)
     url = "https://rest.uniprot.org/uniprotkb/$(accession).json"
-    response = HTTP.get(url; headers = ["Accept" => "application/json"])
+    response = HTTP.get(url; headers = _UNIPROT_HEADERS)
     return JSON.parse(String(response.body))
 end
 
@@ -38,7 +50,7 @@ fasta = fetch_uniprot_fasta("P05820")
 """
 function fetch_uniprot_fasta(accession::AbstractString)
     url = "https://rest.uniprot.org/uniprotkb/$(accession).fasta"
-    response = HTTP.get(url)
+    response = HTTP.get(url; headers = _IDENTITY_HEADERS)
     return String(response.body)
 end
 
@@ -84,7 +96,7 @@ function fetch_uniprot_sequences(accessions::AbstractVector{<:AbstractString};
 end
 
 """
-    search_uniprot(query::AbstractString; size::Int=10) -> Vector{Dict}
+    search_uniprot(query::AbstractString; size::Int=10) -> Vector
 
 Search UniProt by free-text query. Returns a vector of result entries.
 
@@ -96,9 +108,9 @@ results = search_uniprot("gene:csgC AND organism_id:83333"; size=3)
 function search_uniprot(query::AbstractString; size::Int = 10)
     url = "https://rest.uniprot.org/uniprotkb/search"
     params = ["query" => query, "format" => "json", "size" => string(size)]
-    response = HTTP.get(url; headers = ["Accept" => "application/json"], query = params)
-    parsed = JSON3.read(String(response.body))
-    return get(parsed, :results, [])
+    response = HTTP.get(url; headers = _UNIPROT_HEADERS, query = params)
+    parsed = JSON.parse(String(response.body))
+    return get(parsed, "results", [])
 end
 
 # --------------------------------------------------------------------------- #
@@ -110,13 +122,13 @@ end
                           identity::Float64=0.5) -> Union{Dict, Nothing}
 
 Find the UniRef cluster (at given identity threshold) containing a UniProt accession.
-Returns cluster info dict with :id, :name, :member_count, or nothing if not found.
+Returns cluster info dict with string keys, or nothing if not found.
 
 # Example
 ```julia
 cluster = search_uniref_cluster("P05820"; identity=0.5)
-cluster[:id]            # => "UniRef50_P05820"
-cluster[:member_count]  # => 236
+cluster["id"]            # => "UniRef50_P05820"
+cluster["member_count"]  # => 236
 ```
 """
 function search_uniref_cluster(accession::AbstractString; identity::Float64 = 0.5)
@@ -127,17 +139,17 @@ function search_uniref_cluster(accession::AbstractString; identity::Float64 = 0.
         "format" => "json",
         "size" => "1"
     ]
-    response = HTTP.get(url; headers = ["Accept" => "application/json"], query = params)
-    parsed = JSON3.read(String(response.body))
-    results = get(parsed, :results, [])
+    response = HTTP.get(url; headers = _UNIPROT_HEADERS, query = params)
+    parsed = JSON.parse(String(response.body))
+    results = get(parsed, "results", [])
     isempty(results) && return nothing
 
     cluster = first(results)
     return Dict(
-        :id => get(cluster, :id, ""),
-        :name => get(cluster, :name, ""),
-        :member_count => get(cluster, :memberCount, 0),
-        :updated => get(cluster, :updated, "")
+        "id" => get(cluster, "id", ""),
+        "name" => get(cluster, "name", ""),
+        "member_count" => get(cluster, "memberCount", 0),
+        "updated" => get(cluster, "updated", "")
     )
 end
 
@@ -151,26 +163,26 @@ Get members of a UniRef cluster. Returns a vector of member info dicts.
 ```julia
 members = fetch_uniref_members("UniRef50_P05820"; max_members=5)
 for m in members
-    println("\$(m[:accession]) — \$(m[:organism]) (\$(m[:length]) aa)")
+    println("\$(m["accession"]) — \$(m["organism"]) (\$(m["length"]) aa)")
 end
 ```
 """
 function fetch_uniref_members(cluster_id::AbstractString; max_members::Int = 10)
     url = "https://rest.uniprot.org/uniref/$(cluster_id)/members"
     params = ["format" => "json", "size" => string(max_members)]
-    response = HTTP.get(url; headers = ["Accept" => "application/json"], query = params)
-    parsed = JSON3.read(String(response.body))
-    raw_members = get(parsed, :results, [])
+    response = HTTP.get(url; headers = _UNIPROT_HEADERS, query = params)
+    parsed = JSON.parse(String(response.body))
+    raw_members = get(parsed, "results", [])
 
-    members = Dict[]
+    members = Dict{String, Any}[]
     for m in raw_members
         push!(members,
-            Dict(
-                :accession => get(m, :memberId, ""),
-                :type => get(m, :memberIdType, ""),
-                :organism => get(m, :organismName, "unknown"),
-                :length => get(m, :sequenceLength, 0),
-                :tax_id => get(m, :organismTaxId, 0)
+            Dict{String, Any}(
+                "accession" => get(m, "memberId", ""),
+                "type" => get(m, "memberIdType", ""),
+                "organism" => get(m, "organismName", "unknown"),
+                "length" => get(m, "sequenceLength", 0),
+                "tax_id" => get(m, "organismTaxId", 0)
             ))
     end
     return members
@@ -190,7 +202,7 @@ Filters by max_length to enforce phage packaging constraints.
 # Example
 ```julia
 variants = expand_via_uniref("P05820"; max_variants=3)
-# => [Dict(:accession => "CEAM_ECOLX", :organism => "E. coli", ...), ...]
+# => [Dict("accession" => "CEAM_ECOLX", "organism" => "E. coli", ...), ...]
 ```
 """
 function expand_via_uniref(accession::AbstractString;
@@ -198,13 +210,13 @@ function expand_via_uniref(accession::AbstractString;
         max_variants::Int = 3,
         max_length::Int = 500)
     cluster = search_uniref_cluster(accession; identity = identity)
-    cluster === nothing && return Dict[]
+    cluster === nothing && return Dict{String, Any}[]
 
-    members = fetch_uniref_members(cluster[:id]; max_members = max_variants + 2)
+    members = fetch_uniref_members(cluster["id"]; max_members = max_variants + 2)
 
     # Filter: exclude query protein, enforce size limit
     variants = filter(members) do m
-        m[:accession] != accession && m[:length] <= max_length
+        m["accession"] != accession && m["length"] <= max_length
     end
 
     return variants[1:min(max_variants, length(variants))]
@@ -218,33 +230,33 @@ end
     fetch_alphafold_prediction(accession::AbstractString) -> Union{Dict, Nothing}
 
 Get AlphaFold prediction metadata for a UniProt accession.
-Returns dict with :pdb_url, :cif_url, :plddt, :coverage, or nothing.
+Returns dict with string keys, or nothing.
 
 # Example
 ```julia
 pred = fetch_alphafold_prediction("P05820")
-pred[:plddt]    # => 96.12
-pred[:pdb_url]  # => "https://alphafold.ebi.ac.uk/files/AF-P05820-F1-model_v6.pdb"
+pred["plddt"]    # => 96.12
+pred["pdb_url"]  # => "https://alphafold.ebi.ac.uk/files/AF-P05820-F1-model_v6.pdb"
 ```
 """
 function fetch_alphafold_prediction(accession::AbstractString)
     url = "https://alphafold.ebi.ac.uk/api/prediction/$(accession)"
     response = try
-        HTTP.get(url; headers = ["Accept" => "application/json"])
+        HTTP.get(url; headers = _UNIPROT_HEADERS)
     catch e
         @warn "AlphaFold prediction not found for $(accession)"
         return nothing
     end
-    results = JSON3.read(String(response.body))
+    results = JSON.parse(String(response.body))
     isempty(results) && return nothing
 
     pred = first(results)
     return Dict(
-        :pdb_url => get(pred, :pdbUrl, ""),
-        :cif_url => get(pred, :cifUrl, ""),
-        :plddt => get(pred, :globalMetricValue, 0.0),
-        :model_version => get(pred, :latestVersion, 0),
-        :sequence_length => get(pred, :uniprotEnd, 0) - get(pred, :uniprotStart, 0) + 1
+        "pdb_url" => get(pred, "pdbUrl", ""),
+        "cif_url" => get(pred, "cifUrl", ""),
+        "plddt" => get(pred, "globalMetricValue", 0.0),
+        "model_version" => get(pred, "latestVersion", 0),
+        "sequence_length" => get(pred, "uniprotEnd", 0) - get(pred, "uniprotStart", 0) + 1
     )
 end
 
@@ -267,12 +279,12 @@ function download_alphafold_structure(accession::AbstractString,
     pred = fetch_alphafold_prediction(accession)
     pred === nothing && error("No AlphaFold prediction for $(accession)")
 
-    url = format == :pdb ? pred[:pdb_url] : pred[:cif_url]
+    url = format == :pdb ? pred["pdb_url"] : pred["cif_url"]
     ext = format == :pdb ? "pdb" : "cif"
     mkpath(output_dir)
     output_path = joinpath(output_dir, "AF-$(accession).$(ext)")
 
-    response = HTTP.get(url)
+    response = HTTP.get(url; headers = _IDENTITY_HEADERS)
     write(output_path, response.body)
     return output_path
 end
@@ -310,22 +322,20 @@ end
                              model::Symbol=:per_protein,
                              delay::Real=0.5) -> Dict{String, Vector{Float32}}
 
-Fetch pre-computed ProtT5-XL-U50 per-protein embeddings from UniProt.
+Compute composition-based protein embeddings from UniProt sequences.
 
-UniProt provides embeddings for Swiss-Prot entries at:
-  https://rest.uniprot.org/uniprotkb/{accession}?fields=ft_embedding
+Downloads the sequence from UniProt and computes an AAmer (k=2,3) composition
+embedding as a normalized feature vector. This is a lightweight alignment-free
+representation suitable for clustering.
 
-If unavailable (TrEMBL entries or API limitations), falls back to computing
-a sequence composition embedding using AAmer profiles at k=3,4,5 concatenated
-into a fixed-length feature vector.
+When ProtT5 bulk download is available (td-mm8yj), this will upgrade to real
+pre-trained embeddings from UniProt's FTP archive.
 
 # Example
 ```julia
 embeddings = fetch_uniprot_embeddings(["P05820", "Q840G9", "P52107"])
-size(embeddings["P05820"])  # => (1024,) for ProtT5, or (n_features,) for fallback
+length(embeddings["P05820"])  # => n_features (variable, depends on observed k-mers)
 ```
-
-See also: td-mm8yj for full UniProt FTP bulk embedding download.
 """
 function fetch_uniprot_embeddings(accessions::AbstractVector{<:AbstractString};
         model::Symbol = :per_protein,
@@ -334,9 +344,8 @@ function fetch_uniprot_embeddings(accessions::AbstractVector{<:AbstractString};
 
     for (i, acc) in enumerate(accessions)
         try
-            # Try UniProt embeddings endpoint
             url = "https://rest.uniprot.org/uniprotkb/$(acc).json?fields=sequence"
-            response = HTTP.get(url; headers = ["Accept" => "application/json"])
+            response = HTTP.get(url; headers = _UNIPROT_HEADERS)
             entry = JSON.parse(String(response.body))
 
             # Extract sequence for composition-based embedding
@@ -357,21 +366,12 @@ end
 
 """
     _compute_composition_embedding(seq::BioSequences.LongAA;
-                                    ks::Vector{Int}=[2, 3, 4]) -> Vector{Float32}
+                                    ks::Vector{Int}=[2, 3]) -> Vector{Float32}
 
 Compute a fixed-length protein embedding from concatenated AAmer frequency
-profiles at multiple k-mer sizes. This is a lightweight, alignment-free
-embedding that captures compositional properties.
+profiles at multiple k-mer sizes. Lightweight, alignment-free embedding.
 
-Returns a Vector{Float32} of length sum(20^k for k in ks) — but uses sparse
-representation internally to handle large k values efficiently.
-
-For k=[2,3,4]: theoretical max = 400 + 8000 + 160000 = 168400 dimensions.
-In practice, most entries are zero. We use the top 512 most informative
-features (by variance across a reference set) for a compact embedding.
-
-Simplified version: uses only k=2 and k=3 (400 + 8000 = 8400 features),
-truncated to observed k-mers only.
+Returns a normalized Vector{Float32} based on observed k-mer frequencies.
 """
 function _compute_composition_embedding(seq::BioSequences.LongAA;
         ks::Vector{Int} = [2, 3])
@@ -427,6 +427,8 @@ D, labels = protein_aamer_distance_matrix(seqs; k=3, metric=:bray_curtis)
 function protein_aamer_distance_matrix(sequences::Dict{String, BioSequences.LongAA};
         k::Int = 3,
         metric::Symbol = :bray_curtis)
+    isempty(sequences) && return (Matrix{Float64}(undef, 0, 0), String[])
+
     labels = sort(collect(keys(sequences)))
     n = length(labels)
 
@@ -461,7 +463,6 @@ function protein_aamer_distance_matrix(sequences::Dict{String, BioSequences.Long
     elseif metric == :euclidean
         D = frequency_matrix_to_euclidean_distance_matrix(freq_matrix)
     elseif metric == :jaccard
-        # Binary presence/absence Jaccard
         binary = freq_matrix .> 0
         for i in 1:n, j in (i + 1):n
 
@@ -485,12 +486,13 @@ Returns (distance_matrix, ordered_labels).
 
 # Example
 ```julia
-# After fetching embeddings from UniProt or ESM
 D, labels = embedding_distance_matrix(embeddings; metric=:cosine)
 ```
 """
 function embedding_distance_matrix(embeddings::Dict{String, Vector{Float32}};
         metric::Symbol = :cosine)
+    isempty(embeddings) && return (Matrix{Float64}(undef, 0, 0), String[])
+
     labels = sort(collect(keys(embeddings)))
     n = length(labels)
     dim = length(first(values(embeddings)))
@@ -503,7 +505,6 @@ function embedding_distance_matrix(embeddings::Dict{String, Vector{Float32}};
 
     D = zeros(Float64, n, n)
     if metric == :cosine
-        # Normalize rows
         norms = sqrt.(sum(E .^ 2; dims = 2))
         norms[norms .== 0] .= 1.0f0
         E_norm = E ./ norms
@@ -532,7 +533,7 @@ function structural_distance_matrix(foldseek_results_path::AbstractString,
     n = length(labels)
     label_idx = Dict(l => i for (i, l) in enumerate(labels))
 
-    D = ones(Float64, n, n)  # Default distance = 1.0 (no similarity)
+    D = ones(Float64, n, n)
     for i in 1:n
         D[i, i] = 0.0
     end
@@ -547,7 +548,7 @@ function structural_distance_matrix(foldseek_results_path::AbstractString,
 
         qi = get(label_idx, query, 0)
         ti = get(label_idx, target, 0)
-        qi == 0 || ti == 0 && continue
+        (qi == 0 || ti == 0) && continue
 
         dist = 1.0 - tmscore
         D[qi, ti] = min(D[qi, ti], dist)
@@ -584,7 +585,6 @@ function consensus_distance_matrix(matrices::Vector{Matrix{Float64}};
 
     D = zeros(Float64, n, n)
     for (w, M) in zip(weights, matrices)
-        # Normalize each matrix to [0, 1] range
         max_val = maximum(M)
         M_norm = max_val > 0 ? M ./ max_val : M
         D .+= w .* M_norm
