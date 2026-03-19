@@ -454,25 +454,21 @@ function protein_aamer_distance_matrix(sequences::Dict{String, BioSequences.Long
         end
     end
 
-    # Compute pairwise distance
-    D = zeros(Float64, n, n)
-    if metric == :bray_curtis
-        D = frequency_matrix_to_bray_curtis_distance_matrix(freq_matrix)
+    # Compute pairwise distance using Distances.jl (validated implementations).
+    # freq_matrix is (n_proteins × n_kmers), Distances.pairwise expects columns
+    # as observations, so transpose.
+    dist_metric = if metric == :bray_curtis
+        Distances.BrayCurtis()
     elseif metric == :cosine
-        D = frequency_matrix_to_cosine_distance_matrix(freq_matrix)
+        Distances.CosineDist()
     elseif metric == :euclidean
-        D = frequency_matrix_to_euclidean_distance_matrix(freq_matrix)
+        Distances.Euclidean()
     elseif metric == :jaccard
-        binary = freq_matrix .> 0
-        for i in 1:n, j in (i + 1):n
-
-            intersection = sum(binary[i, :] .& binary[j, :])
-            union_size = sum(binary[i, :] .| binary[j, :])
-            D[i, j] = D[j, i] = union_size > 0 ? 1.0 - intersection / union_size : 1.0
-        end
+        Distances.Jaccard()
     else
         error("Unknown metric: $(metric). Use :bray_curtis, :cosine, :euclidean, or :jaccard")
     end
+    D = Distances.pairwise(dist_metric, freq_matrix'; dims = 2)
 
     return D, labels
 end
@@ -495,27 +491,27 @@ function embedding_distance_matrix(embeddings::Dict{String, Vector{Float32}};
 
     labels = sort(collect(keys(embeddings)))
     n = length(labels)
-    dim = length(first(values(embeddings)))
 
-    # Stack into matrix
-    E = zeros(Float32, n, dim)
+    # Embeddings may have variable length (e.g., composition embeddings use
+    # only observed k-mers). Pad shorter vectors with zeros to match the
+    # longest — equivalent to treating unobserved features as zero frequency.
+    max_dim = maximum(length(embeddings[l]) for l in labels)
+
+    E = zeros(Float64, n, max_dim)
     for (i, label) in enumerate(labels)
-        E[i, :] = embeddings[label]
+        v = embeddings[label]
+        E[i, 1:length(v)] = Float64.(v)
     end
 
-    D = zeros(Float64, n, n)
-    if metric == :cosine
-        norms = sqrt.(sum(E .^ 2; dims = 2))
-        norms[norms .== 0] .= 1.0f0
-        E_norm = E ./ norms
-        sim = E_norm * E_norm'
-        D = 1.0 .- Float64.(sim)
+    # Use Distances.jl for validated pairwise computation
+    dist_metric = if metric == :cosine
+        Distances.CosineDist()
     elseif metric == :euclidean
-        for i in 1:n, j in (i + 1):n
-
-            D[i, j] = D[j, i] = sqrt(sum((E[i, :] .- E[j, :]) .^ 2))
-        end
+        Distances.Euclidean()
+    else
+        error("Unknown metric: $(metric). Use :cosine or :euclidean")
     end
+    D = Distances.pairwise(dist_metric, E'; dims = 2)
 
     return D, labels
 end
