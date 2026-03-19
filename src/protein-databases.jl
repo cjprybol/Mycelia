@@ -249,9 +249,8 @@ function expand_via_uniref(accession::AbstractString;
         push!(seen_ur90, query_ur90)
     end
 
-    # Also track seen genera for diversity preference
-    seen_genera = Dict{String, Int}()
-    diverse_variants = Dict{String, Any}[]
+    # Collect all UniRef90-distinct candidates first, then rank by genus diversity
+    ur90_distinct = Dict{String, Any}[]
 
     for m in candidates
         acc = m["accession"]
@@ -259,7 +258,7 @@ function expand_via_uniref(accession::AbstractString;
         # Look up this member's UniRef90 cluster
         ur90 = try
             c = search_uniref_cluster(acc; identity = 0.9)
-            c === nothing ? acc : c["id"]  # fallback to accession if lookup fails
+            c === nothing ? acc : c["id"]
         catch
             acc
         end
@@ -269,20 +268,48 @@ function expand_via_uniref(accession::AbstractString;
         ur90 in seen_ur90 && continue
         push!(seen_ur90, ur90)
 
-        # Track genus for diversity scoring
+        # Extract genus from organism name
         organism = get(m, "organism", "unknown")
         genus = first(split(organism))
-        seen_genera[genus] = get(seen_genera, genus, 0) + 1
 
-        # Add the UniRef90 cluster info to the variant dict
         m["uniref90_id"] = ur90
-        push!(diverse_variants, m)
-
-        # Stop once we have enough
-        length(diverse_variants) >= max_variants && break
+        m["genus"] = genus
+        push!(ur90_distinct, m)
     end
 
-    return diverse_variants
+    # Rank by genus diversity: variants from novel genera score higher.
+    # Extract query genus to deprioritize same-genus hits.
+    query_entry = try
+        fetch_uniprot_entry(accession)
+    catch
+        nothing
+    end
+    query_genus = if query_entry !== nothing
+        org = get(get(query_entry, "organism", Dict()), "scientificName", "unknown")
+        first(split(org))
+    else
+        ""
+    end
+
+    # Sort: novel genus first, then different genus from query, then same genus
+    genus_counts = Dict{String, Int}()
+    for v in ur90_distinct
+        g = v["genus"]
+        genus_counts[g] = get(genus_counts, g, 0) + 1
+    end
+
+    sort!(ur90_distinct; by = v -> begin
+        g = v["genus"]
+        if g == query_genus
+            2  # Same genus as query — lowest priority
+        elseif genus_counts[g] > 1
+            1  # Genus appears multiple times — medium priority
+        else
+            0  # Unique genus — highest priority (sort ascending)
+        end
+    end)
+
+    return ur90_distinct[1:min(max_variants, length(ur90_distinct))]
 end
 
 # --------------------------------------------------------------------------- #
