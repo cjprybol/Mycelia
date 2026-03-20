@@ -569,15 +569,18 @@ function blast_uniprot_sequence(sequence::AbstractString;
     job_id = strip(String(submit_resp.body))
     @info "UniProt BLAST submitted: job_id=$(job_id)"
 
-    # Poll for completion
+    # Poll for completion — EBI statuses: QUEUED → RUNNING → FINISHED (or ERROR/NOT_FOUND)
     status_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/status/$(job_id)"
     elapsed = 0.0
-    status = "RUNNING"
-    while status == "RUNNING" && elapsed < timeout
+    status = "QUEUED"
+    while status in ("QUEUED", "RUNNING") && elapsed < timeout
         sleep(poll_interval)
         elapsed += poll_interval
         status_resp = HTTP.get(status_url; headers = ["Accept" => "text/plain"])
         status = strip(String(status_resp.body))
+        if elapsed > 30 && elapsed % 30 < poll_interval
+            @info "  EBI BLAST $(job_id): $(status) ($(round(elapsed; digits=0))s)"
+        end
     end
 
     if status != "FINISHED"
@@ -669,6 +672,310 @@ function blast_uniprot_batch(sequences::Dict{String, <:AbstractString};
     end
 
     return results
+end
+
+# --------------------------------------------------------------------------- #
+# NCBI Remote BLAST
+# --------------------------------------------------------------------------- #
+
+"""
+    blast_ncbi_sequence(sequence::AbstractString;
+                         program::String="blastp",
+                         database::String="nr",
+                         hits::Int=10,
+                         evalue::Float64=1e-3,
+                         poll_interval::Real=15,
+                         timeout::Real=600) -> Vector{Dict}
+
+BLAST a raw sequence against NCBI databases via the NCBI BLAST REST API.
+No local BLAST database required. Returns top hits with accession, identity,
+e-value, and description.
+
+NCBI rate limits: max 1 request per 10 seconds, max 1 poll per minute per RID.
+High-volume submissions (50+) should be scheduled for nights/weekends.
+
+# Databases
+- `"nr"` — non-redundant protein sequences (default, comprehensive)
+- `"swissprot"` — SwissProt curated subset
+- `"refseq_protein"` — NCBI RefSeq proteins
+- `"pdb"` — Protein Data Bank sequences
+
+# Example
+```julia
+hits = blast_ncbi_sequence("MKWKLFKKIEKVGQNIRDGIIKAG..."; database="swissprot")
+```
+"""
+function blast_ncbi_sequence(sequence::AbstractString;
+        program::String = "blastp",
+        database::String = "nr",
+        hits::Int = 10,
+        evalue::Float64 = 1e-3,
+        poll_interval::Real = 15,
+        timeout::Real = 600)
+    api_base = "https://blast.ncbi.nlm.nih.gov/blast/Blast.cgi"
+
+    # Submit job
+    submit_params = [
+        "CMD" => "Put",
+        "PROGRAM" => program,
+        "DATABASE" => database,
+        "QUERY" => strip(string(sequence)),
+        "EXPECT" => string(evalue),
+        "HITLIST_SIZE" => string(hits),
+        "FORMAT_TYPE" => "JSON2",
+        "TOOL" => "Mycelia.jl",
+        "EMAIL" => "noreply@example.com"
+    ]
+
+    submit_resp = HTTP.post(api_base; body = HTTP.Form(submit_params))
+    body = String(submit_resp.body)
+
+    # Extract RID from response
+    rid_match = match(r"RID = ([A-Z0-9\-]+)", body)
+    rid_match === nothing && error("Failed to extract RID from NCBI BLAST response")
+    rid = rid_match[1]
+
+    # Extract estimated wait time
+    rtoe_match = match(r"RTOE = (\d+)", body)
+    wait_time = rtoe_match !== nothing ? parse(Int, rtoe_match[1]) : 30
+    @info "NCBI BLAST submitted: RID=$(rid), estimated wait=$(wait_time)s"
+
+    # Wait the estimated time before first poll
+    sleep(min(wait_time, poll_interval))
+
+    # Poll for completion (max 1 poll per minute per NCBI guidelines)
+    elapsed = Float64(min(wait_time, poll_interval))
+    status = "WAITING"
+    while status in ("WAITING", "UNKNOWN") && elapsed < timeout
+        sleep(max(poll_interval, 60.0))
+        elapsed += max(poll_interval, 60.0)
+
+        check_url = "$(api_base)?CMD=Get&FORMAT_OBJECT=SearchInfo&RID=$(rid)"
+        check_resp = HTTP.get(check_url)
+        check_body = String(check_resp.body)
+
+        if occursin("Status=READY", check_body)
+            status = "READY"
+        elseif occursin("Status=FAILED", check_body)
+            error("NCBI BLAST failed for RID=$(rid)")
+        elseif occursin("Status=UNKNOWN", check_body)
+            error("NCBI BLAST RID expired or invalid: $(rid)")
+        end
+    end
+
+    if status != "READY"
+        error("NCBI BLAST timed out (RID=$(rid), elapsed=$(elapsed)s)")
+    end
+
+    # Fetch results in JSON format
+    result_url = "$(api_base)?CMD=Get&FORMAT_TYPE=JSON2&RID=$(rid)"
+    result_resp = HTTP.get(result_url)
+    result_json = JSON.parse(String(result_resp.body))
+
+    # Parse hits from NCBI JSON2 format
+    hits_out = Dict[]
+    search_results = get(result_json, "BlastOutput2", [])
+    for report in search_results
+        search = get(get(report, "report", Dict()), "results", Dict())
+        for hit in get(search, "search", Dict()) |> d -> get(d, "hits", [])
+            hit_desc = get(hit, "description", [])
+            desc_entry = isempty(hit_desc) ? Dict() : hit_desc[1]
+            accession = get(desc_entry, "accession", "")
+            title = get(desc_entry, "title", "")
+            taxid = get(desc_entry, "taxid", 0)
+
+            for hsp in get(hit, "hsps", [])
+                push!(hits_out,
+                    Dict(
+                        "accession" => accession,
+                        "description" => title,
+                        "taxid" => taxid,
+                        "identity" => get(hsp, "identity", 0),
+                        "align_len" => get(hsp, "align_len", 0),
+                        "evalue" => get(hsp, "evalue", 0.0),
+                        "bit_score" => get(hsp, "bit_score", 0.0),
+                        "query_from" => get(hsp, "query_from", 0),
+                        "query_to" => get(hsp, "query_to", 0),
+                        "hit_from" => get(hsp, "hit_from", 0),
+                        "hit_to" => get(hsp, "hit_to", 0),
+                        "gaps" => get(hsp, "gaps", 0)
+                    ))
+            end
+        end
+    end
+
+    return hits_out
+end
+
+"""
+    blast_ncbi_batch(sequences::Dict{String, <:AbstractString};
+                      hits_per_query::Int=5,
+                      delay::Real=15,
+                      kwargs...) -> DataFrames.DataFrame
+
+BLAST multiple sequences against NCBI, returning a DataFrame of top hits.
+Respects NCBI rate limits (min 10s between submissions).
+
+# Example
+```julia
+seqs = Dict("payload1" => "MKWK...", "payload2" => "METL...")
+df = blast_ncbi_batch(seqs; database="swissprot", hits_per_query=5)
+```
+"""
+function blast_ncbi_batch(sequences::Dict{String, <:AbstractString};
+        hits_per_query::Int = 5,
+        delay::Real = 15,
+        kwargs...)
+    results = DataFrames.DataFrame(
+        query_name = String[], target_accession = String[],
+        target_description = String[], taxid = Int[],
+        identity = Int[], evalue = Float64[],
+        bit_score = Float64[], align_len = Int[])
+
+    for (name, seq) in sort(collect(sequences); by = first)
+        @info "NCBI BLASTing $(name) ($(length(seq)) aa)..."
+        try
+            hits = blast_ncbi_sequence(seq; hits = hits_per_query, kwargs...)
+            for h in hits
+                push!(results,
+                    (
+                        query_name = name,
+                        target_accession = get(h, "accession", ""),
+                        target_description = get(h, "description", ""),
+                        taxid = Int(get(h, "taxid", 0)),
+                        identity = Int(get(h, "identity", 0)),
+                        evalue = Float64(get(h, "evalue", 0.0)),
+                        bit_score = Float64(get(h, "bit_score", 0.0)),
+                        align_len = Int(get(h, "align_len", 0))
+                    ))
+            end
+        catch e
+            @warn "NCBI BLAST failed for $(name): $(e)"
+        end
+        sleep(max(delay, 10))  # NCBI requires min 10s between requests
+    end
+
+    return results
+end
+
+# --------------------------------------------------------------------------- #
+# UniProt ID Mapping (cross-database accession conversion)
+# --------------------------------------------------------------------------- #
+
+"""
+    map_ids_to_uniprot(ids::AbstractVector{<:AbstractString};
+                        from::String="RefSeq_Protein",
+                        to::String="UniProtKB",
+                        poll_interval::Real=5,
+                        timeout::Real=120) -> Dict{String, Vector{String}}
+
+Map accessions from one database to UniProt (or between any supported databases)
+via the UniProt ID Mapping REST API.
+
+Returns a Dict mapping each input ID to a vector of matched UniProt accessions.
+IDs with no match are omitted.
+
+# Common `from` databases
+- `"RefSeq_Protein"` — NCBI RefSeq protein accessions (e.g., WP_123456789)
+- `"EMBL-GenBank-DDBJ"` — INSDC nucleotide accessions
+- `"EMBL-GenBank-DDBJ_CDS"` — INSDC CDS protein accessions
+- `"GI_number"` — NCBI GI numbers (legacy)
+- `"PDB"` — PDB structure IDs
+- `"UniProtKB_AC-ID"` — UniProt accessions (for mapping to other DBs)
+
+# Common `to` databases
+- `"UniProtKB"` — UniProt Knowledgebase (default)
+- `"UniProtKB-Swiss-Prot"` — Reviewed entries only
+- `"UniRef90"`, `"UniRef50"` — UniRef clusters
+
+# Example
+```julia
+# Map NCBI RefSeq protein accessions to UniProt
+mapping = map_ids_to_uniprot(["WP_012345678", "WP_098765432"])
+# => Dict("WP_012345678" => ["P12345"], "WP_098765432" => ["Q67890"])
+```
+"""
+function map_ids_to_uniprot(ids::AbstractVector{<:AbstractString};
+        from::String = "RefSeq_Protein",
+        to::String = "UniProtKB",
+        poll_interval::Real = 5,
+        timeout::Real = 120)
+    api_base = "https://rest.uniprot.org/idmapping"
+
+    # Submit mapping job
+    form_data = Pair{String, String}[
+    "from" => from,
+    "to" => to,
+    "ids" => join(
+        ids, ",")
+]
+
+    submit_resp = HTTP.post("$(api_base)/run";
+        body = HTTP.Form(form_data),
+        headers = _UNIPROT_HEADERS)
+    submit_json = JSON.parse(String(submit_resp.body))
+    job_id = get(submit_json, "jobId", "")
+    isempty(job_id) && error("UniProt ID mapping failed to return jobId: $(submit_json)")
+    @info "UniProt ID mapping submitted: jobId=$(job_id)"
+
+    # Poll for completion
+    elapsed = 0.0
+    while elapsed < timeout
+        sleep(poll_interval)
+        elapsed += poll_interval
+
+        status_resp = HTTP.get("$(api_base)/status/$(job_id)";
+            headers = _UNIPROT_HEADERS,
+            redirect = true)
+        status_body = String(status_resp.body)
+
+        # Job complete when we get redirected to results or status shows complete
+        if occursin("results", status_body) || status_resp.status == 303
+            break
+        end
+
+        status_json = try
+            JSON.parse(status_body)
+        catch
+            continue
+        end
+
+        job_status = get(status_json, "jobStatus", "")
+        if job_status == "FINISHED"
+            break
+        elseif job_status == "ERROR"
+            error("UniProt ID mapping failed: $(status_json)")
+        end
+    end
+
+    # Fetch results
+    result_resp = HTTP.get("$(api_base)/uniprotkb/results/$(job_id)?format=json&size=500";
+        headers = _UNIPROT_HEADERS)
+    result_json = JSON.parse(String(result_resp.body))
+
+    # Parse into mapping dict
+    mapping = Dict{String, Vector{String}}()
+    for result in get(result_json, "results", [])
+        from_id = get(result, "from", "")
+        to_entry = get(result, "to", Dict())
+        to_acc = if isa(to_entry, Dict)
+            get(to_entry, "primaryAccession", "")
+        else
+            string(to_entry)
+        end
+
+        isempty(from_id) && continue
+        isempty(to_acc) && continue
+
+        if haskey(mapping, from_id)
+            push!(mapping[from_id], to_acc)
+        else
+            mapping[from_id] = [to_acc]
+        end
+    end
+
+    @info "ID mapping: $(length(mapping)) / $(length(ids)) IDs mapped"
+    return mapping
 end
 
 # --------------------------------------------------------------------------- #
