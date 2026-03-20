@@ -536,23 +536,31 @@ function blast_uniprot_sequence(sequence::AbstractString;
     # EBI NCBI BLAST REST API — parameters must use allowed enum values
     blast_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/run"
 
-    # Map hits to nearest allowed alignments value: 0, 5, 10, 20, 50, 100, 150, 200, 250, 500
-    allowed_alignments = [0, 5, 10, 20, 50, 100, 150, 200, 250, 500]
+    # EBI API requires exact enum values — sourced from parameterdetails endpoint
+    allowed_alignments = [0, 5, 10, 20, 50, 100, 150, 200, 250, 500, 750, 1000]
     alignments_val = allowed_alignments[findmin(abs.(allowed_alignments .-
                                                                         hits))[2]]
 
-    # Map threshold to nearest allowed exp value
-    allowed_exp = [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-4, 1e-3, 1.0, 10.0, 100.0, 1000.0]
-    exp_val = allowed_exp[findmin(abs.(log10.(allowed_exp) .- log10(threshold)))[2]]
+    # Exp values must be exact strings (e.g., "1e-3" not "0.001")
+    allowed_exp_strings = [
+        "1e-200", "1e-100", "1e-50", "1e-10", "1e-5",
+        "1e-4", "1e-3", "1e-2", "1e-1", "1.0", "10", "100", "1000"]
+    allowed_exp_vals = [
+        1e-200, 1e-100, 1e-50, 1e-10, 1e-5,
+        1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0, 1000.0]
+    exp_idx = findmin(abs.(log10.(allowed_exp_vals) .- log10(threshold)))[2]
+    exp_str = allowed_exp_strings[exp_idx]
 
-    db_name = database == "uniprotkb" ? "uniprotkb_swissprot" : database
+    # Valid databases include: uniprotkb, uniprotkb_swissprot, uniprotkb_bacteria,
+    # uniref50, uniref90, uniref100, pdb, afdb — see EBI parameterdetails/database
+    db_name = database
     form_data = Pair{String, String}[
     "email" => "noreply@example.com",
     "program" => "blastp",
     "database" => db_name,
     "sequence" => strip(string(sequence)),
     "stype" => "protein",
-    "exp" => string(exp_val),
+    "exp" => exp_str,
     "alignments" => string(alignments_val)
 ]
 
