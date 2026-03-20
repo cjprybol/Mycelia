@@ -1035,9 +1035,3 @@ function consensus_distance_matrix(matrices::Vector{Matrix{Float64}};
 
     return D
 end
-
-function test_bad()
-    import JSON
-    return 1
-end
-
