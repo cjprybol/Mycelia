@@ -14,9 +14,12 @@ Comprehensive guidance for AI agents working in this repository.
 
 ## Repo Sync Rules
 
-- For tracked source files, tests, docs, and other repo content, prefer git sync over `scp`.
-- Default remote workflow: edit locally, commit locally, push to origin, then update the remote clone with `git pull --ff-only`.
-- Reserve `scp` for intentionally untracked, bulky, or transient artifacts that should not be versioned.
+- For tracked source files, tests, docs, and other repo content, prefer git sync
+  over `scp`.
+- Default remote workflow: edit locally, commit locally, push to origin, then
+  update the remote clone with `git pull --ff-only`.
+- Reserve `scp` for intentionally untracked, bulky, or transient artifacts that
+  should not be versioned.
 - If `scp` is used as an exception, call it out explicitly in the handoff.
 
 ---
@@ -32,12 +35,29 @@ probabilistic graph-based genome assembler.
 
 1. **No `using` statements** - Always `import Package` and use qualified names
    (`DataFrames.DataFrame()`)
-2. **No exports** - All symbols accessed via `Mycelia.function_name()` or
+2. **No `import` inside functions** - All `import` statements must be at module
+   level (top of file or `Mycelia.jl`). Julia does not allow `import` at
+   function scope — it causes `syntax: "import" expression not at top level` and
+   breaks precompilation. A pre-commit hook enforces this (see Developer Setup
+   below).
+3. **No exports** - All symbols accessed via `Mycelia.function_name()` or
    `Mycelia.Rhizomorph.function_name()`
-3. **Avoid unnecessary type conversions** - Use BioSequences for
+4. **Avoid unnecessary type conversions** - Use BioSequences for
    DNA/RNA/protein; plain strings for NLP/text
-4. **Test-first development** - All features require tests before claiming
+5. **Test-first development** - All features require tests before claiming
    completion
+
+### Developer Setup
+
+After cloning, install the repo-local pre-commit hook:
+
+```bash
+ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+```
+
+This blocks commits that introduce `import` inside function bodies. If you use a
+global `core.hooksPath` (e.g., `~/workspace/dotfiles/hooks`), the global hook
+already delegates to this repo hook automatically.
 
 ---
 
@@ -75,18 +95,18 @@ probabilistic graph-based genome assembler.
 
 #### Assembly (Rhizomorph System)
 
-| Module                            | Purpose                               | Functions |
-| --------------------------------- | ------------------------------------- | --------- |
-| `rhizomorph/rhizomorph.jl`        | Submodule entry point                 | 2         |
-| `rhizomorph/core/*.jl`            | Graph types, evidence, quality        | ~120      |
-| `rhizomorph/fixed-length/*.jl`    | K-mer, qualmer, n-gram graphs         | ~30       |
-| `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ           | ~30       |
-| `rhizomorph/algorithms/*.jl`      | Path-finding, generation, metrics, error correction | ~100 |
-| `rhizomorph/analysis/*.jl`        | Information theory, sequence quality  | ~20       |
-| `rhizomorph/assembly.jl`          | High-level assembly orchestration     | 54        |
-| `assembly.jl`                     | External assembler wrappers           | 62        |
-| `graph-cleanup.jl`                | Graph simplification utilities        | 22        |
-| `iterative-assembly.jl`           | Iterative refinement methods          | 70        |
+| Module                            | Purpose                                             | Functions |
+| --------------------------------- | --------------------------------------------------- | --------- |
+| `rhizomorph/rhizomorph.jl`        | Submodule entry point                               | 2         |
+| `rhizomorph/core/*.jl`            | Graph types, evidence, quality                      | ~120      |
+| `rhizomorph/fixed-length/*.jl`    | K-mer, qualmer, n-gram graphs                       | ~30       |
+| `rhizomorph/variable-length/*.jl` | OLC graphs from FASTA/FASTQ                         | ~30       |
+| `rhizomorph/algorithms/*.jl`      | Path-finding, generation, metrics, error correction | ~100      |
+| `rhizomorph/analysis/*.jl`        | Information theory, sequence quality                | ~20       |
+| `rhizomorph/assembly.jl`          | High-level assembly orchestration                   | 54        |
+| `assembly.jl`                     | External assembler wrappers                         | 62        |
+| `graph-cleanup.jl`                | Graph simplification utilities                      | 22        |
+| `iterative-assembly.jl`           | Iterative refinement methods                        | 70        |
 
 #### External Tool Wrappers
 
