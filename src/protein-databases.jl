@@ -696,75 +696,88 @@ end
     esm_embed_sequences(sequences::Dict{String, <:AbstractString};
                          model::String="esm2_t33_650M_UR50D",
                          repr_layer::Int=33,
-                         batch_size::Int=5,
-                         delay::Real=1) -> Dict{String, Vector{Float32}}
+                         force_install::Bool=false) -> Dict{String, Vector{Float32}}
 
-Compute protein embeddings using ESM-2 via Meta's ESM Atlas API
-(https://api.esmatlas.com). Returns per-protein mean-pooled embeddings.
+Compute protein embeddings using ESM-2 (Meta) via a Mycelia-managed conda
+environment. Returns per-protein mean-pooled embeddings (1280-dim for the
+650M model). Auto-installs `fair-esm` + PyTorch on first use.
 
-No local installation required — uses the public API. For offline use
-or larger batches, see `esm_embed_sequences_local`.
+Works on raw amino acid sequences — no UniProt accession required.
 
 # Supported models
-- "esm2_t33_650M_UR50D" (default, 650M params)
-- "esm2_t36_3B_UR50D" (3B params, slower but more accurate)
+- "esm2_t33_650M_UR50D" (default, 650M params, 1280-dim output)
+- "esm2_t36_3B_UR50D" (3B params, 2560-dim, slower but more accurate)
+- "esm2_t30_150M_UR50D" (150M params, 640-dim, fastest)
 
 # Example
 ```julia
 seqs = Dict("payload1" => "MKWKLFKKIEKVGQNIRDGIIKAG...")
 embs = esm_embed_sequences(seqs)
+D, labels = embedding_distance_matrix(embs; metric=:cosine)
 ```
 """
 function esm_embed_sequences(sequences::Dict{String, <:AbstractString};
         model::String = "esm2_t33_650M_UR50D",
         repr_layer::Int = 33,
-        batch_size::Int = 5,
-        delay::Real = 1)
-    embeddings = Dict{String, Vector{Float32}}()
-    api_url = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+        force_install::Bool = false)
+    install_esm(; force = force_install)
 
-    # ESM Atlas provides structure prediction but not direct embedding API.
-    # Use the fold endpoint and extract internal representations,
-    # OR fall back to composition embeddings with a warning.
-    #
-    # The Meta ESM GitHub provides a Python CLI:
-    #   pip install fair-esm
-    #   python -m esm.scripts.extract esm2_t33_650M_UR50D input.fasta output/ --repr_layers 33 --include mean
-    #
-    # Check if esm CLI is available
-    esm_available = try
-        run(pipeline(`python3 -c "import esm; print(esm.__version__)"`;
-            stdout = devnull, stderr = devnull))
-        true
-    catch
-        false
-    end
-
-    if esm_available
-        @info "Using local ESM-2 ($(model)) for embeddings"
-        return _esm_embed_local(sequences; model = model, repr_layer = repr_layer)
-    end
-
-    # Try the ESM Metagenomic Atlas API (fold endpoint with embedding extraction)
-    # The public API only supports structure prediction, not raw embeddings.
-    # Fall back to enhanced composition embeddings.
-    @warn "ESM-2 Python package not available. Using enhanced composition embeddings. " *
-          "For neural embeddings, install: pip install fair-esm"
-    return compute_embeddings_from_sequences(
-        Dict(k => BioSequences.LongAA(v) for (k, v) in sequences);
-        ks = [1, 2, 3])
+    @info "Using ESM-2 ($(model)) via Mycelia conda env for $(length(sequences)) sequences"
+    return _esm_embed_via_conda(sequences; model = model, repr_layer = repr_layer)
 end
 
 """
-    _esm_embed_local(sequences::Dict{String, <:AbstractString};
-                      model::String="esm2_t33_650M_UR50D",
-                      repr_layer::Int=33) -> Dict{String, Vector{Float32}}
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-Internal: compute ESM-2 embeddings via the local Python `fair-esm` package.
-Writes sequences to a temporary FASTA, runs the extraction script, and
-reads back the per-protein mean-pooled representations.
+Install the ESM-2 protein language model environment via conda + pip.
+
+Creates a conda environment `esm` with Python, PyTorch (CPU), and `fair-esm`.
+Follows the same pattern as `install_foldseek`.
 """
-function _esm_embed_local(sequences::Dict{String, <:AbstractString};
+function install_esm(; force = false)
+    _ensure_conda_env_vars!()
+    env_name = "esm"
+    already_installed = check_bioconda_env_is_installed(env_name)
+
+    if !already_installed || force
+        if force && already_installed
+            try
+                run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
+            catch e
+                @warn "Failed to remove existing ESM env: $(e)"
+            end
+        end
+
+        @info "Installing ESM-2 conda environment (this may take a few minutes)..."
+        # Create env with Python + pip, then pip-install fair-esm + torch (CPU)
+        run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
+        run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch --index-url https://download.pytorch.org/whl/cpu`)
+        run(`$(CONDA_RUNNER) clean --all -y`)
+    end
+
+    # Verify
+    try
+        run(`$(CONDA_RUNNER) run -n $(env_name) python -c "import esm; print(esm.__version__)"`)
+    catch verify_err
+        if !force
+            @warn "ESM verification failed. Retrying with force reinstall..."
+            return install_esm(; force = true)
+        else
+            error("ESM install verification failed: $(verify_err)")
+        end
+    end
+end
+
+"""
+    _esm_embed_via_conda(sequences::Dict{String, <:AbstractString};
+                          model::String="esm2_t33_650M_UR50D",
+                          repr_layer::Int=33) -> Dict{String, Vector{Float32}}
+
+Internal: compute ESM-2 embeddings using the Mycelia-managed `esm` conda env.
+Writes sequences to a temporary FASTA, runs the extraction script via
+`CONDA_RUNNER`, and reads back mean-pooled representations.
+"""
+function _esm_embed_via_conda(sequences::Dict{String, <:AbstractString};
         model::String = "esm2_t33_650M_UR50D",
         repr_layer::Int = 33)
     tmpdir = mktempdir()
@@ -775,32 +788,50 @@ function _esm_embed_local(sequences::Dict{String, <:AbstractString};
     # Write FASTA
     open(fasta_path, "w") do io
         for (name, seq) in sequences
-            println(io, ">$(name)")
+            # Sanitize name for filesystem (replace special chars)
+            safe_name = replace(name, r"[^A-Za-z0-9_\-\.]" => "_")
+            println(io, ">$(safe_name)")
             println(io, seq)
         end
     end
 
-    # Run ESM extraction
-    cmd = `python3 -m esm.scripts.extract $(model) $(fasta_path) $(output_dir)
-           --repr_layers $(repr_layer) --include mean`
-    run(cmd)
+    # Build name mapping (sanitized → original)
+    name_map = Dict{String, String}()
+    for name in keys(sequences)
+        safe_name = replace(name, r"[^A-Za-z0-9_\-\.]" => "_")
+        name_map[safe_name] = name
+    end
 
-    # Read results (PyTorch .pt files)
+    # Run ESM extraction via conda
+    run(`$(CONDA_RUNNER) run --live-stream -n esm python -m esm.scripts.extract
+        $(model) $(fasta_path) $(output_dir)
+        --repr_layers $(repr_layer) --include mean`)
+
+    # Read results — use a Python script to convert .pt → JSON for Julia
+    convert_script = joinpath(tmpdir, "convert_pt.py")
+    open(convert_script, "w") do io
+        write(io, """
+import torch, json, os, sys
+output_dir = sys.argv[1]
+repr_layer = int(sys.argv[2])
+results = {}
+for f in os.listdir(output_dir):
+    if f.endswith('.pt'):
+        name = f.replace('.pt', '')
+        d = torch.load(os.path.join(output_dir, f), map_location='cpu')
+        emb = d['mean_representations'][repr_layer].numpy().tolist()
+        results[name] = emb
+print(json.dumps(results))
+""")
+    end
+
+    result = read(`$(CONDA_RUNNER) run -n esm python $(convert_script) $(output_dir) $(repr_layer)`, String)
+    parsed = JSON.parse(strip(result))
+
     embeddings = Dict{String, Vector{Float32}}()
-    for f in readdir(output_dir; join = true)
-        endswith(f, ".pt") || continue
-        # Each .pt file contains a dict with "mean_representations" -> {layer -> tensor}
-        # Use Python to convert to numpy, then read
-        name = replace(basename(f), ".pt" => "")
-        py_cmd = """
-import torch, json, sys
-d = torch.load(sys.argv[1], map_location='cpu')
-emb = d['mean_representations'][$(repr_layer)].numpy().tolist()
-print(json.dumps(emb))
-"""
-        result = read(`python3 -c $(py_cmd) $(f)`, String)
-        vec = Float32.(JSON.parse(strip(result)))
-        embeddings[name] = vec
+    for (safe_name, vec) in parsed
+        original_name = get(name_map, safe_name, safe_name)
+        embeddings[original_name] = Float32.(vec)
     end
 
     rm(tmpdir; recursive = true, force = true)
