@@ -239,11 +239,14 @@ function foldseek_web_search(
 
     # Submit search job
     pdb_content = read(pdb_path, String)
-    form_data = [
-        "q" => pdb_content,
-        "mode" => mode,
-        "database[]" => databases
-    ]
+    # HTTP.Form requires each database as a separate "database[]" entry
+    form_data = Pair{String, String}[
+    "q" => pdb_content,
+    "mode" => mode
+]
+    for db in databases
+        push!(form_data, "database[]" => db)
+    end
 
     submit_resp = HTTP.post("$(api_base)/ticket"; body = HTTP.Form(form_data))
     submit_json = JSON.parse(String(submit_resp.body))
