@@ -418,8 +418,9 @@ Downloads the sequence from UniProt and computes an AAmer (k=2,3) composition
 embedding as a normalized feature vector. This is a lightweight alignment-free
 representation suitable for clustering.
 
-When ProtT5 bulk download is available (td-mm8yj), this will upgrade to real
-pre-trained embeddings from UniProt's FTP archive.
+For real pre-trained ProtT5 embeddings (1024-dim, same as UniProt's H5 files),
+use `prot5_embed_sequences` instead — it combines H5 lookup with local compute
+and produces embeddings in the same vector space as UniProt's pre-computed data.
 
 # Example
 ```julia
@@ -453,6 +454,117 @@ function fetch_uniprot_embeddings(accessions::AbstractVector{<:AbstractString};
 
     return embeddings
 end
+
+# --------------------------------------------------------------------------- #
+# ProtT5 pre-computed embeddings (UniProt FTP H5 files)
+# --------------------------------------------------------------------------- #
+
+"""
+    download_uniprot_embeddings(;
+        organism::String="sprot",
+        output_dir::String="\$(homedir())/workspace/UniProt-embeddings",
+        force::Bool=false) -> String
+
+Download pre-computed ProtT5-XL-U50 per-protein embeddings (1024-dim) from the
+UniProt FTP archive. Returns path to the local H5 file.
+
+# Organisms
+- `"sprot"` — all Swiss-Prot (~570K proteins, 1.3 GB)
+- `"UP000000625_83333"` — E. coli K-12 proteome
+- `"UP000005640_9606"` — Human proteome
+
+# Example
+```julia
+h5_path = download_uniprot_embeddings(organism="sprot")
+```
+"""
+function download_uniprot_embeddings(;
+        organism::String = "sprot",
+        output_dir::String = "$(homedir())/workspace/UniProt-embeddings",
+        force::Bool = false)
+    subpath = organism == "sprot" ? "uniprot_sprot" : organism
+    url = "https://ftp.uniprot.org/pub/databases/uniprot/current_release/knowledgebase/embeddings/$(subpath)/per-protein.h5"
+
+    dest_dir = joinpath(output_dir, subpath)
+    mkpath(dest_dir)
+    output_path = joinpath(dest_dir, "per-protein.h5")
+
+    if isfile(output_path) && filesize(output_path) > 0 && !force
+        @info "ProtT5 embeddings already downloaded: $(output_path) ($(round(filesize(output_path) / 1e9; digits=2)) GB)"
+        return output_path
+    end
+
+    @info "Downloading ProtT5 embeddings from UniProt FTP..."
+    @info "  URL: $(url)"
+    @info "  This may take several minutes (Swiss-Prot is ~1.3 GB)"
+
+    Downloads.download(url, output_path)
+    @info "Downloaded: $(output_path) ($(round(filesize(output_path) / 1e9; digits=2)) GB)"
+    return output_path
+end
+
+"""
+    lookup_uniprot_embeddings(
+        accessions::AbstractVector{<:AbstractString};
+        h5_path::String="...",
+        auto_download::Bool=true) -> Dict{String, Vector{Float32}}
+
+Look up pre-computed ProtT5-XL-U50 embeddings (1024-dim) for UniProt accessions
+from a downloaded H5 file. Accessions not found in the file are skipped with a
+warning.
+
+# Example
+```julia
+embs = lookup_uniprot_embeddings(["P05820", "Q840G9", "P00639"])
+D, labels = embedding_distance_matrix(embs; metric=:cosine)
+```
+"""
+function lookup_uniprot_embeddings(
+        accessions::AbstractVector{<:AbstractString};
+        h5_path::String = joinpath(homedir(), "workspace", "UniProt-embeddings",
+            "uniprot_sprot", "per-protein.h5"),
+        auto_download::Bool = true)
+    if !isfile(h5_path)
+        if auto_download
+            @info "H5 file not found, downloading..."
+            download_uniprot_embeddings()
+        else
+            error("H5 file not found: $(h5_path)")
+        end
+    end
+
+    embeddings = Dict{String, Vector{Float32}}()
+    found = 0
+    missed = 0
+
+    HDF5.h5open(h5_path, "r") do fid
+        available_keys = Set(keys(fid))
+        for acc in accessions
+            # Try bare accession, then with version suffix
+            key = if acc in available_keys
+                acc
+            elseif "$(acc).1" in available_keys
+                "$(acc).1"
+            else
+                nothing
+            end
+
+            if key !== nothing
+                embeddings[acc] = Float32.(HDF5.read(fid[key]))
+                found += 1
+            else
+                missed += 1
+            end
+        end
+    end
+
+    @info "ProtT5 H5 lookup: $(found)/$(length(accessions)) found, $(missed) missed"
+    return embeddings
+end
+
+# --------------------------------------------------------------------------- #
+# Composition-based embeddings (lightweight, no external tools)
+# --------------------------------------------------------------------------- #
 
 """
     _compute_composition_embedding(seq::BioSequences.LongAA;
@@ -1240,6 +1352,229 @@ print(json.dumps(results))
     end
 
     rm(tmpdir; recursive = true, force = true)
+    return embeddings
+end
+
+# --------------------------------------------------------------------------- #
+# ProtT5 embeddings (same model as UniProt pre-computed H5 files)
+# --------------------------------------------------------------------------- #
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Install the ProtT5 protein language model environment via conda + pip.
+
+Creates a conda environment `prot5` with Python, PyTorch (CPU), and
+HuggingFace `transformers` + `sentencepiece`. Uses the same ProtT5-XL-U50
+model as UniProt's pre-computed embeddings, so locally computed vectors
+are directly comparable to H5 lookups.
+"""
+function install_prot5(; force = false)
+    _ensure_conda_env_vars!()
+    env_name = "prot5"
+    already_installed = check_bioconda_env_is_installed(env_name)
+
+    if !already_installed || force
+        if force && already_installed
+            try
+                run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
+            catch e
+                @warn "Failed to remove existing prot5 env: $(e)"
+            end
+        end
+
+        @info "Installing ProtT5 conda environment (this may take a few minutes)..."
+        run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
+        run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece --index-url https://download.pytorch.org/whl/cpu`)
+        run(`$(CONDA_RUNNER) clean --all -y`)
+    end
+
+    # Verify
+    try
+        run(`$(CONDA_RUNNER) run -n $(env_name) python -c "from transformers import T5EncoderModel; print('OK')"`)
+    catch verify_err
+        if !force
+            @warn "ProtT5 verification failed. Retrying with force reinstall..."
+            return install_prot5(; force = true)
+        else
+            error("ProtT5 install verification failed: $(verify_err)")
+        end
+    end
+end
+
+"""
+    compute_prot5_embeddings(
+        sequences::Dict{String, <:AbstractString};
+        force_install::Bool=false) -> Dict{String, Vector{Float32}}
+
+Compute ProtT5-XL-U50 embeddings (1024-dim) from raw amino acid sequences
+using HuggingFace `transformers` via a Mycelia-managed conda environment.
+
+Uses the same model (`Rostlab/prot_t5_xl_uniref50`) as UniProt's pre-computed
+embeddings, so vectors are directly comparable to `lookup_uniprot_embeddings`.
+
+First run downloads model weights (~3 GB to ~/.cache/huggingface/).
+Processes sequences one at a time for memory safety on constrained machines.
+
+# Example
+```julia
+seqs = Dict("DspB" => "MNCCVKGNS...", "ColicinM" => "METLTVHAPS...")
+embs = compute_prot5_embeddings(seqs)
+# => Dict with 1024-dim Vector{Float32} per sequence
+```
+"""
+function compute_prot5_embeddings(
+        sequences::Dict{String, <:AbstractString};
+        force_install::Bool = false)
+    install_prot5(; force = force_install)
+
+    tmpdir = mktempdir()
+    fasta_path = joinpath(tmpdir, "input.fasta")
+    script_path = joinpath(tmpdir, "embed_prot5.py")
+
+    # Write FASTA with sanitized names
+    name_map = Dict{String, String}()
+    open(fasta_path, "w") do io
+        for (name, seq) in sequences
+            safe_name = replace(name, r"[^A-Za-z0-9_\-\.]" => "_")
+            name_map[safe_name] = name
+            println(io, ">$(safe_name)")
+            println(io, seq)
+        end
+    end
+
+    # Write Python embedding script
+    open(script_path, "w") do io
+        write(io, """
+import json, sys, re
+from transformers import T5Tokenizer, T5EncoderModel
+import torch
+
+tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50", do_lower_case=False)
+model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_uniref50")
+model.to(torch.device("cpu"))
+
+# Read FASTA
+fasta_path = sys.argv[1]
+sequences = {}
+current_name = None
+current_seq = []
+with open(fasta_path) as f:
+    for line in f:
+        line = line.strip()
+        if line.startswith(">"):
+            if current_name:
+                sequences[current_name] = "".join(current_seq)
+            current_name = line[1:]
+            current_seq = []
+        else:
+            current_seq.append(line)
+    if current_name:
+        sequences[current_name] = "".join(current_seq)
+
+# Compute embeddings one at a time (memory-safe)
+results = {}
+for name, seq in sequences.items():
+    # ProtT5 expects space-separated amino acids
+    seq_spaced = " ".join(list(re.sub(r"[UZOB]", "X", seq)))
+    ids = tokenizer(seq_spaced, return_tensors="pt", add_special_tokens=True, padding=True)
+    with torch.no_grad():
+        output = model(input_ids=ids["input_ids"], attention_mask=ids["attention_mask"])
+    # Mean pool over sequence length (exclude padding)
+    mask = ids["attention_mask"].unsqueeze(-1)
+    emb = (output.last_hidden_state * mask).sum(1) / mask.sum(1)
+    results[name] = emb[0].tolist()
+    sys.stderr.write(f"  Embedded {name}: {len(seq)} aa -> {len(results[name])}-dim\\n")
+
+print(json.dumps(results))
+""")
+    end
+
+    @info "Computing ProtT5 embeddings for $(length(sequences)) sequences..."
+    result = read(`$(CONDA_RUNNER) run --live-stream -n prot5 python $(script_path) $(fasta_path)`, String)
+    parsed = JSON.parse(strip(result))
+
+    embeddings = Dict{String, Vector{Float32}}()
+    for (safe_name, vec) in parsed
+        original_name = get(name_map, safe_name, safe_name)
+        embeddings[original_name] = Float32.(vec)
+    end
+
+    rm(tmpdir; recursive = true, force = true)
+    @info "ProtT5 embeddings computed: $(length(embeddings)) sequences, $(isempty(embeddings) ? 0 : length(first(values(embeddings))))-dim"
+    return embeddings
+end
+
+"""
+    prot5_embed_sequences(
+        sequences::Dict{String, <:AbstractString};
+        accession_map::Dict{String, String}=Dict{String,String}(),
+        h5_path::String="...",
+        auto_download::Bool=true,
+        force_install::Bool=false) -> Dict{String, Vector{Float32}}
+
+Unified ProtT5 embedding function. All embeddings are 1024-dim ProtT5-XL-U50
+vectors in the same space, regardless of source:
+
+1. **Phase A:** Look up pre-computed embeddings from UniProt H5 file for
+   sequences with known UniProt accessions (via `accession_map`)
+2. **Phase B:** Compute ProtT5 locally for remaining sequences using the
+   same model (`Rostlab/prot_t5_xl_uniref50`)
+
+# Arguments
+- `sequences`: name -> AA sequence string (all candidates)
+- `accession_map`: name -> UniProt accession (for H5 lookup). Entries without
+  a mapping are computed locally.
+
+# Example
+```julia
+seqs = Dict("DspB" => "MNCCVKGNS...", "novel_payload" => "MKWKLFKK...")
+acc_map = Dict("DspB" => "Q840G9")  # DspB has a known UniProt accession
+embs = prot5_embed_sequences(seqs; accession_map=acc_map)
+# DspB → from H5 (instant), novel_payload → computed locally
+```
+"""
+function prot5_embed_sequences(
+        sequences::Dict{String, <:AbstractString};
+        accession_map::Dict{String, String} = Dict{String, String}(),
+        h5_path::String = joinpath(homedir(), "workspace", "UniProt-embeddings",
+            "uniprot_sprot", "per-protein.h5"),
+        auto_download::Bool = true,
+        force_install::Bool = false)
+    embeddings = Dict{String, Vector{Float32}}()
+
+    # Phase A: Pre-computed H5 lookup
+    if !isempty(accession_map)
+        accessions = unique(collect(values(accession_map)))
+        @info "Phase A: Looking up $(length(accessions)) accessions in ProtT5 H5..."
+        h5_embs = lookup_uniprot_embeddings(accessions;
+            h5_path = h5_path, auto_download = auto_download)
+
+        # Map back to original names
+        for (name, acc) in accession_map
+            if haskey(h5_embs, acc)
+                embeddings[name] = h5_embs[acc]
+            end
+        end
+        @info "  Phase A result: $(length(embeddings)) embeddings from H5"
+    end
+
+    # Phase B: Compute locally for unmatched sequences
+    unmatched = Dict{String, String}()
+    for (name, seq) in sequences
+        if !haskey(embeddings, name)
+            unmatched[name] = seq
+        end
+    end
+
+    if !isempty(unmatched)
+        @info "Phase B: Computing ProtT5 locally for $(length(unmatched)) unmatched sequences..."
+        local_embs = compute_prot5_embeddings(unmatched; force_install = force_install)
+        merge!(embeddings, local_embs)
+    end
+
+    n_from_h5 = length(embeddings) - length(unmatched)
+    @info "ProtT5 summary: $(length(embeddings)) total ($(n_from_h5) from H5, $(length(unmatched)) computed locally)"
     return embeddings
 end
 
