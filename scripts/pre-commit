@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pre-commit hook: block import statements inside Julia function bodies.
+#
+# Julia does not allow `import` at function scope — it causes:
+#   syntax: "import" expression not at top level
+# which breaks Pkg.precompile and prevents the package from loading.
+#
+# Setup: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+errors=0
+
+# Only check staged .jl files in src/
+staged_jl=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.jl' 2>/dev/null)
+
+if [[ -z "${staged_jl}" ]]; then
+    exit 0
+fi
+
+for file in ${staged_jl}; do
+    # Get the staged content (not working tree)
+    content=$(git show ":${file}" 2>/dev/null) || continue
+
+    # Find import statements that are indented (inside a function body).
+    # Top-level imports have zero indentation; function-level ones are indented.
+    matches=$(printf '%s\n' "${content}" | grep -n '^\s\+import ' 2>/dev/null || true)
+
+    if [[ -n "${matches}" ]]; then
+        echo "ERROR: import statement inside function body in ${file}:"
+        printf '%s\n' "${matches}" | while IFS= read -r line; do
+            echo "  ${line}"
+        done
+        echo ""
+        echo "  Julia does not allow import at function scope."
+        echo "  Move the import to module level (top of file or Mycelia.jl)."
+        echo ""
+        errors=$((errors + 1))
+    fi
+done
+
+if [[ ${errors} -gt 0 ]]; then
+    echo "=== COMMIT BLOCKED: ${errors} file(s) with import-in-function ==="
+    exit 1
+fi
