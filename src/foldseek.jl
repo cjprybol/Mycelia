@@ -231,9 +231,6 @@ function foldseek_web_search(
         poll_interval::Real = 5,
         timeout::Real = 600
 )
-    import HTTP
-    import JSON
-    import DataFrames
 
     @assert isfile(pdb_path) "PDB file not found: $(pdb_path)"
     @assert mode in ("3diaa", "tmalign") "mode must be '3diaa' or 'tmalign'"
@@ -330,7 +327,6 @@ function foldseek_web_allvsall(
         databases::Vector{String} = ["afdb50"],
         delay::Real = 2
 )
-    import DataFrames
 
     pdb_files = filter(f -> endswith(f, ".pdb") || endswith(f, ".cif"), readdir(structure_dir; join = true))
     @assert !isempty(pdb_files) "No PDB/CIF files found in $(structure_dir)"
