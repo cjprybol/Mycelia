@@ -175,13 +175,14 @@ remaining_files = [
     "sentencepiece.jl",
     "sequence-comparison.jl",
     "sequence-graphs.jl",
-    "simulation.jl",
-    "slurm-sbatch.jl",
-    "taxonomy-and-trees.jl",
-    "testing-utilities.jl",
-    "variant-analysis.jl",
-    "viterbi-polishing-and-error-correction.jl",
-    "xam.jl"
+     "simulation.jl",
+     "slurm-sbatch.jl",
+     "statistical-analysis.jl",
+     "taxonomy-and-trees.jl",
+     "testing-utilities.jl",
+     "variant-analysis.jl",
+     "viterbi-polishing-and-error-correction.jl",
+     "xam.jl"
 ]
 
 for file in remaining_files
