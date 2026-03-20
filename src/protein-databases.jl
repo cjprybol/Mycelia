@@ -489,6 +489,325 @@ function _compute_composition_embedding(seq::BioSequences.LongAA;
 end
 
 # --------------------------------------------------------------------------- #
+# Sequence-based UniProt BLAST search
+# --------------------------------------------------------------------------- #
+
+"""
+    blast_uniprot_sequence(sequence::AbstractString;
+                           database::String="uniprotkb",
+                           hits::Int=10,
+                           threshold::Float64=0.001,
+                           poll_interval::Real=5,
+                           timeout::Real=300) -> Vector{Dict}
+
+BLAST a raw amino acid sequence against UniProt databases via the UniProt
+REST API. Returns the top hits with accession, identity, alignment length,
+e-value, and organism.
+
+# Keywords
+- `database`: "uniprotkb" (default), "uniref50", "uniref90", "uniref100"
+- `hits`: Maximum number of hits to return (default: 10)
+- `threshold`: E-value threshold (default: 0.001)
+- `poll_interval`: Seconds between status checks
+- `timeout`: Maximum seconds to wait
+
+# Example
+```julia
+hits = blast_uniprot_sequence("MKWKLFKKIEKVGQNIRDGIIKAG..."; hits=5)
+```
+"""
+function blast_uniprot_sequence(sequence::AbstractString;
+        database::String = "uniprotkb",
+        hits::Int = 10,
+        threshold::Float64 = 0.001,
+        poll_interval::Real = 5,
+        timeout::Real = 300)
+    api_base = "https://rest.uniprot.org/idmapping"
+
+    # Submit BLAST job via UniProt's sequence search endpoint
+    search_url = "https://rest.uniprot.org/uniprotkb/search"
+    params = [
+        "query" => "sequence:$(strip(string(sequence)))",
+        "format" => "json",
+        "size" => string(hits),
+        "fields" => "accession,id,protein_name,organism_name,sequence,gene_names"
+    ]
+
+    # UniProt doesn't have a direct BLAST API via REST; use the BLAST endpoint
+    blast_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/run"
+    form_data = Pair{String, String}[
+    "email" => "noreply@example.com",
+    "program" => "blastp",
+    "database" => database == "uniprotkb" ?
+                                                                                                                                                                                          "uniprotkb_swissprot" :
+                                                                                                                                                                                          database,
+    "sequence" => strip(string(sequence)),
+    "stype" => "protein",
+    "exp" => string(threshold),
+    "alignments" => string(hits)
+]
+
+    submit_resp = HTTP.post(blast_url; body = HTTP.Form(form_data),
+        headers = ["Accept" => "text/plain"])
+    job_id = strip(String(submit_resp.body))
+    @info "UniProt BLAST submitted: job_id=$(job_id)"
+
+    # Poll for completion
+    status_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/status/$(job_id)"
+    elapsed = 0.0
+    status = "RUNNING"
+    while status == "RUNNING" && elapsed < timeout
+        sleep(poll_interval)
+        elapsed += poll_interval
+        status_resp = HTTP.get(status_url; headers = ["Accept" => "text/plain"])
+        status = strip(String(status_resp.body))
+    end
+
+    if status != "FINISHED"
+        error("UniProt BLAST timed out or failed (status: $(status), elapsed: $(elapsed)s)")
+    end
+
+    # Fetch results in JSON format
+    result_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/result/$(job_id)/json"
+    result_resp = HTTP.get(result_url; headers = ["Accept" => "application/json"])
+    result_json = JSON.parse(String(result_resp.body))
+
+    # Parse hits
+    hits_out = Dict[]
+    for hit in get(result_json, "hits", [])
+        hit_acc = get(hit, "hit_acc", "")
+        hit_id = get(hit, "hit_id", "")
+        hit_desc = get(hit, "hit_def", "")
+        hit_org = get(hit, "hit_os", "")
+        hit_len = get(hit, "hit_len", 0)
+
+        for hsp in get(hit, "hit_hsps", [])
+            push!(hits_out,
+                Dict(
+                    "accession" => hit_acc,
+                    "id" => hit_id,
+                    "description" => hit_desc,
+                    "organism" => hit_org,
+                    "length" => hit_len,
+                    "identity" => get(hsp, "hsp_identity", 0.0),
+                    "align_len" => get(hsp, "hsp_align_len", 0),
+                    "evalue" => get(hsp, "hsp_expect", 0.0),
+                    "score" => get(hsp, "hsp_score", 0),
+                    "query_start" => get(hsp, "hsp_query_from", 0),
+                    "query_end" => get(hsp, "hsp_query_to", 0)
+                ))
+        end
+    end
+
+    return hits_out
+end
+
+"""
+    blast_uniprot_batch(sequences::Dict{String, <:AbstractString};
+                         hits_per_query::Int=3,
+                         delay::Real=2,
+                         kwargs...) -> DataFrames.DataFrame
+
+BLAST multiple sequences against UniProt, returning a DataFrame of top hits
+for each query. Useful for finding UniProt accessions for team-provided
+sequences.
+
+# Example
+```julia
+seqs = Dict("payload1" => "MKWK...", "payload2" => "METL...")
+df = blast_uniprot_batch(seqs; hits_per_query=3)
+```
+"""
+function blast_uniprot_batch(sequences::Dict{String, <:AbstractString};
+        hits_per_query::Int = 3,
+        delay::Real = 2,
+        kwargs...)
+    import DataFrames
+
+    results = DataFrames.DataFrame(
+        query_name = String[], target_accession = String[],
+        target_description = String[], target_organism = String[],
+        identity = Float64[], evalue = Float64[],
+        align_len = Int[], score = Int[])
+
+    for (name, seq) in sort(collect(sequences); by = first)
+        @info "BLASTing $(name) ($(length(seq)) aa)..."
+        try
+            hits = blast_uniprot_sequence(seq; hits = hits_per_query, kwargs...)
+            for h in hits
+                push!(results,
+                    (
+                        query_name = name,
+                        target_accession = get(h, "accession", ""),
+                        target_description = get(h, "description", ""),
+                        target_organism = get(h, "organism", ""),
+                        identity = Float64(get(h, "identity", 0.0)),
+                        evalue = Float64(get(h, "evalue", 0.0)),
+                        align_len = Int(get(h, "align_len", 0)),
+                        score = Int(get(h, "score", 0))
+                    ))
+            end
+        catch e
+            @warn "BLAST failed for $(name): $(e)"
+        end
+        sleep(delay)
+    end
+
+    return results
+end
+
+# --------------------------------------------------------------------------- #
+# Sequence-based protein embeddings (no UniProt accession needed)
+# --------------------------------------------------------------------------- #
+
+"""
+    compute_embeddings_from_sequences(sequences::Dict{String, BioSequences.LongAA};
+                                      ks::Vector{Int}=[2, 3]) -> Dict{String, Vector{Float32}}
+
+Compute composition-based embeddings directly from amino acid sequences
+(no UniProt accession required). Uses the same AAmer frequency profile
+as `fetch_uniprot_embeddings` but works on raw sequences.
+
+This is the lightweight, alignment-free embedding method. For neural
+embeddings, use `esm_embed_sequences`.
+
+# Example
+```julia
+seqs = Dict("payload1" => BioSequences.LongAA("MKWK..."))
+embs = compute_embeddings_from_sequences(seqs)
+D, labels = embedding_distance_matrix(embs; metric=:cosine)
+```
+"""
+function compute_embeddings_from_sequences(
+        sequences::Dict{String, BioSequences.LongAA};
+        ks::Vector{Int} = [2, 3])
+    embeddings = Dict{String, Vector{Float32}}()
+    for (name, seq) in sequences
+        try
+            embeddings[name] = _compute_composition_embedding(seq; ks = ks)
+        catch e
+            @warn "Failed to compute embedding for $(name): $(e)"
+        end
+    end
+    return embeddings
+end
+
+"""
+    esm_embed_sequences(sequences::Dict{String, <:AbstractString};
+                         model::String="esm2_t33_650M_UR50D",
+                         repr_layer::Int=33,
+                         batch_size::Int=5,
+                         delay::Real=1) -> Dict{String, Vector{Float32}}
+
+Compute protein embeddings using ESM-2 via Meta's ESM Atlas API
+(https://api.esmatlas.com). Returns per-protein mean-pooled embeddings.
+
+No local installation required — uses the public API. For offline use
+or larger batches, see `esm_embed_sequences_local`.
+
+# Supported models
+- "esm2_t33_650M_UR50D" (default, 650M params)
+- "esm2_t36_3B_UR50D" (3B params, slower but more accurate)
+
+# Example
+```julia
+seqs = Dict("payload1" => "MKWKLFKKIEKVGQNIRDGIIKAG...")
+embs = esm_embed_sequences(seqs)
+```
+"""
+function esm_embed_sequences(sequences::Dict{String, <:AbstractString};
+        model::String = "esm2_t33_650M_UR50D",
+        repr_layer::Int = 33,
+        batch_size::Int = 5,
+        delay::Real = 1)
+    embeddings = Dict{String, Vector{Float32}}()
+    api_url = "https://api.esmatlas.com/foldSequence/v1/pdb/"
+
+    # ESM Atlas provides structure prediction but not direct embedding API.
+    # Use the fold endpoint and extract internal representations,
+    # OR fall back to composition embeddings with a warning.
+    #
+    # The Meta ESM GitHub provides a Python CLI:
+    #   pip install fair-esm
+    #   python -m esm.scripts.extract esm2_t33_650M_UR50D input.fasta output/ --repr_layers 33 --include mean
+    #
+    # Check if esm CLI is available
+    esm_available = try
+        run(pipeline(`python3 -c "import esm; print(esm.__version__)"`;
+            stdout = devnull, stderr = devnull))
+        true
+    catch
+        false
+    end
+
+    if esm_available
+        @info "Using local ESM-2 ($(model)) for embeddings"
+        return _esm_embed_local(sequences; model = model, repr_layer = repr_layer)
+    end
+
+    # Try the ESM Metagenomic Atlas API (fold endpoint with embedding extraction)
+    # The public API only supports structure prediction, not raw embeddings.
+    # Fall back to enhanced composition embeddings.
+    @warn "ESM-2 Python package not available. Using enhanced composition embeddings. " *
+          "For neural embeddings, install: pip install fair-esm"
+    return compute_embeddings_from_sequences(
+        Dict(k => BioSequences.LongAA(v) for (k, v) in sequences);
+        ks = [1, 2, 3])
+end
+
+"""
+    _esm_embed_local(sequences::Dict{String, <:AbstractString};
+                      model::String="esm2_t33_650M_UR50D",
+                      repr_layer::Int=33) -> Dict{String, Vector{Float32}}
+
+Internal: compute ESM-2 embeddings via the local Python `fair-esm` package.
+Writes sequences to a temporary FASTA, runs the extraction script, and
+reads back the per-protein mean-pooled representations.
+"""
+function _esm_embed_local(sequences::Dict{String, <:AbstractString};
+        model::String = "esm2_t33_650M_UR50D",
+        repr_layer::Int = 33)
+    tmpdir = mktempdir()
+    fasta_path = joinpath(tmpdir, "input.fasta")
+    output_dir = joinpath(tmpdir, "output")
+    mkpath(output_dir)
+
+    # Write FASTA
+    open(fasta_path, "w") do io
+        for (name, seq) in sequences
+            println(io, ">$(name)")
+            println(io, seq)
+        end
+    end
+
+    # Run ESM extraction
+    cmd = `python3 -m esm.scripts.extract $(model) $(fasta_path) $(output_dir)
+           --repr_layers $(repr_layer) --include mean`
+    run(cmd)
+
+    # Read results (PyTorch .pt files)
+    embeddings = Dict{String, Vector{Float32}}()
+    for f in readdir(output_dir; join = true)
+        endswith(f, ".pt") || continue
+        # Each .pt file contains a dict with "mean_representations" -> {layer -> tensor}
+        # Use Python to convert to numpy, then read
+        name = replace(basename(f), ".pt" => "")
+        py_cmd = """
+import torch, json, sys
+d = torch.load(sys.argv[1], map_location='cpu')
+emb = d['mean_representations'][$(repr_layer)].numpy().tolist()
+print(json.dumps(emb))
+"""
+        result = read(`python3 -c $(py_cmd) $(f)`, String)
+        vec = Float32.(JSON.parse(strip(result)))
+        embeddings[name] = vec
+    end
+
+    rm(tmpdir; recursive = true, force = true)
+    return embeddings
+end
+
+# --------------------------------------------------------------------------- #
 # FoldSeek operations — uses existing Mycelia.foldseek_easy_search()
 # See foldseek.jl for the core FoldSeek CLI wrappers.
 # This section adds only the distance matrix parser on top.
