@@ -622,8 +622,6 @@ function blast_uniprot_batch(sequences::Dict{String, <:AbstractString};
         hits_per_query::Int = 3,
         delay::Real = 2,
         kwargs...)
-    import DataFrames
-
     results = DataFrames.DataFrame(
         query_name = String[], target_accession = String[],
         target_description = String[], target_organism = String[],
