@@ -1,18 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pre-commit hook: block import statements inside Julia function bodies.
-#
-# Julia does not allow `import` at function scope — it causes:
+# Mycelia repo pre-commit hook: block import statements inside Julia function
+# bodies. Julia does not allow `import` at function scope — it causes:
 #   syntax: "import" expression not at top level
 # which breaks Pkg.precompile and prevents the package from loading.
 #
-# Setup: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+# This hook runs in two scenarios:
+# 1. Called by the global hook (~/workspace/dotfiles/hooks/pre-commit) which
+#    delegates to repo-local scripts/pre-commit if it exists.
+# 2. Installed directly via: ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+#    (for users who don't have the global hook configured)
+#
+# Setup for users without global hooks:
+#   cd ~/workspace/Mycelia
+#   ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
 
 errors=0
 
-# Only check staged .jl files in src/
-staged_jl=$(git diff --cached --name-only --diff-filter=ACM -- 'src/*.jl' 2>/dev/null)
+# Check all staged .jl files (not just src/ — tests/ and scripts/ count too)
+staged_jl=$(git diff --cached --name-only --diff-filter=ACM -- '*.jl' 2>/dev/null)
 
 if [[ -z "${staged_jl}" ]]; then
     exit 0
@@ -24,23 +31,22 @@ for file in ${staged_jl}; do
 
     # Find import statements that are indented (inside a function body).
     # Top-level imports have zero indentation; function-level ones are indented.
-    # Use -E for extended regex (macOS grep needs this for \s+)
     matches=$(printf '%s\n' "${content}" | grep -nE '^[[:space:]]+import ' 2>/dev/null || true)
 
     if [[ -n "${matches}" ]]; then
-        echo "ERROR: import statement inside function body in ${file}:"
+        echo "ERROR: import inside function body in ${file}:"
         printf '%s\n' "${matches}" | while IFS= read -r line; do
             echo "  ${line}"
         done
-        echo ""
-        echo "  Julia does not allow import at function scope."
-        echo "  Move the import to module level (top of file or Mycelia.jl)."
         echo ""
         errors=$((errors + 1))
     fi
 done
 
 if [[ ${errors} -gt 0 ]]; then
+    echo "  Julia does not allow import at function scope."
+    echo "  Move imports to module level (top of file or Mycelia.jl)."
+    echo ""
     echo "=== COMMIT BLOCKED: ${errors} file(s) with import-in-function ==="
     exit 1
 fi
