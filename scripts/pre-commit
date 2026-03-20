@@ -24,7 +24,8 @@ for file in ${staged_jl}; do
 
     # Find import statements that are indented (inside a function body).
     # Top-level imports have zero indentation; function-level ones are indented.
-    matches=$(printf '%s\n' "${content}" | grep -n '^\s\+import ' 2>/dev/null || true)
+    # Use -E for extended regex (macOS grep needs this for \s+)
+    matches=$(printf '%s\n' "${content}" | grep -nE '^[[:space:]]+import ' 2>/dev/null || true)
 
     if [[ -n "${matches}" ]]; then
         echo "ERROR: import statement inside function body in ${file}:"

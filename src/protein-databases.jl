@@ -533,18 +533,27 @@ function blast_uniprot_sequence(sequence::AbstractString;
         "fields" => "accession,id,protein_name,organism_name,sequence,gene_names"
     ]
 
-    # UniProt doesn't have a direct BLAST API via REST; use the BLAST endpoint
+    # EBI NCBI BLAST REST API — parameters must use allowed enum values
     blast_url = "https://www.ebi.ac.uk/Tools/services/rest/ncbiblast/run"
+
+    # Map hits to nearest allowed alignments value: 0, 5, 10, 20, 50, 100, 150, 200, 250, 500
+    allowed_alignments = [0, 5, 10, 20, 50, 100, 150, 200, 250, 500]
+    alignments_val = allowed_alignments[findmin(abs.(allowed_alignments .-
+                                                                        hits))[2]]
+
+    # Map threshold to nearest allowed exp value
+    allowed_exp = [1e-200, 1e-100, 1e-50, 1e-10, 1e-5, 1e-4, 1e-3, 1.0, 10.0, 100.0, 1000.0]
+    exp_val = allowed_exp[findmin(abs.(log10.(allowed_exp) .- log10(threshold)))[2]]
+
+    db_name = database == "uniprotkb" ? "uniprotkb_swissprot" : database
     form_data = Pair{String, String}[
     "email" => "noreply@example.com",
     "program" => "blastp",
-    "database" => database == "uniprotkb" ?
-                                                                                                                                                                                          "uniprotkb_swissprot" :
-                                                                                                                                                                                          database,
+    "database" => db_name,
     "sequence" => strip(string(sequence)),
     "stype" => "protein",
-    "exp" => string(threshold),
-    "alignments" => string(hits)
+    "exp" => string(exp_val),
+    "alignments" => string(alignments_val)
 ]
 
     submit_resp = HTTP.post(blast_url; body = HTTP.Form(form_data),
