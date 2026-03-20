@@ -675,6 +675,130 @@ function blast_uniprot_batch(sequences::Dict{String, <:AbstractString};
 end
 
 # --------------------------------------------------------------------------- #
+# UniRef FASTA download + local BLAST database construction
+# --------------------------------------------------------------------------- #
+
+"""
+    download_uniref_fasta(cluster_level::Int;
+                           output_dir::String="\$(homedir())/workspace/UniRef",
+                           force::Bool=false) -> String
+
+Download UniRef FASTA from UniProt FTP. Returns path to the gzipped FASTA file.
+
+# Arguments
+- `cluster_level::Int`: 50, 90, or 100
+
+# Example
+```julia
+fasta_path = download_uniref_fasta(90)
+# => "~/workspace/UniRef/uniref90.fasta.gz"
+```
+"""
+function download_uniref_fasta(cluster_level::Int;
+        output_dir::String = "$(homedir())/workspace/UniRef",
+        force::Bool = false)
+    @assert cluster_level in (50, 90, 100) "cluster_level must be 50, 90, or 100"
+
+    mkpath(output_dir)
+    filename = "uniref$(cluster_level).fasta.gz"
+    output_path = joinpath(output_dir, filename)
+
+    if isfile(output_path) && filesize(output_path) > 0 && !force
+        @info "UniRef$(cluster_level) FASTA already exists: $(output_path) ($(round(filesize(output_path) / 1e9; digits=1)) GB)"
+        return output_path
+    end
+
+    url = "https://ftp.uniprot.org/pub/databases/uniprot/uniref/uniref$(cluster_level)/$(filename)"
+    @info "Downloading UniRef$(cluster_level) FASTA from $(url)..."
+    @info "This is a large file (UniRef50 ~12GB, UniRef90 ~38GB, UniRef100 ~99GB)"
+
+    Downloads.download(url, output_path)
+    @info "Downloaded: $(output_path) ($(round(filesize(output_path) / 1e9; digits=1)) GB)"
+    return output_path
+end
+
+"""
+    download_and_build_uniref_blastdb(cluster_level::Int;
+                                       uniref_dir::String="\$(homedir())/workspace/UniRef",
+                                       blastdb_dir::String="\$(homedir())/workspace/blastdb",
+                                       force::Bool=false) -> String
+
+Convenience: download UniRef FASTA + build BLAST DB in one step.
+Uses `download_uniref_fasta` + `ensure_blast_db` (from alignments-and-mapping.jl).
+
+# Example
+```julia
+db_path = download_and_build_uniref_blastdb(90)
+run_blastp_search(query_fasta="query.fa", reference_fasta=db_path)
+```
+"""
+function download_and_build_uniref_blastdb(cluster_level::Int;
+        uniref_dir::String = "$(homedir())/workspace/UniRef",
+        blastdb_dir::String = "$(homedir())/workspace/blastdb",
+        force::Bool = false)
+    fasta_path = download_uniref_fasta(cluster_level; output_dir = uniref_dir, force = force)
+    db_name = "uniref$(cluster_level)"
+    ensure_blast_db(;
+        fasta = fasta_path,
+        dbtype = "prot",
+        output_dir = blastdb_dir,
+        db_name = db_name,
+        title = "UniRef$(cluster_level)",
+        parse_seqids = true,
+        force = force)
+end
+
+"""
+    search_uniref_mmseqs(query_fasta::AbstractString,
+                          cluster_level::Int=50;
+                          mmseqs_db_dir::String="\$(homedir())/workspace/mmseqs",
+                          output_dir::String=mktempdir(),
+                          kwargs...) -> String
+
+Search a query FASTA against a local MMSeqs2 UniRef database. Wrapper around
+`run_mmseqs_easy_search` with pre-configured paths for UniRef databases.
+
+Returns path to the results TSV file.
+
+# Arguments
+- `query_fasta`: Path to query FASTA file
+- `cluster_level`: 50 or 100 (must have corresponding MMSeqs2 DB)
+
+# Example
+```julia
+results_path = search_uniref_mmseqs("payloads.fasta", 50)
+df = read_mmseqs_easy_search(results_path)
+```
+"""
+function search_uniref_mmseqs(query_fasta::AbstractString,
+        cluster_level::Int = 50;
+        mmseqs_db_dir::String = "$(homedir())/workspace/mmseqs",
+        output_dir::String = mktempdir(),
+        kwargs...)
+    @assert cluster_level in (50, 90, 100) "cluster_level must be 50, 90, or 100"
+    @assert isfile(query_fasta) "Query FASTA not found: $(query_fasta)"
+
+    db_path = joinpath(mmseqs_db_dir, "UniRef$(cluster_level)")
+    if !isfile(db_path)
+        # Try downloading via Mycelia's MMSeqs DB downloader
+        @info "UniRef$(cluster_level) MMSeqs2 DB not found at $(db_path). Downloading..."
+        download_mmseqs_db(; db = "UniRef$(cluster_level)", dbdir = mmseqs_db_dir)
+    end
+
+    output_file = joinpath(output_dir,
+        replace(basename(query_fasta), r"\.(fa|fasta|faa)(\.gz)?$" => "") *
+        "_vs_UniRef$(cluster_level).tsv")
+
+    run_mmseqs_easy_search(;
+        query_fasta = query_fasta,
+        target_database = db_path,
+        output = output_file,
+        kwargs...)
+
+    return output_file
+end
+
+# --------------------------------------------------------------------------- #
 # NCBI Remote BLAST
 # --------------------------------------------------------------------------- #
 
