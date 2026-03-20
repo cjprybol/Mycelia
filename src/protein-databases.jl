@@ -748,58 +748,17 @@ function download_and_build_uniref_blastdb(cluster_level::Int;
         force = force)
 end
 
-"""
-    search_uniref_mmseqs(query_fasta::AbstractString,
-                          cluster_level::Int=50;
-                          mmseqs_db_dir::String="\$(homedir())/workspace/mmseqs",
-                          output_dir::String=mktempdir(),
-                          kwargs...) -> String
-
-Search a query FASTA against a local MMSeqs2 UniRef database. Wrapper around
-`run_mmseqs_easy_search` with pre-configured paths for UniRef databases.
-
-Returns path to the results TSV file.
-
-# Arguments
-- `query_fasta`: Path to query FASTA file
-- `cluster_level`: 50 or 100 (must have corresponding MMSeqs2 DB)
-
-# Example
-```julia
-results_path = search_uniref_mmseqs("payloads.fasta", 50)
-df = read_mmseqs_easy_search(results_path)
-```
-"""
-function search_uniref_mmseqs(query_fasta::AbstractString,
-        cluster_level::Int = 50;
-        mmseqs_db_dir::String = "$(homedir())/workspace/mmseqs",
-        output_dir::String = mktempdir(),
-        kwargs...)
-    @assert cluster_level in (50, 90, 100) "cluster_level must be 50, 90, or 100"
-    @assert isfile(query_fasta) "Query FASTA not found: $(query_fasta)"
-
-    db_path = joinpath(mmseqs_db_dir, "UniRef$(cluster_level)")
-    if !isfile(db_path)
-        # Try downloading via Mycelia's MMSeqs DB downloader
-        @info "UniRef$(cluster_level) MMSeqs2 DB not found at $(db_path). Downloading..."
-        download_mmseqs_db(; db = "UniRef$(cluster_level)", dbdir = mmseqs_db_dir)
-    end
-
-    output_file = joinpath(output_dir,
-        replace(basename(query_fasta), r"\.(fa|fasta|faa)(\.gz)?$" => "") *
-        "_vs_UniRef$(cluster_level).tsv")
-
-    run_mmseqs_easy_search(;
-        query_fasta = query_fasta,
-        target_database = db_path,
-        output = output_file,
-        kwargs...)
-
-    return output_file
-end
-
 # --------------------------------------------------------------------------- #
 # NCBI Remote BLAST
+#
+# For local UniRef searching, use the existing MMSeqs2 functions:
+#   run_mmseqs_easy_search(query_fasta="query.fa",
+#                          target_database="~/workspace/mmseqs/UniRef50")
+#   read_mmseqs_easy_search(results_path)
+#
+# Or for BLAST-based local search:
+#   ensure_blast_db(fasta="uniref50.fasta.gz", dbtype="prot", ...)
+#   run_blastp_search(query_fasta="query.fa", reference_fasta=db_path)
 # --------------------------------------------------------------------------- #
 
 """
