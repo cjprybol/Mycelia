@@ -231,7 +231,6 @@ function foldseek_web_search(
         poll_interval::Real = 5,
         timeout::Real = 600
 )
-
     @assert isfile(pdb_path) "PDB file not found: $(pdb_path)"
     @assert mode in ("3diaa", "tmalign") "mode must be '3diaa' or 'tmalign'"
 
@@ -239,16 +238,17 @@ function foldseek_web_search(
 
     # Submit search job
     pdb_content = read(pdb_path, String)
-    # HTTP.Form requires each database as a separate "database[]" entry
-    form_data = Pair{String, String}[
-    "q" => pdb_content,
-    "mode" => mode
-]
+    # FoldSeek API requires the PDB as a file upload (multipart), not a raw string.
+    # HTTP.Form with HTTP.Multipart handles file-like uploads.
+    form_parts = [
+        "q" => HTTP.Multipart(basename(pdb_path), IOBuffer(pdb_content), "application/octet-stream"),
+        "mode" => mode
+    ]
     for db in databases
-        push!(form_data, "database[]" => db)
+        push!(form_parts, "database[]" => db)
     end
 
-    submit_resp = HTTP.post("$(api_base)/ticket"; body = HTTP.Form(form_data))
+    submit_resp = HTTP.post("$(api_base)/ticket"; body = HTTP.Form(form_parts))
     submit_json = JSON.parse(String(submit_resp.body))
 
     ticket_id = submit_json["id"]
@@ -330,7 +330,6 @@ function foldseek_web_allvsall(
         databases::Vector{String} = ["afdb50"],
         delay::Real = 2
 )
-
     pdb_files = filter(f -> endswith(f, ".pdb") || endswith(f, ".cif"), readdir(structure_dir; join = true))
     @assert !isempty(pdb_files) "No PDB/CIF files found in $(structure_dir)"
 

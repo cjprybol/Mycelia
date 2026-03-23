@@ -331,10 +331,12 @@ pred["pdb_url"]  # => "https://alphafold.ebi.ac.uk/files/AF-P05820-F1-model_v6.p
 """
 function fetch_alphafold_prediction(accession::AbstractString)
     url = "https://alphafold.ebi.ac.uk/api/prediction/$(accession)"
+    # Use minimal headers for EBI API — _UNIPROT_HEADERS can cause issues
+    # with non-UniProt APIs (AlphaFold is hosted at EBI, not UniProt)
     response = try
-        HTTP.get(url; headers = _UNIPROT_HEADERS)
+        HTTP.get(url; headers = ["Accept" => "application/json"])
     catch e
-        @warn "AlphaFold prediction not found for $(accession)"
+        @warn "AlphaFold prediction not found for $(accession): $(e)"
         return nothing
     end
     results = JSON.parse(String(response.body))
@@ -374,7 +376,8 @@ function download_alphafold_structure(accession::AbstractString,
     mkpath(output_dir)
     output_path = joinpath(output_dir, "AF-$(accession).$(ext)")
 
-    response = HTTP.get(url; headers = _IDENTITY_HEADERS)
+    # PDB files are plain text — no special headers needed for EBI CDN
+    response = HTTP.get(url)
     write(output_path, response.body)
     return output_path
 end
@@ -1579,122 +1582,15 @@ function prot5_embed_sequences(
 end
 
 # --------------------------------------------------------------------------- #
-# FoldSeek operations — uses existing Mycelia.foldseek_easy_search()
-# See foldseek.jl for the core FoldSeek CLI wrappers.
-# This section adds the web API fallback and distance matrix parser.
+# FoldSeek operations — see foldseek.jl for all FoldSeek wrappers:
+#   foldseek_easy_search (local CLI)
+#   foldseek_web_search (web API single query)
+#   foldseek_web_allvsall (web API all-vs-all)
+# This section has only the distance matrix parser.
 # --------------------------------------------------------------------------- #
 
-"""
-    foldseek_web_search(pdb_path::AbstractString;
-                         database::String="afdb50",
-                         mode::String="3diaa",
-                         poll_interval::Real=5,
-                         timeout::Real=300) -> Vector{Dict}
-
-Search a single PDB structure against FoldSeek web server databases.
-Returns a vector of hit dicts with target, identity, TM-score, etc.
-
-Uses the FoldSeek search API at https://search.foldseek.com/api/ticket
-
-# Example
-```julia
-hits = foldseek_web_search("structures/AF-P05820.pdb")
-```
-"""
-function foldseek_web_search(pdb_path::AbstractString;
-        database::String = "afdb50",
-        mode::String = "3diaa",
-        poll_interval::Real = 5,
-        timeout::Real = 300)
-    pdb_content = read(pdb_path, String)
-
-    # Submit search job
-    form = HTTP.Form([
-        "q" => HTTP.Multipart(basename(pdb_path), IOBuffer(pdb_content)),
-        "mode" => mode,
-        "database[]" => database
-    ])
-    submit_resp = HTTP.post("https://search.foldseek.com/api/ticket"; body = form)
-    ticket = JSON.parse(String(submit_resp.body))
-    ticket_id = ticket["id"]
-    @info "FoldSeek web search submitted: ticket=$(ticket_id)"
-
-    # Poll for completion
-    elapsed = 0.0
-    while elapsed < timeout
-        sleep(poll_interval)
-        elapsed += poll_interval
-        status_resp = HTTP.get("https://search.foldseek.com/api/ticket/$(ticket_id)")
-        status = JSON.parse(String(status_resp.body))
-        if get(status, "status", "") == "COMPLETE"
-            # Fetch results
-            results = get(status, "result", [])
-            if !isempty(results) && haskey(first(results), "alignments")
-                return first(results)["alignments"]
-            end
-            return []
-        elseif get(status, "status", "") == "ERROR"
-            error("FoldSeek web search failed: $(get(status, "error", "unknown"))")
-        end
-    end
-    error("FoldSeek web search timed out after $(timeout)s")
-end
-
-"""
-    foldseek_web_allvsall(structure_dir::AbstractString,
-                           output_path::AbstractString;
-                           database::String="afdb50",
-                           delay::Real=3) -> String
-
-Run FoldSeek web API for all PDB files in a directory and produce a TSV
-results file compatible with `structural_distance_matrix`.
-
-This is the web API fallback when local FoldSeek CLI is not available.
-Rate-limited to avoid overwhelming the public server.
-
-# Example
-```julia
-foldseek_web_allvsall("structures/payloads", "figures/foldseek-web.tsv")
-D, labels = structural_distance_matrix("figures/foldseek-web.tsv", accessions)
-```
-"""
-function foldseek_web_allvsall(structure_dir::AbstractString,
-        output_path::AbstractString;
-        database::String = "afdb50",
-        delay::Real = 3)
-    pdb_files = filter(f -> endswith(f, ".pdb"), readdir(structure_dir; join = true))
-    isempty(pdb_files) && error("No PDB files found in $(structure_dir)")
-    @info "FoldSeek web all-vs-all: $(length(pdb_files)) structures"
-
-    mkpath(dirname(output_path))
-    open(output_path, "w") do io
-        for (i, query_pdb) in enumerate(pdb_files)
-            query_name = replace(basename(query_pdb), r"\.pdb$" => "")
-            @info "  Searching $(query_name) ($(i)/$(length(pdb_files)))..."
-            try
-                hits = foldseek_web_search(query_pdb; database = database)
-                for hit in hits
-                    for aln in get(hit, "alignments", [hit])
-                        target = get(aln, "target", "")
-                        fident = get(aln, "seqId", 0.0)
-                        alnlen = get(aln, "alnLength", 0)
-                        evalue = get(aln, "eval", 1.0)
-                        bits = get(aln, "score", 0.0)
-                        tmscore = get(aln, "prob", 0.0)  # TM-score in prob field
-                        println(io, join(
-                            [query_name, target, fident, alnlen,
-                                evalue, bits, tmscore], "\t"))
-                    end
-                end
-            catch e
-                @warn "FoldSeek web search failed for $(query_name): $(e)"
-            end
-            i < length(pdb_files) && sleep(delay)
-        end
-    end
-    @info "FoldSeek web results written to $(output_path)"
-    return output_path
-end
+# foldseek_web_search and foldseek_web_allvsall are defined in foldseek.jl
+# (canonical location for all FoldSeek operations)
 
 # --------------------------------------------------------------------------- #
 # Protein distance matrices — multi-axis
