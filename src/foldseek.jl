@@ -353,6 +353,7 @@ function foldseek_web_allvsall(
     combined = reduce(vcat, all_results)
 
     # Write TSV in same format as local foldseek
+    mkpath(dirname(abspath(output_file)))
     open(output_file, "w") do io
         for row in DataFrames.eachrow(combined)
             println(io,
