@@ -4057,6 +4057,7 @@ function read_mmseqs_easy_search(mmseqs_file::String)
         header = 1,             # Assumes the first row contains column names
         delim = '\t',           # Tab-delimited file
         types = col_types,      # Apply our defined column types
+        validate = false,       # Don't error on missing columns (e.g., pairwise has no taxid)
         pool = true,            # Pool string columns to save memory
         ntasks = get_default_threads() # Utilize available CPU threads for parsing
     )
