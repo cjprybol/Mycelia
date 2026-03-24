@@ -1625,12 +1625,12 @@ function install_prot5(; force = false)
         end
         if has_gpu
             @info "  GPU detected — installing torch with CUDA support"
-            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece tiktoken`)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install "transformers<5" torch sentencepiece`)
         else
             @info "  No GPU detected — installing CPU-only torch"
             # Install torch from CPU index separately (--index-url breaks non-torch packages)
             run(`$(CONDA_RUNNER) run -n $(env_name) pip install torch --index-url https://download.pytorch.org/whl/cpu`)
-            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers sentencepiece tiktoken`)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install "transformers<5" sentencepiece`)
         end
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
