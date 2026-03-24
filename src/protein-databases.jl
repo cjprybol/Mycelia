@@ -565,6 +565,139 @@ function lookup_uniprot_embeddings(
     return embeddings
 end
 
+"""
+    scan_embedding_neighbors(
+        query_embeddings::Dict{String, Vector{Float32}};
+        h5_path::String="...",
+        max_distance::Float64=0.3,
+        max_results_per_query::Int=20,
+        auto_download::Bool=true) -> Dict{String, Vector{@NamedTuple{accession::String, distance::Float64}}}
+
+Scan the full Swiss-Prot ProtT5 H5 file for nearest neighbors to each query
+embedding by cosine distance. Returns a dict mapping each query name to a
+sorted vector of (accession, distance) tuples.
+
+Fast: ~570K Swiss-Prot proteins x N queries at 1024-dim uses Julia BLAS
+matrix multiplication (~2-5 seconds for 20 queries).
+
+# Example
+```julia
+embs = prot5_embed_sequences(Dict("DspB" => "MNCCVKGNS..."))
+neighbors = scan_embedding_neighbors(embs; max_distance=0.3, max_results_per_query=10)
+# => Dict("DspB" => [(accession="Q840G9", distance=0.12), ...])
+```
+"""
+function scan_embedding_neighbors(
+        query_embeddings::Dict{String, Vector{Float32}};
+        h5_path::String = joinpath(homedir(), "workspace", "UniProt-embeddings",
+            "uniprot_sprot", "per-protein.h5"),
+        max_distance::Float64 = 0.3,
+        max_results_per_query::Int = 20,
+        auto_download::Bool = true)
+    if !isfile(h5_path)
+        if auto_download
+            download_uniprot_embeddings()
+        else
+            error("H5 file not found: $(h5_path)")
+        end
+    end
+
+    query_names = collect(keys(query_embeddings))
+    n_queries = length(query_names)
+    dim = length(first(values(query_embeddings)))
+
+    # Build query matrix (dim x n_queries)
+    Q = Matrix{Float32}(undef, dim, n_queries)
+    for (i, name) in enumerate(query_names)
+        Q[:, i] = query_embeddings[name]
+    end
+    # Normalize query vectors for cosine distance
+    for i in 1:n_queries
+        norm_val = sqrt(sum(Q[:, i] .^ 2))
+        if norm_val > 0
+            Q[:, i] ./= norm_val
+        end
+    end
+
+    results = Dict{String, Vector{@NamedTuple{accession::String, distance::Float64}}}()
+    for name in query_names
+        results[name] = @NamedTuple{accession::String, distance::Float64}[]
+    end
+
+    @info "Scanning Swiss-Prot H5 for neighbors ($(n_queries) queries, max_dist=$(max_distance))..."
+    n_scanned = 0
+
+    HDF5.h5open(h5_path, "r") do fid
+        all_keys = keys(fid)
+        n_total = length(all_keys)
+
+        # Process in chunks for memory efficiency
+        chunk_size = 10000
+        for chunk_start in 1:chunk_size:n_total
+            chunk_end = min(chunk_start + chunk_size - 1, n_total)
+            chunk_keys = all_keys[chunk_start:chunk_end]
+            n_chunk = length(chunk_keys)
+
+            # Load chunk into matrix
+            T = Matrix{Float32}(undef, dim, n_chunk)
+            valid_mask = trues(n_chunk)
+            for (j, k) in enumerate(chunk_keys)
+                try
+                    vec = Float32.(HDF5.read(fid[k]))
+                    if length(vec) == dim
+                        T[:, j] = vec
+                    else
+                        valid_mask[j] = false
+                    end
+                catch
+                    valid_mask[j] = false
+                end
+            end
+
+            # Normalize target vectors
+            for j in 1:n_chunk
+                valid_mask[j] || continue
+                norm_val = sqrt(sum(T[:, j] .^ 2))
+                if norm_val > 0
+                    T[:, j] ./= norm_val
+                end
+            end
+
+            # Cosine similarity = Q' * T (dot product of normalized vectors)
+            # Cosine distance = 1 - similarity
+            similarities = Q' * T  # n_queries x n_chunk
+
+            for i in 1:n_queries
+                for j in 1:n_chunk
+                    valid_mask[j] || continue
+                    dist = 1.0 - Float64(similarities[i, j])
+                    if dist < max_distance
+                        push!(results[query_names[i]],
+                            (accession = chunk_keys[j], distance = dist))
+                    end
+                end
+            end
+
+            n_scanned += n_chunk
+            if n_scanned % 100000 == 0
+                @info "  Scanned $(n_scanned)/$(n_total) entries..."
+            end
+        end
+    end
+
+    # Sort by distance and truncate
+    for name in query_names
+        sort!(results[name]; by = x -> x.distance)
+        if length(results[name]) > max_results_per_query
+            results[name] = results[name][1:max_results_per_query]
+        end
+    end
+
+    total_hits = sum(length(v) for v in values(results))
+    @info "Embedding neighbor scan complete: $(total_hits) total hits across $(n_queries) queries"
+    return results
+end
+
 # --------------------------------------------------------------------------- #
 # Composition-based embeddings (lightweight, no external tools)
 # --------------------------------------------------------------------------- #
@@ -1269,9 +1402,9 @@ function install_esm(; force = false)
         end
 
         @info "Installing ESM-2 conda environment (this may take a few minutes)..."
-        # Create env with Python + pip, then pip-install fair-esm + torch (CPU)
         run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
-        run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch --index-url https://download.pytorch.org/whl/cpu`)
+        # Install torch without --index-url constraint — pip auto-detects CUDA on Linux
+        run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch`)
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
 
@@ -1388,7 +1521,8 @@ function install_prot5(; force = false)
 
         @info "Installing ProtT5 conda environment (this may take a few minutes)..."
         run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
-        run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece --index-url https://download.pytorch.org/whl/cpu`)
+        # Install torch without --index-url constraint — pip auto-detects CUDA on Linux
+        run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece`)
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
 
@@ -1455,7 +1589,9 @@ import torch
 
 tokenizer = T5Tokenizer.from_pretrained("Rostlab/prot_t5_xl_uniref50", do_lower_case=False)
 model = T5EncoderModel.from_pretrained("Rostlab/prot_t5_xl_uniref50")
-model.to(torch.device("cpu"))
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+sys.stderr.write(f"ProtT5 device: {device}\\n")
 
 # Read FASTA
 fasta_path = sys.argv[1]
@@ -1481,12 +1617,13 @@ for name, seq in sequences.items():
     # ProtT5 expects space-separated amino acids
     seq_spaced = " ".join(list(re.sub(r"[UZOB]", "X", seq)))
     ids = tokenizer(seq_spaced, return_tensors="pt", add_special_tokens=True, padding=True)
+    ids = {k: v.to(device) for k, v in ids.items()}
     with torch.no_grad():
         output = model(input_ids=ids["input_ids"], attention_mask=ids["attention_mask"])
     # Mean pool over sequence length (exclude padding)
     mask = ids["attention_mask"].unsqueeze(-1)
     emb = (output.last_hidden_state * mask).sum(1) / mask.sum(1)
-    results[name] = emb[0].tolist()
+    results[name] = emb[0].cpu().tolist()
     sys.stderr.write(f"  Embedded {name}: {len(seq)} aa -> {len(results[name])}-dim\\n")
 
 print(json.dumps(results))
