@@ -1958,7 +1958,8 @@ Parse FoldSeek all-vs-all results into a TM-score distance matrix (1 - TM-score)
 Returns (distance_matrix, ordered_labels).
 """
 function structural_distance_matrix(foldseek_results_path::AbstractString,
-        accessions::AbstractVector{<:AbstractString})
+        accessions::AbstractVector{<:AbstractString};
+        name_map::Dict{String, String} = Dict{String, String}())
     labels = sort(accessions)
     n = length(labels)
     label_idx = Dict(l => i for (i, l) in enumerate(labels))
@@ -1971,8 +1972,12 @@ function structural_distance_matrix(foldseek_results_path::AbstractString,
     for line in eachline(foldseek_results_path)
         fields = split(line, '\t')
         length(fields) < 7 && continue
-        query = replace(basename(String(fields[1])), r"^AF-|\.pdb$" => "")
-        target = replace(basename(String(fields[2])), r"^AF-|\.pdb$" => "")
+        # Strip common structure prediction prefixes (AF-, ESM-) and file extensions
+        query = replace(basename(String(fields[1])), r"^(AF|ESM)-|\.pdb$|\.cif$" => "")
+        target = replace(basename(String(fields[2])), r"^(AF|ESM)-|\.pdb$|\.cif$" => "")
+        # Apply optional name mapping (e.g., sanitized filename → original name)
+        query = get(name_map, query, query)
+        target = get(name_map, target, target)
         tmscore = tryparse(Float64, String(fields[7]))
         tmscore === nothing && continue
 
