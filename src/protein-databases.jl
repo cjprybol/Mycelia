@@ -406,6 +406,88 @@ function download_alphafold_structures(accessions::AbstractVector{<:AbstractStri
     return paths
 end
 
+"""
+    predict_structure_esmfold(name::AbstractString,
+                               sequence::AbstractString,
+                               output_dir::AbstractString;
+                               delay::Real=1) -> String
+
+Predict a protein structure using the ESMFold API (Meta AI).
+Accepts any amino acid sequence — no UniProt entry required.
+Returns path to the predicted PDB file.
+
+# Example
+```julia
+pdb = predict_structure_esmfold("DspB", "METLTVHAPS...", "structures/")
+```
+"""
+function predict_structure_esmfold(name::AbstractString,
+        sequence::AbstractString,
+        output_dir::AbstractString;
+        delay::Real = 1)
+    mkpath(output_dir)
+    safe_name = replace(name, r"[^A-Za-z0-9_\-\.]" => "_")
+    output_path = joinpath(output_dir, "ESM-$(safe_name).pdb")
+
+    # Skip if already predicted
+    if isfile(output_path) && filesize(output_path) > 0
+        return output_path
+    end
+
+    # Clean sequence — remove any non-AA characters
+    clean_seq = replace(uppercase(strip(string(sequence))), r"[^ACDEFGHIKLMNPQRSTVWY]" => "")
+
+    # ESMFold API has a length limit (~400 aa for fast, ~1000 for slow)
+    if length(clean_seq) > 800
+        @warn "Sequence too long for ESMFold API ($(length(clean_seq)) aa), truncating to 800"
+        clean_seq = clean_seq[1:800]
+    end
+
+    response = HTTP.post("https://api.esmatlas.com/foldSequence/v1/pdb/";
+        headers = ["Content-Type" => "text/plain"],
+        body = clean_seq)
+
+    write(output_path, response.body)
+    sleep(delay)
+    return output_path
+end
+
+"""
+    predict_structures_esmfold(sequences::Dict{String, <:AbstractString},
+                                output_dir::AbstractString;
+                                delay::Real=2) -> Dict{String, String}
+
+Batch predict protein structures using ESMFold API.
+Accepts a Dict of name => AA sequence. Skips already-predicted structures.
+Returns Dict mapping name => PDB file path.
+
+Rate-limited to be respectful to the public API (~2 sec between requests).
+
+# Example
+```julia
+seqs = Dict("DspB" => "METLTVHAPS...", "CsgC" => "MKKLVL...")
+paths = predict_structures_esmfold(seqs, "structures/all/")
+```
+"""
+function predict_structures_esmfold(sequences::Dict{String, <:AbstractString},
+        output_dir::AbstractString;
+        delay::Real = 2)
+    paths = Dict{String, String}()
+    total = length(sequences)
+    for (i, (name, seq)) in enumerate(sort(collect(sequences); by = first))
+        try
+            paths[name] = predict_structure_esmfold(name, seq, output_dir; delay = delay)
+            if i % 10 == 0 || i == total
+                @info "ESMFold: $(i)/$(total) structures predicted"
+            end
+        catch e
+            @warn "ESMFold failed for $(name): $(e)"
+        end
+    end
+    @info "ESMFold: $(length(paths))/$(total) structures available"
+    return paths
+end
+
 # --------------------------------------------------------------------------- #
 # Protein embeddings
 # --------------------------------------------------------------------------- #
@@ -1416,7 +1498,8 @@ function install_esm(; force = false)
             run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch`)
         else
             @info "  No GPU detected — installing CPU-only torch"
-            run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch --index-url https://download.pytorch.org/whl/cpu`)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install torch --index-url https://download.pytorch.org/whl/cpu`)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm`)
         end
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
@@ -1545,7 +1628,9 @@ function install_prot5(; force = false)
             run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece`)
         else
             @info "  No GPU detected — installing CPU-only torch"
-            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece --index-url https://download.pytorch.org/whl/cpu`)
+            # Install torch from CPU index separately (--index-url breaks non-torch packages)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install torch --index-url https://download.pytorch.org/whl/cpu`)
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers sentencepiece`)
         end
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
