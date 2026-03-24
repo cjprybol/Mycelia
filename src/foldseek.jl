@@ -223,6 +223,18 @@ FoldSeek server, polls until results are ready, and returns a DataFrame of hits.
 `DataFrames.DataFrame` with columns: query, target, fident, alnlen, evalue, bits,
 alntmscore, prob, database.
 """
+# Recursively flatten nested arrays/vectors to extract all Dict entries
+function _flatten_to_dicts!(result::Vector, x)
+    if x isa Dict
+        push!(result, x)
+    elseif x isa Vector || x isa AbstractVector
+        for item in x
+            _flatten_to_dicts!(result, item)
+        end
+    end
+    return result
+end
+
 function foldseek_web_search(
         pdb_path::String;
         databases::Vector{String} = ["afdb50"],
@@ -274,48 +286,39 @@ function foldseek_web_search(
         query = Dict("format" => "json"))
     result_json = JSON.parse(String(result_resp.body))
 
-    # Parse into DataFrame — handle both API response formats:
-    # Format A: {"results": [{"db": "afdb50", "alignments": [...]}]}
-    # Format B: {"results": [{"alignments": [[{...}, ...], ...]}, ...]}
-    # Format C: results contains alignment dicts directly
+    # Parse into DataFrame from FoldSeek web API response.
+    # API structure: {"results": [{"db": "afdb50", "alignments": [[{hit1}, {hit2}, ...]]}]}
+    # Note: alignments is DOUBLY nested — alignments[0] contains the array of hit dicts.
     rows = NamedTuple[]
     raw_results = get(result_json, "results", [])
     for (db_idx, db_results) in enumerate(raw_results)
+        db_results isa Dict || continue
         db_name = db_idx <= length(databases) ? databases[db_idx] : "db_$(db_idx)"
-        # Get alignments — handle nested structure robustly
-        alignments = if db_results isa Dict
-            raw_alns = get(db_results, "alignments", [])
-            # Flatten if nested arrays: [[{aln1}, {aln2}], [{aln3}]] → [{aln1}, {aln2}, {aln3}]
-            flat = Dict[]
-            for item in raw_alns
-                if item isa Vector
-                    append!(flat, filter(x -> x isa Dict, item))
-                elseif item isa Dict
-                    push!(flat, item)
-                end
-            end
-            flat
-        elseif db_results isa Vector
-            filter(x -> x isa Dict, db_results)
-        else
-            Dict[]
-        end
-        for alignment in alignments
+        raw_alns = get(db_results, "alignments", [])
+
+        # Flatten all nested arrays to get individual alignment dicts
+        # The API returns alignments as [[{hit1}, {hit2}, ...]] (array of arrays)
+        alignment_dicts = Any[]
+        _flatten_to_dicts!(alignment_dicts, raw_alns)
+
+        # Limit to top 100 hits per query (1000 is excessive for clustering)
+        for alignment in alignment_dicts[1:min(100, length(alignment_dicts))]
+            alignment isa Dict || continue
             try
                 push!(rows,
                     (
-                        query = string(get(alignment, "query", "")),
-                        target = string(get(alignment, "target", "")),
-                        fident = Float64(get(alignment, "seqId", 0.0)),
-                        alnlen = Int(get(alignment, "alnLength", 0)),
-                        evalue = Float64(get(alignment, "eval", 0.0)),
-                        bits = Float64(get(alignment, "score", 0.0)),
-                        alntmscore = Float64(get(alignment, "prob", 0.0)),
-                        prob = Float64(get(alignment, "prob", 0.0)),
+                        query = string(alignment["query"]),
+                        target = string(alignment["target"]),
+                        fident = Float64(alignment["seqId"]),
+                        alnlen = Int(round(alignment["alnLength"])),
+                        evalue = Float64(alignment["eval"]),
+                        bits = Float64(alignment["score"]),
+                        alntmscore = Float64(alignment["prob"]),
+                        prob = Float64(alignment["prob"]),
                         database = db_name
                     ))
             catch e
-                @debug "Skipping alignment: $(e)"
+                @debug "Skipping alignment entry: $(e)"
             end
         end
     end
