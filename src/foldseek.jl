@@ -274,23 +274,49 @@ function foldseek_web_search(
         query = Dict("format" => "json"))
     result_json = JSON.parse(String(result_resp.body))
 
-    # Parse into DataFrame
+    # Parse into DataFrame — handle both API response formats:
+    # Format A: {"results": [{"db": "afdb50", "alignments": [...]}]}
+    # Format B: {"results": [{"alignments": [[{...}, ...], ...]}, ...]}
+    # Format C: results contains alignment dicts directly
     rows = NamedTuple[]
-    for (db_idx, db_results) in enumerate(get(result_json, "results", []))
+    raw_results = get(result_json, "results", [])
+    for (db_idx, db_results) in enumerate(raw_results)
         db_name = db_idx <= length(databases) ? databases[db_idx] : "db_$(db_idx)"
-        for alignment in get(db_results, "alignments", [])
-            push!(rows,
-                (
-                    query = get(alignment, "query", ""),
-                    target = get(alignment, "target", ""),
-                    fident = get(alignment, "seqId", 0.0),
-                    alnlen = get(alignment, "alnLength", 0),
-                    evalue = get(alignment, "eval", 0.0),
-                    bits = get(alignment, "score", 0.0),
-                    alntmscore = get(alignment, "tmScore", 0.0),
-                    prob = get(alignment, "prob", 0.0),
-                    database = db_name
-                ))
+        # Get alignments — handle nested structure robustly
+        alignments = if db_results isa Dict
+            raw_alns = get(db_results, "alignments", [])
+            # Flatten if nested arrays: [[{aln1}, {aln2}], [{aln3}]] → [{aln1}, {aln2}, {aln3}]
+            flat = Dict[]
+            for item in raw_alns
+                if item isa Vector
+                    append!(flat, filter(x -> x isa Dict, item))
+                elseif item isa Dict
+                    push!(flat, item)
+                end
+            end
+            flat
+        elseif db_results isa Vector
+            filter(x -> x isa Dict, db_results)
+        else
+            Dict[]
+        end
+        for alignment in alignments
+            try
+                push!(rows,
+                    (
+                        query = string(get(alignment, "query", "")),
+                        target = string(get(alignment, "target", "")),
+                        fident = Float64(get(alignment, "seqId", 0.0)),
+                        alnlen = Int(get(alignment, "alnLength", 0)),
+                        evalue = Float64(get(alignment, "eval", 0.0)),
+                        bits = Float64(get(alignment, "score", 0.0)),
+                        alntmscore = Float64(get(alignment, "prob", 0.0)),
+                        prob = Float64(get(alignment, "prob", 0.0)),
+                        database = db_name
+                    ))
+            catch e
+                @debug "Skipping alignment: $(e)"
+            end
         end
     end
 
