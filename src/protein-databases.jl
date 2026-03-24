@@ -1403,8 +1403,21 @@ function install_esm(; force = false)
 
         @info "Installing ESM-2 conda environment (this may take a few minutes)..."
         run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
-        # Install torch without --index-url constraint — pip auto-detects CUDA on Linux
-        run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch`)
+        # Detect GPU: if nvidia-smi exists, install default torch (includes CUDA);
+        # otherwise force CPU-only to avoid pulling unusable CUDA libraries
+        has_gpu = try
+            run(pipeline(`nvidia-smi`; stdout = devnull, stderr = devnull))
+            true
+        catch
+            false
+        end
+        if has_gpu
+            @info "  GPU detected — installing torch with CUDA support"
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch`)
+        else
+            @info "  No GPU detected — installing CPU-only torch"
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install fair-esm torch --index-url https://download.pytorch.org/whl/cpu`)
+        end
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
 
@@ -1521,8 +1534,19 @@ function install_prot5(; force = false)
 
         @info "Installing ProtT5 conda environment (this may take a few minutes)..."
         run(`$(CONDA_RUNNER) create -n $(env_name) -c conda-forge python=3.11 pip -y`)
-        # Install torch without --index-url constraint — pip auto-detects CUDA on Linux
-        run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece`)
+        has_gpu = try
+            run(pipeline(`nvidia-smi`; stdout = devnull, stderr = devnull))
+            true
+        catch
+            false
+        end
+        if has_gpu
+            @info "  GPU detected — installing torch with CUDA support"
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece`)
+        else
+            @info "  No GPU detected — installing CPU-only torch"
+            run(`$(CONDA_RUNNER) run -n $(env_name) pip install transformers torch sentencepiece --index-url https://download.pytorch.org/whl/cpu`)
+        end
         run(`$(CONDA_RUNNER) clean --all -y`)
     end
 
