@@ -52,6 +52,7 @@ TUTORIALS = [
     "16_un_corpus_ngram_vs_token_graphs.jl",
     "17_viroid_sketch_round_trip.jl",
     "18_advanced_assembly_theory_and_practice.jl",
+    "22_environmental_metagenome_case_study.jl",
 ]
 
 """
