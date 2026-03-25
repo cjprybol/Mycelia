@@ -231,4 +231,43 @@ for gname in unique(assembly_results.genome)
     end
 end
 
+# === Phase 5 (Optional): QUAST validation ===
+# Requires QUAST installed via Bioconda. Skip gracefully if unavailable.
+
+run_quast = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") in ["1", "true", "yes"]
+
+if run_quast
+    println("\n--- Phase 5: QUAST validation ---")
+    for gname in unique(assembly_results.genome)
+        subset = filter(r -> r.genome == gname, assembly_results)
+        if DataFrames.nrow(subset) == 0
+            continue
+        end
+        ref_path = first(subset.ref_path)
+        # Use low min_contig for viroid-scale genomes (246-359 nt)
+        ref_size = first(subset.ref_size)
+        mc = max(50, ref_size ÷ 10)
+        contig_files = String[r.contigs_path
+                              for r in eachrow(subset) if isfile(r.contigs_path)]
+        if isempty(contig_files)
+            continue
+        end
+        println("  Running QUAST for $gname ($(length(contig_files)) assemblies, min_contig=$mc)...")
+        try
+            quast_dir = joinpath(benchmark_dir, gname, "quast")
+            Mycelia.run_quast(
+                contig_files;
+                outdir = quast_dir,
+                reference = ref_path,
+                min_contig = mc
+            )
+            println("    QUAST output: $quast_dir")
+        catch e
+            @warn "QUAST failed for $gname" exception = e
+        end
+    end
+else
+    println("\n--- Phase 5: QUAST skipped (set MYCELIA_RUN_EXTERNAL=true to enable) ---")
+end
+
 println("\n=== Benchmark complete: $(Dates.now()) ===")
