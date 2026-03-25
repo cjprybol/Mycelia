@@ -174,3 +174,61 @@ for (name, accession, size_bp, tier, mol_type) in selected_genomes
 end
 
 println("\nAssembly results: $(DataFrames.nrow(assembly_results)) runs completed")
+
+# === Phase 3: Quality assessment ===
+
+println("\n--- Phase 3: Quality assessment ---")
+
+# Add quality columns
+assembly_results[!, :genome_fraction] = fill(0.0, DataFrames.nrow(assembly_results))
+assembly_results[!, :largest_contig] = fill(0, DataFrames.nrow(assembly_results))
+assembly_results[!, :n50] = fill(0, DataFrames.nrow(assembly_results))
+assembly_results[!, :gc_content] = fill(0.0, DataFrames.nrow(assembly_results))
+
+for row_idx in 1:DataFrames.nrow(assembly_results)
+    contigs_path = assembly_results[row_idx, :contigs_path]
+    ref_size = assembly_results[row_idx, :ref_size]
+
+    if isfile(contigs_path) && filesize(contigs_path) > 0
+        try
+            metrics = Mycelia.assembly_metrics(contigs_path)
+            assembly_results[row_idx, :largest_contig] = metrics.largest_contig
+            assembly_results[row_idx, :n50] = metrics.n50
+            assembly_results[row_idx, :gc_content] = round(metrics.gc_content; digits = 3)
+            # Genome fraction: total assembled / reference size
+            assembly_results[row_idx, :genome_fraction] = round(
+                assembly_results[row_idx, :total_length] / ref_size * 100; digits = 1)
+        catch e
+            @warn "Metrics failed for row $row_idx" exception = e
+        end
+    end
+end
+
+# === Phase 4: Results summary ===
+
+println("\n--- Results Summary ---")
+
+# Select display columns
+display_cols = [:genome, :ref_size, :k, :n_contigs, :total_length,
+    :largest_contig, :n50, :gc_content, :genome_fraction, :runtime_s]
+summary_df = assembly_results[:, display_cols]
+println(summary_df)
+
+# Save results
+timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+csv_path = joinpath(results_dir, "real_genome_benchmark_$(timestamp).csv")
+CSV.write(csv_path, summary_df)
+println("\nResults saved to: $csv_path")
+
+# Best k per genome
+println("\n--- Best k per genome (by genome fraction) ---")
+for gname in unique(assembly_results.genome)
+    subset = filter(r -> r.genome == gname, assembly_results)
+    if DataFrames.nrow(subset) > 0
+        best_idx = argmax(subset.genome_fraction)
+        best = subset[best_idx, :]
+        println("  $gname: k=$(best.k) -> $(best.n_contigs) contigs, $(best.genome_fraction)% coverage, $(best.runtime_s)s")
+    end
+end
+
+println("\n=== Benchmark complete: $(Dates.now()) ===")
