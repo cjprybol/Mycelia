@@ -30,7 +30,9 @@ const PROJECT_ROOT = dirname(@__DIR__)
 # Suppress plot display during tests by default.
 # Set MYCELIA_SHOW_PLOTS=true to enable interactive plot display.
 if !MYCELIA_SHOW_PLOTS
-    ENV["GKS_WSTYPE"] = "100"  # GR backend: render to memory (no windows)
+    ENV["GKS_WSTYPE"] = "100"       # GR backend: render to memory (no windows)
+    ENV["DISPLAY"] = ""              # Prevent X11/Wayland window creation
+    ENV["MPLBACKEND"] = "Agg"       # Matplotlib non-interactive backend (if used)
 end
 
 const TEST_ARTIFACT_DIRS = [
