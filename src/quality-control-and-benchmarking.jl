@@ -684,11 +684,8 @@ function assembly_metrics(contigs_file)
     for record in records
         seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
         total_bases += length(seq)
-        for base in seq
-            if base == BioSequences.DNA_G || base == BioSequences.DNA_C
-                gc_count += 1
-            end
-        end
+        gc_count += count(
+            base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
     end
     gc_content = total_bases == 0 ? 0.0 : (gc_count / total_bases)
     largest_contig = isempty(sorted_lengths) ? 0 : first(sorted_lengths)

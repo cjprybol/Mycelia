@@ -2542,7 +2542,9 @@ Calculate the total size (in bases) of all sequences in a FASTA file.
 - `Int`: Sum of lengths of all sequences in the FASTA file
 """
 function total_fasta_size(fasta_file)
-    return reduce(sum, map(record -> length(FASTX.sequence(record)), Mycelia.open_fastx(fasta_file)))
+    return sum(
+        length(FASTX.sequence(record)) for record in Mycelia.open_fastx(fasta_file);
+        init = 0)
 end
 
 """

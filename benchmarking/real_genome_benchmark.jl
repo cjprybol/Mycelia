@@ -85,19 +85,11 @@ println("Successfully downloaded: $(length(genome_refs))/$(length(selected_genom
 
 # === Phase 2: Rhizomorph assembly ===
 
-function measure_reference_size(ref_path)
-    total = 0
-    open(FASTX.FASTA.Reader, ref_path) do reader
-        for record in reader
-            total += length(FASTX.sequence(record))
-        end
-    end
-    return total
-end
-
 function run_rhizomorph_assembly(name, ref_path, k, workdir)
     # Load reference as reads (self-assembly: can we reconstruct from the sequence itself?)
-    records = collect(FASTX.FASTA.Reader(open(ref_path)))
+    records = open(FASTX.FASTA.Reader, ref_path) do reader
+        collect(reader)
+    end
     if isempty(records)
         @warn "No records in $ref_path"
         return nothing
@@ -159,7 +151,7 @@ for (name, accession, size_bp_expected, tier, mol_type) in selected_genomes
     ref_path = genome_refs[name]
     # Measure actual size from the downloaded FASTA; fall back to expected size if reading fails
     actual_size = try
-        measure_reference_size(ref_path)
+        Mycelia.total_fasta_size(ref_path)
     catch e
         @warn "Could not measure reference size for $name, using expected $size_bp_expected" exception = e
         size_bp_expected
