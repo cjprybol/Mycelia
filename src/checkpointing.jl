@@ -9,42 +9,88 @@
 #       expensive_load_operation()
 #   end
 #
+#   # With input-dependent caching (invalidates when files change):
+#   data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR;
+#       input_files=["data/samples.csv", "data/metadata.tsv"]) do
+#       expensive_load_operation()
+#   end
+#
 #   # To recompute: Mycelia.clear_stage("01_loaded", CHECKPOINT_DIR)
 
 """
-    cached_stage(name::String, compute_fn::Function, checkpoint_dir::String)
+    _input_hash(input_files::Vector{String})::String
+
+Compute a hash from sorted input file paths, modification times, and sizes.
+Returns a 16-character hex string suitable for use as a cache key suffix.
+"""
+function _input_hash(input_files::Vector{String})::String
+    ctx = SHA.SHA2_256_CTX()
+    for f in sort(input_files)
+        isfile(f) || error("Input file not found: $f")
+        SHA.update!(ctx, Vector{UInt8}(f))
+        st = Base.stat(f)
+        SHA.update!(ctx, Vector{UInt8}(string(st.mtime)))
+        SHA.update!(ctx, Vector{UInt8}(string(st.size)))
+    end
+    return SHA.bytes2hex(SHA.digest!(ctx))[1:16]
+end
+
+"""
+    cached_stage(compute_fn::Function, name::String, checkpoint_dir::String;
+                 input_files::Vector{String}=String[])
 
 Execute `compute_fn()` and cache result to `checkpoint_dir/name.jld2`.
 Loads from cache if file exists. Delete checkpoint file to force re-computation.
 
+When `input_files` is provided, the cache key incorporates a hash of the file
+paths, modification times, and sizes. If any input file changes, the cache is
+automatically invalidated and the computation re-runs.
+
 # Arguments
-- `name::String`: Stage identifier (becomes filename)
 - `compute_fn::Function`: Zero-argument function that computes the result
+- `name::String`: Stage identifier (becomes filename)
 - `checkpoint_dir::String`: Directory for checkpoint files
+- `input_files::Vector{String}`: Optional list of input file paths to hash into cache key
 
 # Example
 ```julia
 import DrWatson
 const CHECKPOINT_DIR = DrWatson.datadir("checkpoints")
 
+# Basic usage (backward-compatible)
 data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR) do
     expensive_load_operation()
 end
 
-# With explicit function
-function load_data()
-    CSV.read("large_file.csv", DataFrames.DataFrame)
+# Input-dependent caching
+data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR;
+    input_files=["data/samples.csv"]) do
+    expensive_load_operation()
 end
-data = Mycelia.cached_stage("01_loaded", load_data, CHECKPOINT_DIR)
 ```
 """
-function cached_stage(compute_fn::Function, name::String, checkpoint_dir::String)
+function cached_stage(compute_fn::Function, name::String, checkpoint_dir::String;
+        input_files::Vector{String} = String[])
     mkpath(checkpoint_dir)
-    cache_file = joinpath(checkpoint_dir, "$(name).jld2")
+    suffix = isempty(input_files) ? "" : "_$(_input_hash(input_files))"
+    cache_file = joinpath(checkpoint_dir, "$(name)$(suffix).jld2")
 
     if isfile(cache_file)
         Logging.@info "Loading cached '$(name)' from $(cache_file)"
         return JLD2.load(cache_file, "data")
+    end
+
+    # Clean up stale hash-suffixed cache files for this stage name
+    if !isempty(input_files)
+        for f in readdir(checkpoint_dir)
+            if startswith(f, "$(name)_") && endswith(f, ".jld2")
+                old_file = joinpath(checkpoint_dir, f)
+                if old_file != cache_file
+                    rm(old_file)
+                    Logging.@info "Removed stale cache: $(f)"
+                end
+            end
+        end
     end
 
     Logging.@info "Computing '$(name)'..."
@@ -55,24 +101,31 @@ function cached_stage(compute_fn::Function, name::String, checkpoint_dir::String
 end
 
 # Alternative signature with name first (for consistency with do-block syntax)
-function cached_stage(name::String, checkpoint_dir::String, compute_fn::Function)
-    cached_stage(compute_fn, name, checkpoint_dir)
+function cached_stage(name::String, checkpoint_dir::String, compute_fn::Function;
+        input_files::Vector{String} = String[])
+    cached_stage(compute_fn, name, checkpoint_dir; input_files = input_files)
 end
 
 """
-    clear_stage(name::String, checkpoint_dir::String) -> Bool
+    clear_stage(name::String, checkpoint_dir::String;
+                input_files::Vector{String}=String[]) -> Bool
 
 Delete a specific checkpoint to force re-computation.
 Returns true if checkpoint was deleted, false if not found.
 
+When `input_files` is provided, clears the hash-suffixed cache file matching
+those inputs. Without `input_files`, clears the base cache file.
+
 # Example
 ```julia
 Mycelia.clear_stage("02_processed", CHECKPOINT_DIR)
-# Re-run the cell to recompute
+Mycelia.clear_stage("02_processed", CHECKPOINT_DIR; input_files=["data/samples.csv"])
 ```
 """
-function clear_stage(name::String, checkpoint_dir::String)::Bool
-    cache_file = joinpath(checkpoint_dir, "$(name).jld2")
+function clear_stage(name::String, checkpoint_dir::String;
+        input_files::Vector{String} = String[])::Bool
+    suffix = isempty(input_files) ? "" : "_$(_input_hash(input_files))"
+    cache_file = joinpath(checkpoint_dir, "$(name)$(suffix).jld2")
     if isfile(cache_file)
         rm(cache_file)
         Logging.@info "Cleared checkpoint: $(name)"
@@ -150,12 +203,12 @@ info = Mycelia.checkpoint_info(CHECKPOINT_DIR)
 """
 function checkpoint_info(checkpoint_dir::String)
     if !isdir(checkpoint_dir)
-        return DataFrames.DataFrame(name = String[], size_mb = Float64[], modified = DateTime[])
+        return DataFrames.DataFrame(name = String[], size_mb = Float64[], modified = Dates.DateTime[])
     end
 
     names = String[]
     sizes = Float64[]
-    modified = DateTime[]
+    modified = Dates.DateTime[]
 
     for f in readdir(checkpoint_dir)
         if endswith(f, ".jld2")

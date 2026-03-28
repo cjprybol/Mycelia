@@ -85,6 +85,16 @@ println("Successfully downloaded: $(length(genome_refs))/$(length(selected_genom
 
 # === Phase 2: Rhizomorph assembly ===
 
+function measure_reference_size(ref_path)
+    total = 0
+    open(FASTX.FASTA.Reader, ref_path) do reader
+        for record in reader
+            total += length(FASTX.sequence(record))
+        end
+    end
+    return total
+end
+
 function run_rhizomorph_assembly(name, ref_path, k, workdir)
     # Load reference as reads (self-assembly: can we reconstruct from the sequence itself?)
     records = collect(FASTX.FASTA.Reader(open(ref_path)))
@@ -142,15 +152,25 @@ assembly_results = DataFrames.DataFrame(
     ref_path = String[]
 )
 
-for (name, accession, size_bp, tier, mol_type) in selected_genomes
+for (name, accession, size_bp_expected, tier, mol_type) in selected_genomes
     if !haskey(genome_refs, name)
         continue
     end
     ref_path = genome_refs[name]
+    # Measure actual size from the downloaded FASTA; fall back to expected size if reading fails
+    actual_size = try
+        measure_reference_size(ref_path)
+    catch e
+        @warn "Could not measure reference size for $name, using expected $size_bp_expected" exception = e
+        size_bp_expected
+    end
+    if actual_size != size_bp_expected
+        @warn "Reference size mismatch for $name: expected $size_bp_expected bp, actual $actual_size bp"
+    end
     for k in K_VALUES
-        # Skip k values larger than genome
-        if k > size_bp
-            println("  Skipping $name k=$k (k > genome size $size_bp)")
+        # Skip k values larger than actual genome
+        if k > actual_size
+            println("  Skipping $name k=$k (k > genome size $actual_size)")
             continue
         end
         println("  Assembling $name with k=$k...")
@@ -160,7 +180,7 @@ for (name, accession, size_bp, tier, mol_type) in selected_genomes
                 (
                     genome = name,
                     accession = accession,
-                    ref_size = size_bp,
+                    ref_size = actual_size,
                     k = k,
                     n_contigs = res.n_contigs,
                     total_length = res.total_length,
