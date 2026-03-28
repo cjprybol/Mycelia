@@ -51,7 +51,7 @@ import GLM
 import GraphMakie
 import GraphPlot
 import Graphs
-import HDF5
+# import HDF5
 import Hungarian
 import HTTP
 import JLD2
@@ -171,7 +171,6 @@ include("ncbi-datasets-cli.jl")
 include("pangenome-analysis.jl")
 include("pantools.jl")
 include("plotting-and-visualization.jl")
-include("protein-databases.jl")
 include("prokrustean.jl")
 include("quality-control-and-benchmarking.jl")
 include("rclone.jl")

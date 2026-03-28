@@ -25,10 +25,8 @@ import Random
 import Statistics
 import Dates
 
-include("benchmark_utils.jl")
-
 println("=== Comparative Genomics Benchmark ===")
-println("Start time: $(Dates.now())")
+println("Start time: $(now())")
 
 # ## Benchmark Configuration
 #
@@ -110,8 +108,6 @@ println("\n--- Pangenome Construction Benchmarks ---")
 
 println("\n--- Sketch-Guided Pangenome Context Selection Benchmarks ---")
 
-benchmark_suite = BenchmarkSuite("Comparative Genomics Performance")
-
 mock_sketch_scores = Dict(
     "ref_a" => 0.12,
     "ref_b" => 0.02,
@@ -121,22 +117,12 @@ mock_sketch_scores = Dict(
     "ref_f" => 0.01
 )
 
-selection_trial, selection_memory = run_benchmark_with_memory(
-    Mycelia.select_sketch_supported_references,
-    mock_sketch_scores;
-    samples=10,
-    seconds=5,
+selection_trial = BenchmarkTools.@benchmark Mycelia.select_sketch_supported_references(
+    $mock_sketch_scores;
     min_score=0.05,
     max_refs=4
 )
-add_benchmark_result!(
-    benchmark_suite,
-    "select_sketch_supported_references",
-    selection_trial,
-    selection_memory
-)
 println(selection_trial)
-println("Allocated bytes (median): $(BenchmarkTools.median(selection_trial).memory)")
 
 # ## Phylogenetic Analysis Benchmarks
 #
@@ -249,7 +235,7 @@ println("\n--- Collecting Results ---")
 # Example results structure
 results = Dict(
     "benchmark_name" => "comparative",
-    "timestamp" => Dates.now(),
+    "timestamp" => now(),
     "configuration" => config,
     "system_info" => Dict(
         "julia_version" => VERSION,
@@ -261,18 +247,15 @@ results = Dict(
         "phylogenetic_metrics" => Dict(),
         "performance_metrics" => Dict(),
         "accuracy_metrics" => Dict()
-    ),
-    "detailed_results" => benchmark_suite.results
+    )
 )
 
 # Save results
-results_dir = mkpath("results")
-results_file = joinpath(results_dir, "comparative_benchmark_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).json")
-save_benchmark_results(benchmark_suite, results_file)
-format_benchmark_summary(benchmark_suite)
+results_file = "results/comparative_benchmark.json"
+# TODO: Save results to JSON file
 
 println("Comparative Genomics Benchmark completed!")
 println("Results saved to: $results_file")
-println("End time: $(Dates.now())")
+println("End time: $(now())")
 
 nothing

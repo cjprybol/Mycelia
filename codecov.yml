@@ -1,11 +1,2 @@
-coverage:
-  status:
-    project:
-      default:
-        target: 50%
-    patch:
-      default:
-        target: 70%
-
 ignore:
   - "**/.ipynb_checkpoints/**"

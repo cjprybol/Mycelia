@@ -42,8 +42,7 @@ function run_benchmark_with_memory(func, args...; samples=5, seconds=30, kwargs.
     initial_memory = Base.gc_num()
     
     # Run benchmark
-    benchmark_target = () -> func(args...; kwargs...)
-    benchmark_result = BenchmarkTools.@benchmark $benchmark_target() samples=samples seconds=seconds
+    benchmark_result = BenchmarkTools.@benchmark func(args...; kwargs...) samples=samples seconds=seconds
     
     # Get final memory state
     GC.gc()
@@ -57,33 +56,6 @@ function run_benchmark_with_memory(func, args...; samples=5, seconds=30, kwargs.
     )
     
     return benchmark_result, memory_stats
-end
-
-"""
-    profile_execution(func, args...; kwargs...)
-
-Run a single execution with `@timed` and return both the function result and a
-structured memory/time profile.
-"""
-function profile_execution(func, args...; kwargs...)
-    GC.gc()
-    initial_memory = Base.gc_num()
-
-    timed_result = @timed func(args...; kwargs...)
-
-    GC.gc()
-    final_memory = Base.gc_num()
-
-    memory_stats = Dict(
-        "wall_time_seconds" => timed_result.time,
-        "allocated_bytes" => timed_result.bytes,
-        "allocated_mb" => timed_result.bytes / 1e6,
-        "gc_time_seconds" => timed_result.gctime,
-        "gc_allocd_bytes" => final_memory.allocd - initial_memory.allocd,
-        "gc_total_time_seconds" => (final_memory.total_time - initial_memory.total_time) / 1e9
-    )
-
-    return timed_result.value, memory_stats
 end
 
 """
@@ -198,7 +170,7 @@ end
 Add a benchmark result to the suite with optional memory statistics.
 """
 function add_benchmark_result!(suite::BenchmarkSuite, name::String, benchmark_result, memory_stats=nothing)
-    result_data = Dict{String, Any}(
+    result_data = Dict(
         "median_time" => BenchmarkTools.median(benchmark_result).time,
         "mean_time" => BenchmarkTools.mean(benchmark_result).time,
         "min_time" => BenchmarkTools.minimum(benchmark_result).time,
@@ -212,28 +184,6 @@ function add_benchmark_result!(suite::BenchmarkSuite, name::String, benchmark_re
         result_data["memory_stats"] = memory_stats
     end
     
-    suite.results[name] = result_data
-end
-
-"""
-    add_profiled_result!(suite::BenchmarkSuite, name::String, profile_stats::Dict; metadata=nothing)
-
-Store a single-run profiled result in the benchmark suite.
-"""
-function add_profiled_result!(suite::BenchmarkSuite, name::String, profile_stats::Dict; metadata=nothing)
-    result_data = Dict{String, Any}(
-        "wall_time_seconds" => profile_stats["wall_time_seconds"],
-        "allocated_bytes" => profile_stats["allocated_bytes"],
-        "allocated_mb" => profile_stats["allocated_mb"],
-        "gc_time_seconds" => profile_stats["gc_time_seconds"],
-        "gc_allocd_bytes" => profile_stats["gc_allocd_bytes"],
-        "gc_total_time_seconds" => profile_stats["gc_total_time_seconds"]
-    )
-
-    if metadata !== nothing
-        result_data["metadata"] = metadata
-    end
-
     suite.results[name] = result_data
 end
 
@@ -252,22 +202,13 @@ function format_benchmark_summary(suite::BenchmarkSuite)
     println("-"^60)
     
     for (test_name, result) in suite.results
+        median_time_ms = result["median_time"] / 1e6  # Convert to milliseconds
+        memory_mb = result["memory"] / 1e6  # Convert to megabytes
+        
         println("$test_name:")
-
-        if haskey(result, "median_time")
-            median_time_ms = result["median_time"] / 1e6
-            memory_mb = result["memory"] / 1e6
-            println("  Time (median): $(round(median_time_ms, digits=3)) ms")
-            println("  Memory: $(round(memory_mb, digits=2)) MB")
-            println("  Allocations: $(result["allocations"])")
-        elseif haskey(result, "wall_time_seconds")
-            println("  Time (wall): $(round(result["wall_time_seconds"], digits=3)) s")
-            println("  Allocated: $(round(result["allocated_mb"], digits=2)) MB")
-            println("  GC time: $(round(result["gc_time_seconds"], digits=3)) s")
-        else
-            println("  Result keys: $(join(sort!(collect(keys(result))), ", "))")
-        end
-
+        println("  Time (median): $(round(median_time_ms, digits=3)) ms")
+        println("  Memory: $(round(memory_mb, digits=2)) MB")
+        println("  Allocations: $(result["allocations"])")
         println()
     end
     

@@ -88,12 +88,6 @@ primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
-file = "checkpointing.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "JLD2-based stage caching is available, but no user-facing workflow page references it yet."
-
-[[modules]]
 file = "classification.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
@@ -134,12 +128,6 @@ file = "distance-metrics.jl"
 primary_doc_label = "K-mer Analysis"
 primary_doc_path = "docs/src/generated/tutorials/03_kmer_analysis.md"
 coverage_notes = "Mash/Jaccard/JS divergence functions are linked from tutorials."
-
-[[modules]]
-file = "execution.jl"
-primary_doc_label = "HPC Job Templates"
-primary_doc_path = "docs/src/hpc-job-templates.md"
-coverage_notes = "Executor selection and submission plumbing back the portable JobSpec workflow."
 
 
 [[modules]]
@@ -254,40 +242,16 @@ primary_doc_path = "docs/src/generated/tutorials/01_data_acquisition.md"
 coverage_notes = "NCBI/SRA helpers documented; ensure coverage of metadata loaders."
 
 [[modules]]
-file = "relational-matrices.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "RelationalMatrix utilities are implemented but not yet surfaced in docs or tutorials."
-
-[[modules]]
 file = "rhizomorph/algorithms/contigs.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
-file = "rhizomorph/algorithms/error-correction.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "Greedy graph-based error correction exists in the API but is not yet linked from a tutorial."
-
-[[modules]]
-file = "rhizomorph/algorithms/generation.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "Sequence generation helpers are available; add user-facing examples before promoting beyond internal."
-
-[[modules]]
 file = "rhizomorph/algorithms/io.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
-
-[[modules]]
-file = "rhizomorph/algorithms/metrics.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "Graph metric utilities are implemented but not yet surfaced in the assembled docs."
 
 [[modules]]
 file = "rhizomorph/algorithms/path-finding.jl"
@@ -392,18 +356,6 @@ primary_doc_path = ""
 coverage_notes = "TODO: map to docs or mark internal."
 
 [[modules]]
-file = "rhizomorph/analysis/information-theory.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "Entropy and divergence helpers support Rhizomorph analysis, but current docs do not reference them directly."
-
-[[modules]]
-file = "rhizomorph/analysis/sequence-quality.jl"
-primary_doc_label = "Internal"
-primary_doc_path = ""
-coverage_notes = "Generation-quality evaluation helpers exist without a dedicated tutorial or workflow page yet."
-
-[[modules]]
 file = "rhizomorph/variable-length/fasta-graphs.jl"
 primary_doc_label = "Internal"
 primary_doc_path = ""
@@ -447,15 +399,9 @@ coverage_notes = "Read simulators surfaced in tutorials and workflow map."
 
 [[modules]]
 file = "slurm-sbatch.jl"
-primary_doc_label = "HPC Job Templates"
-primary_doc_path = "docs/src/hpc-job-templates.md"
-coverage_notes = "Legacy wrapper entry points now route through the portable JobSpec template system."
-
-[[modules]]
-file = "slurm-templates.jl"
-primary_doc_label = "HPC Job Templates"
-primary_doc_path = "docs/src/hpc-job-templates.md"
-coverage_notes = "Canonical JobSpec rendering and validation are documented on the HPC job templates page."
+primary_doc_label = "Internal"
+primary_doc_path = ""
+coverage_notes = "TODO: map to docs or mark internal."
 
 
 [[modules]]

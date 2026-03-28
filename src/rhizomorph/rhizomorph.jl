@@ -68,7 +68,6 @@ include("algorithms/contigs.jl")
 include("algorithms/generation.jl")
 include("algorithms/metrics.jl")
 include("algorithms/error-correction.jl")
-include("algorithms/filtering.jl")
 
 # Load analysis modules
 include("analysis/information-theory.jl")

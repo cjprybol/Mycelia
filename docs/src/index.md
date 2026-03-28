@@ -34,7 +34,6 @@ Pages = [
     "getting-started.md",
     "installation.md",
     "concepts.md",
-    "topological-assembly-optimization.md",
     "workflow-map.md",
     "metagenomic-workflow.md",
     "tutorials.md",
@@ -50,7 +49,6 @@ Depth = 2
 
 - **Workflow & Tool Map**: See [`workflow-map.md`](workflow-map.md) for the end-to-end data-flow map with links to tutorials and third-party tool wrappers.
 - **Tutorials**: Start with [`tutorials.md`](tutorials.md) for guided walkthroughs of each workflow stage.
-- **Topology-Aware Assembly**: See [`topological-assembly-optimization.md`](topological-assembly-optimization.md) for the TDA overview and tutorial entry point.
 
 ## Installation
 

@@ -87,20 +87,18 @@ function run_diamond_search(;
         search_cmd = Mycelia.command_string(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n diamond diamond blastp --query $(query_fasta) --db $(diamond_db) --out $(results_file).tmp --evalue $(evalue) --threads $(threads) --block-size $(block_size) $(sensitivity) --outfmt 6 qseqid qtitle qlen sseqid sallseqid stitle salltitles slen qstart qend sstart send evalue bitscore length pident nident mismatch gapopen`
         )
-        script = join(
-            [
-                "set -euo pipefail",
-                "mkdir -p \"$(output_dir)\"",
-                "if [ ! -s \"$(results_file)\" ]; then",
-                "  $(makedb_cmd)",
-                "  $(search_cmd)",
-                "  printf '%s\\n' \"$(header_string)\" > \"$(results_file)\"",
-                "  cat \"$(results_file).tmp\" >> \"$(results_file)\"",
-                "  rm -f \"$(results_file).tmp\"",
-                "fi",
-                "rm -f \"$(diamond_db)\""
-            ],
-            "\n")
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(makedb_cmd)",
+            "  $(search_cmd)",
+            "  printf '%s\\n' \"$(header_string)\" > \"$(results_file)\"",
+            "  cat \"$(results_file).tmp\" >> \"$(results_file)\"",
+            "  rm -f \"$(results_file).tmp\"",
+            "fi",
+            "rm -f \"$(diamond_db)\""
+        ], "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -283,17 +281,15 @@ function run_blastp_search(;
         search_cmd = Mycelia.command_string(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastp -query $(query_fasta) -db $(blast_db) -out $(results_file) -evalue $(evalue) -max_target_seqs $(max_target_seqs) -num_threads $(threads) -outfmt "$(outfmt)"`
         )
-        script = join(
-            [
-                "set -euo pipefail",
-                "mkdir -p \"$(output_dir)\"",
-                "if [ ! -s \"$(results_file)\" ]; then",
-                "  $(make_db_cmd)",
-                "  $(search_cmd)",
-                "fi",
-                "rm -f \"$(blast_db).phr\" \"$(blast_db).pin\" \"$(blast_db).psq\""
-            ],
-            "\n")
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(make_db_cmd)",
+            "  $(search_cmd)",
+            "fi",
+            "rm -f \"$(blast_db).phr\" \"$(blast_db).pin\" \"$(blast_db).psq\""
+        ], "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -407,17 +403,15 @@ function run_mmseqs_search(;
         mmseqs_cmd = Mycelia.command_string(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-search $(query_fasta) $(reference_fasta) $(results_file) $(tmp_dir) --format-mode 4 --format-output query,qheader,target,theader,pident,fident,nident,alnlen,mismatch,gapopen,qstart,qend,qlen,tstart,tend,tlen,evalue,bits --start-sens 1 -s 7 --sens-steps 7 --sort-results 1 --remove-tmp-files 1 --search-type 3`
         )
-        script = join(
-            [
-                "set -euo pipefail",
-                "mkdir -p \"$(output_dir)\"",
-                "mkdir -p \"$(tmp_dir)\"",
-                "if [ ! -s \"$(results_file)\" ]; then",
-                "  $(mmseqs_cmd)",
-                "fi",
-                "rm -rf \"$(tmp_dir)\""
-            ],
-            "\n")
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(output_dir)\"",
+            "mkdir -p \"$(tmp_dir)\"",
+            "if [ ! -s \"$(results_file)\" ]; then",
+            "  $(mmseqs_cmd)",
+            "fi",
+            "rm -rf \"$(tmp_dir)\""
+        ], "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -2392,445 +2386,6 @@ function run_clustal_omega(; fasta, outfmt = "clustal")
     return outfile
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Run MAFFT on a FASTA file and return the aligned FASTA path.
-
-# Arguments
-- `fasta`: Input FASTA file to align.
-- `outfile`: Output aligned FASTA path. Defaults to `fasta * ".mafft.fasta"`.
-- `strategy`: MAFFT strategy string such as `"--auto"`, `"--localpair --maxiterate 1000"`, or `"--retree 2"`.
-- `quiet`: When `true`, pass `--quiet` to suppress progress output.
-- `progressfile`: Optional absolute path for MAFFT progress output. When omitted and `quiet=false`, MAFFT writes progress to `/dev/null` instead of stderr.
-- `force`: When `true`, rerun even if `outfile` already exists.
-
-# Returns
-- `String`: Path to the aligned FASTA file.
-"""
-function run_mafft(;
-        fasta,
-        outfile = fasta * ".mafft.fasta",
-        strategy::AbstractString = "--auto",
-        quiet::Bool = false,
-        progressfile::Union{Nothing, AbstractString} = nothing,
-        force::Bool = false
-)
-    Mycelia.add_bioconda_env("mafft")
-    if force || !isfile(outfile) || filesize(outfile) == 0
-        cmd_parts = String[
-        Mycelia.CONDA_RUNNER,
-        "run",
-        "--live-stream",
-        "-n",
-        "mafft",
-        "mafft"
-]
-        quiet && push!(cmd_parts, "--quiet")
-        effective_progressfile = quiet ? nothing : something(progressfile, "/dev/null")
-        if !isnothing(effective_progressfile)
-            progress_dir = dirname(effective_progressfile)
-            isempty(progress_dir) || mkpath(progress_dir)
-            append!(cmd_parts, ["--progress", abspath(effective_progressfile)])
-        end
-        append!(cmd_parts, split(strategy))
-        push!(cmd_parts, fasta)
-        cmd = Cmd(cmd_parts)
-        open(outfile, "w") do io
-            try
-                run(pipeline(cmd, stdout = io))
-            catch e
-                # MAFFT exits non-zero for single-sequence input. Keep the original file as the aligned output.
-                if Mycelia.count_records(fasta) == 1
-                    cp(fasta, outfile; force = true)
-                else
-                    rethrow(e)
-                end
-            end
-        end
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Build an HMM profile from an aligned protein FASTA file.
-"""
-function run_hmmbuild(; aligned_fasta, outfile = aligned_fasta * ".hmm",
-        name::AbstractString = basename(aligned_fasta))
-    Mycelia.add_bioconda_env("hmmer")
-    if !isfile(outfile)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hmmer hmmbuild -n $(name) $(outfile) $(aligned_fasta)`)
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Prepare an HMM database for repeated search.
-"""
-function run_hmmpress(; hmm)
-    Mycelia.add_bioconda_env("hmmer")
-    pressed_files = ["$(hmm).h3f", "$(hmm).h3i", "$(hmm).h3m", "$(hmm).h3p"]
-    if !all(isfile, pressed_files)
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n hmmer hmmpress $(hmm)`)
-    end
-    return hmm
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Download and unpack `Pfam-A.hmm.gz` to `outdir`, returning the plain-text HMM
-path.
-"""
-function download_pfam_a_hmm(;
-        outdir::AbstractString,
-        url::AbstractString = "https://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz",
-        gz_path::AbstractString = joinpath(outdir, basename(url)),
-        hmm_path::AbstractString = replace(gz_path, r"\.gz$" => ""),
-        force::Bool = false
-)
-    mkpath(outdir)
-    if force || !isfile(gz_path)
-        Downloads.download(url, gz_path)
-    end
-    if force || !isfile(hmm_path)
-        open(hmm_path, "w") do io
-            stream = CodecZlib.GzipDecompressorStream(open(gz_path))
-            try
-                write(io, read(stream))
-            finally
-                close(stream)
-            end
-        end
-    end
-    return hmm_path
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Extract a subset of Pfam HMMs from a `Pfam-A.hmm` file, optionally concatenate
-them into a single database, and optionally `hmmpress` the result.
-"""
-function extract_pfam_hmm_subset(;
-        pfam_a::AbstractString,
-        accessions::Vector{String},
-        outdir::AbstractString,
-        combined_hmm::Union{Nothing, AbstractString} = nothing,
-        press::Bool = true,
-        force::Bool = false
-)
-    mkpath(outdir)
-    targets = Set(accessions)
-    current_entry = String[]
-    current_accession = nothing
-    written = Set{String}()
-
-    for accession in accessions
-        outfile = joinpath(outdir, string(accession, ".hmm"))
-        if force && isfile(outfile)
-            rm(outfile; force = true)
-        end
-    end
-
-    open(pfam_a) do io
-        for line in eachline(io; keep = true)
-            push!(current_entry, line)
-            if startswith(line, "ACC")
-                current_accession = split(split(strip(line))[2], '.')[1]
-            elseif startswith(line, "//")
-                if !isnothing(current_accession) && current_accession in targets
-                    outfile = joinpath(outdir, string(current_accession, ".hmm"))
-                    if force || !isfile(outfile)
-                        open(outfile, "w") do out_io
-                            write(out_io, join(current_entry))
-                        end
-                    end
-                    push!(written, current_accession)
-                end
-                empty!(current_entry)
-                current_accession = nothing
-            end
-        end
-    end
-
-    missing = setdiff(targets, written)
-    isempty(missing) ||
-        error("Missing Pfam HMM entries: $(join(sort!(collect(missing)), ", "))")
-
-    hmm_files = [joinpath(outdir, string(accession, ".hmm")) for accession in accessions]
-    if !isnothing(combined_hmm)
-        if force || !isfile(combined_hmm)
-            open(combined_hmm, "w") do io
-                for hmm_file in hmm_files
-                    write(io, read(hmm_file, String))
-                end
-            end
-        end
-        press && run_hmmpress(hmm = combined_hmm)
-    end
-
-    return (; hmm_files, combined_hmm)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Search an HMM profile or profile database against a FASTA file and return the
-`domtblout` path.
-"""
-function run_hmmsearch(;
-        hmm, fasta, domtblout = fasta * ".domtblout", tblout = fasta * ".tblout",
-        cpu::Integer = 1, extra_args::Vector{String} = String[])
-    Mycelia.add_bioconda_env("hmmer")
-    if !isfile(domtblout)
-        cmd = Cmd(vcat(
-            [
-                Mycelia.CONDA_RUNNER,
-                "run",
-                "--live-stream",
-                "-n",
-                "hmmer",
-                "hmmsearch",
-                "--cpu",
-                string(cpu),
-                "--domtblout",
-                domtblout,
-                "--tblout",
-                tblout
-            ],
-            extra_args,
-            [hmm, fasta]))
-        run(cmd)
-    end
-    return domtblout
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Scan a FASTA file against an HMM database with `hmmscan` and return the output
-paths.
-"""
-function run_hmmscan(;
-        hmm,
-        fasta,
-        domtblout = fasta * ".hmmscan.domtblout",
-        tblout::Union{Nothing, AbstractString} = nothing,
-        stdout = fasta * ".hmmscan.out",
-        cpu::Integer = 1,
-        noali::Bool = true,
-        evalue::Union{Nothing, Real} = nothing,
-        domE::Union{Nothing, Real} = nothing,
-        extra_args::Vector{String} = String[],
-        force::Bool = false
-)
-    Mycelia.add_bioconda_env("hmmer")
-    outputs = [domtblout, stdout]
-    isnothing(tblout) || push!(outputs, tblout)
-    if force || !all(isfile, outputs)
-        cmd_parts = String[
-        Mycelia.CONDA_RUNNER,
-        "run",
-        "--live-stream",
-        "-n",
-        "hmmer",
-        "hmmscan",
-        "--cpu",
-        string(cpu),
-        "--domtblout",
-        domtblout
-]
-        isnothing(tblout) || append!(cmd_parts, ["--tblout", tblout])
-        noali && push!(cmd_parts, "--noali")
-        isnothing(evalue) || append!(cmd_parts, ["-E", string(evalue)])
-        isnothing(domE) || append!(cmd_parts, ["--domE", string(domE)])
-        append!(cmd_parts, extra_args)
-        append!(cmd_parts, [hmm, fasta])
-        cmd = Cmd(cmd_parts)
-        open(stdout, "w") do io
-            run(pipeline(cmd, stdout = io))
-        end
-    end
-    return (; domtblout, tblout, stdout)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Parse an HMMER `domtblout` file into a `DataFrames.DataFrame`.
-"""
-function parse_hmmer_domtblout(path::AbstractString)
-    rows = NamedTuple[]
-    for line in eachline(path)
-        startswith(line, "#") && continue
-        isempty(strip(line)) && continue
-        fields = split(strip(line))
-        length(fields) < 23 && continue
-        description = join(fields[23:end], " ")
-        push!(rows,
-            (
-                target_name = fields[1],
-                target_accession = fields[2],
-                target_length = parse(Int, fields[3]),
-                query_name = fields[4],
-                query_accession = fields[5],
-                query_length = parse(Int, fields[6]),
-                full_sequence_evalue = parse(Float64, fields[7]),
-                full_sequence_score = parse(Float64, fields[8]),
-                full_sequence_bias = parse(Float64, fields[9]),
-                domain_number = parse(Int, fields[10]),
-                domain_count = parse(Int, fields[11]),
-                conditional_evalue = parse(Float64, fields[12]),
-                independent_evalue = parse(Float64, fields[13]),
-                domain_score = parse(Float64, fields[14]),
-                domain_bias = parse(Float64, fields[15]),
-                hmm_from = parse(Int, fields[16]),
-                hmm_to = parse(Int, fields[17]),
-                ali_from = parse(Int, fields[18]),
-                ali_to = parse(Int, fields[19]),
-                env_from = parse(Int, fields[20]),
-                env_to = parse(Int, fields[21]),
-                accuracy = parse(Float64, fields[22]),
-                description = description
-            ))
-    end
-    return DataFrames.DataFrame(rows)
-end
-
-function _hmmer_fasta_lookup(fasta::AbstractString)
-    lookup = Dict{String,
-        NamedTuple{(:header, :description, :sequence, :length),
-            Tuple{String, String, String, Int}}}()
-    for record in Mycelia.open_fastx(fasta)
-        id = String(FASTX.identifier(record))
-        description = String(FASTX.description(record))
-        header = isempty(description) ? id : string(id, ' ', description)
-        sequence = String(FASTX.sequence(record))
-        lookup[id] = (
-            header = header,
-            description = description,
-            sequence = sequence,
-            length = length(sequence)
-        )
-    end
-    return lookup
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Summarize HMMER domain hits at the query-sequence level.
-"""
-function summarize_hmmer_domain_hits(domtbl::DataFrames.AbstractDataFrame)
-    rows = NamedTuple[]
-    for sdf in DataFrames.groupby(domtbl, :query_name)
-        ordered = DataFrames.sort(sdf, [:ali_from, :ali_to, :target_name])
-        domains = String.(ordered.target_name)
-        ranges = [string(row.target_name, ':', row.ali_from, '-', row.ali_to)
-                  for row in eachrow(ordered)]
-        push!(rows,
-            (
-                query_name = String(first(ordered.query_name)),
-                query_accession = String(first(ordered.query_accession)),
-                query_length = Int(first(ordered.query_length)),
-                n_hits = DataFrames.nrow(ordered),
-                n_unique_domains = length(unique(domains)),
-                domains = join(domains, ';'),
-                domain_ranges = join(ranges, ';'),
-                best_independent_evalue = minimum(ordered.independent_evalue)
-            ))
-    end
-    return DataFrames.DataFrame(rows)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Summarize HMMER domain boundaries across all hits for each domain model.
-"""
-function summarize_hmmer_domain_boundaries(domtbl::DataFrames.AbstractDataFrame)
-    rows = NamedTuple[]
-    for sdf in DataFrames.groupby(domtbl, :target_name)
-        lengths = sdf.ali_to .- sdf.ali_from .+ 1
-        push!(rows,
-            (
-                target_name = String(first(sdf.target_name)),
-                n_hits = DataFrames.nrow(sdf),
-                n_queries = length(unique(String.(sdf.query_name))),
-                start_min = minimum(sdf.ali_from),
-                start_max = maximum(sdf.ali_from),
-                end_min = minimum(sdf.ali_to),
-                end_max = maximum(sdf.ali_to),
-                length_min = minimum(lengths),
-                length_max = maximum(lengths),
-                length_median = Statistics.median(lengths)
-            ))
-    end
-    return DataFrames.DataFrame(rows)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Extract domain subsequences from HMMER hits into a tidy table.
-"""
-function extract_hmmer_domain_sequences(domtbl::DataFrames.AbstractDataFrame; fasta::AbstractString)
-    lookup = _hmmer_fasta_lookup(fasta)
-    rows = NamedTuple[]
-    ordered = DataFrames.sort(domtbl, [:query_name, :ali_from, :ali_to, :target_name])
-    for row in eachrow(ordered)
-        query_name = String(row.query_name)
-        haskey(lookup, query_name) || continue
-        record = lookup[query_name]
-        start_pos = Int(row.ali_from)
-        end_pos = Int(row.ali_to)
-        domain_sequence = record.sequence[start_pos:end_pos]
-        push!(rows,
-            (
-                seq_id = query_name,
-                query_header = record.header,
-                query_description = record.description,
-                domain = String(row.target_name),
-                target_accession = String(row.target_accession),
-                start = start_pos,
-                stop = end_pos,
-                length = length(domain_sequence),
-                independent_evalue = Float64(row.independent_evalue),
-                domain_sequence = domain_sequence
-            ))
-    end
-    return DataFrames.DataFrame(rows)
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Write extracted HMMER domain sequences to one FASTA per domain and return a
-table of output paths.
-"""
-function write_hmmer_domain_fastas(domain_sequences::DataFrames.AbstractDataFrame; outdir::AbstractString)
-    mkpath(outdir)
-    grouped = DataFrames.groupby(domain_sequences, :domain)
-    rows = NamedTuple[]
-    for sdf in grouped
-        domain = String(first(sdf.domain))
-        outfile = joinpath(outdir, string(domain, "_domains.fasta"))
-        records = FASTX.FASTA.Record[]
-        for row in eachrow(sdf)
-            identifier = string(row.seq_id, '|', row.domain, '|', row.start, '-', row.stop)
-            push!(records, FASTX.FASTA.Record(identifier, row.domain_sequence))
-        end
-        Mycelia.write_fasta(outfile = outfile, records = records, gzip = false)
-        push!(rows, (domain = domain, fasta = outfile, n_sequences = length(records)))
-    end
-    return DataFrames.DataFrame(rows)
-end
-
 # function make_diamond_db(fasta_file, db_file=fasta_file)
 #     @time run(`diamond makedb --in $(fasta_file) -d $(db_file)`)
 # end
@@ -3454,10 +3009,7 @@ This function constructs and runs a BLAST command based on the provided paramete
 If `force` is set to `true` or the output file does not exist or is empty, the BLAST command is executed. The function logs the command being run and measures the time taken for execution. The output file path is returned upon completion.
 """
 function run_blast(; out_dir, fasta, blast_db, blast_command,
-        force = false, remote = false, wait = true,
-        threads = min(get_default_threads(), 8),
-        max_target_seqs = 10, evalue = 0.001)
-    Mycelia.add_bioconda_env("blast")
+        force = false, remote = false, wait = true)
     blast_dir = mkpath(joinpath(out_dir, blast_command))
     outfile = "$(blast_dir)/$(basename(fasta)).$(blast_command).$(basename(blast_db)).txt"
     if remote
@@ -3466,155 +3018,35 @@ function run_blast(; out_dir, fasta, blast_db, blast_command,
 
     need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
 
+    # default max target seqs = 500, which seemed like too much
+    # default evalue is 10, which also seems like too much
     if force || need_to_run
         if remote
             cmd = `
-                  $(Mycelia.CONDA_RUNNER) run --live-stream -n blast $(blast_command)
+                  $(blast_command)
                   -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
                   -query $(fasta)
                   -db $(basename(blast_db))
                   -out $(outfile)
-                  -max_target_seqs $(max_target_seqs)
-                  -evalue $(evalue)
+                  -max_target_seqs 10
+                  -evalue 0.001
                   -remote
                   `
         else
             cmd = `
-                  $(Mycelia.CONDA_RUNNER) run --live-stream -n blast $(blast_command)
-                  -num_threads $(threads)
+                  $(blast_command)
+                  -num_threads $(get_default_threads())
                   -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
                   -query $(fasta)
                   -db $(blast_db)
                   -out $(outfile)
-                  -max_target_seqs $(max_target_seqs)
-                  -evalue $(evalue)
+                  -max_target_seqs 10
+                  -evalue 0.001
                   `
         end
-        @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait = wait)
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Run blastx — translate nucleotide query and search against protein database.
-
-Uses the Mycelia CONDA_RUNNER pattern for bioconda blast installation.
-"""
-function run_blastx(;
-        outdir = pwd(),
-        fasta,
-        blastdb,
-        threads = min(get_default_threads(), 8),
-        force = false,
-        wait = true,
-        max_target_seqs = 10,
-        evalue = 0.001,
-        query_gencode = 1)
-    Mycelia.add_bioconda_env("blast")
-    outdir = mkpath(outdir)
-    outfile = "$(outdir)/$(basename(fasta)).blastx.$(basename(blastdb)).txt"
-
-    need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
-
-    if force || need_to_run
-        cmd = `
-              $(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastx
-              -num_threads $(threads)
-              -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-              -query $(fasta)
-              -db $(blastdb)
-              -out $(outfile)
-              -max_target_seqs $(max_target_seqs)
-              -evalue $(evalue)
-              -query_gencode $(query_gencode)
-              `
-        @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait = wait)
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Run tblastn — search protein query against translated nucleotide database.
-
-Uses the Mycelia CONDA_RUNNER pattern for bioconda blast installation.
-"""
-function run_tblastn(;
-        outdir = pwd(),
-        fasta,
-        blastdb,
-        threads = min(get_default_threads(), 8),
-        force = false,
-        wait = true,
-        max_target_seqs = 10,
-        evalue = 0.001,
-        db_gencode = 1)
-    Mycelia.add_bioconda_env("blast")
-    outdir = mkpath(outdir)
-    outfile = "$(outdir)/$(basename(fasta)).tblastn.$(basename(blastdb)).txt"
-
-    need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
-
-    if force || need_to_run
-        cmd = `
-              $(Mycelia.CONDA_RUNNER) run --live-stream -n blast tblastn
-              -num_threads $(threads)
-              -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-              -query $(fasta)
-              -db $(blastdb)
-              -out $(outfile)
-              -max_target_seqs $(max_target_seqs)
-              -evalue $(evalue)
-              -db_gencode $(db_gencode)
-              `
-        @info "running cmd $(cmd)"
-        @time run(pipeline(cmd), wait = wait)
-    end
-    return outfile
-end
-
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Run tblastx — translate both nucleotide query and database, search protein-vs-protein.
-
-Uses the Mycelia CONDA_RUNNER pattern for bioconda blast installation.
-Note: tblastx does NOT support multi-threading (-num_threads is not available).
-"""
-function run_tblastx(;
-        outdir = pwd(),
-        fasta,
-        blastdb,
-        force = false,
-        wait = true,
-        max_target_seqs = 10,
-        evalue = 0.001,
-        query_gencode = 1,
-        db_gencode = 1)
-    Mycelia.add_bioconda_env("blast")
-    outdir = mkpath(outdir)
-    outfile = "$(outdir)/$(basename(fasta)).tblastx.$(basename(blastdb)).txt"
-
-    need_to_run = !isfile(outfile) || (filesize(outfile) == 0)
-
-    if force || need_to_run
-        # tblastx does not support -num_threads
-        cmd = `
-              $(Mycelia.CONDA_RUNNER) run --live-stream -n blast tblastx
-              -outfmt '7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid'
-              -query $(fasta)
-              -db $(blastdb)
-              -out $(outfile)
-              -max_target_seqs $(max_target_seqs)
-              -evalue $(evalue)
-              -query_gencode $(query_gencode)
-              -db_gencode $(db_gencode)
-              `
+        #         p = pipeline(cmd, 
+        #                 stdout="$(blastn_dir)/$(ID).blastn.out",
+        #                 stderr="$(blastn_dir)/$(ID).blastn.err")
         @info "running cmd $(cmd)"
         @time run(pipeline(cmd), wait = wait)
     end
@@ -4057,7 +3489,6 @@ function read_mmseqs_easy_search(mmseqs_file::String)
         header = 1,             # Assumes the first row contains column names
         delim = '\t',           # Tab-delimited file
         types = col_types,      # Apply our defined column types
-        validate = false,       # Don't error on missing columns (e.g., pairwise has no taxid)
         pool = true,            # Pool string columns to save memory
         ntasks = get_default_threads() # Utilize available CPU threads for parsing
     )

@@ -13,17 +13,13 @@
 # ============================================================================
 
 """
-    write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString; segment_naming::Symbol=:numeric)
+    write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
 
 Export a MetaGraphsNext graph to GFA v1.0 format.
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: The graph to export
 - `outfile::AbstractString`: Path to output GFA file
-- `segment_naming::Symbol`: How to assign GFA segment IDs.
-  - `:numeric` (default): Sequential integers (1, 2, 3, ...). Standard GFA convention.
-  - `:sequence`: Use the sequence text as the segment ID. Useful for Bandage
-    visualization with `--names`, which displays the segment ID as the node label.
 
 # Returns
 - `String`: Path to the output file
@@ -35,6 +31,7 @@ Writes:
 - Link (L) lines for each edge with strand orientations and overlap
 
 # Details
+- Vertex IDs are assigned sequentially (1, 2, 3, ...)
 - Depth (DP:f:) is calculated from coverage data
 - Overlap is inferred from k-mer length (k-1) or edge data
 - Strand orientations from edge data (+ for Forward, - for Reverse)
@@ -43,21 +40,15 @@ Writes:
 ```julia
 graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
 write_gfa_next(graph, "assembly.gfa")
-
-# For Bandage visualization with node labels
-write_gfa_next(graph, "assembly_labeled.gfa"; segment_naming=:sequence)
 ```
 """
-function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString;
-        segment_naming::Symbol = :numeric)
-    segment_naming in (:numeric, :sequence) ||
-        throw(ArgumentError("segment_naming must be :numeric or :sequence, got :$segment_naming"))
-
+function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString)
     open(outfile, "w") do io
         println(io, "H\tVN:Z:1.0\tMY:Z:Mycelia-Rhizomorph")
 
         vertex_id_map = Dict()
         for (i, label) in enumerate(MetaGraphsNext.labels(graph))
+            vertex_id_map[label] = i
             vertex_data = graph[label]
 
             # Calculate depth from evidence
@@ -70,10 +61,7 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
             end
 
             # Extract sequence from vertex data
-            sequence = if label isa Kmers.Kmer || label isa BioSequences.BioSequence ||
-                          label isa AbstractString
-                string(label)
-            elseif hasfield(typeof(vertex_data), :Kmer)
+            sequence = if hasfield(typeof(vertex_data), :Kmer)
                 string(vertex_data.Kmer)
             elseif hasfield(typeof(vertex_data), :canonical_kmer)
                 string(vertex_data.canonical_kmer)
@@ -87,10 +75,7 @@ function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString
                 string(label)  # Fallback: use label as sequence
             end
 
-            seg_id = segment_naming == :sequence ? sequence : string(i)
-            vertex_id_map[label] = seg_id
-
-            println(io, "S\t$(seg_id)\t$(sequence)\tDP:f:$depth")
+            println(io, "S\t$i\t$(sequence)\tDP:f:$depth")
         end
 
         # Determine overlap length
@@ -182,16 +167,6 @@ graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
 function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode = DoubleStrand)
     lines = readlines(gfa_file)
 
-    function parse_overlap_str(s::AbstractString)
-        m = match(Regex("\\d+"), s)
-        isnothing(m) && return 0
-        try
-            return parse(Int, m.captures[1])
-        catch
-            return 0
-        end
-    end
-
     # Parse GFA file content
     segments = Dict{String, String}()  # id -> sequence
     links = Vector{Tuple{String, Bool, String, Bool, String}}()  # (src_id, src_forward, dst_id, dst_forward, overlap_str)
@@ -234,46 +209,6 @@ function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::Gr
         else
             @warn "Unknown GFA line type: $line_type in line: $line"
         end
-    end
-
-    if kmer_type == String
-        segment_lengths = Set(length(sequence) for sequence in values(segments))
-        all_zero_link_overlaps = all(parse_overlap_str(overlap_str) == 0 for (_, _, _, _, overlap_str) in links)
-        default_string_overlap = if length(segment_lengths) == 1 && all_zero_link_overlaps
-            max(first(segment_lengths) - 1, 0)
-        else
-            0
-        end
-
-        graph = MetaGraphsNext.MetaGraph(
-            Graphs.DiGraph();
-            label_type = String,
-            vertex_data_type = StringVertexData,
-            edge_data_type = StringEdgeData,
-            weight_function = compute_edge_weight
-        )
-
-        id_to_string = Dict{String, String}()
-        for (seg_id, sequence) in segments
-            graph[sequence] = StringVertexData(sequence)
-            id_to_string[seg_id] = sequence
-        end
-
-        for (src_id, _, dst_id, _, overlap_str) in links
-            if haskey(id_to_string, src_id) && haskey(id_to_string, dst_id)
-                src_string = id_to_string[src_id]
-                dst_string = id_to_string[dst_id]
-                overlap = parse_overlap_str(overlap_str)
-                if overlap == 0 && default_string_overlap > 0
-                    overlap = default_string_overlap
-                end
-                graph[src_string, dst_string] = StringEdgeData(overlap)
-            else
-                @warn "Link references unknown segment: $src_id -> $dst_id"
-            end
-        end
-
-        return graph
     end
 
     # Determine vertex data type from kmer_type
@@ -367,16 +302,6 @@ graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
 """
 function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleStrand;
         force_biosequence_graph::Bool = false)
-    function parse_overlap_str(s::AbstractString)
-        m = match(Regex("\\d+"), s)
-        isnothing(m) && return 0
-        try
-            return parse(Int, m.captures[1])
-        catch
-            return 0
-        end
-    end
-
     # Parse GFA to detect segment lengths
     segment_lengths = Set{Int}()
     segments = Dict{String, String}()
@@ -401,21 +326,13 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
         k = first(segment_lengths)
 
         # Detect sequence type from first segment
-        Mycelia_module = parentmodule(Rhizomorph)
         first_seq = first(values(segments))
-        detected_alphabet = try
-            Mycelia_module.detect_alphabet(first_seq)
-        catch
-            nothing
-        end
-        if detected_alphabet == :DNA
+        if all(c -> c in ('A', 'C', 'G', 'T'), uppercase(first_seq))
             kmer_type = Kmers.DNAKmer{k}
-        elseif detected_alphabet == :RNA
+        elseif all(c -> c in ('A', 'C', 'G', 'U'), uppercase(first_seq))
             kmer_type = Kmers.RNAKmer{k}
-        elseif detected_alphabet == :AA
-            kmer_type = Kmers.AAKmer{k}
         else
-            kmer_type = String
+            kmer_type = Kmers.AAKmer{k}
         end
 
         return read_gfa_next(gfa_file, kmer_type, graph_mode)
@@ -426,11 +343,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
         seqs = Dict{String, Any}()
         seq_types = Set{DataType}()
         for (seg_id, seq_str) in segments
-            seq = try
-                Mycelia_module.convert_sequence(seq_str)
-            catch
-                seq_str
-            end
+            seq = Mycelia_module.convert_sequence(seq_str)
             seqs[seg_id] = seq
             push!(seq_types, typeof(seq))
         end
@@ -450,24 +363,27 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
 
         SeqType = first(seq_types)
 
-        vertex_data_type = SeqType == String ? StringVertexData :
-                           BioSequenceVertexData{SeqType}
-        edge_data_type = SeqType == String ? StringEdgeData : BioSequenceEdgeData
-
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
             label_type = SeqType,
-            vertex_data_type = vertex_data_type,
-            edge_data_type = edge_data_type,
+            vertex_data_type = BioSequenceVertexData{SeqType},
+            edge_data_type = BioSequenceEdgeData,
             weight_function = compute_edge_weight
         )
 
         # Add vertices
         for seq in values(seqs)
-            if SeqType == String
-                graph[seq] = StringVertexData(seq)
-            else
-                graph[seq] = BioSequenceVertexData(seq)
+            graph[seq] = BioSequenceVertexData(seq)
+        end
+
+        # Helper to parse overlaps like "12M"
+        function parse_overlap_str(s::AbstractString)
+            m = match(Regex("\\d+"), s)
+            isnothing(m) && return 0
+            try
+                return parse(Int, m.captures[1])
+            catch
+                return 0
             end
         end
 
@@ -485,11 +401,7 @@ function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleS
             if haskey(seqs, src_id) && haskey(seqs, dst_id)
                 src_seq = seqs[src_id]
                 dst_seq = seqs[dst_id]
-                if SeqType == String
-                    graph[src_seq, dst_seq] = StringEdgeData(overlap)
-                else
-                    graph[src_seq, dst_seq] = BioSequenceEdgeData(overlap)
-                end
+                graph[src_seq, dst_seq] = BioSequenceEdgeData(overlap)
             end
         end
 

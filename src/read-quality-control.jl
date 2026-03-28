@@ -35,9 +35,14 @@ Return GC fraction per read (0-1).
 function gc_content_per_read(records::AbstractVector{<:FASTX.FASTQ.Record})
     gc_vals = Float64[]
     for record in records
-        seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
-        gc_count = count(
-            base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        seq = FASTX.sequence(record)
+        gc_count = 0
+        for base in seq
+            if base == BioSequences.DNA_G || base == BioSequences.DNA_C ||
+               base == BioSequences.RNA_G || base == BioSequences.RNA_C
+                gc_count += 1
+            end
+        end
         total = length(seq)
         push!(gc_vals, total == 0 ? 0.0 : gc_count / total)
     end

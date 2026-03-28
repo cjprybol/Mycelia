@@ -818,16 +818,14 @@ end
 
 Run the EGAPx (Eukaryotic Genome Annotation Pipeline) tool on a FASTA file.
 
-EGAPx is not currently supported by Mycelia. This function exists only to make the
-unsupported status explicit for callers while preserving a stable API surface for
-future implementation work.
+TODO: Wrapper not implemented yet. Placeholder for planned integration and API shape.
 
 Readme notes protein datasets suitable for most vertebrates, arthropods (insecta/arachnida),
 echinoderms, cnidaria, monocots (Liliopsida), and eudicots (Asterids/Rosids/Fabids/Caryophyllales).
 EGAPx is out-of-scope for fungi, protists, and nematodes.
 
 Returns:
-- Does not return. Always throws `ArgumentError` explaining that EGAPx is not supported.
+- `Nothing`: Always throws until implemented.
 """
 function run_egapx(;
         fasta::AbstractString,
@@ -840,7 +838,7 @@ function run_egapx(;
         prefix = replace(replace(basename(fasta), Mycelia.FASTA_REGEX => ""), r"[^A-Za-z0-9_-]" => "_"),
         no_internet::Bool = false
 )
-    throw(ArgumentError("EGAPx is not currently supported in Mycelia. See planning-docs/TOOL_WRAPPER_STATUS.md for scope notes and supported wrapper coverage."))
+    error("EGAPx wrapper not implemented yet; see planning-docs/TODO.md for scope notes.")
 end
 
 """

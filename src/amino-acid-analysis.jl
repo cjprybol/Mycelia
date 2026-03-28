@@ -30,7 +30,7 @@ seq = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
 
 ## Binary hydrophobic/polar
 reduced = reduce_amino_acid_alphabet(seq, :HP2)
-## Returns: "HHPPHPPHPHHPPPPPPHHP"
+## Returns: "HHPPPPHHPPPPPPPPPHPP"
 
 ## Three-class hydropathy
 reduced = reduce_amino_acid_alphabet(seq, :HYDROPATHY3)
@@ -86,32 +86,6 @@ function reduce_amino_acid_alphabet(sequence::BioSequences.LongAA, scheme::Symbo
     return String(reduced_chars)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
-
-Convert a string-like amino acid sequence to a reduced alphabet representation.
-
-This method accepts protein sequences provided as strings, converts them to
-`BioSequences.LongAA`, and delegates to
-`reduce_amino_acid_alphabet(sequence::BioSequences.LongAA, scheme)`.
-
-# Arguments
-- `sequence::AbstractString`: Input amino acid sequence
-- `scheme::Symbol`: Reduced alphabet scheme to use
-
-# Returns
-- `String`: Sequence converted to reduced alphabet characters
-
-# Examples
-```julia
-reduced = reduce_amino_acid_alphabet("ACDEFGHIKLMNPQRSTVWY", :HP2)
-## Returns: "HHPPHPPHPHHPPPPPPHHP"
-```
-
-# See Also
-- [`reduce_amino_acid_alphabet()`](@ref): `LongAA` method and scheme details
-- [`list_reduced_alphabets()`](@ref): List available schemes
-"""
 function reduce_amino_acid_alphabet(sequence::AbstractString, scheme::Symbol)::String
     return reduce_amino_acid_alphabet(BioSequences.LongAA(String(sequence)), scheme)
 end

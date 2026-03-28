@@ -682,10 +682,13 @@ function assembly_metrics(contigs_file)
     gc_count = 0
     total_bases = 0
     for record in records
-        seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        seq = FASTX.sequence(record)
         total_bases += length(seq)
-        gc_count += count(
-            base -> base == BioSequences.DNA_G || base == BioSequences.DNA_C, seq)
+        for base in seq
+            if base == BioSequences.DNA_G || base == BioSequences.DNA_C
+                gc_count += 1
+            end
+        end
     end
     gc_content = total_bases == 0 ? 0.0 : (gc_count / total_bases)
     largest_contig = isempty(sorted_lengths) ? 0 : first(sorted_lengths)
@@ -718,7 +721,7 @@ function contig_gc_outliers(contigs_file; min_length = 500)
         collect(reader)
     end
     for record in records
-        seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        seq = FASTX.sequence(record)
         if length(seq) < min_length
             continue
         end
@@ -734,7 +737,7 @@ function contig_gc_outliers(contigs_file; min_length = 500)
     std_gc = Statistics.std(gc_values)
 
     for record in records
-        seq = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        seq = FASTX.sequence(record)
         if length(seq) < min_length
             continue
         end
@@ -1520,7 +1523,7 @@ function analyze_fastq_quality(fastq_file::String)
             n_reads += 1
 
             # Get sequence and quality
-            sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+            sequence = FASTX.sequence(record)
             quality_scores = FASTX.quality_scores(record)
 
             # Calculate length

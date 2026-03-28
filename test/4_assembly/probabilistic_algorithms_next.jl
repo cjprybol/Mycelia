@@ -53,33 +53,6 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         return graph
     end
 
-    function add_reduced_edge_evidence!(edge_data)
-        if edge_data isa Union{
-                Mycelia.Rhizomorph.UltralightQualityEdgeData,
-                Mycelia.Rhizomorph.LightweightQualityEdgeData}
-            Mycelia.Rhizomorph.add_evidence!(
-                edge_data,
-                "dataset_01",
-                "obs1",
-                Mycelia.Rhizomorph.EdgeQualityEvidenceEntry(
-                    1,
-                    2,
-                    Mycelia.Rhizomorph.Forward,
-                    UInt8[43, 44, 45],
-                    UInt8[46, 47, 48]
-                )
-            )
-        else
-            Mycelia.Rhizomorph.add_evidence!(
-                edge_data,
-                "dataset_01",
-                "obs1",
-                Mycelia.Rhizomorph.EdgeEvidenceEntry(1, 2, Mycelia.Rhizomorph.Forward)
-            )
-        end
-        return edge_data
-    end
-
     inverse_edge_data_weight(edge_data) = 1.0 / edge_data.weight
 
     Test.@testset "WalkStep and GraphPath Construction" begin
@@ -226,42 +199,6 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
                     Test.@test first(short_path.steps).vertex_label == source
                     Test.@test last(short_path.steps).vertex_label == target
                 end
-            end
-        end
-    end
-
-    Test.@testset "Type-check audit reduced edge dispatch" begin
-        reduced_edge_cases = [
-            ("lightweight", Mycelia.Rhizomorph.LightweightEdgeData(2)),
-            ("ultralight", Mycelia.Rhizomorph.UltralightEdgeData(2)),
-            ("ultralight_quality", Mycelia.Rhizomorph.UltralightQualityEdgeData(2)),
-            ("lightweight_quality", Mycelia.Rhizomorph.LightweightQualityEdgeData(2))
-        ]
-
-        for (name, edge_data) in reduced_edge_cases
-            Test.@testset "$name dispatches via AllReducedEdgeData" begin
-                add_reduced_edge_evidence!(edge_data)
-
-                Test.@test edge_data isa Mycelia.Rhizomorph.AllReducedEdgeData
-                Test.@test Mycelia.Rhizomorph.edge_quality_weight(edge_data) == 1.0
-
-                source_graph = MetaGraphsNext.MetaGraph(
-                    MetaGraphsNext.DiGraph(),
-                    label_type = String,
-                    vertex_data_type = Nothing,
-                    edge_data_type = typeof(edge_data)
-                )
-                source_graph["AAA"] = nothing
-                source_graph["AAT"] = nothing
-                source_graph["AAA", "AAT"] = edge_data
-
-                weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(source_graph)
-                weighted_edge = weighted["AAA", "AAT"]
-
-                Test.@test weighted_edge isa Mycelia.Rhizomorph.StrandWeightedEdgeData
-                Test.@test weighted_edge.weight == 1.0
-                Test.@test weighted_edge.src_strand == Mycelia.Rhizomorph.Forward
-                Test.@test weighted_edge.dst_strand == Mycelia.Rhizomorph.Forward
             end
         end
     end

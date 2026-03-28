@@ -119,15 +119,13 @@ Cluster protein or nucleotide sequences using MMseqs2 easy-cluster workflow.
 - `fasta::String`: Path to input FASTA file containing sequences to cluster
 - `output::String`: Base path for output files (default: input path + ".mmseqs_easy_cluster")
 - `tmp::String`: Path to temporary directory (default: auto-generated temp dir)
-- `min_seq_id::Real`: Minimum sequence identity threshold passed to MMseqs2.
-- `coverage::Real`: Minimum alignment coverage threshold passed to MMseqs2.
-- `coverage_mode::Integer`: MMseqs2 coverage mode (`0`, `1`, or `2`).
 
 # Returns
 - `String`: Path to the output cluster TSV file containing cluster assignments
 
 # Details
-Uses MMseqs2 with configurable sequence identity and coverage thresholds. The output TSV file format contains 
+Uses MMseqs2 with minimum sequence identity threshold of 50% (-min-seq-id 0.5) and 
+minimum coverage threshold of 80% (-c 0.8). The output TSV file format contains 
 tab-separated cluster representative and member sequences.
 """
 # --cov-mode: coverage mode (0: coverage of query and target, 1: coverage of target, 2: coverage of query)
@@ -135,9 +133,6 @@ function mmseqs_easy_cluster(;
         fasta,
         output = fasta * ".mmseqs_easy_cluster",
         tmp = mktempdir(),
-        min_seq_id::Real = 0.5,
-        coverage::Real = 0.8,
-        coverage_mode::Integer = 0,
         executor = nothing,
         site::Symbol = :local,
         job_name::String = "mmseqs_easy_cluster",
@@ -151,7 +146,7 @@ function mmseqs_easy_cluster(;
     if executor !== nothing
         Mycelia.add_bioconda_env("mmseqs2")
         cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id $(min_seq_id) -c $(coverage) --cov-mode $(coverage_mode)`
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`
         )
         script = join([
             "set -euo pipefail",
@@ -179,7 +174,9 @@ function mmseqs_easy_cluster(;
 
     if !isfile(outfile)
         Mycelia.add_bioconda_env("mmseqs2")
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id $(min_seq_id) -c $(coverage) --cov-mode $(coverage_mode)`)
+        # at least 50% equivalent
+        # --min-seq-id 0.5 -c 0.8
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp)`)
     end
     rm(tmp, recursive = true, force = true)
     return outfile
