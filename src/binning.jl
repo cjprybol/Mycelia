@@ -155,7 +155,16 @@ end
 
 function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
         minfasta::Int = 2000, threads::Int = get_default_threads(),
-        extra_args::Vector{String} = String[])
+        extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "vamb",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
     ispath(outdir) && error("VAMB output directory already exists: $(outdir)")
@@ -175,7 +184,32 @@ function run_vamb(; contigs_fasta::String, depth_file::String, outdir::String,
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(dirname(outdir))\"",
+            "if [ ! -d \"$(outdir)\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, clusters_tsv = nothing)
+    end
+
+    run(cmd)
 
     clusters_tsv = _find_first_matching_file(outdir, [
         r"vae_clusters.*\.tsv$", r"clusters.*\.tsv$"])
@@ -205,7 +239,16 @@ Named tuple with:
 """
 function run_metabat2(; contigs_fasta::String, depth_file::String, outdir::String,
         min_contig::Int = 1500, threads::Int = get_default_threads(), seed::Int = 42,
-        extra_args::Vector{String} = String[])
+        extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metabat2",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
     mkpath(outdir)
@@ -224,7 +267,32 @@ function run_metabat2(; contigs_fasta::String, depth_file::String, outdir::Strin
 ]
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n metabat2 $(cmd_args)`)
+    cmd = `$(CONDA_RUNNER) run --live-stream -n metabat2 $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -e \"$(bins_prefix).1.fa\" ] && [ ! -e \"$(bins_prefix).fa\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, bins_prefix)
+    end
+
+    run(cmd)
     return (; outdir, bins_prefix)
 end
 
@@ -252,7 +320,16 @@ Named tuple with:
 """
 function run_metacoag(; contigs_fasta::String, assembly_graph::String,
         mapping_file::String, outdir::String, assembler::String = "custom",
-        threads::Int = get_default_threads(), extra_args::Vector{String} = String[])
+        threads::Int = get_default_threads(), extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metacoag",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(assembly_graph) || error("Assembly graph not found: $(assembly_graph)")
     isfile(mapping_file) || error("Mapping/coverage file not found: $(mapping_file)")
@@ -273,7 +350,33 @@ function run_metacoag(; contigs_fasta::String, assembly_graph::String,
 ]
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n metacoag $(cmd_args)`)
+    cmd = `$(CONDA_RUNNER) run --live-stream -n metacoag $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -d \"$(bins_dir)\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, bins_dir, bins_tsv)
+    end
+
+    run(cmd)
+    bins_tsv = _find_first_matching_file(outdir, [r"bin.*\.tsv$"])
     return (; outdir, bins_dir, bins_tsv)
 end
 
@@ -308,7 +411,16 @@ function run_comebin(; contigs_fasta::String, bam_path::String, outdir::String,
         views::Int = 6, threads::Int = get_default_threads(),
         temperature::Union{Nothing, Float64} = nothing,
         embedding_size::Int = 2048, coverage_embedding_size::Int = 2048,
-        batch_size::Int = 1024, extra_args::Vector{String} = String[])
+        batch_size::Int = 1024, extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "comebin",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     if !(isfile(bam_path) || isdir(bam_path))
         error("BAM path not found: $(bam_path)")
@@ -338,7 +450,34 @@ function run_comebin(; contigs_fasta::String, bam_path::String, outdir::String,
     end
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n comebin $(cmd_args)`)
+    bins_dir = _find_first_matching_dir(outdir, [r"bins$"]; recursive = true)
+    bins_tsv = _find_first_matching_file(outdir, [r"bins.*\.tsv$"]; recursive = true)
+    cmd = `$(CONDA_RUNNER) run --live-stream -n comebin $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -e \"$(joinpath(outdir, "comebin.done"))\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, bins_dir, bins_tsv)
+    end
+
+    run(cmd)
     bins_dir = _find_first_matching_dir(outdir, [r"bins$"]; recursive = true)
     bins_tsv = _find_first_matching_file(outdir, [r"bins.*\.tsv$"]; recursive = true)
     return (; outdir, bins_dir, bins_tsv)
@@ -370,7 +509,16 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
         contamination_threshold::Union{Nothing, Float64} = nothing,
         ani_threshold::Float64 = 0.99,
         threads::Int = get_default_threads(),
-        extra_args::Vector{String} = String[])
+        extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "drep_dereplicate",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isempty(genomes) && error("No genomes provided to dRep")
     for genome in genomes
         isfile(genome) || error("Genome file not found: $(genome)")
@@ -398,7 +546,32 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
 
     append!(cmd_args, extra_args)
 
-    run(`$(CONDA_RUNNER) run --live-stream -n drep $(cmd_args)`)
+    cmd = `$(CONDA_RUNNER) run --live-stream -n drep $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -e \"$(joinpath(outdir, "data_tables", "Widb.csv"))\" ] && [ ! -e \"$(joinpath(outdir, "dereplicated_genomes.csv"))\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, winning_genomes = nothing)
+    end
+
+    run(cmd)
 
     winning_genomes = _find_first_matching_file(
         outdir,
@@ -485,7 +658,16 @@ Uses `vamb taxometer`.
 """
 function run_taxometer(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
         outdir::String, threads::Int = get_default_threads(),
-        extra_args::Vector{String} = String[])
+        extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "taxometer",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
     isfile(taxonomy_file) || error("Taxonomy file not found: $(taxonomy_file)")
@@ -506,7 +688,32 @@ function run_taxometer(; contigs_fasta::String, depth_file::String, taxonomy_fil
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(dirname(outdir))\"",
+            "if [ ! -d \"$(outdir)\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir)
+    end
+
+    run(cmd)
     return (; outdir)
 end
 
@@ -527,7 +734,16 @@ Uses `vamb bin taxvamb`.
 """
 function run_taxvamb(; contigs_fasta::String, depth_file::String, taxonomy_file::String,
         outdir::String, threads::Int = get_default_threads(),
-        extra_args::Vector{String} = String[])
+        extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "taxvamb",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(contigs_fasta) || error("Contigs FASTA not found: $(contigs_fasta)")
     isfile(depth_file) || error("Depth file not found: $(depth_file)")
     isfile(taxonomy_file) || error("Taxonomy file not found: $(taxonomy_file)")
@@ -548,7 +764,32 @@ function run_taxvamb(; contigs_fasta::String, depth_file::String, taxonomy_file:
     end
     append!(cmd_args, extra_args)
 
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_args)`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(dirname(outdir))\"",
+            "if [ ! -d \"$(outdir)\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, clusters_tsv = nothing)
+    end
+
+    run(cmd)
     clusters_tsv = _find_first_matching_file(outdir, [
         r"vae_clusters.*\.tsv$", r"clusters.*\.tsv$"])
     return (; outdir, clusters_tsv)
@@ -572,7 +813,16 @@ end
 Merge MAGs/bins from multiple binners using MAGmax.
 """
 function run_magmax_merge(; bins_dirs::Vector{String}, outdir::String,
-        threads::Int = get_default_threads(), extra_args::Vector{String} = String[])
+        threads::Int = get_default_threads(), extra_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "magmax_merge",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isempty(bins_dirs) && error("No bins directories provided to MAGmax")
     for dir in bins_dirs
         isdir(dir) || error("Bins directory not found: $(dir)")
@@ -608,6 +858,32 @@ function run_magmax_merge(; bins_dirs::Vector{String}, outdir::String,
     append!(cmd_args, extra_args)
 
     cmd = Cmd(`$(CONDA_RUNNER) run --live-stream -n magmax $(cmd_args)`; dir = outdir)
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "mkdir -p \"$(bins_input_dir)\"",
+            "if [ ! -e \"$(joinpath(outdir, "magmax.done"))\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user,
+            workdir = outdir
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return (; outdir, bins_input_dir)
+    end
+
     run(cmd)
     return (; outdir, bins_input_dir)
 end

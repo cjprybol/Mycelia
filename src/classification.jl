@@ -383,7 +383,16 @@ function run_mash_sketch(;
         min_copies::Union{Nothing, Int} = nothing,
         threads::Int = get_default_threads(),
         output_prefix::Union{Nothing, String} = nothing,
-        additional_args::Vector{String} = String[])
+        additional_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mash_sketch",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     for f in input_files
         isfile(f) || error("Input file not found: $(f)")
     end
@@ -423,7 +432,30 @@ function run_mash_sketch(;
             push!(sketch_args, input_file)
 
             sketch_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $sketch_args`
-            run(sketch_cmd)
+            if executor !== nothing
+                script = join([
+                    "set -euo pipefail",
+                    "mkdir -p \"$(outdir)\"",
+                    "if [ ! -f \"$(sketch_file)\" ]; then",
+                    "  $(Mycelia.command_string(sketch_cmd))",
+                    "fi"
+                ], "\n")
+                job = Mycelia.build_execution_job(
+                    cmd = script,
+                    job_name = "$(job_name)_$(basename_clean)",
+                    site = site,
+                    time_limit = time_limit,
+                    cpus_per_task = threads,
+                    mem_gb = mem_gb,
+                    partition = partition,
+                    qos = qos,
+                    account = account,
+                    mail_user = mail_user
+                )
+                Mycelia.execute(job, Mycelia.resolve_executor(executor))
+            else
+                run(sketch_cmd)
+            end
         end
 
         push!(sketches, sketch_file)
@@ -446,7 +478,16 @@ Combine Mash sketch files into a single database sketch.
 """
 function run_mash_paste(;
         out_file::String,
-        in_files::Vector{String})
+        in_files::Vector{String},
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mash_paste",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     for f in in_files
         isfile(f) || error("Input sketch not found: $(f)")
     end
@@ -461,7 +502,30 @@ function run_mash_paste(;
         paste_args = ["paste", output_prefix]
         append!(paste_args, in_files)
         paste_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $paste_args`
-        run(paste_cmd)
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(dirname(output_prefix))\"",
+                "if [ ! -f \"$(output_sketch)\" ]; then",
+                "  $(Mycelia.command_string(paste_cmd))",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = 1,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            run(paste_cmd)
+        end
     end
 
     return output_sketch
@@ -492,7 +556,16 @@ function run_mash_dist(;
         outdir::String,
         threads::Int = get_default_threads(),
         output_tsv::Union{Nothing, String} = nothing,
-        additional_args::Vector{String} = String[])
+        additional_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mash_dist",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(reference) || error("Reference not found: $(reference)")
     isfile(query) || error("Query not found: $(query)")
     threads > 0 || error("threads must be positive")
@@ -511,8 +584,31 @@ function run_mash_dist(;
         append!(dist_args, additional_args)
         append!(dist_args, [reference, query])
         dist_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $dist_args`
-        open(results_tsv, "w") do io
-            run(pipeline(dist_cmd, stdout = io))
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(dirname(results_tsv))\"",
+                "if [ ! -f \"$(results_tsv)\" ]; then",
+                "  $(Mycelia.command_string(dist_cmd)) > \"$(results_tsv)\"",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = threads,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            open(results_tsv, "w") do io
+                run(pipeline(dist_cmd, stdout = io))
+            end
         end
     end
 
@@ -549,7 +645,16 @@ function run_mash_screen(;
         threads::Int = get_default_threads(),
         min_identity::Union{Nothing, Float64} = nothing,
         output_tsv::Union{Nothing, String} = nothing,
-        additional_args::Vector{String} = String[])
+        additional_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "mash_screen",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     isfile(reference) || error("Reference not found: $(reference)")
     query_files = query isa String ? [query] : query
     for f in query_files
@@ -580,8 +685,31 @@ function run_mash_screen(;
         append!(screen_args, query_files)
 
         screen_cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n mash mash $screen_args`
-        open(results_tsv, "w") do io
-            run(pipeline(screen_cmd, stdout = io))
+        if executor !== nothing
+            script = join([
+                "set -euo pipefail",
+                "mkdir -p \"$(dirname(results_tsv))\"",
+                "if [ ! -f \"$(results_tsv)\" ]; then",
+                "  $(Mycelia.command_string(screen_cmd)) > \"$(results_tsv)\"",
+                "fi"
+            ], "\n")
+            job = Mycelia.build_execution_job(
+                cmd = script,
+                job_name = job_name,
+                site = site,
+                time_limit = time_limit,
+                cpus_per_task = threads,
+                mem_gb = mem_gb,
+                partition = partition,
+                qos = qos,
+                account = account,
+                mail_user = mail_user
+            )
+            Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        else
+            open(results_tsv, "w") do io
+                run(pipeline(screen_cmd, stdout = io))
+            end
         end
     end
 
@@ -1855,7 +1983,16 @@ function run_kraken2_classify(;
         paired::Bool = false,
         gzip_compressed::Union{Nothing, Bool} = nothing,
         report_minimizer_data::Bool = false,
-        additional_args::Vector{String} = String[])
+        additional_args::Vector{String} = String[],
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "kraken2_classify",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
     if isempty(input_files)
         error("No input files provided for Kraken2.")
     end
@@ -1914,7 +2051,31 @@ function run_kraken2_classify(;
     append!(cmd_args, input_files)
 
     @info "Running Kraken2 on $(length(input_files)) file(s)..."
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n kraken2 $cmd_args`)
+    cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n kraken2 $cmd_args`
+    if executor !== nothing
+        script = join([
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -s \"$(report_file)\" ]; then",
+            "  $(Mycelia.command_string(cmd))",
+            "fi"
+        ], "\n")
+        job = Mycelia.build_execution_job(
+            cmd = script,
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+    else
+        run(cmd)
+    end
 
     return (outdir = outdir, output_file = output_file, report_file = report_file)
 end

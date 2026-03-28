@@ -34,6 +34,24 @@ import DataFrames
 import Test
 import Mycelia
 
+@eval Mycelia begin
+    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        return nothing
+    end
+
+    function _ensure_vamb_installed()
+        return "mycelia_vamb"
+    end
+end
+
+function _write_text_file(path::String, content::String)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        write(io, content)
+    end
+    return path
+end
+
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 # const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
@@ -152,6 +170,230 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test_throws ErrorException Mycelia.run_magmax_merge(
             bins_dirs = ["missing_bins_dir"],
             outdir = outdir
+        )
+    end
+
+    Test.@testset "Helper utilities and collection paths" begin
+        workdir = mktempdir()
+
+        Test.@test Mycelia._vamb_env_name() == "mycelia_vamb"
+
+        vamb_depth = _write_text_file(
+            joinpath(workdir, "vamb.tsv"),
+            "contigname\tsampleA\tsampleB\nctg1\t1.0\t2.0\n"
+        )
+        Test.@test Mycelia._vamb_abundance_tsv(vamb_depth) == vamb_depth
+
+        jgi_depth = _write_text_file(
+            joinpath(workdir, "depth.tsv"),
+            "contigName\tcontigLen\ttotalAvgDepth\tsampleA\tsampleA-var\tsampleB\nctg1\t1000\t4.0\t3.0\t0.2\t1.0\nctg2\t500\t2.0\t2.0\n"
+        )
+        abundance_dir = joinpath(workdir, "abundance")
+        abundance_tsv = Mycelia._vamb_abundance_tsv(jgi_depth; output_dir = abundance_dir)
+        abundance_df = DataFrames.DataFrame(Mycelia.CSV.File(abundance_tsv; delim = '\t'))
+        Test.@test DataFrames.names(abundance_df) == ["contigname", "sampleA", "sampleB"]
+        Test.@test abundance_df.sampleB[2] == 0
+        Test.@test Mycelia._vamb_abundance_tsv(jgi_depth; output_dir = abundance_dir) == abundance_tsv
+
+        bad_depth = _write_text_file(
+            joinpath(workdir, "bad_depth.tsv"),
+            "contigName\tcontigLen\ttotalAvgDepth\nctg1\t1000\t1.0\n"
+        )
+        Test.@test_throws ErrorException Mycelia._vamb_abundance_tsv(bad_depth)
+
+        search_root = joinpath(workdir, "search")
+        mkpath(joinpath(search_root, "nested", "bins"))
+        _write_text_file(joinpath(search_root, "alpha.tsv"), "x\n")
+        _write_text_file(joinpath(search_root, "nested", "beta.tsv"), "x\n")
+        _write_text_file(joinpath(search_root, "nested", "bins", "bin.fa"), ">bin\nACGT\n")
+        Test.@test Mycelia._find_first_matching_file(search_root, [r"alpha\.tsv$"]) == joinpath(search_root, "alpha.tsv")
+        Test.@test Mycelia._find_first_matching_file(search_root, [r"beta\.tsv$"]; recursive = true) == joinpath(search_root, "nested", "beta.tsv")
+        Test.@test isnothing(Mycelia._find_first_matching_file(search_root, [r"gamma\.tsv$"]))
+        Test.@test Mycelia._find_first_matching_dir(search_root, [r"bins$"]; recursive = true) == joinpath(search_root, "nested", "bins")
+        Test.@test isnothing(Mycelia._find_first_matching_dir(search_root, [r"missing$"]))
+
+        contigs = _write_text_file(joinpath(workdir, "contigs.fa"), ">ctg1\nACGT\n")
+        taxonomy = _write_text_file(joinpath(workdir, "taxonomy.tsv"), "ctg1\tBacteria\n")
+        graph = _write_text_file(joinpath(workdir, "assembly.gfa"), "H\tVN:Z:1.0\n")
+        mapping = _write_text_file(joinpath(workdir, "mapping.tsv"), "contig\tsampleA\nctg1\t1.0\n")
+        bam_dir = joinpath(workdir, "bams")
+        mkpath(bam_dir)
+        _write_text_file(joinpath(bam_dir, "sample.bam"), "bam")
+        genome_a = _write_text_file(joinpath(workdir, "genome_a.fa"), ">a\nACGT\n")
+        genome_b = _write_text_file(joinpath(workdir, "genome_b.fa"), ">b\nTGCA\n")
+        bins_a = joinpath(workdir, "bins_a")
+        bins_b = joinpath(workdir, "bins_b")
+        mkpath(bins_a)
+        mkpath(bins_b)
+        _write_text_file(joinpath(bins_a, "bin.1.fa"), ">bin1\nACGT\n")
+        _write_text_file(joinpath(bins_b, "bin.2.fa"), ">bin2\nTGCA\n")
+
+        vamb_exec = Mycelia.CollectExecutor()
+        vamb_result = Mycelia.run_vamb(
+            contigs_fasta = contigs,
+            depth_file = jgi_depth,
+            outdir = joinpath(workdir, "vamb_out"),
+            minfasta = 2500,
+            threads = 6,
+            executor = vamb_exec
+        )
+        Test.@test length(vamb_exec.jobs) == 1
+        Test.@test occursin("vamb bin default", vamb_exec.jobs[1].cmd)
+        Test.@test occursin("--abundance_tsv", vamb_exec.jobs[1].cmd)
+        Test.@test occursin("-p 6", vamb_exec.jobs[1].cmd)
+        Test.@test vamb_result.outdir == joinpath(workdir, "vamb_out")
+
+        metabat_exec = Mycelia.CollectExecutor()
+        metabat_result = Mycelia.run_metabat2(
+            contigs_fasta = contigs,
+            depth_file = jgi_depth,
+            outdir = joinpath(workdir, "metabat_out"),
+            min_contig = 1800,
+            threads = 3,
+            seed = 99,
+            extra_args = ["--saveCls"],
+            executor = metabat_exec
+        )
+        Test.@test length(metabat_exec.jobs) == 1
+        Test.@test occursin("metabat2", metabat_exec.jobs[1].cmd)
+        Test.@test occursin("-m 1800", metabat_exec.jobs[1].cmd)
+        Test.@test occursin("-s 99", metabat_exec.jobs[1].cmd)
+        Test.@test occursin("--saveCls", metabat_exec.jobs[1].cmd)
+        Test.@test endswith(metabat_result.bins_prefix, "bin")
+
+        metacoag_exec = Mycelia.CollectExecutor()
+        metacoag_result = Mycelia.run_metacoag(
+            contigs_fasta = contigs,
+            assembly_graph = graph,
+            mapping_file = mapping,
+            outdir = joinpath(workdir, "metacoag_out"),
+            assembler = "megahit",
+            threads = 2,
+            extra_args = ["--min_length", "1000"],
+            executor = metacoag_exec
+        )
+        Test.@test length(metacoag_exec.jobs) == 1
+        Test.@test occursin("metacoag", metacoag_exec.jobs[1].cmd)
+        Test.@test occursin("--assembler megahit", metacoag_exec.jobs[1].cmd)
+        Test.@test occursin("--min_length 1000", metacoag_exec.jobs[1].cmd)
+        Test.@test metacoag_result.bins_dir == joinpath(metacoag_result.outdir, "bins")
+
+        comebin_exec = Mycelia.CollectExecutor()
+        comebin_result = Mycelia.run_comebin(
+            contigs_fasta = contigs,
+            bam_path = bam_dir,
+            outdir = joinpath(workdir, "comebin_out"),
+            views = 4,
+            threads = 5,
+            temperature = 0.2,
+            embedding_size = 512,
+            coverage_embedding_size = 256,
+            batch_size = 128,
+            extra_args = ["--resume"],
+            executor = comebin_exec
+        )
+        Test.@test length(comebin_exec.jobs) == 1
+        Test.@test occursin("run_comebin.sh", comebin_exec.jobs[1].cmd)
+        Test.@test occursin("-n 4", comebin_exec.jobs[1].cmd)
+        Test.@test occursin("-l 0.2", comebin_exec.jobs[1].cmd)
+        Test.@test occursin("--resume", comebin_exec.jobs[1].cmd)
+        Test.@test comebin_result.outdir == joinpath(workdir, "comebin_out")
+
+        drep_exec = Mycelia.CollectExecutor()
+        drep_result = Mycelia.run_drep_dereplicate(
+            genomes = [genome_a, genome_b],
+            outdir = joinpath(workdir, "drep_out"),
+            completeness_threshold = 90.0,
+            contamination_threshold = 5.0,
+            ani_threshold = 0.97,
+            threads = 4,
+            extra_args = ["--ignoreGenomeQuality"],
+            executor = drep_exec
+        )
+        Test.@test length(drep_exec.jobs) == 1
+        Test.@test occursin("dRep dereplicate", drep_exec.jobs[1].cmd)
+        Test.@test occursin("-comp 90.0", drep_exec.jobs[1].cmd)
+        Test.@test occursin("-con 5.0", drep_exec.jobs[1].cmd)
+        Test.@test occursin("-sa 0.97", drep_exec.jobs[1].cmd)
+        Test.@test drep_result.outdir == joinpath(workdir, "drep_out")
+
+        taxometer_exec = Mycelia.CollectExecutor()
+        taxometer_result = Mycelia.run_taxometer(
+            contigs_fasta = contigs,
+            depth_file = jgi_depth,
+            taxonomy_file = taxonomy,
+            outdir = joinpath(workdir, "taxometer_out"),
+            threads = 7,
+            executor = taxometer_exec
+        )
+        Test.@test length(taxometer_exec.jobs) == 1
+        Test.@test occursin("vamb taxometer", taxometer_exec.jobs[1].cmd)
+        Test.@test occursin("-p 7", taxometer_exec.jobs[1].cmd)
+        Test.@test taxometer_result.outdir == joinpath(workdir, "taxometer_out")
+
+        taxvamb_exec = Mycelia.CollectExecutor()
+        taxvamb_result = Mycelia.run_taxvamb(
+            contigs_fasta = contigs,
+            depth_file = jgi_depth,
+            taxonomy_file = taxonomy,
+            outdir = joinpath(workdir, "taxvamb_out"),
+            threads = 8,
+            extra_args = ["--cuda"],
+            executor = taxvamb_exec
+        )
+        Test.@test length(taxvamb_exec.jobs) == 1
+        Test.@test occursin("vamb bin taxvamb", taxvamb_exec.jobs[1].cmd)
+        Test.@test occursin("-p 8", taxvamb_exec.jobs[1].cmd)
+        Test.@test occursin("--cuda", taxvamb_exec.jobs[1].cmd)
+        Test.@test taxvamb_result.outdir == joinpath(workdir, "taxvamb_out")
+
+        magmax_exec = Mycelia.CollectExecutor()
+        magmax_result = Mycelia.run_magmax_merge(
+            bins_dirs = [bins_a, bins_b],
+            outdir = joinpath(workdir, "magmax_out"),
+            threads = 2,
+            executor = magmax_exec
+        )
+        Test.@test length(magmax_exec.jobs) == 1
+        Test.@test occursin("magmax", magmax_exec.jobs[1].cmd)
+        Test.@test occursin("--format fa", magmax_exec.jobs[1].cmd)
+        copied_bins = sort(readdir(magmax_result.bins_input_dir))
+        Test.@test copied_bins == ["bins_a__bin.1.fa", "bins_b__bin.2.fa"]
+    end
+
+    Test.@testset "Existing outdir validation" begin
+        workdir = mktempdir()
+        contigs = _write_text_file(joinpath(workdir, "contigs.fa"), ">ctg1\nACGT\n")
+        depth = _write_text_file(
+            joinpath(workdir, "depth.tsv"),
+            "contigName\tcontigLen\ttotalAvgDepth\tsampleA\nctg1\t1000\t1.0\t1.0\n"
+        )
+        taxonomy = _write_text_file(joinpath(workdir, "taxonomy.tsv"), "ctg1\tBacteria\n")
+
+        existing_vamb = joinpath(workdir, "existing_vamb")
+        mkpath(existing_vamb)
+        Test.@test_throws ErrorException Mycelia.run_vamb(
+            contigs_fasta = contigs,
+            depth_file = depth,
+            outdir = existing_vamb
+        )
+
+        existing_taxometer = joinpath(workdir, "existing_taxometer")
+        mkpath(existing_taxometer)
+        Test.@test_throws ErrorException Mycelia.run_taxometer(
+            contigs_fasta = contigs,
+            depth_file = depth,
+            taxonomy_file = taxonomy,
+            outdir = existing_taxometer
+        )
+
+        existing_taxvamb = joinpath(workdir, "existing_taxvamb")
+        mkpath(existing_taxvamb)
+        Test.@test_throws ErrorException Mycelia.run_taxvamb(
+            contigs_fasta = contigs,
+            depth_file = depth,
+            taxonomy_file = taxonomy,
+            outdir = existing_taxvamb
         )
     end
 

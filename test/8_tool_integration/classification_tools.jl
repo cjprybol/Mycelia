@@ -27,6 +27,40 @@ import FASTX
 import CodecZlib
 import Random
 
+@eval Mycelia begin
+    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        return nothing
+    end
+end
+
+function _write_text_file(path::String, content::String)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        write(io, content)
+    end
+    return path
+end
+
+function _make_metaphlan_db(dir::String; index::String = "mpa_vTest")
+    mkpath(dir)
+    _write_text_file(joinpath(dir, "$(index).pkl"), "db")
+    return dir
+end
+
+function _make_metabuli_db(dir::String)
+    mkpath(dir)
+    _write_text_file(joinpath(dir, "db.info"), "db")
+    return dir
+end
+
+function _make_kraken2_db(dir::String)
+    mkpath(dir)
+    for name in ("hash.k2d", "opts.k2d", "taxo.k2d")
+        _write_text_file(joinpath(dir, name), "db")
+    end
+    return dir
+end
+
 # Check if external tool tests should run
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
@@ -456,6 +490,499 @@ Test.@testset "Classification Tools Integration Tests" begin
         else
             @info "Skipping Metabuli execution test; external tool execution is opt-in via MYCELIA_RUN_EXTERNAL=true"
         end
+    end
+
+    # ========================================================================
+    # Fast Wrapper Coverage Tests
+    # ========================================================================
+    Test.@testset "Sourmash wrapper collection and cache paths" begin
+        workdir = mktempdir()
+
+        fasta_a = _write_text_file(joinpath(workdir, "a.fasta"), ">a\nACGT\n")
+        fasta_b = _write_text_file(joinpath(workdir, "b.fastq"), "@b\nACGT\n+\nIIII\n")
+        query_sig = _write_text_file(joinpath(workdir, "query.sig"), "sig")
+        db_sig = _write_text_file(joinpath(workdir, "db.sig"), "sig")
+
+        sketch_exec = Mycelia.CollectExecutor()
+        sketch_result = Mycelia.run_sourmash_sketch(
+            input_files = [fasta_a, fasta_b],
+            outdir = joinpath(workdir, "sourmash_sketch"),
+            k_sizes = [21, 31],
+            scaled = 500,
+            singleton = true,
+            name = "demo",
+            executor = sketch_exec,
+            site = :scg
+        )
+        Test.@test length(sketch_exec.jobs) == 1
+        Test.@test sketch_exec.jobs[1].site == :scg
+        Test.@test occursin("sourmash sketch dna", sketch_exec.jobs[1].cmd)
+        Test.@test occursin("--singleton", sketch_exec.jobs[1].cmd)
+        Test.@test occursin("--name demo", sketch_exec.jobs[1].cmd)
+        Test.@test occursin("k=21,k=31,scaled=500", sketch_exec.jobs[1].cmd)
+        Test.@test length(sketch_result.signatures) == 2
+
+        search_exec = Mycelia.CollectExecutor()
+        search_result = Mycelia.run_sourmash_search(
+            query_sig = query_sig,
+            database_sig = db_sig,
+            outdir = joinpath(workdir, "sourmash_search"),
+            threshold = 0.2,
+            k_size = 51,
+            best_only = true,
+            num_results = 3,
+            executor = search_exec
+        )
+        Test.@test length(search_exec.jobs) == 1
+        Test.@test occursin("sourmash search", search_exec.jobs[1].cmd)
+        Test.@test occursin("--best-only", search_exec.jobs[1].cmd)
+        Test.@test occursin("-n 3", search_exec.jobs[1].cmd)
+        Test.@test occursin("--threshold 0.2", search_exec.jobs[1].cmd)
+        Test.@test endswith(search_result.results_csv, "_search_results.csv")
+
+        gather_exec = Mycelia.CollectExecutor()
+        gather_result = Mycelia.run_sourmash_gather(
+            query_sig = query_sig,
+            database_sig = db_sig,
+            outdir = joinpath(workdir, "sourmash_gather"),
+            k_size = 21,
+            threshold_bp = 250,
+            executor = gather_exec
+        )
+        Test.@test length(gather_exec.jobs) == 1
+        Test.@test occursin("sourmash gather", gather_exec.jobs[1].cmd)
+        Test.@test occursin("--threshold-bp 250", gather_exec.jobs[1].cmd)
+        Test.@test endswith(gather_result.results_csv, "_gather.csv")
+        Test.@test endswith(gather_result.results_matches, "_gather_matches.sig")
+
+        cached_search_dir = joinpath(workdir, "cached_search")
+        mkpath(cached_search_dir)
+        cached_search = joinpath(cached_search_dir, "query_search_results.csv")
+        _write_text_file(cached_search, "similarity,name\n0.9,ref\n")
+        cached_result = Mycelia.run_sourmash_search(
+            query_sig = query_sig,
+            database_sig = db_sig,
+            outdir = cached_search_dir
+        )
+        Test.@test cached_result.results_csv == cached_search
+
+        cached_sketch_dir = joinpath(workdir, "cached_sketch")
+        mkpath(cached_sketch_dir)
+        _write_text_file(joinpath(cached_sketch_dir, "a.sig"), "sig")
+        cached_sketch = Mycelia.run_sourmash_sketch(
+            input_files = [fasta_a],
+            outdir = cached_sketch_dir
+        )
+        Test.@test cached_sketch.signatures == [joinpath(cached_sketch_dir, "a.sig")]
+
+        gather_csv = _write_text_file(joinpath(workdir, "gather.csv"), "intersect_bp,name\n10,ref\n")
+        gather_df = Mycelia.parse_sourmash_gather_output(gather_csv)
+        Test.@test DataFrames.nrow(gather_df) == 1
+
+        search_csv = _write_text_file(joinpath(workdir, "search.csv"), "similarity,name\n0.2,ref\n")
+        search_df = Mycelia.parse_sourmash_search_output(search_csv)
+        Test.@test DataFrames.nrow(search_df) == 1
+    end
+
+    Test.@testset "Mash wrapper collection and cache paths" begin
+        workdir = mktempdir()
+
+        fasta = _write_text_file(joinpath(workdir, "reads.fa"), ">r1\nACGT\n")
+        fastq = _write_text_file(joinpath(workdir, "reads.fastq"), "@r1\nACGT\n+\nIIII\n")
+        sketch_a = _write_text_file(joinpath(workdir, "sketch_a.msh"), "msh")
+        sketch_b = _write_text_file(joinpath(workdir, "sketch_b.msh"), "msh")
+
+        sketch_exec = Mycelia.CollectExecutor()
+        sketch_result = Mycelia.run_mash_sketch(
+            input_files = [fasta, fastq],
+            outdir = joinpath(workdir, "mash_sketch"),
+            r = true,
+            min_copies = 2,
+            output_prefix = "panel",
+            additional_args = ["-I"],
+            executor = sketch_exec
+        )
+        Test.@test length(sketch_exec.jobs) == 2
+        Test.@test all(job -> occursin("mash sketch", job.cmd), sketch_exec.jobs)
+        Test.@test any(job -> occursin("-r", job.cmd), sketch_exec.jobs)
+        Test.@test any(job -> occursin("-m 2", job.cmd), sketch_exec.jobs)
+        Test.@test any(job -> occursin("-I", job.cmd), sketch_exec.jobs)
+        Test.@test length(sketch_result.sketches) == 2
+
+        paste_exec = Mycelia.CollectExecutor()
+        pasted = Mycelia.run_mash_paste(
+            out_file = joinpath(workdir, "combined.msh"),
+            in_files = [sketch_a, sketch_b],
+            executor = paste_exec
+        )
+        Test.@test length(paste_exec.jobs) == 1
+        Test.@test occursin("mash paste", paste_exec.jobs[1].cmd)
+        Test.@test endswith(pasted, ".msh")
+
+        dist_exec = Mycelia.CollectExecutor()
+        dist_result = Mycelia.run_mash_dist(
+            reference = sketch_a,
+            query = sketch_b,
+            outdir = joinpath(workdir, "mash_dist"),
+            threads = 4,
+            additional_args = ["-v"],
+            executor = dist_exec
+        )
+        Test.@test length(dist_exec.jobs) == 1
+        Test.@test occursin("mash dist", dist_exec.jobs[1].cmd)
+        Test.@test occursin("-p 4", dist_exec.jobs[1].cmd)
+        Test.@test occursin("-v", dist_exec.jobs[1].cmd)
+        Test.@test endswith(dist_result.results_tsv, "_mash_dist.tsv")
+
+        screen_exec = Mycelia.CollectExecutor()
+        screen_result = Mycelia.run_mash_screen(
+            reference = sketch_a,
+            query = [fasta, fastq],
+            outdir = joinpath(workdir, "mash_screen"),
+            winner_takes_all = false,
+            min_identity = 0.95,
+            additional_args = ["-v"],
+            executor = screen_exec
+        )
+        Test.@test length(screen_exec.jobs) == 1
+        Test.@test occursin("mash screen", screen_exec.jobs[1].cmd)
+        Test.@test !occursin(" -w", screen_exec.jobs[1].cmd)
+        Test.@test occursin("-i 0.95", screen_exec.jobs[1].cmd)
+        Test.@test occursin("-v", screen_exec.jobs[1].cmd)
+        Test.@test endswith(screen_result.results_tsv, "_mash_screen.tsv")
+
+        cached_dist_dir = joinpath(workdir, "cached_dist")
+        mkpath(cached_dist_dir)
+        cached_dist = joinpath(cached_dist_dir, "existing.tsv")
+        _write_text_file(cached_dist, "ref\tqry\t0.0\t1\t1/1\n")
+        cached_dist_result = Mycelia.run_mash_dist(
+            reference = sketch_a,
+            query = sketch_b,
+            outdir = cached_dist_dir,
+            output_tsv = cached_dist
+        )
+        Test.@test cached_dist_result.results_tsv == cached_dist
+
+        cached_default_sketch_dir = joinpath(workdir, "cached_default_sketch")
+        mkpath(cached_default_sketch_dir)
+        _write_text_file(joinpath(cached_default_sketch_dir, "reads.msh"), "msh")
+        cached_default_sketch = Mycelia.run_mash_sketch(
+            input_files = [fasta],
+            outdir = cached_default_sketch_dir
+        )
+        Test.@test cached_default_sketch.sketches == [joinpath(cached_default_sketch_dir, "reads.msh")]
+
+        cached_custom_sketch_dir = joinpath(workdir, "cached_custom_sketch")
+        mkpath(cached_custom_sketch_dir)
+        _write_text_file(joinpath(cached_custom_sketch_dir, "custom.msh"), "msh")
+        cached_custom_sketch = Mycelia.run_mash_sketch(
+            input_files = [fasta],
+            outdir = cached_custom_sketch_dir,
+            output_prefix = "custom"
+        )
+        Test.@test cached_custom_sketch.sketches == [joinpath(cached_custom_sketch_dir, "custom.msh")]
+
+        winner_exec = Mycelia.CollectExecutor()
+        winner_screen = Mycelia.run_mash_screen(
+            reference = sketch_a,
+            query = fasta,
+            outdir = joinpath(workdir, "winner_screen"),
+            winner_takes_all = true,
+            executor = winner_exec
+        )
+        Test.@test length(winner_exec.jobs) == 1
+        Test.@test occursin("-w", winner_exec.jobs[1].cmd)
+        Test.@test endswith(winner_screen.results_tsv, "_mash_screen.tsv")
+
+        cached_screen_dir = joinpath(workdir, "cached_screen")
+        mkpath(cached_screen_dir)
+        cached_screen = joinpath(cached_screen_dir, "existing.tsv")
+        _write_text_file(cached_screen, "0.99\t1/1\t1\t1e-5\tq\tr\n")
+        cached_screen_result = Mycelia.run_mash_screen(
+            reference = sketch_a,
+            query = fasta,
+            outdir = cached_screen_dir,
+            output_tsv = cached_screen
+        )
+        Test.@test cached_screen_result.results_tsv == cached_screen
+        Test.@test_throws ErrorException Mycelia.run_mash_screen(
+            reference = sketch_a,
+            query = fasta,
+            outdir = joinpath(workdir, "bad_screen"),
+            min_identity = 1.5
+        )
+    end
+
+    Test.@testset "MetaPhlAn wrapper database and parser paths" begin
+        workdir = mktempdir()
+        db_dir = _make_metaphlan_db(joinpath(workdir, "metaphlan_db"))
+        reads = _write_text_file(joinpath(workdir, "reads.sam"), "@HD\tVN:1.0\n")
+
+        default_index, default_explicit = Mycelia.resolve_metaphlan_db_index()
+        Test.@test isnothing(default_index)
+        Test.@test !default_explicit
+
+        resolved_index, index_explicit = Mycelia.resolve_metaphlan_db_index(db_index = "mpa_vTest")
+        Test.@test resolved_index == "mpa_vTest"
+        Test.@test index_explicit
+
+        withenv("METAPHLAN_DB_INDEX" => "env_index") do
+            env_index, env_explicit = Mycelia.resolve_metaphlan_db_index()
+            Test.@test env_index == "env_index"
+            Test.@test env_explicit
+        end
+
+        Test.@test Mycelia._metaphlan_db_present(db_dir, "mpa_vTest")
+        Test.@test !Mycelia._metaphlan_db_present(joinpath(workdir, "missing_db"), "mpa_vTest")
+        Test.@test Mycelia._metaphlan_db_present(db_dir)
+        Test.@test Mycelia.get_metaphlan_db_path(download = false, db_dir = db_dir, db_index = "mpa_vTest") == db_dir
+        Test.@test isnothing(
+            Mycelia.get_metaphlan_db_path(
+                require = false,
+                download = false,
+                db_dir = joinpath(workdir, "missing_meta_db"),
+                db_index = "mpa_vTest"
+            )
+        )
+
+        withenv(
+            "METAPHLAN_DB_DIR" => "",
+            "METAPHLAN_DB_PATH" => "",
+            "METAPHLAN_BOWTIE2DB" => db_dir
+        ) do
+            Test.@test_logs (:warn, r"deprecated") begin
+                Test.@test Mycelia.get_metaphlan_db_path(download = false, db_index = "mpa_vTest") == db_dir
+            end
+        end
+
+        metaphlan_exec = Mycelia.CollectExecutor()
+        result = Mycelia.run_metaphlan(
+            input_file = reads,
+            outdir = joinpath(workdir, "metaphlan_out"),
+            input_type = "sam",
+            nprocs = 4,
+            db_dir = db_dir,
+            db_index = "mpa_vTest",
+            unknown_estimation = false,
+            long_reads = true,
+            executor = metaphlan_exec
+        )
+        Test.@test length(metaphlan_exec.jobs) == 1
+        Test.@test occursin("metaphlan", metaphlan_exec.jobs[1].cmd)
+        Test.@test occursin("--input_type sam", metaphlan_exec.jobs[1].cmd)
+        Test.@test occursin("--index mpa_vTest", metaphlan_exec.jobs[1].cmd)
+        Test.@test occursin("--skip_unclassified_estimation", metaphlan_exec.jobs[1].cmd)
+        Test.@test occursin("--long_reads", metaphlan_exec.jobs[1].cmd)
+        Test.@test result.mapout == joinpath(result.outdir, "reads_mapout.bz2")
+
+        cached_dir = joinpath(workdir, "metaphlan_cached")
+        mkpath(cached_dir)
+        _write_text_file(joinpath(cached_dir, "reads_profile.txt"), "#profile\n")
+        cached_result = Mycelia.run_metaphlan(
+            input_file = reads,
+            outdir = cached_dir,
+            db_dir = db_dir,
+            db_index = "mpa_vTest"
+        )
+        Test.@test cached_result.profile_txt == joinpath(cached_dir, "reads_profile.txt")
+
+        empty_profile = _write_text_file(joinpath(workdir, "empty_profile.txt"), "# comment\n")
+        empty_df = Mycelia.parse_metaphlan_profile(empty_profile)
+        Test.@test DataFrames.nrow(empty_df) == 0
+
+        mixed_profile = _write_text_file(
+            joinpath(workdir, "mixed_profile.txt"),
+            "# header\nk__Bacteria\t2\t100.0\t  \ninvalid\nk__Archaea\t\t25.0\tMethanogens\nk__Skip\t1\tnot-a-number\tignored\n"
+        )
+        mixed_df = Mycelia.parse_metaphlan_profile(mixed_profile)
+        Test.@test DataFrames.nrow(mixed_df) == 2
+        Test.@test mixed_df.taxid[2] === missing
+        Test.@test mixed_df.additional_species[1] === missing
+        Test.@test mixed_df.additional_species[2] == "Methanogens"
+    end
+
+    Test.@testset "Metabuli wrapper database and parser paths" begin
+        workdir = mktempdir()
+        reads_1 = _write_text_file(joinpath(workdir, "reads_1.fastq"), "@r1\nACGT\n+\nIIII\n")
+        reads_2 = _write_text_file(joinpath(workdir, "reads_2.fastq"), "@r2\nTGCA\n+\nIIII\n")
+        db_root = joinpath(workdir, "metabuli_root")
+        named_db = _make_metabuli_db(joinpath(db_root, "db_named"))
+
+        Test.@test Mycelia._metabuli_db_present(named_db)
+        Test.@test !Mycelia._metabuli_db_present(joinpath(workdir, "missing_metabuli"))
+        Test.@test Mycelia._resolve_metabuli_db_dir(db_root, "db_named") == named_db
+
+        withenv("METABULI_DB" => named_db) do
+            Test.@test Mycelia.get_metabuli_db_path(download = false) == named_db
+        end
+        withenv("METABULI_DB" => joinpath(workdir, "bad_metabuli")) do
+            Test.@test isnothing(Mycelia.get_metabuli_db_path(require = false, download = false))
+        end
+        Test.@test Mycelia.get_metabuli_db_path(download = false, db_root = db_root, db_name = "db_named") == named_db
+        Test.@test isnothing(
+            Mycelia.get_metabuli_db_path(
+                require = false,
+                download = false,
+                db_root = joinpath(workdir, "missing_metabuli_root"),
+                db_name = "missing_db"
+            )
+        )
+        Test.@test 1 <= Mycelia._default_metabuli_max_ram_gb() <= 128
+
+        metabuli_exec = Mycelia.CollectExecutor()
+        metabuli_result = Mycelia.run_metabuli_classify(
+            input_files = [reads_1, reads_2],
+            database_path = named_db,
+            outdir = joinpath(workdir, "metabuli_out"),
+            seq_mode = "3",
+            threads = 2,
+            min_score = 0.4,
+            min_sp_score = 0.6,
+            max_ram_gb = 7,
+            executor = metabuli_exec
+        )
+        Test.@test length(metabuli_exec.jobs) == 1
+        Test.@test occursin("metabuli classify", metabuli_exec.jobs[1].cmd)
+        Test.@test occursin("--seq-mode 3", metabuli_exec.jobs[1].cmd)
+        Test.@test occursin("--min-score 0.4", metabuli_exec.jobs[1].cmd)
+        Test.@test occursin("--min-sp-score 0.6", metabuli_exec.jobs[1].cmd)
+        Test.@test occursin("--max-ram 7", metabuli_exec.jobs[1].cmd)
+        Test.@test endswith(metabuli_result.report_file, "_report.tsv")
+
+        taxonomy_dir = joinpath(workdir, "taxonomy")
+        mkpath(taxonomy_dir)
+        _write_text_file(joinpath(taxonomy_dir, "names.dmp"), "1\t|\troot\t|\n")
+        _write_text_file(joinpath(taxonomy_dir, "nodes.dmp"), "1\t|\t1\t|\n")
+        reference_fasta = _write_text_file(joinpath(workdir, "reference.fa"), ">ref\nACGT\n")
+
+        build_exec = Mycelia.CollectExecutor()
+        build_result = Mycelia.run_metabuli_build_db(
+            reference_fasta = reference_fasta,
+            taxonomy_dir = taxonomy_dir,
+            outdir = joinpath(workdir, "metabuli_build"),
+            threads = 3,
+            split_num = 64,
+            executor = build_exec
+        )
+        Test.@test length(build_exec.jobs) == 1
+        Test.@test occursin("metabuli build", build_exec.jobs[1].cmd)
+        Test.@test occursin("--threads 3", build_exec.jobs[1].cmd)
+        Test.@test occursin("--split-num 64", build_exec.jobs[1].cmd)
+        Test.@test build_result.database_path == joinpath(workdir, "metabuli_build")
+
+        cached_build_dir = joinpath(workdir, "cached_metabuli_build")
+        _make_metabuli_db(cached_build_dir)
+        cached_build = Mycelia.run_metabuli_build_db(
+            reference_fasta = reference_fasta,
+            taxonomy_dir = taxonomy_dir,
+            outdir = cached_build_dir
+        )
+        Test.@test cached_build.database_path == cached_build_dir
+
+        partial_report = _write_text_file(
+            joinpath(workdir, "partial_report.tsv"),
+            "20.0\t4\t2\t  species  \n"
+        )
+        partial_df = Mycelia.parse_metabuli_report(partial_report)
+        Test.@test DataFrames.names(partial_df) == ["percentage", "num_reads", "num_direct_reads", "rank"]
+
+        partial_classifications = _write_text_file(
+            joinpath(workdir, "partial_classifications.tsv"),
+            "C\tread_1\n"
+        )
+        partial_class_df = Mycelia.parse_metabuli_classifications(partial_classifications)
+        Test.@test DataFrames.ncol(partial_class_df) == 2
+    end
+
+    Test.@testset "Legacy and Kraken wrapper fast paths" begin
+        workdir = mktempdir()
+        assembly = _write_text_file(joinpath(workdir, "assembly.fna"), ">ctg\nACGT\n")
+        assembly_gz = joinpath(workdir, "assembly.fna.gz")
+        open(assembly_gz, "w") do io
+            write(io, "placeholder")
+        end
+
+        clamlst_out = _write_text_file(joinpath(workdir, "assembly_clamlst.tsv"), "scheme\tst\n")
+        Test.@test Mycelia.run_clamlst(assembly_gz; outdir = workdir) == clamlst_out
+
+        ectyper_dir = joinpath(workdir, "ectyper_out")
+        mkpath(ectyper_dir)
+        ectyper_out = _write_text_file(joinpath(ectyper_dir, "output.tsv"), "serotype\n")
+        Test.@test Mycelia.run_ectyper(assembly; outdir = ectyper_dir) == ectyper_out
+        Test.@test_throws ErrorException Mycelia.run_ectyper(
+            joinpath(workdir, "missing_assembly.fna");
+            outdir = joinpath(workdir, "ectyper_missing")
+        )
+
+        ezclermont_out = _write_text_file(joinpath(workdir, "assembly_ezclermont.csv"), "sample,group\n")
+        Test.@test Mycelia.run_ezclermont(assembly_gz; outdir = workdir) == ezclermont_out
+
+        kleborate_outdir = joinpath(workdir, "kleborate")
+        mkpath(kleborate_outdir)
+        _write_text_file(joinpath(kleborate_outdir, "existing_output.txt"), "done\n")
+        Test.@test Mycelia.run_kleborate([assembly]; outdir = kleborate_outdir) == kleborate_outdir
+        Test.@test Mycelia.run_kleborate(assembly; outdir = kleborate_outdir) == kleborate_outdir
+        Test.@test_throws ErrorException Mycelia.run_kleborate(String[]; outdir = joinpath(workdir, "kleborate_empty"))
+        Test.@test_throws ErrorException Mycelia.run_kleborate(
+            [assembly];
+            outdir = joinpath(workdir, "kleborate_invalid"),
+            preset = nothing,
+            modules = nothing
+        )
+
+        kraken_db = _make_kraken2_db(joinpath(workdir, "kraken_db"))
+        Test.@test Mycelia._kraken2_db_present(kraken_db)
+        Test.@test !Mycelia._kraken2_db_present(joinpath(workdir, "missing_kraken"))
+        withenv("KRAKEN2_DB" => kraken_db) do
+            Test.@test Mycelia.get_kraken2_db_path(download = false) == kraken_db
+        end
+        withenv("KRAKEN2_DB" => joinpath(workdir, "bad_kraken")) do
+            Test.@test isnothing(Mycelia.get_kraken2_db_path(require = false, download = false))
+        end
+
+        kraken_exec = Mycelia.CollectExecutor()
+        gz_reads = _write_text_file(joinpath(workdir, "reads.fastq.gz"), "@r1\nACGT\n+\nIIII\n")
+        kraken_result = Mycelia.run_kraken2_classify(
+            input_files = [gz_reads, gz_reads],
+            outdir = joinpath(workdir, "kraken_out"),
+            database_path = kraken_db,
+            threads = 8,
+            confidence = 0.2,
+            minimum_hit_groups = 3,
+            paired = true,
+            gzip_compressed = true,
+            report_minimizer_data = true,
+            additional_args = ["--quick"],
+            executor = kraken_exec
+        )
+        Test.@test length(kraken_exec.jobs) == 1
+        Test.@test occursin("kraken2", kraken_exec.jobs[1].cmd)
+        Test.@test occursin("--paired", kraken_exec.jobs[1].cmd)
+        Test.@test occursin("--gzip-compressed", kraken_exec.jobs[1].cmd)
+        Test.@test occursin("--report-minimizer-data", kraken_exec.jobs[1].cmd)
+        Test.@test occursin("--quick", kraken_exec.jobs[1].cmd)
+        Test.@test endswith(kraken_result.report_file, "_kraken2_report.txt")
+
+        cached_kraken_dir = joinpath(workdir, "kraken_cached")
+        mkpath(cached_kraken_dir)
+        _write_text_file(joinpath(cached_kraken_dir, "reads_kraken2_output.txt"), "C\tread\t1\n")
+        _write_text_file(joinpath(cached_kraken_dir, "reads_kraken2_report.txt"), "100.0\t1\t1\tS\t1\t name\n")
+        cached_kraken = Mycelia.run_kraken2_classify(
+            input_files = [gz_reads],
+            outdir = cached_kraken_dir,
+            database_path = kraken_db
+        )
+        Test.@test cached_kraken.report_file == joinpath(cached_kraken_dir, "reads_kraken2_report.txt")
+
+        kraken_report = _write_text_file(
+            joinpath(workdir, "kraken_report.txt"),
+            "100.0\t5\t5\tS\t562\t  Escherichia coli  \n"
+        )
+        kraken_df = Mycelia.parse_kraken2_report(kraken_report)
+        Test.@test DataFrames.nrow(kraken_df) == 1
+        Test.@test kraken_df.name[1] == "Escherichia coli"
+
+        Test.@test haskey(Mycelia.list_kraken2_databases(), Mycelia.DEFAULT_KRAKEN2_DB_NAME)
     end
 
     # ========================================================================
