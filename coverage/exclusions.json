@@ -1,0 +1,29 @@
+{
+  "policy": "Modules excluded from coverage targets but still measured",
+  "exclusions": [
+    {
+      "file": "Mycelia.jl",
+      "reason": "Module loader — no testable logic"
+    },
+    {
+      "file": "bioconda.jl",
+      "reason": "External tool installation — network-dependent"
+    },
+    {
+      "file": "execution.jl",
+      "reason": "Shell execution wrappers — system-dependent"
+    },
+    {
+      "file": "precompile_workload.jl",
+      "reason": "Precompilation statements — not runtime code"
+    },
+    {
+      "file": "slurm-templates.jl",
+      "reason": "HPC template generation — environment-dependent"
+    },
+    {
+      "file": "testing-utilities.jl",
+      "reason": "Test infrastructure helpers — tested transitively"
+    }
+  ]
+}
