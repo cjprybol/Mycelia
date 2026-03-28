@@ -136,6 +136,32 @@ function get_tier(filename::String, rel_path::String)::Tuple{Int, String, Int}
     return get(TIER_MAP, filename, (0, "Unassigned", 0))
 end
 
+function find_uncovered_sources(src_dir::String, covered::Set{String})::Vector{Tuple{
+        String, Int}}
+    """Find .jl source files with no .cov output and count their executable lines."""
+    uncovered = Tuple{String, Int}[]
+    for (root, _, files) in walkdir(src_dir)
+        for f in files
+            if endswith(f, ".jl") && !endswith(f, ".cov")
+                rel_path = relpath(joinpath(root, f), dirname(src_dir))
+                if rel_path ∉ covered
+                    # Count executable lines (non-blank, non-comment)
+                    n_exec = 0
+                    for line in eachline(joinpath(root, f))
+                        stripped = strip(line)
+                        if !isempty(stripped) && !startswith(stripped, '#') &&
+                           !startswith(stripped, "\"\"\"") && stripped != "\"\"\""
+                            n_exec += 1
+                        end
+                    end
+                    push!(uncovered, (rel_path, n_exec))
+                end
+            end
+        end
+    end
+    return uncovered
+end
+
 function main()
     println("Scanning for .cov files in $(SRC_DIR)...")
     grouped = find_cov_files(SRC_DIR)
@@ -143,6 +169,7 @@ function main()
 
     modules = Dict{String, Any}[]
     tier_stats = Dict{Int, Dict{String, Any}}()
+    covered_paths = Set{String}(keys(grouped))
 
     for (rel_path, cov_paths) in sort(collect(grouped))
         merged = merge_cov_files(cov_paths)
@@ -185,6 +212,46 @@ function main()
             ts = tier_stats[tier_num]
             ts["lines_total"] += lines_total
             ts["lines_hit"] += lines_hit
+            push!(ts["modules"], filename)
+        end
+    end
+
+    # Add 0% coverage modules (source files with no .cov output)
+    uncovered = find_uncovered_sources(SRC_DIR, covered_paths)
+    println("Found $(length(uncovered)) source files with zero coverage")
+    for (rel_path, n_exec) in uncovered
+        filename = basename(rel_path)
+        is_excluded = filename in EXCLUDED_FILES
+        tier_num, tier_name, target_pct = get_tier(filename, rel_path)
+
+        mod = Dict{String, Any}(
+            "file" => rel_path,
+            "filename" => filename,
+            "lines_total" => n_exec,
+            "lines_hit" => 0,
+            "lines_missed" => n_exec,
+            "coverage_pct" => 0.0,
+            "tier" => tier_num,
+            "tier_name" => tier_name,
+            "target_pct" => target_pct,
+            "excluded" => is_excluded,
+            "cov_file_count" => 0
+        )
+        push!(modules, mod)
+
+        if !is_excluded && tier_num > 0 && n_exec > 0
+            if !haskey(tier_stats, tier_num)
+                tier_stats[tier_num] = Dict{String, Any}(
+                    "tier" => tier_num,
+                    "name" => tier_name,
+                    "target_pct" => target_pct,
+                    "lines_total" => 0,
+                    "lines_hit" => 0,
+                    "modules" => String[]
+                )
+            end
+            ts = tier_stats[tier_num]
+            ts["lines_total"] += n_exec
             push!(ts["modules"], filename)
         end
     end
