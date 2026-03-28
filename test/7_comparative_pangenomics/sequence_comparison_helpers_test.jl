@@ -31,12 +31,21 @@ Test.@testset "Sequence Comparison Helpers" begin
             end
             Test.@test Mycelia.count_fasta_records(fasta_path) == 2
             Test.@test !isempty(Mycelia.genome_pair_id(fasta_path, fasta_path))
+
+            empty_fasta = joinpath(dir, "empty.fasta")
+            open(empty_fasta, "w") do io
+                write(io, "")
+            end
+            Test.@test Mycelia.count_fasta_records(empty_fasta) == 0
         end
     end
 
     Test.@testset "Circular sequence helpers" begin
         Test.@test Mycelia.reverse_complement_ascii("ACGT") == "ACGT"
+        Test.@test Mycelia.reverse_complement_ascii("ARYN") == "NRYT"
+        Test.@test Mycelia.booth_min_rotation_index(UInt8[]) == 1
         Test.@test Mycelia.booth_min_rotation_index(Vector{UInt8}(codeunits("baba"))) == 2
+        Test.@test Mycelia.rotate_bytes(Vector{UInt8}(codeunits("abcd")), 1) == "abcd"
         Test.@test Mycelia.rotate_bytes(Vector{UInt8}(codeunits("abcd")), 3) == "cdab"
 
         canonical, orientation, _ = Mycelia.canonical_circular_sequence("AAAA")
@@ -45,5 +54,31 @@ Test.@testset "Sequence Comparison Helpers" begin
 
         Test.@test Mycelia.header_says_circular("plasmid circular genome")
         Test.@test Mycelia.has_terminal_overlap("ATGCATGC"; overlap_bp = 4)
+        Test.@test !Mycelia.has_terminal_overlap("ATGC"; overlap_bp = 0)
+        Test.@test !Mycelia.has_terminal_overlap("ATGCAT"; overlap_bp = 4)
+    end
+
+    Test.@testset "Wrapper validation without external execution" begin
+        mktempdir() do dir
+            reference = joinpath(dir, "reference.fasta")
+            open(reference, "w") do io
+                println(io, ">ref")
+                println(io, "ATGCGATGCA")
+            end
+
+            existing_output = joinpath(dir, "triangle.tsv")
+            open(existing_output, "w") do io
+                println(io, "existing")
+            end
+            Test.@test Mycelia.skani_triangle([reference];
+                output_file = existing_output, force = false) == existing_output
+
+            Test.@test_throws ErrorException Mycelia.skani_triangle([joinpath(dir, "missing.fasta")])
+            Test.@test_throws ErrorException Mycelia.skani_dist([joinpath(dir, "missing.fasta")])
+            Test.@test_throws ErrorException Mycelia.run_sylph_profile(
+                [reference]; first_pairs = [reference], second_pairs = String[])
+            Test.@test_throws ErrorException Mycelia.run_sylph_profile(
+                [reference]; sample_reads = [joinpath(dir, "missing.fastq")])
+        end
     end
 end

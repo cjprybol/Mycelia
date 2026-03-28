@@ -141,6 +141,10 @@ function analyze_pangenome_kmers(genome_files::Vector{String};
     pangenome_size = n_kmers
     unique_total = sum(length(kmers) for kmers in values(unique_kmers_by_genome))
 
+    positive_distances = distance_matrix[distance_matrix .> 0]
+    mean_pairwise_distance = isempty(positive_distances) ? 0.0 :
+                             Statistics.mean(positive_distances)
+
     similarity_stats = (
         n_genomes = n_genomes,
         pangenome_size = pangenome_size,
@@ -150,7 +154,7 @@ function analyze_pangenome_kmers(genome_files::Vector{String};
         core_percentage = (core_size / pangenome_size) * 100,
         accessory_percentage = (accessory_size / pangenome_size) * 100,
         unique_percentage = (unique_total / pangenome_size) * 100,
-        mean_pairwise_distance = Statistics.mean(distance_matrix[distance_matrix .> 0])
+        mean_pairwise_distance = mean_pairwise_distance
     )
 
     println("Pangenome Analysis Results:")

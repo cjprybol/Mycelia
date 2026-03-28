@@ -214,3 +214,25 @@ Test.@testset "Pangenome analysis - input validation" begin
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
 end
+
+Test.@testset "Pangenome analysis - single genome summary statistics" begin
+    temp_dir = mktempdir()
+    try
+        genome_file = joinpath(temp_dir, "singleton.fasta")
+        open(genome_file, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("singleton", BioSequences.LongDNA{4}("ATGCGATGCA")))
+        end
+
+        result = Mycelia.analyze_pangenome_kmers([genome_file]; kmer_type = Kmers.DNAKmer{3})
+
+        Test.@test result.similarity_stats.n_genomes == 1
+        Test.@test result.similarity_stats.mean_pairwise_distance == 0.0
+        Test.@test result.similarity_stats.core_size == result.similarity_stats.pangenome_size
+        Test.@test result.similarity_stats.accessory_size == 0
+        Test.@test result.similarity_stats.unique_total == 0
+        Test.@test result.similarity_stats.core_percentage == 100.0
+        Test.@test all(result.distance_matrix .== 0.0)
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
