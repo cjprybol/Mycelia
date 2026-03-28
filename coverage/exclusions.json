@@ -1,5 +1,5 @@
 {
-  "policy": "Modules excluded from coverage targets but still measured",
+  "policy": "Modules excluded from coverage targets but still measured. See campaign spec for rationale.",
   "exclusions": [
     {
       "file": "Mycelia.jl",
