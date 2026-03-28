@@ -4,7 +4,7 @@
 
 **A Julia package for bioinformatics and computational biology**
 
-[![codecov](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR)](https://codecov.io/github/cjprybol/Mycelia)
+[![Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR)](https://codecov.io/github/cjprybol/Mycelia)
 [![HPC Coverage](https://codecov.io/github/cjprybol/Mycelia/graph/badge.svg?token=0ZQSER2FLR&flag=hpc-extended)](https://codecov.io/github/cjprybol/Mycelia?flag=hpc-extended)
 [![HPC Tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-tests.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
 [![HPC Benchmarks](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-benchmarks.json)](https://raw.githubusercontent.com/cjprybol/Mycelia/hpc-results/latest-hpc-results.json)
