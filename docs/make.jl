@@ -120,6 +120,7 @@ tutorial_order = [
     ("Step 19: Relational Clustering", "19_relational_clustering.md"),
     ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
     ("Step 21: Topological Assembly Optimization", "21_tda_topological_assembly_optimization.md"),
+    ("Step 22: Environmental Metagenome Analysis", "22_environmental_metagenome_analysis.md"),
 ]
 
 # Add tutorials that exist in the specified order

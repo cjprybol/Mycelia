@@ -10,6 +10,14 @@ The Mycelia metagenomic workflow implements a triangulated approach to taxonomic
 2. **Contig-level DNA taxonomy** - BLAST-based classification of assembled contigs
 3. **Contig-level protein taxonomy** - MMseqs2-based classification against UniRef databases
 
+## Worked Environmental Example
+
+For a repo-local, fully runnable environmental case study, see
+`Tutorial 22: Environmental Metagenome Analysis`. That tutorial targets the
+public Tara Oceans marine metagenome resource (`PRJEB1787`) while using a
+bundled lightweight abundance table so the workflow can be exercised in tests
+and local development without downloading large read sets.
+
 ```mermaid
 flowchart TD
   R[Sequencing reads]

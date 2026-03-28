@@ -15,6 +15,7 @@ Tutorials are organized following the standard bioinformatics workflow:
 7. **Comparative Genomics** - Pangenome and phylogenetic analysis
 8. **Tool Integration** - Working with external bioinformatics tools
 9. **Binning & Post-binning** - MAG binning and dereplication workflows
+10. **Environmental Metagenomes** - Public dataset case studies with narrative-ready figures
 
 ## Usage
 
