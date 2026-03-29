@@ -317,20 +317,10 @@ Test.@testset "XAM File Processing Tests" begin
         # Test flagstat output file generation
         expected_flagstat = temp_sam * ".samtools-flagstat.txt"
 
-        # Note: This would require samtools to be installed
-        # In a real test environment, we'd mock this or skip if not available
-        try
-            result = Mycelia.run_samtools_flagstat(temp_sam)
-            Test.@test result == expected_flagstat
-            # If successful, check that file was created
-            if isfile(expected_flagstat)
-                Test.@test isfile(expected_flagstat)
-                rm(expected_flagstat, force = true)
-            end
-        catch e
-            # If samtools not available, test that function exists
-            Test.@test hasmethod(Mycelia.run_samtools_flagstat, (String,))
-        end
+        result = Mycelia.run_samtools_flagstat(temp_sam)
+        Test.@test result == expected_flagstat
+        Test.@test isfile(expected_flagstat)
+        rm(expected_flagstat, force = true)
 
         # Cleanup
         rm(ref_fasta, force = true)
@@ -1106,15 +1096,20 @@ Test.@testset "XAM File Processing Tests" begin
             ## Create malformed variant by corrupting the valid file
             malformed_sam = tempname() * ".sam"
             valid_content = read(valid_sam, String)
-            ## Corrupt the content by removing essential fields
-            corrupted_content = replace(valid_content, r"\t[0-9]+\t" => "\tXXX\t", count = 1)
-            write(malformed_sam, corrupted_content)
+            ## Corrupt the first alignment record by removing one required SAM field.
+            lines = split(valid_content, '\n')
+            alignment_line_index = findfirst(line -> !isempty(line) && !startswith(line, "@"), lines)
+            Test.@test alignment_line_index !== nothing
+            alignment_fields = split(lines[alignment_line_index], '\t')
+            Test.@test length(alignment_fields) >= 11
+            deleteat!(alignment_fields, 11)
+            lines[alignment_line_index] = join(alignment_fields, '\t')
+            write(malformed_sam, join(lines, '\n'))
 
-            ## Test that malformed file is handled appropriately
-            ## Note: Some malformed files may still parse as valid DataFrames
-            ## depending on the level of corruption, so we test for either case
+            ## The malformed alignment row is rejected, so no records should survive parsing.
             df = Mycelia.xam_to_dataframe(malformed_sam)
             Test.@test df isa DataFrames.DataFrame
+            Test.@test DataFrames.nrow(df) == 0
 
             ## Cleanup
             rm(ref_fasta, force = true)
