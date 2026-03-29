@@ -1,7 +1,18 @@
+"""
+    strip_gz_extension(name::AbstractString) -> String
+
+Remove a trailing `.gz` extension from `name`. Returns `name` unchanged if
+it does not end with `.gz`.
+"""
 function strip_gz_extension(name::AbstractString)
     return replace(name, r"\.gz$" => "")
 end
 
+"""
+    nonempty_file(path::AbstractString) -> Bool
+
+Check whether `path` exists as a regular file with nonzero size.
+"""
 function nonempty_file(path::AbstractString)
     return isfile(path) && filesize(path) > 0
 end
