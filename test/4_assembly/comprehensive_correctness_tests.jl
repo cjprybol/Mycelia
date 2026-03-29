@@ -56,6 +56,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     function validate_graph_comprehensive(
             graph, input_sequences, expected_vertices, expected_edges, graph_type_name)
         @info "Validating $graph_type_name graph..."
+        reconstructed_sequences = Any[]
 
         # 1. Basic structure validation
         vertices = collect(MetaGraphsNext.labels(graph))
@@ -124,6 +125,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
 
                     if reconstructed !== nothing
                         reconstruction_success = true
+                        push!(reconstructed_sequences, reconstructed)
                         @info "Successfully reconstructed sequence: $(typeof(reconstructed)) of length $(length(reconstructed))"
                         break
                     end
@@ -135,7 +137,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
 
         Test.@test reconstruction_success
 
-        return true
+        return reconstructed_sequences
     end
 
     """
@@ -177,8 +179,26 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     function test_round_trip_io(graph, reconstructed_sequences, graph_type_name)
         @info "Testing round-trip I/O for $graph_type_name..."
 
-        # For now, test sequence identity preservation
-        # TODO: Add actual graph serialization/deserialization when implemented
+        mktempdir() do tmpdir
+            serialized_graph = joinpath(
+                tmpdir,
+                replace(graph_type_name, r"[^A-Za-z0-9]+" => "_") * ".jld2")
+            Mycelia.JLD2.save(serialized_graph, "graph", graph)
+            restored_graph = Mycelia.JLD2.load(serialized_graph, "graph")
+
+            original_vertices = Set(string(label) for label in MetaGraphsNext.labels(graph))
+            restored_vertices = Set(string(label) for label in MetaGraphsNext.labels(restored_graph))
+            original_edges = Set(
+                (string(src_label), string(dst_label)) for
+                (src_label, dst_label) in MetaGraphsNext.edge_labels(graph))
+            restored_edges = Set(
+                (string(src_label), string(dst_label)) for
+                (src_label, dst_label) in MetaGraphsNext.edge_labels(restored_graph))
+
+            Test.@test original_vertices == restored_vertices
+            Test.@test original_edges == restored_edges
+            Test.@test MetaGraphsNext.ne(restored_graph) == MetaGraphsNext.ne(graph)
+        end
 
         for (i, seq) in enumerate(reconstructed_sequences)
             if isa(seq, BioSequences.BioSequence)
@@ -207,8 +227,10 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # ATC, TCG, CGA, GAT
             expected_edges = 4     # ATC->TCG, TCG->CGA, CGA->GAT, GAT->ATC
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+            reconstructed_sequences = validate_graph_comprehensive(
+                graph, [known_dna], expected_vertices,
                 expected_edges, "DNA K-mer SingleStrand")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA K-mer SingleStrand")
         end
 
         Test.@testset "DNA K-mer DoubleStrand Detailed" begin
@@ -219,8 +241,10 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # ATC, TCG, CGA, GAT for this sequence
             expected_edges = nothing
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+            reconstructed_sequences = validate_graph_comprehensive(
+                graph, [known_dna], expected_vertices,
                 expected_edges, "DNA K-mer DoubleStrand")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA K-mer DoubleStrand")
 
             # Additional validation: check that both orientations are tracked
             found_both_orientations = false
@@ -249,8 +273,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # Same structure as k-mer graph
             expected_edges = 4
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, reads, expected_vertices, expected_edges, "DNA Qualmer")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA Qualmer")
             validate_quality_handling(graph, reads, "DNA Qualmer")
         end
 
@@ -298,8 +323,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4
             expected_edges = 3  # ABC->BCD, BCD->CDE, CDE->DEF
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, [known_string], expected_vertices, expected_edges, "String N-gram")
+            test_round_trip_io(graph, reconstructed_sequences, "String N-gram")
         end
 
         Test.@testset "String N-gram Graph from FASTQ Inputs" begin
@@ -313,8 +339,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4
             expected_edges = 3
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, reads, expected_vertices, expected_edges, "String N-gram from FASTQ")
+            test_round_trip_io(graph, reconstructed_sequences, "String N-gram from FASTQ")
         end
     end
 
