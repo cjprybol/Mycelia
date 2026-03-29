@@ -1,3 +1,13 @@
+@doc raw"""
+    fastx.jl — Sequence I/O & Processing
+
+FASTA/FASTQ reading, normalization, and streaming conversion utilities. Provides
+record-by-record processing with optional progress meters, compressed JSON Lines
+output, and integration with BioSequences/FASTX for type-safe sequence handling.
+
+Key functions: `fastx2normalized_jsonl_stream`, `read_fastx`, `normalize_fastx`.
+"""
+
 # Streaming FASTA/FASTQ normalization to a compressed JSON Lines file, record-by-record,
 # with an optional progress meter.
 

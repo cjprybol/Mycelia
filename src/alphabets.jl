@@ -1,3 +1,14 @@
+@doc raw"""
+    alphabets.jl — Preprocessing & QC
+
+Sequence alphabet detection and classification utilities. Provides functions to
+identify whether a sequence is DNA, RNA, amino acid, or IUPAC-ambiguous, and to
+retrieve the alphabet from BioSequence types.
+
+Key functions: `get_biosequence_alphabet`, `determine_sequence_alphabet`,
+`get_iupac_alphabet_from_biosequence_type`.
+"""
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 

@@ -1,4 +1,13 @@
-# const METADATA = joinpath(dirname(dirname(pathof(Mycelia))), "docs", "metadata")
+@doc raw"""
+    constants.jl — Core Infrastructure
+
+Shared constants for Mycelia: default database paths, download URLs, and
+configuration values used across bioinformatics tool wrappers (BLAST, Kraken2,
+MetaBuli, MetaPhlAn, etc.).
+
+Key constants: `DEFAULT_BLASTDB_PATH`, `DEFAULT_KRAKEN2_DB_PATH`,
+`KRAKEN2_DB_URLS`, `METABULI_DB_URLS`.
+"""
 
 const DEFAULT_BLASTDB_PATH = "$(homedir())/workspace/blastdb"
 const DEFAULT_METABULI_DB_PATH = "$(homedir())/workspace/metabuli"

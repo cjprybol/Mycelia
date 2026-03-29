@@ -1,21 +1,32 @@
-# Checkpointing utilities for long-running genomics workflows
-# Provides JLD2-based stage caching to enable iterative development
-#
-# Usage:
-#   import DrWatson
-#   const CHECKPOINT_DIR = DrWatson.datadir("checkpoints")
-#
-#   data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR) do
-#       expensive_load_operation()
-#   end
-#
-#   # With input-dependent caching (invalidates when files change):
-#   data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR;
-#       input_files=["data/samples.csv", "data/metadata.tsv"]) do
-#       expensive_load_operation()
-#   end
-#
-#   # To recompute: Mycelia.clear_stage("01_loaded", CHECKPOINT_DIR)
+@doc raw"""
+    checkpointing.jl — Core Infrastructure
+
+JLD2-based stage caching for long-running genomics workflows. Enables iterative
+development by persisting intermediate results to disk and optionally invalidating
+caches when input files change.
+
+Key functions: `cached_stage`, `clear_stage`, `clear_all_stages`,
+`list_stages`, `_input_hash`.
+
+# Usage
+```julia
+import DrWatson
+const CHECKPOINT_DIR = DrWatson.datadir("checkpoints")
+
+data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR) do
+    expensive_load_operation()
+end
+
+# With input-dependent caching (invalidates when files change):
+data = Mycelia.cached_stage("01_loaded", CHECKPOINT_DIR;
+    input_files=["data/samples.csv", "data/metadata.tsv"]) do
+    expensive_load_operation()
+end
+
+# To recompute:
+Mycelia.clear_stage("01_loaded", CHECKPOINT_DIR)
+```
+"""
 
 """
     _input_hash(input_files::Vector{String})::String

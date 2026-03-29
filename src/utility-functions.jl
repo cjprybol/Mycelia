@@ -1,3 +1,14 @@
+@doc raw"""
+    utility-functions.jl — Core Infrastructure
+
+General-purpose helper functions shared across Mycelia. Includes file handling
+(compression, extension stripping), DataFrame manipulation (duplicate collapsing),
+memory estimation, system resource queries, and miscellaneous string/path utilities.
+
+Key functions: `strip_gz_extension`, `nonempty_file`, `collapse_duplicates`,
+`estimate_memory`, `available_memory`.
+"""
+
 function strip_gz_extension(name::AbstractString)
     return replace(name, r"\.gz$" => "")
 end
