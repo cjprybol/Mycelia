@@ -236,3 +236,177 @@ Test.@testset "Pangenome analysis - single genome summary statistics" begin
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
 end
+
+Test.@testset "Pangenome analysis - construct_pangenome_pggb validation" begin
+    temp_dir = mktempdir()
+    try
+        missing_file = joinpath(temp_dir, "nonexistent.fasta")
+        Test.@test_throws ErrorException Mycelia.construct_pangenome_pggb(
+            [missing_file], joinpath(temp_dir, "output"))
+
+        valid_file = joinpath(temp_dir, "valid.fasta")
+        open(valid_file, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
+        end
+        Test.@test_throws ErrorException Mycelia.construct_pangenome_pggb(
+            [valid_file, missing_file], joinpath(temp_dir, "output"))
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - call_variants_from_pggb_graph validation" begin
+    temp_dir = mktempdir()
+    try
+        missing_gfa = joinpath(temp_dir, "nonexistent.gfa")
+        Test.@test_throws ErrorException Mycelia.call_variants_from_pggb_graph(
+            missing_gfa, "reference")
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - construct_pangenome_cactus validation" begin
+    temp_dir = mktempdir()
+    try
+        valid_file = joinpath(temp_dir, "genome.fasta")
+        open(valid_file, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
+        end
+
+        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
+            [valid_file], ["name1", "name2"],
+            joinpath(temp_dir, "output"), "name1")
+
+        missing_file = joinpath(temp_dir, "missing.fasta")
+        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
+            [missing_file], ["name1"],
+            joinpath(temp_dir, "output"), "name1")
+
+        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
+            [valid_file], ["name1"],
+            joinpath(temp_dir, "output"), "WRONG_REF")
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - convert_gfa_to_vg_format validation" begin
+    temp_dir = mktempdir()
+    try
+        missing_gfa = joinpath(temp_dir, "nonexistent.gfa")
+        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(missing_gfa)
+
+        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(
+            missing_gfa; output_file = joinpath(temp_dir, "out.vg"))
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - index_pangenome_graph validation" begin
+    temp_dir = mktempdir()
+    try
+        missing_graph = joinpath(temp_dir, "nonexistent.vg")
+        Test.@test_throws ErrorException Mycelia.index_pangenome_graph(missing_graph)
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - PangenomeAnalysisResult struct" begin
+    result = Mycelia.PangenomeAnalysisResult(
+        ["g1", "g2"],
+        Dict("g1" => Dict("ACG" => 1), "g2" => Dict("ACG" => 2)),
+        ["ACG"],
+        ["ACG"],
+        String[],
+        Dict("g1" => String[], "g2" => String[]),
+        BitMatrix([true true]),
+        [0.0 0.1; 0.1 0.0],
+        (n_genomes = 2, pangenome_size = 1, core_size = 1,
+         accessory_size = 0, unique_total = 0,
+         core_percentage = 100.0, accessory_percentage = 0.0,
+         unique_percentage = 0.0, mean_pairwise_distance = 0.1)
+    )
+    Test.@test result.genome_names == ["g1", "g2"]
+    Test.@test length(result.core_kmers) == 1
+    Test.@test length(result.accessory_kmers) == 0
+    Test.@test result.similarity_stats.n_genomes == 2
+    Test.@test result.similarity_stats.core_percentage == 100.0
+end
+
+Test.@testset "Pangenome analysis - compare_genome_kmer_similarity statistics" begin
+    temp_dir = mktempdir()
+    try
+        genome1 = joinpath(temp_dir, "g1.fasta")
+        genome2 = joinpath(temp_dir, "g2.fasta")
+        open(genome1, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("s1", BioSequences.LongDNA{4}("ATGCGATGCA")))
+        end
+        open(genome2, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("s2", BioSequences.LongDNA{4}("ATGCGTTTAA")))
+        end
+
+        kmer_type = Kmers.DNAKmer{3}
+        result = Mycelia.compare_genome_kmer_similarity(
+            genome1, genome2; kmer_type = kmer_type, metric = :jaccard)
+
+        Test.@test result.shared_kmers > 0
+        Test.@test result.genome1_unique >= 0
+        Test.@test result.genome2_unique >= 0
+        Test.@test result.shared_kmers + result.genome1_unique + result.genome2_unique == result.total_kmers
+        Test.@test result.metric == :jaccard
+        Test.@test 0.0 <= result.jaccard_similarity <= 1.0
+        Test.@test isapprox(result.distance, 1.0 - result.jaccard_similarity; atol = 1e-12)
+
+        result_js = Mycelia.compare_genome_kmer_similarity(
+            genome1, genome2; kmer_type = kmer_type, metric = :js_divergence)
+        Test.@test result_js.shared_kmers == result.shared_kmers
+        Test.@test result_js.genome1_unique == result.genome1_unique
+        Test.@test result_js.genome2_unique == result.genome2_unique
+
+        result_cos = Mycelia.compare_genome_kmer_similarity(
+            genome1, genome2; kmer_type = kmer_type, metric = :cosine)
+        Test.@test result_cos.shared_kmers == result.shared_kmers
+        Test.@test result_cos.total_kmers == result.total_kmers
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome analysis - build_genome_distance_matrix metrics" begin
+    temp_dir = mktempdir()
+    try
+        genomes = [
+            ("g1.fasta", BioSequences.LongDNA{4}("ATGCGATGCA")),
+            ("g2.fasta", BioSequences.LongDNA{4}("ATGCGTTTAA")),
+        ]
+        genome_files = String[]
+        for (name, seq) in genomes
+            path = joinpath(temp_dir, name)
+            open(path, "w") do io
+                FASTX.write(io, FASTX.FASTA.Record(name, seq))
+            end
+            push!(genome_files, path)
+        end
+
+        kmer_type = Kmers.DNAKmer{3}
+
+        result_js = Mycelia.build_genome_distance_matrix(
+            genome_files; kmer_type = kmer_type, metric = :js_divergence)
+        Test.@test result_js.metric == :js_divergence
+        Test.@test size(result_js.distance_matrix) == (2, 2)
+        Test.@test result_js.distance_matrix[1, 1] == 0.0
+        Test.@test result_js.distance_matrix[2, 2] == 0.0
+        Test.@test result_js.distance_matrix[1, 2] == result_js.distance_matrix[2, 1]
+        Test.@test result_js.distance_matrix[1, 2] > 0.0
+
+        result_cos = Mycelia.build_genome_distance_matrix(
+            genome_files; kmer_type = kmer_type, metric = :cosine)
+        Test.@test result_cos.metric == :cosine
+        Test.@test result_cos.distance_matrix[1, 2] == result_cos.distance_matrix[2, 1]
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
