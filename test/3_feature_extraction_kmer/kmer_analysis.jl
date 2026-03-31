@@ -329,8 +329,6 @@ Test.@testset "Reference Graph and K-mer Analysis" begin
     end
 end
 
-import StatsBase
-
 Test.@testset "kmer_frequency_histogram" begin
     # Dict overload
     kmer_counts = OrderedCollections.OrderedDict(
@@ -358,7 +356,7 @@ Test.@testset "coverage_peak_from_hist" begin
     Test.@test peak.coverage == 10
     Test.@test peak.kmers == 200
 
-    # With min_coverage=1 the coverage=1 entry has most kmers
+    # With min_coverage=1, peak is still at coverage=10 (200 > 100)
     peak_low = Mycelia.coverage_peak_from_hist(hist; min_coverage = 1)
     Test.@test peak_low.coverage == 10  # 200 > 100
 
