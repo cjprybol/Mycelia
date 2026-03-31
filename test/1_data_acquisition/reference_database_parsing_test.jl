@@ -101,9 +101,185 @@ Test.@testset "Reference Database Parsing" begin
         end
     end
 
+    Test.@testset "parse_ncbi_metadata_file error paths" begin
+        Test.@test_throws ErrorException Mycelia.parse_ncbi_metadata_file("/nonexistent/path/file.txt")
+
+        mktempdir() do dir
+            empty_file = joinpath(dir, "empty.txt")
+            touch(empty_file)
+            Test.@test_throws ErrorException Mycelia.parse_ncbi_metadata_file(empty_file)
+        end
+    end
+
     Test.@testset "NCBI FTP path helper" begin
         ftp_path = "ftp://example/GCF_000001"
         url = Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "genomic.fna.gz")
         Test.@test url == "ftp://example/GCF_000001/GCF_000001_genomic.fna.gz"
+    end
+
+    Test.@testset "ncbi_ftp_path_to_url extensions" begin
+        ftp_path = "ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/005/845/GCF_000005845.2_ASM584v2"
+        Test.@test endswith(
+            Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "genomic.gff.gz"),
+            "_genomic.gff.gz"
+        )
+        Test.@test endswith(
+            Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "protein.faa.gz"),
+            "_protein.faa.gz"
+        )
+        Test.@test endswith(
+            Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "assembly_report.txt"),
+            "_assembly_report.txt"
+        )
+    end
+
+    Test.@testset "Constants" begin
+        Test.@test Mycelia.NCBI_SUPERKINGDOMS isa Dict
+        Test.@test length(Mycelia.NCBI_SUPERKINGDOMS) == 6
+        Test.@test Mycelia.NCBI_SUPERKINGDOMS["Bacteria"] == 2
+        Test.@test Mycelia.NCBI_SUPERKINGDOMS["Archaea"] == 2157
+        Test.@test Mycelia.NCBI_SUPERKINGDOMS["Eukaryota"] == 2759
+        Test.@test Mycelia.NCBI_SUPERKINGDOMS["Viruses"] == 10239
+
+        Test.@test Mycelia.UN_LANGUAGES isa Vector{String}
+        Test.@test length(Mycelia.UN_LANGUAGES) == 6
+        Test.@test "en" in Mycelia.UN_LANGUAGES
+        Test.@test "zh" in Mycelia.UN_LANGUAGES
+
+        Test.@test Mycelia.UN_PAIRS isa Vector{String}
+        Test.@test length(Mycelia.UN_PAIRS) == 15
+        Test.@test "en-fr" in Mycelia.UN_PAIRS
+        Test.@test "ar-zh" in Mycelia.UN_PAIRS
+
+        Test.@test Mycelia.UN_CORPUS_BASE_URL isa String
+        Test.@test occursin("un.org", Mycelia.UN_CORPUS_BASE_URL)
+
+        Test.@test Mycelia.UN_CORPUS_USER_AGENT == "Mycelia/UNCorpus"
+    end
+
+    Test.@testset "_resolve_un_archives" begin
+        # Single bitext pair
+        archives = Mycelia._resolve_un_archives(["en-fr"], ["txt"])
+        Test.@test archives == ["UNv1.0.en-fr.tar.gz"]
+
+        # Reversed pair order should be normalized
+        archives = Mycelia._resolve_un_archives(["fr-en"], ["txt"])
+        Test.@test archives == ["UNv1.0.en-fr.tar.gz"]
+
+        # 6way subset
+        archives = Mycelia._resolve_un_archives(["6way"], ["txt"])
+        Test.@test archives == ["UNv1.0.6way.tar.gz"]
+
+        # 6-way alias
+        archives = Mycelia._resolve_un_archives(["6-way"], ["txt"])
+        Test.@test archives == ["UNv1.0.6way.tar.gz"]
+
+        # TEI subset
+        archives = Mycelia._resolve_un_archives(["tei"], ["xml"])
+        Test.@test length(archives) == 6
+        Test.@test all(a -> occursin("TEI", a), archives)
+
+        # bitext subset generates all 15 pairs
+        archives = Mycelia._resolve_un_archives(["bitext"], ["txt"])
+        Test.@test length(archives) == 15
+
+        # "all" gets everything
+        archives = Mycelia._resolve_un_archives(["all"], ["txt"])
+        Test.@test length(archives) > 15  # bitext + 6way + TEI
+
+        # Error: empty subsets
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(String[], ["txt"])
+
+        # Error: empty formats
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], String[])
+
+        # Error: unsupported format
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["pdf"])
+
+        # Error: unsupported subset
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["invalid"], ["txt"])
+
+        # Error: unsupported language
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["en-de"], ["txt"])
+
+        # Error: bitext without txt format
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["xml"])
+
+        # Error: tei without xml format
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["tei"], ["txt"])
+    end
+
+    Test.@testset "_merge_un_archive_parts" begin
+        mktempdir() do dir
+            # Create small test parts
+            part1 = joinpath(dir, "part.00")
+            part2 = joinpath(dir, "part.01")
+            merged = joinpath(dir, "merged.dat")
+
+            write(part1, "Hello, ")
+            write(part2, "World!")
+
+            Mycelia._merge_un_archive_parts([part1, part2], merged)
+            Test.@test isfile(merged)
+            Test.@test read(merged, String) == "Hello, World!"
+
+            # Single part
+            merged2 = joinpath(dir, "merged2.dat")
+            Mycelia._merge_un_archive_parts([part1], merged2)
+            Test.@test read(merged2, String) == "Hello, "
+
+            # Empty parts list
+            merged3 = joinpath(dir, "merged3.dat")
+            Mycelia._merge_un_archive_parts(String[], merged3)
+            Test.@test isfile(merged3)
+            Test.@test filesize(merged3) == 0
+        end
+    end
+
+    Test.@testset "collect_un_language_files" begin
+        mktempdir() do dir
+            # Create mock UN corpus structure
+            mkpath(joinpath(dir, "sub"))
+            write(joinpath(dir, "UNv1.0.en-fr.en"), "english text")
+            write(joinpath(dir, "UNv1.0.en-fr.fr"), "french text")
+            write(joinpath(dir, "UNv1.0.6way.en"), "6way english")
+            write(joinpath(dir, "sub", "UNv1.0.ar-en.ar"), "arabic text")
+            # Non-matching files
+            write(joinpath(dir, "README.md"), "readme")
+            write(joinpath(dir, "data.tar.gz"), "archive")
+            write(joinpath(dir, "noversion.en"), "no UNv1.0 prefix")
+
+            # all subsets
+            result = Mycelia.collect_un_language_files(dir; subsets = ["all"])
+            Test.@test haskey(result, "en")
+            Test.@test haskey(result, "fr")
+            Test.@test haskey(result, "ar")
+            Test.@test length(result["en"]) == 2  # en-fr.en, 6way.en
+
+            # specific subset filter
+            result2 = Mycelia.collect_un_language_files(dir; subsets = ["en-fr"])
+            Test.@test haskey(result2, "en")
+            Test.@test haskey(result2, "fr")
+            Test.@test !haskey(result2, "ar")
+
+            # strict_naming=false allows files without UNv1.0 prefix
+            write(joinpath(dir, "testset.en"), "test english")
+            result3 = Mycelia.collect_un_language_files(dir; subsets = ["all"], strict_naming = false)
+            # Should include testset.en and noversion.en now
+            en_files = result3["en"]
+            Test.@test length(en_files) > length(result["en"])
+        end
+    end
+
+    Test.@testset "download_sra_data error paths" begin
+        Test.@test_throws ErrorException Mycelia.download_sra_data("")
+    end
+
+    Test.@testset "prefetch_sra_runs error path" begin
+        Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
+    end
+
+    Test.@testset "fasterq_dump_parallel error path" begin
+        Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
     end
 end
