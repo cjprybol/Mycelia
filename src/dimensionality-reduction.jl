@@ -491,6 +491,52 @@ function umap_embed(X::AbstractMatrix{<:Real};
     return model
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+    umap_from_dist(D::AbstractMatrix{<:Real}, labels::AbstractVector{<:AbstractString};
+                   n_neighbors::Int=15,
+                   min_dist::Float64=0.3,
+                   n_components::Int=2)
+
+Embed a precomputed distance matrix into `n_components` via UMAP.
+
+Complement to `pcoa_from_dist` — use when you already have a distance/dissimilarity
+matrix (e.g., from FoldSeek TM-scores, AAmer cosine, or a consensus of multiple layers).
+
+# Arguments
+- `D`            : (n×n) symmetric distance matrix
+- `labels`       : vector of sample labels (length n)
+- `n_neighbors`  : UMAP neighborhood size (default 15)
+- `min_dist`     : controls how tightly points cluster (default 0.3)
+- `n_components` : output dimensions (default 2)
+
+# Returns
+- `embedding`    : (n_components × n) matrix of UMAP coordinates
+- `labels`       : the input labels (passed through for convenience)
+- `model`        : the trained UMAP.UMAP model
+"""
+function umap_from_dist(
+        D::AbstractMatrix{<:Real}, labels::AbstractVector{<:AbstractString};
+        n_neighbors::Int = min(15, size(D, 1) - 1),
+        min_dist::Float64 = 0.3,
+        n_components::Int = 2)
+    n = size(D, 1)
+    @assert size(D, 2) == n "Distance matrix must be square"
+    @assert length(labels) == n "Labels length must match matrix dimension"
+
+    if any(!isfinite, D)
+        throw(ArgumentError("Distance matrix contains non-finite values (NaN or Inf)."))
+    end
+
+    model = UMAP.UMAP_(D, n_components;
+        n_neighbors = n_neighbors,
+        min_dist = min_dist,
+        metric = :precomputed)
+
+    return (embedding = model.embedding, labels = labels, model = model)
+end
+
 #=
 Additional ExpFamilyPCA transforms (binomial, continuous Bernoulli,
 gamma, Gaussian) were here prior to disabling the dependency. Re-enable
