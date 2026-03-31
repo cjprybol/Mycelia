@@ -328,3 +328,337 @@ Test.@testset "Reference Graph and K-mer Analysis" begin
             error_rate = 0.001, sequence_length = 100, threshold = 0.99) == 10
     end
 end
+
+Test.@testset "kmer_frequency_histogram" begin
+    # Dict overload
+    kmer_counts = OrderedCollections.OrderedDict(
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("ACG")) => 5,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("CGT")) => 5,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("GTA")) => 2,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("TAC")) => 1
+    )
+    hist = Mycelia.kmer_frequency_histogram(kmer_counts)
+    Test.@test hist[5] == 2  # two kmers with count 5
+    Test.@test hist[2] == 1  # one kmer with count 2
+    Test.@test hist[1] == 1  # one kmer with count 1
+
+    # Vector overload
+    counts_vec = [5, 5, 2, 1]
+    hist_vec = Mycelia.kmer_frequency_histogram(counts_vec)
+    Test.@test hist_vec == hist
+end
+
+Test.@testset "coverage_peak_from_hist" begin
+    hist = Dict(1 => 100, 5 => 50, 10 => 200, 20 => 30)
+
+    # Default min_coverage=2 should skip coverage=1
+    peak = Mycelia.coverage_peak_from_hist(hist)
+    Test.@test peak.coverage == 10
+    Test.@test peak.kmers == 200
+
+    # With min_coverage=1, peak is still at coverage=10 (200 > 100)
+    peak_low = Mycelia.coverage_peak_from_hist(hist; min_coverage = 1)
+    Test.@test peak_low.coverage == 10  # 200 > 100
+
+    # Empty histogram
+    empty_peak = Mycelia.coverage_peak_from_hist(Dict{Int, Int}())
+    Test.@test ismissing(empty_peak.coverage)
+    Test.@test empty_peak.kmers == 0
+end
+
+Test.@testset "analyze_kmer_frequency_spectrum" begin
+    kmer_counts = OrderedCollections.OrderedDict(
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("ACG")) => 5,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("CGT")) => 5,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("GTA")) => 2,
+        Kmers.DNAKmer{3}(BioSequences.LongDNA{2}("TAC")) => 1
+    )
+    result = Mycelia.analyze_kmer_frequency_spectrum(kmer_counts)
+    Test.@test haskey(result, :histogram)
+    Test.@test haskey(result, :peak)
+    Test.@test haskey(result, :total_kmers)
+    Test.@test haskey(result, :unique_kmers)
+    Test.@test result.total_kmers == 13  # 5+5+2+1
+    Test.@test result.unique_kmers == 4
+
+    # Vector overload
+    result_vec = Mycelia.analyze_kmer_frequency_spectrum([5, 5, 2, 1])
+    Test.@test result_vec.total_kmers == 13
+    Test.@test result_vec.unique_kmers == 4
+end
+
+Test.@testset "canonical_minimizers" begin
+    seq = BioSequences.LongDNA{4}("ACGTACGTACGT")
+    k = 3
+    window = 3
+
+    minimizers = Mycelia.canonical_minimizers(seq, k, window)
+    Test.@test isa(minimizers, Vector)
+    Test.@test length(minimizers) > 0
+    # Number of minimizers = num_kmers - window + 1
+    num_kmers = length(seq) - k + 1  # 10
+    Test.@test length(minimizers) == num_kmers - window + 1  # 8
+
+    # Edge case: window larger than number of kmers returns empty
+    empty_min = Mycelia.canonical_minimizers(seq, k, 100)
+    Test.@test isempty(empty_min)
+
+    # Error on invalid k
+    Test.@test_throws ErrorException Mycelia.canonical_minimizers(seq, 0, 3)
+    # Error on invalid window
+    Test.@test_throws ErrorException Mycelia.canonical_minimizers(seq, 3, 0)
+
+    # RNA minimizers (non-canonical path for nucleotides still works)
+    rna_seq = BioSequences.LongRNA{4}("ACGUACGUACGU")
+    rna_min = Mycelia.canonical_minimizers(rna_seq, 3, 3)
+    Test.@test length(rna_min) > 0
+end
+
+Test.@testset "open_syncmers" begin
+    seq = BioSequences.LongDNA{4}("ACGTACGTACGTACGT")
+    k = 5
+    s = 3
+    t = 1
+
+    syncmers = Mycelia.open_syncmers(seq, k, s, t)
+    Test.@test isa(syncmers, Vector)
+    # Each syncmer should be a k-mer extracted from the sequence
+    for sm in syncmers
+        Test.@test length(sm) == k
+    end
+
+    # With canonical=true
+    syncmers_canon = Mycelia.open_syncmers(seq, k, s, t; canonical = true)
+    Test.@test isa(syncmers_canon, Vector)
+
+    # Error on invalid s
+    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 0, 1)
+    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 6, 1)
+
+    # Error on invalid t
+    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 3, 0)
+    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 3, 4)  # max_position = 5-3+1 = 3
+
+    # AA syncmers (SingleStrand, no canonical)
+    aa_seq = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
+    aa_syncmers = Mycelia.open_syncmers(aa_seq, 4, 2, 1)
+    Test.@test isa(aa_syncmers, Vector)
+end
+
+Test.@testset "strobemers" begin
+    seq = BioSequences.LongDNA{4}("ACGTACGTACGTACGT")
+    k = 3
+    w_min = 2
+    w_max = 4
+
+    strobes = Mycelia.strobemers(seq, k, w_min, w_max)
+    Test.@test isa(strobes, Vector{<:Tuple})
+    Test.@test length(strobes) > 0
+    # Each element is a pair of k-mers
+    for (s1, s2) in strobes
+        Test.@test length(s1) == k
+        Test.@test length(s2) == k
+    end
+
+    # canonical=true
+    strobes_canon = Mycelia.strobemers(seq, k, w_min, w_max; canonical = true)
+    Test.@test length(strobes_canon) > 0
+
+    # Error on invalid w_min/w_max
+    Test.@test_throws ErrorException Mycelia.strobemers(seq, 3, 0, 4)
+    Test.@test_throws ErrorException Mycelia.strobemers(seq, 3, 5, 3)
+end
+
+Test.@testset "determine_max_possible_kmers and determine_max_canonical_kmers" begin
+    # max possible kmers
+    Test.@test Mycelia.determine_max_possible_kmers(3, Mycelia.DNA_ALPHABET) == 4^3
+    Test.@test Mycelia.determine_max_possible_kmers(2, Mycelia.AA_ALPHABET) ==
+               length(Mycelia.AA_ALPHABET)^2
+    Test.@test Mycelia.determine_max_possible_kmers(3, Mycelia.RNA_ALPHABET) == 4^3
+
+    # max canonical kmers - for AA returns all, for DNA/RNA returns half (odd k)
+    Test.@test Mycelia.determine_max_canonical_kmers(3, Mycelia.DNA_ALPHABET) == 4^3 ÷ 2
+    Test.@test Mycelia.determine_max_canonical_kmers(2, Mycelia.AA_ALPHABET) ==
+               length(Mycelia.AA_ALPHABET)^2
+    Test.@test Mycelia.determine_max_canonical_kmers(3, Mycelia.RNA_ALPHABET) == 4^3 ÷ 2
+
+    # Even k should error for nucleotide alphabets
+    Test.@test_throws AssertionError Mycelia.determine_max_canonical_kmers(4, Mycelia.DNA_ALPHABET)
+end
+
+Test.@testset "kmer_counts_dict_to_vector" begin
+    k = 3
+    all_kmers = Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET)
+    kmer_to_index = Dict(kmer => i for (i, kmer) in enumerate(all_kmers))
+
+    # Build a small counts dict
+    seq = BioSequences.LongDNA{4}("ACGTACGT")
+    kmer_counts = Mycelia.count_canonical_kmers(Kmers.DNAKmer{k}, seq)
+
+    vec = Mycelia.kmer_counts_dict_to_vector(kmer_to_index, kmer_counts)
+    Test.@test length(vec) == length(all_kmers)
+    Test.@test sum(vec) == sum(values(kmer_counts))
+    # Zeros for absent kmers
+    Test.@test count(==(0), vec) == length(all_kmers) - length(kmer_counts)
+end
+
+Test.@testset "canonicalize_kmer_counts! with AA kmers (no-op)" begin
+    aa_seq = BioSequences.LongAA("ACDEFGHIKLMN")
+    aa_counts = Mycelia.count_kmers(Kmers.AAKmer{2}, aa_seq)
+    original_counts = copy(aa_counts)
+
+    # AA kmers should not be modified by canonicalization
+    Mycelia.canonicalize_kmer_counts!(aa_counts)
+    Test.@test aa_counts == original_counts
+end
+
+Test.@testset "_is_nucleotide_sequence helper" begin
+    Test.@test Mycelia._is_nucleotide_sequence(BioSequences.LongDNA{4}("ACGT")) == true
+    Test.@test Mycelia._is_nucleotide_sequence(BioSequences.LongRNA{4}("ACGU")) == true
+    Test.@test Mycelia._is_nucleotide_sequence(BioSequences.LongAA("ACD")) == false
+end
+
+Test.@testset "_sequence_kmer_iterator and _collect_kmers" begin
+    dna = BioSequences.LongDNA{4}("ACGTACGT")
+    rna = BioSequences.LongRNA{4}("ACGUACGU")
+    aa = BioSequences.LongAA("ACDEFGHI")
+
+    dna_kmers = Mycelia._collect_kmers(dna, 3)
+    Test.@test length(dna_kmers) == length(dna) - 3 + 1
+
+    rna_kmers = Mycelia._collect_kmers(rna, 3)
+    Test.@test length(rna_kmers) == length(rna) - 3 + 1
+
+    aa_kmers = Mycelia._collect_kmers(aa, 3)
+    Test.@test length(aa_kmers) == length(aa) - 3 + 1
+
+    # Unsupported type should error
+    Test.@test_throws ErrorException Mycelia._sequence_kmer_iterator("ACGT", 3)
+end
+
+Test.@testset "calculate_window_quality" begin
+    window = BioSequences.LongDNA{4}("ACGTACGTACGT")
+    quality = Mycelia.calculate_window_quality(window, 3)
+    Test.@test quality isa Float64
+    Test.@test 0.0 <= quality <= 1.0
+
+    # Short window (shorter than k) returns 0.0
+    short = BioSequences.LongDNA{4}("AC")
+    Test.@test Mycelia.calculate_window_quality(short, 5) == 0.0
+
+    # Repetitive sequence should have lower diversity
+    repetitive = BioSequences.LongDNA{4}("AAAAAAAAAAAA")
+    rep_quality = Mycelia.calculate_window_quality(repetitive, 3)
+    Test.@test rep_quality < quality  # less diverse = lower quality
+end
+
+Test.@testset "ks function" begin
+    result = Mycelia.ks()
+    Test.@test isa(result, Vector{Int})
+    Test.@test !isempty(result)
+    Test.@test issorted(result)
+    # Should start with small odd primes (3, 5, 7, ...)
+    Test.@test 3 in result
+    Test.@test 5 in result
+    Test.@test 7 in result
+    # 19 should be skipped
+    Test.@test !(19 in result)
+
+    # With min/max filters
+    filtered = Mycelia.ks(min = 5, max = 50)
+    Test.@test all(x -> 5 <= x <= 50, filtered)
+end
+
+Test.@testset "k_ladder function" begin
+    result = Mycelia.k_ladder()
+    Test.@test isa(result, Vector{Int})
+    Test.@test !isempty(result)
+    Test.@test issorted(result)
+    # Default seeds include 3, 5, 7
+    Test.@test 3 in result
+    Test.@test 5 in result
+    Test.@test 7 in result
+    # All should be odd primes (check manually for small primes)
+    Test.@test all(x -> isodd(x) && x > 1 && all(d -> x % d != 0, 2:isqrt(x)), result)
+
+    # With read_length cap
+    short_result = Mycelia.k_ladder(read_length = 50, read_margin = 10)
+    Test.@test all(x -> x <= 40, short_result)
+
+    # Custom seed primes
+    custom = Mycelia.k_ladder(seed_primes = [11, 13, 17], max_k = 100)
+    Test.@test 11 in custom
+    Test.@test 13 in custom
+    Test.@test 17 in custom
+end
+
+Test.@testset "count_kmers with RNA and AA sequences directly" begin
+    # RNA from sequence
+    rna_seq = BioSequences.LongRNA{4}("ACGUACGUACGU")
+    k = 3
+    rna_counts = Mycelia.count_kmers(Kmers.RNAKmer{k}, rna_seq)
+    Test.@test isa(rna_counts, OrderedCollections.OrderedDict)
+    Test.@test sum(values(rna_counts)) == length(rna_seq) - k + 1
+
+    # AA from sequence
+    aa_seq = BioSequences.LongAA("ACDEFGHIKLMN")
+    k_aa = 2
+    aa_counts = Mycelia.count_kmers(Kmers.AAKmer{k_aa}, aa_seq)
+    Test.@test isa(aa_counts, OrderedCollections.OrderedDict)
+    Test.@test sum(values(aa_counts)) == length(aa_seq) - k_aa + 1
+end
+
+Test.@testset "count_kmers with FASTA records vector" begin
+    records = FASTX.FASTA.Record[]
+    push!(records, FASTX.FASTA.Record("s1", "ACGTACGT"))
+    push!(records, FASTX.FASTA.Record("s2", "GGGGAAAA"))
+    k = 3
+    counts = Mycelia.count_kmers(Kmers.DNAKmer{k}, records)
+    Test.@test isa(counts, OrderedCollections.OrderedDict)
+    expected_total = (8 - k + 1) * 2  # 6 kmers per 8-base seq, 2 seqs
+    Test.@test sum(values(counts)) == expected_total
+end
+
+Test.@testset "generate_all_possible_kmers RNA" begin
+    k = 2
+    rna_kmers = Mycelia.generate_all_possible_kmers(k, Mycelia.RNA_ALPHABET)
+    Test.@test length(rna_kmers) == 4^k
+    Test.@test issorted(rna_kmers)
+end
+
+Test.@testset "generate_all_possible_canonical_kmers RNA" begin
+    k = 3
+    canonical_rna = Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.RNA_ALPHABET)
+    all_rna = Mycelia.generate_all_possible_kmers(k, Mycelia.RNA_ALPHABET)
+    Test.@test length(canonical_rna) <= length(all_rna)
+end
+
+Test.@testset "generate_all_possible_canonical_kmers AA (returns all)" begin
+    k = 2
+    canonical_aa = Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.AA_ALPHABET)
+    all_aa = Mycelia.generate_all_possible_kmers(k, Mycelia.AA_ALPHABET)
+    # AA has no reverse complement, so canonical == all
+    Test.@test length(canonical_aa) == length(all_aa)
+end
+
+Test.@testset "save_kmer_results with non-.jld2 filename appends extension" begin
+    k = 3
+    kmers = Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET)
+    counts = zeros(UInt16, length(kmers), 1)
+    save_file = "test_no_ext"
+    expected_file = "test_no_ext.jld2"
+    try
+        Mycelia.save_kmer_results(
+            filename = save_file,
+            kmers = kmers,
+            counts = counts,
+            fasta_list = ["dummy.fasta"],
+            k = k,
+            alphabet = :DNA
+        )
+        Test.@test isfile(expected_file)
+    finally
+        isfile(expected_file) && rm(expected_file)
+        isfile(save_file) && rm(save_file)
+    end
+end
