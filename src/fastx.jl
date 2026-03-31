@@ -2351,15 +2351,15 @@ function translate_nucleic_acid_fasta(fasta_nucleic_acid_file, fasta_amino_acid_
         writer = FASTX.FASTA.Writer(io)
         for record in FASTX.FASTA.Reader(open(fasta_nucleic_acid_file))
             try
-                raw_seq = FASTX.sequence(record)
+                raw_seq = BioSequences.LongDNA{4}(FASTX.sequence(record))
                 pruned_seq_length = Int(floor(length(raw_seq)/3)) * 3
                 truncated_seq = raw_seq[1:pruned_seq_length]
                 amino_acid_seq = BioSequences.translate(truncated_seq)
                 amino_acid_record = FASTX.FASTA.Record(
-                    FASTX.identifier(record), FASTX.description(record), amino_acid_seq)
+                    String(FASTX.description(record)), amino_acid_seq)
                 write(writer, amino_acid_record)
-            catch
-                @warn "unable to translate record", record
+            catch e
+                @warn "unable to translate record" exception=(e, catch_backtrace()) record
             end
         end
         close(writer)
@@ -2384,9 +2384,9 @@ Convert a FASTA file/record iterator to a DataFrame.
 function fasta_to_table(fasta)
     collected_fasta = collect(fasta)
     fasta_df = DataFrames.DataFrame(
-        identifier = FASTX.identifier.(collected_fasta),
-        description = FASTX.description.(collected_fasta),
-        sequence = FASTX.sequence.(collected_fasta)
+        identifier = String.(FASTX.identifier.(collected_fasta)),
+        description = String.(FASTX.description.(collected_fasta)),
+        sequence = String.(FASTX.sequence.(collected_fasta))
     )
     return fasta_df
 end
@@ -2405,7 +2405,7 @@ Convert a DataFrame containing FASTA sequence information into a vector of FASTA
 function fasta_table_to_fasta(fasta_df)
     records = Vector{FASTX.FASTA.Record}(undef, DataFrames.nrow(fasta_df))
     for (i, row) in enumerate(DataFrames.eachrow(fasta_df))
-        record = FASTX.FASTA.Record(row["identifier"], row["description"], row["sequence"])
+        record = FASTX.FASTA.Record(String(row["description"]), String(row["sequence"]))
         records[i] = record
     end
     return records

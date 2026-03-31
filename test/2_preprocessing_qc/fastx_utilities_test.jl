@@ -170,11 +170,14 @@ Test.@testset "FASTX Utilities" begin
 
     Test.@testset "_extract_human_readable_id edge cases" begin
         # Short name - returned as-is
-        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("short.fna") == "short"
+        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("short.fna") ==
+                   "short"
 
         # FASTQ extension
-        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("reads.fastq") == "reads"
-        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("reads.fq.gz") == "reads"
+        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("reads.fastq") ==
+                   "reads"
+        Test.@test Mycelia._extract_human_readable_id_from_fastx_path("reads.fq.gz") ==
+                   "reads"
 
         # Long name with delimiters - finds longest prefix ≤16
         Test.@test length(Mycelia._extract_human_readable_id_from_fastx_path(
@@ -187,7 +190,8 @@ Test.@testset "FASTX Utilities" begin
 
         # force_truncate on very long name with no delimiters
         long_name = "abcdefghijklmnopqrstuvwxyz.fna"
-        Test.@test length(Mycelia._extract_human_readable_id_from_fastx_path(long_name, true)) == 16
+        Test.@test length(Mycelia._extract_human_readable_id_from_fastx_path(long_name, true)) ==
+                   16
 
         # Error without force_truncate on very long name with no delimiters
         Test.@test_throws ErrorException Mycelia._extract_human_readable_id_from_fastx_path(
@@ -315,12 +319,18 @@ Test.@testset "FASTX Utilities" begin
         Test.@test hash_bio == hash_str
         Test.@test length(hash_bio) == 16
 
-        # Test different hash functions
-        for hf in [:sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512, :crc32]
-            h = Mycelia.create_sequence_hash("ATGC"; hash_function = hf, encoded_length = 16,
+        # Test different hash functions (all except crc32 can produce 16 chars)
+        for hf in [:sha256, :sha512, :md5, :sha1, :sha3_256, :sha3_512]
+            h = Mycelia.create_sequence_hash(
+                "ATGC"; hash_function = hf, encoded_length = 16,
                 allow_truncation = true)
             Test.@test length(h) == 16
         end
+        # CRC32 produces only 4 bytes (6 base58 chars)
+        h_crc = Mycelia.create_sequence_hash(
+            "ATGC"; hash_function = :crc32, encoded_length = 6,
+            allow_truncation = true)
+        Test.@test length(h_crc) == 6
 
         # Unsupported hash function
         Test.@test_throws ErrorException Mycelia.create_sequence_hash(
@@ -372,7 +382,7 @@ Test.@testset "FASTX Utilities" begin
         # No filename provided
         Test.@test_throws ErrorException Mycelia.write_fastq(
             records = [Mycelia.fastq_record(
-                identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])])
+            identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])])
 
         # Invalid extension
         Test.@test_throws ErrorException Mycelia.write_fastq(
@@ -391,7 +401,8 @@ Test.@testset "FASTX Utilities" begin
         temp_dir = mktempdir()
         gz_path = joinpath(temp_dir, "reads.fq.gz")
         recs = [
-            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+            30, 30, 30, 30])
         ]
         Mycelia.write_fastq(records = recs, filename = gz_path)
         Test.@test Mycelia.count_records(gz_path) == 1
@@ -461,8 +472,10 @@ Test.@testset "FASTX Utilities" begin
         temp_dir = mktempdir()
         fastq_path = joinpath(temp_dir, "norm.fastq")
         recs = [
-            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30]),
-            Mycelia.fastq_record(identifier = "r2", sequence = "GCTA", quality_scores = [20, 20, 20, 20])
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "GCTA", quality_scores = [
+                20, 20, 20, 20])
         ]
         Mycelia.write_fastq(records = recs, filename = fastq_path)
 
@@ -476,7 +489,8 @@ Test.@testset "FASTX Utilities" begin
         temp_dir = mktempdir()
         fastq_path = joinpath(temp_dir, "stream.fastq")
         recs = [
-            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+            30, 30, 30, 30])
         ]
         Mycelia.write_fastq(records = recs, filename = fastq_path)
 
