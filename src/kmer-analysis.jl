@@ -323,12 +323,9 @@ Counts k-mer occurrences in a FASTA file, considering both forward and reverse c
 function fasta_to_reference_kmer_counts(; kmer_type, fasta)
     kmer_counts = Dict{kmer_type, Int}()
     for record in Mycelia.open_fastx(fasta)
-        record_sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
-        forward_counts = StatsBase.countmap(kmer
-        for (i, kmer) in Kmers.EveryKmer{kmer_type}(record_sequence))
-        reverse_counts = StatsBase.countmap(kmer
-        for (i, kmer) in
-            Kmers.EveryKmer{kmer_type}(BioSequences.reverse_complement(record_sequence)))
+        record_sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        forward_counts = count_kmers(kmer_type, record_sequence)
+        reverse_counts = count_kmers(kmer_type, BioSequences.reverse_complement(record_sequence))
         record_counts = merge(+, forward_counts, reverse_counts)
         merge!(+, kmer_counts, record_counts)
     end
@@ -707,8 +704,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     # canonical_kmers = Set{kmer_type}()
     canonical_kmer_counts = Dict{kmer_type, Int}()
 
-    @show kmer_type
-    k = Kmers.ksize(Kmers.kmertype(kmer_type))
+    k = Kmers.ksize(kmer_type)
 
     max_possible_kmers = determine_max_canonical_kmers(k, DNA_ALPHABET)
 
@@ -739,7 +735,8 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}, kmer
     for fastx in fastxs
         for record in open_fastx(fastx)
             record_sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
-            for (index, kmer) in Kmers.EveryKmer{kmer_type}(record_sequence)
+            for index in 1:(length(record_sequence) - k + 1)
+                kmer = kmer_type(record_sequence[index:(index + k - 1)])
                 canonical_kmer = BioSequences.canonical(kmer)
                 if haskey(canonical_kmer_counts, canonical_kmer)
                     canonical_kmer_counts[canonical_kmer] += 1
@@ -803,7 +800,7 @@ function assess_dnamer_saturation(fastxs::AbstractVector{<:AbstractString}; powe
     minimum_saturation = Inf
     midpoint = Inf
     for k in ks
-        kmer_type = Kmers.kmertype(Kmers.Kmer{BioSequences.DNAAlphabet{4}, k})
+        kmer_type = Kmers.DNAKmer{k}
         sampling_points, kmer_counts,
         hit_eof = assess_dnamer_saturation(fastxs, kmer_type, kmers_to_assess = kmers_to_assess, power = power)
         @show sampling_points, kmer_counts, hit_eof
