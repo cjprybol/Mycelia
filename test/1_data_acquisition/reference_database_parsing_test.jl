@@ -1,6 +1,7 @@
 import Test
 import Dates
 import Logging
+import Sockets
 import Mycelia
 
 @eval Mycelia begin
@@ -44,6 +45,85 @@ function make_test_blastdb(dir::AbstractString; dbtype::AbstractString)
 
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(source_path) -dbtype $(dbtype) -parse_seqids -out $(db_path)`)
     return db_path
+end
+
+function reserve_local_port()
+    server = Sockets.listen(Sockets.InetAddr(parse(Sockets.IPAddr, "127.0.0.1"), 0))
+    port = last(Sockets.getsockname(server))
+    close(server)
+    return port
+end
+
+function make_test_tarball_bytes(files::Dict{String, String})
+    mktempdir() do dir
+        payload_dir = joinpath(dir, "payload")
+        mkpath(payload_dir)
+        for (relative_path, contents) in files
+            output_path = joinpath(payload_dir, relative_path)
+            mkpath(dirname(output_path))
+            write(output_path, contents)
+        end
+        archive_path = joinpath(dir, "payload.tar.gz")
+        run(`tar -czf $(archive_path) -C $(payload_dir) .`)
+        return read(archive_path)
+    end
+end
+
+function split_bytes(payload::Vector{UInt8}; chunks::Int = 2)
+    chunk_count = max(1, chunks)
+    chunk_size = cld(length(payload), chunk_count)
+    return [
+        payload[start_index:min(start_index + chunk_size - 1, length(payload))]
+        for start_index in 1:chunk_size:length(payload)
+    ]
+end
+
+function start_un_test_server(file_map::Dict{String, Vector{UInt8}})
+    port = reserve_local_port()
+    base_url = "http://127.0.0.1:$(port)"
+
+    function make_response(status::Integer, body = UInt8[]; headers = Pair{String, String}[])
+        response_headers = ["Connection" => "close"]
+        append!(response_headers, headers)
+        return Mycelia.HTTP.Response(status, response_headers, body)
+    end
+
+    function handler(request)
+        path = String(request.target)
+
+        if path == "/redirect-start"
+            return make_response(302; headers = ["Location" => "$(base_url)/redirect-target"])
+        elseif path == "/redirect-target"
+            return make_response(200, "redirected")
+        elseif path == "/redirect-loop"
+            return make_response(302; headers = ["Location" => "$(base_url)/redirect-loop"])
+        elseif path == "/redirect-no-location"
+            return make_response(302)
+        elseif path == "/unexpected-status"
+            return make_response(500, "server error")
+        elseif path == "/range-fallback"
+            if request.method == "HEAD"
+                return make_response(405)
+            end
+            return make_response(206, file_map[path][1:min(length(file_map[path]), 1)])
+        elseif path == "/forbidden-fallback"
+            return make_response(403)
+        end
+
+        if !haskey(file_map, path)
+            return make_response(404, "missing")
+        end
+
+        payload = file_map[path]
+        if request.method == "HEAD"
+            return make_response(200; headers = ["Content-Length" => string(length(payload))])
+        end
+
+        return make_response(200, payload)
+    end
+
+    server = Mycelia.HTTP.serve!(handler, "127.0.0.1", port)
+    return (server = server, base_url = base_url)
 end
 
 Test.@testset "Reference Database Parsing" begin
@@ -775,6 +855,120 @@ Test.@testset "Reference Database Parsing" begin
                     taxids = [0]
                 )
             end
+        end
+    end
+
+    Test.@testset "UN download helper coverage" begin
+        split_archive = make_test_tarball_bytes(Dict("split/archive.txt" => "split archive contents"))
+        direct_archive = make_test_tarball_bytes(Dict("direct/archive.txt" => "direct archive contents"))
+        testset_archive = make_test_tarball_bytes(Dict("testsets/sample.en" => "testset contents"))
+        split_archive_parts = split_bytes(split_archive)
+
+        server_files = Dict(
+            "/download.txt" => Vector{UInt8}(codeunits("downloaded via helper")),
+            "/range-fallback" => Vector{UInt8}(codeunits("range fallback")),
+            "/forbidden-fallback" => Vector{UInt8}(codeunits("forbidden fallback")),
+            "/UNv1.0.en-fr.tar.gz.00" => split_archive_parts[1],
+            "/UNv1.0.en-fr.tar.gz.01" => split_archive_parts[2],
+            "/direct.tar.gz" => direct_archive,
+            "/UNv1.0.testsets.tar.gz" => testset_archive
+        )
+
+        server = start_un_test_server(server_files)
+        try
+            redirected_response = Mycelia._un_request("$(server.base_url)/redirect-start", "GET")
+            Test.@test redirected_response.status == 200
+            Test.@test String(redirected_response.body) == "redirected"
+
+            Test.@test_throws ArgumentError Mycelia._un_request(
+                "$(server.base_url)/redirect-no-location",
+                "GET"
+            )
+            Test.@test_throws ErrorException Mycelia._un_request(
+                "$(server.base_url)/redirect-loop",
+                "GET";
+                max_redirects = 1
+            )
+
+            Test.@test Mycelia._un_part_exists("$(server.base_url)/download.txt")
+            Test.@test !Mycelia._un_part_exists("$(server.base_url)/missing.txt")
+            Test.@test Mycelia._un_part_exists("$(server.base_url)/range-fallback")
+            Test.@test Mycelia._un_part_exists("$(server.base_url)/forbidden-fallback")
+            Test.@test_throws ErrorException Mycelia._un_part_exists("$(server.base_url)/unexpected-status")
+
+            mktempdir() do dir
+                downloaded_path = joinpath(dir, "download.txt")
+                Test.@test Mycelia._un_download(
+                    "$(server.base_url)/download.txt",
+                    downloaded_path
+                ) == downloaded_path
+                Test.@test read(downloaded_path, String) == "downloaded via helper"
+
+                cached_archive_dir = joinpath(dir, "cached")
+                mkpath(cached_archive_dir)
+                cached_archive_path = joinpath(cached_archive_dir, "cached.tar.gz")
+                write(cached_archive_path, direct_archive)
+                cached_result = Mycelia._download_and_extract_split_archive(
+                    "cached.tar.gz",
+                    server.base_url,
+                    cached_archive_dir
+                )
+                Test.@test cached_result == cached_archive_dir
+                Test.@test read(
+                    joinpath(cached_archive_dir, "direct", "archive.txt"),
+                    String
+                ) == "direct archive contents"
+                Test.@test isfile(cached_archive_path)
+
+                split_outdir = joinpath(dir, "split")
+                split_result = Mycelia._download_and_extract_split_archive(
+                    "UNv1.0.en-fr.tar.gz",
+                    server.base_url,
+                    split_outdir
+                )
+                Test.@test split_result == split_outdir
+                Test.@test read(joinpath(split_outdir, "split", "archive.txt"), String) ==
+                    "split archive contents"
+                Test.@test !isfile(joinpath(split_outdir, "UNv1.0.en-fr.tar.gz"))
+                Test.@test !isfile(joinpath(split_outdir, "UNv1.0.en-fr.tar.gz.00"))
+                Test.@test !isfile(joinpath(split_outdir, "UNv1.0.en-fr.tar.gz.01"))
+
+                direct_outdir = joinpath(dir, "direct")
+                direct_result = Mycelia._download_and_extract_split_archive(
+                    "direct.tar.gz",
+                    server.base_url,
+                    direct_outdir
+                )
+                Test.@test direct_result == direct_outdir
+                Test.@test read(joinpath(direct_outdir, "direct", "archive.txt"), String) ==
+                    "direct archive contents"
+                Test.@test !isfile(joinpath(direct_outdir, "direct.tar.gz"))
+
+                Test.@test_throws ErrorException Mycelia._download_and_extract_split_archive(
+                    "missing.tar.gz",
+                    server.base_url,
+                    joinpath(dir, "missing")
+                )
+
+                corpus_dir = Mycelia.download_un_parallel_corpus(
+                    outdir = dir,
+                    subsets = ["en-fr"],
+                    base_url = "$(server.base_url)/"
+                )
+                Test.@test corpus_dir == joinpath(dir, "un_corpus")
+                Test.@test read(joinpath(corpus_dir, "split", "archive.txt"), String) ==
+                    "split archive contents"
+
+                testset_dir = Mycelia.download_un_parallel_corpus_testset(
+                    outdir = dir,
+                    base_url = "$(server.base_url)/"
+                )
+                Test.@test testset_dir == joinpath(dir, "un_corpus_testsets")
+                Test.@test read(joinpath(testset_dir, "testsets", "sample.en"), String) ==
+                    "testset contents"
+            end
+        finally
+            Mycelia.HTTP.forceclose(server.server)
         end
     end
 end
