@@ -4,24 +4,42 @@
 # Provides greedy sequence error correction using k-mer graph structure.
 
 """
-    hamming_distance(s1::AbstractString, s2::AbstractString)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-Compute Hamming distance between two strings of equal length.
+Compute the number of mismatched character positions between two strings.
+
+# Arguments
+- `s1::AbstractString`: First string to compare.
+- `s2::AbstractString`: Second string to compare.
 
 # Returns
-- `Int`: Number of positions where characters differ
+- `Int`: Number of zipped character pairs whose values differ.
+
+# Example
+```julia
+distance = Mycelia.Rhizomorph.hamming_distance("ABC", "ABD")
+```
 """
 function hamming_distance(s1::AbstractString, s2::AbstractString)
     return sum(c1 != c2 for (c1, c2) in zip(s1, s2))
 end
 
 """
-    extract_kmers(seq::AbstractString, k::Int)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Extract all k-mers from a sequence using a sliding window.
 
+# Arguments
+- `seq::AbstractString`: Input sequence to scan.
+- `k::Int`: Length of each k-mer window.
+
 # Returns
-- `Vector{String}`: K-mers in order of occurrence
+- `Vector{String}`: K-mers in order of occurrence. Returns an empty vector when `k > length(seq)`.
+
+# Example
+```julia
+kmers = Mycelia.Rhizomorph.extract_kmers("ABCDE", 3)
+```
 """
 function extract_kmers(seq::AbstractString, k::Int)
     s = string(seq)
@@ -29,7 +47,7 @@ function extract_kmers(seq::AbstractString, k::Int)
 end
 
 """
-    correct_sequence_greedy(query, k, kmer_counts, edge_counts)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Greedy error correction using k-mer graph structure.
 
@@ -44,6 +62,18 @@ the previous corrected k-mer, allowing single-substitution corrections.
 
 # Returns
 - `Tuple{String, Vector{Int}}`: (corrected sequence, indices of corrected k-mer positions)
+
+# Example
+```julia
+kmer_counts = Dict("ABC" => 3, "BCD" => 3, "CDE" => 3)
+edge_counts = Dict(("ABC", "BCD") => 2, ("BCD", "CDE") => 2)
+corrected, corrected_positions = Mycelia.Rhizomorph.correct_sequence_greedy(
+    "ABXDE",
+    3,
+    kmer_counts,
+    edge_counts,
+)
+```
 """
 function correct_sequence_greedy(
         query::AbstractString,
@@ -109,10 +139,12 @@ function correct_sequence_greedy(
 end
 
 """
-    correct_sequence_greedy(query, k, graph)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Greedy error correction using a Rhizomorph MetaGraph.
-Extracts k-mer counts and edge weights from the graph structure.
+
+Extracts k-mer counts and edge weights from the graph structure before
+delegating to the dictionary-backed method.
 
 # Arguments
 - `query::AbstractString`: Sequence to correct
@@ -121,6 +153,15 @@ Extracts k-mer counts and edge weights from the graph structure.
 
 # Returns
 - `Tuple{String, Vector{Int}}`: (corrected sequence, indices of corrected k-mer positions)
+
+# Example
+```julia
+corrected, corrected_positions = Mycelia.Rhizomorph.correct_sequence_greedy(
+    "ACGTA",
+    3,
+    graph,
+)
+```
 """
 function correct_sequence_greedy(
         query::AbstractString,

@@ -42,6 +42,7 @@ import ..Mycelia
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
 import DataStructures
+import DocStringExtensions
 import FASTX
 import Graphs
 import Kmers
