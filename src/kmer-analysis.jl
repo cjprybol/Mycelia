@@ -323,12 +323,9 @@ Counts k-mer occurrences in a FASTA file, considering both forward and reverse c
 function fasta_to_reference_kmer_counts(; kmer_type, fasta)
     kmer_counts = Dict{kmer_type, Int}()
     for record in Mycelia.open_fastx(fasta)
-        record_sequence = BioSequences.LongDNA{2}(FASTX.sequence(record))
-        forward_counts = StatsBase.countmap(kmer
-        for (i, kmer) in Kmers.EveryKmer{kmer_type}(record_sequence))
-        reverse_counts = StatsBase.countmap(kmer
-        for (i, kmer) in
-            Kmers.EveryKmer{kmer_type}(BioSequences.reverse_complement(record_sequence)))
+        record_sequence = FASTX.sequence(BioSequences.LongDNA{4}, record)
+        forward_counts = count_kmers(kmer_type, record_sequence)
+        reverse_counts = count_kmers(kmer_type, BioSequences.reverse_complement(record_sequence))
         record_counts = merge(+, forward_counts, reverse_counts)
         merge!(+, kmer_counts, record_counts)
     end
