@@ -153,6 +153,31 @@ Test.@testset "FASTX Utilities" begin
         Test.@test parsed["human_readable_id"] == "sample"
     end
 
+    Test.@testset "fastx2normalized_jsonl_stream progress and truncation" begin
+        temp_dir = mktempdir()
+        fasta_path = joinpath(temp_dir, "streaming_input.fna")
+        records = [
+            Mycelia.FASTX.FASTA.Record("seq1", "ATGC"),
+            Mycelia.FASTX.FASTA.Record("seq2", "GCTA")
+        ]
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
+
+        progress_io = IOBuffer()
+        out_path = Test.@test_logs (:warn, r"exceeds 16 characters") Mycelia.fastx2normalized_jsonl_stream(
+            fastx_path = fasta_path,
+            human_readable_id = "identifier_that_is_far_too_long",
+            force_truncate = true,
+            show_progress = true,
+            progress_every = 1,
+            progress_output = progress_io)
+        Test.@test Mycelia.nonempty_file(out_path)
+
+        io = Mycelia.CodecZlib.GzipDecompressorStream(open(out_path, "r"))
+        parsed = Mycelia.JSON.parse(readline(io))
+        close(io)
+        Test.@test length(parsed["human_readable_id"]) == 16
+    end
+
     Test.@testset "_fmt_hms helper" begin
         Test.@test Mycelia._fmt_hms(0) == "00:00:00"
         Test.@test Mycelia._fmt_hms(-5) == "00:00:00"
@@ -227,6 +252,41 @@ Test.@testset "FASTX Utilities" begin
         Test.@test isfile(out_fasta3)
     end
 
+    Test.@testset "normalized_table2fastx FASTQ gzip and deduplication" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "input.fastq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "GCTA", quality_scores = [
+                20, 20, 20, 20])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        table = Mycelia.fastx2normalized_table(fastq_path; human_readable_id = "fqdedup")
+        table = Mycelia.DataFrames.vcat(table, table[1:1, :])
+
+        out_fastq = Test.@test_logs (:warn, r"duplicate records detected") Mycelia.normalized_table2fastx(
+            table; output_dir = temp_dir, output_basename = "deduped", gzip = true,
+            deduplicate = true, verbose = true, force = true)
+        Test.@test endswith(out_fastq, ".fq.gz")
+        Test.@test Mycelia.count_records(out_fastq) == 2
+    end
+
+    Test.@testset "normalized_table2fastx genome_identifier fallback" begin
+        temp_dir = mktempdir()
+        table = Mycelia.DataFrames.DataFrame(
+            genome_identifier = ["genome_alpha", "genome_alpha"],
+            sequence_identifier = ["seq1", "seq2"],
+            record_sequence = ["ATGC", "GCTA"],
+            record_quality = [missing, missing]
+        )
+
+        out_fasta = Mycelia.normalized_table2fastx(table; output_dir = temp_dir, force = true)
+        Test.@test endswith(out_fasta, "genome_alpha.fna")
+        Test.@test Mycelia.count_records(out_fasta) == 2
+    end
+
     Test.@testset "split_fasta_by_record" begin
         temp_dir = mktempdir()
         fasta_path = joinpath(temp_dir, "multi.fna")
@@ -250,6 +310,23 @@ Test.@testset "FASTX Utilities" begin
         # Re-run should skip existing files (force=false)
         id_map2 = Mycelia.split_fasta_by_record(fasta_in = fasta_path, outdir = outdir)
         Test.@test id_map2 == id_map
+    end
+
+    Test.@testset "split_fasta_by_record gzip and sanitization" begin
+        temp_dir = mktempdir()
+        fasta_path = joinpath(temp_dir, "special_ids.fna")
+        records = [
+            Mycelia.FASTX.FASTA.Record("contig/1-alpha", "ATGC"),
+            Mycelia.FASTX.FASTA.Record("contig.2-beta", "GCTA")
+        ]
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
+
+        outdir = joinpath(temp_dir, "split_gz")
+        id_map = Mycelia.split_fasta_by_record(
+            fasta_in = fasta_path, outdir = outdir, gzip = true, force = true)
+        Test.@test haskey(id_map, "contig_1-alpha")
+        Test.@test isfile(joinpath(outdir, "contig_1-alpha.fna.gz"))
+        Test.@test isfile(joinpath(outdir, "contig.2-beta.fna.gz"))
     end
 
     Test.@testset "subset_fasta_by_ids" begin
@@ -286,6 +363,22 @@ Test.@testset "FASTX Utilities" begin
         Test.@test result3 == out_path
     end
 
+    Test.@testset "subset_fasta_by_ids gzipped output" begin
+        temp_dir = mktempdir()
+        fasta_path = joinpath(temp_dir, "all.fna")
+        records = [
+            Mycelia.FASTX.FASTA.Record("s1", "AAAA"),
+            Mycelia.FASTX.FASTA.Record("s2", "CCCC")
+        ]
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
+
+        out_path = joinpath(temp_dir, "subset.fna.gz")
+        result = Mycelia.subset_fasta_by_ids(
+            fasta_in = fasta_path, ids = ["s2"], fasta_out = out_path, force = true)
+        Test.@test result == out_path
+        Test.@test Mycelia.count_records(result) == 1
+    end
+
     Test.@testset "concatenate_fastq_files" begin
         temp_dir = mktempdir()
         fq1 = joinpath(temp_dir, "a.fastq")
@@ -309,6 +402,26 @@ Test.@testset "FASTX Utilities" begin
         result2 = Mycelia.concatenate_fastq_files(
             fastq_files = [fq1, fq2], output_fastq = concat_out)
         Test.@test result2 == concat_out
+    end
+
+    Test.@testset "concatenate_fastq_files gzipped output" begin
+        temp_dir = mktempdir()
+        fq1 = joinpath(temp_dir, "a.fastq")
+        fq2 = joinpath(temp_dir, "b.fastq")
+        Mycelia.write_fastq(
+            records = [Mycelia.fastq_record(
+                identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
+            filename = fq1)
+        Mycelia.write_fastq(
+            records = [Mycelia.fastq_record(
+                identifier = "r2", sequence = "GCTA", quality_scores = [20, 20, 20, 20])],
+            filename = fq2)
+
+        concat_out = joinpath(temp_dir, "concat.fastq.gz")
+        result = Mycelia.concatenate_fastq_files(
+            fastq_files = [fq1, fq2], output_fastq = concat_out, force = true)
+        Test.@test result == concat_out
+        Test.@test Mycelia.count_records(concat_out) == 2
     end
 
     Test.@testset "create_sequence_hash dispatches" begin
@@ -338,6 +451,16 @@ Test.@testset "FASTX Utilities" begin
 
         # Empty sequence
         Test.@test_throws ErrorException Mycelia.create_sequence_hash("")
+    end
+
+    Test.@testset "create_sequence_hash kmer dispatch and base58 case handling" begin
+        dna_seq = Mycelia.BioSequences.LongDNA{4}("ATCG")
+        kmer = Mycelia.Kmers.DNAKmer{4}(dna_seq)
+        Test.@test Mycelia.create_sequence_hash(kmer; encoded_length = 16) ==
+                   Mycelia.create_sequence_hash("ATCG"; encoded_length = 16)
+
+        Test.@test Mycelia.create_base58_hash("atgc"; normalize_case = false) !=
+                   Mycelia.create_base58_hash("ATGC"; normalize_case = false)
     end
 
     Test.@testset "create_base58_hash" begin
@@ -406,6 +529,18 @@ Test.@testset "FASTX Utilities" begin
         ]
         Mycelia.write_fastq(records = recs, filename = gz_path)
         Test.@test Mycelia.count_records(gz_path) == 1
+    end
+
+    Test.@testset "fastq_record caps quality scores and open_fastx validates extension" begin
+        record = Mycelia.fastq_record(
+            identifier = "cap", sequence = "ATGC", quality_scores = [120, 94, 93, 10])
+        Test.@test Mycelia.get_phred_scores(record) == UInt8[93, 93, 93, 10]
+
+        bad_path = tempname() * ".txt"
+        open(bad_path, "w") do io
+            write(io, "not fastx")
+        end
+        Test.@test_throws ErrorException Mycelia.open_fastx(bad_path)
     end
 
     Test.@testset "total_fasta_size" begin
