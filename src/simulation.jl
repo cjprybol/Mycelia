@@ -1037,9 +1037,12 @@ See also: `simulate_nanopore_reads`, `simulate_nearly_perfect_long_reads`, `simu
 """
 function simulate_pacbio_reads(; fasta,
         quantity,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false,
         seed::Union{Nothing, Int} = nothing)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         cmd_args = ["badread", "simulate", "--error_model", "pacbio2021",
@@ -1083,9 +1086,12 @@ See also: `simulate_pacbio_reads`, `simulate_nanopore_r941_reads`, `simulate_bad
 """
 function simulate_nanopore_reads(; fasta,
         quantity,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false,
         seed::Union{Nothing, Int} = nothing)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         cmd_args = ["badread", "simulate", "--reference", fasta, "--quantity", quantity]
@@ -1132,8 +1138,11 @@ function simulate_nearly_perfect_long_reads(; fasta,
         quantity,
         length_mean::Int = 40000,
         length_sd::Int = 20000,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.perfect.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         if quiet
@@ -1203,8 +1212,11 @@ See also: `simulate_nanopore_reads`, `simulate_pacbio_reads`, `simulate_badread_
 """
 function simulate_nanopore_r941_reads(; fasta,
         quantity,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r941.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         if quiet
@@ -1252,8 +1264,11 @@ See also: `simulate_pretty_good_reads`, `simulate_nanopore_reads`, `simulate_bad
 """
 function simulate_very_bad_reads(; fasta,
         quantity,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.very_bad.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         if quiet
@@ -1301,8 +1316,11 @@ See also: `simulate_very_bad_reads`, `simulate_nearly_perfect_long_reads`, `simu
 """
 function simulate_pretty_good_reads(; fasta,
         quantity,
-        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz"),
+        outfile::String = "",
         quiet = false)
+    if isempty(outfile)
+        outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.pretty_good.$(quantity).fq.gz")
+    end
     if !isfile(outfile) || (filesize(outfile) == 0)
         Mycelia.add_bioconda_env("badread")
         if quiet

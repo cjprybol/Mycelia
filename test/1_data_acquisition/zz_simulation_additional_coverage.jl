@@ -242,6 +242,56 @@ Test.@testset "Simulation Additional Coverage" begin
                 Test.@test isfile(nanopore)
                 Test.@test endswith(nanopore, ".badread.nanopore_r10.4x.fq.gz")
 
+                empty_outfile_cases = [
+                    (
+                        fn = Mycelia.simulate_pacbio_reads,
+                        quantity = "7x",
+                        suffix = ".badread.pacbio_hifi.7x.fq.gz",
+                        kwargs = (; seed = 12, quiet = true)
+                    ),
+                    (
+                        fn = Mycelia.simulate_nanopore_reads,
+                        quantity = "8x",
+                        suffix = ".badread.nanopore_r10.8x.fq.gz",
+                        kwargs = (; seed = 13, quiet = false)
+                    ),
+                    (
+                        fn = Mycelia.simulate_nearly_perfect_long_reads,
+                        quantity = "9x",
+                        suffix = ".badread.perfect.9x.fq.gz",
+                        kwargs = (; length_mean = 15000, length_sd = 2000, quiet = true)
+                    ),
+                    (
+                        fn = Mycelia.simulate_nanopore_r941_reads,
+                        quantity = "10x",
+                        suffix = ".badread.nanopore_r941.10x.fq.gz",
+                        kwargs = (; quiet = false)
+                    ),
+                    (
+                        fn = Mycelia.simulate_very_bad_reads,
+                        quantity = "11x",
+                        suffix = ".badread.very_bad.11x.fq.gz",
+                        kwargs = (; quiet = true)
+                    ),
+                    (
+                        fn = Mycelia.simulate_pretty_good_reads,
+                        quantity = "12x",
+                        suffix = ".badread.pretty_good.12x.fq.gz",
+                        kwargs = (; quiet = false)
+                    )
+                ]
+
+                for case in empty_outfile_cases
+                    generated = case.fn(;
+                        fasta = fasta,
+                        quantity = case.quantity,
+                        outfile = "",
+                        case.kwargs...
+                    )
+                    Test.@test generated == replace(fasta, Mycelia.FASTA_REGEX => case.suffix)
+                    Test.@test isfile(generated)
+                end
+
                 nearly_perfect = Mycelia.simulate_nearly_perfect_long_reads(
                     fasta = fasta,
                     quantity = "3x",
