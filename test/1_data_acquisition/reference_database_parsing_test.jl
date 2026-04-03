@@ -145,23 +145,16 @@ end
 
 function with_fake_conda_runner(f::Function)
     mktempdir() do dir
-        runner_path = Mycelia.CONDA_RUNNER
-        backup_path = joinpath(dir, "conda-runner-backup")
-        runner_existed = isfile(runner_path)
-        if runner_existed
-            cp(runner_path, backup_path; force = true)
-        else
-            mkpath(dirname(runner_path))
-        end
-        write_fake_conda_runner(runner_path, dir)
+        # Use PATH-based isolation instead of overwriting Mycelia.CONDA_RUNNER.
+        # Create a fake conda script in the temp dir and prepend to PATH so
+        # the module finds our fake before the real one.
+        fake_conda = write_fake_conda_runner(joinpath(dir, "conda"), dir)
+        original_path = get(ENV, "PATH", "")
+        ENV["PATH"] = dir * ":" * original_path
         try
             return f(dir)
         finally
-            if runner_existed
-                mv(backup_path, runner_path; force = true)
-            else
-                rm(runner_path; force = true)
-            end
+            ENV["PATH"] = original_path
         end
     end
 end
@@ -203,8 +196,10 @@ Test.@testset "Reference Database Parsing" begin
                     outfile = entries_outfile,
                     max_cores = 0
                 ) == entries_outfile
-                Test.@test read(entries_outfile, String) == ">seqA\nSEQUENCE\n>seqB\nSEQUENCE\n"
-                Test.@test read(joinpath(capture_dir, "entries_capture.txt"), String) == "seqA\nseqB\n"
+                Test.@test read(entries_outfile, String) ==
+                           ">seqA\nSEQUENCE\n>seqB\nSEQUENCE\n"
+                Test.@test read(joinpath(capture_dir, "entries_capture.txt"), String) ==
+                           "seqA\nseqB\n"
                 Test.@test !isfile(strip(read(joinpath(capture_dir, "entries_path.txt"), String)))
 
                 taxids_outfile = joinpath(dir, "taxids.faa.gz")
@@ -214,8 +209,10 @@ Test.@testset "Reference Database Parsing" begin
                     outfile = taxids_outfile,
                     max_cores = typemax(Int)
                 ) == taxids_outfile
-                Test.@test read(taxids_outfile, String) == ">taxid:2\nSEQUENCE\n>taxid:2157\nSEQUENCE\n"
-                Test.@test read(joinpath(capture_dir, "taxids_capture.txt"), String) == "2\n2157\n"
+                Test.@test read(taxids_outfile, String) ==
+                           ">taxid:2\nSEQUENCE\n>taxid:2157\nSEQUENCE\n"
+                Test.@test read(joinpath(capture_dir, "taxids_capture.txt"), String) ==
+                           "2\n2157\n"
                 Test.@test !isfile(strip(read(joinpath(capture_dir, "taxids_path.txt"), String)))
             end
 

@@ -44,6 +44,24 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test counts[Kmers.DNAKmer{2}("CA")] == 1
         end
 
+        Test.@testset "Reference k-mer counting with ambiguous bases" begin
+            fasta_ambig = joinpath(temp_dir, "reference_ambig.fasta")
+            open(fasta_ambig, "w") do io
+                FASTX.write(io, FASTX.FASTA.Record("ref", "ATNGC"))
+            end
+
+            counts_ambig = Mycelia.fasta_to_reference_kmer_counts(
+                kmer_type = Kmers.DNAKmer{2},
+                fasta = fasta_ambig
+            )
+
+            # Unambiguous k-mers get counted (forward + reverse complement)
+            Test.@test counts_ambig[Kmers.DNAKmer{2}("AT")] == 2
+            Test.@test counts_ambig[Kmers.DNAKmer{2}("GC")] == 2
+            # K-mers containing N are skipped by UnambiguousDNAMers
+            Test.@test get(counts_ambig, Kmers.DNAKmer{2}("TG"), 0) == 0
+        end
+
         Test.@testset "Sequence count tables" begin
             dna_sequences = [
                 BioSequences.LongDNA{4}("ATGC"),
@@ -149,14 +167,18 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test aa_result["total_kmers"] == 3
             Test.@test aa_result["estimated_genome_size"] == 2
 
-            fallback = Mycelia.adaptive_kmer_selection((
-                coverage_estimates = Dict(3 => 1.0, 5 => 2.0, 7 => 3.0),
-            ); target_coverage = 10.0)
+            fallback = Mycelia.adaptive_kmer_selection(
+                (
+                    coverage_estimates = Dict(3 => 1.0, 5 => 2.0, 7 => 3.0),
+                );
+                target_coverage = 10.0)
             Test.@test fallback == [7]
 
-            top3 = Mycelia.adaptive_kmer_selection((
-                coverage_estimates = Dict(3 => 9.0, 5 => 10.5, 7 => 11.0, 11 => 9.8),
-            ); target_coverage = 10.0)
+            top3 = Mycelia.adaptive_kmer_selection(
+                (
+                    coverage_estimates = Dict(3 => 9.0, 5 => 10.5, 7 => 11.0, 11 => 9.8),
+                );
+                target_coverage = 10.0)
             Test.@test length(top3) == 3
             Test.@test issorted(top3)
             Test.@test all(k -> k in (3, 5, 7, 11), top3)
