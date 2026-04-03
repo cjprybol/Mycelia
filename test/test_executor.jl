@@ -158,3 +158,191 @@ Test.@testset "SLURM Wrapper Executor Support" begin
     Test.@test length(collector.jobs) == 1
     Test.@test collector.jobs[1].site == :scg
 end
+
+Test.@testset "SLURM Wrapper Argument Construction" begin
+    tmpdir = mktempdir()
+
+    withenv(
+        "SLURM_MAIL_USER" => "env@example.org",
+        "LRC_ACCOUNT" => "pc_project",
+        "SCG_ACCOUNT" => "PI_EXAMPLE",
+        "NERSC_ACCOUNT" => "m1234_g",
+    ) do
+        lawrencium_exec = Mycelia.CollectExecutor()
+        lawrencium_idx = Mycelia.lawrencium_sbatch(
+            job_name = "lawrencium-env",
+            cmd = "echo lawrencium",
+            logdir = tmpdir,
+            executor = lawrencium_exec
+        )
+        Test.@test lawrencium_idx == 1
+        Test.@test lawrencium_exec.jobs[1].site == :lawrencium
+        Test.@test lawrencium_exec.jobs[1].account == "pc_project"
+        Test.@test lawrencium_exec.jobs[1].mail_user == "env@example.org"
+        Test.@test lawrencium_exec.jobs[1].mail_type == ["ALL"]
+        Test.@test lawrencium_exec.jobs[1].output_path == joinpath(tmpdir, "%j.%x.out")
+        Test.@test lawrencium_exec.jobs[1].error_path == joinpath(tmpdir, "%j.%x.err")
+
+        scg_result = Mycelia.scg_sbatch(
+            job_name = "scg-dry-run",
+            cmd = "echo scg",
+            logdir = tmpdir,
+            executor = :slurm,
+            dry_run = true
+        )
+        Test.@test scg_result isa Mycelia.SubmitResult
+        Test.@test scg_result.ok
+        Test.@test scg_result.dry_run
+        Test.@test scg_result.backend == :sbatch
+        Test.@test occursin("#SBATCH --partition=nih_s10", something(scg_result.artifact_text, ""))
+        Test.@test occursin("--mail-user=env@example.org", something(scg_result.artifact_text, ""))
+
+        nersc_exec = Mycelia.DryRunExecutor()
+        nersc_result = Mycelia.nersc_sbatch(
+            job_name = "nersc-vector-cmd",
+            mail_user = "nersc@example.org",
+            cmd = ["module load julia", "srun julia --project=. workflow.jl"],
+            logdir = tmpdir,
+            scriptdir = tmpdir,
+            qos = "regular",
+            constraint = "gpu",
+            gpus_per_node = 1,
+            gpu_bind = "closest",
+            requeue = true,
+            executor = nersc_exec
+        )
+        Test.@test nersc_result isa Mycelia.SubmitResult
+        Test.@test nersc_result.ok
+        Test.@test length(nersc_exec.jobs) == 1
+        Test.@test length(nersc_exec.results) == 1
+        Test.@test nersc_exec.jobs[1].site == :nersc
+        Test.@test nersc_exec.jobs[1].cmd == "module load julia\nsrun julia --project=. workflow.jl"
+        Test.@test nersc_exec.jobs[1].account == "m1234_g"
+        Test.@test nersc_exec.jobs[1].gpus_per_node == 1
+        Test.@test nersc_exec.jobs[1].gpu_bind == "closest"
+        Test.@test nersc_exec.jobs[1].requeue
+        Test.@test occursin("#SBATCH --gpus-per-node=1", something(nersc_result.artifact_text, ""))
+        Test.@test occursin("#SBATCH --gpu-bind=closest", something(nersc_result.artifact_text, ""))
+
+        shared_exec = Mycelia.CollectExecutor()
+        shared_idx = Mycelia.nersc_sbatch_shared(
+            job_name = "nersc-shared",
+            mail_user = "shared@example.org",
+            cmd = "python batch.py",
+            logdir = tmpdir,
+            executor = shared_exec
+        )
+        Test.@test shared_idx == 1
+        Test.@test shared_exec.jobs[1].site == :nersc
+        Test.@test shared_exec.jobs[1].qos == "shared"
+        Test.@test shared_exec.jobs[1].account == "m1234_g"
+        Test.@test shared_exec.jobs[1].mail_user == "shared@example.org"
+    end
+end
+
+Test.@testset "SLURM Wrapper Dry-Run Submission Path" begin
+    tmpdir = mktempdir()
+
+    withenv(
+        "SLURM_MAIL_USER" => "env@example.org",
+        "LRC_ACCOUNT" => "pc_project",
+        "SCG_ACCOUNT" => "PI_EXAMPLE",
+        "NERSC_ACCOUNT" => "m1234_g",
+    ) do
+        Test.@test Mycelia.lawrencium_sbatch(
+            job_name = "lawrencium-submit-dry-run",
+            cmd = "echo lawrencium",
+            logdir = tmpdir,
+            dry_run = true
+        )
+
+        Test.@test Mycelia.scg_sbatch(
+            job_name = "scg-submit-dry-run",
+            cmd = "echo scg",
+            logdir = tmpdir,
+            dry_run = true
+        )
+
+        Test.@test Mycelia.nersc_sbatch(
+            job_name = "nersc-submit-dry-run",
+            mail_user = "nersc@example.org",
+            cmd = "python train.py",
+            logdir = tmpdir,
+            scriptdir = tmpdir,
+            qos = "regular",
+            constraint = "gpu",
+            gpus_per_node = 1,
+            dry_run = true
+        )
+    end
+end
+
+Test.@testset "Lovelace and submit_job dispatch" begin
+    tmpdir = mktempdir()
+    payload = joinpath(tmpdir, "payload.txt")
+
+    Test.@test Mycelia.lovelace_run(
+        cmd = "printf 'hello' > $payload",
+        logdir = tmpdir,
+        job_name = "lovelace-ok"
+    )
+    Test.@test isfile(payload)
+    Test.@test read(payload, String) == "hello"
+    Test.@test !isempty(filter(name -> occursin("lovelace-ok.out", name), readdir(tmpdir)))
+    Test.@test !Mycelia.lovelace_run(
+        cmd = "exit 1",
+        logdir = tmpdir,
+        job_name = "lovelace-fail"
+    )
+
+    withenv(
+        "SITE_TAG" => "scg",
+        "SLURM_MAIL_USER" => "env@example.org",
+        "LRC_ACCOUNT" => "pc_project",
+        "SCG_ACCOUNT" => "PI_EXAMPLE",
+        "NERSC_ACCOUNT" => "m1234_g",
+    ) do
+        env_dispatch_exec = Mycelia.CollectExecutor()
+        Test.@test Mycelia.submit_job(
+            job_name = "dispatch-default",
+            cmd = "echo default dispatch",
+            executor = env_dispatch_exec
+        ) == 1
+        Test.@test env_dispatch_exec.jobs[1].site == :scg
+
+        alias_dispatch_exec = Mycelia.CollectExecutor()
+        Test.@test Mycelia.submit_job(
+            site = "stanford_scg",
+            job_name = "dispatch-alias",
+            cmd = "echo alias dispatch",
+            executor = alias_dispatch_exec
+        ) == 1
+        Test.@test alias_dispatch_exec.jobs[1].site == :scg
+
+        lawrencium_dispatch_exec = Mycelia.CollectExecutor()
+        Test.@test Mycelia.submit_job(
+            site = "lawrencium",
+            job_name = "dispatch-lawrencium",
+            cmd = "echo lawrencium dispatch",
+            executor = lawrencium_dispatch_exec
+        ) == 1
+        Test.@test lawrencium_dispatch_exec.jobs[1].site == :lawrencium
+
+        nersc_dispatch_exec = Mycelia.CollectExecutor()
+        Test.@test Mycelia.submit_job(
+            site = "nersc",
+            job_name = "dispatch-nersc",
+            mail_user = "nersc@example.org",
+            cmd = "echo nersc dispatch",
+            constraint = "cpu",
+            executor = nersc_dispatch_exec
+        ) == 1
+        Test.@test nersc_dispatch_exec.jobs[1].site == :nersc
+    end
+
+    Test.@test_throws ErrorException Mycelia.submit_job(
+        site = "unknown-site",
+        job_name = "dispatch-unknown",
+        cmd = "echo nope"
+    )
+end
