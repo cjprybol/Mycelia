@@ -227,6 +227,7 @@ Test.@testset "Simulation Additional Coverage" begin
                 pacbio = Mycelia.simulate_pacbio_reads(
                     fasta = fasta,
                     quantity = "6x",
+                    outfile = "",
                     quiet = true,
                     seed = 22
                 )
@@ -236,6 +237,7 @@ Test.@testset "Simulation Additional Coverage" begin
                 nanopore = Mycelia.simulate_nanopore_reads(
                     fasta = fasta,
                     quantity = "4x",
+                    outfile = "",
                     quiet = false,
                     seed = 33
                 )
@@ -297,6 +299,7 @@ Test.@testset "Simulation Additional Coverage" begin
                     quantity = "3x",
                     length_mean = 12000,
                     length_sd = 3000,
+                    outfile = "",
                     quiet = true
                 )
                 Test.@test isfile(nearly_perfect)
@@ -305,6 +308,7 @@ Test.@testset "Simulation Additional Coverage" begin
                 nanopore_r941 = Mycelia.simulate_nanopore_r941_reads(
                     fasta = fasta,
                     quantity = "2x",
+                    outfile = "",
                     quiet = false
                 )
                 Test.@test isfile(nanopore_r941)
@@ -313,6 +317,7 @@ Test.@testset "Simulation Additional Coverage" begin
                 very_bad = Mycelia.simulate_very_bad_reads(
                     fasta = fasta,
                     quantity = "2x",
+                    outfile = "",
                     quiet = true
                 )
                 Test.@test isfile(very_bad)
@@ -321,6 +326,7 @@ Test.@testset "Simulation Additional Coverage" begin
                 pretty_good = Mycelia.simulate_pretty_good_reads(
                     fasta = fasta,
                     quantity = "2x",
+                    outfile = "",
                     quiet = false
                 )
                 Test.@test isfile(pretty_good)

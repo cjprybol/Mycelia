@@ -43,7 +43,26 @@ const COMMUNITY_CONCAT_CALLS = Ref{Vector{NamedTuple}}(NamedTuple[])
                 quiet = quiet
             )
         )
+        if read_count === nothing && coverage === nothing
+            error("Either `coverage` or `read_count` must be provided.")
+        end
+        if isempty(outbase)
+            if read_count !== nothing
+                outbase = "$(fasta).rcount_$(read_count).art"
+            else
+                outbase = "$(fasta).fcov_$(coverage)x.art"
+            end
+        end
         mkpath(dirname(outbase))
+        open(joinpath(dirname(outbase), "wrapper_calls.tsv"), "w") do io
+            println(io, join([
+                seqSys,
+                string(read_length),
+                paired ? "1" : "0",
+                coverage === nothing ? "" : string(coverage),
+                read_count === nothing ? "" : string(read_count)
+            ], '\t'))
+        end
         forward = paired ? outbase * "1.fq.gz" : outbase * ".fq.gz"
         write(forward, errfree ? "truth-forward" : "forward")
         reverse = nothing
@@ -68,9 +87,12 @@ const COMMUNITY_CONCAT_CALLS = Ref{Vector{NamedTuple}}(NamedTuple[])
 
     function simulate_nanopore_reads(; fasta,
             quantity,
-            outfile,
+            outfile::String = "",
             quiet = true,
             seed = current_unix_datetime())
+        if isempty(outfile)
+            outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.nanopore_r10.$(quantity).fq.gz")
+        end
         push!(
             Main.COMMUNITY_LONG_READ_CALLS[],
             (platform = :nanopore, fasta = fasta, quantity = quantity, outfile = outfile, quiet = quiet, seed = seed)
@@ -82,9 +104,12 @@ const COMMUNITY_CONCAT_CALLS = Ref{Vector{NamedTuple}}(NamedTuple[])
 
     function simulate_pacbio_reads(; fasta,
             quantity,
-            outfile,
+            outfile::String = "",
             quiet = true,
             seed = current_unix_datetime())
+        if isempty(outfile)
+            outfile = replace(fasta, Mycelia.FASTA_REGEX => ".badread.pacbio_hifi.$(quantity).fq.gz")
+        end
         push!(
             Main.COMMUNITY_LONG_READ_CALLS[],
             (platform = :pacbio_hifi, fasta = fasta, quantity = quantity, outfile = outfile, quiet = quiet, seed = seed)
