@@ -185,6 +185,41 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test channel_cmd isa Cmd
         Test.@test "$(channel)::$(pkg)" in channel_cmd.exec
     end
+
+    Test.@testset "VIBRANT database detection" begin
+        mktempdir() do tempdir
+            empty_db_dir = joinpath(tempdir, "empty")
+            mkpath(empty_db_dir)
+            Test.@test Mycelia._vibrant_databases_exist(empty_db_dir) == false
+        end
+
+        mktempdir() do tempdir
+            data_dir = joinpath(tempdir, "share", "vibrant-1.2.1", "db")
+            mkpath(joinpath(data_dir, "databases", "profile_names"))
+            mkpath(joinpath(data_dir, "files"))
+            write(joinpath(data_dir, "files", "VIBRANT_machine_model.sav"), "model")
+            write(joinpath(data_dir, "files", "VIBRANT_names.tsv"), "names")
+
+            Test.@test Mycelia._vibrant_databases_exist(data_dir) == false
+            Base.withenv("VIBRANT_DATA_PATH" => nothing) do
+                Test.@test Mycelia._vibrant_database_path("vibrant-missing") === nothing
+            end
+        end
+
+        mktempdir() do tempdir
+            env_prefix = joinpath(tempdir, "envs", "vibrant")
+            data_dir = joinpath(env_prefix, "share", "vibrant-1.2.1", "db")
+
+            for relpath in Mycelia.VIBRANT_REQUIRED_DATA_FILES
+                fullpath = joinpath(data_dir, relpath)
+                mkpath(dirname(fullpath))
+                write(fullpath, "present")
+            end
+
+            Test.@test Mycelia._vibrant_databases_exist(data_dir)
+            Test.@test Mycelia._vibrant_data_path_candidates_from_prefix(env_prefix) == [data_dir]
+        end
+    end
 end
 
 # Note: Actual conda operations are not tested here to avoid:
