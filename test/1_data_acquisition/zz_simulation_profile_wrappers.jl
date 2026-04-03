@@ -124,7 +124,7 @@ function with_profile_logging_conda_runner(f::Function)
 end
 
 function read_wrapper_call(logfile::AbstractString)
-    fields = split(strip(read(logfile, String)), '\t')
+    fields = split(chomp(read(logfile, String)), '\t'; keepempty = true)
     return (
         seqSys = fields[1],
         read_length = parse(Int, fields[2]),
