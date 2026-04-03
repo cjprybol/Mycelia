@@ -39,6 +39,7 @@ test/test-development.jl
 *.mmi
 *.arrow
 Manifest.toml
+!docs/Manifest.toml
 scratch*
 build/*
 package-lock.json
