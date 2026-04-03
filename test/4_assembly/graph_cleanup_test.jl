@@ -50,6 +50,7 @@ Test.@testset "Graph cleanup" begin
     Test.@test length(components) == 2
     Test.@test any(component -> Set(component) == Set([1, 2]), components)
     Test.@test any(component -> Set(component) == Set([3]), components)
+    Test.@test_throws ArgumentError Mycelia.get_node_neighbors(component_graph, 2, :sideways)
 end
 
 Test.@testset "assess_sequence_quality - DNA case handling" begin
