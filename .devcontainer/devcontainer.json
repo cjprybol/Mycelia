@@ -34,8 +34,18 @@
         },
         "ghcr.io/devcontainers/features/common-utils:2": {
             "installVim": true
-        }
+        },
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "./fleet-setup": {}
 	},
+    "containerEnv": {
+        "ANTHROPIC_API_KEY": "",
+        "CLAUDE_CODE_OAUTH_TOKEN": "",
+        "OPENAI_API_KEY": "",
+        "GEMINI_API_KEY": "",
+        "GH_TOKEN": ""
+    },
+    "overrideCommand": false,
     "waitFor": "postCreateCommand",
     // "updateContentCommand": "python3 -m pip install -r requirements.txt",
     // "postCreateCommand": "",

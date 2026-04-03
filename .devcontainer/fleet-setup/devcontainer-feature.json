@@ -1,0 +1,9 @@
+{
+  "id": "local-fleet-setup",
+  "version": "0.1.0",
+  "name": "Fleet dispatch tools (Codex, Gemini, Copilot CLI + headless config)",
+  "description": "Installs AI coding agent CLIs not covered by official features, configures headless mode",
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/node"
+  ]
+}
