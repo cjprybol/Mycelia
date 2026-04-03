@@ -45,6 +45,7 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 17. [17 Viroid Sketch Round Trip](generated/tutorials/17_viroid_sketch_round_trip.md) - BLAST DB export, sketching, and validation
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
 21. [21 Topological Assembly Optimization](generated/tutorials/21_tda_topological_assembly_optimization.md) - Betti numbers, filtrations, and topology-aware graph scoring
+22. [22 Momentum Fork Resolution](generated/tutorials/22_momentum_fork_resolution.md) - SPRT-based branch decisions for read-evidence forks
 
 ## Tutorial Gaps (TODO)
 

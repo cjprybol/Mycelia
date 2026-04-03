@@ -48,9 +48,12 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
     # Set environment variable for benchmark scale
     ENV["BENCHMARK_SCALE"] = scale
     
-    # Create results directory
-    results_dir = "results"
-    mkpath(results_dir)
+    # Create results directories for both legacy root-level outputs and
+    # benchmark-local outputs that live beside the scripts.
+    results_dirs = ["results", joinpath(@__DIR__, "results")]
+    for results_dir in results_dirs
+        mkpath(results_dir)
+    end
     mkpath(baseline_dir)
     
     # Benchmark scripts to run
@@ -59,12 +62,14 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
         ("02_kmer_analysis_benchmark.jl", "K-mer Analysis"),
         ("03_assembly_benchmark.jl", "Assembly"),
         ("04_annotation_benchmark.jl", "Annotation"),
+        ("08_momentum_fork_resolution_benchmark.jl", "Momentum Fork Resolution"),
         # Add other benchmarks as they are implemented
         # ("05_comparative_benchmark.jl", "Comparative Genomics")
     ]
     
     # Run each benchmark
-    benchmark_results = Dict{String, Any}()\n    
+    benchmark_results = Dict{String, Any}()
+
     for (script, description) in benchmark_scripts
         println("\\n" * "-"^40)
         println("Running: $description")
@@ -83,10 +88,20 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
             
             # Find the most recent results file for this benchmark
             pattern = replace(script, ".jl" => "_")
-            result_files = filter(f -> startswith(f, pattern), readdir(results_dir))
-            
-            if !isempty(result_files)
-                latest_result = joinpath(results_dir, sort(result_files)[end])
+            latest_result = nothing
+            for results_dir in results_dirs
+                result_files = isdir(results_dir) ?
+                               filter(f -> startswith(f, pattern), readdir(results_dir)) :
+                               String[]
+                if !isempty(result_files)
+                    candidate = joinpath(results_dir, sort(result_files)[end])
+                    if isnothing(latest_result) || stat(candidate).mtime > stat(latest_result).mtime
+                        latest_result = candidate
+                    end
+                end
+            end
+
+            if !isnothing(latest_result)
                 benchmark_results[description] = latest_result
             end
             
@@ -124,7 +139,7 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
     println("BENCHMARK SUITE COMPLETE")
     println("="^60)
     println("End time: $(Dates.now())")
-    println("Results directory: $results_dir")
+    println("Results directories: " * join(results_dirs, ", "))
     println("Baselines directory: $baseline_dir")
 end
 

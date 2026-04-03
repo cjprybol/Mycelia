@@ -1,0 +1,393 @@
+{
+  "suite_name": "Momentum Fork Resolution Synthetic Repeat Benchmark",
+  "metadata": {
+    "cpu_info": {
+      "model": "unknown",
+      "speed": 0,
+      "cpu_times!user": 13907750,
+      "cpu_times!nice": 0,
+      "cpu_times!sys": 4637390,
+      "cpu_times!idle": 11617860,
+      "cpu_times!irq": 0
+    },
+    "julia_version": {
+      "major": 1,
+      "minor": 10,
+      "patch": 11,
+      "prerelease": [],
+      "build": []
+    },
+    "memory_total": 8322555904,
+    "timestamp": "2026-04-03T19:20:30.429"
+  },
+  "results": {
+    "uniform_alpha0p1": {
+      "summary": {
+        "correct_resolution_rate": 0.006172839506172839,
+        "total_trials": 648,
+        "resolved_trials": 4,
+        "resolution_rate": 0.006172839506172839,
+        "misassembly_count": 0,
+        "fork_accuracy": 1.0,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 53316.52313307761,
+      "median_time": 1.24e6,
+      "mean_time": 1.236083e6,
+      "memory": 2599200,
+      "min_time": 1.180916e6,
+      "max_time": 1.287333e6,
+      "allocations": 40880,
+      "memory_stats": {
+        "gc_time": 4.210868382,
+        "gc_count": 58,
+        "allocations": 0
+      }
+    },
+    "llr_mapping_quality_alpha0p2": {
+      "summary": {
+        "correct_resolution_rate": 0.6790123456790124,
+        "total_trials": 648,
+        "resolved_trials": 487,
+        "resolution_rate": 0.7515432098765432,
+        "misassembly_count": 47,
+        "fork_accuracy": 0.9034907597535934,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 95757.64680344507,
+      "median_time": 1.090042e6,
+      "mean_time": 1.1151806666666667e6,
+      "memory": 2302336,
+      "min_time": 1.0345e6,
+      "max_time": 1.221e6,
+      "allocations": 33958,
+      "memory_stats": {
+        "gc_time": 3.427735537,
+        "gc_count": 54,
+        "allocations": 0
+      }
+    },
+    "uniform_alpha0p01": {
+      "summary": {
+        "correct_resolution_rate": 0.0,
+        "total_trials": 648,
+        "resolved_trials": 0,
+        "resolution_rate": 0.0,
+        "misassembly_count": 0,
+        "fork_accuracy": 0.0,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 124043.27621842307,
+      "median_time": 1.148167e6,
+      "mean_time": 1.194917e6,
+      "memory": 2595760,
+      "min_time": 1.101042e6,
+      "max_time": 1.335542e6,
+      "allocations": 40823,
+      "memory_stats": {
+        "gc_time": 3.028103297,
+        "gc_count": 77,
+        "allocations": 0
+      }
+    },
+    "linear_alpha0p01": {
+      "summary": {
+        "correct_resolution_rate": 0.7546296296296297,
+        "total_trials": 648,
+        "resolved_trials": 591,
+        "resolution_rate": 0.9120370370370371,
+        "misassembly_count": 102,
+        "fork_accuracy": 0.8274111675126904,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 2.1296742353173015e6,
+      "median_time": 1.111958e6,
+      "mean_time": 2.2514303333333335e6,
+      "memory": 2123152,
+      "min_time": 933916.0,
+      "max_time": 4.708417e6,
+      "allocations": 29799,
+      "memory_stats": {
+        "gc_time": 3.06182979,
+        "gc_count": 88,
+        "allocations": 0
+      }
+    },
+    "saturating_alpha0p1": {
+      "summary": {
+        "correct_resolution_rate": 0.7299382716049383,
+        "total_trials": 648,
+        "resolved_trials": 542,
+        "resolution_rate": 0.8364197530864198,
+        "misassembly_count": 69,
+        "fork_accuracy": 0.8726937269372693,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 72028.98008672157,
+      "median_time": 950334.0,
+      "mean_time": 991083.6666666666,
+      "memory": 2185792,
+      "min_time": 948667.0,
+      "max_time": 1.07425e6,
+      "allocations": 31260,
+      "memory_stats": {
+        "gc_time": 3.155394796,
+        "gc_count": 70,
+        "allocations": 0
+      }
+    },
+    "uniform_alpha0p05": {
+      "summary": {
+        "correct_resolution_rate": 0.0015432098765432098,
+        "total_trials": 648,
+        "resolved_trials": 1,
+        "resolution_rate": 0.0015432098765432098,
+        "misassembly_count": 0,
+        "fork_accuracy": 1.0,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 2.3616321035902975e6,
+      "median_time": 2.27175e6,
+      "mean_time": 3.6262916666666665e6,
+      "memory": 2600768,
+      "min_time": 2.253875e6,
+      "max_time": 6.35325e6,
+      "allocations": 40932,
+      "memory_stats": {
+        "gc_time": 2.853461836,
+        "gc_count": 77,
+        "allocations": 0
+      }
+    },
+    "saturating_alpha0p05": {
+      "summary": {
+        "correct_resolution_rate": 0.6388888888888888,
+        "total_trials": 648,
+        "resolved_trials": 454,
+        "resolution_rate": 0.7006172839506173,
+        "misassembly_count": 40,
+        "fork_accuracy": 0.9118942731277533,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 3.5772155673403763e6,
+      "median_time": 4.013167e6,
+      "mean_time": 4.388500333333333e6,
+      "memory": 2276496,
+      "min_time": 1.01375e6,
+      "max_time": 8.138584e6,
+      "allocations": 33367,
+      "memory_stats": {
+        "gc_time": 3.173523544,
+        "gc_count": 64,
+        "allocations": 0
+      }
+    },
+    "linear_alpha0p05": {
+      "summary": {
+        "correct_resolution_rate": 0.8240740740740741,
+        "total_trials": 648,
+        "resolved_trials": 641,
+        "resolution_rate": 0.9891975308641975,
+        "misassembly_count": 107,
+        "fork_accuracy": 0.8330733229329174,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 79083.86558795247,
+      "median_time": 858917.0,
+      "mean_time": 858639.3333333334,
+      "memory": 1996560,
+      "min_time": 779417.0,
+      "max_time": 937584.0,
+      "allocations": 26869,
+      "memory_stats": {
+        "gc_time": 2.944893922,
+        "gc_count": 87,
+        "allocations": 0
+      }
+    },
+    "llr_mapping_quality_alpha0p05": {
+      "summary": {
+        "correct_resolution_rate": 0.3194444444444444,
+        "total_trials": 648,
+        "resolved_trials": 221,
+        "resolution_rate": 0.3410493827160494,
+        "misassembly_count": 14,
+        "fork_accuracy": 0.9366515837104072,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 56049.13209259653,
+      "median_time": 1.193625e6,
+      "mean_time": 1.2040833333333333e6,
+      "memory": 2534752,
+      "min_time": 1.154e6,
+      "max_time": 1.264625e6,
+      "allocations": 39306,
+      "memory_stats": {
+        "gc_time": 2.68680479,
+        "gc_count": 66,
+        "allocations": 0
+      }
+    },
+    "llr_mapping_quality_alpha0p01": {
+      "summary": {
+        "correct_resolution_rate": 0.09567901234567901,
+        "total_trials": 648,
+        "resolved_trials": 66,
+        "resolution_rate": 0.10185185185185185,
+        "misassembly_count": 4,
+        "fork_accuracy": 0.9393939393939394,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 4.1651625530370763e6,
+      "median_time": 1.381333e6,
+      "mean_time": 3.7248746666666665e6,
+      "memory": 2588240,
+      "min_time": 1.259416e6,
+      "max_time": 8.533875e6,
+      "allocations": 40544,
+      "memory_stats": {
+        "gc_time": 3.068592211,
+        "gc_count": 76,
+        "allocations": 0
+      }
+    },
+    "llr_mapping_quality_alpha0p1": {
+      "summary": {
+        "correct_resolution_rate": 0.4722222222222222,
+        "total_trials": 648,
+        "resolved_trials": 333,
+        "resolution_rate": 0.5138888888888888,
+        "misassembly_count": 27,
+        "fork_accuracy": 0.918918918918919,
+        "synthetic_nga50_bp": 280
+      },
+      "std_time": 90866.70579664112,
+      "median_time": 1.102417e6,
+      "mean_time": 1.1292086666666667e6,
+      "memory": 2433616,
+      "min_time": 1.05475e6,
+      "max_time": 1.230459e6,
+      "allocations": 36981,
+      "memory_stats": {
+        "gc_time": 3.062580084,
+        "gc_count": 74,
+        "allocations": 0
+      }
+    },
+    "linear_alpha0p2": {
+      "summary": {
+        "correct_resolution_rate": 0.8333333333333334,
+        "total_trials": 648,
+        "resolved_trials": 646,
+        "resolution_rate": 0.9969135802469136,
+        "misassembly_count": 106,
+        "fork_accuracy": 0.8359133126934984,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 1.246297824213378e6,
+      "median_time": 3.121042e6,
+      "mean_time": 2.4215e6,
+      "memory": 1947184,
+      "min_time": 982583.0,
+      "max_time": 3.160875e6,
+      "allocations": 25701,
+      "memory_stats": {
+        "gc_time": 2.995640165,
+        "gc_count": 79,
+        "allocations": 0
+      }
+    },
+    "linear_alpha0p1": {
+      "summary": {
+        "correct_resolution_rate": 0.8024691358024691,
+        "total_trials": 648,
+        "resolved_trials": 635,
+        "resolution_rate": 0.9799382716049383,
+        "misassembly_count": 115,
+        "fork_accuracy": 0.8188976377952756,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 78323.36544309964,
+      "median_time": 831875.0,
+      "mean_time": 845902.6666666666,
+      "memory": 2007280,
+      "min_time": 775541.0,
+      "max_time": 930292.0,
+      "allocations": 27088,
+      "memory_stats": {
+        "gc_time": 2.869935039,
+        "gc_count": 107,
+        "allocations": 0
+      }
+    },
+    "uniform_alpha0p2": {
+      "summary": {
+        "correct_resolution_rate": 0.018518518518518517,
+        "total_trials": 648,
+        "resolved_trials": 12,
+        "resolution_rate": 0.018518518518518517,
+        "misassembly_count": 0,
+        "fork_accuracy": 1.0,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 71192.84910719615,
+      "median_time": 1.350625e6,
+      "mean_time": 1.326833e6,
+      "memory": 2600192,
+      "min_time": 1.246791e6,
+      "max_time": 1.383083e6,
+      "allocations": 40881,
+      "memory_stats": {
+        "gc_time": 3.542166044,
+        "gc_count": 59,
+        "allocations": 0
+      }
+    },
+    "saturating_alpha0p01": {
+      "summary": {
+        "correct_resolution_rate": 0.470679012345679,
+        "total_trials": 648,
+        "resolved_trials": 327,
+        "resolution_rate": 0.5046296296296297,
+        "misassembly_count": 22,
+        "fork_accuracy": 0.9327217125382263,
+        "synthetic_nga50_bp": 240
+      },
+      "std_time": 3.4155689998953813e6,
+      "median_time": 7.049042e6,
+      "mean_time": 5.183736333333333e6,
+      "memory": 2424400,
+      "min_time": 1.241667e6,
+      "max_time": 7.2605e6,
+      "allocations": 36769,
+      "memory_stats": {
+        "gc_time": 4.706667004,
+        "gc_count": 44,
+        "allocations": 0
+      }
+    },
+    "saturating_alpha0p2": {
+      "summary": {
+        "correct_resolution_rate": 0.7824074074074074,
+        "total_trials": 648,
+        "resolved_trials": 600,
+        "resolution_rate": 0.9259259259259259,
+        "misassembly_count": 93,
+        "fork_accuracy": 0.845,
+        "synthetic_nga50_bp": 480
+      },
+      "std_time": 27329.266297018174,
+      "median_time": 1.10975e6,
+      "mean_time": 1.0972223333333333e6,
+      "memory": 2067312,
+      "min_time": 1.065875e6,
+      "max_time": 1.116042e6,
+      "allocations": 28536,
+      "memory_stats": {
+        "gc_time": 3.175783877,
+        "gc_count": 81,
+        "allocations": 0
+      }
+    }
+  }
+}
