@@ -73,6 +73,12 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - Uses user-supplied contigs/depth/coverage inputs
 - Records wall-clock durations for tool runs
 
+### 8. Momentum Fork Resolution Benchmarks (`08_momentum_fork_resolution_benchmark.jl`)
+- Synthetic repeat-fork scenarios with controlled repeat length, divergence, and coverage
+- Threshold sweeps over SPRT error rates to expose contiguity vs correctness tradeoffs
+- Fork accuracy, unresolved rate, and misassembly counts across `MomentumForkResolver` weighting modes
+- CSV outputs for per-scenario and per-threshold summaries plus JSON benchmark metadata
+
 ## Usage
 
 ### Prerequisites
@@ -125,6 +131,9 @@ julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl synthet
 
 # Run annotation benchmark
 julia --project=. benchmarking/04_annotation_benchmark.jl
+
+# Run synthetic repeat benchmarks for MomentumForkResolver
+julia --project=. benchmarking/08_momentum_fork_resolution_benchmark.jl
 ```
 
 ### Running Complete Benchmark Suite

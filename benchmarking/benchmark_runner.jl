@@ -59,6 +59,7 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
         ("02_kmer_analysis_benchmark.jl", "K-mer Analysis"),
         ("03_assembly_benchmark.jl", "Assembly"),
         ("04_annotation_benchmark.jl", "Annotation"),
+        ("08_momentum_fork_resolution_benchmark.jl", "Momentum Fork Resolution"),
         # Add other benchmarks as they are implemented
         # ("05_comparative_benchmark.jl", "Comparative Genomics")
     ]
