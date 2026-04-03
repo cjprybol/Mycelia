@@ -13,6 +13,52 @@ import Test
 import Mycelia
 
 Test.@testset "Momentum Fork Resolution" begin
+    function simulate_diploid_case(
+            case_id::AbstractString,
+            support_pairs::Vector{Tuple{Int, Int}};
+            reference_branch::Symbol = :hap_a
+    )
+        state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+            case_id, [:hap_a, :hap_b]; reference_branch)
+        decisions = Symbol[]
+
+        for (reference_support, alternative_support) in support_pairs
+            decision = Mycelia.Rhizomorph.MomentumForkResolver.observe_fork_event!(
+                state,
+                :hap_b,
+                :hap_a,
+                alternative_support,
+                reference_support
+            )
+            push!(decisions, decision)
+        end
+
+        resolution = Mycelia.Rhizomorph.MomentumForkResolver.fork_resolution(state)
+        return (
+            case_id = case_id,
+            decisions = decisions,
+            resolution = resolution,
+            preserved = resolution.resolved_branch === nothing,
+            collapsed = resolution.resolved_branch !== nothing
+        )
+    end
+
+    function summarize_diploid_cases(cases)
+        results = [simulate_diploid_case(case_id, support_pairs) for (case_id, support_pairs) in cases]
+        total_cases = length(results)
+        collapsed_cases = count(result -> result.collapsed, results)
+        preserved_cases = total_cases - collapsed_cases
+
+        return (
+            results = results,
+            total_cases = total_cases,
+            collapsed_cases = collapsed_cases,
+            preserved_cases = preserved_cases,
+            collapse_rate = total_cases == 0 ? 0.0 : collapsed_cases / total_cases,
+            preservation_rate = total_cases == 0 ? 0.0 : preserved_cases / total_cases
+        )
+    end
+
     Test.@testset "Weight functions" begin
         Test.@test Mycelia.Rhizomorph.MomentumForkResolver.linear_weight(3) == 3.0
         Test.@test Mycelia.Rhizomorph.MomentumForkResolver.linear_weight(
@@ -111,5 +157,45 @@ Test.@testset "Momentum Fork Resolution" begin
 
         Test.@test Mycelia.Rhizomorph.MomentumForkResolver.best_branch(state) == "left"
         Test.@test Mycelia.Rhizomorph.MomentumForkResolver.strongest_alternative(state) == "left"
+    end
+
+    Test.@testset "Diploid heterozygosity stress" begin
+        preserved_cases = [
+            ("perfect_balance", [(12, 12), (11, 11), (13, 13), (10, 10)]),
+            ("alternating_microbias", [(13, 12), (12, 13), (13, 12), (12, 13), (13, 12), (12, 13)]),
+            ("mild_reference_advantage", [(20, 15), (20, 15), (20, 15), (20, 15)]),
+            ("mild_alternative_advantage", [(15, 20), (15, 20), (15, 20), (15, 20)])
+        ]
+        preserved_summary = summarize_diploid_cases(preserved_cases)
+
+        Test.@test preserved_summary.total_cases == length(preserved_cases)
+        Test.@test preserved_summary.collapse_rate == 0.0
+        Test.@test preserved_summary.preservation_rate == 1.0
+        for result in preserved_summary.results
+            Test.@test result.preserved
+            Test.@test !result.collapsed
+            Test.@test result.resolution.decision == :continue
+            Test.@test result.resolution.resolved_branch === nothing
+        end
+
+        collapsing_cases = [
+            ("decisive_reference", [(40, 1)]),
+            ("decisive_alternative", [(1, 40)]),
+            ("compound_reference", [(20, 2), (20, 2)]),
+            ("compound_alternative", [(2, 20), (2, 20)])
+        ]
+        collapsing_summary = summarize_diploid_cases(collapsing_cases)
+        resolved_branches = Set(result.resolution.resolved_branch for result in collapsing_summary.results)
+
+        Test.@test collapsing_summary.total_cases == length(collapsing_cases)
+        Test.@test collapsing_summary.collapse_rate == 1.0
+        Test.@test collapsing_summary.preservation_rate == 0.0
+        Test.@test resolved_branches == Set([:hap_a, :hap_b])
+        for result in collapsing_summary.results
+            Test.@test !result.preserved
+            Test.@test result.collapsed
+            Test.@test result.resolution.decision in (:accept_reference, :accept_alternative)
+            Test.@test result.resolution.resolved_branch in (:hap_a, :hap_b)
+        end
     end
 end
