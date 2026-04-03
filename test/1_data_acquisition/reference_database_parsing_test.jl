@@ -1,5 +1,42 @@
 import Test
+import Dates
 import Mycelia
+
+const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
+const RUN_EXTERNAL = RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+
+function blast_env_available()
+    if !isfile(Mycelia.CONDA_RUNNER)
+        return false
+    end
+    try
+        env_list = read(`$(Mycelia.CONDA_RUNNER) env list`, String)
+        return occursin(r"(?m)^blast\s", env_list)
+    catch
+        return false
+    end
+end
+
+function make_test_blastdb(dir::AbstractString; dbtype::AbstractString)
+    source_path = if dbtype == "nucl"
+        joinpath(dir, "test.fna")
+    elseif dbtype == "prot"
+        joinpath(dir, "test.faa")
+    else
+        error("Unsupported BLAST dbtype fixture: $dbtype")
+    end
+
+    if dbtype == "nucl"
+        write(source_path, ">seq1\nACGTACGT\n>seq2\nTTTTAAAA\n")
+        db_path = joinpath(dir, "nucl_db")
+    else
+        write(source_path, ">prot1\nMKT\n>prot2\nGGA\n")
+        db_path = joinpath(dir, "prot_db")
+    end
+
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast makeblastdb -in $(source_path) -dbtype $(dbtype) -parse_seqids -out $(db_path)`)
+    return db_path
+end
 
 Test.@testset "Reference Database Parsing" begin
     Test.@testset "NCBI metadata parsing" begin
@@ -322,5 +359,133 @@ Test.@testset "Reference Database Parsing" begin
 
     Test.@testset "fasterq_dump_parallel error path" begin
         Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
+    end
+
+    Test.@testset "BLAST database helper coverage" begin
+        if !RUN_EXTERNAL
+            @info "Skipping BLAST helper coverage tests; external tool execution is opt-in via MYCELIA_RUN_EXTERNAL=true"
+            Test.@test_skip "Set MYCELIA_RUN_EXTERNAL=true to run BLAST helper coverage tests"
+        elseif !blast_env_available()
+            @info "Skipping BLAST helper coverage tests; blast env unavailable"
+            Test.@test_skip "BLAST conda env unavailable"
+        else
+            mktempdir() do dir
+                nucleotide_db = make_test_blastdb(dir; dbtype = "nucl")
+                protein_db = make_test_blastdb(dir; dbtype = "prot")
+
+                nucleotide_metadata = Mycelia.get_blastdb_metadata(blastdb = nucleotide_db)
+                Test.@test nucleotide_metadata["dbtype"] == "Nucleotide"
+                Test.@test nucleotide_metadata["number-of-sequences"] == 2
+                Test.@test Dates.DateTime(nucleotide_metadata["last-updated"]) isa Dates.DateTime
+
+                protein_metadata = Mycelia.get_blastdb_metadata(blastdb = protein_db)
+                Test.@test protein_metadata["dbtype"] == "Protein"
+                Test.@test protein_metadata["number-of-sequences"] == 2
+
+                Test.@test begin
+                    Mycelia.get_blastdb_info(blastdb = nucleotide_db)
+                    true
+                end
+
+                tax_info = Mycelia.get_blastdb_tax_info(blastdb = nucleotide_db)
+                Test.@test Mycelia.DataFrames.nrow(tax_info) == 1
+                Test.@test tax_info[1, "num of seqs"] == 2
+
+                tax_info_from_entries = Mycelia.get_blastdb_tax_info(
+                    blastdb = nucleotide_db,
+                    entries = ["seq1"]
+                )
+                Test.@test Mycelia.DataFrames.nrow(tax_info_from_entries) == 1
+
+                tax_info_from_taxids = Mycelia.get_blastdb_tax_info(
+                    blastdb = nucleotide_db,
+                    taxids = [0]
+                )
+                Test.@test Mycelia.DataFrames.nrow(tax_info_from_taxids) == 1
+
+                Test.@test_throws ErrorException Mycelia.get_blastdb_tax_info(
+                    blastdb = nucleotide_db,
+                    entries = ["seq1"],
+                    taxids = [0]
+                )
+
+                nucleotide_date = Dates.format(
+                    Dates.DateTime(nucleotide_metadata["last-updated"]),
+                    "yyyy-mm-dd"
+                )
+                nucleotide_outfile = "$(nucleotide_db).$(nucleotide_date).fna.gz"
+                write(nucleotide_outfile, "existing nucleotide archive")
+                Test.@test Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    force = false
+                ) == nucleotide_outfile
+
+                protein_date = Dates.format(
+                    Dates.DateTime(protein_metadata["last-updated"]),
+                    "yyyy-mm-dd"
+                )
+                protein_outfile = "$(protein_db).$(protein_date).faa.gz"
+                write(protein_outfile, "existing protein archive")
+                Test.@test Mycelia.blastdb_to_fasta(
+                    blastdb = protein_db,
+                    force = false
+                ) == protein_outfile
+
+                explicit_outfile = joinpath(dir, "already-there.fna.gz")
+                write(explicit_outfile, "no-op")
+                Test.@test Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    outfile = explicit_outfile,
+                    force = false
+                ) == explicit_outfile
+
+                exported_outfile = joinpath(dir, "exports", "full-db.fna.gz")
+                exported_path = Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    outfile = exported_outfile,
+                    force = true,
+                    max_cores = 1
+                )
+                Test.@test exported_path == exported_outfile
+                Test.@test isfile(exported_path)
+                exported_contents = read(`gzip -dc $(exported_path)`, String)
+                Test.@test occursin(">seq1", exported_contents)
+                Test.@test occursin("ACGTACGT", exported_contents)
+
+                entry_subset_outfile = joinpath(dir, "exports", "entry-subset.fna.gz")
+                entry_subset_path = Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    entries = ["seq1"],
+                    outfile = entry_subset_outfile,
+                    force = true,
+                    max_cores = 1
+                )
+                Test.@test entry_subset_path == entry_subset_outfile
+                Test.@test isfile(entry_subset_path)
+                entry_subset_contents = read(`gzip -dc $(entry_subset_path)`, String)
+                Test.@test occursin(">seq1", entry_subset_contents)
+                Test.@test !occursin(">seq2", entry_subset_contents)
+
+                taxid_subset_outfile = joinpath(dir, "exports", "taxid-subset.fna.gz")
+                taxid_subset_path = Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    taxids = [0],
+                    outfile = taxid_subset_outfile,
+                    force = true,
+                    max_cores = 1
+                )
+                Test.@test taxid_subset_path == taxid_subset_outfile
+                Test.@test isfile(taxid_subset_path)
+                Test.@test filesize(taxid_subset_path) > 0
+                taxid_subset_contents = read(`gzip -dc $(taxid_subset_path)`, String)
+                Test.@test occursin(">seq1", taxid_subset_contents)
+
+                Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
+                    blastdb = nucleotide_db,
+                    entries = ["seq1"],
+                    taxids = [0]
+                )
+            end
+        end
     end
 end
