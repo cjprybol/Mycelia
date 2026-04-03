@@ -17,8 +17,9 @@ function blast_env_available()
         return false
     end
     try
-        env_list = read(`$(Mycelia.CONDA_RUNNER) env list`, String)
-        return occursin(r"(?m)^blast\s", env_list)
+        read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n blast blastdbcmd -version`, String)
+        read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n pigz pigz --version`, String)
+        return true
     catch
         return false
     end
