@@ -1,7 +1,238 @@
 import Test
 import Mycelia
 
+@eval Mycelia begin
+    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        return nothing
+    end
+end
+
+function write_fake_conda_runner(path::AbstractString, capture_dir::AbstractString)
+    script = """
+#!/usr/bin/env bash
+set -euo pipefail
+
+capture_dir="$capture_dir"
+
+if [[ "\${1:-}" == "run" ]]; then
+    shift
+fi
+
+if [[ "\${1:-}" == "--live-stream" ]]; then
+    shift
+fi
+
+if [[ "\${1:-}" == "-n" ]]; then
+    env_name="\${2:-}"
+    shift 2
+fi
+
+tool="\${1:-}"
+if [[ -n "\$tool" ]]; then
+    shift
+fi
+
+if [[ "\$tool" == "blastdbcmd" ]]; then
+    db=""
+    batch_file=""
+    taxid_file=""
+    metadata=0
+    info=0
+    tax_info=0
+
+    while [[ \$# -gt 0 ]]; do
+        case "\$1" in
+            -db)
+                db="\${2:-}"
+                shift 2
+                ;;
+            -entry)
+                shift 2
+                ;;
+            -entry_batch)
+                batch_file="\${2:-}"
+                shift 2
+                ;;
+            -taxidlist)
+                taxid_file="\${2:-}"
+                shift 2
+                ;;
+            -metadata)
+                metadata=1
+                shift
+                ;;
+            -info)
+                info=1
+                shift
+                ;;
+            -tax_info)
+                tax_info=1
+                shift
+                ;;
+            -outfmt)
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+
+    if [[ \$metadata -eq 1 ]]; then
+        case "\$db" in
+            nt)
+                printf '{"dbtype":"Nucleotide","last-updated":"2024-01-02T03:04:05"}'
+                ;;
+            nr)
+                printf '{"dbtype":"Protein","last-updated":"2024-02-03T04:05:06"}'
+                ;;
+            weird)
+                printf '{"dbtype":"Unsupported","last-updated":"2024-05-06T07:08:09"}'
+                ;;
+            *)
+                printf '{"dbtype":"Protein","last-updated":"2024-03-05T12:00:00"}'
+                ;;
+        esac
+        exit 0
+    fi
+
+    if [[ \$info -eq 1 ]]; then
+        printf 'Database: %s\\n' "\$db"
+        exit 0
+    fi
+
+    if [[ \$tax_info -eq 1 ]]; then
+        printf '# comment\\n'
+        printf '2\\tBacillus subtilis\\tbacterium\\tBacteria\\tBacteria\\t1\\n'
+        exit 0
+    fi
+
+    if [[ -n "\$batch_file" ]]; then
+        printf '%s\\n' "\$batch_file" > "\$capture_dir/entries_path.txt"
+        cp "\$batch_file" "\$capture_dir/entries_capture.txt"
+        while IFS= read -r entry; do
+            printf '>%s\\nSEQUENCE\\n' "\$entry"
+        done < "\$batch_file"
+        exit 0
+    fi
+
+    if [[ -n "\$taxid_file" ]]; then
+        printf '%s\\n' "\$taxid_file" > "\$capture_dir/taxids_path.txt"
+        cp "\$taxid_file" "\$capture_dir/taxids_capture.txt"
+        while IFS= read -r taxid; do
+            printf '>taxid:%s\\nSEQUENCE\\n' "\$taxid"
+        done < "\$taxid_file"
+        exit 0
+    fi
+
+    printf '>all\\nSEQUENCE\\n'
+    exit 0
+fi
+
+if [[ "\$tool" == "pigz" ]]; then
+    cat
+    exit 0
+fi
+
+printf 'unexpected tool: %s\\n' "\$tool" >&2
+exit 1
+"""
+
+    write(path, script)
+    chmod(path, 0o755)
+    return path
+end
+
+function with_fake_conda_runner(f::Function)
+    mktempdir() do dir
+        runner_path = Mycelia.CONDA_RUNNER
+        backup_path = joinpath(dir, "conda-runner-backup")
+        runner_existed = isfile(runner_path)
+        if runner_existed
+            cp(runner_path, backup_path; force = true)
+        else
+            mkpath(dirname(runner_path))
+        end
+        write_fake_conda_runner(runner_path, dir)
+        try
+            return f(dir)
+        finally
+            if runner_existed
+                mv(backup_path, runner_path; force = true)
+            else
+                rm(runner_path; force = true)
+            end
+        end
+    end
+end
+
 Test.@testset "Reference Database Parsing" begin
+    Test.@testset "BLAST database helpers" begin
+        with_fake_conda_runner() do capture_dir
+            Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
+                blastdb = "nr",
+                entries = ["seq1"],
+                taxids = [2]
+            )
+
+            mktempdir() do dir
+                cd(dir) do
+                    write("nt.2024-01-02.fna.gz", "cached nucleotide")
+                    write("nr.2024-02-03.faa.gz", "cached protein")
+
+                    Test.@test Mycelia.blastdb_to_fasta(
+                        blastdb = "nt",
+                        force = false
+                    ) == "nt.2024-01-02.fna.gz"
+
+                    Test.@test Mycelia.blastdb_to_fasta(
+                        blastdb = "nr",
+                        force = false
+                    ) == "nr.2024-02-03.faa.gz"
+
+                    Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
+                        blastdb = "weird",
+                        force = false
+                    )
+                end
+
+                entries_outfile = joinpath(dir, "nested", "entries.faa.gz")
+                Test.@test Mycelia.blastdb_to_fasta(
+                    blastdb = "nr",
+                    entries = ["seqA", "seqB"],
+                    outfile = entries_outfile,
+                    max_cores = 0
+                ) == entries_outfile
+                Test.@test read(entries_outfile, String) == ">seqA\nSEQUENCE\n>seqB\nSEQUENCE\n"
+                Test.@test read(joinpath(capture_dir, "entries_capture.txt"), String) == "seqA\nseqB\n"
+                Test.@test !isfile(strip(read(joinpath(capture_dir, "entries_path.txt"), String)))
+
+                taxids_outfile = joinpath(dir, "taxids.faa.gz")
+                Test.@test Mycelia.blastdb_to_fasta(
+                    blastdb = "nr",
+                    taxids = [2, 2157],
+                    outfile = taxids_outfile,
+                    max_cores = typemax(Int)
+                ) == taxids_outfile
+                Test.@test read(taxids_outfile, String) == ">taxid:2\nSEQUENCE\n>taxid:2157\nSEQUENCE\n"
+                Test.@test read(joinpath(capture_dir, "taxids_capture.txt"), String) == "2\n2157\n"
+                Test.@test !isfile(strip(read(joinpath(capture_dir, "taxids_path.txt"), String)))
+            end
+
+            blast_metadata = Mycelia.get_blastdb_metadata(blastdb = "nr")
+            Test.@test blast_metadata["dbtype"] == "Protein"
+            Test.@test blast_metadata["last-updated"] == "2024-02-03T04:05:06"
+
+            Test.@test success(Mycelia.get_blastdb_info(blastdb = "nr"))
+
+            tax_info = Mycelia.get_blastdb_tax_info(blastdb = "nr")
+            Test.@test Mycelia.DataFrames.nrow(tax_info) == 1
+            Test.@test tax_info[1, "taxid"] == 2
+            Test.@test tax_info[1, "scientific name"] == "Bacillus subtilis"
+            Test.@test tax_info[1, "taxonomic super kingdom"] == "Bacteria"
+        end
+    end
+
     Test.@testset "NCBI metadata parsing" begin
         mktempdir() do dir
             path = joinpath(dir, "assembly_summary.txt")
