@@ -1,6 +1,13 @@
 import Test
 import Dates
+import Logging
 import Mycelia
+
+@eval Mycelia begin
+    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        return nothing
+    end
+end
 
 const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const RUN_EXTERNAL = RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
@@ -148,6 +155,118 @@ Test.@testset "Reference Database Parsing" begin
         end
     end
 
+    Test.@testset "parse_ncbi_metadata_file warning and logged failure paths" begin
+        mktempdir() do dir
+            warned_path = joinpath(dir, "assembly_summary_extra_header.txt")
+            warned_header = [
+                "assembly_accession",
+                "bioproject",
+                "biosample",
+                "wgs_master",
+                "refseq_category",
+                "organism_name",
+                "infraspecific_name",
+                "isolate",
+                "version_status",
+                "assembly_level",
+                "release_type",
+                "genome_rep",
+                "seq_rel_date",
+                "asm_name",
+                "asm_submitter",
+                "gbrs_paired_asm",
+                "paired_asm_comp",
+                "ftp_path",
+                "excluded_from_refseq",
+                "relation_to_type_material",
+                "asm_not_live_date",
+                "assembly_type",
+                "group",
+                "annotation_provider",
+                "annotation_name",
+                "annotation_date",
+                "pubmed_id",
+                "taxid",
+                "species_taxid",
+                "genome_size",
+                "genome_size_ungapped",
+                "replicon_count",
+                "scaffold_count",
+                "contig_count",
+                "total_gene_count",
+                "protein_coding_gene_count",
+                "non_coding_gene_count",
+                "gc_percent",
+                "assembly_notes"
+            ]
+            warned_row = [
+                "GCF_000002",
+                "PRJNA2",
+                "SAMN2",
+                "WGS2",
+                "representative genome",
+                "Bacillus subtilis",
+                "strain=168",
+                "168",
+                "latest",
+                "Complete Genome",
+                "Major",
+                "Full",
+                "2024-01-01",
+                "ASM2",
+                "Submitter",
+                "none",
+                "none",
+                "ftp://example/GCF_000002",
+                "none",
+                "none",
+                "none",
+                "haploid",
+                "bacteria",
+                "Provider",
+                "Annot2",
+                "2024-01-02",
+                "67890",
+                "1423",
+                "1423",
+                "4200",
+                "4000",
+                "1",
+                "1",
+                "1",
+                "3900",
+                "3700",
+                "200",
+                "43.5",
+                "manually-curated"
+            ]
+
+            open(warned_path, "w") do io
+                println(io, "## Assembly summary warning test")
+                println(io, "# " * join(warned_header, '\t'))
+                println(io, join(warned_row, '\t'))
+            end
+
+            warned_df = Test.@test_logs (:warn, r"Headers found in data file") min_level=Logging.Warn match_mode=:any begin
+                Mycelia.parse_ncbi_metadata_file(warned_path)
+            end
+            Test.@test warned_df[1, "assembly_notes"] == "manually-curated"
+
+            invalid_path = joinpath(dir, "assembly_summary_invalid_value.txt")
+            invalid_row = copy(warned_row)
+            invalid_row[28] = "not_an_int"
+            open(invalid_path, "w") do io
+                println(io, "## Assembly summary invalid value test")
+                println(io, "# " * join(warned_header, '\t'))
+                println(io, join(invalid_row, '\t'))
+            end
+
+            Test.@test_logs (:error, r"Failed to parse NCBI metadata file") min_level=Logging.Error match_mode=:any begin
+                Test.@test_throws Exception Mycelia.parse_ncbi_metadata_file(invalid_path)
+            end
+        end
+    end
+
     Test.@testset "NCBI FTP path helper" begin
         ftp_path = "ftp://example/GCF_000001"
         url = Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp_path, extension = "genomic.fna.gz")
@@ -230,6 +349,12 @@ Test.@testset "Reference Database Parsing" begin
         # Error: empty formats
         Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], String[])
 
+        # Error: effectively empty formats after stripping
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], [" ", "\t"])
+
+        # Error: effectively empty subsets after stripping
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives([" ", "\t"], ["txt"])
+
         # Error: unsupported format
         Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["pdf"])
 
@@ -238,6 +363,9 @@ Test.@testset "Reference Database Parsing" begin
 
         # Error: unsupported language
         Test.@test_throws ErrorException Mycelia._resolve_un_archives(["en-de"], ["txt"])
+
+        # Error: language codes are valid but pair itself is unsupported
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["en-en"], ["txt"])
 
         # Error: bitext without txt format
         Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["xml"])
@@ -308,6 +436,33 @@ Test.@testset "Reference Database Parsing" begin
         end
     end
 
+    Test.@testset "collect_un_language_files skips malformed filenames" begin
+        mktempdir() do dir
+            candidate_path = joinpath(dir, "UNv1.0.testset.en")
+            valid_path = joinpath(dir, "UNv1.0.6way.en")
+            write(joinpath(dir, "README"), "missing language separator")
+            write(candidate_path, "missing pair marker")
+            write(joinpath(dir, "UNv1.0.6way"), "missing language suffix")
+            write(joinpath(dir, "UNv1.0.6way.engl"), "language suffix too long")
+            write(joinpath(dir, "UNv1.0.6way.e1"), "non-letter language suffix")
+            write(valid_path, "valid english file")
+
+            strict_result = Mycelia.collect_un_language_files(dir; subsets = ["all"])
+            Test.@test haskey(strict_result, "en")
+            Test.@test strict_result["en"] == [valid_path]
+
+            loose_result = Mycelia.collect_un_language_files(dir; subsets = ["all"], strict_naming = false)
+            Test.@test haskey(loose_result, "en")
+            Test.@test Set(loose_result["en"]) == Set([candidate_path, valid_path])
+            Test.@test !haskey(loose_result, "engl")
+            Test.@test !haskey(loose_result, "e1")
+
+            filtered_result = Mycelia.collect_un_language_files(dir; subsets = ["6way"], strict_naming = false)
+            Test.@test haskey(filtered_result, "en")
+            Test.@test filtered_result["en"] == [valid_path]
+        end
+    end
+
     Test.@testset "download_sra_data error paths" begin
         Test.@test_throws ErrorException Mycelia.download_sra_data("")
     end
@@ -353,12 +508,145 @@ Test.@testset "Reference Database Parsing" begin
         )
     end
 
+    Test.@testset "prefetch and fasterq_dump cached outputs" begin
+        mktempdir() do dir
+            paired_srr = "SRR_PAIRED_CACHED"
+            paired_dir = joinpath(dir, paired_srr)
+            mkpath(paired_dir)
+            paired_archive = joinpath(paired_dir, "$(paired_srr).sra")
+            write(paired_archive, "cached archive")
+
+            paired_prefetch = Test.@test_logs (:info, r"SRA archive already present") begin
+                Mycelia.prefetch(SRR = paired_srr, outdir = dir)
+            end
+            Test.@test paired_prefetch.directory == paired_dir
+            Test.@test paired_prefetch.archive == paired_archive
+
+            paired_forward = joinpath(paired_dir, "$(paired_srr)_1.fastq.gz")
+            paired_reverse = joinpath(paired_dir, "$(paired_srr)_2.fastq.gz")
+            write(paired_forward, "forward")
+            write(paired_reverse, "reverse")
+
+            paired_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = paired_srr)
+            Test.@test paired_result.forward_reads == paired_forward
+            Test.@test paired_result.reverse_reads == paired_reverse
+            Test.@test ismissing(paired_result.unpaired_reads)
+
+            single_srr = "SRR_SINGLE_CACHED"
+            single_dir = joinpath(dir, single_srr)
+            mkpath(single_dir)
+            write(joinpath(single_dir, "$(single_srr).sra"), "cached archive")
+            single_unpaired = joinpath(single_dir, "$(single_srr).fastq.gz")
+            write(single_unpaired, "single")
+
+            single_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = single_srr)
+            Test.@test ismissing(single_result.forward_reads)
+            Test.@test ismissing(single_result.reverse_reads)
+            Test.@test single_result.unpaired_reads == single_unpaired
+        end
+    end
+
+    @eval Mycelia begin
+        function prefetch(; SRR, outdir = pwd())
+            if endswith(SRR, "FAIL")
+                error("synthetic prefetch failure for $(SRR)")
+            end
+            output_dir = joinpath(outdir, SRR)
+            archive = joinpath(output_dir, "$(SRR).sra")
+            mkpath(output_dir)
+            write(archive, "stub archive")
+            return (directory = output_dir, archive = archive)
+        end
+
+        function fasterq_dump(; outdir = pwd(), srr_identifier = "")
+            if endswith(srr_identifier, "FAIL")
+                error("synthetic fasterq failure for $(srr_identifier)")
+            end
+            mkpath(outdir)
+            if occursin("PAIRED", srr_identifier)
+                forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
+                reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
+                write(forward_reads, "forward reads")
+                write(reverse_reads, "reverse reads")
+                return (
+                    forward_reads = forward_reads,
+                    reverse_reads = reverse_reads,
+                    unpaired_reads = missing
+                )
+            elseif occursin("SINGLE", srr_identifier)
+                unpaired_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
+                write(unpaired_reads, "single reads")
+                return (
+                    forward_reads = missing,
+                    reverse_reads = missing,
+                    unpaired_reads = unpaired_reads
+                )
+            else
+                return (
+                    forward_reads = missing,
+                    reverse_reads = missing,
+                    unpaired_reads = missing
+                )
+            end
+        end
+    end
+
+    Test.@testset "download_sra_data wrapper branches" begin
+        mktempdir() do dir
+            paired = Mycelia.download_sra_data("SRR_PAIRED_WRAPPER"; outdir = dir)
+            Test.@test paired.srr_id == "SRR_PAIRED_WRAPPER"
+            Test.@test paired.is_paired
+            Test.@test length(paired.files) == 2
+            Test.@test all(isfile, paired.files)
+
+            single = Mycelia.download_sra_data("SRR_SINGLE_WRAPPER"; outdir = dir)
+            Test.@test single.srr_id == "SRR_SINGLE_WRAPPER"
+            Test.@test !single.is_paired
+            Test.@test length(single.files) == 1
+            Test.@test isfile(only(single.files))
+
+            Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+        end
+    end
+
     Test.@testset "prefetch_sra_runs error path" begin
         Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
     end
 
+    Test.@testset "prefetch_sra_runs collects success and failure results" begin
+        mktempdir() do dir
+            results = Mycelia.prefetch_sra_runs(
+                ["SRR_BATCH_A", "SRR_BATCH_FAIL", "SRR_BATCH_B"];
+                outdir = dir,
+                max_parallel = 2
+            )
+            Test.@test length(results) == 3
+            successes = Dict(result.srr_id => result for result in results)
+            Test.@test successes["SRR_BATCH_A"].success
+            Test.@test successes["SRR_BATCH_B"].success
+            Test.@test !successes["SRR_BATCH_FAIL"].success
+            Test.@test occursin("synthetic prefetch failure", successes["SRR_BATCH_FAIL"].error)
+        end
+    end
+
     Test.@testset "fasterq_dump_parallel error path" begin
         Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
+    end
+
+    Test.@testset "fasterq_dump_parallel collects success and failure results" begin
+        mktempdir() do dir
+            results = Mycelia.fasterq_dump_parallel(
+                ["SRR_PAIRED_A", "SRR_PAIRED_FAIL", "SRR_SINGLE_B"];
+                outdir = dir,
+                max_parallel = 2
+            )
+            Test.@test length(results) == 3
+            outcomes = Dict(result.srr_id => result for result in results)
+            Test.@test outcomes["SRR_PAIRED_A"].success
+            Test.@test outcomes["SRR_SINGLE_B"].success
+            Test.@test !outcomes["SRR_PAIRED_FAIL"].success
+            Test.@test occursin("synthetic fasterq failure", outcomes["SRR_PAIRED_FAIL"].error)
+        end
     end
 
     Test.@testset "BLAST database helper coverage" begin
