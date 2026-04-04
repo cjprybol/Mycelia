@@ -65,13 +65,21 @@ function _conda_environment_names()
 
     if isfile(CONDA_RUNNER)
         try
-            return _conda_env_names_from_lines(readlines(`$(CONDA_RUNNER) env list`))
+            return _conda_env_names_from_lines(split(_read_conda_env_list_output(), '\n'))
         catch
             return Set{String}()
         end
     end
 
     return Set{String}()
+end
+
+function _read_conda_env_list_output()
+    _ensure_conda_env_vars!()
+    return Base.read(
+        pipeline(`$(Mycelia.CONDA_RUNNER) env list`, stderr = devnull),
+        String
+    )
 end
 
 """
@@ -349,7 +357,6 @@ Check whether a named Bioconda environment already exists.
 `Bool` indicating if the environment is present.
 """
 function check_bioconda_env_is_installed(pkg)
-    _ensure_conda_env_vars!()
     # ensure conda environment is available
     if !isfile(CONDA_RUNNER)
         if (basename(CONDA_RUNNER) == "mamba")
