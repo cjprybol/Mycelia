@@ -201,6 +201,9 @@ Test.@testset "Pangenome wrapper command failures are surfaced for existing grap
         xg_indexes = Mycelia.index_pangenome_graph(graph_file; index_types = ["xg"])
         Test.@test isempty(xg_indexes)
 
+        Test.@test_throws Exception Mycelia.index_pangenome_graph(
+            graph_file; index_types = ["gcsa"])
+
         snarls_indexes = Mycelia.index_pangenome_graph(graph_file; index_types = ["snarls"])
         Test.@test isempty(snarls_indexes)
     finally
