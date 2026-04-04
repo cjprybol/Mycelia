@@ -53,7 +53,7 @@ const RUN_EXTERNAL = lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "tr
 const RUN_CLAIR3 = RUN_EXTERNAL &&
                    lowercase(get(ENV, "MYCELIA_RUN_CLAIR3_TUTORIAL", "false")) == "true"
 const RUN_VCFEVAL = RUN_EXTERNAL &&
-                    lowercase(get(ENV, "MYCELIA_RUN_VCFEVAL_TUTORIAL", "true")) == "true"
+                    lowercase(get(ENV, "MYCELIA_RUN_VCFEVAL_TUTORIAL", "false")) == "true"
 
 println("=== Variant Calling Workflow Tutorial ===")
 println("External wrappers enabled: ", RUN_EXTERNAL)
