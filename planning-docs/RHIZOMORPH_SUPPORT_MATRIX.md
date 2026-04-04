@@ -4,6 +4,11 @@
 > rationale, see
 > [rhizomorph-graph-ecosystem-plan.md](rhizomorph-graph-ecosystem-plan.md).
 
+Status (2026-04-04): matrix coverage is effectively 100% documented, with
+implementation maturity around 85%. All planned graph/alphabet/mode rows are
+accounted for below; the remaining work is mostly deeper traversal and
+simplification test coverage rather than missing support-matrix entries.
+
 Legend: ✅ supported, 🚫 not applicable, ⏳ pending/partial (documented).
 Testing gaps: variable-length and n-gram traversal coverage is still light;
 simplification edge-removal behavior needs broader tests; end-to-end suites

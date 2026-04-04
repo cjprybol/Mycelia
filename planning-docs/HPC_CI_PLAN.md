@@ -7,7 +7,7 @@ Phased plan for integrating HPC-driven CI while keeping GitHub Actions as-is. Mi
 - Add HPC-only coverage, extended correctness tests, and benchmarks; surface results back to GitHub with extra Codecov flag(s), badges, and optional PR/status checks.
 - Assume HPC harness can emit coverage (`lcov.info`), benchmark JSON/HTML, and correctness summaries (pass/fail counts, regression info).
 
-**Status (2026-01-17)**: Phase 1 is in use; HPC coverage is uploaded to Codecov with a dedicated flag and displayed via the README badge. Remaining phases focus on automated results publishing and benchmarking summaries.
+**Status (2026-04-04, estimated 70% complete)**: Phase 1 is operational in-repo, and Phase 2 implementation scaffolding is now present. `ci/hpc/run_hpc_ci.sh`, `ci/hpc/publish_hpc_results.sh`, `ci/hpc/render_hpc_results_site.jl`, and `ci/hpc/submit_lawrencium_hpc_ci.jl` cover the main driver, results publication, badge-site rendering, and scheduler submission flow. What remains is end-to-end deployment verification of the `hpc-results` publishing path plus any future Jacamar/GitLab runner rollout from Phase 3.
 
 ## 1. Common Building Blocks (All Phases)
 - **Single HPC driver**: `ci/hpc/run_hpc_ci.sh` (or `.jl` wrapper) that:

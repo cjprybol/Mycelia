@@ -110,5 +110,12 @@ Implemented as a new core file: `src/tda.jl`.
 
 ## Implementation Status (as of this doc)
 
+- **Progress snapshot (2026-04-04): ~45% complete against the phased plan.**
+  The graph-only TDA backend is implemented and tested, and TDA now has both a
+  tutorial and a narrative docs page. The remaining gap is not basic API
+  availability; it is the still-open integration work for persistent homology,
+  threshold selection, assembly-objective wiring, and local bubble/repeat
+  scoring.
 - `src/tda.jl`: implemented graph Betti invariants and filtration curves (graph-only backend).
 - `test/4_assembly/tda_metrics_test.jl`: tests exist for cycle vs path and filtration sanity.
+- `docs/src/topological-assembly-optimization.md` and `tutorials/21_tda_topological_assembly_optimization.jl`: present, so the docs/tutorial phase is now partially complete rather than purely planned.

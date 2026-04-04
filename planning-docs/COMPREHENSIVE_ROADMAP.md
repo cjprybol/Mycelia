@@ -72,6 +72,21 @@ accessible, production-ready platform that serves three user constituencies:
 **Source:** `ASSEMBLY_ROADMAP_UNIFIED.md` (for structure), with details from all
 documents.
 
+### Phase Progress Snapshot (2026-04-04)
+
+These percentages are conservative estimates against the original phase scope,
+not a claim that the corresponding roadmap sections are production-complete.
+They were updated against the current `src/`, `test/`, `docs/src/`, `ci/hpc/`,
+and `coverage/baseline-summary.md` state.
+
+| Phase | Estimated completion | Rationale |
+| --- | --- | --- |
+| Phase 1: Foundational Rhizomorph Ecosystem | 85% | Core Rhizomorph module structure, fixed-/variable-length graph builders, conversions, simplification helpers, path-finding, GFA/JLD2 round-trips, and broad Stage 4 coverage are in place. Remaining work is concentrated in broader variable-length traversal coverage, edge-removal simplification cases, and retiring the last legacy graph test paths. |
+| Phase 2: Core Algorithms & Performance | 65% | Core algorithms exist across `src/rhizomorph/algorithms/`, including path-finding, generation, filtering, repeats, simplification, metrics, and momentum fork resolution. Performance benchmarking infrastructure exists, but more systematic multi-threading, streaming/on-disk representations, and benchmark-driven optimization remain open. |
+| Phase 3: Production Readiness & Validation | 45% | Validation wrappers, HPC CI scaffolding, and broad staged tests exist, but the current coverage baseline is still 37.4% overall and several external wrapper suites remain opt-in or validation-only. This phase is materially underway, but it is still far from the roadmap's original "all tests green, >90% coverage, full workflow validation" target. |
+| Phase 4: User Accessibility & Documentation | 75% | The repo now has installation/getting-started docs, workflow maps, an API index, metagenomic and TDA narrative docs, and a large generated tutorial set. Remaining gaps are the tutorial TODOs still listed in `docs/src/tutorials.md`, plus more complete onboarding for some downstream workflows. |
+| Phase 5: Advanced Features & Research | 35% | TDA APIs/tests/docs and momentum fork resolution are now implemented, so this phase is no longer just aspirational. The larger self-optimizing assembly, reinforcement-learning, dashboard, and manuscript-oriented deliverables are still only partially realized or remain in `test/in_development`. |
+
 ### **Phase 1: Foundational Rhizomorph Ecosystem (CRITICAL PRIORITY)**
 
 _Goal: Implement the core type-safe, biologically accurate graph data
