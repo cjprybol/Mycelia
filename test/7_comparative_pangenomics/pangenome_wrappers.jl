@@ -128,6 +128,49 @@ Test.@testset "Cactus wrapper executor collection" begin
     end
 end
 
+Test.@testset "Cactus wrapper executor handles unknown output formats" begin
+    temp_dir = mktempdir()
+    try
+        reference = joinpath(temp_dir, "reference.fasta")
+        sample = joinpath(temp_dir, "sample.fasta")
+        open(reference, "w") do io
+            println(io, ">reference")
+            println(io, "ATGCGATGCA")
+        end
+        open(sample, "w") do io
+            println(io, ">sample")
+            println(io, "ATGCGTTTAA")
+        end
+
+        executor = Mycelia.CollectExecutor()
+        output_dir = joinpath(temp_dir, "cactus-mixed")
+        output_files = Mycelia.construct_pangenome_cactus(
+            [reference, sample],
+            ["reference", "sample"],
+            output_dir,
+            "reference";
+            output_formats = ["gfa", "mystery"],
+            executor = executor,
+            max_memory_gb = 32,
+            mem_gb = 12,
+            site = :local,
+            job_name = "cactus-mixed"
+        )
+
+        Test.@test output_files == Dict(
+            "gfa" => joinpath(output_dir, "pangenome.gfa"),
+            "mystery" => joinpath(output_dir, "pangenome.mystery")
+        )
+        Test.@test length(executor.jobs) == 1
+        Test.@test executor.jobs[1].job_name == "cactus-mixed"
+        Test.@test executor.jobs[1].mem_gb == 12
+        Test.@test occursin("--gfa", executor.jobs[1].cmd)
+        Test.@test !occursin("--mystery", executor.jobs[1].cmd)
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
 Test.@testset "Pangenome wrapper index validation" begin
     temp_dir = mktempdir()
     try
@@ -139,6 +182,27 @@ Test.@testset "Pangenome wrapper index validation" begin
         Test.@test isempty(Mycelia.index_pangenome_graph(graph_file; index_types = ["mystery"]))
         Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(joinpath(temp_dir, "missing.gfa"))
         Test.@test_throws ErrorException Mycelia.index_pangenome_graph(joinpath(temp_dir, "missing.vg"))
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
+Test.@testset "Pangenome wrapper command failures are surfaced for existing graphs" begin
+    temp_dir = mktempdir()
+    try
+        graph_file = joinpath(temp_dir, "graph.gfa")
+        open(graph_file, "w") do io
+            println(io, "H\tVN:Z:1.0")
+        end
+
+        Test.@test_throws ErrorException Mycelia.call_variants_from_pggb_graph(graph_file, "ref")
+        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(graph_file)
+
+        xg_indexes = Mycelia.index_pangenome_graph(graph_file; index_types = ["xg"])
+        Test.@test isempty(xg_indexes)
+
+        snarls_indexes = Mycelia.index_pangenome_graph(graph_file; index_types = ["snarls"])
+        Test.@test isempty(snarls_indexes)
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
