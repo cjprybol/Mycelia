@@ -7,12 +7,292 @@ import Mycelia
 const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const RUN_EXTERNAL = RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 
-if !RUN_EXTERNAL
+function install_noop_add_bioconda_env!()
     @eval Mycelia begin
-        function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        function add_bioconda_env(pkg; force = false, quiet = false)
             return nothing
         end
     end
+    return nothing
+end
+
+function restore_add_bioconda_env!()
+    @eval Mycelia begin
+        function add_bioconda_env(pkg; force = false, quiet = false)
+            _ensure_conda_env_vars!()
+            channel = nothing
+            if occursin("::", pkg)
+                if !quiet
+                    println("splitting $(pkg)")
+                end
+                channel, pkg = split(pkg, "::")
+                if !quiet
+                    println("into channel:$(channel) pkg:$(pkg)")
+                end
+            end
+            already_installed = check_bioconda_env_is_installed(pkg)
+            if !already_installed || force
+                if !quiet
+                    @info "installing conda environment $(pkg)"
+                end
+                if isnothing(channel)
+                    if quiet
+                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
+                    else
+                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+                    end
+                else
+                    if quiet
+                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
+                    else
+                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+                    end
+                end
+                if quiet
+                    run(`$(CONDA_RUNNER) clean --all -y --quiet`)
+                else
+                    run(`$(CONDA_RUNNER) clean --all -y`)
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+function write_executable(path::AbstractString, contents::AbstractString)
+    write(path, contents)
+    chmod(path, 0o755)
+    return path
+end
+
+function install_fake_sra_runner!(runner_path::AbstractString)
+    script = raw"""#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "run" ]]; then
+    shift
+fi
+if [[ "${1:-}" == "--live-stream" ]]; then
+    shift
+fi
+if [[ "${1:-}" == "-n" ]]; then
+    shift 2
+fi
+
+tool="${1:-}"
+if [[ -z "$tool" ]]; then
+    echo "missing tool" >&2
+    exit 1
+fi
+shift
+
+case "$tool" in
+    prefetch)
+        srr=""
+        outdir="."
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -O)
+                    outdir="$2"
+                    shift 2
+                    ;;
+                *)
+                    srr="$1"
+                    shift
+                    ;;
+            esac
+        done
+        if [[ "$srr" == *FAIL ]]; then
+            exit 1
+        fi
+        mkdir -p "$outdir/$srr"
+        printf 'stub archive' > "$outdir/$srr/$srr.sra"
+        ;;
+    fasterq-dump)
+        outdir="."
+        target=""
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                --outdir)
+                    outdir="$2"
+                    shift 2
+                    ;;
+                --mem|--split-3|--skip-technical)
+                    shift
+                    ;;
+                --threads)
+                    shift 2
+                    ;;
+                *)
+                    target="$1"
+                    shift
+                    ;;
+            esac
+        done
+        srr="$(basename "$target")"
+        if [[ "$srr" == *FAIL ]]; then
+            exit 1
+        fi
+        mkdir -p "$outdir"
+        if [[ "$srr" == *PAIRED* ]]; then
+            printf 'forward reads' > "$outdir/$srr"_1.fastq
+            printf 'reverse reads' > "$outdir/$srr"_2.fastq
+        elif [[ "$srr" == *SINGLE* ]]; then
+            printf 'single reads' > "$outdir/$srr.fastq"
+        fi
+        ;;
+    *)
+        echo "unexpected tool: $tool" >&2
+        exit 1
+        ;;
+esac
+"""
+    return write_executable(runner_path, script)
+end
+
+function install_fake_gzip!(gzip_path::AbstractString)
+    script = raw"""#!/usr/bin/env bash
+set -euo pipefail
+
+input="${1:?missing input}"
+cp "$input" "$input.gz"
+rm -f "$input"
+"""
+    return write_executable(gzip_path, script)
+end
+
+function with_fake_sra_tooling(f::Function)
+    original_path = get(ENV, "PATH", "")
+    conda_runner = Mycelia.CONDA_RUNNER
+    @assert isfile(conda_runner)
+
+    mktempdir() do dir
+        fake_runner = joinpath(dir, "conda")
+        fake_gzip_dir = joinpath(dir, "bin")
+        backup_runner = joinpath(dir, "conda.backup")
+
+        mkpath(fake_gzip_dir)
+        install_fake_sra_runner!(fake_runner)
+        install_fake_gzip!(joinpath(fake_gzip_dir, "gzip"))
+
+        cp(conda_runner, backup_runner; force = true)
+        cp(fake_runner, conda_runner; force = true)
+        chmod(conda_runner, 0o755)
+        ENV["PATH"] = fake_gzip_dir * ":" * original_path
+
+        try
+            return f()
+        finally
+            ENV["PATH"] = original_path
+            cp(backup_runner, conda_runner; force = true)
+            chmod(conda_runner, 0o755)
+        end
+    end
+end
+
+function install_synthetic_sra_helpers!()
+    @eval Mycelia begin
+        function prefetch(; SRR, outdir = pwd())
+            if endswith(SRR, "FAIL")
+                error("synthetic prefetch failure for $(SRR)")
+            end
+            output_dir = joinpath(outdir, SRR)
+            archive = joinpath(output_dir, "$(SRR).sra")
+            mkpath(output_dir)
+            write(archive, "stub archive")
+            return (directory = output_dir, archive = archive)
+        end
+
+        function fasterq_dump(; outdir = pwd(), srr_identifier = "")
+            if endswith(srr_identifier, "FAIL")
+                error("synthetic fasterq failure for $(srr_identifier)")
+            end
+            mkpath(outdir)
+            if occursin("PAIRED", srr_identifier)
+                forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
+                reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
+                write(forward_reads, "forward reads")
+                write(reverse_reads, "reverse reads")
+                return (
+                    forward_reads = forward_reads,
+                    reverse_reads = reverse_reads,
+                    unpaired_reads = missing
+                )
+            elseif occursin("SINGLE", srr_identifier)
+                unpaired_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
+                write(unpaired_reads, "single reads")
+                return (
+                    forward_reads = missing,
+                    reverse_reads = missing,
+                    unpaired_reads = unpaired_reads
+                )
+            else
+                return (
+                    forward_reads = missing,
+                    reverse_reads = missing,
+                    unpaired_reads = missing
+                )
+            end
+        end
+    end
+    return nothing
+end
+
+function restore_sra_helpers!()
+    @eval Mycelia begin
+        function prefetch(; SRR, outdir = pwd())
+            Mycelia.add_bioconda_env("sra-tools")
+            final_dir = joinpath(outdir, SRR)
+            sra_archive = joinpath(final_dir, "$(SRR).sra")
+            if !isfile(sra_archive)
+                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
+            else
+                @info "SRA archive already present: $(sra_archive)"
+            end
+            return (directory = final_dir, archive = sra_archive)
+        end
+
+        function fasterq_dump(; outdir = pwd(), srr_identifier = "")
+            Mycelia.add_bioconda_env("sra-tools")
+            prefetch_results = Mycelia.prefetch(SRR = srr_identifier, outdir = outdir)
+
+            final_outdir = prefetch_results.directory
+
+            forward_reads = joinpath(final_outdir, "$(srr_identifier)_1.fastq")
+            reverse_reads = joinpath(final_outdir, "$(srr_identifier)_2.fastq")
+            unpaired_reads = joinpath(final_outdir, "$(srr_identifier).fastq")
+
+            forward_reads_gz = forward_reads * ".gz"
+            reverse_reads_gz = reverse_reads * ".gz"
+            unpaired_reads_gz = unpaired_reads * ".gz"
+
+            forward_and_reverse_present = isfile(forward_reads_gz) && isfile(reverse_reads_gz)
+            unpaired_present = isfile(unpaired_reads_gz)
+
+            if !(forward_and_reverse_present || unpaired_present)
+                fasterq_dump_cmd = `
+                    $(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools fasterq-dump
+                        --outdir $(final_outdir)
+                        --mem 1G
+                        --split-3
+                        --threads $(min(get_default_threads(), 4))
+                        --skip-technical
+                        $(final_outdir)`
+                @time run(fasterq_dump_cmd)
+                isfile(forward_reads) && run(`gzip $(forward_reads)`)
+                isfile(reverse_reads) && run(`gzip $(reverse_reads)`)
+                isfile(unpaired_reads) && run(`gzip $(unpaired_reads)`)
+            else
+                @info "$(forward_reads_gz) & $(reverse_reads_gz) already present"
+            end
+            return (
+                forward_reads = isfile(forward_reads_gz) ? forward_reads_gz : missing,
+                reverse_reads = isfile(reverse_reads_gz) ? reverse_reads_gz : missing,
+                unpaired_reads = isfile(unpaired_reads_gz) ? unpaired_reads_gz : missing
+            )
+        end
+    end
+    return nothing
 end
 
 function blast_env_available()
@@ -591,15 +871,14 @@ Test.@testset "Reference Database Parsing" begin
         )
     end
 
+    install_noop_add_bioconda_env!()
+    try
+
     if RUN_EXTERNAL
         Test.@testset "Cached SRA helper coverage is core-only" begin
             Test.@test_skip "Cached prefetch/fasterq coverage is skipped when external tooling is enabled"
         end
 
-        Test.@testset "Synthetic SRA wrapper coverage is core-only" begin
-            Test.@test_skip "Synthetic prefetch/fasterq coverage is skipped when external tooling is enabled"
-        end
-    else
         Test.@testset "prefetch and fasterq_dump cached outputs" begin
             mktempdir() do dir
                 paired_srr = "SRR_PAIRED_CACHED"
@@ -638,108 +917,96 @@ Test.@testset "Reference Database Parsing" begin
             end
         end
 
-        @eval Mycelia begin
-            function prefetch(; SRR, outdir = pwd())
-                if endswith(SRR, "FAIL")
-                    error("synthetic prefetch failure for $(SRR)")
-                end
-                output_dir = joinpath(outdir, SRR)
-                archive = joinpath(output_dir, "$(SRR).sra")
-                mkpath(output_dir)
-                write(archive, "stub archive")
-                return (directory = output_dir, archive = archive)
-            end
+        Test.@testset "prefetch and fasterq_dump command branches" begin
+            with_fake_sra_tooling() do
+                mktempdir() do dir
+                    prefetched = Mycelia.prefetch(SRR = "SRR_PREFETCH_LIVE", outdir = dir)
+                    Test.@test prefetched.directory == joinpath(dir, "SRR_PREFETCH_LIVE")
+                    Test.@test isfile(prefetched.archive)
 
-            function fasterq_dump(; outdir = pwd(), srr_identifier = "")
-                if endswith(srr_identifier, "FAIL")
-                    error("synthetic fasterq failure for $(srr_identifier)")
-                end
-                mkpath(outdir)
-                if occursin("PAIRED", srr_identifier)
-                    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
-                    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
-                    write(forward_reads, "forward reads")
-                    write(reverse_reads, "reverse reads")
-                    return (
-                        forward_reads = forward_reads,
-                        reverse_reads = reverse_reads,
-                        unpaired_reads = missing
-                    )
-                elseif occursin("SINGLE", srr_identifier)
-                    unpaired_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
-                    write(unpaired_reads, "single reads")
-                    return (
-                        forward_reads = missing,
-                        reverse_reads = missing,
-                        unpaired_reads = unpaired_reads
-                    )
-                else
-                    return (
-                        forward_reads = missing,
-                        reverse_reads = missing,
-                        unpaired_reads = missing
-                    )
+                    paired_srr = "SRR_PAIRED_LIVE"
+                    paired_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = paired_srr)
+                    Test.@test paired_result.forward_reads == joinpath(dir, paired_srr, "$(paired_srr)_1.fastq.gz")
+                    Test.@test paired_result.reverse_reads == joinpath(dir, paired_srr, "$(paired_srr)_2.fastq.gz")
+                    Test.@test ismissing(paired_result.unpaired_reads)
+                    Test.@test isfile(paired_result.forward_reads)
+                    Test.@test isfile(paired_result.reverse_reads)
+
+                    single_srr = "SRR_SINGLE_LIVE"
+                    single_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = single_srr)
+                    Test.@test ismissing(single_result.forward_reads)
+                    Test.@test ismissing(single_result.reverse_reads)
+                    Test.@test single_result.unpaired_reads == joinpath(dir, single_srr, "$(single_srr).fastq.gz")
+                    Test.@test isfile(single_result.unpaired_reads)
                 end
             end
         end
 
-        Test.@testset "download_sra_data wrapper branches" begin
-            mktempdir() do dir
-                paired = Mycelia.download_sra_data("SRR_PAIRED_WRAPPER"; outdir = dir)
-                Test.@test paired.srr_id == "SRR_PAIRED_WRAPPER"
-                Test.@test paired.is_paired
-                Test.@test length(paired.files) == 2
-                Test.@test all(isfile, paired.files)
+        install_synthetic_sra_helpers!()
+        try
 
-                single = Mycelia.download_sra_data("SRR_SINGLE_WRAPPER"; outdir = dir)
-                Test.@test single.srr_id == "SRR_SINGLE_WRAPPER"
-                Test.@test !single.is_paired
-                Test.@test length(single.files) == 1
-                Test.@test isfile(only(single.files))
+            Test.@testset "download_sra_data wrapper branches" begin
+                mktempdir() do dir
+                    paired = Mycelia.download_sra_data("SRR_PAIRED_WRAPPER"; outdir = dir)
+                    Test.@test paired.srr_id == "SRR_PAIRED_WRAPPER"
+                    Test.@test paired.is_paired
+                    Test.@test length(paired.files) == 2
+                    Test.@test all(isfile, paired.files)
 
-                Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+                    single = Mycelia.download_sra_data("SRR_SINGLE_WRAPPER"; outdir = dir)
+                    Test.@test single.srr_id == "SRR_SINGLE_WRAPPER"
+                    Test.@test !single.is_paired
+                    Test.@test length(single.files) == 1
+                    Test.@test isfile(only(single.files))
+
+                    Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+                end
             end
-        end
 
-        Test.@testset "prefetch_sra_runs error path" begin
-            Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
-        end
-
-        Test.@testset "prefetch_sra_runs collects success and failure results" begin
-            mktempdir() do dir
-                results = Mycelia.prefetch_sra_runs(
-                    ["SRR_BATCH_A", "SRR_BATCH_FAIL", "SRR_BATCH_B"];
-                    outdir = dir,
-                    max_parallel = 2
-                )
-                Test.@test length(results) == 3
-                successes = Dict(result.srr_id => result for result in results)
-                Test.@test successes["SRR_BATCH_A"].success
-                Test.@test successes["SRR_BATCH_B"].success
-                Test.@test !successes["SRR_BATCH_FAIL"].success
-                Test.@test occursin("synthetic prefetch failure", successes["SRR_BATCH_FAIL"].error)
+            Test.@testset "prefetch_sra_runs error path" begin
+                Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
             end
-        end
 
-        Test.@testset "fasterq_dump_parallel error path" begin
-            Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
-        end
-
-        Test.@testset "fasterq_dump_parallel collects success and failure results" begin
-            mktempdir() do dir
-                results = Mycelia.fasterq_dump_parallel(
-                    ["SRR_PAIRED_A", "SRR_PAIRED_FAIL", "SRR_SINGLE_B"];
-                    outdir = dir,
-                    max_parallel = 2
-                )
-                Test.@test length(results) == 3
-                outcomes = Dict(result.srr_id => result for result in results)
-                Test.@test outcomes["SRR_PAIRED_A"].success
-                Test.@test outcomes["SRR_SINGLE_B"].success
-                Test.@test !outcomes["SRR_PAIRED_FAIL"].success
-                Test.@test occursin("synthetic fasterq failure", outcomes["SRR_PAIRED_FAIL"].error)
+            Test.@testset "prefetch_sra_runs collects success and failure results" begin
+                mktempdir() do dir
+                    results = Mycelia.prefetch_sra_runs(
+                        ["SRR_BATCH_A", "SRR_BATCH_FAIL", "SRR_BATCH_B"];
+                        outdir = dir,
+                        max_parallel = 2
+                    )
+                    Test.@test length(results) == 3
+                    successes = Dict(result.srr_id => result for result in results)
+                    Test.@test successes["SRR_BATCH_A"].success
+                    Test.@test successes["SRR_BATCH_B"].success
+                    Test.@test !successes["SRR_BATCH_FAIL"].success
+                    Test.@test occursin("synthetic prefetch failure", successes["SRR_BATCH_FAIL"].error)
+                end
             end
+
+            Test.@testset "fasterq_dump_parallel error path" begin
+                Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
+            end
+
+            Test.@testset "fasterq_dump_parallel collects success and failure results" begin
+                mktempdir() do dir
+                    results = Mycelia.fasterq_dump_parallel(
+                        ["SRR_PAIRED_A", "SRR_PAIRED_FAIL", "SRR_SINGLE_B"];
+                        outdir = dir,
+                        max_parallel = 2
+                    )
+                    Test.@test length(results) == 3
+                    outcomes = Dict(result.srr_id => result for result in results)
+                    Test.@test outcomes["SRR_PAIRED_A"].success
+                    Test.@test outcomes["SRR_SINGLE_B"].success
+                    Test.@test !outcomes["SRR_PAIRED_FAIL"].success
+                    Test.@test occursin("synthetic fasterq failure", outcomes["SRR_PAIRED_FAIL"].error)
+                end
+            end
+        finally
+            restore_sra_helpers!()
         end
+    finally
+        restore_add_bioconda_env!()
     end
 
     Test.@testset "BLAST database helper coverage" begin
