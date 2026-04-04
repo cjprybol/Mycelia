@@ -820,7 +820,7 @@ Run the EGAPx (Eukaryotic Genome Annotation Pipeline) tool on a FASTA file.
 
 EGAPx is not currently supported by Mycelia. This function exists only to make the
 unsupported status explicit for callers while preserving a stable API surface for
-future implementation work.
+future implementation work. Tracking issue: `my-a14` (source bead `td-ex8mp`).
 
 Readme notes protein datasets suitable for most vertebrates, arthropods (insecta/arachnida),
 echinoderms, cnidaria, monocots (Liliopsida), and eudicots (Asterids/Rosids/Fabids/Caryophyllales).
