@@ -5,6 +5,10 @@ function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
 end
 
+function _fixture_with_local_home(text::String)
+    return replace(text, "/Users/cameronprybol" => homedir())
+end
+
 Test.@testset "JobSpec JSON roundtrip" begin
     job = Mycelia.JobSpec(
         job_name = "json-roundtrip",
@@ -202,8 +206,12 @@ Test.@testset "Template rendering and fixture checks" begin
 
     fixture_root = joinpath(dirname(@__DIR__), "fixtures", "job_templates")
 
-    expected_nersc = read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String)
-    expected_scg = read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String)
+    expected_nersc = _fixture_with_local_home(
+        read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String)
+    )
+    expected_scg = _fixture_with_local_home(
+        read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String)
+    )
     expected_docker = read(joinpath(fixture_root, "docker_run.sh"), String)
     expected_cloud = read(joinpath(fixture_root, "cloudbuild_prebuilt.yaml"), String)
 
