@@ -1667,6 +1667,7 @@ Downloads a genome file from NCBI FTP server to the specified directory.
 - Downloads the genomic.fna.gz version of the genome
 """
 function download_genome_by_ftp(; ftp, outdir = pwd())
+    mkpath(outdir)
     url = Mycelia.ncbi_ftp_path_to_url(ftp_path = ftp, extension = "genomic.fna.gz")
     outfile = joinpath(outdir, basename(url))
     if !isfile(outfile)
