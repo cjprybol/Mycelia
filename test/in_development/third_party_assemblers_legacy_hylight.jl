@@ -28,8 +28,26 @@ function legacy_conda_tool_available(env_name::AbstractString, cmd_parts::Vector
     end
 end
 
+function legacy_conda_env_listing_available()
+    if !isfile(Mycelia.CONDA_RUNNER)
+        return false
+    end
+
+    try
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) env list`,
+            stdout = devnull,
+            stderr = devnull
+        ))
+        return true
+    catch
+        return false
+    end
+end
+
 function legacy_strain_workflow_tools_available()
     return RUN_EXTERNAL &&
+           legacy_conda_env_listing_available() &&
            legacy_conda_tool_available("badread", ["badread", "simulate", "--help"]) &&
            legacy_conda_tool_available("flye", ["flye", "--version"]) &&
            legacy_conda_tool_available("strong", ["STRONG", "--help"]) &&
@@ -40,6 +58,7 @@ end
 
 function legacy_plass_smoke_tools_available()
     return RUN_EXTERNAL &&
+           legacy_conda_env_listing_available() &&
            legacy_conda_tool_available("plass", ["plass", "--help"]) &&
            legacy_conda_tool_available("plass", ["penguin", "--help"])
 end
@@ -700,7 +719,7 @@ end
 
 Test.@testset "Protein Assembly - PLASS (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PLASS smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PLASS smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
@@ -736,7 +755,7 @@ end
 
 Test.@testset "Nucleotide Assembly - PenguiN guided_nuclassemble (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PenguiN smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
@@ -772,7 +791,7 @@ end
 
 Test.@testset "Nucleotide Assembly - PenguiN nuclassemble (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PenguiN smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
