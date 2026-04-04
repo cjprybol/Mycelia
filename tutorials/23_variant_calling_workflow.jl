@@ -33,6 +33,12 @@
 # MYCELIA_RUN_EXTERNAL=true julia --project=. tutorials/23_variant_calling_workflow.jl
 # ```
 #
+# To also run RTG vcfeval benchmarking:
+#
+# ```bash
+# MYCELIA_RUN_EXTERNAL=true MYCELIA_RUN_VCFEVAL_TUTORIAL=true julia --project=. tutorials/23_variant_calling_workflow.jl
+# ```
+#
 # To also run Clair3:
 #
 # ```bash
@@ -53,7 +59,7 @@ const RUN_EXTERNAL = lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "tr
 const RUN_CLAIR3 = RUN_EXTERNAL &&
                    lowercase(get(ENV, "MYCELIA_RUN_CLAIR3_TUTORIAL", "false")) == "true"
 const RUN_VCFEVAL = RUN_EXTERNAL &&
-                    lowercase(get(ENV, "MYCELIA_RUN_VCFEVAL_TUTORIAL", "true")) == "true"
+                    lowercase(get(ENV, "MYCELIA_RUN_VCFEVAL_TUTORIAL", "false")) == "true"
 
 println("=== Variant Calling Workflow Tutorial ===")
 println("External wrappers enabled: ", RUN_EXTERNAL)
@@ -110,7 +116,8 @@ if RUN_EXTERNAL
     println("Mutated haplotype FASTA: ", mutant_fasta)
 else
     println("Skipping consensus FASTA materialization.")
-    println("Set MYCELIA_RUN_EXTERNAL=true to run bcftools/minimap2/GATK/Clair3 steps.")
+    println("Set MYCELIA_RUN_EXTERNAL=true to run bcftools/minimap2/GATK steps.")
+    println("Add MYCELIA_RUN_VCFEVAL_TUTORIAL=true or MYCELIA_RUN_CLAIR3_TUTORIAL=true for optional sections.")
 end
 
 # ## Part 3: Simulate paired-end reads and align them with minimap2
