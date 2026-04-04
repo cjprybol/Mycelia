@@ -538,41 +538,46 @@ Indels  5  20
         end
     end
 
+    function build_pocp_test_helpers(rng)
+        aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
+            'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+
+        random_protein = len -> String(rand(rng, aa_alphabet, len))
+
+        function mutate_to_target_identity(seq::AbstractString, target_identity::Float64)
+            seq_chars = collect(seq)
+            n_positions = length(seq_chars)
+            n_keep = round(Int, n_positions * target_identity)
+            keep_indices = Set(Random.randperm(rng, n_positions)[1:n_keep])
+            for i in eachindex(seq_chars)
+                if !(i in keep_indices)
+                    original = seq_chars[i]
+                    candidates = filter(residue -> residue != original, aa_alphabet)
+                    seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+                end
+            end
+            return String(seq_chars)
+        end
+
+        function write_protein_fasta(path::AbstractString, entries)
+            open(path, "w") do io
+                for (identifier, sequence) in entries
+                    println(io, ">", identifier)
+                    println(io, sequence)
+                end
+            end
+            return path
+        end
+
+        return aa_alphabet, random_protein, mutate_to_target_identity, write_protein_fasta
+    end
+
     Test.@testset "POCP parameter regression (external)" begin
         if !(run_external && conda_available)
             Test.@test_skip "POCP regression requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(119)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
-                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
-
-            random_protein = len -> String(rand(rng, aa_alphabet, len))
-
-            function mutate_to_target_identity(seq::AbstractString, target_identity::Float64)
-                seq_chars = collect(seq)
-                n_positions = length(seq_chars)
-                n_keep = round(Int, n_positions * target_identity)
-                keep_indices = Set(Random.randperm(rng, n_positions)[1:n_keep])
-                for i in eachindex(seq_chars)
-                    if !(i in keep_indices)
-                        original = seq_chars[i]
-                        candidates = filter(residue -> residue != original, aa_alphabet)
-                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
-                    end
-                end
-                return String(seq_chars)
-            end
-
-            function write_protein_fasta(path::AbstractString, entries)
-                open(path, "w") do io
-                    for (identifier, sequence) in entries
-                        println(io, ">", identifier)
-                        println(io, sequence)
-                    end
-                end
-                return path
-            end
-
+            aa_alphabet, random_protein, mutate_to_target_identity, write_protein_fasta = build_pocp_test_helpers(rng)
             mktempdir() do temp_dir
                 shared_segment = random_protein(110)
                 coverage_ref = random_protein(110) * shared_segment
