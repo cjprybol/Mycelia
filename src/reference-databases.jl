@@ -1065,27 +1065,23 @@ function download_sra_data(srr_identifier::String; outdir::String = pwd())
     end
 
     @info "Downloading SRA data: $(srr_identifier)"
-    fasterq_dump(outdir = outdir, srr_identifier = srr_identifier)
+    fasterq_results = fasterq_dump(outdir = outdir, srr_identifier = srr_identifier)
+    final_outdir = joinpath(outdir, srr_identifier)
 
-    # Check what files were created to determine data type
-    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
-    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
-    single_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
-
-    if isfile(forward_reads) && isfile(reverse_reads)
+    if !(ismissing(fasterq_results.forward_reads) || ismissing(fasterq_results.reverse_reads))
         # Paired-end data
         return (
             srr_id = srr_identifier,
-            outdir = outdir,
-            files = [forward_reads, reverse_reads],
+            outdir = final_outdir,
+            files = [fasterq_results.forward_reads, fasterq_results.reverse_reads],
             is_paired = true
         )
-    elseif isfile(single_reads)
+    elseif !ismissing(fasterq_results.unpaired_reads)
         # Single-end data
         return (
             srr_id = srr_identifier,
-            outdir = outdir,
-            files = [single_reads],
+            outdir = final_outdir,
+            files = [fasterq_results.unpaired_reads],
             is_paired = false
         )
     else

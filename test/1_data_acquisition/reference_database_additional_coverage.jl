@@ -212,6 +212,20 @@ Test.@testset "Reference Database Additional Coverage" begin
                 Test.@test protein_out == "forced.faa.gz"
                 Test.@test read(protein_out, String) == ">all\nSEQUENCE\n"
 
+                protein_auto_out = Mycelia.blastdb_to_fasta(
+                    blastdb = "nr",
+                    force = true
+                )
+                Test.@test protein_auto_out == "nr.2024-02-03.faa.gz"
+                Test.@test read(protein_auto_out, String) == ">all\nSEQUENCE\n"
+
+                Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
+                    blastdb = "nt",
+                    entries = ["seqA"],
+                    taxids = [2],
+                    force = true
+                )
+
                 Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
                     blastdb = "weird",
                     force = true

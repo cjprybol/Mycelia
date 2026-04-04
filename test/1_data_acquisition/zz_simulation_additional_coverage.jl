@@ -128,6 +128,45 @@ Test.@testset "Simulation Additional Coverage" begin
         Test.@test vcf_table[1, "REF"] != vcf_table[1, "ALT"]
     end
 
+    Test.@testset "simulate_variants additional variant types" begin
+        record = FASTX.FASTA.Record("seq2", BioSequences.LongDNA{4}("ACGTACGTTGCA"))
+
+        Random.seed!(12)
+        insertion_table = Mycelia.simulate_variants(
+            record;
+            n_variants = 1,
+            window_size = 4,
+            variant_size_disbribution = Distributions.Geometric(1.0),
+            variant_type_likelihoods = [:insertion => 1.0]
+        )
+        Test.@test Mycelia.DataFrames.nrow(insertion_table) == 1
+        Test.@test insertion_table[1, "FILTER"] == "insertion"
+        Test.@test length(insertion_table[1, "ALT"]) > length(insertion_table[1, "REF"])
+
+        Random.seed!(13)
+        deletion_table = Mycelia.simulate_variants(
+            record;
+            n_variants = 1,
+            window_size = 4,
+            variant_size_disbribution = Distributions.Geometric(1.0),
+            variant_type_likelihoods = [:deletion => 1.0]
+        )
+        Test.@test Mycelia.DataFrames.nrow(deletion_table) == 1
+        Test.@test deletion_table[1, "FILTER"] == "deletion"
+        Test.@test length(deletion_table[1, "REF"]) > length(deletion_table[1, "ALT"])
+
+        Random.seed!(14)
+        inversion_table = Mycelia.simulate_variants(
+            record;
+            n_variants = 1,
+            window_size = 4,
+            variant_size_disbribution = Distributions.Geometric(1.0),
+            variant_type_likelihoods = [:inversion => 1.0]
+        )
+        Test.@test Mycelia.DataFrames.nrow(inversion_table) == 1
+        Test.@test inversion_table[1, "FILTER"] == "inversion"
+    end
+
     Test.@testset "observe helpers" begin
         dna = BioSequences.LongDNA{4}("ACGTACGT")
         rna = BioSequences.LongRNA{4}("ACGUACGU")
@@ -163,6 +202,37 @@ Test.@testset "Simulation Additional Coverage" begin
         Test.@test 55 <= Mycelia.get_correct_quality(:ultima, 2, 10) <= 65
         Test.@test Mycelia.get_error_quality(:unknown) == 10
         Test.@test Mycelia.get_correct_quality(:unknown, 1, 5) == 30
+    end
+
+    Test.@testset "observe pacbio and ultima helpers" begin
+        homopolymer = BioSequences.LongDNA{4}("AAAAAACCCCCC")
+
+        Random.seed!(21)
+        observed_pacbio, pacbio_quals = Mycelia.observe(
+            homopolymer;
+            error_rate = 1.0,
+            tech = :pacbio
+        )
+        Test.@test length(observed_pacbio) > 0
+        Test.@test length(pacbio_quals) == length(observed_pacbio)
+        Test.@test all(q -> 5 <= q <= 18, pacbio_quals)
+
+        Random.seed!(22)
+        observed_ultima, ultima_quals = Mycelia.observe(
+            homopolymer;
+            error_rate = 1.0,
+            tech = :ultima
+        )
+        Test.@test length(observed_ultima) > 0
+        Test.@test length(ultima_quals) == length(observed_ultima)
+        Test.@test all(q -> 15 <= q <= 65, ultima_quals)
+
+        Random.seed!(23)
+        Test.@test 12 <= Mycelia.get_correct_quality(:pacbio, 3, 12) <= 18
+        Random.seed!(24)
+        Test.@test 5 <= Mycelia.get_error_quality(:pacbio) <= 10
+        Random.seed!(25)
+        Test.@test 15 <= Mycelia.get_error_quality(:ultima) <= 25
     end
 
     Test.@testset "stubbed simulation wrappers" begin
@@ -366,6 +436,25 @@ Test.@testset "Simulation Additional Coverage" begin
                 )
                 Test.@test reused_badread == cached_badread
                 Test.@test read(reused_badread, String) == "cached"
+
+                cached_wrapper_cases = [
+                    (fn = Mycelia.simulate_nearly_perfect_long_reads, quantity = "14x", outfile = joinpath(dir, "cached_perfect.fq.gz")),
+                    (fn = Mycelia.simulate_nanopore_r941_reads, quantity = "15x", outfile = joinpath(dir, "cached_r941.fq.gz")),
+                    (fn = Mycelia.simulate_very_bad_reads, quantity = "16x", outfile = joinpath(dir, "cached_very_bad.fq.gz")),
+                    (fn = Mycelia.simulate_pretty_good_reads, quantity = "17x", outfile = joinpath(dir, "cached_pretty_good.fq.gz"))
+                ]
+
+                for case in cached_wrapper_cases
+                    write(case.outfile, "cached-wrapper")
+                    reused = case.fn(;
+                        fasta = fasta,
+                        quantity = case.quantity,
+                        outfile = case.outfile,
+                        quiet = true
+                    )
+                    Test.@test reused == case.outfile
+                    Test.@test read(reused, String) == "cached-wrapper"
+                end
             end
         end
     end
