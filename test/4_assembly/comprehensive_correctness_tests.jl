@@ -171,31 +171,6 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         return true
     end
 
-    """
-    Test round-trip I/O by writing and reading back graphs/sequences.
-    """
-    function test_round_trip_io(graph, reconstructed_sequences, graph_type_name)
-        @info "Testing round-trip I/O for $graph_type_name..."
-
-        # For now, test sequence identity preservation
-        # TODO: Add actual graph serialization/deserialization when implemented
-
-        for (i, seq) in enumerate(reconstructed_sequences)
-            if isa(seq, BioSequences.BioSequence)
-                # Test BioSequence consistency
-                seq_copy = deepcopy(seq)
-                Test.@test seq == seq_copy
-                Test.@test string(seq) == string(seq_copy)
-            elseif isa(seq, String)
-                # Test String consistency
-                seq_copy = String(seq)
-                Test.@test seq == seq_copy
-            end
-        end
-
-        return true
-    end
-
     Test.@testset "DNA K-mer Graph Correctness" begin
         Test.@testset "DNA K-mer SingleStrand Detailed" begin
             reads = [FASTX.FASTA.Record("test", known_dna)]
