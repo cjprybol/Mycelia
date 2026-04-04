@@ -121,6 +121,7 @@ tutorial_order = [
     ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
     ("Step 21: Topological Assembly Optimization", "21_tda_topological_assembly_optimization.md"),
     ("Step 22: Momentum Fork Resolution", "22_momentum_fork_resolution.md"),
+    ("Step 23: Variant Calling Workflow", "23_variant_calling_workflow.md"),
 ]
 
 # Add tutorials that exist in the specified order
