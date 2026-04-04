@@ -15,8 +15,20 @@
 # ============================================================================
 
 """
-Represents a step in a probabilistic walk through the graph.
-Type parameter T allows for different vertex label types (k-mers, strings, biosequences, etc.)
+    WalkStep{T}
+
+Represents a single step in a graph walk.
+
+# Fields
+- `vertex_label::T`: Vertex visited at this step
+- `strand::StrandOrientation`: Strand orientation used for traversal
+- `probability::Float64`: Transition probability for this step
+- `cumulative_probability::Float64`: Product of step probabilities up to this step
+
+# Example
+```julia
+step = Mycelia.Rhizomorph.WalkStep("AAA", Mycelia.Rhizomorph.Forward, 0.5, 0.5)
+```
 """
 struct WalkStep{T}
     vertex_label::T
@@ -26,9 +38,23 @@ struct WalkStep{T}
 end
 
 """
-Represents a complete path through the graph.
-Type parameter T allows for different vertex label types (k-mers, strings, biosequences, etc.)
-No pre-computed sequence - use path_to_sequence() to reconstruct sequences from paths.
+    GraphPath{T}
+
+Represents a complete walk through a Rhizomorph graph.
+
+# Fields
+- `steps::Vector{WalkStep{T}}`: Ordered walk steps
+- `total_probability::Float64`: Cumulative probability of the full walk
+
+# Notes
+`GraphPath` stores traversal metadata only. Use
+`Mycelia.Rhizomorph.path_to_sequence` to reconstruct the assembled sequence.
+
+# Example
+```julia
+steps = [Mycelia.Rhizomorph.WalkStep("AAA", Mycelia.Rhizomorph.Forward, 1.0, 1.0)]
+path = Mycelia.Rhizomorph.GraphPath(steps)
+```
 """
 struct GraphPath{T}
     steps::Vector{WalkStep{T}}
@@ -40,13 +66,45 @@ struct GraphPath{T}
     end
 end
 
-# Convenience constructor that infers the type parameter
+"""
+    GraphPath(steps::Vector{WalkStep{T}}) where T
+
+Construct a `GraphPath` and infer the vertex label type from `steps`.
+
+# Arguments
+- `steps::Vector{WalkStep{T}}`: Ordered traversal steps
+
+# Returns
+- `GraphPath{T}`: Path with `total_probability` derived from the final step
+
+# Example
+```julia
+steps = [Mycelia.Rhizomorph.WalkStep("AAA", Mycelia.Rhizomorph.Forward, 1.0, 1.0)]
+path = Mycelia.Rhizomorph.GraphPath(steps)
+```
+"""
 function GraphPath(steps::Vector{WalkStep{T}}) where {T}
     return GraphPath{T}(steps)
 end
 
 """
-Edge data for probabilistic path algorithms with strand awareness.
+    StrandWeightedEdgeData
+
+Edge payload for probabilistic path algorithms with explicit strand tracking.
+
+# Fields
+- `weight::Float64`: Edge transition weight
+- `src_strand::StrandOrientation`: Strand at the source vertex
+- `dst_strand::StrandOrientation`: Strand at the destination vertex
+
+# Example
+```julia
+edge = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+    3.0,
+    Mycelia.Rhizomorph.Forward,
+    Mycelia.Rhizomorph.Forward,
+)
+```
 """
 struct StrandWeightedEdgeData
     weight::Float64
@@ -54,6 +112,27 @@ struct StrandWeightedEdgeData
     dst_strand::StrandOrientation
 end
 
+"""
+    edge_data_weight(edge_data)
+
+Extract the numeric weight used for path scoring and random-walk sampling.
+
+# Arguments
+- `edge_data`: Rhizomorph edge payload or `StrandWeightedEdgeData`
+
+# Returns
+- `Float64`: Edge weight for traversal algorithms
+
+# Example
+```julia
+edge = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+    2.5,
+    Mycelia.Rhizomorph.Forward,
+    Mycelia.Rhizomorph.Forward,
+)
+weight = Mycelia.Rhizomorph.edge_data_weight(edge)
+```
+"""
 function edge_data_weight(edge_data::StrandWeightedEdgeData)
     return edge_data.weight
 end
@@ -67,6 +146,17 @@ end
 
 Compute an edge weight from quality evidence when available.
 Falls back to evidence counts for non-quality edges.
+
+# Arguments
+- `edge_data`: Rhizomorph edge payload with quality or evidence annotations
+
+# Returns
+- `Float64`: Quality-derived edge weight, or evidence count fallback
+
+# Example
+```julia
+weight = Mycelia.Rhizomorph.edge_quality_weight(edge_data)
+```
 """
 function edge_quality_weight(edge_data)
     # TYPE-CHECK-AUDIT: super-union guard — must cover all reduced edge types
@@ -108,6 +198,19 @@ Convert a Rhizomorph evidence graph into a weighted graph suitable for
 probabilistic path algorithms. Edge weights are derived from evidence counts
 by default, and strand orientation is inferred from the first evidence entry
 when present. Undirected graphs are expanded into bidirectional edges.
+
+# Arguments
+- `source_graph::MetaGraphsNext.MetaGraph`: Evidence-backed graph to convert
+- `default_weight::Float64=1e-10`: Fallback weight for zero-support edges
+- `edge_weight::Function=count_evidence`: Callback used to score each edge
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: Directed graph with `StrandWeightedEdgeData` edges
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+```
 """
 function weighted_graph_from_rhizomorph(
         source_graph::MetaGraphsNext.MetaGraph;
@@ -150,6 +253,26 @@ function weighted_graph_from_rhizomorph(
     return weighted
 end
 
+"""
+    probabilistic_walk_next(graph::MetaGraphsNext.MetaGraph, start_vertex, max_steps; seed=nothing)
+
+Generate a weighted random walk from `start_vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `start_vertex`: Vertex label to start from
+- `max_steps::Int`: Maximum number of edge traversals
+- `seed::Union{Nothing, Int}=nothing`: Optional RNG seed for reproducibility
+
+# Returns
+- `GraphPath`: Walk annotated with per-step and cumulative probabilities
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, first(MetaGraphsNext.labels(weighted)), 25)
+```
+"""
 function probabilistic_walk_next(
         graph::MetaGraphsNext.MetaGraph,
         start_vertex::T,
@@ -193,6 +316,27 @@ function probabilistic_walk_next(
     return GraphPath(steps)
 end
 
+"""
+    maximum_weight_walk_next(graph::MetaGraphsNext.MetaGraph, start_vertex, max_steps; weight_function=edge_data_weight)
+
+Generate a greedy walk that chooses the highest-weight outgoing transition at
+each step.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `start_vertex`: Vertex label to start from
+- `max_steps::Int`: Maximum number of edge traversals
+- `weight_function::Function=edge_data_weight`: Scoring callback for transitions
+
+# Returns
+- `GraphPath`: Greedy walk through the graph
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted, first(MetaGraphsNext.labels(weighted)), 25)
+```
+"""
 function maximum_weight_walk_next(
         graph::MetaGraphsNext.MetaGraph,
         start_vertex::T,
@@ -320,6 +464,27 @@ function _sample_transition(transitions, probabilities)
     return last(transitions)
 end
 
+"""
+    shortest_probability_path_next(graph::MetaGraphsNext.MetaGraph, source, target)
+
+Find the highest-probability path between `source` and `target` by minimizing
+negative log transition probabilities.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `source`: Source vertex label
+- `target`: Target vertex label
+
+# Returns
+- `Union{Nothing, GraphPath}`: Most probable path, or `nothing` if unreachable
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+labels = collect(MetaGraphsNext.labels(weighted))
+path = Mycelia.Rhizomorph.shortest_probability_path_next(weighted, labels[1], labels[end])
+```
+"""
 function shortest_probability_path_next(
         graph::MetaGraphsNext.MetaGraph,
         source::T,
@@ -431,6 +596,11 @@ exactly once. The algorithm checks that:
 - At most one vertex has (out-degree - in-degree) = 1 (start vertex)
 - At most one vertex has (out-degree - in-degree) = -1 (end vertex)
 - All other vertices have equal in-degree and out-degree
+
+# Example
+```julia
+paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+```
 """
 function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{
         <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where {T}
@@ -638,6 +808,12 @@ of find_eulerian_paths_next. For k-mer graphs, reconstructs by overlapping k-mer
 
 # Returns
 Appropriate sequence type based on the k-mer type.
+
+# Example
+```julia
+paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+sequence = Mycelia.Rhizomorph.path_to_sequence(first(paths), graph)
+```
 """
 function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where {T}
     if isempty(path)
@@ -689,6 +865,14 @@ concatenates sequences.
 - For BioSequence graphs: Handles overlap based on edge data
 - Maintains type stability - returns same sequence type as graph contains
 - Handles strand orientation correctly (forward/reverse complement)
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+start_vertex = first(MetaGraphsNext.labels(weighted))
+path = Mycelia.Rhizomorph.probabilistic_walk_next(weighted, start_vertex, 25)
+sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted)
+```
 """
 function path_to_sequence(path::GraphPath{T}, graph::MetaGraphsNext.MetaGraph) where {T}
     if isempty(path.steps)

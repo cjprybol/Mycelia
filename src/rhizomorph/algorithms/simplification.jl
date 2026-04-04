@@ -13,6 +13,8 @@
 # ============================================================================
 
 """
+    BubbleStructure{T}
+
 Represents a bubble (alternative path) in the assembly graph.
 
 A bubble occurs when the graph splits into two or more alternative paths
@@ -33,6 +35,11 @@ that later rejoin. Bubbles often represent:
 - `path1_support`: Coverage/support for path 1
 - `path2_support`: Coverage/support for path 2
 - `complexity_score`: Measure of bubble complexity (higher = more complex)
+
+# Example
+```julia
+bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph)
+```
 """
 struct BubbleStructure{T}
     entry_vertex::T
@@ -76,8 +83,8 @@ Detect bubble structures (alternative paths) in the assembly graph.
 
 # Example
 ```julia
-graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
-bubbles = detect_bubbles_next(graph, min_bubble_length=2, max_bubble_length=50)
+graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
+bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph; min_bubble_length=2, max_bubble_length=50)
 ```
 """
 function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
@@ -108,7 +115,21 @@ function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
 end
 
 """
-Get outgoing neighbors of a vertex.
+    get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
+
+Return outgoing neighbor labels for `vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to query
+- `vertex`: Vertex label
+
+# Returns
+- `Vector`: Outgoing neighbor labels
+
+# Example
+```julia
+neighbors = Mycelia.Rhizomorph.get_out_neighbors(graph, vertex)
+```
 """
 function get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
     neighbors = []
@@ -122,7 +143,21 @@ function get_out_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
 end
 
 """
-Get incoming neighbors of a vertex.
+    get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
+
+Return incoming neighbor labels for `vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to query
+- `vertex`: Vertex label
+
+# Returns
+- `Vector`: Incoming neighbor labels
+
+# Example
+```julia
+neighbors = Mycelia.Rhizomorph.get_in_neighbors(graph, vertex)
+```
 """
 function get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
     neighbors = []
@@ -136,7 +171,24 @@ function get_in_neighbors(graph::MetaGraphsNext.MetaGraph, vertex)
 end
 
 """
-Find potential bubble paths from an entry vertex.
+    find_bubble_paths(graph::MetaGraphsNext.MetaGraph, entry_vertex, out_neighbors, min_length, max_length)
+
+Enumerate candidate bubbles that originate at `entry_vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to analyze
+- `entry_vertex`: Candidate bubble entry point
+- `out_neighbors::Vector`: Outgoing neighbors from `entry_vertex`
+- `min_length::Int`: Minimum path length required for a bubble
+- `max_length::Int`: Maximum path length to trace before giving up
+
+# Returns
+- `Vector{BubbleStructure}`: Candidate bubble structures
+
+# Example
+```julia
+candidates = Mycelia.Rhizomorph.find_bubble_paths(graph, vertex, neighbors, 2, 50)
+```
 """
 function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
         entry_vertex::T,
@@ -187,7 +239,22 @@ function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
 end
 
 """
-Find a limited-length path from a starting vertex.
+    find_limited_path(graph::MetaGraphsNext.MetaGraph, start_vertex, max_length::Int)
+
+Trace a simple path forward from `start_vertex` while the out-degree stays `1`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to traverse
+- `start_vertex`: Seed vertex label
+- `max_length::Int`: Maximum number of extension steps
+
+# Returns
+- `Vector`: Limited path beginning at `start_vertex`
+
+# Example
+```julia
+path = Mycelia.Rhizomorph.find_limited_path(graph, vertex, 25)
+```
 """
 function find_limited_path(graph::MetaGraphsNext.MetaGraph, start_vertex, max_length::Int)
     path = [start_vertex]
@@ -211,7 +278,21 @@ function find_limited_path(graph::MetaGraphsNext.MetaGraph, start_vertex, max_le
 end
 
 """
-Find where two paths converge.
+    find_path_convergence(path1::Vector, path2::Vector)
+
+Return the first shared vertex between `path1` and `path2`.
+
+# Arguments
+- `path1::Vector`: First candidate path
+- `path2::Vector`: Second candidate path
+
+# Returns
+- Shared vertex label or `nothing` if the paths never reconverge
+
+# Example
+```julia
+vertex = Mycelia.Rhizomorph.find_path_convergence(path1, path2)
+```
 """
 function find_path_convergence(path1::Vector, path2::Vector)
     for v1 in path1
@@ -223,7 +304,21 @@ function find_path_convergence(path1::Vector, path2::Vector)
 end
 
 """
-Calculate support for a path based on vertex coverage.
+    calculate_path_support(graph::MetaGraphsNext.MetaGraph, path::Vector)
+
+Estimate support for `path` by summing per-vertex evidence.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph containing evidence-bearing vertices
+- `path::Vector`: Vertex labels along the path
+
+# Returns
+- `Int`: Total support score
+
+# Example
+```julia
+support = Mycelia.Rhizomorph.calculate_path_support(graph, path)
+```
 """
 function calculate_path_support(graph::MetaGraphsNext.MetaGraph, path::Vector)
     total_support = 0
@@ -243,7 +338,21 @@ function calculate_path_support(graph::MetaGraphsNext.MetaGraph, path::Vector)
 end
 
 """
-Calculate complexity score for a bubble.
+    calculate_bubble_complexity(path1::Vector, path2::Vector)
+
+Compute a simple length-based complexity score for a bubble.
+
+# Arguments
+- `path1::Vector`: First bubble branch
+- `path2::Vector`: Second bubble branch
+
+# Returns
+- `Float64`: Normalized path-length difference in `[0, 1]`
+
+# Example
+```julia
+complexity = Mycelia.Rhizomorph.calculate_bubble_complexity(path1, path2)
+```
 """
 function calculate_bubble_complexity(path1::Vector, path2::Vector)
     # Simple complexity measure: difference in path lengths
@@ -253,7 +362,21 @@ function calculate_bubble_complexity(path1::Vector, path2::Vector)
 end
 
 """
-Check if a bubble structure is valid.
+    is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where T
+
+Validate that a bubble references existing vertices and distinct branches.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph that produced `bubble`
+- `bubble::BubbleStructure{T}`: Candidate bubble
+
+# Returns
+- `Bool`: `true` if the bubble is structurally valid
+
+# Example
+```julia
+valid = Mycelia.Rhizomorph.is_valid_bubble(graph, bubble)
+```
 """
 function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructure{T}) where {T}
     # Check that entry and exit vertices exist
@@ -275,7 +398,20 @@ function is_valid_bubble(graph::MetaGraphsNext.MetaGraph, bubble::BubbleStructur
 end
 
 """
-Remove duplicate bubble detections.
+    remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where T
+
+Drop duplicate bubble calls with the same entry and exit vertices.
+
+# Arguments
+- `bubbles::Vector{BubbleStructure{T}}`: Candidate bubble calls
+
+# Returns
+- `Vector{BubbleStructure{T}}`: Deduplicated bubble collection
+
+# Example
+```julia
+unique_bubbles = Mycelia.Rhizomorph.remove_duplicate_bubbles(bubbles)
+```
 """
 function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where {T}
     unique_bubbles = BubbleStructure{T}[]
@@ -301,6 +437,18 @@ end
 
 Remove dead-end vertices (tips) whose evidence support is ≤ `min_support`.
 Tips are vertices with indegree == 0 or outdegree == 0. Returns the modified graph.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to prune in place
+- `min_support::Int=1`: Maximum evidence count allowed for removable tips
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: The modified input graph
+
+# Example
+```julia
+Mycelia.Rhizomorph.remove_tips!(graph; min_support=2)
+```
 """
 function remove_tips!(graph::MetaGraphsNext.MetaGraph; min_support::Int = 1)
     if Graphs.nv(graph.graph) == 0
@@ -358,9 +506,9 @@ For each bubble:
 
 # Example
 ```julia
-graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
-bubbles = detect_bubbles_next(graph)
-simplified = simplify_graph_next(graph, bubbles)
+graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
+bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph)
+simplified = Mycelia.Rhizomorph.simplify_graph_next(graph, bubbles)
 ```
 """
 function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
@@ -389,7 +537,23 @@ function simplify_graph_next(graph::MetaGraphsNext.MetaGraph,
 end
 
 """
-Remove a path from the graph (helper function for simplification).
+    remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph, path::Vector, entry_vertex, exit_vertex)
+
+Delete a bubble branch from `graph` and remove any vertices that become isolated.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to mutate
+- `path::Vector`: Interior branch vertices to remove
+- `entry_vertex`: Bubble entry vertex
+- `exit_vertex`: Bubble exit vertex
+
+# Returns
+- `Nothing`: Mutates `graph` in place
+
+# Example
+```julia
+Mycelia.Rhizomorph.remove_path_from_graph!(graph, bubble.path2, bubble.entry_vertex, bubble.exit_vertex)
+```
 """
 function remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph, path::Vector,
         entry_vertex, exit_vertex)
@@ -414,7 +578,21 @@ function remove_path_from_graph!(graph::MetaGraphsNext.MetaGraph, path::Vector,
 end
 
 """
-Check if a vertex is isolated (no edges).
+    is_isolated_vertex(graph::MetaGraphsNext.MetaGraph, vertex)
+
+Check whether `vertex` has neither incoming nor outgoing edges.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to query
+- `vertex`: Vertex label
+
+# Returns
+- `Bool`: `true` if `vertex` is isolated
+
+# Example
+```julia
+isolated = Mycelia.Rhizomorph.is_isolated_vertex(graph, vertex)
+```
 """
 function is_isolated_vertex(graph::MetaGraphsNext.MetaGraph, vertex)
     return isempty(get_in_neighbors(graph, vertex)) &&
@@ -422,7 +600,20 @@ function is_isolated_vertex(graph::MetaGraphsNext.MetaGraph, vertex)
 end
 
 """
-Remove all isolated vertices from the graph.
+    remove_isolated_vertices!(graph::MetaGraphsNext.MetaGraph)
+
+Remove every isolated vertex from `graph` in place.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to prune
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: The modified input graph
+
+# Example
+```julia
+Mycelia.Rhizomorph.remove_isolated_vertices!(graph)
+```
 """
 function remove_isolated_vertices!(graph::MetaGraphsNext.MetaGraph)
     vertices_to_remove = Vector{eltype(MetaGraphsNext.labels(graph))}()
@@ -451,6 +642,17 @@ Collapse maximal linear unitigs (vertices with indegree=1 and outdegree=1) into
 single variable-length vertices while preserving aggregated evidence.
 Currently operates on graphs whose vertex data include a `sequence` field
 (`BioSequenceVertexData` or `QualityBioSequenceVertexData`).
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to simplify in place
+
+# Returns
+- `MetaGraphsNext.MetaGraph`: The modified input graph
+
+# Example
+```julia
+Mycelia.Rhizomorph.collapse_linear_chains!(graph)
+```
 """
 function collapse_linear_chains!(graph::MetaGraphsNext.MetaGraph)
     labels = collect(MetaGraphsNext.labels(graph))

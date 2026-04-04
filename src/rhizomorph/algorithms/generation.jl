@@ -30,6 +30,12 @@ If a non-weighted Rhizomorph evidence graph is passed, it will be converted auto
   - `path`: The GraphPath object
   - `walk_probability`: Total probability of the walk
   - `length`: Length of the generated sequence
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+results = Mycelia.Rhizomorph.generate_sequences(weighted, 5; walk_length=50, seed=42)
+```
 """
 function generate_sequences(
         graph::MetaGraphsNext.MetaGraph,
@@ -185,6 +191,19 @@ Select `n` start vertices for generation.
 - `:degree_weighted`: Probability proportional to out-degree (default)
 - `:uniform`: Uniform random selection with replacement
 - `:largest_component`: Restrict to largest connected component, then degree-weighted
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted graph to sample from
+- `n::Int`: Number of start vertices to draw
+- `strategy::Symbol=:degree_weighted`: Selection strategy
+
+# Returns
+- `Vector`: Vertex labels sampled according to `strategy`
+
+# Example
+```julia
+starts = Mycelia.Rhizomorph.select_start_vertices(weighted_graph, 10; strategy=:largest_component)
+```
 """
 function select_start_vertices(
         graph::MetaGraphsNext.MetaGraph,
@@ -262,6 +281,19 @@ Compute log-likelihood of a sequence under the graph's transition model.
 Decomposes the sequence into k-mers and sums log₂ transition probabilities.
 Returns `-Inf` if any k-mer transition is not found in the graph.
 Returns `0.0` for sequences shorter than or equal to `k`.
+
+# Arguments
+- `sequence::AbstractString`: Sequence to score
+- `graph::MetaGraphsNext.MetaGraph`: Weighted or evidence-backed graph
+- `k::Int`: K-mer size used to decompose `sequence`
+
+# Returns
+- `Float64`: Log2 likelihood under the graph transition model
+
+# Example
+```julia
+score = Mycelia.Rhizomorph.compute_sequence_likelihood("ACGTACGT", weighted_graph; k=3)
+```
 """
 function compute_sequence_likelihood(
         sequence::AbstractString,
