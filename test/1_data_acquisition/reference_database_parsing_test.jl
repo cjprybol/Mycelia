@@ -4,14 +4,16 @@ import Logging
 import Sockets
 import Mycelia
 
-@eval Mycelia begin
-    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
-        return nothing
-    end
-end
-
 const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const RUN_EXTERNAL = RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+
+if !RUN_EXTERNAL
+    @eval Mycelia begin
+        function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+            return nothing
+        end
+    end
+end
 
 function blast_env_available()
     if !isfile(Mycelia.CONDA_RUNNER)
@@ -589,144 +591,154 @@ Test.@testset "Reference Database Parsing" begin
         )
     end
 
-    Test.@testset "prefetch and fasterq_dump cached outputs" begin
-        mktempdir() do dir
-            paired_srr = "SRR_PAIRED_CACHED"
-            paired_dir = joinpath(dir, paired_srr)
-            mkpath(paired_dir)
-            paired_archive = joinpath(paired_dir, "$(paired_srr).sra")
-            write(paired_archive, "cached archive")
-
-            paired_prefetch = Test.@test_logs (:info, r"SRA archive already present") begin
-                Mycelia.prefetch(SRR = paired_srr, outdir = dir)
-            end
-            Test.@test paired_prefetch.directory == paired_dir
-            Test.@test paired_prefetch.archive == paired_archive
-
-            paired_forward = joinpath(paired_dir, "$(paired_srr)_1.fastq.gz")
-            paired_reverse = joinpath(paired_dir, "$(paired_srr)_2.fastq.gz")
-            write(paired_forward, "forward")
-            write(paired_reverse, "reverse")
-
-            paired_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = paired_srr)
-            Test.@test paired_result.forward_reads == paired_forward
-            Test.@test paired_result.reverse_reads == paired_reverse
-            Test.@test ismissing(paired_result.unpaired_reads)
-
-            single_srr = "SRR_SINGLE_CACHED"
-            single_dir = joinpath(dir, single_srr)
-            mkpath(single_dir)
-            write(joinpath(single_dir, "$(single_srr).sra"), "cached archive")
-            single_unpaired = joinpath(single_dir, "$(single_srr).fastq.gz")
-            write(single_unpaired, "single")
-
-            single_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = single_srr)
-            Test.@test ismissing(single_result.forward_reads)
-            Test.@test ismissing(single_result.reverse_reads)
-            Test.@test single_result.unpaired_reads == single_unpaired
-        end
-    end
-
-    @eval Mycelia begin
-        function prefetch(; SRR, outdir = pwd())
-            if endswith(SRR, "FAIL")
-                error("synthetic prefetch failure for $(SRR)")
-            end
-            output_dir = joinpath(outdir, SRR)
-            archive = joinpath(output_dir, "$(SRR).sra")
-            mkpath(output_dir)
-            write(archive, "stub archive")
-            return (directory = output_dir, archive = archive)
+    if RUN_EXTERNAL
+        Test.@testset "Cached SRA helper coverage is core-only" begin
+            Test.@test_skip "Cached prefetch/fasterq coverage is skipped when external tooling is enabled"
         end
 
-        function fasterq_dump(; outdir = pwd(), srr_identifier = "")
-            if endswith(srr_identifier, "FAIL")
-                error("synthetic fasterq failure for $(srr_identifier)")
+        Test.@testset "Synthetic SRA wrapper coverage is core-only" begin
+            Test.@test_skip "Synthetic prefetch/fasterq coverage is skipped when external tooling is enabled"
+        end
+    else
+        Test.@testset "prefetch and fasterq_dump cached outputs" begin
+            mktempdir() do dir
+                paired_srr = "SRR_PAIRED_CACHED"
+                paired_dir = joinpath(dir, paired_srr)
+                mkpath(paired_dir)
+                paired_archive = joinpath(paired_dir, "$(paired_srr).sra")
+                write(paired_archive, "cached archive")
+
+                paired_prefetch = Test.@test_logs (:info, r"SRA archive already present") begin
+                    Mycelia.prefetch(SRR = paired_srr, outdir = dir)
+                end
+                Test.@test paired_prefetch.directory == paired_dir
+                Test.@test paired_prefetch.archive == paired_archive
+
+                paired_forward = joinpath(paired_dir, "$(paired_srr)_1.fastq.gz")
+                paired_reverse = joinpath(paired_dir, "$(paired_srr)_2.fastq.gz")
+                write(paired_forward, "forward")
+                write(paired_reverse, "reverse")
+
+                paired_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = paired_srr)
+                Test.@test paired_result.forward_reads == paired_forward
+                Test.@test paired_result.reverse_reads == paired_reverse
+                Test.@test ismissing(paired_result.unpaired_reads)
+
+                single_srr = "SRR_SINGLE_CACHED"
+                single_dir = joinpath(dir, single_srr)
+                mkpath(single_dir)
+                write(joinpath(single_dir, "$(single_srr).sra"), "cached archive")
+                single_unpaired = joinpath(single_dir, "$(single_srr).fastq.gz")
+                write(single_unpaired, "single")
+
+                single_result = Mycelia.fasterq_dump(outdir = dir, srr_identifier = single_srr)
+                Test.@test ismissing(single_result.forward_reads)
+                Test.@test ismissing(single_result.reverse_reads)
+                Test.@test single_result.unpaired_reads == single_unpaired
             end
-            mkpath(outdir)
-            if occursin("PAIRED", srr_identifier)
-                forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
-                reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
-                write(forward_reads, "forward reads")
-                write(reverse_reads, "reverse reads")
-                return (
-                    forward_reads = forward_reads,
-                    reverse_reads = reverse_reads,
-                    unpaired_reads = missing
+        end
+
+        @eval Mycelia begin
+            function prefetch(; SRR, outdir = pwd())
+                if endswith(SRR, "FAIL")
+                    error("synthetic prefetch failure for $(SRR)")
+                end
+                output_dir = joinpath(outdir, SRR)
+                archive = joinpath(output_dir, "$(SRR).sra")
+                mkpath(output_dir)
+                write(archive, "stub archive")
+                return (directory = output_dir, archive = archive)
+            end
+
+            function fasterq_dump(; outdir = pwd(), srr_identifier = "")
+                if endswith(srr_identifier, "FAIL")
+                    error("synthetic fasterq failure for $(srr_identifier)")
+                end
+                mkpath(outdir)
+                if occursin("PAIRED", srr_identifier)
+                    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
+                    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
+                    write(forward_reads, "forward reads")
+                    write(reverse_reads, "reverse reads")
+                    return (
+                        forward_reads = forward_reads,
+                        reverse_reads = reverse_reads,
+                        unpaired_reads = missing
+                    )
+                elseif occursin("SINGLE", srr_identifier)
+                    unpaired_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
+                    write(unpaired_reads, "single reads")
+                    return (
+                        forward_reads = missing,
+                        reverse_reads = missing,
+                        unpaired_reads = unpaired_reads
+                    )
+                else
+                    return (
+                        forward_reads = missing,
+                        reverse_reads = missing,
+                        unpaired_reads = missing
+                    )
+                end
+            end
+        end
+
+        Test.@testset "download_sra_data wrapper branches" begin
+            mktempdir() do dir
+                paired = Mycelia.download_sra_data("SRR_PAIRED_WRAPPER"; outdir = dir)
+                Test.@test paired.srr_id == "SRR_PAIRED_WRAPPER"
+                Test.@test paired.is_paired
+                Test.@test length(paired.files) == 2
+                Test.@test all(isfile, paired.files)
+
+                single = Mycelia.download_sra_data("SRR_SINGLE_WRAPPER"; outdir = dir)
+                Test.@test single.srr_id == "SRR_SINGLE_WRAPPER"
+                Test.@test !single.is_paired
+                Test.@test length(single.files) == 1
+                Test.@test isfile(only(single.files))
+
+                Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+            end
+        end
+
+        Test.@testset "prefetch_sra_runs error path" begin
+            Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
+        end
+
+        Test.@testset "prefetch_sra_runs collects success and failure results" begin
+            mktempdir() do dir
+                results = Mycelia.prefetch_sra_runs(
+                    ["SRR_BATCH_A", "SRR_BATCH_FAIL", "SRR_BATCH_B"];
+                    outdir = dir,
+                    max_parallel = 2
                 )
-            elseif occursin("SINGLE", srr_identifier)
-                unpaired_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
-                write(unpaired_reads, "single reads")
-                return (
-                    forward_reads = missing,
-                    reverse_reads = missing,
-                    unpaired_reads = unpaired_reads
-                )
-            else
-                return (
-                    forward_reads = missing,
-                    reverse_reads = missing,
-                    unpaired_reads = missing
-                )
+                Test.@test length(results) == 3
+                successes = Dict(result.srr_id => result for result in results)
+                Test.@test successes["SRR_BATCH_A"].success
+                Test.@test successes["SRR_BATCH_B"].success
+                Test.@test !successes["SRR_BATCH_FAIL"].success
+                Test.@test occursin("synthetic prefetch failure", successes["SRR_BATCH_FAIL"].error)
             end
         end
-    end
 
-    Test.@testset "download_sra_data wrapper branches" begin
-        mktempdir() do dir
-            paired = Mycelia.download_sra_data("SRR_PAIRED_WRAPPER"; outdir = dir)
-            Test.@test paired.srr_id == "SRR_PAIRED_WRAPPER"
-            Test.@test paired.is_paired
-            Test.@test length(paired.files) == 2
-            Test.@test all(isfile, paired.files)
-
-            single = Mycelia.download_sra_data("SRR_SINGLE_WRAPPER"; outdir = dir)
-            Test.@test single.srr_id == "SRR_SINGLE_WRAPPER"
-            Test.@test !single.is_paired
-            Test.@test length(single.files) == 1
-            Test.@test isfile(only(single.files))
-
-            Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+        Test.@testset "fasterq_dump_parallel error path" begin
+            Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
         end
-    end
 
-    Test.@testset "prefetch_sra_runs error path" begin
-        Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
-    end
-
-    Test.@testset "prefetch_sra_runs collects success and failure results" begin
-        mktempdir() do dir
-            results = Mycelia.prefetch_sra_runs(
-                ["SRR_BATCH_A", "SRR_BATCH_FAIL", "SRR_BATCH_B"];
-                outdir = dir,
-                max_parallel = 2
-            )
-            Test.@test length(results) == 3
-            successes = Dict(result.srr_id => result for result in results)
-            Test.@test successes["SRR_BATCH_A"].success
-            Test.@test successes["SRR_BATCH_B"].success
-            Test.@test !successes["SRR_BATCH_FAIL"].success
-            Test.@test occursin("synthetic prefetch failure", successes["SRR_BATCH_FAIL"].error)
-        end
-    end
-
-    Test.@testset "fasterq_dump_parallel error path" begin
-        Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
-    end
-
-    Test.@testset "fasterq_dump_parallel collects success and failure results" begin
-        mktempdir() do dir
-            results = Mycelia.fasterq_dump_parallel(
-                ["SRR_PAIRED_A", "SRR_PAIRED_FAIL", "SRR_SINGLE_B"];
-                outdir = dir,
-                max_parallel = 2
-            )
-            Test.@test length(results) == 3
-            outcomes = Dict(result.srr_id => result for result in results)
-            Test.@test outcomes["SRR_PAIRED_A"].success
-            Test.@test outcomes["SRR_SINGLE_B"].success
-            Test.@test !outcomes["SRR_PAIRED_FAIL"].success
-            Test.@test occursin("synthetic fasterq failure", outcomes["SRR_PAIRED_FAIL"].error)
+        Test.@testset "fasterq_dump_parallel collects success and failure results" begin
+            mktempdir() do dir
+                results = Mycelia.fasterq_dump_parallel(
+                    ["SRR_PAIRED_A", "SRR_PAIRED_FAIL", "SRR_SINGLE_B"];
+                    outdir = dir,
+                    max_parallel = 2
+                )
+                Test.@test length(results) == 3
+                outcomes = Dict(result.srr_id => result for result in results)
+                Test.@test outcomes["SRR_PAIRED_A"].success
+                Test.@test outcomes["SRR_SINGLE_B"].success
+                Test.@test !outcomes["SRR_PAIRED_FAIL"].success
+                Test.@test occursin("synthetic fasterq failure", outcomes["SRR_PAIRED_FAIL"].error)
+            end
         end
     end
 
