@@ -1191,6 +1191,7 @@ Test.@testset "Reference Database Parsing" begin
         finally
             restore_sra_helpers!()
         end
+    end
     finally
         restore_add_bioconda_env!()
     end
