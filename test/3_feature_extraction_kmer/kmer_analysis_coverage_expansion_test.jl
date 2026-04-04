@@ -37,6 +37,12 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
         Test.@test loaded_without_extension.fasta_list == fasta_list
         Test.@test loaded_without_extension.metadata["alphabet"] == :DNA
 
+        alternate_extension_path = joinpath(temp_dir, "results.txt")
+        cp(appended_path, alternate_extension_path; force = true)
+        loaded_alternate_extension = Mycelia.load_kmer_results(alternate_extension_path)
+        Test.@test loaded_alternate_extension.kmers == kmers
+        Test.@test loaded_alternate_extension.metadata["alphabet"] == :DNA
+
         missing_keys_path = joinpath(temp_dir, "missing_keys.jld2")
         JLD2.jldopen(missing_keys_path, "w") do file
             file["counts"] = counts
@@ -127,6 +133,32 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
         Test.@test size(dense_counts.kmer_counts_matrix) == (32, 2)
         Test.@test vec(sum(dense_counts.kmer_counts_matrix; dims = 1)) == [2.0, 2.0]
 
+        rna_sequences = [
+            BioSequences.LongRNA{4}("AUGC"),
+            BioSequences.LongRNA{4}("AUGA")
+        ]
+        dense_rna_counts = Mycelia.biosequences_to_dense_counts_table(
+            biosequences = rna_sequences,
+            k = 2
+        )
+        Test.@test length(dense_rna_counts.sorted_kmers) ==
+                   length(Mycelia.generate_all_possible_kmers(2, Mycelia.RNA_ALPHABET))
+        Test.@test size(dense_rna_counts.kmer_counts_matrix) == (16, 2)
+        Test.@test vec(sum(dense_rna_counts.kmer_counts_matrix; dims = 1)) == [3.0, 3.0]
+
+        aa_sequences = [
+            BioSequences.LongAA("ACDE"),
+            BioSequences.LongAA("ACDF")
+        ]
+        dense_aa_counts = Mycelia.biosequences_to_dense_counts_table(
+            biosequences = aa_sequences,
+            k = 2
+        )
+        Test.@test length(dense_aa_counts.sorted_kmers) ==
+                   length(Mycelia.generate_all_possible_kmers(2, Mycelia.AA_ALPHABET))
+        Test.@test size(dense_aa_counts.kmer_counts_matrix, 2) == 2
+        Test.@test vec(sum(dense_aa_counts.kmer_counts_matrix; dims = 1)) == [3.0, 3.0]
+
         sparse_counts = Mycelia.biosequences_to_counts_table(
             biosequences = dna_sequences,
             k = 3
@@ -210,6 +242,20 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
         Test.@test saturation.eof == true
         Test.@test last(saturation.sampling_points) == 6
         Test.@test last(saturation.unique_kmer_counts) == 2
+
+        complete_path = joinpath(temp_dir, "complete.fasta")
+        open(complete_path, "w") do io
+            FASTX.write(io, FASTX.FASTA.Record("complete", "AC"))
+        end
+
+        complete_saturation = Mycelia.assess_dnamer_saturation(
+            [complete_path],
+            Kmers.DNAKmer{1};
+            power = 2
+        )
+        Test.@test complete_saturation.eof == false
+        Test.@test complete_saturation.sampling_points == [0, 1, 2]
+        Test.@test complete_saturation.unique_kmer_counts == [0, 1, 2]
 
         no_match_results = (; coverage_estimates = Dict(3 => 0.5, 5 => 0.7))
         Test.@test Mycelia.adaptive_kmer_selection(
