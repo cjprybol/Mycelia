@@ -32,6 +32,9 @@ were cross-checked against:
 - The old archived claims that variant-calling and pangenome wrappers were
   missing are now false: those wrappers exist in `src/variant-analysis.jl` and
   `src/pangenome-analysis.jl`.
+- The archived PenguiN "missing from metagenomic workflow docs" claim is also
+  stale: `docs/src/metagenomic-workflow.md` already lists PenguiN in the
+  short-read assembly workflow and tool table.
 - Recently expanded comparative/pangenome wrapper coverage is now green in the
   default suite: `test/7_comparative_pangenomics/pangenome_wrappers.jl` passed
   25/25 assertions, `test/7_comparative_pangenomics/pangenome_analysis.jl`
@@ -100,6 +103,8 @@ artifact. The main corrections are:
   `src/pangenome-analysis.jl`.
 - `run_vcfeval`, `run_gatk_haplotypecaller`, `run_freebayes`, `run_clair3`, and
   `run_bcftools_call` exist in `src/variant-analysis.jl`.
+- `docs/src/metagenomic-workflow.md` already documents PenguiN support; the
+  stale claim lived in this planning snapshot, not in the workflow docs.
 - The dominant problem is coverage quality, not outright absence of wrappers.
 
 ## Highest-Priority Gaps
@@ -111,5 +116,6 @@ artifact. The main corrections are:
 4. Repair or retire `run_hylight`, then decide whether `run_hifiasm_meta`,
    `run_strong`, and `run_strainy` should be promoted out of
    legacy/in-development coverage.
-5. Keep `docs/src/workflow-map.md` and `docs/src/metagenomic-workflow.md` aligned
-   with this file when wrapper support changes.
+5. Audit stale planning-text carryovers from archived wrapper snapshots; the
+   PenguiN follow-up here outlived the actual docs gap and is the pattern to
+   avoid when wrapper support changes.
