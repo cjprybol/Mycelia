@@ -388,6 +388,11 @@ function start_un_test_server(file_map::Dict{String, Vector{UInt8}})
                 return make_response(405)
             end
             return make_response(206, file_map[path][1:min(length(file_map[path]), 1)])
+        elseif path == "/range-missing-fallback"
+            if request.method == "HEAD"
+                return make_response(405)
+            end
+            return make_response(404, "missing after fallback")
         elseif path == "/forbidden-fallback"
             return make_response(403)
         end
@@ -1172,6 +1177,7 @@ Test.@testset "Reference Database Parsing" begin
             Test.@test Mycelia._un_part_exists("$(server.base_url)/download.txt")
             Test.@test !Mycelia._un_part_exists("$(server.base_url)/missing.txt")
             Test.@test Mycelia._un_part_exists("$(server.base_url)/range-fallback")
+            Test.@test !Mycelia._un_part_exists("$(server.base_url)/range-missing-fallback")
             Test.@test Mycelia._un_part_exists("$(server.base_url)/forbidden-fallback")
             Test.@test_throws ErrorException Mycelia._un_part_exists("$(server.base_url)/unexpected-status")
 
@@ -1212,6 +1218,23 @@ Test.@testset "Reference Database Parsing" begin
                 Test.@test !isfile(joinpath(split_outdir, "UNv1.0.en-fr.tar.gz.00"))
                 Test.@test !isfile(joinpath(split_outdir, "UNv1.0.en-fr.tar.gz.01"))
 
+                cached_split_outdir = joinpath(dir, "cached-split")
+                mkpath(cached_split_outdir)
+                write(joinpath(cached_split_outdir, "UNv1.0.en-fr.tar.gz.00"), split_archive_parts[1])
+                write(joinpath(cached_split_outdir, "UNv1.0.en-fr.tar.gz.01"), split_archive_parts[2])
+                cached_split_result = Test.@test_logs (:info, r"Using existing part") min_level=Logging.Info match_mode=:any begin
+                    Mycelia._download_and_extract_split_archive(
+                        "UNv1.0.en-fr.tar.gz",
+                        server.base_url,
+                        cached_split_outdir
+                    )
+                end
+                Test.@test cached_split_result == cached_split_outdir
+                Test.@test read(joinpath(cached_split_outdir, "split", "archive.txt"), String) ==
+                    "split archive contents"
+                Test.@test !isfile(joinpath(cached_split_outdir, "UNv1.0.en-fr.tar.gz.00"))
+                Test.@test !isfile(joinpath(cached_split_outdir, "UNv1.0.en-fr.tar.gz.01"))
+
                 direct_outdir = joinpath(dir, "direct")
                 direct_result = Mycelia._download_and_extract_split_archive(
                     "direct.tar.gz",
@@ -1249,5 +1272,9 @@ Test.@testset "Reference Database Parsing" begin
         finally
             Mycelia.HTTP.forceclose(server.server)
         end
+    end
+
+    Test.@testset "_resolve_un_archives empty-selection error path" begin
+        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["6way"], ["xml"])
     end
 end
