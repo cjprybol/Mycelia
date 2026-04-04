@@ -360,6 +360,121 @@ function split_bytes(payload::Vector{UInt8}; chunks::Int = 2)
     ]
 end
 
+function with_temp_home(f::Function)
+    original_home = get(ENV, "HOME", nothing)
+
+    mktempdir() do dir
+        ENV["HOME"] = dir
+        try
+            return f(dir)
+        finally
+            if isnothing(original_home)
+                delete!(ENV, "HOME")
+            else
+                ENV["HOME"] = original_home
+            end
+        end
+    end
+end
+
+function write_ncbi_metadata_fixture(
+        path::AbstractString;
+        assembly_accession::AbstractString = "GCF_000001",
+        ftp_path::AbstractString = "ftp://example/GCF_000001",
+        taxid::AbstractString = "562",
+        gc_percent::AbstractString = "50.0")
+    header = [
+        "assembly_accession",
+        "bioproject",
+        "biosample",
+        "wgs_master",
+        "refseq_category",
+        "organism_name",
+        "infraspecific_name",
+        "isolate",
+        "version_status",
+        "assembly_level",
+        "release_type",
+        "genome_rep",
+        "seq_rel_date",
+        "asm_name",
+        "asm_submitter",
+        "gbrs_paired_asm",
+        "paired_asm_comp",
+        "ftp_path",
+        "excluded_from_refseq",
+        "relation_to_type_material",
+        "asm_not_live_date",
+        "assembly_type",
+        "group",
+        "annotation_provider",
+        "annotation_name",
+        "annotation_date",
+        "pubmed_id",
+        "taxid",
+        "species_taxid",
+        "genome_size",
+        "genome_size_ungapped",
+        "replicon_count",
+        "scaffold_count",
+        "contig_count",
+        "total_gene_count",
+        "protein_coding_gene_count",
+        "non_coding_gene_count",
+        "gc_percent"
+    ]
+
+    row = [
+        assembly_accession,
+        "PRJNA1",
+        "SAMN1",
+        "WGS1",
+        "reference genome",
+        "Escherichia coli",
+        "strain=K12",
+        "K12",
+        "latest",
+        "Complete Genome",
+        "Major",
+        "Full",
+        "2023-01-01",
+        "ASM1",
+        "Submitter",
+        "none",
+        "none",
+        ftp_path,
+        "none",
+        "none",
+        "none",
+        "haploid",
+        "bacteria",
+        "Provider",
+        "Annot1",
+        "2023-01-02",
+        "12345",
+        taxid,
+        taxid,
+        "5000",
+        "4800",
+        "1",
+        "1",
+        "1",
+        "4500",
+        "4300",
+        "200",
+        gc_percent
+    ]
+
+    mkpath(dirname(path))
+    open(path, "w") do io
+        println(io, "## Assembly summary test")
+        println(io, "# " * join(header, '\t'))
+        println(io, join(row, '\t'))
+    end
+
+    return path
+end
+
 function start_un_test_server(file_map::Dict{String, Vector{UInt8}})
     port = reserve_local_port()
     base_url = "http://127.0.0.1:$(port)"
@@ -520,6 +635,72 @@ Test.@testset "Reference Database Parsing" begin
             empty_file = joinpath(dir, "empty.txt")
             touch(empty_file)
             Test.@test_throws ErrorException Mycelia.parse_ncbi_metadata_file(empty_file)
+        end
+    end
+
+    Test.@testset "load_ncbi_metadata cache coverage" begin
+        fixture_date = Dates.Date(2024, 2, 3)
+        date_prefix = Dates.format(fixture_date, "yyyy-mm-dd")
+        today_prefix = Dates.format(Dates.today(), "yyyy-mm-dd")
+
+        Test.@test_throws ArgumentError Mycelia.load_ncbi_metadata("invalid-db"; date = fixture_date)
+
+        with_temp_home() do home
+            cache_dir = joinpath(home, "workspace", ".ncbi")
+
+            requested_refseq_cache = write_ncbi_metadata_fixture(
+                joinpath(cache_dir, "$(date_prefix).assembly_summary_refseq.txt");
+                assembly_accession = "GCF_REQUESTED_REFSEQ",
+                ftp_path = "ftp://example/GCF_REQUESTED_REFSEQ",
+                taxid = "111"
+            )
+
+            requested_df = Test.@test_logs (:info, r"Found cached file for requested date") min_level=Logging.Info match_mode=:any begin
+                Mycelia.load_ncbi_metadata("refseq"; date = fixture_date)
+            end
+            Test.@test requested_df[1, "assembly_accession"] == "GCF_REQUESTED_REFSEQ"
+            Test.@test requested_df[1, "ftp_path"] == "ftp://example/GCF_REQUESTED_REFSEQ"
+            Test.@test requested_refseq_cache == joinpath(cache_dir, "$(date_prefix).assembly_summary_refseq.txt")
+
+            today_genbank_cache = write_ncbi_metadata_fixture(
+                joinpath(cache_dir, "$(today_prefix).assembly_summary_genbank.txt");
+                assembly_accession = "GCA_TODAY_GENBANK",
+                ftp_path = "ftp://example/GCA_TODAY_GENBANK",
+                taxid = "222"
+            )
+
+            today_df = Test.@test_logs (:info, r"Found valid cached file for today") min_level=Logging.Info match_mode=:any begin
+                Mycelia.load_ncbi_metadata("genbank")
+            end
+            Test.@test today_df[1, "assembly_accession"] == "GCA_TODAY_GENBANK"
+            Test.@test today_df[1, "taxid"] == 222
+            Test.@test today_genbank_cache == joinpath(cache_dir, "$(today_prefix).assembly_summary_genbank.txt")
+
+            refseq_wrapper = Mycelia.load_refseq_metadata(date = fixture_date)
+            Test.@test refseq_wrapper[1, "assembly_accession"] == "GCF_REQUESTED_REFSEQ"
+
+            requested_genbank_cache = write_ncbi_metadata_fixture(
+                joinpath(cache_dir, "$(date_prefix).assembly_summary_genbank.txt");
+                assembly_accession = "GCA_REQUESTED_GENBANK",
+                ftp_path = "ftp://example/GCA_REQUESTED_GENBANK",
+                taxid = "333"
+            )
+
+            genbank_wrapper = Mycelia.load_genbank_metadata(date = fixture_date)
+            Test.@test genbank_wrapper[1, "assembly_accession"] == "GCA_REQUESTED_GENBANK"
+            Test.@test requested_genbank_cache == joinpath(cache_dir, "$(date_prefix).assembly_summary_genbank.txt")
+
+            Test.@test_throws ErrorException Mycelia.load_ncbi_metadata(
+                "refseq";
+                date = Dates.Date(2024, 2, 4)
+            )
+        end
+
+        with_temp_home() do home
+            write(joinpath(home, "workspace"), "occupied by file")
+            Test.@test_logs (:error, r"Failed to create cache directory") min_level=Logging.Error match_mode=:any begin
+                Test.@test_throws Exception Mycelia.load_ncbi_metadata("refseq"; date = fixture_date)
+            end
         end
     end
 
