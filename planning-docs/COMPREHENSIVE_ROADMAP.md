@@ -72,6 +72,16 @@ accessible, production-ready platform that serves three user constituencies:
 **Source:** `ASSEMBLY_ROADMAP_UNIFIED.md` (for structure), with details from all
 documents.
 
+### Completion Snapshot (estimated as of 2026-04-04)
+
+| Phase | Estimated Completion | Basis |
+| ----- | -------------------- | ----- |
+| Phase 1 | 85% | `src/rhizomorph/` now covers the core builders, conversions, query helpers, path-finding, simplification primitives, and GFA/JLD2 round-trip support; remaining work is mainly broader traversal/simplification coverage and final legacy migration cleanup. |
+| Phase 2 | 60% | Core algorithms exist in `src/rhizomorph/algorithms/` and assembly orchestration is in place, but benchmarking, multithreading, and large-data performance work remain only partially implemented. |
+| Phase 3 | 45% | GitHub Actions CI, HPC CI helpers, validation wrappers, and benchmark fixtures exist, but the roadmap goals around full `Pkg.test()` stability, >90% coverage, fuzzing, and curated validation datasets are still incomplete. |
+| Phase 4 | 55% | The repo now has a substantial docs site (`docs/src/`), workflow pages, benchmarks/status pages, and tutorial infrastructure, but the onboarding/documentation surface is still uneven relative to the roadmap target. |
+| Phase 5 | 20% | Early advanced pieces such as generation, error-correction, and TDA foundations exist, but the larger research features in this phase remain mostly planned. |
+
 ### **Phase 1: Foundational Rhizomorph Ecosystem (CRITICAL PRIORITY)**
 
 _Goal: Implement the core type-safe, biologically accurate graph data

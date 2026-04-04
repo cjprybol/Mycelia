@@ -10,6 +10,15 @@ simplification edge-removal behavior needs broader tests; end-to-end suites
 assert evidence positions/quality, doublestrand/canonical conversions, and
 GFA/JLD2 round-trips.
 
+**Estimated completion (2026-04-04): 90%**
+
+- **Implementation surface: 95%** complete. The builders, conversions, query
+  helpers, and algorithm scaffolding in `src/rhizomorph/` cover essentially all
+  supported rows in this matrix.
+- **Validation depth: 75%** complete. The repo has strong k-mer/qualmer/core
+  conversion coverage plus GFA/JLD2 round-trips, but variable-length and
+  n-gram traversal plus simplification edge-removal still need broader tests.
+
 | Graph Type                   | Alphabet         | Singlestrand | Doublestrand | Canonical | Notes                                                                                  |
 | ---------------------------- | ---------------- | ------------ | ------------ | --------- | -------------------------------------------------------------------------------------- |
 | K-mer                        | DNA              | ✅           | ✅           | ✅        | core k-mer graph-construction, traversal/tests (singlestrand, doublestrand, canonical) |
