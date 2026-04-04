@@ -38,6 +38,219 @@ const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 # const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 
+function write_text_file(path::String, contents::AbstractString)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        write(io, contents)
+    end
+    return path
+end
+
+function make_fake_conda_env(env_name::String, scripts::Dict{String, String})
+    env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
+    ispath(env_dir) && error("Refusing to overwrite existing conda environment: $(env_dir)")
+    mkpath(joinpath(env_dir, "bin"))
+    mkpath(joinpath(env_dir, "conda-meta"))
+    write_text_file(joinpath(env_dir, "conda-meta", "history"), "")
+    for (script_name, script_body) in scripts
+        script_path = joinpath(env_dir, "bin", script_name)
+        write_text_file(script_path, "#!/usr/bin/env bash\nset -euo pipefail\n$(script_body)\n")
+        chmod(script_path, 0o755)
+    end
+    return env_dir
+end
+
+function with_fake_conda_envs(f::Function, specs::Vector{Tuple{String, Dict{String, String}}})
+    created_envs = String[]
+    try
+        for (env_name, scripts) in specs
+            push!(created_envs, make_fake_conda_env(env_name, scripts))
+        end
+        return f()
+    finally
+        for env_dir in reverse(created_envs)
+            rm(env_dir; recursive = true, force = true)
+        end
+    end
+end
+
+function create_binning_stub_inputs(root::String)
+    contigs_fasta = write_text_file(
+        joinpath(root, "contigs.fna"),
+        ">contig1\nACGTACGTACGT\n>contig2\nTTTTCCCCAAAA\n"
+    )
+    depth_file = write_text_file(
+        joinpath(root, "depth.tsv"),
+        "contigName\tcontigLen\ttotalAvgDepth\tsampleA\tsampleA-var\tsampleB\n" *
+        "contig1\t12\t8.0\t3.5\t0.2\t4.5\n" *
+        "contig2\t12\t5.0\t5.0\t0.1\n"
+    )
+    taxonomy_file = write_text_file(
+        joinpath(root, "taxonomy.tsv"),
+        "contig\ttaxonomy\ncontig1\tBacteria\n"
+    )
+    assembly_graph = write_text_file(
+        joinpath(root, "assembly.gfa"),
+        "H\tVN:Z:1.0\nS\tcontig1\tACGTACGTACGT\n"
+    )
+    mapping_file = write_text_file(
+        joinpath(root, "mapping.tsv"),
+        "contig\tcoverage\ncontig1\t7.0\n"
+    )
+    coverage_table = write_text_file(
+        joinpath(root, "coverage.tsv"),
+        "contig\tdepth\ncontig1\t7.0\n"
+    )
+    bam_dir = joinpath(root, "bams")
+    mkpath(bam_dir)
+    write_text_file(joinpath(bam_dir, "reads.bam"), "stub bam\n")
+    genomes_dir = joinpath(root, "genomes")
+    mkpath(genomes_dir)
+    genome_a = write_text_file(joinpath(genomes_dir, "genome_a.fa"), ">genome_a\nACGT\n")
+    genome_b = write_text_file(joinpath(genomes_dir, "genome_b.fa"), ">genome_b\nTGCA\n")
+    bins_a = joinpath(root, "bins_a")
+    bins_b = joinpath(root, "bins_b")
+    mkpath(bins_a)
+    mkpath(bins_b)
+    write_text_file(joinpath(bins_a, "a.fa"), ">bin_a\nACGT\n")
+    write_text_file(joinpath(bins_b, "b.fa"), ">bin_b\nTGCA\n")
+    return (;
+        contigs_fasta,
+        depth_file,
+        taxonomy_file,
+        assembly_graph,
+        mapping_file,
+        coverage_table,
+        bam_dir,
+        genomes = [genome_a, genome_b],
+        bins_dirs = [bins_a, bins_b]
+    )
+end
+
+function fake_binning_env_specs()
+    vamb_script = raw"""
+original_args=("$@")
+if [[ "${1:-}" == "--version" ]]; then
+    echo "vamb 1.0.0"
+    exit 0
+fi
+outdir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --outdir)
+            outdir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$outdir"
+printf '%s\n' "${original_args[*]}" > "$outdir/vamb_args.txt"
+if [[ "${original_args[0]:-}" == "bin" ]]; then
+    printf 'contig\tbin\ncontig1\tbin_1\n' > "$outdir/vae_clusters.tsv"
+else
+    printf 'taxometer\n' > "$outdir/taxometer_output.txt"
+fi
+"""
+    metabat_script = raw"""
+original_args=("$@")
+prefix=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            prefix="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$(dirname "$prefix")"
+printf '%s\n' "${original_args[*]}" > "$(dirname "$prefix")/metabat2_args.txt"
+printf '>bin1\nACGT\n' > "${prefix}.1.fa"
+"""
+    metacoag_script = raw"""
+original_args=("$@")
+outdir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --output)
+            outdir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$outdir/bins"
+printf '%s\n' "${original_args[*]}" > "$outdir/metacoag_args.txt"
+printf '>bin1\nACGT\n' > "$outdir/bins/bin1.fa"
+printf 'contig\tbin\ncontig1\tbin1\n' > "$outdir/bin_assignments.tsv"
+"""
+    comebin_script = raw"""
+original_args=("$@")
+outdir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -o)
+            outdir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$outdir/results/bins"
+printf '%s\n' "${original_args[*]}" > "$outdir/results/comebin_args.txt"
+printf '>bin1\nACGT\n' > "$outdir/results/bins/bin1.fa"
+printf 'contig\tbin\ncontig1\tbin1\n' > "$outdir/results/bins_assignments.tsv"
+"""
+    drep_script = raw"""
+original_args=("$@")
+outdir="${2:-}"
+mkdir -p "$outdir/data_tables"
+printf '%s\n' "${original_args[*]}" > "$outdir/drep_args.txt"
+printf 'genome,secondary_cluster,representative\n' > "$outdir/data_tables/Widb.csv"
+printf 'genome_a,1,genome_a\n' >> "$outdir/data_tables/Widb.csv"
+"""
+    magmax_script = raw"""
+original_args=("$@")
+bindir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --bindir)
+            bindir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+printf '%s\n' "${original_args[*]}" > "$PWD/magmax_args.txt"
+find "$bindir" -maxdepth 1 -type f | sort > "$PWD/magmax_inputs.txt"
+mkdir -p "$PWD/merged"
+printf 'merged\n' > "$PWD/merged/summary.txt"
+"""
+    return [
+        ("mycelia_vamb", Dict("vamb" => vamb_script)),
+        ("metabat2", Dict("metabat2" => metabat_script)),
+        ("metacoag", Dict("metacoag" => metacoag_script)),
+        ("comebin", Dict("run_comebin.sh" => comebin_script)),
+        ("drep", Dict("dRep" => drep_script)),
+        ("magmax", Dict("magmax" => magmax_script))
+    ]
+end
+
+function fake_conda_envs_available(specs::Vector{Tuple{String, Dict{String, String}}})
+    return all(!ispath(joinpath(Mycelia._conda_envs_dir(), env_name)) for (env_name, _) in specs)
+end
+
 Test.@testset "Binning Tools Integration" begin
     Test.@testset "Parser utilities" begin
         # Generic contig/bin table
@@ -81,6 +294,82 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test DataFrames.nrow(df_drep) == 3
         Test.@test df_drep.secondary_cluster[1] == "1"
         Test.@test df_drep.representative[2] == "g1"
+    end
+
+    Test.@testset "Binning helper utilities" begin
+        Test.@test Mycelia._vamb_env_name() == "mycelia_vamb"
+
+        mktempdir() do dir
+            vamb_depth = write_text_file(
+                joinpath(dir, "already_vamb.tsv"),
+                "contigname\tsample1\tsample2\ncontig1\t1.0\t2.0\n"
+            )
+            Test.@test Mycelia._vamb_abundance_tsv(vamb_depth) == vamb_depth
+        end
+
+        mktempdir() do dir
+            depth_file = write_text_file(
+                joinpath(dir, "depth.tsv"),
+                "contigName\tcontigLen\ttotalAvgDepth\tsampleA\tsampleA-var\tsampleB\n" *
+                "contig1\t12\t8.0\t3.5\t0.2\t4.5\n" *
+                "contig2\t12\t5.0\t5.0\t0.1\n\n"
+            )
+            output_dir = joinpath(dir, "derived")
+            abundance_tsv = Mycelia._vamb_abundance_tsv(depth_file; output_dir = output_dir)
+            Test.@test abundance_tsv == joinpath(output_dir, "vamb_abundance.tsv")
+            Test.@test readlines(abundance_tsv) == [
+                "contigname\tsampleA\tsampleB",
+                "contig1\t3.5\t4.5",
+                "contig2\t5.0\t0"
+            ]
+
+            write_text_file(abundance_tsv, "preexisting\n")
+            Test.@test Mycelia._vamb_abundance_tsv(depth_file; output_dir = output_dir) == abundance_tsv
+            Test.@test read(abundance_tsv, String) == "preexisting\n"
+        end
+
+        mktempdir() do dir
+            no_sample_depth = write_text_file(
+                joinpath(dir, "no_sample_depth.tsv"),
+                "contigName\tcontigLen\ttotalAvgDepth\tsampleA-var\ncontig1\t12\t8.0\t0.2\n"
+            )
+            Test.@test_throws ErrorException Mycelia._vamb_abundance_tsv(no_sample_depth)
+        end
+
+        mktempdir() do dir
+            write_text_file(joinpath(dir, "z_last.txt"), "z\n")
+            write_text_file(joinpath(dir, "a_first.tsv"), "a\n")
+            mkpath(joinpath(dir, "nested"))
+            write_text_file(joinpath(dir, "nested", "match.tsv"), "nested\n")
+
+            Test.@test Mycelia._find_first_matching_file(
+                dir,
+                [r"\.tsv$"]
+            ) == joinpath(dir, "a_first.tsv")
+            Test.@test Mycelia._find_first_matching_file(
+                dir,
+                [r"match\.tsv$"];
+                recursive = true
+            ) == joinpath(dir, "nested", "match.tsv")
+            Test.@test isnothing(Mycelia._find_first_matching_file(dir, [r"missing\.tsv$"]))
+        end
+
+        mktempdir() do dir
+            mkpath(joinpath(dir, "z_last_dir"))
+            mkpath(joinpath(dir, "a_first_dir"))
+            mkpath(joinpath(dir, "nested", "match_dir"))
+
+            Test.@test Mycelia._find_first_matching_dir(
+                dir,
+                [r"^a_"]
+            ) == joinpath(dir, "a_first_dir")
+            Test.@test Mycelia._find_first_matching_dir(
+                dir,
+                [r"match_dir$"];
+                recursive = true
+            ) == joinpath(dir, "nested", "match_dir")
+            Test.@test isnothing(Mycelia._find_first_matching_dir(dir, [r"missing_dir$"]))
+        end
     end
 
     Test.@testset "Input validation" begin
@@ -153,6 +442,218 @@ Test.@testset "Binning Tools Integration" begin
             bins_dirs = ["missing_bins_dir"],
             outdir = outdir
         )
+
+        Test.@test_throws ErrorException Mycelia.parse_bin_assignments("missing_assignments.tsv")
+        Test.@test_throws ErrorException Mycelia.parse_drep_clusters("missing_drep.csv")
+
+        mktempdir() do dir
+            assignments = write_text_file(joinpath(dir, "assignments.tsv"), "bin\tcount\nbin1\t1\n")
+            Test.@test_throws ErrorException Mycelia.parse_bin_assignments(assignments)
+        end
+
+        mktempdir() do dir
+            drep_clusters = write_text_file(
+                joinpath(dir, "drep.csv"),
+                "genome,secondary_cluster\nsample,1\n"
+            )
+            Test.@test_throws ErrorException Mycelia.parse_drep_clusters(drep_clusters)
+        end
+
+        mktempdir() do dir
+            inputs = create_binning_stub_inputs(dir)
+            existing_outdir = joinpath(dir, "existing_vamb_out")
+            mkpath(existing_outdir)
+            Test.@test_throws ErrorException Mycelia.run_vamb(
+                contigs_fasta = inputs.contigs_fasta,
+                depth_file = inputs.depth_file,
+                outdir = existing_outdir
+            )
+
+            existing_taxometer_outdir = joinpath(dir, "existing_taxometer_out")
+            mkpath(existing_taxometer_outdir)
+            Test.@test_throws ErrorException Mycelia.run_taxometer(
+                contigs_fasta = inputs.contigs_fasta,
+                depth_file = inputs.depth_file,
+                taxonomy_file = inputs.taxonomy_file,
+                outdir = existing_taxometer_outdir
+            )
+
+            existing_taxvamb_outdir = joinpath(dir, "existing_taxvamb_out")
+            mkpath(existing_taxvamb_outdir)
+            Test.@test_throws ErrorException Mycelia.run_taxvamb(
+                contigs_fasta = inputs.contigs_fasta,
+                depth_file = inputs.depth_file,
+                taxonomy_file = inputs.taxonomy_file,
+                outdir = existing_taxvamb_outdir
+            )
+
+            Test.@test_throws ErrorException Mycelia.run_metacoag(
+                contigs_fasta = inputs.contigs_fasta,
+                assembly_graph = inputs.assembly_graph,
+                mapping_file = "missing_mapping.tsv",
+                outdir = joinpath(dir, "metacoag_out")
+            )
+
+            empty_bam_dir = joinpath(dir, "empty_bams")
+            mkpath(empty_bam_dir)
+            write_text_file(joinpath(empty_bam_dir, "notes.txt"), "not a bam\n")
+            Test.@test_throws ErrorException Mycelia.run_comebin(
+                contigs_fasta = inputs.contigs_fasta,
+                bam_path = empty_bam_dir,
+                outdir = joinpath(dir, "comebin_out")
+            )
+
+            Test.@test_throws ErrorException Mycelia.run_drep_dereplicate(
+                genomes = [joinpath(dir, "missing_genome.fa")],
+                outdir = joinpath(dir, "drep_out")
+            )
+        end
+    end
+
+    Test.@testset "Stubbed wrapper execution" begin
+        fake_specs = fake_binning_env_specs()
+        if fake_conda_envs_available(fake_specs)
+            with_fake_conda_envs(fake_specs) do
+                mktempdir() do dir
+                    inputs = create_binning_stub_inputs(dir)
+
+                    vamb_outdir = joinpath(dir, "vamb_out")
+                    vamb_result = Mycelia.run_vamb(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        outdir = vamb_outdir,
+                        minfasta = 1500,
+                        threads = 3
+                    )
+                    Test.@test vamb_result.clusters_tsv == joinpath(vamb_outdir, "vae_clusters.tsv")
+                    Test.@test isfile(vamb_result.clusters_tsv)
+                    Test.@test occursin("--abundance_tsv", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                    Test.@test occursin("-p 3", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                    Test.@test isfile(joinpath(dirname(inputs.depth_file), "vamb_abundance.tsv"))
+
+                    taxometer_outdir = joinpath(dir, "taxometer_out")
+                    taxometer_result = Mycelia.run_taxometer(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        taxonomy_file = inputs.taxonomy_file,
+                        outdir = taxometer_outdir,
+                        threads = 2,
+                        extra_args = ["--threads", "7"]
+                    )
+                    taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
+                    Test.@test taxometer_result.outdir == taxometer_outdir
+                    Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
+                    Test.@test occursin("taxometer", taxometer_args)
+                    Test.@test occursin("--threads 7", taxometer_args)
+                    Test.@test !occursin("-p 2", taxometer_args)
+
+                    taxvamb_outdir = joinpath(dir, "taxvamb_out")
+                    taxvamb_result = Mycelia.run_taxvamb(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        taxonomy_file = inputs.taxonomy_file,
+                        outdir = taxvamb_outdir,
+                        threads = 4,
+                        extra_args = ["-p", "9"]
+                    )
+                    taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                    Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                    Test.@test occursin("taxvamb", taxvamb_args)
+                    Test.@test occursin("-p 9", taxvamb_args)
+                    Test.@test !occursin("-p 4", taxvamb_args)
+
+                    metabat_outdir = joinpath(dir, "metabat2_out")
+                    metabat_result = Mycelia.run_metabat2(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        outdir = metabat_outdir,
+                        min_contig = 1200,
+                        threads = 5,
+                        seed = 11,
+                        extra_args = ["--maxEdges", "250"]
+                    )
+                    metabat_args = read(joinpath(metabat_outdir, "metabat2_args.txt"), String)
+                    Test.@test metabat_result.bins_prefix == joinpath(metabat_outdir, "bin")
+                    Test.@test isfile("$(metabat_result.bins_prefix).1.fa")
+                    Test.@test occursin("-m 1200", metabat_args)
+                    Test.@test occursin("-t 5", metabat_args)
+                    Test.@test occursin("-s 11", metabat_args)
+                    Test.@test occursin("--maxEdges 250", metabat_args)
+
+                    metacoag_outdir = joinpath(dir, "metacoag_out")
+                    metacoag_result = Mycelia.run_metacoag(
+                        contigs_fasta = inputs.contigs_fasta,
+                        assembly_graph = inputs.assembly_graph,
+                        mapping_file = inputs.mapping_file,
+                        outdir = metacoag_outdir,
+                        assembler = "megahit",
+                        threads = 6,
+                        extra_args = ["--min_length", "1000"]
+                    )
+                    metacoag_args = read(joinpath(metacoag_outdir, "metacoag_args.txt"), String)
+                    Test.@test metacoag_result.bins_dir == joinpath(metacoag_outdir, "bins")
+                    Test.@test isdir(metacoag_result.bins_dir)
+                    Test.@test occursin("--assembler megahit", metacoag_args)
+                    Test.@test occursin("--nthreads 6", metacoag_args)
+                    Test.@test occursin("--min_length 1000", metacoag_args)
+
+                    comebin_outdir = joinpath(dir, "comebin_out")
+                    comebin_result = Mycelia.run_comebin(
+                        contigs_fasta = inputs.contigs_fasta,
+                        bam_path = inputs.bam_dir,
+                        outdir = comebin_outdir,
+                        views = 2,
+                        threads = 3,
+                        temperature = 0.25,
+                        embedding_size = 128,
+                        coverage_embedding_size = 64,
+                        batch_size = 16,
+                        extra_args = ["--mode", "test"]
+                    )
+                    comebin_args = read(joinpath(comebin_outdir, "results", "comebin_args.txt"), String)
+                    Test.@test comebin_result.bins_dir == joinpath(comebin_outdir, "results", "bins")
+                    Test.@test comebin_result.bins_tsv == joinpath(comebin_outdir, "results", "bins_assignments.tsv")
+                    Test.@test occursin("-l 0.25", comebin_args)
+                    Test.@test occursin("-e 128", comebin_args)
+                    Test.@test occursin("-c 64", comebin_args)
+                    Test.@test occursin("-b 16", comebin_args)
+                    Test.@test occursin("--mode test", comebin_args)
+
+                    drep_outdir = joinpath(dir, "drep_out")
+                    drep_result = Mycelia.run_drep_dereplicate(
+                        genomes = inputs.genomes,
+                        outdir = drep_outdir,
+                        completeness_threshold = 90.0,
+                        contamination_threshold = 5.0,
+                        ani_threshold = 0.97,
+                        threads = 4,
+                        extra_args = ["--ignoreGenomeQuality"]
+                    )
+                    drep_args = read(joinpath(drep_outdir, "drep_args.txt"), String)
+                    Test.@test drep_result.winning_genomes == joinpath(drep_outdir, "data_tables", "Widb.csv")
+                    Test.@test occursin("-comp 90.0", drep_args)
+                    Test.@test occursin("-con 5.0", drep_args)
+                    Test.@test occursin("-sa 0.97", drep_args)
+                    Test.@test occursin("--ignoreGenomeQuality", drep_args)
+
+                    magmax_outdir = joinpath(dir, "magmax_out")
+                    magmax_result = Mycelia.run_magmax_merge(
+                        bins_dirs = inputs.bins_dirs,
+                        outdir = magmax_outdir,
+                        threads = 8
+                    )
+                    magmax_args = read(joinpath(magmax_outdir, "magmax_args.txt"), String)
+                    copied_bins = read(joinpath(magmax_outdir, "magmax_inputs.txt"), String)
+                    Test.@test magmax_result.bins_input_dir == joinpath(magmax_outdir, "magmax_bins_input")
+                    Test.@test occursin("--threads 8", magmax_args)
+                    Test.@test occursin("--format fa", magmax_args)
+                    Test.@test occursin("bins_a__a.fa", copied_bins)
+                    Test.@test occursin("bins_b__b.fa", copied_bins)
+                end
+            end
+        else
+            Test.@test_skip "Stubbed wrapper execution skipped because one or more real conda envs already exist."
+        end
     end
 
     if RUN_EXTERNAL
