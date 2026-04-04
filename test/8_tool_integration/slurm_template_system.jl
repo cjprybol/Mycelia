@@ -1,6 +1,16 @@
 import Test
 import Mycelia
 
+@eval Mycelia begin
+    function sleep(seconds::Real)
+        return nothing
+    end
+
+    function list_lawrencium_associations(; execute::Bool = true)::String
+        return "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
+    end
+end
+
 function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
 end
@@ -42,6 +52,25 @@ function _with_git_email(f::Function, email::AbstractString)
         run(`git -C $repo_dir config user.email $email`)
         cd(repo_dir) do
             return f()
+        end
+    end
+end
+
+function _without_git_email(f::Function)
+    mktempdir() do repo_dir
+        run(`git -C $repo_dir init --quiet`)
+        empty_config = joinpath(repo_dir, "empty.gitconfig")
+        write(empty_config, "")
+
+        _with_env(Dict(
+            "HOME" => repo_dir,
+            "XDG_CONFIG_HOME" => joinpath(repo_dir, ".config"),
+            "GIT_CONFIG_GLOBAL" => empty_config,
+            "GIT_CONFIG_NOSYSTEM" => "1"
+        )) do
+            cd(repo_dir) do
+                return f()
+            end
         end
     end
 end
@@ -308,6 +337,21 @@ Test.@testset "SLURM wrapper entrypoints" begin
         end
     end
 
+    Test.@testset "lawrencium_sbatch errors when no mail source is available" begin
+        _without_git_email() do
+            _with_env(Dict(
+                "SLURM_MAIL_USER" => nothing
+            )) do
+                Test.@test_throws ErrorException Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-missing-mail",
+                    account = "pc_nomail",
+                    cmd = "echo fail before submit",
+                    executor = Mycelia.CollectExecutor()
+                )
+            end
+        end
+    end
+
     Test.@testset "lawrencium_sbatch dry_run delegates to slurm submit executor" begin
         mktempdir() do logdir
             result = Mycelia.lawrencium_sbatch(
@@ -326,6 +370,31 @@ Test.@testset "SLURM wrapper entrypoints" begin
             Test.@test result.backend == :sbatch
             Test.@test result.site == :lawrencium
             Test.@test occursin("#SBATCH --partition=lr6", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "lawrencium_sbatch direct dry_run succeeds and validation failures return false" begin
+        mktempdir() do logdir
+            Test.@test Mycelia.lawrencium_sbatch(
+                job_name = "lawrencium-direct-dry-run",
+                mail_user = "explicit@example.org",
+                account = "pc_direct",
+                cmd = "echo direct dry-run",
+                logdir = logdir,
+                dry_run = true
+            )
+        end
+
+        mktempdir() do logdir
+            Test.@test !Mycelia.lawrencium_sbatch(
+                job_name = "lawrencium-invalid",
+                mail_user = "explicit@example.org",
+                account = "pc_invalid",
+                cpus_per_task = 0,
+                cmd = "echo should fail validation",
+                logdir = logdir,
+                dry_run = true
+            )
         end
     end
 
@@ -396,6 +465,35 @@ Test.@testset "SLURM wrapper entrypoints" begin
             Test.@test result.site == :scg
             Test.@test occursin("sbatch", something(result.submit_command, ""))
             Test.@test occursin("#SBATCH --partition=nih_s10", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "scg_sbatch direct dry_run covers env fallback and missing mail sources" begin
+        mktempdir() do logdir
+            _with_env(Dict(
+                "SCG_ACCOUNT" => "PI_ENV",
+                "SLURM_MAIL_USER" => "env-scg@example.org"
+            )) do
+                Test.@test Mycelia.scg_sbatch(
+                    job_name = "scg-direct-dry-run",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        _without_git_email() do
+            _with_env(Dict(
+                "SLURM_MAIL_USER" => nothing
+            )) do
+                Test.@test_throws ErrorException Mycelia.scg_sbatch(
+                    job_name = "scg-missing-mail",
+                    account = "PI_FAIL",
+                    cmd = "echo fail before submit",
+                    executor = Mycelia.CollectExecutor()
+                )
+            end
         end
     end
 
@@ -477,6 +575,30 @@ Test.@testset "SLURM wrapper entrypoints" begin
             Test.@test result.backend == :sbatch
             Test.@test result.site == :nersc
             Test.@test occursin("#SBATCH --constraint=cpu", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "nersc_sbatch direct dry_run returns true" begin
+        mktempdir() do logdir
+            mktempdir() do scriptdir
+                Test.@test Mycelia.nersc_sbatch(
+                    job_name = "nersc-direct-dry-run",
+                    mail_user = "user@example.org",
+                    account = "m2468",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        _with_env(Dict("NERSC_ACCOUNT" => nothing)) do
+            Test.@test_throws ErrorException Mycelia.nersc_sbatch(
+                job_name = "nersc-direct-missing-account",
+                mail_user = "user@example.org",
+                cmd = "echo fail"
+            )
         end
     end
 
