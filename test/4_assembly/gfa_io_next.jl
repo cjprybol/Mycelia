@@ -175,6 +175,23 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
     end
 
     Test.@testset "Sequence-Based Segment Naming Round-Trip" begin
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            dna_fasta_records,
+            3;
+            dataset_id = "gfa_sequence_roundtrip",
+            mode = :singlestrand
+        )
+        expected_segments = Set(string.(MetaGraphsNext.labels(graph)))
+
+        mktempdir() do tmpdir
+            gfa_file = joinpath(tmpdir, "sequence_ids_roundtrip.gfa")
+            Mycelia.Rhizomorph.write_gfa_next(graph, gfa_file; segment_naming = :sequence)
+
+            sequence_segments, _ = parse_gfa_segments_and_links(gfa_file)
+            Test.@test Set(keys(sequence_segments)) == expected_segments
+            Test.@test Set(values(sequence_segments)) == expected_segments
+        end
+
         assert_roundtrip(
             "DNA K-mer SingleStrand Sequence IDs",
             () -> Mycelia.Rhizomorph.build_kmer_graph(
