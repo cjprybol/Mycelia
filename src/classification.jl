@@ -1335,11 +1335,20 @@ end
 """
     run_clamlst(genome_file::String; 
                 db_path::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                db_dir::Union{Nothing, String}=nothing,
                 species::String="Escherichia coli", 
                 outdir::String=dirname(genome_file),
                 threads::Int=get_default_threads(),
                 force_db_update::Bool=false,
-                executor=nothing)
+                executor=nothing,
+                site::Symbol=:local,
+                job_name::String="clamlst",
+                time_limit::String="1-00:00:00",
+                partition::Union{Nothing, String}=nothing,
+                account::Union{Nothing, String}=nothing,
+                mem_gb::Union{Nothing, Real}=nothing,
+                qos::Union{Nothing, String}=nothing,
+                mail_user::Union{Nothing, String}=nothing)
 
 Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
 
@@ -1352,13 +1361,21 @@ Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
 - `threads`: Number of threads to use.
 - `force_db_update`: If `true`, re-imports the database even if it exists.
 - `executor`: Optional execution backend. When provided, execution/job metadata keywords are forwarded to `Mycelia.build_execution_job`.
+- `site`: Execution site identifier used when `executor` is provided.
+- `job_name`: Job name used when `executor` is provided.
+- `time_limit`: Scheduler time limit used when `executor` is provided.
+- `partition`: Optional scheduler partition passed through when `executor` is provided.
+- `account`: Optional scheduler account passed through when `executor` is provided.
+- `mem_gb`: Optional scheduler memory request in gigabytes when `executor` is provided.
+- `qos`: Optional scheduler QoS passed through when `executor` is provided.
+- `mail_user`: Optional scheduler email recipient passed through when `executor` is provided.
 
 # Details
 This function automatically:
 1. Installs the `pymlst` conda environment.
 2. Checks if the `claMLST` database exists at `db_path`. If not, it imports it for the specified `species`.
 3. Decompresses the input genome to a temporary file (required by `claMLST`).
-4. Runs the search and returns the path to the output.
+4. Runs the search locally or emits an execution job when `executor` is provided, then returns the expected output path.
 
 # Returns
 - `String`: Path to the `claMLST` output TSV file.
