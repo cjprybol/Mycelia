@@ -74,6 +74,48 @@ function with_fake_conda_envs(f::Function, specs::Vector{Tuple{String, Dict{Stri
     end
 end
 
+function with_stubbed_conda_envs(f::Function, specs::Vector{Tuple{String, Dict{String, String}}})
+    created_envs = String[]
+    backed_up_scripts = Tuple{String, String}[]
+    installed_scripts = String[]
+    try
+        for (env_name, scripts) in specs
+            env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
+            if !isdir(env_dir)
+                push!(created_envs, env_dir)
+                mkpath(joinpath(env_dir, "bin"))
+                mkpath(joinpath(env_dir, "conda-meta"))
+                write_text_file(joinpath(env_dir, "conda-meta", "history"), "")
+            end
+            bin_dir = joinpath(env_dir, "bin")
+            mkpath(bin_dir)
+            for (script_name, script_body) in scripts
+                script_path = joinpath(bin_dir, script_name)
+                backup_path = script_path * ".mycelia-test-backup"
+                ispath(backup_path) && error("Conda env script backup already exists: $(backup_path)")
+                if isfile(script_path)
+                    mv(script_path, backup_path)
+                    push!(backed_up_scripts, (script_path, backup_path))
+                end
+                write_text_file(script_path, "#!/usr/bin/env bash\nset -euo pipefail\n$(script_body)\n")
+                chmod(script_path, 0o755)
+                push!(installed_scripts, script_path)
+            end
+        end
+        return f()
+    finally
+        for script_path in reverse(installed_scripts)
+            rm(script_path; force = true)
+        end
+        for (script_path, backup_path) in reverse(backed_up_scripts)
+            mv(backup_path, script_path)
+        end
+        for env_dir in reverse(created_envs)
+            rm(env_dir; recursive = true, force = true)
+        end
+    end
+end
+
 function with_stubbed_conda_runner(f::Function, script_body::AbstractString)
     runner_path = Mycelia.CONDA_RUNNER
     isfile(runner_path) || error("Cannot stub missing conda runner: $(runner_path)")
@@ -201,19 +243,29 @@ end
 function with_fake_vamb_bootstrap_runner(f::Function)
     env_name = Mycelia._vamb_env_name()
     env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
-    ispath(env_dir) && error("Refusing to overwrite existing VAMB environment: $(env_dir)")
+    backup_env_dir = env_dir * ".mycelia-test-backup"
+    ispath(backup_env_dir) && error("VAMB environment backup already exists: $(backup_env_dir)")
+    if ispath(env_dir)
+        mv(env_dir, backup_env_dir)
+    end
     mktempdir() do dir
         log_file = joinpath(dir, "fake_conda.log")
-        withenv(
-            "MYCELIA_FAKE_CONDA_LOG" => log_file,
-            "MYCELIA_FAKE_CONDA_ENVS_DIR" => Mycelia._conda_envs_dir(),
-        ) do
-            with_stubbed_conda_runner(fake_vamb_bootstrap_conda_runner_script()) do
-                try
-                    return f(log_file)
-                finally
-                    rm(env_dir; recursive = true, force = true)
+        try
+            withenv(
+                "MYCELIA_FAKE_CONDA_LOG" => log_file,
+                "MYCELIA_FAKE_CONDA_ENVS_DIR" => Mycelia._conda_envs_dir(),
+            ) do
+                with_stubbed_conda_runner(fake_vamb_bootstrap_conda_runner_script()) do
+                    try
+                        return f(log_file)
+                    finally
+                        rm(env_dir; recursive = true, force = true)
+                    end
                 end
+            end
+        finally
+            if ispath(backup_env_dir)
+                mv(backup_env_dir, env_dir)
             end
         end
     end
@@ -518,68 +570,58 @@ Test.@testset "Binning Tools Integration" begin
     end
 
     Test.@testset "VAMB bootstrap coverage" begin
-        env_name = Mycelia._vamb_env_name()
-        env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
-        if ispath(env_dir)
-            Test.@test_skip "Bootstrap coverage skipped because the real VAMB conda environment already exists."
-        else
-            with_fake_vamb_bootstrap_runner() do log_file
-                mktempdir() do dir
-                    inputs = create_binning_stub_inputs(dir)
+        with_fake_vamb_bootstrap_runner() do log_file
+            mktempdir() do dir
+                inputs = create_binning_stub_inputs(dir)
 
-                    taxometer_outdir = joinpath(dir, "taxometer_bootstrap_out")
-                    taxometer_result = Mycelia.run_taxometer(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        taxonomy_file = inputs.taxonomy_file,
-                        outdir = taxometer_outdir,
-                        threads = 6
-                    )
-                    taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
-                    Test.@test taxometer_result.outdir == taxometer_outdir
-                    Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
-                    Test.@test occursin("taxometer", taxometer_args)
-                    Test.@test occursin("-p 6", taxometer_args)
-
-                    taxvamb_outdir = joinpath(dir, "taxvamb_bootstrap_out")
-                    taxvamb_result = Mycelia.run_taxvamb(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        taxonomy_file = inputs.taxonomy_file,
-                        outdir = taxvamb_outdir,
-                        threads = 7
-                    )
-                    taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
-                    Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
-                    Test.@test isfile(taxvamb_result.clusters_tsv)
-                    Test.@test occursin("taxvamb", taxvamb_args)
-                    Test.@test occursin("-p 7", taxvamb_args)
-                end
-
-                conda_log = read(log_file, String)
-                Test.@test occursin("create -y -n mycelia_vamb python=3.11 pip", conda_log)
-                Test.@test occursin(
-                    "run --live-stream -n mycelia_vamb python -m pip install --upgrade pip setuptools wheel",
-                    conda_log
+                taxometer_outdir = joinpath(dir, "taxometer_bootstrap_out")
+                taxometer_result = Mycelia.run_taxometer(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = taxometer_outdir,
+                    threads = 6
                 )
-                Test.@test occursin(
-                    "run --live-stream -n mycelia_vamb python -m pip install vamb",
-                    conda_log
+                taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
+                Test.@test taxometer_result.outdir == taxometer_outdir
+                Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
+                Test.@test occursin("taxometer", taxometer_args)
+                Test.@test occursin("-p 6", taxometer_args)
+
+                taxvamb_outdir = joinpath(dir, "taxvamb_bootstrap_out")
+                taxvamb_result = Mycelia.run_taxvamb(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = taxvamb_outdir,
+                    threads = 7
                 )
+                taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                Test.@test isfile(taxvamb_result.clusters_tsv)
+                Test.@test occursin("taxvamb", taxvamb_args)
+                Test.@test occursin("-p 7", taxvamb_args)
             end
+
+            conda_log = read(log_file, String)
+            Test.@test occursin("create -y -n mycelia_vamb python=3.11 pip", conda_log)
+            Test.@test occursin(
+                "run --live-stream -n mycelia_vamb python -m pip install --upgrade pip setuptools wheel",
+                conda_log
+            )
+            Test.@test occursin(
+                "run --live-stream -n mycelia_vamb python -m pip install vamb",
+                conda_log
+            )
         end
     end
 
     Test.@testset "VAMB version-check failure handling" begin
         env_name = Mycelia._vamb_env_name()
-        if fake_conda_envs_available([(env_name, Dict{String, String}())])
-            with_fake_conda_envs([(env_name, Dict{String, String}())]) do
-                with_missing_conda_runner() do
-                    Test.@test_throws Exception Mycelia._ensure_vamb_installed()
-                end
+        with_stubbed_conda_envs([(env_name, Dict{String, String}())]) do
+            with_missing_conda_runner() do
+                Test.@test_throws Exception Mycelia._ensure_vamb_installed()
             end
-        else
-            Test.@test_skip "Version-check failure coverage skipped because the real VAMB conda environment already exists."
         end
     end
 
@@ -723,147 +765,143 @@ Test.@testset "Binning Tools Integration" begin
 
     Test.@testset "Stubbed wrapper execution" begin
         fake_specs = fake_binning_env_specs()
-        if fake_conda_envs_available(fake_specs)
-            with_fake_conda_envs(fake_specs) do
-                mktempdir() do dir
-                    inputs = create_binning_stub_inputs(dir)
+        with_stubbed_conda_envs(fake_specs) do
+            mktempdir() do dir
+                inputs = create_binning_stub_inputs(dir)
 
-                    vamb_outdir = joinpath(dir, "vamb_out")
-                    vamb_result = Mycelia.run_vamb(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        outdir = vamb_outdir,
-                        minfasta = 1500,
-                        threads = 3
-                    )
-                    Test.@test vamb_result.clusters_tsv == joinpath(vamb_outdir, "vae_clusters.tsv")
-                    Test.@test isfile(vamb_result.clusters_tsv)
-                    Test.@test occursin("--abundance_tsv", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
-                    Test.@test occursin("-p 3", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
-                    Test.@test isfile(joinpath(dirname(inputs.depth_file), "vamb_abundance.tsv"))
+                vamb_outdir = joinpath(dir, "vamb_out")
+                vamb_result = Mycelia.run_vamb(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    outdir = vamb_outdir,
+                    minfasta = 1500,
+                    threads = 3
+                )
+                Test.@test vamb_result.clusters_tsv == joinpath(vamb_outdir, "vae_clusters.tsv")
+                Test.@test isfile(vamb_result.clusters_tsv)
+                Test.@test occursin("--abundance_tsv", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                Test.@test occursin("-p 3", read(joinpath(vamb_outdir, "vamb_args.txt"), String))
+                Test.@test isfile(joinpath(dirname(inputs.depth_file), "vamb_abundance.tsv"))
 
-                    taxometer_outdir = joinpath(dir, "taxometer_out")
-                    taxometer_result = Mycelia.run_taxometer(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        taxonomy_file = inputs.taxonomy_file,
-                        outdir = taxometer_outdir,
-                        threads = 2,
-                        extra_args = ["--threads", "7"]
-                    )
-                    taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
-                    Test.@test taxometer_result.outdir == taxometer_outdir
-                    Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
-                    Test.@test occursin("taxometer", taxometer_args)
-                    Test.@test occursin("--threads 7", taxometer_args)
-                    Test.@test !occursin("-p 2", taxometer_args)
+                taxometer_outdir = joinpath(dir, "taxometer_out")
+                taxometer_result = Mycelia.run_taxometer(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = taxometer_outdir,
+                    threads = 2,
+                    extra_args = ["--threads", "7"]
+                )
+                taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
+                Test.@test taxometer_result.outdir == taxometer_outdir
+                Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
+                Test.@test occursin("taxometer", taxometer_args)
+                Test.@test occursin("--threads 7", taxometer_args)
+                Test.@test !occursin("-p 2", taxometer_args)
 
-                    taxvamb_outdir = joinpath(dir, "taxvamb_out")
-                    taxvamb_result = Mycelia.run_taxvamb(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        taxonomy_file = inputs.taxonomy_file,
-                        outdir = taxvamb_outdir,
-                        threads = 4,
-                        extra_args = ["-p", "9"]
-                    )
-                    taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
-                    Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
-                    Test.@test occursin("taxvamb", taxvamb_args)
-                    Test.@test occursin("-p 9", taxvamb_args)
-                    Test.@test !occursin("-p 4", taxvamb_args)
+                taxvamb_outdir = joinpath(dir, "taxvamb_out")
+                taxvamb_result = Mycelia.run_taxvamb(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = taxvamb_outdir,
+                    threads = 4,
+                    extra_args = ["-p", "9"]
+                )
+                taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                Test.@test occursin("taxvamb", taxvamb_args)
+                Test.@test occursin("-p 9", taxvamb_args)
+                Test.@test !occursin("-p 4", taxvamb_args)
 
-                    metabat_outdir = joinpath(dir, "metabat2_out")
-                    metabat_result = Mycelia.run_metabat2(
-                        contigs_fasta = inputs.contigs_fasta,
-                        depth_file = inputs.depth_file,
-                        outdir = metabat_outdir,
-                        min_contig = 1200,
-                        threads = 5,
-                        seed = 11,
-                        extra_args = ["--maxEdges", "250"]
-                    )
-                    metabat_args = read(joinpath(metabat_outdir, "metabat2_args.txt"), String)
-                    Test.@test metabat_result.bins_prefix == joinpath(metabat_outdir, "bin")
-                    Test.@test isfile("$(metabat_result.bins_prefix).1.fa")
-                    Test.@test occursin("-m 1200", metabat_args)
-                    Test.@test occursin("-t 5", metabat_args)
-                    Test.@test occursin("-s 11", metabat_args)
-                    Test.@test occursin("--maxEdges 250", metabat_args)
+                metabat_outdir = joinpath(dir, "metabat2_out")
+                metabat_result = Mycelia.run_metabat2(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    outdir = metabat_outdir,
+                    min_contig = 1200,
+                    threads = 5,
+                    seed = 11,
+                    extra_args = ["--maxEdges", "250"]
+                )
+                metabat_args = read(joinpath(metabat_outdir, "metabat2_args.txt"), String)
+                Test.@test metabat_result.bins_prefix == joinpath(metabat_outdir, "bin")
+                Test.@test isfile("$(metabat_result.bins_prefix).1.fa")
+                Test.@test occursin("-m 1200", metabat_args)
+                Test.@test occursin("-t 5", metabat_args)
+                Test.@test occursin("-s 11", metabat_args)
+                Test.@test occursin("--maxEdges 250", metabat_args)
 
-                    metacoag_outdir = joinpath(dir, "metacoag_out")
-                    metacoag_result = Mycelia.run_metacoag(
-                        contigs_fasta = inputs.contigs_fasta,
-                        assembly_graph = inputs.assembly_graph,
-                        mapping_file = inputs.mapping_file,
-                        outdir = metacoag_outdir,
-                        assembler = "megahit",
-                        threads = 6,
-                        extra_args = ["--min_length", "1000"]
-                    )
-                    metacoag_args = read(joinpath(metacoag_outdir, "metacoag_args.txt"), String)
-                    Test.@test metacoag_result.bins_dir == joinpath(metacoag_outdir, "bins")
-                    Test.@test isdir(metacoag_result.bins_dir)
-                    Test.@test occursin("--assembler megahit", metacoag_args)
-                    Test.@test occursin("--nthreads 6", metacoag_args)
-                    Test.@test occursin("--min_length 1000", metacoag_args)
+                metacoag_outdir = joinpath(dir, "metacoag_out")
+                metacoag_result = Mycelia.run_metacoag(
+                    contigs_fasta = inputs.contigs_fasta,
+                    assembly_graph = inputs.assembly_graph,
+                    mapping_file = inputs.mapping_file,
+                    outdir = metacoag_outdir,
+                    assembler = "megahit",
+                    threads = 6,
+                    extra_args = ["--min_length", "1000"]
+                )
+                metacoag_args = read(joinpath(metacoag_outdir, "metacoag_args.txt"), String)
+                Test.@test metacoag_result.bins_dir == joinpath(metacoag_outdir, "bins")
+                Test.@test isdir(metacoag_result.bins_dir)
+                Test.@test occursin("--assembler megahit", metacoag_args)
+                Test.@test occursin("--nthreads 6", metacoag_args)
+                Test.@test occursin("--min_length 1000", metacoag_args)
 
-                    comebin_outdir = joinpath(dir, "comebin_out")
-                    comebin_result = Mycelia.run_comebin(
-                        contigs_fasta = inputs.contigs_fasta,
-                        bam_path = inputs.bam_dir,
-                        outdir = comebin_outdir,
-                        views = 2,
-                        threads = 3,
-                        temperature = 0.25,
-                        embedding_size = 128,
-                        coverage_embedding_size = 64,
-                        batch_size = 16,
-                        extra_args = ["--mode", "test"]
-                    )
-                    comebin_args = read(joinpath(comebin_outdir, "results", "comebin_args.txt"), String)
-                    Test.@test comebin_result.bins_dir == joinpath(comebin_outdir, "results", "bins")
-                    Test.@test comebin_result.bins_tsv == joinpath(comebin_outdir, "results", "bins_assignments.tsv")
-                    Test.@test occursin("-l 0.25", comebin_args)
-                    Test.@test occursin("-e 128", comebin_args)
-                    Test.@test occursin("-c 64", comebin_args)
-                    Test.@test occursin("-b 16", comebin_args)
-                    Test.@test occursin("--mode test", comebin_args)
+                comebin_outdir = joinpath(dir, "comebin_out")
+                comebin_result = Mycelia.run_comebin(
+                    contigs_fasta = inputs.contigs_fasta,
+                    bam_path = inputs.bam_dir,
+                    outdir = comebin_outdir,
+                    views = 2,
+                    threads = 3,
+                    temperature = 0.25,
+                    embedding_size = 128,
+                    coverage_embedding_size = 64,
+                    batch_size = 16,
+                    extra_args = ["--mode", "test"]
+                )
+                comebin_args = read(joinpath(comebin_outdir, "results", "comebin_args.txt"), String)
+                Test.@test comebin_result.bins_dir == joinpath(comebin_outdir, "results", "bins")
+                Test.@test comebin_result.bins_tsv == joinpath(comebin_outdir, "results", "bins_assignments.tsv")
+                Test.@test occursin("-l 0.25", comebin_args)
+                Test.@test occursin("-e 128", comebin_args)
+                Test.@test occursin("-c 64", comebin_args)
+                Test.@test occursin("-b 16", comebin_args)
+                Test.@test occursin("--mode test", comebin_args)
 
-                    drep_outdir = joinpath(dir, "drep_out")
-                    drep_result = Mycelia.run_drep_dereplicate(
-                        genomes = inputs.genomes,
-                        outdir = drep_outdir,
-                        completeness_threshold = 90.0,
-                        contamination_threshold = 5.0,
-                        ani_threshold = 0.97,
-                        threads = 4,
-                        extra_args = ["--ignoreGenomeQuality"]
-                    )
-                    drep_args = read(joinpath(drep_outdir, "drep_args.txt"), String)
-                    Test.@test drep_result.winning_genomes == joinpath(drep_outdir, "data_tables", "Widb.csv")
-                    Test.@test occursin("-comp 90.0", drep_args)
-                    Test.@test occursin("-con 5.0", drep_args)
-                    Test.@test occursin("-sa 0.97", drep_args)
-                    Test.@test occursin("--ignoreGenomeQuality", drep_args)
+                drep_outdir = joinpath(dir, "drep_out")
+                drep_result = Mycelia.run_drep_dereplicate(
+                    genomes = inputs.genomes,
+                    outdir = drep_outdir,
+                    completeness_threshold = 90.0,
+                    contamination_threshold = 5.0,
+                    ani_threshold = 0.97,
+                    threads = 4,
+                    extra_args = ["--ignoreGenomeQuality"]
+                )
+                drep_args = read(joinpath(drep_outdir, "drep_args.txt"), String)
+                Test.@test drep_result.winning_genomes == joinpath(drep_outdir, "data_tables", "Widb.csv")
+                Test.@test occursin("-comp 90.0", drep_args)
+                Test.@test occursin("-con 5.0", drep_args)
+                Test.@test occursin("-sa 0.97", drep_args)
+                Test.@test occursin("--ignoreGenomeQuality", drep_args)
 
-                    magmax_outdir = joinpath(dir, "magmax_out")
-                    magmax_result = Mycelia.run_magmax_merge(
-                        bins_dirs = inputs.bins_dirs,
-                        outdir = magmax_outdir,
-                        threads = 8
-                    )
-                    magmax_args = read(joinpath(magmax_outdir, "magmax_args.txt"), String)
-                    copied_bins = read(joinpath(magmax_outdir, "magmax_inputs.txt"), String)
-                    Test.@test magmax_result.bins_input_dir == joinpath(magmax_outdir, "magmax_bins_input")
-                    Test.@test occursin("--threads 8", magmax_args)
-                    Test.@test occursin("--format fa", magmax_args)
-                    Test.@test occursin("bins_a__a.fa", copied_bins)
-                    Test.@test occursin("bins_b__b.fa", copied_bins)
-                end
+                magmax_outdir = joinpath(dir, "magmax_out")
+                magmax_result = Mycelia.run_magmax_merge(
+                    bins_dirs = inputs.bins_dirs,
+                    outdir = magmax_outdir,
+                    threads = 8
+                )
+                magmax_args = read(joinpath(magmax_outdir, "magmax_args.txt"), String)
+                copied_bins = read(joinpath(magmax_outdir, "magmax_inputs.txt"), String)
+                Test.@test magmax_result.bins_input_dir == joinpath(magmax_outdir, "magmax_bins_input")
+                Test.@test occursin("--threads 8", magmax_args)
+                Test.@test occursin("--format fa", magmax_args)
+                Test.@test occursin("bins_a__a.fa", copied_bins)
+                Test.@test occursin("bins_b__b.fa", copied_bins)
             end
-        else
-            Test.@test_skip "Stubbed wrapper execution skipped because one or more real conda envs already exist."
         end
     end
 
