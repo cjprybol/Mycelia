@@ -63,7 +63,7 @@ function SPRTThresholds(; alpha::Real = 0.05, beta::Real = 0.05)
 end
 
 """
-    ActiveReadState(read_id, branches; reference_branch=first(branches))
+    ActiveReadState(read_id, branches; reference_branch=nothing)
 
 Track sequential branch evidence for one read traversing a fork.
 
@@ -100,7 +100,7 @@ mutable struct ActiveReadState{B}
 end
 
 """
-    ActiveReadState(read_id, branches; reference_branch=first(branches))
+    ActiveReadState(read_id, branches; reference_branch=nothing)
 
 Initialize per-read fork-resolution state with zeroed evidence totals for each
 candidate branch.
@@ -130,7 +130,8 @@ function ActiveReadState(
 ) where {B}
     isempty(branches) && error("ActiveReadState requires at least one branch label")
     unique_branches = unique(collect(branches))
-    chosen_reference = isnothing(reference_branch) ? first(unique_branches) : reference_branch
+    chosen_reference = isnothing(reference_branch) ? first(unique_branches) :
+                       reference_branch
     chosen_reference in unique_branches ||
         error("reference_branch must be one of the supplied branches")
 
@@ -249,8 +250,10 @@ function llr_weight(
         competing_support::Real;
         pseudocount::Real = 0.5
 )
-    favored_support >= 0 || error("favored_support must be non-negative, got $(favored_support)")
-    competing_support >= 0 || error("competing_support must be non-negative, got $(competing_support)")
+    favored_support >= 0 ||
+        error("favored_support must be non-negative, got $(favored_support)")
+    competing_support >= 0 ||
+        error("competing_support must be non-negative, got $(competing_support)")
     pseudocount > 0 || error("pseudocount must be positive, got $(pseudocount)")
     return log(
         (Float64(favored_support) + Float64(pseudocount)) /
@@ -514,7 +517,8 @@ function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
                             state.branch_scores[alternative_branch]
         state.log_likelihood_ratio = alternative_score - reference_score
     else
-        state.log_likelihood_ratio = state.branch_scores[state.current_branch] - reference_score
+        state.log_likelihood_ratio = state.branch_scores[state.current_branch] -
+                                     reference_score
     end
 
     state.decision = sprt_decision(state.log_likelihood_ratio; alpha, beta)
@@ -530,7 +534,8 @@ function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
 end
 
 function _require_known_branch(state::ActiveReadState{B}, branch::B) where {B}
-    haskey(state.branch_scores, branch) || error("Unknown branch $(branch) for read $(state.read_id)")
+    haskey(state.branch_scores, branch) ||
+        error("Unknown branch $(branch) for read $(state.read_id)")
     return nothing
 end
 
