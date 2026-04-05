@@ -186,14 +186,11 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             Mycelia.JLD2.save(serialized_graph, "graph", graph)
             restored_graph = Mycelia.JLD2.load(serialized_graph, "graph")
 
-            original_vertices = Set(string(label) for label in MetaGraphsNext.labels(graph))
-            restored_vertices = Set(string(label) for label in MetaGraphsNext.labels(restored_graph))
-            original_edges = Set(
-                (string(src_label), string(dst_label)) for
-                (src_label, dst_label) in MetaGraphsNext.edge_labels(graph))
-            restored_edges = Set(
-                (string(src_label), string(dst_label)) for
-                (src_label, dst_label) in MetaGraphsNext.edge_labels(restored_graph))
+            Test.@test typeof(restored_graph) == typeof(graph)
+            original_vertices = Set(MetaGraphsNext.labels(graph))
+            restored_vertices = Set(MetaGraphsNext.labels(restored_graph))
+            original_edges = Set(MetaGraphsNext.edge_labels(graph))
+            restored_edges = Set(MetaGraphsNext.edge_labels(restored_graph))
 
             Test.@test original_vertices == restored_vertices
             Test.@test original_edges == restored_edges
