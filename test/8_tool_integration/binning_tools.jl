@@ -74,6 +74,151 @@ function with_fake_conda_envs(f::Function, specs::Vector{Tuple{String, Dict{Stri
     end
 end
 
+function with_stubbed_conda_runner(f::Function, script_body::AbstractString)
+    runner_path = Mycelia.CONDA_RUNNER
+    isfile(runner_path) || error("Cannot stub missing conda runner: $(runner_path)")
+    backup_path = runner_path * ".mycelia-test-backup"
+    ispath(backup_path) && error("Conda runner backup already exists: $(backup_path)")
+    mv(runner_path, backup_path)
+    write_text_file(runner_path, "#!/usr/bin/env bash\nset -euo pipefail\n$(script_body)\n")
+    chmod(runner_path, 0o755)
+    try
+        return f()
+    finally
+        rm(runner_path; force = true)
+        mv(backup_path, runner_path)
+    end
+end
+
+function with_missing_conda_runner(f::Function)
+    runner_path = Mycelia.CONDA_RUNNER
+    isfile(runner_path) || error("Cannot hide missing conda runner: $(runner_path)")
+    backup_path = runner_path * ".mycelia-test-backup"
+    ispath(backup_path) && error("Conda runner backup already exists: $(backup_path)")
+    mv(runner_path, backup_path)
+    try
+        return f()
+    finally
+        mv(backup_path, runner_path)
+    end
+end
+
+function fake_vamb_bootstrap_conda_runner_script()
+    return raw"""
+log_file="${MYCELIA_FAKE_CONDA_LOG:?}"
+envs_dir="${MYCELIA_FAKE_CONDA_ENVS_DIR:?}"
+mkdir -p "$envs_dir"
+printf '%s\n' "$*" >> "$log_file"
+
+if [[ "${1:-}" == "create" ]]; then
+    env_name=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -n)
+                env_name="$2"
+                shift 2
+                ;;
+            *)
+                shift
+                ;;
+        esac
+    done
+    mkdir -p "$envs_dir/$env_name/bin" "$envs_dir/$env_name/conda-meta"
+    : > "$envs_dir/$env_name/conda-meta/history"
+    exit 0
+fi
+
+if [[ "${1:-}" == "run" ]]; then
+    shift
+    if [[ "${1:-}" == "--live-stream" ]]; then
+        shift
+    fi
+    [[ "${1:-}" == "-n" ]] || exit 2
+    env_name="$2"
+    shift 2
+
+    if [[ "${1:-}" == "vamb" && "${2:-}" == "--version" ]]; then
+        counter_file="$envs_dir/$env_name/version_checks.txt"
+        count=0
+        if [[ -f "$counter_file" ]]; then
+            count="$(cat "$counter_file")"
+        fi
+        count=$((count + 1))
+        printf '%s\n' "$count" > "$counter_file"
+        if [[ "$count" -eq 1 ]]; then
+            exit 1
+        fi
+        echo "vamb 1.0.0"
+        exit 0
+    fi
+
+    if [[ "${1:-}" == "python" && "${2:-}" == "-m" && "${3:-}" == "pip" && "${4:-}" == "install" ]]; then
+        if [[ "${5:-}" == "--upgrade" ]]; then
+            exit 0
+        fi
+        vamb_script="$envs_dir/$env_name/bin/vamb"
+        cat > "$vamb_script" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+original_args=("$@")
+if [[ "${1:-}" == "--version" ]]; then
+    echo "vamb 1.0.0"
+    exit 0
+fi
+outdir=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --outdir)
+            outdir="$2"
+            shift 2
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+mkdir -p "$outdir"
+printf '%s\n' "${original_args[*]}" > "$outdir/vamb_args.txt"
+if [[ "${original_args[0]:-}" == "bin" ]]; then
+    printf 'contig\tbin\ncontig1\tbin_1\n' > "$outdir/vae_clusters.tsv"
+else
+    printf 'taxometer\n' > "$outdir/taxometer_output.txt"
+fi
+EOF
+        chmod +x "$vamb_script"
+        exit 0
+    fi
+
+    tool_path="$envs_dir/$env_name/bin/${1:-}"
+    [[ -x "$tool_path" ]] || exit 127
+    exec "$tool_path" "${@:2}"
+fi
+
+exit 0
+"""
+end
+
+function with_fake_vamb_bootstrap_runner(f::Function)
+    env_name = Mycelia._vamb_env_name()
+    env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
+    ispath(env_dir) && error("Refusing to overwrite existing VAMB environment: $(env_dir)")
+    mktempdir() do dir
+        log_file = joinpath(dir, "fake_conda.log")
+        withenv(
+            "MYCELIA_FAKE_CONDA_LOG" => log_file,
+            "MYCELIA_FAKE_CONDA_ENVS_DIR" => Mycelia._conda_envs_dir(),
+        ) do
+            with_stubbed_conda_runner(fake_vamb_bootstrap_conda_runner_script()) do
+                try
+                    return f(log_file)
+                finally
+                    rm(env_dir; recursive = true, force = true)
+                end
+            end
+        end
+    end
+end
+
 function create_binning_stub_inputs(root::String)
     contigs_fasta = write_text_file(
         joinpath(root, "contigs.fna"),
@@ -369,6 +514,72 @@ Test.@testset "Binning Tools Integration" begin
                 recursive = true
             ) == joinpath(dir, "nested", "match_dir")
             Test.@test isnothing(Mycelia._find_first_matching_dir(dir, [r"missing_dir$"]))
+        end
+    end
+
+    Test.@testset "VAMB bootstrap coverage" begin
+        env_name = Mycelia._vamb_env_name()
+        env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
+        if ispath(env_dir)
+            Test.@test_skip "Bootstrap coverage skipped because the real VAMB conda environment already exists."
+        else
+            with_fake_vamb_bootstrap_runner() do log_file
+                mktempdir() do dir
+                    inputs = create_binning_stub_inputs(dir)
+
+                    taxometer_outdir = joinpath(dir, "taxometer_bootstrap_out")
+                    taxometer_result = Mycelia.run_taxometer(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        taxonomy_file = inputs.taxonomy_file,
+                        outdir = taxometer_outdir,
+                        threads = 6
+                    )
+                    taxometer_args = read(joinpath(taxometer_outdir, "vamb_args.txt"), String)
+                    Test.@test taxometer_result.outdir == taxometer_outdir
+                    Test.@test isfile(joinpath(taxometer_outdir, "taxometer_output.txt"))
+                    Test.@test occursin("taxometer", taxometer_args)
+                    Test.@test occursin("-p 6", taxometer_args)
+
+                    taxvamb_outdir = joinpath(dir, "taxvamb_bootstrap_out")
+                    taxvamb_result = Mycelia.run_taxvamb(
+                        contigs_fasta = inputs.contigs_fasta,
+                        depth_file = inputs.depth_file,
+                        taxonomy_file = inputs.taxonomy_file,
+                        outdir = taxvamb_outdir,
+                        threads = 7
+                    )
+                    taxvamb_args = read(joinpath(taxvamb_outdir, "vamb_args.txt"), String)
+                    Test.@test taxvamb_result.clusters_tsv == joinpath(taxvamb_outdir, "vae_clusters.tsv")
+                    Test.@test isfile(taxvamb_result.clusters_tsv)
+                    Test.@test occursin("taxvamb", taxvamb_args)
+                    Test.@test occursin("-p 7", taxvamb_args)
+                end
+
+                conda_log = read(log_file, String)
+                Test.@test occursin("create -y -n mycelia_vamb python=3.11 pip", conda_log)
+                Test.@test occursin(
+                    "run --live-stream -n mycelia_vamb python -m pip install --upgrade pip setuptools wheel",
+                    conda_log
+                )
+                Test.@test occursin(
+                    "run --live-stream -n mycelia_vamb python -m pip install vamb",
+                    conda_log
+                )
+            end
+        end
+    end
+
+    Test.@testset "VAMB version-check failure handling" begin
+        env_name = Mycelia._vamb_env_name()
+        if fake_conda_envs_available([(env_name, Dict{String, String}())])
+            with_fake_conda_envs([(env_name, Dict{String, String}())]) do
+                with_missing_conda_runner() do
+                    Test.@test_throws Exception Mycelia._ensure_vamb_installed()
+                end
+            end
+        else
+            Test.@test_skip "Version-check failure coverage skipped because the real VAMB conda environment already exists."
         end
     end
 
