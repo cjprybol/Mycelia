@@ -45,7 +45,8 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
         return segment_map, links
     end
 
-    function assert_roundtrip(case_name, graph_builder, graph_reader, expected_label_type)
+    function assert_roundtrip(case_name, graph_builder, graph_reader, expected_label_type;
+            segment_naming::Symbol = :numeric)
         original_graph = graph_builder()
         original_labels = Set(MetaGraphsNext.labels(original_graph))
         original_edges = edge_label_set(original_graph)
@@ -54,7 +55,11 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
 
         mktempdir() do tmpdir
             gfa_file = joinpath(tmpdir, replace(case_name, r"[^A-Za-z0-9]+" => "_") * ".gfa")
-            written_file = Mycelia.Rhizomorph.write_gfa_next(original_graph, gfa_file)
+            written_file = Mycelia.Rhizomorph.write_gfa_next(
+                original_graph,
+                gfa_file;
+                segment_naming = segment_naming
+            )
             restored_graph = graph_reader(gfa_file)
 
             Test.@test written_file == gfa_file
@@ -167,6 +172,25 @@ Test.@testset "GFA I/O Next-Generation Tests (Rhizomorph)" begin
             Test.@test numeric_link_sequences == sequence_link_sequences
             Test.@test Set(values(numeric_segments)) == Set(keys(sequence_segments))
         end
+    end
+
+    Test.@testset "Sequence-Based Segment Naming Round-Trip" begin
+        assert_roundtrip(
+            "DNA K-mer SingleStrand Sequence IDs",
+            () -> Mycelia.Rhizomorph.build_kmer_graph(
+                dna_fasta_records,
+                3;
+                dataset_id = "gfa_sequence_roundtrip",
+                mode = :singlestrand
+            ),
+            path -> Mycelia.Rhizomorph.read_gfa_next(
+                path,
+                Kmers.DNAKmer{3},
+                Mycelia.Rhizomorph.SingleStrand
+            ),
+            Kmers.DNAKmer{3};
+            segment_naming = :sequence
+        )
     end
 
     Test.@testset "GFA Reading" begin
