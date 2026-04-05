@@ -1,15 +1,9 @@
 import Test
 import Mycelia
 
-@eval Mycelia begin
-    function sleep(seconds::Real)
-        return nothing
-    end
-
-    function list_lawrencium_associations(; execute::Bool = true)::String
-        return "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
-    end
-end
+const LEGACY_FIXTURE_LOGDIR = "/Users/cameronprybol/workspace/slurmlogs"
+const FAKE_LAWRENCIUM_ASSOCIATIONS =
+    "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
 
 function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
@@ -41,8 +35,7 @@ function _with_env(f::Function, overrides::AbstractDict)
 end
 
 function _normalize_fixture_logdir(text::AbstractString)
-    legacy_logdir = "/Users/cameronprybol/workspace/slurmlogs"
-    return replace(String(text), legacy_logdir => Mycelia.DEFAULT_SLURM_LOGDIR)
+    return replace(String(text), LEGACY_FIXTURE_LOGDIR => Mycelia.DEFAULT_SLURM_LOGDIR)
 end
 
 function _with_git_email(f::Function, email::AbstractString)
@@ -63,14 +56,30 @@ function _without_git_email(f::Function)
         write(empty_config, "")
 
         _with_env(Dict(
-            "HOME" => repo_dir,
-            "XDG_CONFIG_HOME" => joinpath(repo_dir, ".config"),
             "GIT_CONFIG_GLOBAL" => empty_config,
-            "GIT_CONFIG_NOSYSTEM" => "1"
+            "GIT_CONFIG_NOSYSTEM" => "1",
+            "GIT_AUTHOR_EMAIL" => nothing,
+            "GIT_COMMITTER_EMAIL" => nothing
         )) do
             cd(repo_dir) do
                 return f()
             end
+        end
+    end
+end
+
+function _with_fake_lawrencium_associations(f::Function)
+    mktempdir() do bindir
+        sacctmgr_path = joinpath(bindir, "sacctmgr")
+        write(sacctmgr_path, "#!/bin/sh\nprintf '%s' '$FAKE_LAWRENCIUM_ASSOCIATIONS'\n")
+        chmod(sacctmgr_path, 0o755)
+
+        path_entries = filter(!isempty, [bindir, get(ENV, "PATH", "")])
+        _with_env(Dict(
+            "PATH" => join(path_entries, ":"),
+            "USER" => "user"
+        )) do
+            return f()
         end
     end
 end
@@ -375,26 +384,30 @@ Test.@testset "SLURM wrapper entrypoints" begin
 
     Test.@testset "lawrencium_sbatch direct dry_run succeeds and validation failures return false" begin
         mktempdir() do logdir
-            Test.@test Mycelia.lawrencium_sbatch(
-                job_name = "lawrencium-direct-dry-run",
-                mail_user = "explicit@example.org",
-                account = "pc_direct",
-                cmd = "echo direct dry-run",
-                logdir = logdir,
-                dry_run = true
-            )
+            _with_fake_lawrencium_associations() do
+                Test.@test Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-direct-dry-run",
+                    mail_user = "explicit@example.org",
+                    account = "pc_test",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
         end
 
         mktempdir() do logdir
-            Test.@test !Mycelia.lawrencium_sbatch(
-                job_name = "lawrencium-invalid",
-                mail_user = "explicit@example.org",
-                account = "pc_invalid",
-                cpus_per_task = 0,
-                cmd = "echo should fail validation",
-                logdir = logdir,
-                dry_run = true
-            )
+            _with_fake_lawrencium_associations() do
+                Test.@test !Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-invalid",
+                    mail_user = "explicit@example.org",
+                    account = "pc_test",
+                    cpus_per_task = 0,
+                    cmd = "echo should fail validation",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
         end
     end
 
@@ -481,6 +494,18 @@ Test.@testset "SLURM wrapper entrypoints" begin
                     dry_run = true
                 )
             end
+        end
+
+        mktempdir() do logdir
+            Test.@test !Mycelia.scg_sbatch(
+                job_name = "scg-direct-invalid",
+                mail_user = "env-scg@example.org",
+                account = "PI_ENV",
+                cpus_per_task = 0,
+                cmd = "echo invalid scg direct dry-run",
+                logdir = logdir,
+                dry_run = true
+            )
         end
 
         _without_git_email() do
@@ -578,7 +603,7 @@ Test.@testset "SLURM wrapper entrypoints" begin
         end
     end
 
-    Test.@testset "nersc_sbatch direct dry_run returns true" begin
+    Test.@testset "nersc_sbatch direct dry_run returns true and false on validation failure" begin
         mktempdir() do logdir
             mktempdir() do scriptdir
                 Test.@test Mycelia.nersc_sbatch(
@@ -586,6 +611,21 @@ Test.@testset "SLURM wrapper entrypoints" begin
                     mail_user = "user@example.org",
                     account = "m2468",
                     cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        mktempdir() do logdir
+            mktempdir() do scriptdir
+                Test.@test !Mycelia.nersc_sbatch(
+                    job_name = "nersc-direct-invalid",
+                    mail_user = "user@example.org",
+                    account = "m2468",
+                    cpus_per_task = 0,
+                    cmd = "echo invalid nersc direct dry-run",
                     logdir = logdir,
                     scriptdir = scriptdir,
                     dry_run = true
