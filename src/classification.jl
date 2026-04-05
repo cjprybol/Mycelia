@@ -1334,7 +1334,7 @@ end
 
 """
     run_clamlst(genome_file::String; 
-                db_dir::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                db_path::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
                 species::String="Escherichia coli", 
                 outdir::String=dirname(genome_file),
                 threads::Int=get_default_threads(),
@@ -1365,7 +1365,18 @@ function run_clamlst(genome_file::String;
         species::String = "Escherichia coli",
         outdir::String = dirname(genome_file),
         threads::Int = get_default_threads(),
-        force_db_update::Bool = false)
+        force_db_update::Bool = false,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "clamlst",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
+    isfile(genome_file) || error("Genome file not found: $(genome_file)")
+
     mkpath(outdir)
     mkpath(dirname(db_path))
 
@@ -1382,27 +1393,85 @@ function run_clamlst(genome_file::String;
     # only install if we need to make the file - skip if it's already present
     Mycelia.add_bioconda_env("pymlst")
 
-    # Fix 2: Simplified DB check. 
+    # Fix 2: Simplified DB check.
     # If the database exists, we assume the DB is already present
     db_exists = isfile(db_path) || isdir(db_path)
+    base_import_args = String[
+        "run", "--live-stream", "-n", "pymlst",
+        "claMLST", "import", db_path, species
+    ]
+    import_args = copy(base_import_args)
+    import_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(base_import_args)`)
+    if db_exists && force_db_update
+        push!(import_args, "--force")
+    end
+    import_force_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(vcat(base_import_args, "--force"))`)
+
+    if executor !== nothing
+        script_lines = String[
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "mkdir -p \"$(dirname(db_path))\"",
+            "if [ ! -f \"$(output_tsv)\" ]; then"
+        ]
+
+        if force_db_update
+            append!(script_lines, [
+                "  if [ -e \"$(db_path)\" ]; then",
+                "    $(import_force_cmd)",
+                "  else",
+                "    $(import_cmd)",
+                "  fi"
+            ])
+        else
+            append!(script_lines, [
+                "  if [ ! -e \"$(db_path)\" ]; then",
+                "    $(import_cmd)",
+                "  fi"
+            ])
+        end
+
+        if endswith(genome_file, ".gz")
+            temp_template = joinpath(outdir, "clamlst_input.XXXXXX")
+            append!(script_lines, [
+                "  temp_input=\$(mktemp \"$(temp_template)\")",
+                "  trap 'rm -f \"\$temp_input\"' EXIT",
+                "  gunzip -c \"$(genome_file)\" > \"\$temp_input\"",
+                "  input_path=\"\$temp_input\""
+            ])
+        else
+            push!(script_lines, "  input_path=\"$(genome_file)\"")
+        end
+
+        push!(
+            script_lines,
+            "  $(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search \"$(db_path)\" \"\$input_path\" > \"$(output_tsv)\""
+        )
+        push!(script_lines, "fi")
+
+        job = Mycelia.build_execution_job(
+            cmd = join(script_lines, "\n"),
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        return output_tsv
+    end
+
     if !db_exists || force_db_update
-        @info "Initializing claMLST database for $species at $db_dir..."
+        @info "Initializing claMLST database for $species at $db_path..."
         try
-            # Prepare arguments
-            cmd_args = ["run", "--live-stream", "-n", "pymlst",
-                "claMLST", "import", db_dir, species]
-
-            # If forcing an update on an existing DB, attempt to use --force if supported, 
-            # or the user might need to manually clear the folder. 
-            # The error message "use --force to override it" suggests the flag exists.
-            if db_exists && force_db_update
-                push!(cmd_args, "--force")
-            end
-
-            run(`$(Mycelia.CONDA_RUNNER) $cmd_args`)
+            run(`$(Mycelia.CONDA_RUNNER) $import_args`)
         catch e
             @warn "Failed to import claMLST database: $e"
-            # If strictly required, you might want to rethrow() here, 
+            # If strictly required, you might want to rethrow() here,
             # but usually we proceed to check if search works.
         end
     end
@@ -1423,7 +1492,7 @@ function run_clamlst(genome_file::String;
         end
 
         # Run Search
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_dir) $(input_path_to_use)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_path) $(input_path_to_use)`
 
         open(output_tsv, "w") do io
             run(pipeline(cmd, stdout = io))
