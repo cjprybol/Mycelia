@@ -1338,17 +1338,20 @@ end
                 species::String="Escherichia coli", 
                 outdir::String=dirname(genome_file),
                 threads::Int=get_default_threads(),
-                force_db_update::Bool=false)
+                force_db_update::Bool=false,
+                executor=nothing)
 
 Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
 
 # Arguments
 - `genome_file`: Path to the input genome FASTA file (gzip supported).
 - `db_path`: Path to store/look for the claMLST database. Defaults to `~/workspace/pymlst/claMLSTDB`.
+- `db_dir`: Deprecated alias for `db_path`.
 - `species`: Species name to import/search if the database needs initialization (default: "Escherichia coli").
 - `outdir`: Directory for output files.
 - `threads`: Number of threads to use.
 - `force_db_update`: If `true`, re-imports the database even if it exists.
+- `executor`: Optional execution backend. When provided, execution/job metadata keywords are forwarded to `Mycelia.build_execution_job`.
 
 # Details
 This function automatically:
@@ -1358,10 +1361,11 @@ This function automatically:
 4. Runs the search and returns the path to the output.
 
 # Returns
-- `String`: Path to the output directory.
+- `String`: Path to the `claMLST` output TSV file.
 """
 function run_clamlst(genome_file::String;
         db_path::String = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+        db_dir::Union{Nothing, String} = nothing,
         species::String = "Escherichia coli",
         outdir::String = dirname(genome_file),
         threads::Int = get_default_threads(),
@@ -1375,7 +1379,14 @@ function run_clamlst(genome_file::String;
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing)
-    isfile(genome_file) || error("Genome file not found: $(genome_file)")
+    default_db_path = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB")
+    if !isnothing(db_dir)
+        if db_path != default_db_path && db_path != db_dir
+            error("Provide only one of db_path or db_dir for run_clamlst().")
+        end
+        Base.depwarn("Keyword argument db_dir is deprecated; use db_path instead.", :run_clamlst)
+        db_path = db_dir
+    end
 
     mkpath(outdir)
     mkpath(dirname(db_path))
@@ -1390,8 +1401,14 @@ function run_clamlst(genome_file::String;
         return output_tsv
     end
 
-    # only install if we need to make the file - skip if it's already present
-    Mycelia.add_bioconda_env("pymlst")
+    isfile(genome_file) || error("Genome file not found: $(genome_file)")
+
+    resolved_executor = executor === nothing ? nothing : Mycelia.resolve_executor(executor)
+    if resolved_executor === nothing ||
+       !(resolved_executor isa Mycelia.CollectExecutor || resolved_executor isa Mycelia.DryRunExecutor)
+        # Only install if we need to make the file; skip cached outputs and pure collection backends.
+        Mycelia.add_bioconda_env("pymlst")
+    end
 
     # Fix 2: Simplified DB check.
     # If the database exists, we assume the DB is already present
@@ -1407,7 +1424,7 @@ function run_clamlst(genome_file::String;
     end
     import_force_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(vcat(base_import_args, "--force"))`)
 
-    if executor !== nothing
+    if resolved_executor !== nothing
         script_lines = String[
             "set -euo pipefail",
             "mkdir -p \"$(outdir)\"",
@@ -1461,7 +1478,7 @@ function run_clamlst(genome_file::String;
             account = account,
             mail_user = mail_user
         )
-        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        Mycelia.execute(job, resolved_executor)
         return output_tsv
     end
 
