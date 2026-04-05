@@ -1413,3 +1413,145 @@ Test.@testset "Linear Chain Collapsing (collapse_linear_chains!)" begin
         end
     end
 end
+
+struct CountedEvidenceVertexData
+    evidence::Int
+end
+
+struct CoverageOnlyVertexData
+    coverage::Vector{Int}
+end
+
+Mycelia.Rhizomorph.count_evidence(data::CountedEvidenceVertexData) = data.evidence
+
+Test.@testset "Graph Simplification Helper Coverage" begin
+    Test.@testset "calculate_path_support covers evidence, coverage, fallback, and missing vertices" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Nothing
+        )
+
+        graph["evidence"] = CountedEvidenceVertexData(3)
+        graph["coverage"] = CoverageOnlyVertexData([1, 2, 3, 4])
+        graph["fallback"] = nothing
+
+        support = Mycelia.Rhizomorph.calculate_path_support(
+            graph, ["evidence", "coverage", "fallback", "missing"])
+
+        Test.@test support == 8
+    end
+
+    Test.@testset "find_limited_path stops on cycles" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+        )
+
+        for vertex in ["A", "B"]
+            graph[vertex] = Mycelia.Rhizomorph.StringVertexData(vertex)
+        end
+
+        graph["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["B", "A"] = Mycelia.Rhizomorph.StringEdgeData(1)
+
+        Test.@test Mycelia.Rhizomorph.find_limited_path(graph, "A", 10) == ["A", "B"]
+    end
+
+    Test.@testset "remove_tips removes only low-support terminal vertices" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Nothing
+        )
+
+        graph["tip_low"] = CountedEvidenceVertexData(1)
+        graph["core"] = "core"
+        graph["tip_high"] = CountedEvidenceVertexData(3)
+
+        graph["tip_low", "core"] = nothing
+        graph["core", "tip_high"] = nothing
+
+        result = Mycelia.Rhizomorph.remove_tips!(graph; min_support = 1)
+
+        Test.@test result === graph
+        Test.@test !MetaGraphsNext.haskey(graph, "tip_low")
+        Test.@test MetaGraphsNext.haskey(graph, "core")
+        Test.@test MetaGraphsNext.haskey(graph, "tip_high")
+    end
+
+    Test.@testset "remove_path_from_graph removes branch edges and isolated vertices" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+        )
+
+        for vertex in ["A", "B", "C", "E"]
+            graph[vertex] = Mycelia.Rhizomorph.StringVertexData(vertex)
+        end
+
+        graph["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["B", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["C", "E"] = Mycelia.Rhizomorph.StringEdgeData(1)
+
+        Mycelia.Rhizomorph.remove_path_from_graph!(graph, String[], "A", "E")
+        Test.@test MetaGraphsNext.haskey(graph, "A", "B")
+
+        Mycelia.Rhizomorph.remove_path_from_graph!(graph, ["B", "C"], "A", "E")
+
+        Test.@test !MetaGraphsNext.haskey(graph, "A", "B")
+        Test.@test !MetaGraphsNext.haskey(graph, "B", "C")
+        Test.@test !MetaGraphsNext.haskey(graph, "C", "E")
+        Test.@test !MetaGraphsNext.haskey(graph, "B")
+        Test.@test !MetaGraphsNext.haskey(graph, "C")
+        Test.@test MetaGraphsNext.haskey(graph, "A")
+        Test.@test MetaGraphsNext.haskey(graph, "E")
+    end
+
+    Test.@testset "isolation helpers prune isolated vertices" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+        )
+
+        for vertex in ["A", "B", "C"]
+            graph[vertex] = Mycelia.Rhizomorph.StringVertexData(vertex)
+        end
+
+        graph["A", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
+
+        Test.@test Mycelia.Rhizomorph.is_isolated_vertex(graph, "B")
+        Test.@test !Mycelia.Rhizomorph.is_isolated_vertex(graph, "A")
+
+        result = Mycelia.Rhizomorph.remove_isolated_vertices!(graph)
+
+        Test.@test result === graph
+        Test.@test !MetaGraphsNext.haskey(graph, "B")
+        Test.@test MetaGraphsNext.haskey(graph, "A")
+        Test.@test MetaGraphsNext.haskey(graph, "C")
+    end
+
+    Test.@testset "remove_duplicate_bubbles keeps first entry-exit pair only" begin
+        bubble1 = Mycelia.Rhizomorph.BubbleStructure("A", "D", ["B", "D"], ["C", "D"], 5, 3, 0.0)
+        bubble2 = Mycelia.Rhizomorph.BubbleStructure("A", "D", ["X", "D"], ["Y", "D"], 7, 1, 0.5)
+        bubble3 = Mycelia.Rhizomorph.BubbleStructure("A", "E", ["B", "E"], ["C", "E"], 4, 2, 0.25)
+
+        deduplicated = Mycelia.Rhizomorph.remove_duplicate_bubbles([bubble1, bubble2, bubble3])
+
+        Test.@test deduplicated == [bubble1, bubble3]
+    end
+
+    Test.@testset "_suffix_after_overlap handles zero and oversize overlaps" begin
+        Test.@test Mycelia.Rhizomorph._suffix_after_overlap("ABC", 0) == "ABC"
+        Test.@test Mycelia.Rhizomorph._suffix_after_overlap("ABC", 2) == "C"
+        Test.@test Mycelia.Rhizomorph._suffix_after_overlap("ABC", 5) == ""
+    end
+end
