@@ -74,3 +74,53 @@ Test.@testset "Classification wrapper cache and compatibility" begin
         rm(temp_dir; recursive = true, force = true)
     end
 end
+
+Test.@testset "Classification wrapper executor force-update and validation" begin
+    temp_dir = mktempdir()
+    try
+        plain_input = joinpath(temp_dir, "compressed.fasta")
+        open(plain_input, "w") do io
+            println(io, ">contig1")
+            println(io, "ATGCATGC")
+        end
+        gz_input = joinpath(temp_dir, "compressed.fasta.gz")
+        open(gz_input, "w") do io
+            run(pipeline(`gzip -c $(plain_input)`, stdout = io))
+        end
+
+        forced_db_path = joinpath(temp_dir, "forced", "claMLSTDB")
+        mkpath(forced_db_path)
+        force_executor = Mycelia.CollectExecutor()
+        forced_output = Mycelia.run_clamlst(
+            gz_input;
+            db_path = forced_db_path,
+            outdir = joinpath(temp_dir, "forced_out"),
+            force_db_update = true,
+            executor = force_executor
+        )
+
+        Test.@test forced_output == joinpath(temp_dir, "forced_out", "compressed_clamlst.tsv")
+        Test.@test length(force_executor.jobs) == 1
+        Test.@test occursin("claMLST import", force_executor.jobs[1].cmd)
+        Test.@test occursin("--force", force_executor.jobs[1].cmd)
+        Test.@test occursin("gunzip -c", force_executor.jobs[1].cmd)
+        Test.@test occursin("mktemp", force_executor.jobs[1].cmd)
+
+        mismatch_executor = Mycelia.CollectExecutor()
+        mismatch_genome = joinpath(temp_dir, "mismatch.fasta")
+        open(mismatch_genome, "w") do io
+            println(io, ">contig1")
+            println(io, "ATGCATGC")
+        end
+
+        Test.@test_throws ErrorException Mycelia.run_clamlst(
+            mismatch_genome;
+            db_path = joinpath(temp_dir, "path_a"),
+            db_dir = joinpath(temp_dir, "path_b"),
+            outdir = joinpath(temp_dir, "mismatch_out"),
+            executor = mismatch_executor
+        )
+    finally
+        rm(temp_dir; recursive = true, force = true)
+    end
+end
