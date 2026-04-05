@@ -71,7 +71,9 @@ end
 function _with_fake_lawrencium_associations(f::Function)
     mktempdir() do bindir
         sacctmgr_path = joinpath(bindir, "sacctmgr")
-        write(sacctmgr_path, "#!/bin/sh\nprintf '%s' '$FAKE_LAWRENCIUM_ASSOCIATIONS'\n")
+        write(
+            sacctmgr_path,
+            "#!/bin/sh\ncat <<'EOF'\n$(FAKE_LAWRENCIUM_ASSOCIATIONS)EOF\n")
         chmod(sacctmgr_path, 0o755)
 
         path_entries = filter(!isempty, [bindir, get(ENV, "PATH", "")])
