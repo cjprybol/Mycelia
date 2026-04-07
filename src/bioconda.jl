@@ -24,14 +24,15 @@ it cannot be determined.
 function _conda_env_prefix(env_name::AbstractString)
     _ensure_conda_env_vars!()
     try
-        for fields in split.(filter(x -> !occursin(r"^#", x), readlines(`$(Mycelia.CONDA_RUNNER) env list`)))
-            if length(fields) == 2 && fields[1] == env_name
-                return fields[2]
-            elseif length(fields) == 3 && fields[1] == env_name && fields[2] == "*"
-                return fields[3]
+        for line in
+            filter(x -> !occursin(r"^#", x), readlines(`$(Mycelia.CONDA_RUNNER) env list`))
+            m = match(r"^(\S+)\s+(\*)?\s*(.+?)\s*$", line)
+            if !isnothing(m) && m.captures[1] == env_name
+                return m.captures[3]
             end
         end
-    catch
+    catch e
+        @debug "conda env prefix lookup failed" exception = e
         return nothing
     end
     return nothing
@@ -55,7 +56,8 @@ function _conda_env_variable(env_name::AbstractString, variable_name::AbstractSt
         ])
         value = strip(read(cmd, String))
         return isempty(value) ? nothing : value
-    catch
+    catch e
+        @debug "conda env variable lookup failed" exception = e
         return nothing
     end
 end
@@ -109,7 +111,8 @@ function _vibrant_databases_exist(data_path::AbstractString)
     if !isdir(data_path)
         return false
     end
-    return all(isfile(joinpath(data_path, relpath)) for relpath in VIBRANT_REQUIRED_DATA_FILES)
+    return all(isfile(joinpath(data_path, relpath))
+    for relpath in VIBRANT_REQUIRED_DATA_FILES)
 end
 
 """
@@ -185,7 +188,7 @@ function _install_vibrant()
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n vibrant download-db.sh`)
     downloaded_data_path = _vibrant_database_path("vibrant")
     if isnothing(downloaded_data_path)
-        @warn "VIBRANT database download completed, but the expected data files were not detected automatically."
+        error("VIBRANT database download completed, but the expected data files were not detected automatically.")
     end
     return downloaded_data_path
     # Likely unused optional arguments
@@ -278,7 +281,8 @@ function _check_conda_env_exists(env_name::AbstractString)
     try
         result = Base.read(`$(Mycelia.CONDA_RUNNER) env list`, String)
         return Base.occursin(env_name, result)
-    catch
+    catch e
+        @debug "conda env existence check failed" exception = e
         return false
     end
 end
@@ -299,7 +303,8 @@ function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
         output = read(cmd, String)
         line = strip(first(split(output, '\n')))
         return isempty(line) ? missing : line
-    catch
+    catch e
+        @debug "conda tool version check failed" exception = e
         return missing
     end
 end
