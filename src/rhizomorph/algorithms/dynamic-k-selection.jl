@@ -25,11 +25,11 @@ function _dynamic_k_sequence_string(sequence::BioSequences.BioSequence)
 end
 
 function _dynamic_k_sequence_string(record::FASTX.FASTA.Record)
-    return FASTX.FASTA.sequence(record)
+    return String(FASTX.FASTA.sequence(record))
 end
 
 function _dynamic_k_sequence_string(record::FASTX.FASTQ.Record)
-    return FASTX.FASTQ.sequence(record)
+    return String(FASTX.FASTQ.sequence(record))
 end
 
 function _dynamic_k_sequence_string(sequence::AbstractString)
@@ -89,9 +89,10 @@ function _calculate_dynamic_k_sparsity(sequences::Vector{String}, k::Int)::Float
     observed_kmers = Set{String}()
 
     for sequence in sequences
-        if length(sequence) >= k
-            for start_index in 1:(length(sequence) - k + 1)
-                push!(observed_kmers, sequence[start_index:(start_index + k - 1)])
+        chars = collect(sequence)
+        if length(chars) >= k
+            for start_index in 1:(length(chars) - k + 1)
+                push!(observed_kmers, String(chars[start_index:(start_index + k - 1)]))
             end
         end
     end
@@ -114,9 +115,10 @@ function _dynamic_k_errors_are_singletons(
     kmer_counts = Dict{String, Int}()
 
     for sequence in sequences
-        if length(sequence) >= k
-            for start_index in 1:(length(sequence) - k + 1)
-                kmer = sequence[start_index:(start_index + k - 1)]
+        chars = collect(sequence)
+        if length(chars) >= k
+            for start_index in 1:(length(chars) - k + 1)
+                kmer = String(chars[start_index:(start_index + k - 1)])
                 kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
             end
         end
