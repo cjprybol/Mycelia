@@ -50,3 +50,33 @@ if [[ ${errors} -gt 0 ]]; then
     echo "=== COMMIT BLOCKED: ${errors} file(s) with import-in-function ==="
     exit 1
 fi
+
+# Check for @eval monkeypatching in test files without zz_ prefix.
+# See .codex/skills/test-isolation/SKILL.md for the full convention.
+eval_warnings=0
+staged_test_jl=$(printf '%s\n' "${staged_jl}" | grep '^test/' || true)
+
+for file in ${staged_test_jl}; do
+    basename_file=$(basename "${file}")
+    if [[ "${basename_file}" == zz_* ]]; then
+        continue
+    fi
+    content=$(git show ":${file}" 2>/dev/null) || continue
+    eval_matches=$(printf '%s\n' "${content}" | grep -nE '@eval\s+Mycelia' 2>/dev/null || true)
+    if [[ -n "${eval_matches}" ]]; then
+        echo "WARNING: @eval Mycelia in ${file} (no zz_ prefix):"
+        printf '%s\n' "${eval_matches}" | while IFS= read -r line; do
+            echo "  ${line}"
+        done
+        echo "  See .codex/skills/test-isolation/SKILL.md for alternatives."
+        echo ""
+        eval_warnings=$((eval_warnings + 1))
+    fi
+done
+
+if [[ ${eval_warnings} -gt 0 ]]; then
+    echo "=== WARNING: ${eval_warnings} test file(s) use @eval Mycelia without zz_ prefix ==="
+    echo "  This can leak global state into subsequent test files."
+    echo "  Consider: zz_ prefix, save/restore pattern, or fake CONDA_RUNNER approach."
+    echo ""
+fi
