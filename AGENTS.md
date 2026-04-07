@@ -90,8 +90,9 @@ closure.**
 
 ### Code Quality
 
-- **CairoMakie only** — never use `StatsPlots` or `Plots.jl`. See global
-  CLAUDE.md plotting preference.
+- **CairoMakie for new code** — do not add new `StatsPlots` or `Plots.jl`
+  usage. Existing `Plots.jl` usage in `plotting-and-visualization.jl` is being
+  migrated to CairoMakie. See global CLAUDE.md plotting preference.
 - **No committed artifacts** — `results/*.json`, `results/*.csv`, benchmark
   outputs, and generated data must not be committed. Add to `.gitignore`.
 - **No undefined variables** — all references must be defined. Run
