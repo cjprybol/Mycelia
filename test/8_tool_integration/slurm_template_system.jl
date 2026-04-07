@@ -8,12 +8,12 @@ end
 function _with_env(f::Function, overrides::AbstractDict)
     previous = Dict{String, Union{Nothing, String}}()
     for (key, value) in overrides
-        key_string = String(key)
+        key_string = string(key)
         previous[key_string] = get(ENV, key_string, nothing)
         if value === nothing
             pop!(ENV, key_string, nothing)
         else
-            ENV[key_string] = String(value)
+            ENV[key_string] = string(value)
         end
     end
 
@@ -302,7 +302,8 @@ Test.@testset "SLURM wrapper entrypoints" begin
                     )
 
                     Test.@test outcome == 1
-                    Test.@test only(collector.jobs).mail_user == "git-lawrencium@example.org"
+                    Test.@test only(collector.jobs).mail_user ==
+                               "git-lawrencium@example.org"
                 end
             end
         end
@@ -492,7 +493,8 @@ Test.@testset "SLURM wrapper entrypoints" begin
             err_files = filter(name -> endswith(name, ".err"), readdir(logdir))
             Test.@test length(out_files) == 1
             Test.@test length(err_files) == 1
-            Test.@test read(joinpath(logdir, only(out_files)), String) == "hello from lovelace"
+            Test.@test read(joinpath(logdir, only(out_files)), String) ==
+                       "hello from lovelace"
             Test.@test isempty(read(joinpath(logdir, only(err_files)), String))
         end
 
