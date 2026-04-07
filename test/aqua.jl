@@ -23,10 +23,13 @@ import Aqua
 import Mycelia
 import Test
 
+const MYCELIA_SKIP_AQUA_AMBIGUITIES =
+    lowercase(get(ENV, "MYCELIA_SKIP_AQUA_AMBIGUITIES", "false")) == "true"
+
 Test.@testset "Aqua.jl" begin
     Aqua.test_all(
         Mycelia;
-        ambiguities = (broken=true),
+        ambiguities = MYCELIA_SKIP_AQUA_AMBIGUITIES ? false : true,
         deps_compat = false,
         # persistent_tasks test fails due to background tasks spawned by dependencies
         # (e.g., HTTP.jl, Makie.jl, etc.) during package loading - not a Mycelia issue

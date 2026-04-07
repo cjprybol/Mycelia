@@ -49,8 +49,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             )
 
             Test.@test merged isa DataFrames.DataFrame
-            ## Should exclude "total" row and only have contigs
-            Test.@test DataFrames.nrow(merged) == 4  ## 4 contigs, 3 with taxonomy
+            ## Left join preserves the mosdepth "total" row and contigs without taxonomy
+            Test.@test DataFrames.nrow(merged) == 5
             Test.@test "chrom" in names(merged)
             Test.@test "mean" in names(merged)
         end
@@ -63,8 +63,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
                 min_coverage = 5.0
             )
 
-            ## contig_004 has mean=3.0, should be filtered out
-            Test.@test DataFrames.nrow(merged) == 3
+            ## contig_004 has mean=3.0, should be filtered out; "total" remains
+            Test.@test DataFrames.nrow(merged) == 4
             Test.@test !("contig_004" in merged.chrom)
         end
 
@@ -76,8 +76,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
                 min_length = 3000
             )
 
-            ## contig_004 has length=2000, should be filtered out
-            Test.@test DataFrames.nrow(merged) == 3
+            ## contig_004 has length=2000, should be filtered out; "total" remains
+            Test.@test DataFrames.nrow(merged) == 4
             Test.@test !("contig_004" in merged.chrom)
         end
 
@@ -90,8 +90,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
                 min_length = 3000
             )
 
-            ## Only contig_001 (mean=15.2, length=5000) and contig_003 (mean=22.1, length=4000) pass
-            Test.@test DataFrames.nrow(merged) == 2
+            ## contig_001 and contig_003 pass; the aggregate "total" row also remains
+            Test.@test DataFrames.nrow(merged) == 3
             Test.@test all(merged.mean .>= 10.0)
             Test.@test all(merged.length .>= 3000)
         end
@@ -327,11 +327,11 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
 
         Test.@testset "calculate_tick_step" begin
             ## Few samples - show all
-            step_small = Mycelia.calculate_tick_step(30, config = Mycelia.MicrobiomePlotConfig())
+            step_small = Mycelia.calculate_tick_step(30)
             Test.@test step_small == 1
 
             ## Many samples - skip some
-            step_large = Mycelia.calculate_tick_step(300, config = Mycelia.MicrobiomePlotConfig())
+            step_large = Mycelia.calculate_tick_step(300)
             Test.@test step_large > 1
         end
     end

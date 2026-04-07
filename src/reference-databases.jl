@@ -2939,9 +2939,17 @@ function ncbi_genome_download_accession(;
     outfolder = joinpath(outdir, accession)
     if !isdir(outfolder)
         add_bioconda_env("ncbi-datasets-cli")
+        reuse_existing_archive = false
         if isfile(outpath)
-            @info "$(outpath) already exists, skipping download..."
-        else
+            if success(`unzip -tqq $(outpath)`)
+                @info "$(outpath) already exists, skipping download..."
+                reuse_existing_archive = true
+            else
+                @warn "$(outpath) is not a valid zip archive, removing it and re-downloading..."
+                rm(outpath; force = true)
+            end
+        end
+        if !reuse_existing_archive
             mkpath(outdir)
             # Use retry logic to handle transient NCBI API failures
             with_retry(
