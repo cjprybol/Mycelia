@@ -107,9 +107,11 @@ if RUN_EXTERNAL
     Mycelia.add_bioconda_env("samtools")
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(reference_fasta)`)
 
+    truth_vcf_copy = joinpath(workdir, "truth_for_consensus.vcf")
+    cp(truth_vcf, truth_vcf_copy; force = true)
     Mycelia.update_fasta_with_vcf(
         in_fasta = reference_fasta,
-        vcf_file = truth_vcf,
+        vcf_file = truth_vcf_copy,
         out_fasta = mutant_fasta
     )
     Test.@test isfile(mutant_fasta)
@@ -184,9 +186,11 @@ if RUN_EXTERNAL
     )
     Test.@test isfile(normalized_gatk_vcf)
 
+    gatk_vcf_copy = joinpath(workdir, "gatk_for_consensus.vcf")
+    cp(gatk_vcf, gatk_vcf_copy; force = true)
     Mycelia.update_fasta_with_vcf(
         in_fasta = reference_fasta,
-        vcf_file = gatk_vcf,
+        vcf_file = gatk_vcf_copy,
         out_fasta = gatk_consensus_fasta
     )
     Test.@test isfile(gatk_consensus_fasta)
