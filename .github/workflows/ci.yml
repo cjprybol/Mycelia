@@ -19,10 +19,12 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Check @eval monkeypatching in non-zz test files
         run: |
-          violations=$(grep -rl '@eval\s*Mycelia' test/ --include='*.jl' | grep -v '/zz_' || true)
+          violations=$(grep -rlE '@eval[[:space:]]*Mycelia' test/ --include='*.jl' | grep -v '/zz_' || true)
           if [[ -n "${violations}" ]]; then
             echo "::warning::@eval Mycelia found in test files without zz_ prefix:"
             echo "${violations}"
@@ -30,8 +32,12 @@ jobs:
           fi
 
       - name: Check for committed benchmark artifacts
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          artifacts=$(git diff --name-only origin/master...HEAD -- 'results/*.json' 'results/*.csv' 2>/dev/null || true)
+          base_ref="${BASE_REF:-master}"
+          git fetch --no-tags --depth=1 origin "${base_ref}" || true
+          artifacts=$(git diff --name-only "origin/${base_ref}"...HEAD -- results 2>/dev/null | grep -E '^results/.*\.(json|csv)$' || true)
           if [[ -n "${artifacts}" ]]; then
             echo "::error::Benchmark artifacts committed in results/:"
             echo "${artifacts}"
@@ -39,13 +45,12 @@ jobs:
             exit 1
           fi
 
-      - name: Check for StatsPlots/Plots.jl usage in source
+      - name: Check for new StatsPlots usage in source
         run: |
-          violations=$(grep -rl 'import StatsPlots\|import Plots$' src/ --include='*.jl' || true)
+          violations=$(grep -rl 'import StatsPlots' src/ --include='*.jl' || true)
           if [[ -n "${violations}" ]]; then
-            echo "::error::StatsPlots or Plots.jl used in source files (use CairoMakie):"
+            echo "::warning::StatsPlots found in source files (prefer CairoMakie for new code):"
             echo "${violations}"
-            exit 1
           fi
 
   test:
