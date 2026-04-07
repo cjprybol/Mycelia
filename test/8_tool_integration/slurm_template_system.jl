@@ -2,8 +2,7 @@ import Test
 import Mycelia
 
 const LEGACY_FIXTURE_LOGDIR = "/Users/cameronprybol/workspace/slurmlogs"
-const FAKE_LAWRENCIUM_ASSOCIATIONS =
-    "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
+const FAKE_LAWRENCIUM_ASSOCIATIONS = "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
 
 function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
@@ -342,7 +341,8 @@ Test.@testset "SLURM wrapper entrypoints" begin
                     )
 
                     Test.@test outcome == 1
-                    Test.@test only(collector.jobs).mail_user == "git-lawrencium@example.org"
+                    Test.@test only(collector.jobs).mail_user ==
+                               "git-lawrencium@example.org"
                 end
             end
         end
@@ -353,12 +353,19 @@ Test.@testset "SLURM wrapper entrypoints" begin
             _with_env(Dict(
                 "SLURM_MAIL_USER" => nothing
             )) do
-                Test.@test_throws ErrorException Mycelia.lawrencium_sbatch(
-                    job_name = "lawrencium-missing-mail",
-                    account = "pc_nomail",
-                    cmd = "echo fail before submit",
-                    executor = Mycelia.CollectExecutor()
-                )
+                err = try
+                    Mycelia.lawrencium_sbatch(
+                        job_name = "lawrencium-missing-mail",
+                        account = "pc_nomail",
+                        cmd = "echo fail before submit",
+                        executor = Mycelia.CollectExecutor()
+                    )
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("mail", lowercase(err.msg))
             end
         end
     end
@@ -514,12 +521,19 @@ Test.@testset "SLURM wrapper entrypoints" begin
             _with_env(Dict(
                 "SLURM_MAIL_USER" => nothing
             )) do
-                Test.@test_throws ErrorException Mycelia.scg_sbatch(
-                    job_name = "scg-missing-mail",
-                    account = "PI_FAIL",
-                    cmd = "echo fail before submit",
-                    executor = Mycelia.CollectExecutor()
-                )
+                err = try
+                    Mycelia.scg_sbatch(
+                        job_name = "scg-missing-mail",
+                        account = "PI_FAIL",
+                        cmd = "echo fail before submit",
+                        executor = Mycelia.CollectExecutor()
+                    )
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("mail", lowercase(err.msg))
             end
         end
     end
@@ -656,7 +670,8 @@ Test.@testset "SLURM wrapper entrypoints" begin
             err_files = filter(name -> endswith(name, ".err"), readdir(logdir))
             Test.@test length(out_files) == 1
             Test.@test length(err_files) == 1
-            Test.@test read(joinpath(logdir, only(out_files)), String) == "hello from lovelace"
+            Test.@test read(joinpath(logdir, only(out_files)), String) ==
+                       "hello from lovelace"
             Test.@test isempty(read(joinpath(logdir, only(err_files)), String))
         end
 
