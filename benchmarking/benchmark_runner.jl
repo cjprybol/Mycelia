@@ -20,7 +20,8 @@ function preflight_benchmark_environment(scale)
     if !(scale in valid_scales)
         error("Unknown benchmark scale: $(scale). Use one of $(collect(valid_scales)).")
     end
-    if isnothing(Sys.which("conda")) && isnothing(Sys.which("mamba")) && isnothing(Sys.which("micromamba"))
+    if isnothing(Sys.which("conda")) && isnothing(Sys.which("mamba")) &&
+       isnothing(Sys.which("micromamba"))
         println("WARNING: No conda/mamba found on PATH; external-tool benchmarks may fail.")
     end
     return nothing
@@ -36,7 +37,7 @@ Run the complete Mycelia benchmark suite with performance regression checking.
 - `check_regression`: Whether to check for performance regressions
 - `baseline_dir`: Directory containing baseline benchmark results
 """
-function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir="baselines")
+function run_benchmark_suite(scale = "small"; check_regression = true, baseline_dir = "baselines")
     preflight_benchmark_environment(scale)
     println("="^60)
     println("MYCELIA PERFORMANCE BENCHMARK SUITE")
@@ -44,10 +45,10 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
     println("Scale: $scale")
     println("Start time: $(Dates.now())")
     println("Regression checking: $check_regression")
-    
+
     # Set environment variable for benchmark scale
     ENV["BENCHMARK_SCALE"] = scale
-    
+
     # Create results directories for both legacy root-level outputs and
     # benchmark-local outputs that live beside the scripts.
     results_dirs = ["results", joinpath(@__DIR__, "results")]
@@ -55,18 +56,16 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
         mkpath(results_dir)
     end
     mkpath(baseline_dir)
-    
+
     # Benchmark scripts to run
     benchmark_scripts = [
         ("01_data_processing_benchmark.jl", "Data Processing"),
         ("02_kmer_analysis_benchmark.jl", "K-mer Analysis"),
         ("03_assembly_benchmark.jl", "Assembly"),
         ("04_annotation_benchmark.jl", "Annotation"),
-        ("08_momentum_fork_resolution_benchmark.jl", "Momentum Fork Resolution"),
-        # Add other benchmarks as they are implemented
-        # ("05_comparative_benchmark.jl", "Comparative Genomics")
+        ("08_momentum_fork_resolution_benchmark.jl", "Momentum Fork Resolution")        # Add other benchmarks as they are implemented        # ("05_comparative_benchmark.jl", "Comparative Genomics")
     ]
-    
+
     # Run each benchmark
     benchmark_results = Dict{String, Any}()
 
@@ -74,7 +73,7 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
         println("\\n" * "-"^40)
         println("Running: $description")
         println("-"^40)
-        
+
         try
             # Run benchmark script
             script_path = joinpath(@__DIR__, script)
@@ -85,17 +84,19 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
                 println("⚠️  Benchmark script not found: $script")
                 continue
             end
-            
+
             # Find the most recent results file for this benchmark
             pattern = replace(script, ".jl" => "_")
             latest_result = nothing
             for results_dir in results_dirs
                 result_files = isdir(results_dir) ?
-                               filter(f -> startswith(f, pattern), readdir(results_dir)) :
+                               filter(
+                    f -> startswith(f, pattern) && endswith(f, ".json"), readdir(results_dir)) :
                                String[]
                 if !isempty(result_files)
                     candidate = joinpath(results_dir, sort(result_files)[end])
-                    if isnothing(latest_result) || stat(candidate).mtime > stat(latest_result).mtime
+                    if isnothing(latest_result) ||
+                       stat(candidate).mtime > stat(latest_result).mtime
                         latest_result = candidate
                     end
                 end
@@ -104,37 +105,37 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
             if !isnothing(latest_result)
                 benchmark_results[description] = latest_result
             end
-            
+
         catch e
             println("❌ Error running $description benchmark:")
             println("   $(typeof(e)): $e")
             continue
         end
     end
-    
+
     # Performance regression checking
     if check_regression
         println("\\n" * "="^40)
         println("PERFORMANCE REGRESSION ANALYSIS")
         println("="^40)
-        
+
         for (description, results_file) in benchmark_results
             baseline_file = joinpath(baseline_dir, "$(replace(description, " " => "_"))_baseline.json")
-            
+
             println("\\nChecking regressions for: $description")
-            check_performance_regression(results_file, baseline_file, threshold=0.10)
-            
+            check_performance_regression(results_file, baseline_file, threshold = 0.10)
+
             # Update baseline if this is the first run or if explicitly requested
             if !isfile(baseline_file) || get(ENV, "UPDATE_BASELINES", "false") == "true"
-                cp(results_file, baseline_file, force=true)
+                cp(results_file, baseline_file, force = true)
                 println("📝 Updated baseline: $baseline_file")
             end
         end
     end
-    
+
     # Generate summary report
     generate_benchmark_report(benchmark_results, scale)
-    
+
     println("\\n" * "="^60)
     println("BENCHMARK SUITE COMPLETE")
     println("="^60)
@@ -150,7 +151,7 @@ Generate a comprehensive HTML report of benchmark results.
 """
 function generate_benchmark_report(benchmark_results, scale)
     println("\\n--- Generating Benchmark Report ---")
-    
+
     # Load all benchmark results
     all_results = Dict{String, Any}()
     for (description, results_file) in benchmark_results
@@ -160,16 +161,16 @@ function generate_benchmark_report(benchmark_results, scale)
             println("⚠️  Could not load results for $description: $e")
         end
     end
-    
+
     # Generate HTML report
     html_content = generate_html_report(all_results, scale)
-    
+
     # Save report
     report_file = "results/benchmark_report_$(scale)_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).html"
     open(report_file, "w") do f
         write(f, html_content)
     end
-    
+
     println("📊 Benchmark report generated: $report_file")
 end
 
@@ -208,7 +209,7 @@ function generate_html_report(results, scale)
             <p><strong>Julia Version:</strong> $(VERSION)</p>
         </div>
     """
-    
+
     for (benchmark_name, benchmark_data) in results
         html *= """
         <div class="benchmark-section">
@@ -223,13 +224,13 @@ function generate_html_report(results, scale)
                         <th>Allocations</th>
                     </tr>
         """
-        
+
         if haskey(benchmark_data, "results")
             for (test_name, test_result) in benchmark_data["results"]
                 median_time_ms = get(test_result, "median_time", 0) / 1e6
                 memory_mb = get(test_result, "memory", 0) / 1e6
                 allocations = get(test_result, "allocations", 0)
-                
+
                 html *= """
                     <tr>
                         <td>$test_name</td>
@@ -240,19 +241,19 @@ function generate_html_report(results, scale)
                 """
             end
         end
-        
+
         html *= """
                 </table>
             </div>
         </div>
         """
     end
-    
+
     html *= """
     </body>
     </html>
     """
-    
+
     return html
 end
 
@@ -265,17 +266,17 @@ function main()
     # Parse command line arguments
     scale = get(ARGS, 1, "small")
     check_regression = get(ENV, "CHECK_REGRESSION", "true") == "true"
-    
+
     # Validate scale argument
     if !(scale in ["small", "medium", "large"])
         println("❌ Invalid scale: $scale")
         println("   Valid options: small, medium, large")
         exit(1)
     end
-    
+
     # Run benchmark suite
     try
-        run_benchmark_suite(scale, check_regression=check_regression)
+        run_benchmark_suite(scale, check_regression = check_regression)
         println("\\n✅ Benchmark suite completed successfully!")
     catch e
         println("\\n❌ Benchmark suite failed:")
