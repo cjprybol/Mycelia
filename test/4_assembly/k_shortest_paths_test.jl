@@ -78,6 +78,9 @@ Test.@testset "K-Shortest Paths" begin
         sources = [l for l in labels if get(in_edges, l, 0) == 0]
         sinks = [l for l in labels if get(out_edges, l, 0) == 0]
 
+        Test.@test !isempty(sources)
+        Test.@test !isempty(sinks)
+
         if !isempty(sources) && !isempty(sinks)
             paths = Mycelia.Rhizomorph.k_shortest_paths(
                 weighted, first(sources), first(sinks), 5
@@ -92,5 +95,94 @@ Test.@testset "K-Shortest Paths" begin
                 Test.@test path.total_probability > 0.0
             end
         end
+    end
+
+    Test.@testset "Edge cases" begin
+        Test.@testset "K=0 returns empty" begin
+            sequence = BioSequences.dna"ATCGATCG"
+            records = [FASTX.FASTA.Record("seq", sequence)]
+            graph = Mycelia.Rhizomorph.build_kmer_graph(
+                records, 4; dataset_id = "k0_test", mode = :singlestrand
+            )
+            weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+            labels = collect(MetaGraphsNext.labels(weighted))
+
+            paths = Mycelia.Rhizomorph.k_shortest_paths(
+                weighted, first(labels), last(labels), 0
+            )
+            Test.@test isempty(paths)
+        end
+
+        Test.@testset "No path between disconnected vertices" begin
+            seq1 = BioSequences.dna"AAAAAAA"
+            seq2 = BioSequences.dna"TTTTTTT"
+            records = [
+                FASTX.FASTA.Record("a", seq1),
+                FASTX.FASTA.Record("b", seq2)
+            ]
+            graph = Mycelia.Rhizomorph.build_kmer_graph(
+                records, 4; dataset_id = "disc_ksp", mode = :singlestrand
+            )
+            weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+            labels = collect(MetaGraphsNext.labels(weighted))
+
+            if length(labels) >= 2
+                paths = Mycelia.Rhizomorph.k_shortest_paths(
+                    weighted, labels[1], labels[end], 3
+                )
+                Test.@test length(paths) <= 1
+            end
+        end
+
+        Test.@testset "Source equals target" begin
+            sequence = BioSequences.dna"ATCGATCG"
+            records = [FASTX.FASTA.Record("seq", sequence)]
+            graph = Mycelia.Rhizomorph.build_kmer_graph(
+                records, 4; dataset_id = "self_ksp", mode = :singlestrand
+            )
+            weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+            labels = collect(MetaGraphsNext.labels(weighted))
+
+            paths = Mycelia.Rhizomorph.k_shortest_paths(
+                weighted, first(labels), first(labels), 3
+            )
+            Test.@test length(paths) >= 1
+            Test.@test paths[1].total_probability == 1.0
+        end
+    end
+
+    Test.@testset "Path to sequence roundtrip" begin
+        # ACGTTTCG has 5 distinct k=4 k-mers forming a linear (acyclic) path,
+        # so sources and sinks are non-empty and the roundtrip is unambiguous.
+        sequence = BioSequences.LongDNA{4}("ACGTTTCG")
+        records = [FASTX.FASTA.Record("known", sequence)]
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 4; dataset_id = "roundtrip_ksp", mode = :singlestrand
+        )
+        weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
+        labels = collect(MetaGraphsNext.labels(weighted))
+        in_deg = Dict(l => 0 for l in labels)
+        out_deg = Dict(l => 0 for l in labels)
+        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
+            out_deg[src] += 1
+            in_deg[dst] += 1
+        end
+        sources = [l for l in labels if in_deg[l] == 0]
+        sinks = [l for l in labels if out_deg[l] == 0]
+
+        Test.@test !isempty(sources)
+        Test.@test !isempty(sinks)
+
+        paths = Mycelia.Rhizomorph.k_shortest_paths(
+            weighted, first(sources), first(sinks), 1
+        )
+
+        Test.@test length(paths) == 1
+
+        path_labels = [step.vertex_label for step in paths[1].steps]
+        reconstructed = Mycelia.Rhizomorph.path_to_sequence(path_labels, graph)
+
+        Test.@test reconstructed == sequence
     end
 end
