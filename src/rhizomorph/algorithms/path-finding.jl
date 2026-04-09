@@ -575,6 +575,284 @@ function _reconstruct_shortest_path(predecessors, distances, start_state, end_st
 end
 
 # ============================================================================
+# K-Shortest Paths (Yen's Algorithm)
+# ============================================================================
+
+"""
+    _total_outgoing_weight(graph, vertex)
+
+Sum of all outgoing edge weights from `vertex`. Used for normalizing
+transition probabilities in Dijkstra-based path finding.
+"""
+function _total_outgoing_weight(graph::MetaGraphsNext.MetaGraph, vertex)
+    total = 0.0
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        if src == vertex
+            total += edge_data_weight(graph[src, dst])
+        end
+    end
+    return total
+end
+
+"""
+    _build_graph_path_from_vertices(graph, vertices)
+
+Construct a `GraphPath` from an ordered list of vertex labels, computing
+transition probabilities from edge weights.
+"""
+function _build_graph_path_from_vertices(
+        graph::MetaGraphsNext.MetaGraph,
+        vertices::Vector{T}
+) where {T}
+    if isempty(vertices)
+        return GraphPath(WalkStep{T}[])
+    end
+
+    steps = WalkStep{T}[]
+    cumulative_prob = 1.0
+
+    for (i, v) in enumerate(vertices)
+        if i == 1
+            push!(steps, WalkStep(v, Forward, 1.0, 1.0))
+        else
+            prev = vertices[i - 1]
+            total_out = _total_outgoing_weight(graph, prev)
+            if total_out > 0.0
+                edge_w = edge_data_weight(graph[prev, v])
+                step_prob = edge_w / total_out
+            else
+                step_prob = 1e-10
+            end
+            cumulative_prob *= step_prob
+            push!(steps, WalkStep(v, Forward, step_prob, cumulative_prob))
+        end
+    end
+
+    return GraphPath(steps)
+end
+
+"""
+    _shortest_path_excluding(graph, source, target, excluded_vertices, excluded_edges)
+
+Dijkstra shortest path that skips excluded vertices and edges. Edge weights
+are `-log(probability)` where probability = edge_weight / total_outgoing_weight.
+Returns a `GraphPath` or `nothing` if no path exists.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
+- `source`: Source vertex label
+- `target`: Target vertex label
+- `excluded_vertices::Set`: Vertex labels to skip during traversal
+- `excluded_edges::Set{Tuple}`: Edge label pairs `(src, dst)` to skip
+"""
+function _shortest_path_excluding(
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T,
+        excluded_vertices::Set{T},
+        excluded_edges::Set{Tuple{T, T}}
+) where {T}
+    if source in excluded_vertices || target in excluded_vertices
+        return nothing
+    end
+    if !(source in MetaGraphsNext.labels(graph)) ||
+       !(target in MetaGraphsNext.labels(graph))
+        return nothing
+    end
+
+    distances = Dict{T, Float64}()
+    predecessors = Dict{T, Union{Nothing, T}}()
+    pq = DataStructures.PriorityQueue{T, Float64}()
+
+    distances[source] = 0.0
+    predecessors[source] = nothing
+    DataStructures.enqueue!(pq, source, 0.0)
+
+    while !isempty(pq)
+        current = DataStructures.dequeue!(pq)
+
+        if current == target
+            # Reconstruct path
+            path_vertices = T[]
+            node = current
+            while node !== nothing
+                pushfirst!(path_vertices, node)
+                node = predecessors[node]
+            end
+            return _build_graph_path_from_vertices(graph, path_vertices)
+        end
+
+        total_out = _total_outgoing_weight(graph, current)
+        if total_out <= 0.0
+            continue
+        end
+
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            if src != current
+                continue
+            end
+            if dst in excluded_vertices
+                continue
+            end
+            if (src, dst) in excluded_edges
+                continue
+            end
+
+            edge_w = edge_data_weight(graph[src, dst])
+            transition_prob = edge_w / total_out
+            if transition_prob <= 0.0
+                continue
+            end
+            distance = -log(transition_prob)
+            new_distance = distances[current] + distance
+
+            if !haskey(distances, dst) || new_distance < distances[dst]
+                distances[dst] = new_distance
+                predecessors[dst] = current
+                # PriorityQueue: enqueue or update priority
+                if haskey(pq, dst)
+                    pq[dst] = new_distance
+                else
+                    DataStructures.enqueue!(pq, dst, new_distance)
+                end
+            end
+        end
+    end
+
+    return nothing
+end
+
+"""
+    _paths_equal(a, b)
+
+Check if two `GraphPath`s traverse the same sequence of vertices.
+"""
+function _paths_equal(a::GraphPath, b::GraphPath)
+    if length(a.steps) != length(b.steps)
+        return false
+    end
+    for (sa, sb) in zip(a.steps, b.steps)
+        if sa.vertex_label != sb.vertex_label
+            return false
+        end
+    end
+    return true
+end
+
+"""
+    k_shortest_paths(graph, source, target, K)
+
+Find the K shortest (most probable) paths from `source` to `target` using
+Yen's algorithm. Returns paths sorted by **descending** total_probability
+(most probable first).
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
+- `source`: Source vertex label
+- `target`: Target vertex label
+- `K::Int`: Maximum number of paths to return
+
+# Returns
+- `Vector{GraphPath}`: Up to K paths, sorted by descending probability
+"""
+function k_shortest_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T,
+        K::Int
+) where {T}
+    if K < 1
+        return GraphPath{T}[]
+    end
+
+    # Handle trivial source == target case
+    if source == target
+        step = WalkStep(source, Forward, 1.0, 1.0)
+        return [GraphPath(WalkStep{T}[step])]
+    end
+
+    # A holds the confirmed K-shortest paths
+    A = GraphPath{T}[]
+
+    # Find the shortest path (A_1)
+    empty_verts = Set{T}()
+    empty_edges = Set{Tuple{T, T}}()
+    a1 = _shortest_path_excluding(graph, source, target, empty_verts, empty_edges)
+    if a1 === nothing
+        return A
+    end
+    push!(A, a1)
+
+    # B is the candidate list
+    B = GraphPath{T}[]
+
+    for k in 2:K
+        prev_path = A[k - 1]
+        prev_vertices = [s.vertex_label for s in prev_path.steps]
+
+        for i in 1:(length(prev_vertices) - 1)
+            spur_node = prev_vertices[i]
+            root_path_vertices = prev_vertices[1:i]
+
+            # Exclude edges that share the same root path prefix in already-found paths
+            excluded_edges = Set{Tuple{T, T}}()
+            for path in A
+                path_verts = [s.vertex_label for s in path.steps]
+                if length(path_verts) >= i + 1 && path_verts[1:i] == root_path_vertices
+                    push!(excluded_edges, (path_verts[i], path_verts[i + 1]))
+                end
+            end
+
+            # Exclude root path vertices except the spur node
+            excluded_vertices = Set{T}()
+            for j in 1:(i - 1)
+                push!(excluded_vertices, root_path_vertices[j])
+            end
+
+            spur_path = _shortest_path_excluding(
+                graph, spur_node, target, excluded_vertices, excluded_edges)
+
+            if spur_path !== nothing
+                spur_vertices = [s.vertex_label for s in spur_path.steps]
+                # Combine root + spur (root_path_vertices[1:i-1] + spur_path)
+                combined_vertices = vcat(root_path_vertices[1:(i - 1)], spur_vertices)
+                candidate = _build_graph_path_from_vertices(graph, combined_vertices)
+
+                # Only add if not a duplicate
+                is_duplicate = false
+                for existing in B
+                    if _paths_equal(existing, candidate)
+                        is_duplicate = true
+                        break
+                    end
+                end
+                for existing in A
+                    if _paths_equal(existing, candidate)
+                        is_duplicate = true
+                        break
+                    end
+                end
+                if !is_duplicate
+                    push!(B, candidate)
+                end
+            end
+        end
+
+        if isempty(B)
+            break
+        end
+
+        # Pick the candidate with highest probability (shortest -log distance)
+        sort!(B; by = p -> p.total_probability, rev = true)
+        push!(A, popfirst!(B))
+    end
+
+    # Sort results by descending probability
+    sort!(A; by = p -> p.total_probability, rev = true)
+    return A
+end
+
+# ============================================================================
 # Eulerian Path Finding
 # ============================================================================
 
