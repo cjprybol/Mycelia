@@ -2,13 +2,13 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Kmers
 import MetaGraphsNext
 
 Test.@testset "K-Shortest Paths" begin
     Test.@testset "Single path graph returns K=1" begin
-        # Linear sequence ATCGATCG with k=4 has exactly one path
-        sequence = BioSequences.dna"ATCGATCG"
+        # ACGTTTCG with k=4 produces 5 distinct k-mers in a strictly linear chain
+        # (no k-mer appears at both start and end), guaranteeing a true source and sink.
+        sequence = BioSequences.dna"ACGTTTCG"
         records = [FASTX.FASTA.Record("linear", sequence)]
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 4; dataset_id = "linear_ksp", mode = :singlestrand
@@ -16,14 +16,21 @@ Test.@testset "K-Shortest Paths" begin
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
 
         labels = collect(MetaGraphsNext.labels(weighted))
-        source = first(labels)
-        target = last(labels)
+        in_deg = Dict(l => 0 for l in labels)
+        out_deg = Dict(l => 0 for l in labels)
+        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
+            out_deg[src] += 1
+            in_deg[dst] += 1
+        end
+        sources = [l for l in labels if in_deg[l] == 0]
+        sinks = [l for l in labels if out_deg[l] == 0]
+        source = first(sources)
+        target = first(sinks)
 
         paths = Mycelia.Rhizomorph.k_shortest_paths(weighted, source, target, 5)
 
         # Only 1 path exists in a linear graph
-        Test.@test length(paths) >= 1
-        Test.@test length(paths) <= 1
+        Test.@test length(paths) == 1
 
         # The single path should be valid
         path = first(paths)
@@ -114,8 +121,8 @@ Test.@testset "K-Shortest Paths" begin
         end
 
         Test.@testset "No path between disconnected vertices" begin
-            seq1 = BioSequences.dna"AAAAAAA"
-            seq2 = BioSequences.dna"TTTTTTT"
+            seq1 = BioSequences.dna"ACGTACGT"
+            seq2 = BioSequences.dna"TGCATGCA"
             records = [
                 FASTX.FASTA.Record("a", seq1),
                 FASTX.FASTA.Record("b", seq2)

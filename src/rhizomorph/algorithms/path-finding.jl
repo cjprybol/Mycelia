@@ -595,6 +595,28 @@ function _total_outgoing_weight(graph::MetaGraphsNext.MetaGraph, vertex)
 end
 
 """
+    _total_outgoing_weight_excluding(graph, vertex, excluded_edges)
+
+Sum of outgoing edge weights from `vertex`, skipping edges in `excluded_edges`.
+Used to compute correct transition probabilities when some edges are suppressed
+during Yen's k-shortest-paths spur search.
+"""
+function _total_outgoing_weight_excluding(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex,
+        excluded_edges::Set{Tuple{T, T}}
+) where {T}
+    total = 0.0
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        if src == vertex && !((src, dst) in excluded_edges)
+            edge_data = graph[src, dst]
+            total += edge_data.weight > 0 ? edge_data.weight : 1e-10
+        end
+    end
+    return max(total, 1e-10)
+end
+
+"""
     _build_graph_path_from_vertices(graph, vertices)
 
 Construct a `GraphPath` from an ordered list of vertex labels, computing
@@ -662,6 +684,7 @@ function _shortest_path_excluding(
 
     distances = Dict{T, Float64}()
     predecessors = Dict{T, Union{Nothing, T}}()
+    visited = Set{T}()
     pq = DataStructures.PriorityQueue{T, Float64}()
 
     distances[source] = 0.0
@@ -670,6 +693,11 @@ function _shortest_path_excluding(
 
     while !isempty(pq)
         current = DataStructures.dequeue!(pq)
+
+        if current in visited
+            continue
+        end
+        push!(visited, current)
 
         if current == target
             # Reconstruct path
@@ -682,10 +710,7 @@ function _shortest_path_excluding(
             return _build_graph_path_from_vertices(graph, path_vertices)
         end
 
-        total_out = _total_outgoing_weight(graph, current)
-        if total_out <= 0.0
-            continue
-        end
+        total_out = _total_outgoing_weight_excluding(graph, current, excluded_edges)
 
         for (src, dst) in MetaGraphsNext.edge_labels(graph)
             if src != current
@@ -740,9 +765,9 @@ function _paths_equal(a::GraphPath, b::GraphPath)
 end
 
 """
-    k_shortest_paths(graph, source, target, K)
+    k_shortest_paths(graph, source, target, k)
 
-Find the K shortest (most probable) paths from `source` to `target` using
+Find the `k` shortest (most probable) paths from `source` to `target` using
 Yen's algorithm. Returns paths sorted by **descending** total_probability
 (most probable first).
 
@@ -750,18 +775,18 @@ Yen's algorithm. Returns paths sorted by **descending** total_probability
 - `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
 - `source`: Source vertex label
 - `target`: Target vertex label
-- `K::Int`: Maximum number of paths to return
+- `k::Int`: Maximum number of paths to return
 
 # Returns
-- `Vector{GraphPath}`: Up to K paths, sorted by descending probability
+- `Vector{GraphPath}`: Up to `k` paths, sorted by descending probability
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
         source::T,
         target::T,
-        K::Int
+        k::Int
 ) where {T}
-    if K < 1
+    if k < 1
         return GraphPath{T}[]
     end
 
@@ -771,7 +796,7 @@ function k_shortest_paths(
         return [GraphPath(WalkStep{T}[step])]
     end
 
-    # A holds the confirmed K-shortest paths
+    # A holds the confirmed k-shortest paths
     A = GraphPath{T}[]
 
     # Find the shortest path (A_1)
@@ -786,8 +811,8 @@ function k_shortest_paths(
     # B is the candidate list
     B = GraphPath{T}[]
 
-    for k in 2:K
-        prev_path = A[k - 1]
+    for ki in 2:k
+        prev_path = A[ki - 1]
         prev_vertices = [s.vertex_label for s in prev_path.steps]
 
         for i in 1:(length(prev_vertices) - 1)
