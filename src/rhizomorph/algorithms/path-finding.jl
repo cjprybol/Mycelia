@@ -7,6 +7,7 @@
 # - Eulerian path finding (Hierholzer's algorithm)
 # - Sequence reconstruction from paths
 # - Type-stable path traversal
+# - K-shortest paths (Yen's algorithm)
 #
 # Based on legacy sequence-graph utilities now ported to Rhizomorph
 
@@ -595,6 +596,28 @@ function _total_outgoing_weight(graph::MetaGraphsNext.MetaGraph, vertex)
 end
 
 """
+    _total_outgoing_weight_excluding(graph, vertex, excluded_edges)
+
+Sum of outgoing edge weights from `vertex`, skipping edges in `excluded_edges`.
+Used to compute correct transition probabilities when some edges are suppressed
+during Yen's k-shortest-paths spur search.
+"""
+function _total_outgoing_weight_excluding(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex,
+        excluded_edges::Set{Tuple{T, T}}
+) where {T}
+    total = 0.0
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        if src == vertex && !((src, dst) in excluded_edges)
+            w = edge_data_weight(graph[src, dst])
+            total += max(w, 1e-10)
+        end
+    end
+    return max(total, 1e-10)
+end
+
+"""
     _build_graph_path_from_vertices(graph, vertices)
 
 Construct a `GraphPath` from an ordered list of vertex labels, computing
@@ -742,26 +765,40 @@ end
 """
     k_shortest_paths(graph, source, target, K)
 
-Find the K shortest (most probable) paths from `source` to `target` using
-Yen's algorithm. Returns paths sorted by **descending** total_probability
+Find up to `k` most probable loopless paths between `source` and `target`
+using Yen's algorithm. Internally, edge transition probabilities are converted
+to distances via `-log(p)`, so the shortest distance path corresponds to the
+most probable path. Returns paths sorted by **descending** total_probability
 (most probable first).
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
 - `source`: Source vertex label
 - `target`: Target vertex label
-- `K::Int`: Maximum number of paths to return
+- `k::Int`: Maximum number of paths to return (must be non-negative)
 
 # Returns
-- `Vector{GraphPath}`: Up to K paths, sorted by descending probability
+- `Vector{GraphPath}`: Up to `k` paths, sorted by descending probability
+
+# Throws
+- `ArgumentError`: If `source` or `target` is not in the graph, or `k < 0`
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
         source::T,
         target::T,
-        K::Int
+        k::Int
 ) where {T}
-    if K < 1
+    if !(source in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Source vertex $source not found in graph"))
+    end
+    if !(target in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Target vertex $target not found in graph"))
+    end
+    if k < 0
+        throw(ArgumentError("k must be non-negative, got $k"))
+    end
+    if k == 0
         return GraphPath{T}[]
     end
 
