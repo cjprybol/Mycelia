@@ -89,19 +89,17 @@ Test.@testset "K-Shortest Paths" begin
         Test.@test !isempty(sources)
         Test.@test !isempty(sinks)
 
-        if !isempty(sources) && !isempty(sinks)
-            paths = Mycelia.Rhizomorph.k_shortest_paths(
-                weighted, first(sources), first(sinks), 5
-            )
-            Test.@test length(paths) >= 1
-            Test.@test length(paths) <= 2
-            if length(paths) >= 2
-                Test.@test paths[1].total_probability >= paths[2].total_probability
-            end
-            for path in paths
-                Test.@test path isa Mycelia.Rhizomorph.GraphPath
-                Test.@test path.total_probability > 0.0
-            end
+        paths = Mycelia.Rhizomorph.k_shortest_paths(
+            weighted, first(sources), first(sinks), 5
+        )
+        Test.@test length(paths) >= 1
+        Test.@test length(paths) <= 2
+        if length(paths) >= 2
+            Test.@test paths[1].total_probability >= paths[2].total_probability
+        end
+        for path in paths
+            Test.@test path isa Mycelia.Rhizomorph.GraphPath
+            Test.@test path.total_probability > 0.0
         end
     end
 
@@ -134,12 +132,11 @@ Test.@testset "K-Shortest Paths" begin
             weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
             labels = collect(MetaGraphsNext.labels(weighted))
 
-            if length(labels) >= 2
-                paths = Mycelia.Rhizomorph.k_shortest_paths(
-                    weighted, labels[1], labels[end], 3
-                )
-                Test.@test length(paths) <= 1
-            end
+            Test.@test length(labels) >= 2
+            paths = Mycelia.Rhizomorph.k_shortest_paths(
+                weighted, labels[1], labels[end], 3
+            )
+            Test.@test length(paths) == 0
         end
 
         Test.@testset "Source equals target" begin

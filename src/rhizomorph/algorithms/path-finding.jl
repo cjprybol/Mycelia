@@ -579,6 +579,10 @@ end
 # K-Shortest Paths (Yen's Algorithm)
 # ============================================================================
 
+# Minimum weight floor to prevent -log(0) = Inf in Dijkstra distance calculations.
+# This is a numerical stability guard, not a real probability.
+const _KSP_MIN_WEIGHT = 1e-10
+
 """
     _total_outgoing_weight(graph, vertex)
 
@@ -611,10 +615,10 @@ function _total_outgoing_weight_excluding(
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         if src == vertex && !((src, dst) in excluded_edges)
             w = edge_data_weight(graph[src, dst])
-            total += max(w, 1e-10)
+            total += max(w, _KSP_MIN_WEIGHT)
         end
     end
-    return max(total, 1e-10)
+    return max(total, _KSP_MIN_WEIGHT)
 end
 
 """
@@ -639,12 +643,16 @@ function _build_graph_path_from_vertices(
             push!(steps, WalkStep(v, Forward, 1.0, 1.0))
         else
             prev = vertices[i - 1]
+            if !haskey(graph, prev, v)
+                throw(ArgumentError(
+                    "Cannot build path: no edge from $(prev) to $(v) in graph"))
+            end
             total_out = _total_outgoing_weight(graph, prev)
             if total_out > 0.0
                 edge_w = edge_data_weight(graph[prev, v])
                 step_prob = edge_w / total_out
             else
-                step_prob = 1e-10
+                step_prob = _KSP_MIN_WEIGHT
             end
             cumulative_prob *= step_prob
             push!(steps, WalkStep(v, Forward, step_prob, cumulative_prob))
@@ -785,6 +793,11 @@ most probable path. Returns paths sorted by **descending** total_probability
 
 # Throws
 - `ArgumentError`: If `source` or `target` is not in the graph, or `k < 0`
+
+# Notes
+- When `source == target`, returns a single trivial zero-length path with
+  probability 1.0. Cycle detection (finding non-trivial paths from a vertex
+  back to itself) is not currently supported.
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
@@ -856,6 +869,10 @@ function k_shortest_paths(
                 spur_vertices = [s.vertex_label for s in spur_path.steps]
                 # Combine root + spur (root_path_vertices[1:i-1] + spur_path)
                 combined_vertices = vcat(root_path_vertices[1:(i - 1)], spur_vertices)
+                # Note: Path probabilities are computed against the full graph (all edges),
+                # not the constrained graph used during spur path search. This is intentional:
+                # the search uses exclusions to find alternative routes, but the final
+                # probabilities reflect each path's likelihood in the original graph.
                 candidate = _build_graph_path_from_vertices(graph, combined_vertices)
 
                 # Only add if not a duplicate
