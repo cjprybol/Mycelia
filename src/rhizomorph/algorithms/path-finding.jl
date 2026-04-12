@@ -7,6 +7,7 @@
 # - Eulerian path finding (Hierholzer's algorithm)
 # - Sequence reconstruction from paths
 # - Type-stable path traversal
+# - K-shortest paths (Yen's algorithm)
 #
 # Based on legacy sequence-graph utilities now ported to Rhizomorph
 
@@ -609,8 +610,8 @@ function _total_outgoing_weight_excluding(
     total = 0.0
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         if src == vertex && !((src, dst) in excluded_edges)
-            edge_data = graph[src, dst]
-            total += edge_data.weight > 0 ? edge_data.weight : 1e-10
+            w = edge_data_weight(graph[src, dst])
+            total += max(w, 1e-10)
         end
     end
     return max(total, 1e-10)
@@ -767,18 +768,23 @@ end
 """
     k_shortest_paths(graph, source, target, k)
 
-Find the `k` shortest (most probable) paths from `source` to `target` using
-Yen's algorithm. Returns paths sorted by **descending** total_probability
+Find up to `k` most probable loopless paths between `source` and `target`
+using Yen's algorithm. Internally, edge transition probabilities are converted
+to distances via `-log(p)`, so the shortest distance path corresponds to the
+most probable path. Returns paths sorted by **descending** total_probability
 (most probable first).
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
 - `source`: Source vertex label
 - `target`: Target vertex label
-- `k::Int`: Maximum number of paths to return
+- `k::Int`: Maximum number of paths to return (must be non-negative)
 
 # Returns
 - `Vector{GraphPath}`: Up to `k` paths, sorted by descending probability
+
+# Throws
+- `ArgumentError`: If `source` or `target` is not in the graph, or `k < 0`
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
@@ -786,7 +792,16 @@ function k_shortest_paths(
         target::T,
         k::Int
 ) where {T}
-    if k < 1
+    if !(source in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Source vertex $source not found in graph"))
+    end
+    if !(target in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Target vertex $target not found in graph"))
+    end
+    if k < 0
+        throw(ArgumentError("k must be non-negative, got $k"))
+    end
+    if k == 0
         return GraphPath{T}[]
     end
 
