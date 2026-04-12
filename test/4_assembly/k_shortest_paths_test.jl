@@ -41,8 +41,8 @@ Test.@testset "K-Shortest Paths" begin
     end
 
     Test.@testset "Excluded vertices block paths" begin
-        seq1 = BioSequences.dna"ATCGTTGA"
-        seq2 = BioSequences.dna"ATCAATGA"
+        seq1 = BioSequences.dna"ACGTCCTGCA"
+        seq2 = BioSequences.dna"ACGTAATGCA"
         records = [
             FASTX.FASTA.Record("path1", seq1),
             FASTX.FASTA.Record("path2", seq2)
@@ -65,8 +65,10 @@ Test.@testset "K-Shortest Paths" begin
     end
 
     Test.@testset "Bubble graph returns 2 paths" begin
-        seq1 = BioSequences.dna"ATCGTTGA"
-        seq2 = BioSequences.dna"ATCAATGA"
+        # These sequences share first k-mer (ACGT) and last k-mer (TGCA),
+        # forming a true bubble with two divergent paths through the middle.
+        seq1 = BioSequences.dna"ACGTCCTGCA"
+        seq2 = BioSequences.dna"ACGTAATGCA"
         records = [
             FASTX.FASTA.Record("path1", seq1),
             FASTX.FASTA.Record("path2", seq2)
@@ -92,11 +94,8 @@ Test.@testset "K-Shortest Paths" begin
         paths = Mycelia.Rhizomorph.k_shortest_paths(
             weighted, first(sources), first(sinks), 5
         )
-        Test.@test length(paths) >= 1
-        Test.@test length(paths) <= 2
-        if length(paths) >= 2
-            Test.@test paths[1].total_probability >= paths[2].total_probability
-        end
+        Test.@test length(paths) == 2
+        Test.@test paths[1].total_probability >= paths[2].total_probability
         for path in paths
             Test.@test path isa Mycelia.Rhizomorph.GraphPath
             Test.@test path.total_probability > 0.0
@@ -239,10 +238,17 @@ Test.@testset "K-Shortest Paths" begin
         sources = [l for l in labels if in_deg[l] == 0]
         sinks = [l for l in labels if out_deg[l] == 0]
 
-        # Build path from vertices
-        path = Mycelia.Rhizomorph._build_graph_path_from_vertices(weighted, labels)
+        # Find a valid path through the graph via k_shortest_paths
+        ksp_paths = Mycelia.Rhizomorph.k_shortest_paths(
+            weighted, first(sources), first(sinks), 1
+        )
+        Test.@test length(ksp_paths) == 1
+        valid_vertices = [step.vertex_label for step in ksp_paths[1].steps]
+
+        # Build path from the known-valid vertex sequence
+        path = Mycelia.Rhizomorph._build_graph_path_from_vertices(weighted, valid_vertices)
         Test.@test path isa Mycelia.Rhizomorph.GraphPath
-        Test.@test length(path.steps) == length(labels)
+        Test.@test length(path.steps) == length(valid_vertices)
         Test.@test path.total_probability > 0.0
 
         # First step should have probability 1.0

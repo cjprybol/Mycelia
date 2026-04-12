@@ -719,7 +719,7 @@ function _shortest_path_excluding(
             return _build_graph_path_from_vertices(graph, path_vertices)
         end
 
-        total_out = _total_outgoing_weight_excluding(graph, current, excluded_edges)
+        total_out = _total_outgoing_weight(graph, current)
 
         for (src, dst) in MetaGraphsNext.edge_labels(graph)
             if src != current
@@ -795,9 +795,19 @@ most probable path. Returns paths sorted by **descending** total_probability
 - `ArgumentError`: If `source` or `target` is not in the graph, or `k < 0`
 
 # Notes
-- When `source == target`, returns a single trivial zero-length path with
+- When `source == target`, returns a single trivial single-vertex path with
   probability 1.0. Cycle detection (finding non-trivial paths from a vertex
   back to itself) is not currently supported.
+
+# Example
+```julia
+graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; mode = :singlestrand)
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+paths = Mycelia.Rhizomorph.k_shortest_paths(weighted, source, target, 5)
+for (i, path) in enumerate(paths)
+    println("Path \$i: probability = \$(path.total_probability)")
+end
+```
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
