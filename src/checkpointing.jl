@@ -107,6 +107,93 @@ function cached_stage(name::String, checkpoint_dir::String, compute_fn::Function
 end
 
 """
+    cached_stage_incremental(compute_new_fn::Function, name::String,
+                             checkpoint_dir::String, current_ids::AbstractVector{String};
+                             id_column::Symbol=:lims_id)
+
+Incremental checkpoint: loads existing cached DataFrame, identifies new IDs
+not in the cache, calls `compute_new_fn(new_ids)` for only the new entries,
+merges with cached data, and saves the updated checkpoint.
+
+Returns the merged DataFrame with all entries (cached + newly computed).
+
+If no checkpoint exists, all IDs are treated as new and the full computation
+runs. If no new IDs are found, returns the cached data unchanged.
+
+# Arguments
+- `compute_new_fn`: Function that takes `Vector{String}` of new IDs and returns a DataFrame
+- `name`: Checkpoint name (becomes filename)
+- `checkpoint_dir`: Directory for checkpoint files
+- `current_ids`: Full list of expected IDs (e.g., from the manifest)
+- `id_column`: Column name in the cached DataFrame to match against (default `:lims_id`)
+
+# Example
+```julia
+results = Mycelia.cached_stage_incremental(
+    "phage_mapping_v2", CHECKPOINT_DIR, all_lims_ids; id_column=:fastq
+) do new_ids
+    # Only process samples not in the cache
+    process_phage_mapping(new_ids)
+end
+```
+"""
+function cached_stage_incremental(compute_new_fn::Function, name::String,
+        checkpoint_dir::String, current_ids::AbstractVector{String};
+        id_column::Symbol = :lims_id)
+    mkpath(checkpoint_dir)
+    cache_file = joinpath(checkpoint_dir, "$(name).jld2")
+
+    # Load existing checkpoint
+    existing = if isfile(cache_file)
+        Logging.@info "Loading cached '$(name)' from $(cache_file)"
+        JLD2.load(cache_file, "data")
+    else
+        nothing
+    end
+
+    # Determine which IDs are new
+    cached_ids = if existing !== nothing && id_column in propertynames(existing)
+        Set(string.(existing[!, id_column]))
+    else
+        Set{String}()
+    end
+    new_ids = filter(id -> !(id in cached_ids), current_ids)
+
+    if isempty(new_ids) && existing !== nothing
+        Logging.@info "No new entries for '$(name)' — $(length(cached_ids)) cached, 0 new"
+        return existing
+    end
+
+    Logging.@info "Processing '$(name)': $(length(cached_ids)) cached, $(length(new_ids)) new"
+
+    # Compute only the new entries
+    new_results = compute_new_fn(new_ids)
+
+    # Merge
+    merged = if existing !== nothing && DataFrames.nrow(existing) > 0
+        vcat(existing, new_results; cols = :union)
+    else
+        new_results
+    end
+
+    # Save atomically (write to tmp, then rename)
+    tmp_file = cache_file * ".tmp"
+    JLD2.jldsave(tmp_file; data = merged)
+    mv(tmp_file, cache_file; force = true)
+    Logging.@info "Saved '$(name)' to $(cache_file) ($(DataFrames.nrow(merged)) total rows)"
+
+    return merged
+end
+
+# Alternative signature with name first
+function cached_stage_incremental(name::String, checkpoint_dir::String,
+        current_ids::AbstractVector{String}, compute_new_fn::Function;
+        id_column::Symbol = :lims_id)
+    cached_stage_incremental(
+        compute_new_fn, name, checkpoint_dir, current_ids; id_column = id_column)
+end
+
+"""
     clear_stage(name::String, checkpoint_dir::String;
                 input_files::Vector{String}=String[]) -> Bool
 
