@@ -972,6 +972,10 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
         "CS tag"]
 
     Mycelia.add_bioconda_env("minimap2")
+    # Initialize so the trailing `isempty(results)` branch is always well-defined —
+    # when all three asm presets return empty (truly divergent inputs, or a
+    # malformed/empty FASTA) we otherwise hit `UndefVarError: results`.
+    results = UInt8[]
     #     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
     results5 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
     if !isempty(results5)
@@ -986,6 +990,8 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
             results20 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
             if !isempty(results20)
                 results = results20
+            else
+                @warn "no minimap2 hits at asm5, asm10, or asm20 — returning empty result" reference_fasta query_fasta
             end
         end
     end
