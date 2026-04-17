@@ -2821,6 +2821,10 @@ function run_pyorthoani(;
         cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
         append!(cmd_parts, additional_args)
         cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        # Prevent the user-site (~/.local/...) from shadowing the conda env's
+        # site-packages. Without this, a stray py3.9 numpy in ~/.local/ breaks
+        # Biopython's numpy import inside a py3.11 conda env.
+        cmd = addenv(cmd, "PYTHONNOUSERSITE" => "1", "PYTHONPATH" => "")
         output = read(cmd, String)
         write(output_path, output)
     end
