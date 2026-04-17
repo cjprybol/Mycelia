@@ -1045,15 +1045,18 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
         target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
         size_equivalence_to_reference = round(query_length/target_length * 100, digits = 2)
 
-        # unable to find any matches
+        # unable to find any matches — use `missing` (not "") on the numeric-
+        # semantics columns so a caller that appends a batch of these rows
+        # with rows from happy-path hits doesn't hit a String/Float64 schema
+        # conflict in `append!`.
         results = DataFrames.DataFrame(
-            alignment_percent_identity = "",
-            total_equivalent_bases = "",
-            total_alignment_length = "",
+            alignment_percent_identity = missing,
+            total_equivalent_bases = missing,
+            total_alignment_length = missing,
             query_length = query_length,
-            total_variants = "",
-            total_snps = "",
-            total_indels = "",
+            total_variants = missing,
+            total_snps = missing,
+            total_indels = missing,
             alignment_coverage_query = 0,
             alignment_coverage_reference = 0,
             size_equivalence_to_reference = size_equivalence_to_reference
