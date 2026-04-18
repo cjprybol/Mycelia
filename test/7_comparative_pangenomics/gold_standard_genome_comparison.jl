@@ -584,6 +584,64 @@ Indels  5  20
         end
     end
 
+    Test.@testset "PyOrthoANI pairwise batched (external)" begin
+        if !(run_external && conda_available)
+            Test.@test_skip "PyOrthoANI pairwise batched requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
+        else
+            rng = StableRNGs.StableRNG(303)
+            dna_alphabet = ['A', 'C', 'G', 'T']
+            random_dna = len -> String(rand(rng, dna_alphabet, len))
+            function mutate_dna(seq::AbstractString, mutation_rate::Float64)
+                seq_chars = collect(seq)
+                for i in eachindex(seq_chars)
+                    if rand(rng) < mutation_rate
+                        original = seq_chars[i]
+                        candidates = filter(base -> base != original, dna_alphabet)
+                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+                    end
+                end
+                return String(seq_chars)
+            end
+
+            temp_dir = mktempdir()
+            # Three single-record FASTAs: one parent + two independently mutated
+            # copies. Expectation: every pair returns 95–100% ANI, self-vs-self
+            # rows equal 100.
+            parent_seq = random_dna(8000)
+            a_seq = mutate_dna(parent_seq, 0.01)
+            b_seq = mutate_dna(parent_seq, 0.02)
+
+            a_fasta = joinpath(temp_dir, "a.fasta")
+            b_fasta = joinpath(temp_dir, "b.fasta")
+            c_fasta = joinpath(temp_dir, "c.fasta")
+            write(a_fasta, ">a\n$(parent_seq)\n")
+            write(b_fasta, ">b\n$(a_seq)\n")
+            write(c_fasta, ">c\n$(b_seq)\n")
+
+            df = Mycelia.orthoani_pairwise(
+                [a_fasta, b_fasta, c_fasta];
+                threads = 1
+            )
+
+            Test.@test DataFrames.nrow(df) >= 3  # upper triangle (and diag, if emitted)
+            Test.@test all(>=(95.0), df.ani)
+            Test.@test all(<=(100.0), df.ani)
+
+            # Diagonal rows (self-vs-self) should be exactly 100 when present.
+            diag_rows = df[df.query .== df.reference, :]
+            if DataFrames.nrow(diag_rows) > 0
+                Test.@test all(isapprox.(diag_rows.ani, 100.0; atol = 1e-6))
+            end
+
+            # The batched output must reference the actual input paths so callers
+            # can round-trip from dataframe rows back to their source FASTAs.
+            Test.@test issubset(unique(df.query), [a_fasta, b_fasta, c_fasta])
+            Test.@test issubset(unique(df.reference), [a_fasta, b_fasta, c_fasta])
+
+            rm(temp_dir; recursive = true, force = true)
+        end
+    end
+
     Test.@testset "MUMmer NUCmer Wrapper (external)" begin
         if !(run_external && conda_available)
             Test.@test_skip "NUCmer wrapper test requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
