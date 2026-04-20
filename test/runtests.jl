@@ -298,7 +298,9 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 if MYCELIA_RUN_EXTERNAL
     include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
 else
-    @info "Skipping tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
+    # Execution backend tests are pure-Julia and run without external tools
+    include(joinpath(@__DIR__, "8_tool_integration", "execution_backends_test.jl"))
+    @info "Skipping remaining tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end
 # for file in (
 #     "8_tool_integration/autocycler.jl",

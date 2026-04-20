@@ -171,12 +171,15 @@ function run_sourmash_search(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
+        mail_user::Union{Nothing, String} = nothing,
+        ensure_env::Bool = true)
     isfile(query_sig) || error("Query signature not found: $(query_sig)")
     (isfile(database_sig) || isdir(database_sig)) ||
         error("Database not found: $(database_sig)")
 
-    Mycelia.add_bioconda_env("sourmash")
+    if ensure_env
+        Mycelia.add_bioconda_env("sourmash")
+    end
     mkpath(outdir)
 
     query_basename = replace(basename(query_sig), r"\.sig(\.gz)?$"i => "")
