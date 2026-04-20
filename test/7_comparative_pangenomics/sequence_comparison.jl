@@ -23,9 +23,66 @@ import Mycelia
 import DataFrames
 import BioSequences
 import FASTX
+import Logging
 import SHA
 import DelimitedFiles
 import StableRNGs
+
+function _write_text_file(path::String, content::AbstractString)
+    mkpath(dirname(path))
+    open(path, "w") do io
+        write(io, content)
+    end
+    return path
+end
+
+function with_fake_conda_env(f::Function, env_name::String)
+    env_dir = joinpath(Mycelia._conda_envs_dir(), env_name)
+    created = false
+    if !isdir(env_dir)
+        mkpath(joinpath(env_dir, "conda-meta"))
+        _write_text_file(joinpath(env_dir, "conda-meta", "history"), "")
+        created = true
+    end
+
+    try
+        return f()
+    finally
+        if created
+            rm(env_dir; recursive = true, force = true)
+        end
+    end
+end
+
+function with_stubbed_conda_runner(f::Function, script_body::AbstractString)
+    runner_path = Mycelia.CONDA_RUNNER
+    isfile(runner_path) || error("Cannot stub missing conda runner: $(runner_path)")
+    backup_path = runner_path * ".mycelia-test-backup"
+    ispath(backup_path) && error("Conda runner backup already exists: $(backup_path)")
+    mv(runner_path, backup_path)
+    _write_text_file(runner_path, "#!/usr/bin/env bash\nset -euo pipefail\n$(script_body)\n")
+    chmod(runner_path, 0o755)
+    try
+        return f()
+    finally
+        rm(runner_path; force = true)
+        mv(backup_path, runner_path)
+    end
+end
+
+function fake_empty_stdout_conda_runner_script()
+    return raw"""
+if [[ "${1:-}" == "run" ]]; then
+    exit 0
+fi
+
+if [[ "${1:-}" == "env" && "${2:-}" == "list" ]]; then
+    exit 0
+fi
+
+exit 0
+"""
+end
 
 Test.@testset "Sequence Comparison Tests" begin
     Test.@testset "Mash Distance Calculation" begin
@@ -159,6 +216,48 @@ Test.@testset "Sequence Comparison Tests" begin
         # Cleanup
         rm(ref_fasta, force = true)
         rm(query_fasta, force = true)
+    end
+
+    Test.@testset "Pairwise Minimap Comparison No-Hit Path" begin
+        temp_dir = mktempdir()
+        try
+            ref_fasta = _write_text_file(
+                joinpath(temp_dir, "reference.fasta"),
+                ">reference\nATCGATCGATCGATCG\n"
+            )
+            query_fasta = _write_text_file(
+                joinpath(temp_dir, "query.fasta"),
+                ">query\nGGGGCCCCAAAATTTT\n"
+            )
+
+            with_fake_conda_env("minimap2") do
+                with_stubbed_conda_runner(fake_empty_stdout_conda_runner_script()) do
+                    result = Test.@test_logs (:warn, r"no hit with asm5, trying asm10") (
+                        :warn, r"no hits with asm5 or asm10, trying asm20") (
+                        :warn, r"no minimap2 hits at asm5, asm10, or asm20") min_level=Logging.Warn match_mode=:all begin
+                        Mycelia.pairwise_minimap_fasta_comparison(
+                            reference_fasta = ref_fasta,
+                            query_fasta = query_fasta
+                        )
+                    end
+
+                    Test.@test result isa DataFrames.DataFrame
+                    Test.@test DataFrames.nrow(result) == 1
+                    Test.@test result[1, :alignment_percent_identity] == ""
+                    Test.@test result[1, :total_equivalent_bases] == ""
+                    Test.@test result[1, :total_alignment_length] == ""
+                    Test.@test result[1, :query_length] == 16
+                    Test.@test result[1, :total_variants] == ""
+                    Test.@test result[1, :total_snps] == ""
+                    Test.@test result[1, :total_indels] == ""
+                    Test.@test result[1, :alignment_coverage_query] == 0
+                    Test.@test result[1, :alignment_coverage_reference] == 0
+                    Test.@test result[1, :size_equivalence_to_reference] == 100.0
+                end
+            end
+        finally
+            rm(temp_dir; recursive = true, force = true)
+        end
     end
 
     Test.@testset "FastANI Mock Tests" begin
