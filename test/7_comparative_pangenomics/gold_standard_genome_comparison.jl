@@ -185,6 +185,22 @@ Indels  5  20
         Test.@test Mycelia.parse_pyorthoani_output("ANI: 99.95") ≈ 99.95
     end
 
+    Test.@testset "Sanitized Conda Run Command" begin
+        cmd = Mycelia.sanitized_conda_run_cmd("pyorthoani", ["pyorthoani", "--help"]; live_stream = true)
+
+        Test.@test cmd.exec == [
+            Mycelia.CONDA_RUNNER,
+            "run",
+            "--live-stream",
+            "-n",
+            "pyorthoani",
+            "pyorthoani",
+            "--help"
+        ]
+        Test.@test "PYTHONNOUSERSITE=1" in cmd.env
+        Test.@test "PYTHONPATH=" in cmd.env
+    end
+
     run_all = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
     run_external = run_all || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
     conda_available = haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
