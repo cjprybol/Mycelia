@@ -7,17 +7,17 @@ end
 
 function _with_env(f::Function, overrides::AbstractDict)
     previous = Dict{String, Union{Nothing, String}}()
-    for (key, value) in overrides
-        key_string = string(key)
-        previous[key_string] = get(ENV, key_string, nothing)
-        if value === nothing
-            pop!(ENV, key_string, nothing)
-        else
-            ENV[key_string] = string(value)
-        end
-    end
 
     try
+        for (key, value) in overrides
+            key_string = string(key)
+            previous[key_string] = get(ENV, key_string, nothing)
+            if value === nothing
+                pop!(ENV, key_string, nothing)
+            else
+                ENV[key_string] = string(value)
+            end
+        end
         return f()
     finally
         for (key, value) in previous
@@ -241,7 +241,7 @@ Test.@testset "Template rendering and fixture checks" begin
     Test.@test !occursin("{{", rendered_docker)
     Test.@test !occursin("{{", rendered_cloud)
 
-    fixture_root = joinpath(dirname(@__DIR__), "fixtures", "job_templates")
+    fixture_root = joinpath(dirname(@__DIR__), "metadata", "job_templates")
 
     expected_nersc = _normalize_fixture_logdir(
         read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String))
