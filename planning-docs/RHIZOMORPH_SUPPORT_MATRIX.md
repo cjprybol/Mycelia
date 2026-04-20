@@ -32,7 +32,7 @@ GFA/JLD2 round-trips.
 | Variable-length OLC (FASTA)  | AA/String        | ✅           | 🚫           | 🚫        | RC not defined; errors enforced                                                        |
 | Variable-length OLC (FASTQ)  | DNA/RNA          | ✅           | ✅           | ✅        | quality-aware; conversions implemented                                                 |
 | Variable-length OLC (FASTQ)  | AA/String        | 🚫           | 🚫           | 🚫        | not applicable                                                                         |
-| Variable-length OLC (String) | Unicode          | ✅           | 🚫           | 🚫        | non-RC; errors enforced                                                                |
+| Variable-length OLC (String) | Unicode          | ✅           | 🚫           | 🚫        | non-RC; errors enforced; `collapse_linear_chains!` covered for `StringVertexData` graphs |
 | Reduced AA alphabets         | AA/String inputs | ✅           | 🚫           | 🚫        | covered in k-mer/ngram and OLC tests                                                   |
 
 ## Graph Query Functions
