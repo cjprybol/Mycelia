@@ -62,6 +62,21 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
         Test.@test loaded_invalid_alphabet.metadata["alphabet"] == 17
         Test.@test loaded_invalid_alphabet.metadata["k"] == 3
         Test.@test loaded_invalid_alphabet.metadata["custom_field"] == "kept"
+
+        malformed_alphabet_path = joinpath(temp_dir, "malformed_alphabet.jld2")
+        JLD2.jldopen(malformed_alphabet_path, "w") do file
+            file["kmers"] = kmers
+            file["counts"] = counts
+            file["fasta_list"] = fasta_list
+            file["metadata/k"] = 3
+            file["metadata/alphabet"] = "DNA\0broken"
+        end
+        loaded_malformed_alphabet = Mycelia.load_kmer_results(malformed_alphabet_path)
+        Test.@test loaded_malformed_alphabet !== nothing
+        Test.@test loaded_malformed_alphabet.kmers == kmers
+        Test.@test loaded_malformed_alphabet.counts == counts
+        Test.@test loaded_malformed_alphabet.fasta_list == fasta_list
+        Test.@test loaded_malformed_alphabet.metadata["alphabet"] == "DNA\0broken"
     end
 
     Test.@testset "jellyfish tabular helpers" begin

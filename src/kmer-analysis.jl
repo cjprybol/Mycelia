@@ -93,8 +93,25 @@ function load_kmer_results(filename::AbstractString)
             if loaded_alphabet isa Symbol
                 metadata["alphabet"] = loaded_alphabet
             elseif loaded_alphabet isa AbstractString
-                metadata["alphabet"] = Symbol(loaded_alphabet)
+                try
+                    metadata["alphabet"] = Symbol(loaded_alphabet)
+                catch error
+                    @warn(
+                        "Could not convert loaded alphabet back to Symbol. Preserving original value.",
+                        key = "metadata/alphabet",
+                        loaded_alphabet = loaded_alphabet,
+                        alphabet_type = typeof(loaded_alphabet),
+                        error = error
+                    )
+                    metadata["alphabet"] = loaded_alphabet
+                end
             else
+                @warn(
+                    "Unexpected loaded alphabet metadata type. Preserving original value.",
+                    key = "metadata/alphabet",
+                    loaded_alphabet = loaded_alphabet,
+                    alphabet_type = typeof(loaded_alphabet)
+                )
                 metadata["alphabet"] = loaded_alphabet
             end
         end
