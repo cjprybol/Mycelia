@@ -1,12 +1,6 @@
 import Test
 import Mycelia
 
-@eval Mycelia begin
-    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
-        return nothing
-    end
-end
-
 function _executor_test_write_file(path::String, content::String)
     mkpath(dirname(path))
     open(path, "w") do io
@@ -134,7 +128,8 @@ Test.@testset "Wrapper collection paths remain routable through executor infrast
             fastq2 = fastq2,
             outdir = joinpath(tmpdir, "megahit"),
             executor = assembly_exec,
-            site = :scg
+            site = :scg,
+            ensure_env = false
         )
         Test.@test length(assembly_exec.jobs) == 1
         Test.@test assembly_exec.jobs[1].site == :scg
@@ -147,7 +142,8 @@ Test.@testset "Wrapper collection paths remain routable through executor infrast
             database_sig = db_sig,
             outdir = joinpath(tmpdir, "sourmash"),
             executor = classification_exec,
-            site = :scg
+            site = :scg,
+            ensure_env = false
         )
         Test.@test length(classification_exec.jobs) == 1
         Test.@test occursin("sourmash search", classification_exec.jobs[1].cmd)
@@ -159,7 +155,8 @@ Test.@testset "Wrapper collection paths remain routable through executor infrast
             reference_fasta = reference_fasta,
             output_dir = joinpath(tmpdir, "blast"),
             executor = align_exec,
-            site = :scg
+            site = :scg,
+            ensure_env = false
         )
         Test.@test length(align_exec.jobs) == 1
         Test.@test occursin("blastp", align_exec.jobs[1].cmd)
@@ -171,7 +168,8 @@ Test.@testset "Wrapper collection paths remain routable through executor infrast
             output = joinpath(tmpdir, "mmseqs_cluster"),
             tmp = joinpath(tmpdir, "mmseqs_tmp"),
             executor = cluster_exec,
-            site = :scg
+            site = :scg,
+            ensure_env = false
         )
         Test.@test length(cluster_exec.jobs) == 1
         Test.@test occursin("easy-cluster", cluster_exec.jobs[1].cmd)

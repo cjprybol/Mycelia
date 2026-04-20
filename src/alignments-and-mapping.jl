@@ -246,7 +246,8 @@ function run_blastp_search(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing
+        mail_user::Union{Nothing, String} = nothing,
+        ensure_env::Bool = true
 )
     # Input validation and assertions
     @assert isfile(query_fasta) "Query FASTA file does not exist: $(query_fasta)"
@@ -273,7 +274,9 @@ function run_blastp_search(;
     end
 
     # Ensure BLAST environment exists
-    Mycelia.add_bioconda_env("blast")
+    if ensure_env
+        Mycelia.add_bioconda_env("blast")
+    end
 
     if executor !== nothing
         outfmt = "7 qseqid qtitle sseqid sacc saccver stitle qlen slen qstart qend sstart send evalue bitscore length pident nident mismatch staxid"
