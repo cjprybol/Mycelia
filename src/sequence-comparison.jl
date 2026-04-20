@@ -2678,6 +2678,17 @@ function _conda_env_exec_ok(env_name::String, exec_parts::Vector{String})
     return Base.success(pipeline(cmd, stdout = Base.devnull, stderr = Base.devnull))
 end
 
+function sanitized_conda_run_cmd(
+        env_name::AbstractString,
+        exec_parts::Vector{String};
+        live_stream::Bool = false)
+    cmd_parts = live_stream ?
+                vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name], exec_parts) :
+                vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], exec_parts)
+    cmd = Cmd(cmd_parts)
+    return addenv(cmd, "PYTHONNOUSERSITE" => "1", "PYTHONPATH" => "")
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2820,7 +2831,10 @@ function run_pyorthoani(;
     if force || !isfile(output_path) || filesize(output_path) == 0
         cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
         append!(cmd_parts, additional_args)
-        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        # Prevent the user-site (~/.local/...) from shadowing the conda env's
+        # site-packages. Without this, a stray py3.9 numpy in ~/.local/ breaks
+        # Biopython's numpy import inside a py3.11 conda env.
+        cmd = sanitized_conda_run_cmd("pyorthoani", cmd_parts; live_stream = true)
         output = read(cmd, String)
         write(output_path, output)
     end
