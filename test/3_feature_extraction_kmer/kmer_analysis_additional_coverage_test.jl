@@ -6,6 +6,30 @@ import Kmers
 import CodecZlib
 import JLD2
 import DelimitedFiles
+import Logging
+
+struct ThrowOnWarnLogger <: Logging.AbstractLogger end
+
+Logging.min_enabled_level(::ThrowOnWarnLogger) = Logging.Warn
+Logging.shouldlog(::ThrowOnWarnLogger, level, _module, group, id) = level >= Logging.Warn
+Logging.catch_exceptions(::ThrowOnWarnLogger) = false
+
+function Logging.handle_message(
+        ::ThrowOnWarnLogger,
+        level,
+        message,
+        _module,
+        group,
+        id,
+        file,
+        line;
+        kwargs...
+)
+    if level >= Logging.Warn
+        throw(ErrorException(string(message)))
+    end
+    return nothing
+end
 
 Test.@testset "K-mer Analysis Additional Coverage" begin
     mktempdir() do temp_dir
@@ -131,6 +155,18 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             symbol_loaded = Mycelia.load_kmer_results(symbol_metadata_path)
             Test.@test symbol_loaded !== nothing
             Test.@test symbol_loaded.metadata["alphabet"] == :DNA
+
+            malformed_metadata_path = joinpath(temp_dir, "malformed_metadata.jld2")
+            JLD2.jldopen(malformed_metadata_path, "w") do file
+                file["kmers"] = [Kmers.DNAKmer{3}("AAA")]
+                file["counts"] = reshape(UInt16[4, 2], 1, 2)
+                file["fasta_list"] = ["a.fasta", "b.fasta"]
+                file["metadata/k"] = 3
+                file["metadata/alphabet"] = "DNA\0broken"
+            end
+            malformed_loaded = Mycelia.load_kmer_results(malformed_metadata_path)
+            Test.@test malformed_loaded !== nothing
+            Test.@test malformed_loaded.metadata["alphabet"] == "DNA\0broken"
 
             corrupt_path = joinpath(temp_dir, "corrupt_results.jld2")
             write(corrupt_path, "not a jld2 file")
@@ -533,6 +569,16 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test all(k -> haskey(multi_k.consensus_kmers, k), [3, 5])
             Test.@test all(k -> !isempty(multi_k.quality_profiles[k]), [3, 5])
             Test.@test all(v -> v >= 0.0, values(multi_k.coverage_estimates))
+
+            sparse_multi_k = Mycelia.multi_scale_kmer_analysis(
+                [BioSequences.LongDNA{4}("ATGC")];
+                prime_ks = [7],
+                window_size = 3,
+                step_size = 1
+            )
+            Test.@test sparse_multi_k.coverage_estimates[7] == 0.0
+            Test.@test isempty(sparse_multi_k.consensus_kmers[7])
+            Test.@test length(sparse_multi_k.quality_profiles[7]) == 2
         end
 
         Test.@testset "Dense and sparse file count helpers" begin
@@ -578,6 +624,17 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 result_file = dense_cache
             )
             Test.@test dense_cached == dense_result
+
+            dense_serial_temp = Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [fasta],
+                k = 3,
+                alphabet = :DNA,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test dense_serial_temp.kmers == dense_result.kmers
+            Test.@test dense_serial_temp.counts == dense_result.counts
 
             dense_rna_result = Mycelia.fasta_list_to_dense_kmer_counts(
                 fasta_list = [rna_fasta],
@@ -814,6 +871,328 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test_throws ErrorException Mycelia.biosequences_to_dense_counts_table(
                 biosequences = ["ATGC"],
                 k = 2
+            )
+        end
+
+        Test.@testset "Sparse generation and fallback branches" begin
+            dna_sparse_fasta = joinpath(temp_dir, "sparse_generation_dna.fasta")
+            rna_sparse_fasta = joinpath(temp_dir, "sparse_generation_rna.fasta")
+            aa_sparse_fasta = joinpath(temp_dir, "sparse_generation_aa.fasta")
+
+            Mycelia.write_fasta(
+                outfile = dna_sparse_fasta,
+                records = [FASTX.FASTA.Record("dna_sparse", "ATGCATGCATGC")],
+                gzip = false,
+                show_progress = false
+            )
+            Mycelia.write_fasta(
+                outfile = rna_sparse_fasta,
+                records = [FASTX.FASTA.Record("rna_sparse", "AUGCAUGCAUGC")],
+                gzip = false,
+                show_progress = false
+            )
+            Mycelia.write_fasta(
+                outfile = aa_sparse_fasta,
+                records = [FASTX.FASTA.Record("aa_sparse", "ACDEFGHIK")],
+                gzip = false,
+                show_progress = false
+            )
+
+            auto_generated = Mycelia.generate_and_save_kmer_counts(
+                alphabet = :DNA,
+                fastas = [dna_sparse_fasta],
+                k = 10,
+                output_dir = temp_dir
+            )
+            Test.@test isfile(auto_generated)
+            Test.@test occursin(".dna10mers.jld2", Base.Filesystem.basename(auto_generated))
+            auto_loaded = Mycelia.load_kmer_results(auto_generated)
+            Test.@test auto_loaded !== nothing
+            Test.@test auto_loaded.metadata["alphabet"] == :DNA
+            Test.@test auto_loaded.metadata["k"] == 10
+
+            rna_sparse_generated = Mycelia.generate_and_save_kmer_counts(
+                alphabet = :RNA,
+                fastas = [rna_sparse_fasta],
+                k = 10,
+                output_dir = temp_dir,
+                filename = "generated_rna_sparse.jld2"
+            )
+            Test.@test isfile(rna_sparse_generated)
+            rna_loaded = Mycelia.load_kmer_results(rna_sparse_generated)
+            Test.@test rna_loaded !== nothing
+            Test.@test rna_loaded.metadata["alphabet"] == :RNA
+
+            aa_sparse_generated = Mycelia.generate_and_save_kmer_counts(
+                alphabet = :AA,
+                fastas = [aa_sparse_fasta],
+                k = 4,
+                output_dir = temp_dir,
+                filename = "generated_aa_sparse.jld2"
+            )
+            Test.@test isfile(aa_sparse_generated)
+            aa_loaded = Mycelia.load_kmer_results(aa_sparse_generated)
+            Test.@test aa_loaded !== nothing
+            Test.@test aa_loaded.metadata["alphabet"] == :AA
+
+            rarefaction_cache = joinpath(temp_dir, "force_sparse_cache.jld2")
+            Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [dna_sparse_fasta],
+                k = 3,
+                alphabet = :DNA,
+                result_file = rarefaction_cache,
+                skip_rarefaction_plot = true,
+                skip_rarefaction_data = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test isfile(rarefaction_cache)
+
+            rarefaction_outdir = joinpath(temp_dir, "forced_rarefaction")
+            forced_sparse = Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [dna_sparse_fasta],
+                k = 3,
+                alphabet = :DNA,
+                result_file = rarefaction_cache,
+                out_dir = rarefaction_outdir,
+                rarefaction_data_filename = "forced_rarefaction.tsv",
+                rarefaction_plot_basename = "forced_rarefaction",
+                show_rarefaction_plot = false,
+                skip_rarefaction_plot = false,
+                skip_rarefaction_data = false,
+                force = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = true
+            )
+            Test.@test forced_sparse.rarefaction_data_path ==
+                       joinpath(rarefaction_outdir, "forced_rarefaction.tsv")
+            Test.@test isfile(forced_sparse.rarefaction_data_path)
+
+            threaded_dense_bad_dir = joinpath(temp_dir, "missing_dense_dir", "threaded.jld2")
+            threaded_sorted_kmers = sort(Mycelia.generate_all_possible_canonical_kmers(
+                3, Mycelia.DNA_ALPHABET))
+            threaded_dense = Mycelia._dense_kmer_counts_in_memory(
+                [dna_sparse_fasta, rna_sparse_fasta],
+                threaded_sorted_kmers,
+                Kmers.DNAKmer{3},
+                Mycelia.count_canonical_kmers,
+                true,
+                true,
+                UInt16,
+                threaded_dense_bad_dir
+            )
+            Test.@test size(threaded_dense.counts) == (length(threaded_sorted_kmers), 2)
+            Test.@test sum(threaded_dense.counts[:, 1]) == 10
+            Test.@test sum(threaded_dense.counts[:, 2]) == 0
+            Test.@test !isfile(threaded_dense_bad_dir)
+
+            dense_temp_fail = Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [rna_sparse_fasta],
+                k = 3,
+                alphabet = :DNA,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = true
+            )
+            Test.@test isempty(dense_temp_fail.successful_fasta_list)
+            Test.@test length(dense_temp_fail.error_log) == 1
+            Test.@test size(dense_temp_fail.counts, 2) == 0
+
+            aa_record_estimate = Mycelia.estimate_genome_size_from_kmers(
+                [FASTX.FASTA.Record("aa_record", "ACDEFG")],
+                2
+            )
+            Test.@test aa_record_estimate["num_records"] == 1
+            Test.@test aa_record_estimate["actual_size"] == 6
+
+            Test.@test_throws ErrorException Mycelia.generate_all_possible_canonical_kmers(2, [1, 2])
+        end
+
+        Test.@testset "Count element type and serial fallback branches" begin
+            dense_ok_fasta = joinpath(temp_dir, "dense_ok.fasta")
+            dense_bad_fasta = joinpath(temp_dir, "dense_bad.fasta")
+            dense_invalid_fasta = joinpath(temp_dir, "dense_invalid.fasta")
+            sparse_uint16_fasta = joinpath(temp_dir, "sparse_uint16.fasta")
+            sparse_uint32_fasta = joinpath(temp_dir, "sparse_uint32.fasta")
+
+            Mycelia.write_fasta(
+                outfile = dense_ok_fasta,
+                records = [FASTX.FASTA.Record("dense_ok", repeat("A", 10))],
+                gzip = false,
+                show_progress = false
+            )
+            Mycelia.write_fasta(
+                outfile = dense_bad_fasta,
+                records = [FASTX.FASTA.Record("dense_bad", repeat("U", 8))],
+                gzip = false,
+                show_progress = false
+            )
+            write(dense_invalid_fasta, "not fasta\nATGC\n")
+            Mycelia.write_fasta(
+                outfile = sparse_uint16_fasta,
+                records = [FASTX.FASTA.Record("sparse_uint16", repeat("A", 300))],
+                gzip = false,
+                show_progress = false
+            )
+            Mycelia.write_fasta(
+                outfile = sparse_uint32_fasta,
+                records = [FASTX.FASTA.Record("sparse_uint32", repeat("A", 70000))],
+                gzip = false,
+                show_progress = false
+            )
+
+            serial_sorted_kmers = sort(Mycelia.generate_all_possible_canonical_kmers(
+                1, Mycelia.DNA_ALPHABET))
+            serial_dense = Mycelia._dense_kmer_counts_in_memory(
+                [dense_ok_fasta, dense_bad_fasta],
+                serial_sorted_kmers,
+                Kmers.DNAKmer{1},
+                Mycelia.count_canonical_kmers,
+                false,
+                true,
+                nothing,
+                nothing
+            )
+            Test.@test size(serial_dense.counts) == (length(serial_sorted_kmers), 2)
+            Test.@test sum(serial_dense.counts[:, 1]) == 10
+            Test.@test sum(serial_dense.counts[:, 2]) == 0
+
+            Test.@test_throws InexactError Mycelia._dense_kmer_counts_in_memory(
+                [sparse_uint16_fasta],
+                serial_sorted_kmers,
+                Kmers.DNAKmer{1},
+                Mycelia.count_canonical_kmers,
+                false,
+                false,
+                UInt8,
+                nothing
+            )
+
+            sparse_uint16 = Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [sparse_uint16_fasta],
+                k = 1,
+                alphabet = :DNA,
+                skip_rarefaction_plot = true,
+                skip_rarefaction_data = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test eltype(sparse_uint16.counts) == UInt16
+            Test.@test sum(sparse_uint16.counts) == 300
+
+            sparse_uint32 = Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [sparse_uint32_fasta],
+                k = 1,
+                alphabet = :DNA,
+                skip_rarefaction_plot = true,
+                skip_rarefaction_data = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test eltype(sparse_uint32.counts) == UInt32
+            Test.@test sum(sparse_uint32.counts) == 70000
+
+            sparse_missing_result = joinpath(temp_dir, "missing_sparse_dir", "sparse_result.jld2")
+            sparse_custom_type = Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [sparse_uint16_fasta],
+                k = 1,
+                alphabet = :DNA,
+                result_file = sparse_missing_result,
+                count_element_type = UInt16,
+                skip_rarefaction_plot = true,
+                skip_rarefaction_data = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test eltype(sparse_custom_type.counts) == UInt16
+            Test.@test isfile(sparse_missing_result)
+
+            sparse_missing_rarefaction = Mycelia.fasta_list_to_sparse_kmer_counts(
+                fasta_list = [sparse_uint16_fasta, dense_bad_fasta],
+                k = 1,
+                alphabet = :DNA,
+                out_dir = joinpath(temp_dir, "sparse_missing_rarefaction"),
+                rarefaction_plot_basename = "missing_rarefaction",
+                skip_rarefaction_plot = false,
+                skip_rarefaction_data = true,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = true
+            )
+            Test.@test eltype(sparse_missing_rarefaction.counts) == UInt16
+            Test.@test size(sparse_missing_rarefaction.counts, 2) == 2
+            Test.@test sum(sparse_missing_rarefaction.counts[:, 1]) == 300
+            Test.@test sum(sparse_missing_rarefaction.counts[:, 2]) == 0
+            Test.@test !isfile(sparse_missing_rarefaction.rarefaction_data_path)
+
+            dense_temp_saved_result = joinpath(temp_dir, "dense_temp_saved_result.jld2")
+            dense_temp_saved = Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [dense_ok_fasta, dense_invalid_fasta],
+                k = 1,
+                alphabet = :DNA,
+                count_element_type = UInt16,
+                result_file = dense_temp_saved_result,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = true
+            )
+            Test.@test dense_temp_saved.successful_fasta_list == [dense_ok_fasta]
+            Test.@test length(dense_temp_saved.error_log) == 1
+            Test.@test eltype(dense_temp_saved.counts) == UInt16
+            Test.@test size(dense_temp_saved.counts, 2) == 1
+            Test.@test sum(dense_temp_saved.counts[:, 1]) == 10
+            Test.@test isfile(dense_temp_saved_result)
+            Test.@test JLD2.load_object(dense_temp_saved_result) == dense_temp_saved
+
+            dense_missing_result = joinpath(temp_dir, "missing_dense_temp", "dense_result.jld2")
+            Test.@test_throws InexactError Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [sparse_uint16_fasta],
+                k = 1,
+                alphabet = :DNA,
+                count_element_type = UInt8,
+                result_file = dense_missing_result,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = true
+            )
+            Test.@test !isfile(dense_missing_result)
+
+            dense_uint32 = Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [sparse_uint32_fasta],
+                k = 1,
+                alphabet = :DNA,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test eltype(dense_uint32.counts) == UInt32
+            Test.@test sum(dense_uint32.counts[:, 1]) == 70000
+
+            force_warning = try
+                Logging.with_logger(ThrowOnWarnLogger()) do
+                    Mycelia.fasta_list_to_dense_kmer_counts(
+                        fasta_list = [sparse_uint16_fasta],
+                        k = 12,
+                        alphabet = :DNA,
+                        force = true,
+                        force_threading = false,
+                        force_temp_files = true,
+                        force_progress_bars = false
+                    )
+                end
+                nothing
+            catch e
+                e
+            end
+            Test.@test force_warning isa ErrorException
+            Test.@test occursin(
+                "k should be a positive integer <= 11 for alphabet :DNA or :RNA",
+                sprint(showerror, force_warning)
             )
         end
     end
