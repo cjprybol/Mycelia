@@ -6,6 +6,30 @@ import Kmers
 import CodecZlib
 import JLD2
 import DelimitedFiles
+import Logging
+
+struct ThrowOnWarnLogger <: Logging.AbstractLogger end
+
+Logging.min_enabled_level(::ThrowOnWarnLogger) = Logging.Warn
+Logging.shouldlog(::ThrowOnWarnLogger, level, _module, group, id) = level >= Logging.Warn
+Logging.catch_exceptions(::ThrowOnWarnLogger) = false
+
+function Logging.handle_message(
+        ::ThrowOnWarnLogger,
+        level,
+        message,
+        _module,
+        group,
+        id,
+        file,
+        line;
+        kwargs...
+)
+    if level >= Logging.Warn
+        throw(ErrorException(string(message)))
+    end
+    return nothing
+end
 
 Test.@testset "K-mer Analysis Additional Coverage" begin
     mktempdir() do temp_dir
@@ -1126,7 +1150,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test JLD2.load_object(dense_temp_saved_result) == dense_temp_saved
 
             dense_missing_result = joinpath(temp_dir, "missing_dense_temp", "dense_result.jld2")
-            dense_temp_overflow = Mycelia.fasta_list_to_dense_kmer_counts(
+            Test.@test_throws InexactError Mycelia.fasta_list_to_dense_kmer_counts(
                 fasta_list = [sparse_uint16_fasta],
                 k = 1,
                 alphabet = :DNA,
@@ -1136,10 +1160,6 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 force_temp_files = true,
                 force_progress_bars = true
             )
-            Test.@test dense_temp_overflow.successful_fasta_list == [sparse_uint16_fasta]
-            Test.@test isempty(dense_temp_overflow.error_log)
-            Test.@test size(dense_temp_overflow.counts, 2) == 1
-            Test.@test sum(dense_temp_overflow.counts[:, 1]) == 0
             Test.@test !isfile(dense_missing_result)
 
             dense_uint32 = Mycelia.fasta_list_to_dense_kmer_counts(
@@ -1153,17 +1173,27 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test eltype(dense_uint32.counts) == UInt32
             Test.@test sum(dense_uint32.counts[:, 1]) == 70000
 
-            forced_dense_dna = Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = [sparse_uint16_fasta],
-                k = 12,
-                alphabet = :DNA,
-                force = true,
-                force_threading = false,
-                force_temp_files = true,
-                force_progress_bars = false
+            force_warning = try
+                Logging.with_logger(ThrowOnWarnLogger()) do
+                    Mycelia.fasta_list_to_dense_kmer_counts(
+                        fasta_list = [sparse_uint16_fasta],
+                        k = 12,
+                        alphabet = :DNA,
+                        force = true,
+                        force_threading = false,
+                        force_temp_files = true,
+                        force_progress_bars = false
+                    )
+                end
+                nothing
+            catch e
+                e
+            end
+            Test.@test force_warning isa ErrorException
+            Test.@test occursin(
+                "k should be a positive integer <= 11 for alphabet :DNA or :RNA",
+                sprint(showerror, force_warning)
             )
-            Test.@test size(forced_dense_dna.counts, 2) == 1
-            Test.@test sum(forced_dense_dna.counts[:, 1]) == 289
         end
     end
 end

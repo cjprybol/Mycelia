@@ -2152,8 +2152,14 @@ function fasta_list_to_dense_kmer_counts(;
                 row = kmer_index[kmer]
                 kmer_counts_matrix[row, col] = ValType(count)
             end
-        catch
-            # Optionally log error
+        catch e
+            Base.lock(lock)
+            try
+                push!(error_log, (orig_idx, sprint(showerror, e)))
+            finally
+                Base.unlock(lock)
+            end
+            rethrow()
         end
         Base.lock(lock)
         try
