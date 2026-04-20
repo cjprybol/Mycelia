@@ -641,7 +641,9 @@ end
 Collapse maximal linear unitigs (vertices with indegree=1 and outdegree=1) into
 single variable-length vertices while preserving aggregated evidence.
 Currently operates on graphs whose vertex data include a `sequence` field
-(`BioSequenceVertexData` or `QualityBioSequenceVertexData`).
+(`BioSequenceVertexData`/`QualityBioSequenceVertexData`, their
+lightweight/ultralight variants, and `StringVertexData` plus the lightweight
+and ultralight string variants).
 
 # Arguments
 - `graph::MetaGraphsNext.MetaGraph`: Graph to simplify in place

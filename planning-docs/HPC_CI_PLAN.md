@@ -9,7 +9,7 @@ Phased plan for integrating HPC-driven CI while keeping GitHub Actions as-is. Mi
 
 **Status (2026-04-04)**: overall completion is estimated at **60%**.
 
-- **Phase 1: DONE**. `ci/hpc/run_hpc_ci.sh` uploads the `hpc-extended`
+- **Phase 1: 100%** complete. `ci/hpc/run_hpc_ci.sh` uploads the `hpc-extended`
   Codecov flag, and the README/docs already expose the HPC coverage badge.
 - **Phase 2: 70%** complete. `ci/hpc/publish_hpc_results.sh`,
   `ci/hpc/render_hpc_results_site.jl`, the `hpc-results` publication flow, and
