@@ -44,6 +44,38 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     high_quality = [40, 40, 40, 40, 40, 40, 40, 40]  # High confidence
     mixed_quality = [20, 40, 30, 35, 25, 40, 30, 35]  # Mixed confidence
 
+    function reconstruct_sequences(graph)
+        reconstructed_sequences = Any[]
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+
+        for path_vector in paths
+            isempty(path_vector) && continue
+
+            try
+                first_vertex = first(path_vector)
+                vertex_type = typeof(first_vertex)
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
+
+                for (i, vertex_label) in enumerate(path_vector)
+                    push!(walk_steps, Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i)))
+                end
+
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
+
+                if reconstructed !== nothing
+                    push!(reconstructed_sequences, reconstructed)
+                    @info "Successfully reconstructed sequence: $(typeof(reconstructed)) of length $(length(reconstructed))"
+                end
+            catch e
+                @warn "Path reconstruction failed: $e"
+            end
+        end
+
+        return reconstructed_sequences
+    end
+
     """
     Comprehensive validation function for any graph type.
 
@@ -105,37 +137,8 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
         Test.@test !isempty(paths)
 
-        reconstruction_success = false
-        for path_vector in paths
-            if !isempty(path_vector)
-                try
-                    # Create properly typed WalkStep objects
-                    first_vertex = first(path_vector)
-                    vertex_type = typeof(first_vertex)
-                    walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
-
-                    for (i, vertex_label) in enumerate(path_vector)
-                        step = Mycelia.Rhizomorph.WalkStep(
-                            vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
-                        push!(walk_steps, step)
-                    end
-
-                    graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
-                    reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
-
-                    if reconstructed !== nothing
-                        reconstruction_success = true
-                        push!(reconstructed_sequences, reconstructed)
-                        @info "Successfully reconstructed sequence: $(typeof(reconstructed)) of length $(length(reconstructed))"
-                        break
-                    end
-                catch e
-                    @warn "Path reconstruction failed: $e"
-                end
-            end
-        end
-
-        Test.@test reconstruction_success
+        reconstructed_sequences = reconstruct_sequences(graph)
+        Test.@test !isempty(reconstructed_sequences)
 
         return reconstructed_sequences
     end
@@ -195,19 +198,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             Test.@test original_vertices == restored_vertices
             Test.@test original_edges == restored_edges
             Test.@test MetaGraphsNext.ne(restored_graph) == MetaGraphsNext.ne(graph)
-        end
-
-        for (i, seq) in enumerate(reconstructed_sequences)
-            if isa(seq, BioSequences.BioSequence)
-                # Test BioSequence consistency
-                seq_copy = deepcopy(seq)
-                Test.@test seq == seq_copy
-                Test.@test string(seq) == string(seq_copy)
-            elseif isa(seq, String)
-                # Test String consistency
-                seq_copy = String(seq)
-                Test.@test seq == seq_copy
-            end
+            restored_sequences = reconstruct_sequences(restored_graph)
+            Test.@test sort(string.(restored_sequences)) ==
+                        sort(string.(reconstructed_sequences))
         end
 
         return true
