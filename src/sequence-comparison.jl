@@ -2829,3 +2829,138 @@ function run_pyorthoani(;
     ani = parse_pyorthoani_output(output)
     return (; ani, output_path, raw_output = output)
 end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run PyOrthoANI's native batched all-vs-all API (`orthoani_pairwise`) over a set
+of FASTA files in a single `conda run` invocation.
+
+Batch mode amortizes the two big per-pair costs of `run_pyorthoani`:
+  - Conda-env activation (~2–3 s per call)
+  - BLAST database construction (one DB per genome, built once then reused)
+
+For an N-genome sweep this is typically 10–50× faster than calling
+`run_pyorthoani` in an N² loop. PyOrthoANI exploits symmetry internally and
+runs N·(N-1)/2 alignments, so the returned table has one row per unordered
+pair plus the diagonal entries.
+
+# Arguments
+- `fasta_files::Vector{String}`: Paths to genome FASTA files. At least two
+  are required. Each file is treated as one genome; if a file contains
+  multiple records, only the first record is used.
+- `blocksize::Int=1020`: Block size passed to PyOrthoANI. Matches the
+  OrthoANI paper's default and PyOrthoANI's internal default.
+- `threads::Union{Int,Nothing}=nothing`: Number of threads for the internal
+  BLAST calls. `nothing` defers to `os.cpu_count()` inside the Python
+  driver (PyOrthoANI's default).
+- `force_env::Bool=false`: Recreate the pyorthoani conda env before running.
+- `quiet::Bool=false`: Reduce conda output during environment setup.
+
+# Returns
+`DataFrames.DataFrame` with columns `query::String`, `reference::String`,
+`ani::Float64`. `query` and `reference` carry the FASTA file paths supplied
+in `fasta_files`. PyOrthoANI emits symmetric keys plus diagonal (self-vs-self
+at 100.0).
+
+# Example
+```julia
+fastas = ["phage_a.fasta", "phage_b.fasta", "phage_c.fasta"]
+df = Mycelia.orthoani_pairwise(fastas)
+# df has rows like (phage_a, phage_b, 99.4), (phage_a, phage_a, 100.0), …
+```
+
+See also: [`run_pyorthoani`](@ref) for a single-pair invocation, and
+[`skani_triangle`](@ref)/[`skani_dist`](@ref) for a substantially faster
+non-BLAST alternative based on hashing.
+"""
+function orthoani_pairwise(fasta_files::Vector{String};
+        blocksize::Int = 1020,
+        threads::Union{Int, Nothing} = nothing,
+        force_env::Bool = false,
+        quiet::Bool = false)
+    @assert length(fasta_files) >= 2 "orthoani_pairwise needs at least 2 FASTA files (got $(length(fasta_files)))"
+    for f in fasta_files
+        @assert isfile(f) "FASTA not found: $(f)"
+    end
+
+    ensure_pyorthoani_env(force = force_env, quiet = quiet)
+
+    # Drive PyOrthoANI's Python API directly so all pairs run in one process:
+    # one conda activation, one set of BLAST DB builds, one upper-triangle sweep.
+    # Output is delimited with markers so the Julia side can extract the JSON
+    # body even if conda-run prepends banner text to stdout.
+    threads_kwarg = isnothing(threads) ? "" : ",\n    threads=$(Int(threads))"
+    driver_code = """
+import json, sys
+from Bio import SeqIO
+from pyorthoani import orthoani_pairwise
+
+paths = sys.argv[1:]
+path_order = {p: i for i, p in enumerate(paths)}
+genomes = []
+for p in paths:
+    records = list(SeqIO.parse(p, "fasta"))
+    if not records:
+        sys.stderr.write("skipping empty FASTA: %s\\n" % p)
+        continue
+    rec = records[0]
+    # Identify each genome by its FASTA path so Julia can round-trip them.
+    rec.id = p
+    rec.description = p
+    genomes.append(rec)
+
+result = orthoani_pairwise(
+    genomes,
+    blocksize=$(Int(blocksize))$threads_kwarg,
+)
+seen = set()
+out = []
+for (a, b), v in result.items():
+    if a not in path_order or b not in path_order:
+        raise KeyError("unexpected PyOrthoANI result key: %r vs %r" % (a, b))
+    pair = (a, b) if path_order[a] <= path_order[b] else (b, a)
+    if pair in seen:
+        continue
+    seen.add(pair)
+    out.append({"query": pair[0], "reference": pair[1], "ani": float(v) * 100.0})
+
+expected_pairs = len(paths) * (len(paths) + 1) // 2
+if len(out) != expected_pairs:
+    raise RuntimeError(
+        "expected %d unordered ANI rows, got %d" % (expected_pairs, len(out))
+    )
+sys.stdout.write("===BEGIN_JSON===\\n")
+json.dump(out, sys.stdout)
+sys.stdout.write("\\n===END_JSON===\\n")
+"""
+    temp_dir = mktempdir()
+    raw = try
+        driver_path = joinpath(temp_dir, "mycelia_orthoani_pairwise.py")
+        write(driver_path, driver_code)
+
+        cmd = Cmd(vcat(
+            [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani",
+                "python", driver_path],
+            fasta_files
+        ))
+        read(cmd, String)
+    finally
+        rm(temp_dir; recursive = true, force = true)
+    end
+
+    # Extract the JSON body between our sentinels.
+    m_begin = findfirst("===BEGIN_JSON===", raw)
+    m_end = findfirst("===END_JSON===", raw)
+    (m_begin === nothing || m_end === nothing) && error(
+        "orthoani_pairwise: could not locate JSON markers in driver output. " *
+        "Full output:\n" * raw,
+    )
+    json_body = strip(raw[(last(m_begin) + 1):(first(m_end) - 1)])
+    parsed = JSON.parse(json_body)
+
+    queries = String[row["query"] for row in parsed]
+    refs = String[row["reference"] for row in parsed]
+    anis = Float64[row["ani"] for row in parsed]
+    return DataFrames.DataFrame(; query = queries, reference = refs, ani = anis)
+end
