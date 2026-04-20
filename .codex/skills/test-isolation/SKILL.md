@@ -56,6 +56,8 @@ of 34 PRs during a comprehensive audit (2026-04-04), causing:
 
 ### Checklist for PR Authors
 
+- These checks are surfaced automatically by the CI lint job and the repo
+  pre-commit hook, so violations should be visible before merge.
 - [ ] No `@eval Mycelia` in files without `zz_` prefix
 - [ ] If `@eval` is used, a save/restore pattern is in place
 - [ ] Prefer fake CONDA_RUNNER scripts over method replacement

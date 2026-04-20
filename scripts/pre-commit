@@ -62,7 +62,7 @@ for file in ${staged_test_jl}; do
         continue
     fi
     content=$(git show ":${file}" 2>/dev/null) || continue
-    eval_matches=$(printf '%s\n' "${content}" | grep -nE '@eval\s+Mycelia' 2>/dev/null || true)
+    eval_matches=$(printf '%s\n' "${content}" | grep -nE '@eval[[:space:]]*Mycelia' 2>/dev/null || true)
     if [[ -n "${eval_matches}" ]]; then
         echo "WARNING: @eval Mycelia in ${file} (no zz_ prefix):"
         printf '%s\n' "${eval_matches}" | while IFS= read -r line; do
