@@ -89,12 +89,30 @@ function load_kmer_results(filename::AbstractString)
             metadata["k"] = loaded_data["metadata/k"]
         end
         if haskey(loaded_data, "metadata/alphabet")
-            # Attempt to convert back to Symbol, fallback to string if error
-            try
-                metadata["alphabet"] = Symbol(loaded_data["metadata/alphabet"])
-            catch
-                @warn "Could not convert loaded alphabet '$(loaded_data["metadata/alphabet"])' back to Symbol. Storing as String."
-                metadata["alphabet"] = loaded_data["metadata/alphabet"]
+            loaded_alphabet = loaded_data["metadata/alphabet"]
+            if loaded_alphabet isa Symbol
+                metadata["alphabet"] = loaded_alphabet
+            elseif loaded_alphabet isa AbstractString
+                try
+                    metadata["alphabet"] = Symbol(loaded_alphabet)
+                catch error
+                    @warn(
+                        "Could not convert loaded alphabet back to Symbol. Preserving original value.",
+                        key = "metadata/alphabet",
+                        loaded_alphabet = loaded_alphabet,
+                        alphabet_type = typeof(loaded_alphabet),
+                        error = error
+                    )
+                    metadata["alphabet"] = loaded_alphabet
+                end
+            else
+                @warn(
+                    "Unexpected loaded alphabet metadata type. Preserving original value.",
+                    key = "metadata/alphabet",
+                    loaded_alphabet = loaded_alphabet,
+                    alphabet_type = typeof(loaded_alphabet)
+                )
+                metadata["alphabet"] = loaded_alphabet
             end
         end
         # Add other metadata fields if they exist
@@ -2023,7 +2041,7 @@ function fasta_list_to_dense_kmer_counts(;
     progress1 = show_progress ?
                 ProgressMeter.Progress(num_files; desc = "Counting: ",
         barglyphs = ProgressMeter.BarGlyphs("[=> ]"), color = :cyan) : nothing
-    lock = use_threading ? Base.ReentrantLock() : nothing
+    lock = Base.ReentrantLock()
     error_log = Vector{Tuple{Int, String}}()
     successful_indices = Vector{Int}()
     max_observed_count_ref = Ref{Int}(0)
@@ -2694,7 +2712,8 @@ function multi_scale_kmer_analysis(sequences::Vector{BioSequences.LongDNA{4}};
         # Select consensus k-mers (high-frequency, high-quality)
         sorted_kmers = sort(collect(kmer_counts), by = x->x[2], rev = true)
         consensus_threshold = max(3, Int(ceil(0.1 * length(sorted_kmers))))
-        consensus_kmers[k] = [kmer for (kmer, count) in sorted_kmers[1:consensus_threshold]]
+        consensus_limit = min(consensus_threshold, length(sorted_kmers))
+        consensus_kmers[k] = [kmer for (kmer, count) in sorted_kmers[1:consensus_limit]]
 
         # Estimate coverage
         if !isempty(kmer_counts)
