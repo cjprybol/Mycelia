@@ -8,7 +8,6 @@ import Test
 import Mycelia
 import FASTX
 import DataFrames
-import Random
 import StableRNGs
 
 Test.@testset "Gold-Standard Genome Comparison Tests" begin
@@ -484,77 +483,36 @@ Indels  5  20
         end
     end
 
-    Test.@testset "POCP (external)" begin
-        if !(run_external && conda_available)
-            Test.@test_skip "POCP requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
-        else
-            rng = StableRNGs.StableRNG(19)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
-                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
-
-            random_protein = len -> String(rand(rng, aa_alphabet, len))
-            function mutate_protein(seq::AbstractString, mutation_rate::Float64)
-                seq_chars = collect(seq)
-                for i in eachindex(seq_chars)
-                    if rand(rng) < mutation_rate
-                        original = seq_chars[i]
-                        candidates = filter(residue -> residue != original, aa_alphabet)
-                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
-                    end
-                end
-                return String(seq_chars)
-            end
-
-            temp_dir = mktempdir()
-            query_fasta = joinpath(temp_dir, "query_proteins.fasta")
-            reference_fasta = joinpath(temp_dir, "reference_proteins.fasta")
-
-            ref_p1 = random_protein(220)
-            ref_p2 = random_protein(180)
-            query_p1 = mutate_protein(ref_p1, 0.02)
-            query_p2 = mutate_protein(ref_p2, 0.02)
-
-            write(reference_fasta, ">ref_p1\n$(ref_p1)\n>ref_p2\n$(ref_p2)\n")
-            write(query_fasta, ">query_p1\n$(query_p1)\n>query_p2\n$(query_p2)\n")
-
-            result = Mycelia.pocp(
-                reference_fasta,
-                query_fasta;
-                proteins_a = reference_fasta,
-                proteins_b = query_fasta,
-                tool = :blastp,
-                threads = 1,
-                outdir = joinpath(temp_dir, "pocp"),
-                force = true
-            )
-
-            Test.@test result.pocp isa Float64
-            Test.@test result.pocp >= 90.0
-            Test.@test result.pocpu_besthit >= 90.0
-            Test.@test result.pocpu_rbh >= 90.0
-            Test.@test result.n_rbh == 2
-
-            rm(temp_dir; recursive = true, force = true)
-        end
-    end
-
     function build_pocp_test_helpers(rng)
         aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
             'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
 
         random_protein = len -> String(rand(rng, aa_alphabet, len))
 
-        function mutate_to_target_identity(seq::AbstractString, target_identity::Float64)
+        function mutate_protein(seq::AbstractString, mutation_rate::Float64)
             seq_chars = collect(seq)
-            n_positions = length(seq_chars)
-            n_keep = round(Int, n_positions * target_identity)
-            keep_indices = Set(Random.randperm(rng, n_positions)[1:n_keep])
             for i in eachindex(seq_chars)
-                if !(i in keep_indices)
+                if rand(rng) < mutation_rate
                     original = seq_chars[i]
                     candidates = filter(residue -> residue != original, aa_alphabet)
                     seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
                 end
+            end
+            return String(seq_chars)
+        end
+
+        function mutate_to_target_identity(seq::AbstractString, target_identity::Float64)
+            @assert 0.0 <= target_identity <= 1.0 "target_identity must be in [0, 1]"
+            seq_chars = collect(seq)
+            kept_positions = 0
+            for i in eachindex(seq_chars)
+                if floor(Int, i * target_identity) > kept_positions
+                    kept_positions += 1
+                    continue
+                end
+                original = seq_chars[i]
+                candidates = filter(residue -> residue != original, aa_alphabet)
+                seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
             end
             return String(seq_chars)
         end
@@ -569,7 +527,47 @@ Indels  5  20
             return path
         end
 
-        return aa_alphabet, random_protein, mutate_to_target_identity, write_protein_fasta
+        return random_protein, mutate_protein, mutate_to_target_identity, write_protein_fasta
+    end
+
+    Test.@testset "POCP (external)" begin
+        if !(run_external && conda_available)
+            Test.@test_skip "POCP requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
+        else
+            rng = StableRNGs.StableRNG(19)
+            random_protein, mutate_protein,
+            _, write_protein_fasta = build_pocp_test_helpers(rng)
+
+            mktempdir() do temp_dir
+                query_fasta = joinpath(temp_dir, "query_proteins.fasta")
+                reference_fasta = joinpath(temp_dir, "reference_proteins.fasta")
+
+                ref_p1 = random_protein(220)
+                ref_p2 = random_protein(180)
+                query_p1 = mutate_protein(ref_p1, 0.02)
+                query_p2 = mutate_protein(ref_p2, 0.02)
+
+                write_protein_fasta(reference_fasta, ["ref_p1" => ref_p1, "ref_p2" => ref_p2])
+                write_protein_fasta(query_fasta, ["query_p1" => query_p1, "query_p2" => query_p2])
+
+                result = Mycelia.pocp(
+                    reference_fasta,
+                    query_fasta;
+                    proteins_a = reference_fasta,
+                    proteins_b = query_fasta,
+                    tool = :blastp,
+                    threads = 1,
+                    outdir = joinpath(temp_dir, "pocp"),
+                    force = true
+                )
+
+                Test.@test result.pocp isa Float64
+                Test.@test result.pocp >= 90.0
+                Test.@test result.pocpu_besthit >= 90.0
+                Test.@test result.pocpu_rbh >= 90.0
+                Test.@test result.n_rbh == 2
+            end
+        end
     end
 
     Test.@testset "POCP parameter regression (external)" begin
@@ -577,42 +575,44 @@ Indels  5  20
             Test.@test_skip "POCP regression requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(119)
-            aa_alphabet, random_protein,
-            mutate_to_target_identity, write_protein_fasta = build_pocp_test_helpers(rng)
+            random_protein, _, mutate_to_target_identity,
+            write_protein_fasta = build_pocp_test_helpers(rng)
             mktempdir() do temp_dir
-                shared_segment = random_protein(150)
-                coverage_ref = random_protein(70) * shared_segment
-                coverage_query = shared_segment * random_protein(70)
+                shared_segment = random_protein(120)
+                coverage_ref = random_protein(100) * shared_segment
+                coverage_query = shared_segment * random_protein(100)
 
                 identity_ref = random_protein(220)
-                identity_query = mutate_to_target_identity(identity_ref, 0.55)
+                identity_query = mutate_to_target_identity(identity_ref, 0.45)
 
-                reference_fasta = joinpath(temp_dir, "reference_boundary_proteins.fasta")
-                query_fasta = joinpath(temp_dir, "query_boundary_proteins.fasta")
+                reference_fasta = joinpath(temp_dir, "reference_regression_proteins.fasta")
+                query_fasta = joinpath(temp_dir, "query_regression_proteins.fasta")
 
                 write_protein_fasta(reference_fasta,
                     [
                         "id_ref" => identity_ref,
-                        "cov_a" => coverage_ref,
+                        "cov_ref" => coverage_ref,
                         "decoy_ref_1" => random_protein(180),
                         "decoy_ref_2" => random_protein(175)
                     ])
                 write_protein_fasta(query_fasta,
                     [
                         "id_qry" => identity_query,
-                        "cov_b" => coverage_query,
+                        "cov_qry" => coverage_query,
                         "decoy_query_1" => random_protein(180),
                         "decoy_query_2" => random_protein(175)
                     ])
 
-                baseline = Mycelia.pocp(
+                permissive = Mycelia.pocp(
                     reference_fasta,
                     query_fasta;
                     proteins_a = reference_fasta,
                     proteins_b = query_fasta,
                     tool = :blastp,
+                    min_id = 25.0,
+                    min_len_frac = 0.35,
                     threads = 1,
-                    outdir = joinpath(temp_dir, "baseline"),
+                    outdir = joinpath(temp_dir, "permissive"),
                     force = true
                 )
                 stricter_identity = Mycelia.pocp(
@@ -622,6 +622,7 @@ Indels  5  20
                     proteins_b = query_fasta,
                     tool = :blastp,
                     min_id = 65.0,
+                    min_len_frac = 0.35,
                     threads = 1,
                     outdir = joinpath(temp_dir, "stricter_identity"),
                     force = true
@@ -632,23 +633,26 @@ Indels  5  20
                     proteins_a = reference_fasta,
                     proteins_b = query_fasta,
                     tool = :blastp,
+                    min_id = 25.0,
                     min_len_frac = 0.75,
                     threads = 1,
                     outdir = joinpath(temp_dir, "stricter_coverage"),
                     force = true
                 )
 
-                Test.@test baseline.pocp > 0.0
-                Test.@test baseline.n_rbh >= 2
+                Test.@test permissive.pocp > 0.0
+                Test.@test permissive.n_rbh == 2
 
-                Test.@test stricter_identity.pocp <= baseline.pocp
-                Test.@test stricter_identity.pocpu_besthit <= baseline.pocpu_besthit
-                Test.@test stricter_identity.n_rbh < baseline.n_rbh
+                Test.@test stricter_identity.pocp < permissive.pocp
+                Test.@test stricter_identity.pocpu_besthit < permissive.pocpu_besthit
+                Test.@test stricter_identity.n_rbh == 1
+                Test.@test sort(collect(skipmissing(stricter_identity.rbh_table.query_a))) ==
+                           ["cov_ref"]
 
-                Test.@test stricter_coverage.pocp <= baseline.pocp
-                Test.@test stricter_coverage.pocpu_besthit <= baseline.pocpu_besthit
+                Test.@test stricter_coverage.pocp < permissive.pocp
+                Test.@test stricter_coverage.pocpu_besthit < permissive.pocpu_besthit
                 Test.@test stricter_coverage.n_rbh == 1
-                Test.@test collect(skipmissing(stricter_coverage.rbh_table.query_a)) ==
+                Test.@test sort(collect(skipmissing(stricter_coverage.rbh_table.query_a))) ==
                            ["id_ref"]
             end
         end
