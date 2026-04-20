@@ -67,53 +67,54 @@ Test.@testset "Read Quality Control" begin
     end
 
     Test.@testset "analyze_fastq_quality and summarize_fastq" begin
-        temp_dir = mktempdir()
-        fastq_path = joinpath(temp_dir, "reads.fastq")
-        records = [
-            Mycelia.fastq_record(identifier = "gc_high", sequence = "GCGC", quality_scores = q40(4)),
-            Mycelia.fastq_record(identifier = "gc_low", sequence = "ATATAT", quality_scores = fill(30, 6))
-        ]
-        Mycelia.write_fastq(records = records, filename = fastq_path)
+        mktempdir() do temp_dir
+            fastq_path = joinpath(temp_dir, "reads.fastq")
+            records = [
+                Mycelia.fastq_record(identifier = "gc_high", sequence = "GCGC", quality_scores = q40(4)),
+                Mycelia.fastq_record(identifier = "gc_low", sequence = "ATATAT", quality_scores = fill(30, 6))
+            ]
+            Mycelia.write_fastq(records = records, filename = fastq_path)
 
-        quality_stats = Mycelia.analyze_fastq_quality(fastq_path)
-        Test.@test quality_stats.n_reads == 2
-        Test.@test quality_stats.mean_quality ≈ 35.0
-        Test.@test quality_stats.mean_length ≈ 5.0
-        Test.@test quality_stats.gc_content ≈ 40.0
-        Test.@test quality_stats.quality_distribution.q20_percent ≈ 100.0
-        Test.@test quality_stats.quality_distribution.q30_percent ≈ 100.0
-        Test.@test quality_stats.quality_distribution.q40_percent ≈ 50.0
+            quality_stats = Mycelia.analyze_fastq_quality(fastq_path)
+            Test.@test quality_stats.n_reads == 2
+            Test.@test quality_stats.mean_quality ≈ 35.0
+            Test.@test quality_stats.mean_length ≈ 5.0
+            Test.@test quality_stats.gc_content ≈ 40.0
+            Test.@test quality_stats.quality_distribution.q20_percent ≈ 100.0
+            Test.@test quality_stats.quality_distribution.q30_percent ≈ 100.0
+            Test.@test quality_stats.quality_distribution.q40_percent ≈ 50.0
 
-        summary_result = mktemp() do _, io
-            summary = redirect_stdout(io) do
-                Mycelia.summarize_fastq("test sample", fastq_path, 20)
+            summary_result = mktemp() do _, io
+                summary = redirect_stdout(io) do
+                    Mycelia.summarize_fastq("test sample", fastq_path, 20)
+                end
+                flush(io)
+                seekstart(io)
+                text = read(io, String)
+                (summary, text)
             end
-            flush(io)
-            seekstart(io)
-            text = read(io, String)
-            (summary, text)
-        end
-        summary, summary_text = summary_result
+            summary, summary_text = summary_result
 
-        Test.@test summary.read_lengths == [4, 6]
-        Test.@test summary.coverage ≈ 0.5
-        Test.@test summary.error_rate_est ≈ Mycelia.q_value_to_error_rate(35.0)
-        Test.@test occursin("test sample", summary_text)
-        Test.@test occursin("reads: 2", summary_text)
-        Test.@test occursin("estimated coverage: 0.5x", summary_text)
+            Test.@test summary.read_lengths == [4, 6]
+            Test.@test summary.coverage ≈ 0.5
+            Test.@test summary.error_rate_est ≈ Mycelia.q_value_to_error_rate(35.0)
+            Test.@test occursin("test sample", summary_text)
+            Test.@test occursin("reads: 2", summary_text)
+            Test.@test occursin("estimated coverage: 0.5x", summary_text)
 
-        missing_result = mktemp() do _, io
-            missing_summary = redirect_stdout(io) do
-                Mycelia.summarize_fastq("missing sample", joinpath(temp_dir, "missing.fastq"), 20)
+            missing_result = mktemp() do _, io
+                missing_summary = redirect_stdout(io) do
+                    Mycelia.summarize_fastq("missing sample", joinpath(temp_dir, "missing.fastq"), 20)
+                end
+                flush(io)
+                seekstart(io)
+                text = read(io, String)
+                (missing_summary, text)
             end
-            flush(io)
-            seekstart(io)
-            text = read(io, String)
-            (missing_summary, text)
-        end
-        missing_summary, missing_output = missing_result
+            missing_summary, missing_output = missing_result
 
-        Test.@test missing_summary === nothing
-        Test.@test occursin("missing file, skipping", missing_output)
+            Test.@test missing_summary === nothing
+            Test.@test occursin("missing file, skipping", missing_output)
+        end
     end
 end
