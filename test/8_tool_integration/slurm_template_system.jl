@@ -39,11 +39,16 @@ end
 
 function _with_git_email(f::Function, email::AbstractString)
     mktempdir() do repo_dir
-        run(`git -C $repo_dir init --quiet`)
-        run(`git -C $repo_dir config user.name TestUser`)
-        run(`git -C $repo_dir config user.email $email`)
-        cd(repo_dir) do
-            return f()
+        _with_env(Dict(
+            "GIT_AUTHOR_EMAIL" => nothing,
+            "GIT_COMMITTER_EMAIL" => nothing
+        )) do
+            run(`git -C $repo_dir init --quiet`)
+            run(`git -C $repo_dir config user.name TestUser`)
+            run(`git -C $repo_dir config user.email $email`)
+            cd(repo_dir) do
+                return f()
+            end
         end
     end
 end
