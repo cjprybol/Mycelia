@@ -1,6 +1,61 @@
 import Test
 import Mycelia
 
+@eval Mycelia begin
+    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+        return nothing
+    end
+end
+
+function with_fake_conda_runner(f::Function)
+    runner_path = Mycelia.CONDA_RUNNER
+    runner_dir = dirname(runner_path)
+    backup_dir = mktempdir()
+    backup_path = joinpath(backup_dir, "conda")
+
+    if isfile(runner_path)
+        mv(runner_path, backup_path; force = true)
+    end
+
+    mkpath(runner_dir)
+    open(runner_path, "w") do io
+        write(io, raw"""
+        #!/bin/sh
+        set -eu
+
+        if [ "${5:-}" != "claMLST" ]; then
+          echo "unexpected command: $*" >&2
+          exit 1
+        fi
+
+        case "${6:-}" in
+          import)
+            mkdir -p "$(dirname "$7")"
+            : > "$7"
+            ;;
+          search)
+            printf 'scheme\tst\nfake\t1\n'
+            ;;
+          *)
+            echo "unexpected subcommand: ${6:-}" >&2
+            exit 1
+            ;;
+        esac
+        """)
+    end
+    chmod(runner_path, 0o755)
+
+    try
+        return f()
+    finally
+        rm(runner_path; force = true)
+        if isfile(backup_path)
+            mv(backup_path, runner_path; force = true)
+        end
+        rm(backup_dir; recursive = true, force = true)
+    end
+end
+
 Test.@testset "Classification wrapper executor coverage" begin
     temp_dir = mktempdir()
     try
@@ -70,6 +125,34 @@ Test.@testset "Classification wrapper cache and compatibility" begin
         Test.@test alias_output == joinpath(temp_dir, "alias_out", "alias_clamlst.tsv")
         Test.@test length(alias_executor.jobs) == 1
         Test.@test occursin(alias_db_path, alias_executor.jobs[1].cmd)
+    finally
+        rm(temp_dir; recursive = true, force = true)
+    end
+end
+
+Test.@testset "Classification wrapper uncached local execution" begin
+    temp_dir = mktempdir()
+    try
+        genome_file = joinpath(temp_dir, "local.fasta")
+        open(genome_file, "w") do io
+            println(io, ">contig1")
+            println(io, "ATGCATGC")
+        end
+
+        db_path = joinpath(temp_dir, "local", "claMLSTDB")
+        outdir = joinpath(temp_dir, "local_out")
+        output_tsv = with_fake_conda_runner() do
+            Mycelia.run_clamlst(
+                genome_file;
+                db_path = db_path,
+                outdir = outdir
+            )
+        end
+
+        Test.@test output_tsv == joinpath(outdir, "local_clamlst.tsv")
+        Test.@test isfile(output_tsv)
+        Test.@test isfile(db_path)
+        Test.@test read(output_tsv, String) == "scheme\tst\nfake\t1\n"
     finally
         rm(temp_dir; recursive = true, force = true)
     end
