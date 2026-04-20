@@ -618,25 +618,38 @@ Indels  5  20
             write(b_fasta, ">b\n$(a_seq)\n")
             write(c_fasta, ">c\n$(b_seq)\n")
 
-            df = Mycelia.orthoani_pairwise(
-                [a_fasta, b_fasta, c_fasta];
-                threads = 1
-            )
+            fastas = [a_fasta, b_fasta, c_fasta]
+            df = Mycelia.orthoani_pairwise(fastas)
 
-            Test.@test DataFrames.nrow(df) >= 3  # upper triangle (and diag, if emitted)
+            Test.@test DataFrames.nrow(df) == 6
             Test.@test all(>=(95.0), df.ani)
             Test.@test all(<=(100.0), df.ani)
 
-            # Diagonal rows (self-vs-self) should be exactly 100 when present.
+            fasta_order = Dict(path => i for (i, path) in enumerate(fastas))
+            observed_pairs = Set(
+                fasta_order[row.query] <= fasta_order[row.reference] ?
+                (row.query, row.reference) : (row.reference, row.query)
+                for row in DataFrames.eachrow(df)
+            )
+            expected_pairs = Set([
+                (a_fasta, a_fasta),
+                (a_fasta, b_fasta),
+                (a_fasta, c_fasta),
+                (b_fasta, b_fasta),
+                (b_fasta, c_fasta),
+                (c_fasta, c_fasta),
+            ])
+            Test.@test observed_pairs == expected_pairs
+
+            # Diagonal rows (self-vs-self) should be exactly 100.
             diag_rows = df[df.query .== df.reference, :]
-            if DataFrames.nrow(diag_rows) > 0
-                Test.@test all(isapprox.(diag_rows.ani, 100.0; atol = 1e-6))
-            end
+            Test.@test DataFrames.nrow(diag_rows) == 3
+            Test.@test all(isapprox.(diag_rows.ani, 100.0; atol = 1e-6))
 
             # The batched output must reference the actual input paths so callers
             # can round-trip from dataframe rows back to their source FASTAs.
-            Test.@test issubset(unique(df.query), [a_fasta, b_fasta, c_fasta])
-            Test.@test issubset(unique(df.reference), [a_fasta, b_fasta, c_fasta])
+            Test.@test all(path -> path in fastas, df.query)
+            Test.@test all(path -> path in fastas, df.reference)
 
             rm(temp_dir; recursive = true, force = true)
         end

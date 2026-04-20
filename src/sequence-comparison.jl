@@ -2890,13 +2890,14 @@ function orthoani_pairwise(fasta_files::Vector{String};
     # one conda activation, one set of BLAST DB builds, one upper-triangle sweep.
     # Output is delimited with markers so the Julia side can extract the JSON
     # body even if conda-run prepends banner text to stdout.
-    threads_expr = isnothing(threads) ? "None" : string(Int(threads))
+    threads_kwarg = isnothing(threads) ? "" : ",\n    threads=$(Int(threads))"
     driver_code = """
 import json, sys
 from Bio import SeqIO
 from pyorthoani import orthoani_pairwise
 
 paths = sys.argv[1:]
+path_order = {p: i for i, p in enumerate(paths)}
 genomes = []
 for p in paths:
     records = list(SeqIO.parse(p, "fasta"))
@@ -2911,23 +2912,42 @@ for p in paths:
 
 result = orthoani_pairwise(
     genomes,
-    blocksize=$(Int(blocksize)),
-    threads=$threads_expr,
+    blocksize=$(Int(blocksize))$threads_kwarg,
 )
-out = [{"query": a, "reference": b, "ani": float(v)} for (a, b), v in result.items()]
+seen = set()
+out = []
+for (a, b), v in result.items():
+    if a not in path_order or b not in path_order:
+        raise KeyError("unexpected PyOrthoANI result key: %r vs %r" % (a, b))
+    pair = (a, b) if path_order[a] <= path_order[b] else (b, a)
+    if pair in seen:
+        continue
+    seen.add(pair)
+    out.append({"query": pair[0], "reference": pair[1], "ani": float(v) * 100.0})
+
+expected_pairs = len(paths) * (len(paths) + 1) // 2
+if len(out) != expected_pairs:
+    raise RuntimeError(
+        "expected %d unordered ANI rows, got %d" % (expected_pairs, len(out))
+    )
 sys.stdout.write("===BEGIN_JSON===\\n")
 json.dump(out, sys.stdout)
 sys.stdout.write("\\n===END_JSON===\\n")
 """
-    driver_path = joinpath(mktempdir(), "mycelia_orthoani_pairwise.py")
-    write(driver_path, driver_code)
+    temp_dir = mktempdir()
+    raw = try
+        driver_path = joinpath(temp_dir, "mycelia_orthoani_pairwise.py")
+        write(driver_path, driver_code)
 
-    cmd = Cmd(vcat(
-        [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani",
-            "python", driver_path],
-        fasta_files
-    ))
-    raw = read(cmd, String)
+        cmd = Cmd(vcat(
+            [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani",
+                "python", driver_path],
+            fasta_files
+        ))
+        read(cmd, String)
+    finally
+        rm(temp_dir; recursive = true, force = true)
+    end
 
     # Extract the JSON body between our sentinels.
     m_begin = findfirst("===BEGIN_JSON===", raw)
