@@ -586,25 +586,69 @@ const _KSP_MIN_WEIGHT = 1e-10
 """
     _total_outgoing_weight(graph, vertex)
 
-Sum of all outgoing edge weights from `vertex`. Used for normalizing
-transition probabilities in Dijkstra-based path finding.
+Sum the original outgoing edge weights from `vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `vertex`: Vertex label whose outgoing mass should be measured
+
+# Returns
+- `Float64`: Total outgoing edge weight from `vertex`, floored at `_KSP_MIN_WEIGHT`
+
+# Example
+```julia
+total = Mycelia.Rhizomorph._total_outgoing_weight(weighted, source)
+```
 """
 function _total_outgoing_weight(graph::MetaGraphsNext.MetaGraph, vertex)
     total = 0.0
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         if src == vertex
-            total += edge_data_weight(graph[src, dst])
+            total += max(edge_data_weight(graph[src, dst]), _KSP_MIN_WEIGHT)
         end
     end
-    return total
+    return max(total, _KSP_MIN_WEIGHT)
+end
+
+function _total_outgoing_weight(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex,
+        strand::StrandOrientation
+)
+    total = 0.0
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        if src != vertex
+            continue
+        end
+        edge_data = graph[src, dst]
+        edge_src_strand = _normalize_strand(edge_data.src_strand)
+        if edge_src_strand != strand
+            continue
+        end
+        total += max(edge_data_weight(edge_data), _KSP_MIN_WEIGHT)
+    end
+    return max(total, _KSP_MIN_WEIGHT)
 end
 
 """
     _total_outgoing_weight_excluding(graph, vertex, excluded_edges)
 
-Sum of outgoing edge weights from `vertex`, skipping edges in `excluded_edges`.
-Used to compute correct transition probabilities when some edges are suppressed
-during Yen's k-shortest-paths spur search.
+Sum the remaining outgoing edge weights from `vertex` after suppressing
+`excluded_edges`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `vertex`: Vertex label whose outgoing mass should be measured
+- `excluded_edges::Set{Tuple{T, T}}`: Edge label pairs `(src, dst)` to omit
+
+# Returns
+- `Float64`: Remaining outgoing edge weight from `vertex`, floored at `_KSP_MIN_WEIGHT`
+
+# Example
+```julia
+excluded = Set([(source, blocked_neighbor)])
+total = Mycelia.Rhizomorph._total_outgoing_weight_excluding(weighted, source, excluded)
+```
 """
 function _total_outgoing_weight_excluding(
         graph::MetaGraphsNext.MetaGraph,
@@ -624,38 +668,63 @@ end
 """
     _build_graph_path_from_vertices(graph, vertices)
 
-Construct a `GraphPath` from an ordered list of vertex labels, computing
-transition probabilities from edge weights.
+Construct a `GraphPath` from an ordered list of vertex labels or `(vertex, strand)`
+states, computing transition probabilities from the original graph weights.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `vertices`: Ordered path as vertex labels or `(vertex, strand)` states
+
+# Returns
+- `GraphPath`: Path annotated with per-step and cumulative probabilities
+
+# Example
+```julia
+path = Mycelia.Rhizomorph._build_graph_path_from_vertices(weighted, [source, target])
+```
 """
 function _build_graph_path_from_vertices(
         graph::MetaGraphsNext.MetaGraph,
         vertices::Vector{T}
 ) where {T}
-    if isempty(vertices)
+    path_states = Tuple{T, StrandOrientation}[(vertex, Forward) for vertex in vertices]
+    return _build_graph_path_from_vertices(graph, path_states)
+end
+
+function _build_graph_path_from_vertices(
+        graph::MetaGraphsNext.MetaGraph,
+        path_states::Vector{Tuple{T, StrandOrientation}}
+) where {T}
+    if isempty(path_states)
         return GraphPath(WalkStep{T}[])
     end
 
     steps = WalkStep{T}[]
     cumulative_prob = 1.0
 
-    for (i, v) in enumerate(vertices)
+    for (i, (vertex, strand)) in enumerate(path_states)
         if i == 1
-            push!(steps, WalkStep(v, Forward, 1.0, 1.0))
+            push!(steps, WalkStep(vertex, strand, 1.0, 1.0))
         else
-            prev = vertices[i - 1]
-            if !haskey(graph, prev, v)
+            prev_vertex, prev_strand = path_states[i - 1]
+            if !haskey(graph, prev_vertex, vertex)
                 throw(ArgumentError(
-                    "Cannot build path: no edge from $(prev) to $(v) in graph"))
+                    "Cannot build path: no edge from $(prev_vertex) to $(vertex) in graph"))
             end
-            total_out = _total_outgoing_weight(graph, prev)
-            if total_out > 0.0
-                edge_w = edge_data_weight(graph[prev, v])
-                step_prob = edge_w / total_out
-            else
-                step_prob = _KSP_MIN_WEIGHT
+            edge_data = graph[prev_vertex, vertex]
+            edge_src_strand = _normalize_strand(edge_data.src_strand)
+            edge_dst_strand = _normalize_strand(edge_data.dst_strand)
+            if edge_src_strand != prev_strand || edge_dst_strand != strand
+                throw(ArgumentError(
+                    "Cannot build path: edge $(prev_vertex) => $(vertex) uses " *
+                    "strand $(edge_src_strand) => $(edge_dst_strand), not " *
+                    "$(prev_strand) => $(strand)"))
             end
+            total_out = _total_outgoing_weight(graph, prev_vertex, prev_strand)
+            edge_w = max(edge_data_weight(edge_data), _KSP_MIN_WEIGHT)
+            step_prob = edge_w / total_out
             cumulative_prob *= step_prob
-            push!(steps, WalkStep(v, Forward, step_prob, cumulative_prob))
+            push!(steps, WalkStep(vertex, strand, step_prob, cumulative_prob))
         end
     end
 
@@ -675,13 +744,28 @@ Returns a `GraphPath` or `nothing` if no path exists.
 - `target`: Target vertex label
 - `excluded_vertices::Set`: Vertex labels to skip during traversal
 - `excluded_edges::Set{Tuple}`: Edge label pairs `(src, dst)` to skip
+
+# Returns
+- `Union{Nothing, GraphPath}`: Most probable constrained path, or `nothing` if unreachable
+
+# Example
+```julia
+path = Mycelia.Rhizomorph._shortest_path_excluding(
+    weighted,
+    source,
+    target,
+    Set([blocked_vertex]),
+    Set([(source, blocked_neighbor)]),
+)
+```
 """
 function _shortest_path_excluding(
         graph::MetaGraphsNext.MetaGraph,
         source::T,
         target::T,
         excluded_vertices::Set{T},
-        excluded_edges::Set{Tuple{T, T}}
+        excluded_edges::Set{Tuple{T, T}};
+        initial_states::Union{Nothing, Vector{Tuple{T, StrandOrientation}}} = nothing
 ) where {T}
     if source in excluded_vertices || target in excluded_vertices
         return nothing
@@ -691,60 +775,69 @@ function _shortest_path_excluding(
         return nothing
     end
 
-    distances = Dict{T, Float64}()
-    predecessors = Dict{T, Union{Nothing, T}}()
-    pq = DataStructures.PriorityQueue{T, Float64}()
+    start_states = if isnothing(initial_states)
+        [(source, Forward), (source, Reverse)]
+    else
+        initial_states
+    end
 
-    distances[source] = 0.0
-    predecessors[source] = nothing
-    DataStructures.enqueue!(pq, source, 0.0)
+    distances = Dict{Tuple{T, StrandOrientation}, Float64}()
+    predecessors = Dict{
+        Tuple{T, StrandOrientation}, Union{Nothing, Tuple{T, StrandOrientation}}}()
+    visited = Set{Tuple{T, StrandOrientation}}()
+    pq = DataStructures.PriorityQueue{Tuple{T, StrandOrientation}, Float64}()
+
+    for start_state in start_states
+        distances[start_state] = 0.0
+        predecessors[start_state] = nothing
+        DataStructures.enqueue!(pq, start_state, 0.0)
+    end
 
     while !isempty(pq)
-        current = DataStructures.dequeue!(pq)
+        current_state = DataStructures.dequeue!(pq)
 
-        if current == target
-            # Reconstruct path
-            path_vertices = T[]
-            node = current
-            while node !== nothing
-                pushfirst!(path_vertices, node)
-                node = predecessors[node]
-            end
-            return _build_graph_path_from_vertices(graph, path_vertices)
-        end
-
-        total_out = _total_outgoing_weight(graph, current)
-        if total_out <= 0.0
+        if current_state in visited
             continue
         end
+        push!(visited, current_state)
 
-        for (src, dst) in MetaGraphsNext.edge_labels(graph)
-            if src != current
-                continue
+        current, current_strand = current_state
+
+        if current == target
+            path_states = Tuple{T, StrandOrientation}[]
+            node = current_state
+            while node !== nothing
+                pushfirst!(path_states, node)
+                node = predecessors[node]
             end
-            if dst in excluded_vertices
-                continue
-            end
-            if (src, dst) in excluded_edges
+            return _build_graph_path_from_vertices(graph, path_states)
+        end
+
+        total_out = _total_outgoing_weight(graph, current, current_strand)
+
+        for transition in _get_valid_transitions(graph, current, current_strand)
+            src = current
+            dst = transition[:target_vertex]
+            if dst in excluded_vertices || (src, dst) in excluded_edges
                 continue
             end
 
-            edge_w = edge_data_weight(graph[src, dst])
+            next_state = (dst, transition[:target_strand])
+            edge_w = max(edge_data_weight(transition[:edge_data]), _KSP_MIN_WEIGHT)
             transition_prob = edge_w / total_out
             if transition_prob <= 0.0
                 continue
             end
             distance = -log(transition_prob)
-            new_distance = distances[current] + distance
+            new_distance = distances[current_state] + distance
 
-            if !haskey(distances, dst) || new_distance < distances[dst]
-                distances[dst] = new_distance
-                predecessors[dst] = current
-                # PriorityQueue: enqueue or update priority
-                if haskey(pq, dst)
-                    pq[dst] = new_distance
+            if !haskey(distances, next_state) || new_distance < distances[next_state]
+                distances[next_state] = new_distance
+                predecessors[next_state] = current_state
+                if haskey(pq, next_state)
+                    pq[next_state] = new_distance
                 else
-                    DataStructures.enqueue!(pq, dst, new_distance)
+                    DataStructures.enqueue!(pq, next_state, new_distance)
                 end
             end
         end
@@ -756,14 +849,26 @@ end
 """
     _paths_equal(a, b)
 
-Check if two `GraphPath`s traverse the same sequence of vertices.
+Check if two `GraphPath`s traverse the same sequence of vertex/strand states.
+
+# Arguments
+- `a::GraphPath`: First path to compare
+- `b::GraphPath`: Second path to compare
+
+# Returns
+- `Bool`: `true` when both paths visit the same vertices with the same strands
+
+# Example
+```julia
+same_path = Mycelia.Rhizomorph._paths_equal(path_a, path_b)
+```
 """
 function _paths_equal(a::GraphPath, b::GraphPath)
     if length(a.steps) != length(b.steps)
         return false
     end
     for (sa, sb) in zip(a.steps, b.steps)
-        if sa.vertex_label != sb.vertex_label
+        if sa.vertex_label != sb.vertex_label || sa.strand != sb.strand
             return false
         end
     end
@@ -771,7 +876,7 @@ function _paths_equal(a::GraphPath, b::GraphPath)
 end
 
 """
-    k_shortest_paths(graph, source, target, K)
+    k_shortest_paths(graph, source, target, k)
 
 Find up to `k` most probable loopless paths between `source` and `target`
 using Yen's algorithm. Internally, edge transition probabilities are converted
@@ -792,9 +897,19 @@ most probable path. Returns paths sorted by **descending** total_probability
 - `ArgumentError`: If `source` or `target` is not in the graph, or `k < 0`
 
 # Notes
-- When `source == target`, returns a single trivial zero-length path with
+- When `source == target`, returns a single trivial single-vertex path with
   probability 1.0. Cycle detection (finding non-trivial paths from a vertex
   back to itself) is not currently supported.
+
+# Example
+```julia
+graph = Mycelia.Rhizomorph.build_kmer_graph(records, k; mode = :singlestrand)
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+paths = Mycelia.Rhizomorph.k_shortest_paths(weighted, source, target, 5)
+for (i, path) in enumerate(paths)
+    println("Path \$i: probability = \$(path.total_probability)")
+end
+```
 """
 function k_shortest_paths(
         graph::MetaGraphsNext.MetaGraph,
@@ -821,7 +936,7 @@ function k_shortest_paths(
         return [GraphPath(WalkStep{T}[step])]
     end
 
-    # A holds the confirmed K-shortest paths
+    # A holds the confirmed k-shortest paths
     A = GraphPath{T}[]
 
     # Find the shortest path (A_1)
@@ -836,13 +951,15 @@ function k_shortest_paths(
     # B is the candidate list
     B = GraphPath{T}[]
 
-    for k in 2:K
-        prev_path = A[k - 1]
-        prev_vertices = [s.vertex_label for s in prev_path.steps]
+    for ki in 2:k
+        prev_path = A[ki - 1]
+        prev_states = [(s.vertex_label, s.strand) for s in prev_path.steps]
+        prev_vertices = [state[1] for state in prev_states]
 
         for i in 1:(length(prev_vertices) - 1)
-            spur_node = prev_vertices[i]
+            spur_node, spur_strand = prev_states[i]
             root_path_vertices = prev_vertices[1:i]
+            root_path_states = prev_states[1:i]
 
             # Exclude edges that share the same root path prefix in already-found paths
             excluded_edges = Set{Tuple{T, T}}()
@@ -860,17 +977,23 @@ function k_shortest_paths(
             end
 
             spur_path = _shortest_path_excluding(
-                graph, spur_node, target, excluded_vertices, excluded_edges)
+                graph,
+                spur_node,
+                target,
+                excluded_vertices,
+                excluded_edges;
+                initial_states = [(spur_node, spur_strand)]
+            )
 
             if spur_path !== nothing
-                spur_vertices = [s.vertex_label for s in spur_path.steps]
+                spur_states = [(s.vertex_label, s.strand) for s in spur_path.steps]
                 # Combine root + spur (root_path_vertices[1:i-1] + spur_path)
-                combined_vertices = vcat(root_path_vertices[1:(i - 1)], spur_vertices)
+                combined_states = vcat(root_path_states[1:(i - 1)], spur_states)
                 # Note: Path probabilities are computed against the full graph (all edges),
                 # not the constrained graph used during spur path search. This is intentional:
                 # the search uses exclusions to find alternative routes, but the final
                 # probabilities reflect each path's likelihood in the original graph.
-                candidate = _build_graph_path_from_vertices(graph, combined_vertices)
+                candidate = _build_graph_path_from_vertices(graph, combined_states)
 
                 # Only add if not a duplicate
                 is_duplicate = false

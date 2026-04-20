@@ -2,29 +2,82 @@ import Test
 import Mycelia
 import BioSequences
 import FASTX
-import Kmers
 import MetaGraphsNext
 import Kmers
 
+function _degree_maps(graph)
+    labels = collect(MetaGraphsNext.labels(graph))
+    in_degree = Dict(label => 0 for label in labels)
+    out_degree = Dict(label => 0 for label in labels)
+
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        out_degree[src] += 1
+        in_degree[dst] += 1
+    end
+
+    return labels, in_degree, out_degree
+end
+
+function _source_sink_labels(graph)
+    labels, in_degree, out_degree = _degree_maps(graph)
+    sources = [label for label in labels if in_degree[label] == 0 && out_degree[label] > 0]
+    sinks = [label for label in labels if out_degree[label] == 0 && in_degree[label] > 0]
+    return labels, sources, sinks
+end
+
+function _reachable_vertices(graph, source)
+    visited = Set([source])
+    queue = [source]
+    index = 1
+
+    while index <= length(queue)
+        current = queue[index]
+        index += 1
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            if src == current && !(dst in visited)
+                push!(visited, dst)
+                push!(queue, dst)
+            end
+        end
+    end
+
+    return visited
+end
+
+function _find_unreachable_pair(graph)
+    labels = collect(MetaGraphsNext.labels(graph))
+
+    for source in labels
+        reachable = _reachable_vertices(graph, source)
+        for target in labels
+            if source != target && !(target in reachable)
+                return source, target
+            end
+        end
+    end
+
+    throw(ArgumentError("Expected at least one unreachable vertex pair"))
+end
+
 Test.@testset "K-Shortest Paths" begin
     Test.@testset "Single path graph returns K=1" begin
-        # Linear sequence ATCGATCG with k=4 has exactly one path
-        sequence = BioSequences.dna"ATCGATCG"
+        # ACGTTTCG with k=4 produces 5 distinct k-mers in a strictly linear chain
+        # (no k-mer appears at both start and end), guaranteeing a true source and sink.
+        sequence = BioSequences.dna"ACGTTTCG"
         records = [FASTX.FASTA.Record("linear", sequence)]
         graph = Mycelia.Rhizomorph.build_kmer_graph(
             records, 4; dataset_id = "linear_ksp", mode = :singlestrand
         )
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
 
-        labels = collect(MetaGraphsNext.labels(weighted))
-        source = first(labels)
-        target = last(labels)
+        _, sources, sinks = _source_sink_labels(weighted)
+        source = first(sources)
+        target = first(sinks)
 
         paths = Mycelia.Rhizomorph.k_shortest_paths(weighted, source, target, 5)
 
         # Only 1 path exists in a linear graph
-        Test.@test length(paths) >= 1
-        Test.@test length(paths) <= 1
+        Test.@test length(paths) == 1
 
         # The single path should be valid
         path = first(paths)
@@ -34,8 +87,8 @@ Test.@testset "K-Shortest Paths" begin
     end
 
     Test.@testset "Excluded vertices block paths" begin
-        seq1 = BioSequences.dna"ATCGTTGA"
-        seq2 = BioSequences.dna"ATCAATGA"
+        seq1 = BioSequences.dna"ACGTCCTGCA"
+        seq2 = BioSequences.dna"ACGTAATGCA"
         records = [
             FASTX.FASTA.Record("path1", seq1),
             FASTX.FASTA.Record("path2", seq2)
@@ -44,11 +97,12 @@ Test.@testset "K-Shortest Paths" begin
             records, 4; dataset_id = "bubble_ksp", mode = :singlestrand
         )
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
-        labels = collect(MetaGraphsNext.labels(weighted))
-
-        all_excluded = Set(labels[2:end])
-        source = labels[1]
-        target = labels[end]
+        labels, sources, sinks = _source_sink_labels(weighted)
+        source = first(sources)
+        target = first(sinks)
+        all_excluded = Set(labels)
+        delete!(all_excluded, source)
+        delete!(all_excluded, target)
 
         result = Mycelia.Rhizomorph._shortest_path_excluding(
             weighted, source, target, all_excluded, Set{Tuple{
@@ -58,8 +112,10 @@ Test.@testset "K-Shortest Paths" begin
     end
 
     Test.@testset "Bubble graph returns 2 paths" begin
-        seq1 = BioSequences.dna"ATCGTTGA"
-        seq2 = BioSequences.dna"ATCAATGA"
+        # These sequences share first k-mer (ACGT) and last k-mer (TGCA),
+        # forming a true bubble with two divergent paths through the middle.
+        seq1 = BioSequences.dna"ACGTCCTGCA"
+        seq2 = BioSequences.dna"ACGTAATGCA"
         records = [
             FASTX.FASTA.Record("path1", seq1),
             FASTX.FASTA.Record("path2", seq2)
@@ -69,15 +125,7 @@ Test.@testset "K-Shortest Paths" begin
         )
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
 
-        labels = collect(MetaGraphsNext.labels(weighted))
-        in_edges = Dict(l => 0 for l in labels)
-        out_edges = Dict(l => 0 for l in labels)
-        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
-            out_edges[src] = get(out_edges, src, 0) + 1
-            in_edges[dst] = get(in_edges, dst, 0) + 1
-        end
-        sources = [l for l in labels if get(in_edges, l, 0) == 0]
-        sinks = [l for l in labels if get(out_edges, l, 0) == 0]
+        _, sources, sinks = _source_sink_labels(weighted)
 
         Test.@test !isempty(sources)
         Test.@test !isempty(sinks)
@@ -85,11 +133,8 @@ Test.@testset "K-Shortest Paths" begin
         paths = Mycelia.Rhizomorph.k_shortest_paths(
             weighted, first(sources), first(sinks), 5
         )
-        Test.@test length(paths) >= 1
-        Test.@test length(paths) <= 2
-        if length(paths) >= 2
-            Test.@test paths[1].total_probability >= paths[2].total_probability
-        end
+        Test.@test length(paths) == 2
+        Test.@test paths[1].total_probability >= paths[2].total_probability
         for path in paths
             Test.@test path isa Mycelia.Rhizomorph.GraphPath
             Test.@test path.total_probability > 0.0
@@ -113,8 +158,8 @@ Test.@testset "K-Shortest Paths" begin
         end
 
         Test.@testset "No path between disconnected vertices" begin
-            seq1 = BioSequences.dna"AAAAAAA"
-            seq2 = BioSequences.dna"TTTTTTT"
+            seq1 = BioSequences.dna"ACGTACGT"
+            seq2 = BioSequences.dna"TGCATGCA"
             records = [
                 FASTX.FASTA.Record("a", seq1),
                 FASTX.FASTA.Record("b", seq2)
@@ -123,11 +168,10 @@ Test.@testset "K-Shortest Paths" begin
                 records, 4; dataset_id = "disc_ksp", mode = :singlestrand
             )
             weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
-            labels = collect(MetaGraphsNext.labels(weighted))
+            source, target = _find_unreachable_pair(weighted)
 
-            Test.@test length(labels) >= 2
             paths = Mycelia.Rhizomorph.k_shortest_paths(
-                weighted, labels[1], labels[end], 3
+                weighted, source, target, 3
             )
             Test.@test length(paths) == 0
         end
@@ -159,15 +203,7 @@ Test.@testset "K-Shortest Paths" begin
         )
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
 
-        labels = collect(MetaGraphsNext.labels(weighted))
-        in_deg = Dict(l => 0 for l in labels)
-        out_deg = Dict(l => 0 for l in labels)
-        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
-            out_deg[src] += 1
-            in_deg[dst] += 1
-        end
-        sources = [l for l in labels if in_deg[l] == 0]
-        sinks = [l for l in labels if out_deg[l] == 0]
+        _, sources, sinks = _source_sink_labels(weighted)
 
         Test.@test !isempty(sources)
         Test.@test !isempty(sinks)
@@ -178,8 +214,7 @@ Test.@testset "K-Shortest Paths" begin
 
         Test.@test length(paths) == 1
 
-        path_labels = [step.vertex_label for step in paths[1].steps]
-        reconstructed = Mycelia.Rhizomorph.path_to_sequence(path_labels, graph)
+        reconstructed = Mycelia.Rhizomorph.path_to_sequence(paths[1], weighted)
 
         Test.@test reconstructed == sequence
     end
@@ -191,18 +226,11 @@ Test.@testset "K-Shortest Paths" begin
             records, 4; dataset_id = "equal_test", mode = :singlestrand
         )
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
-        labels = collect(MetaGraphsNext.labels(weighted))
+        _, sources, sinks = _source_sink_labels(weighted)
 
-        in_deg = Dict(l => 0 for l in labels)
-        out_deg = Dict(l => 0 for l in labels)
-        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
-            out_deg[src] += 1
-            in_deg[dst] += 1
-        end
-        sources = [l for l in labels if in_deg[l] == 0]
-        sinks = [l for l in labels if out_deg[l] == 0]
-
-        paths = Mycelia.Rhizomorph.k_shortest_paths(weighted, first(sources), first(sinks), 1)
+        paths = Mycelia.Rhizomorph.k_shortest_paths(
+            weighted, first(sources), first(sinks), 1
+        )
         Test.@test length(paths) == 1
 
         # Same path should be equal to itself
@@ -223,19 +251,19 @@ Test.@testset "K-Shortest Paths" begin
         weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
         labels = collect(MetaGraphsNext.labels(weighted))
 
-        in_deg = Dict(l => 0 for l in labels)
-        out_deg = Dict(l => 0 for l in labels)
-        for (src, dst) in MetaGraphsNext.edge_labels(weighted)
-            out_deg[src] += 1
-            in_deg[dst] += 1
-        end
-        sources = [l for l in labels if in_deg[l] == 0]
-        sinks = [l for l in labels if out_deg[l] == 0]
+        _, sources, sinks = _source_sink_labels(weighted)
 
-        # Build path from vertices
-        path = Mycelia.Rhizomorph._build_graph_path_from_vertices(weighted, labels)
+        # Find a valid path through the graph via k_shortest_paths
+        ksp_paths = Mycelia.Rhizomorph.k_shortest_paths(
+            weighted, first(sources), first(sinks), 1
+        )
+        Test.@test length(ksp_paths) == 1
+        valid_vertices = [step.vertex_label for step in ksp_paths[1].steps]
+
+        # Build path from the known-valid vertex sequence
+        path = Mycelia.Rhizomorph._build_graph_path_from_vertices(weighted, valid_vertices)
         Test.@test path isa Mycelia.Rhizomorph.GraphPath
-        Test.@test length(path.steps) == length(labels)
+        Test.@test length(path.steps) == length(valid_vertices)
         Test.@test path.total_probability > 0.0
 
         # First step should have probability 1.0
