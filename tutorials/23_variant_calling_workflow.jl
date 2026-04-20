@@ -115,6 +115,7 @@ if RUN_EXTERNAL
         out_fasta = mutant_fasta
     )
     Test.@test isfile(mutant_fasta)
+    Test.@test isfile(truth_vcf)
     println("Mutated haplotype FASTA: ", mutant_fasta)
 else
     println("Skipping consensus FASTA materialization.")
@@ -194,6 +195,7 @@ if RUN_EXTERNAL
         out_fasta = gatk_consensus_fasta
     )
     Test.@test isfile(gatk_consensus_fasta)
+    Test.@test isfile(gatk_vcf)
 
     println("GATK VCF: ", gatk_vcf)
     println("Normalized GATK VCF: ", normalized_gatk_vcf)
