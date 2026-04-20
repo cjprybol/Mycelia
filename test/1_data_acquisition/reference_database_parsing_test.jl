@@ -1,7 +1,9 @@
 import Test
+import CodecZlib
 import Dates
 import Logging
 import Sockets
+import Tar
 import Mycelia
 
 const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
@@ -20,6 +22,7 @@ function restore_add_bioconda_env!()
     @eval Mycelia begin
         function add_bioconda_env(pkg; force = false, quiet = false)
             _ensure_conda_env_vars!()
+            conda_runner = _conda_runner()
             channel = nothing
             if occursin("::", pkg)
                 if !quiet
@@ -37,21 +40,21 @@ function restore_add_bioconda_env!()
                 end
                 if isnothing(channel)
                     if quiet
-                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
+                        run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
                     else
-                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+                        run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
                     end
                 else
                     if quiet
-                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
+                        run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
                     else
-                        run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+                        run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
                     end
                 end
                 if quiet
-                    run(`$(CONDA_RUNNER) clean --all -y --quiet`)
+                    run(`$(conda_runner) clean --all -y --quiet`)
                 else
-                    run(`$(CONDA_RUNNER) clean --all -y`)
+                    run(`$(conda_runner) clean --all -y`)
                 end
             end
         end
@@ -85,6 +88,21 @@ if [[ -z "$tool" ]]; then
     exit 1
 fi
 shift
+
+if [[ "$tool" == "env" && "${1:-}" == "list" ]]; then
+    cat <<'EOF'
+# conda environments:
+#
+base                  *  /tmp/fake-conda
+sra-tools                /tmp/fake-conda/envs/sra-tools
+EOF
+    exit 0
+fi
+
+if [[ "${1:-}" == "--version" ]]; then
+    printf '%s 1.0.0\n' "$tool"
+    exit 0
+fi
 
 case "$tool" in
     prefetch)
@@ -163,29 +181,28 @@ end
 
 function with_fake_sra_tooling(f::Function)
     original_path = get(ENV, "PATH", "")
-    conda_runner = Mycelia.CONDA_RUNNER
-    @assert isfile(conda_runner)
+    original_conda_runner = get(ENV, "MYCELIA_CONDA_RUNNER", nothing)
 
     mktempdir() do dir
         fake_runner = joinpath(dir, "conda")
         fake_gzip_dir = joinpath(dir, "bin")
-        backup_runner = joinpath(dir, "conda.backup")
 
         mkpath(fake_gzip_dir)
         install_fake_sra_runner!(fake_runner)
         install_fake_gzip!(joinpath(fake_gzip_dir, "gzip"))
 
-        cp(conda_runner, backup_runner; force = true)
-        cp(fake_runner, conda_runner; force = true)
-        chmod(conda_runner, 0o755)
+        ENV["MYCELIA_CONDA_RUNNER"] = fake_runner
         ENV["PATH"] = fake_gzip_dir * ":" * original_path
 
         try
             return f()
         finally
             ENV["PATH"] = original_path
-            cp(backup_runner, conda_runner; force = true)
-            chmod(conda_runner, 0o755)
+            if isnothing(original_conda_runner)
+                delete!(ENV, "MYCELIA_CONDA_RUNNER")
+            else
+                ENV["MYCELIA_CONDA_RUNNER"] = original_conda_runner
+            end
         end
     end
 end
@@ -245,7 +262,7 @@ function restore_sra_helpers!()
             final_dir = joinpath(outdir, SRR)
             sra_archive = joinpath(final_dir, "$(SRR).sra")
             if !isfile(sra_archive)
-                run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
+                run(`$(Mycelia._conda_runner()) run --live-stream -n sra-tools prefetch $(SRR) -O $(outdir)`)
             else
                 @info "SRA archive already present: $(sra_archive)"
             end
@@ -271,7 +288,7 @@ function restore_sra_helpers!()
 
             if !(forward_and_reverse_present || unpaired_present)
                 fasterq_dump_cmd = `
-                    $(Mycelia.CONDA_RUNNER) run --live-stream -n sra-tools fasterq-dump
+                    $(Mycelia._conda_runner()) run --live-stream -n sra-tools fasterq-dump
                         --outdir $(final_outdir)
                         --mem 1G
                         --split-3
@@ -329,11 +346,10 @@ function make_test_blastdb(dir::AbstractString; dbtype::AbstractString)
     return db_path
 end
 
-function reserve_local_port()
+function reserve_local_listener()
     server = Sockets.listen(Sockets.InetAddr(parse(Sockets.IPAddr, "127.0.0.1"), 0))
     port = last(Sockets.getsockname(server))
-    close(server)
-    return port
+    return (server = server, port = port)
 end
 
 function make_test_tarball_bytes(files::Dict{String, String})
@@ -346,7 +362,14 @@ function make_test_tarball_bytes(files::Dict{String, String})
             write(output_path, contents)
         end
         archive_path = joinpath(dir, "payload.tar.gz")
-        run(`tar -czf $(archive_path) -C $(payload_dir) .`)
+        open(archive_path, "w") do io
+            gzip_stream = CodecZlib.GzipCompressorStream(io)
+            try
+                Tar.create(payload_dir, gzip_stream)
+            finally
+                close(gzip_stream)
+            end
+        end
         return read(archive_path)
     end
 end
@@ -476,7 +499,8 @@ function write_ncbi_metadata_fixture(
 end
 
 function start_un_test_server(file_map::Dict{String, Vector{UInt8}})
-    port = reserve_local_port()
+    listener = reserve_local_listener()
+    port = listener.port
     base_url = "http://127.0.0.1:$(port)"
 
     function make_response(status::Integer, body = UInt8[]; headers = Pair{String, String}[])
@@ -524,7 +548,7 @@ function start_un_test_server(file_map::Dict{String, Vector{UInt8}})
         return make_response(200, payload)
     end
 
-    server = Mycelia.HTTP.serve!(handler, "127.0.0.1", port)
+    server = Mycelia.HTTP.serve!(handler, listener.server)
     return (server = server, base_url = base_url)
 end
 
@@ -1055,6 +1079,22 @@ Test.@testset "Reference Database Parsing" begin
                 unpaired_reads = missing
             )
         )
+    end
+
+    Test.@testset "Bioconda runner override helpers" begin
+        with_fake_sra_tooling() do
+            fake_runner = ENV["MYCELIA_CONDA_RUNNER"]
+            Test.@test Mycelia._conda_runner() == fake_runner
+            Test.@test Mycelia._conda_root_prefix() == normpath(joinpath(dirname(fake_runner), ".."))
+
+            env_list_output = Mycelia._read_conda_env_list_output()
+            Test.@test occursin("sra-tools", env_list_output)
+            Test.@test Mycelia.check_bioconda_env_is_installed("sra-tools")
+            Test.@test !Mycelia.check_bioconda_env_is_installed("blast")
+
+            version = Mycelia.conda_tool_version("sra-tools", ["fasterq-dump", "--version"])
+            Test.@test version == "fasterq-dump 1.0.0"
+        end
     end
 
     install_noop_add_bioconda_env!()
