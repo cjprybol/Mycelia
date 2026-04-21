@@ -929,137 +929,247 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Compare two FASTA sequences and calculate alignment statistics.
+Merge overlapping or adjacent half-open `[start, end)` integer intervals.
 
-# Arguments
-- `reference_fasta::String`: Path to the reference FASTA file
-- `query_fasta::String`: Path to the query FASTA file
+Returns the sorted, minimal non-overlapping covering. Zero-length intervals
+(`start == end`) are dropped. Touching intervals (e.g. `[10, 20)` and `[20, 30)`)
+merge under half-open semantics.
 
-# Returns
-DataFrame with the following columns:
-- `alignment_percent_identity`: Percentage of matching bases in alignment
-- `total_equivalent_bases`: Number of equivalent bases between sequences
-- `total_alignment_length`: Length of the alignment
-- `query_length`: Length of query sequence
-- `total_variants`: Total number of variants (SNPs + indels)
-- `total_snps`: Number of single nucleotide polymorphisms
-- `total_indels`: Number of insertions and deletions
-- `alignment_coverage_query`: Percentage of query sequence covered
-- `alignment_coverage_reference`: Percentage of reference sequence covered
-- `size_equivalence_to_reference`: Size ratio of query to reference (%)
-
-# Notes
-- Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
-- Returns empty string values for alignment statistics if no alignment is found
-- Requires minimap2 to be installed and accessible in PATH
+Used internally by [`pairwise_minimap_fasta_comparison`](@ref) to compute unique
+base-pair coverage on a sequence that received multiple overlapping minimap
+alignment hits (e.g. over a repetitive region).
 """
-# uses minimap
-function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
-    header = [
-        "Query",
-        "Query length",
-        "Query start",
-        "Query end",
-        "Query strand",
-        "Target",
-        "Target length",
-        "Target start",
-        "Target end",
-        "Matches",
-        "Alignment length",
-        "Mapping quality",
-        "Cigar",
-        "CS tag"]
+function _merge_intervals(intervals::AbstractVector{<:Tuple{<:Integer, <:Integer}})
+    nonzero = [(Int(a), Int(b)) for (a, b) in intervals if b > a]
+    isempty(nonzero) && return Tuple{Int, Int}[]
+    sort!(nonzero; by = first)
 
-    Mycelia.add_bioconda_env("minimap2")
-    #     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
-    results5 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
-    if !isempty(results5)
-        results = results5
-    else
-        @warn "no hit with asm5, trying asm10"
-        results10 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
-        if !isempty(results10)
-            results = results10
+    merged = Tuple{Int, Int}[]
+    current_start, current_end = nonzero[1]
+    for i in 2:length(nonzero)
+        s, e = nonzero[i]
+        if s <= current_end
+            current_end = max(current_end, e)
         else
-            @warn "no hits with asm5 or asm10, trying asm20"
-            results20 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
-            if !isempty(results20)
-                results = results20
-            end
+            push!(merged, (current_start, current_end))
+            current_start, current_end = s, e
         end
     end
-    if !isempty(results)
-        data = DelimitedFiles.readdlm(IOBuffer(results), '\t')
-        data_columns_of_interest = [
-            collect(1:(length(header) - 2))..., collect((size(data, 2) - 1):size(data, 2))...]
-        minimap_results = DataFrames.DataFrame(data[:, data_columns_of_interest], header)
+    push!(merged, (current_start, current_end))
+    return merged
+end
 
-        equivalent_matches = reduce(vcat,
-            map(x -> collect(eachmatch(r":([0-9]+)", replace(x, "cs:Z:" => ""))),
-                minimap_results[!, "CS tag"]))
-        total_equivalent_bases = sum(map(match -> parse(Int, first(match.captures)), equivalent_matches))
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-        insertion_matches = reduce(vcat,
-            map(x -> collect(eachmatch(r"\+([a-z]+)"i, replace(x, "cs:Z:" => ""))),
-                minimap_results[!, "CS tag"]))
-        total_inserted_bases = sum(map(match -> length(first(match.captures)), insertion_matches))
-        deletion_matches = reduce(vcat,
-            map(x -> collect(eachmatch(r"\-([a-z]+)"i, replace(x, "cs:Z:" => ""))),
-                minimap_results[!, "CS tag"]))
-        total_deleted_bases = sum(map(match -> length(first(match.captures)), deletion_matches))
-        substitution_matches = reduce(vcat,
-            map(x -> collect(eachmatch(r"\*([a-z]{2})"i, replace(x, "cs:Z:" => ""))),
-                minimap_results[!, "CS tag"]))
-        total_substituted_bases = length(substitution_matches)
-        total_variants = length(insertion_matches) + length(deletion_matches) +
-                         length(substitution_matches)
-        total_variable_bases = total_inserted_bases + total_deleted_bases +
-                               total_substituted_bases
+Total base count summed across every sequence in a FASTA file. Robust to
+multi-contig inputs — used as the coverage denominator in
+[`pairwise_minimap_fasta_comparison`](@ref).
+"""
+function _fasta_total_length(path::AbstractString)::Int
+    total = 0
+    reader = FASTX.FASTA.Reader(open(path))
+    try
+        for record in reader
+            total += length(FASTX.sequence(record))
+        end
+    finally
+        close(reader)
+    end
+    return total
+end
 
-        total_alignment_length = sum(minimap_results[!, "Alignment length"])
-        total_matches = sum(minimap_results[!, "Matches"])
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
 
-        alignment_percent_identity = round(total_matches / total_alignment_length * 100, digits = 2)
-        size_equivalence_to_reference = round(
-            minimap_results[1, "Query length"]/minimap_results[1, "Target length"] * 100, digits = 2)
-        alignment_coverage_query = round(
-            total_alignment_length / minimap_results[1, "Query length"] * 100, digits = 2)
-        alignment_coverage_reference = round(
-            total_alignment_length / minimap_results[1, "Target length"] * 100, digits = 2)
+Compute unique (non-redundant) aligned base count across all sequences in a
+parsed minimap2 PAF-style DataFrame.
 
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = alignment_percent_identity,
-            total_equivalent_bases = total_equivalent_bases,
-            total_alignment_length = total_alignment_length,
-            query_length = minimap_results[1, "Query length"],
-            total_variants = total_variants,
-            total_snps = total_substituted_bases,
-            total_indels = length(insertion_matches) + length(deletion_matches),
-            alignment_coverage_query = alignment_coverage_query,
-            alignment_coverage_reference = alignment_coverage_reference,
-            size_equivalence_to_reference = size_equivalence_to_reference
-        )
+`which = :query` sums bases covered on the query side; `which = :target` sums
+bases covered on the reference side. Overlapping and secondary alignments on
+the same sequence are deduplicated via interval merge, so the returned count
+is mathematically bounded by the total sequence length.
+"""
+function _minimap_merged_coverage(df::DataFrames.DataFrame, which::Symbol)::Int
+    name_col, start_col,
+    end_col = if which == :query
+        "Query", "Query start", "Query end"
+    elseif which == :target
+        "Target", "Target start", "Target end"
     else
-        query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
-        target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
-        size_equivalence_to_reference = round(query_length/target_length * 100, digits = 2)
+        error("_minimap_merged_coverage: unknown `which` value $(which); expected :query or :target")
+    end
 
-        # unable to find any matches
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = "",
-            total_equivalent_bases = "",
-            total_alignment_length = "",
-            query_length = query_length,
-            total_variants = "",
-            total_snps = "",
-            total_indels = "",
-            alignment_coverage_query = 0,
-            alignment_coverage_reference = 0,
+    DataFrames.nrow(df) == 0 && return 0
+
+    intervals_by_sequence = Dict{String, Vector{Tuple{Int, Int}}}()
+    for row in DataFrames.eachrow(df)
+        name = String(row[name_col])
+        s = Int(row[start_col])
+        e = Int(row[end_col])
+        push!(get!(Vector{Tuple{Int, Int}}, intervals_by_sequence, name), (s, e))
+    end
+
+    total = 0
+    for intervals in values(intervals_by_sequence)
+        for (s, e) in _merge_intervals(intervals)
+            total += e - s
+        end
+    end
+    return total
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Compare two FASTA files end-to-end with minimap2 and return a one-row DataFrame
+of alignment statistics.
+
+minimap2 is invoked from the `minimap2` bioconda environment (auto-installed
+if needed) with progressively relaxed divergence presets (`asm5` → `asm10` →
+`asm20`) until at least one alignment is produced.
+
+# Arguments
+- `reference_fasta::AbstractString`: Path to the reference FASTA file.
+- `query_fasta::AbstractString`: Path to the query FASTA file.
+
+# Returns
+A one-row `DataFrames.DataFrame` with columns:
+
+| Column                           | Meaning                                                                              |
+| -------------------------------- | ------------------------------------------------------------------------------------ |
+| `alignment_percent_identity`     | Percent matching bases across all alignment blocks (0-100).                          |
+| `total_equivalent_bases`         | Equivalent-base count parsed from minimap CS tags.                                   |
+| `total_alignment_length`         | Raw sum of alignment block lengths (may exceed genome size for repeat-rich inputs).  |
+| `query_length`                   | Total query FASTA length (sum of all sequences).                                     |
+| `reference_length`               | Total reference FASTA length (sum of all sequences).                                 |
+| `total_variants`                 | SNPs + indels parsed from CS tags.                                                   |
+| `total_snps`                     | Substitution count.                                                                  |
+| `total_indels`                   | Insertion + deletion count.                                                          |
+| `unique_aligned_bases_query`     | Query bases covered by any alignment, deduplicated via interval merge.               |
+| `unique_aligned_bases_reference` | Reference bases covered by any alignment, deduplicated via interval merge.           |
+| `alignment_coverage_query`       | `unique_aligned_bases_query / query_length * 100`; bounded to [0, 100].              |
+| `alignment_coverage_reference`   | `unique_aligned_bases_reference / reference_length * 100`; bounded to [0, 100].      |
+| `size_equivalence_to_reference`  | `query_length / reference_length * 100`.                                             |
+
+# Notes
+- `alignment_coverage_*` use **per-sequence interval merging** so the value is
+  mathematically bounded to [0, 100] even when minimap emits multiple secondary
+  or split alignments over repeats. Compare with `total_alignment_length`,
+  which is the raw sum across all alignment rows (can exceed genome size).
+- `query_length` / `reference_length` are computed from the input FASTAs (sum
+  across all records), not from the first minimap row — multi-contig inputs
+  are supported.
+- When no alignment is produced at any preset, numeric coverage columns are 0
+  and identity/variant columns are `missing`.
+- Requires minimap2 via bioconda; `Mycelia.add_bioconda_env("minimap2")` is
+  invoked automatically.
+"""
+function pairwise_minimap_fasta_comparison(;
+        reference_fasta::AbstractString,
+        query_fasta::AbstractString
+)
+    paf_header = [
+        "Query", "Query length", "Query start", "Query end", "Query strand",
+        "Target", "Target length", "Target start", "Target end",
+        "Matches", "Alignment length", "Mapping quality",
+        "Cigar", "CS tag"
+    ]
+
+    Mycelia.add_bioconda_env("minimap2")
+    # asm5 / asm10 / asm20: asm-to-ref mapping for ~0.1% / 1% / 5% divergence.
+    # Try each preset in turn; keep the first non-empty output.
+    results_bytes = UInt8[]
+    for preset in ("asm5", "asm10", "asm20")
+        bytes = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x $preset --cs -cL $reference_fasta $query_fasta`)
+        if !isempty(bytes)
+            results_bytes = bytes
+            break
+        else
+            @warn "no hits at preset $preset; trying next"
+        end
+    end
+
+    # Total genome lengths read from the FASTA files (fixes multi-contig denominator).
+    total_query_length = _fasta_total_length(query_fasta)
+    total_reference_length = _fasta_total_length(reference_fasta)
+    size_equivalence_to_reference = total_reference_length == 0 ? 0.0 :
+                                    round(total_query_length / total_reference_length * 100, digits = 2)
+
+    if isempty(results_bytes)
+        return DataFrames.DataFrame(
+            alignment_percent_identity = missing,
+            total_equivalent_bases = missing,
+            total_alignment_length = 0,
+            query_length = total_query_length,
+            reference_length = total_reference_length,
+            total_variants = missing,
+            total_snps = missing,
+            total_indels = missing,
+            unique_aligned_bases_query = 0,
+            unique_aligned_bases_reference = 0,
+            alignment_coverage_query = 0.0,
+            alignment_coverage_reference = 0.0,
             size_equivalence_to_reference = size_equivalence_to_reference
         )
     end
-    return results
+
+    data = DelimitedFiles.readdlm(IOBuffer(results_bytes), '\t')
+    data_columns_of_interest = [
+        collect(1:(length(paf_header) - 2))...,
+        collect((size(data, 2) - 1):size(data, 2))...
+    ]
+    minimap_results = DataFrames.DataFrame(data[:, data_columns_of_interest], paf_header)
+
+    # Variant counts from CS tags
+    equivalent_matches = reduce(vcat,
+        map(x -> collect(eachmatch(r":([0-9]+)", replace(x, "cs:Z:" => ""))),
+            minimap_results[!, "CS tag"]))
+    total_equivalent_bases = sum(map(m -> parse(Int, first(m.captures)), equivalent_matches))
+
+    insertion_matches = reduce(vcat,
+        map(x -> collect(eachmatch(r"\+([a-z]+)"i, replace(x, "cs:Z:" => ""))),
+            minimap_results[!, "CS tag"]))
+    deletion_matches = reduce(vcat,
+        map(x -> collect(eachmatch(r"\-([a-z]+)"i, replace(x, "cs:Z:" => ""))),
+            minimap_results[!, "CS tag"]))
+    substitution_matches = reduce(vcat,
+        map(x -> collect(eachmatch(r"\*([a-z]{2})"i, replace(x, "cs:Z:" => ""))),
+            minimap_results[!, "CS tag"]))
+
+    total_substituted_bases = length(substitution_matches)
+    total_variants = length(insertion_matches) + length(deletion_matches) +
+                     length(substitution_matches)
+
+    total_alignment_length = sum(minimap_results[!, "Alignment length"])
+    total_matches = sum(minimap_results[!, "Matches"])
+    alignment_percent_identity = total_alignment_length == 0 ? 0.0 :
+                                 round(total_matches / total_alignment_length * 100, digits = 2)
+
+    # Interval-merged (deduplicated) coverage fixes the secondary-alignment over-count.
+    unique_aligned_bases_query = _minimap_merged_coverage(minimap_results, :query)
+    unique_aligned_bases_reference = _minimap_merged_coverage(minimap_results, :target)
+    alignment_coverage_query = total_query_length == 0 ? 0.0 :
+                               round(unique_aligned_bases_query / total_query_length * 100, digits = 2)
+    alignment_coverage_reference = total_reference_length == 0 ? 0.0 :
+                                   round(
+        unique_aligned_bases_reference / total_reference_length * 100, digits = 2)
+
+    return DataFrames.DataFrame(
+        alignment_percent_identity = alignment_percent_identity,
+        total_equivalent_bases = total_equivalent_bases,
+        total_alignment_length = total_alignment_length,
+        query_length = total_query_length,
+        reference_length = total_reference_length,
+        total_variants = total_variants,
+        total_snps = total_substituted_bases,
+        total_indels = length(insertion_matches) + length(deletion_matches),
+        unique_aligned_bases_query = unique_aligned_bases_query,
+        unique_aligned_bases_reference = unique_aligned_bases_reference,
+        alignment_coverage_query = alignment_coverage_query,
+        alignment_coverage_reference = alignment_coverage_reference,
+        size_equivalence_to_reference = size_equivalence_to_reference
+    )
 end
 
 # always interpret as strings to ensure changes in underlying biosequence representation don't change results

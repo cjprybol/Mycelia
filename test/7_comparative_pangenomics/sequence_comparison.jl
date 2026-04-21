@@ -460,4 +460,70 @@ Test.@testset "Sequence Comparison Tests" begin
 
         rm(workdir; recursive = true, force = true)
     end
+
+    Test.@testset "pairwise_minimap_fasta_comparison — coverage math" begin
+        # Exercises the fix for two bugs:
+        #   (1) coverage denominator previously used minimap_results[1, "Query length"]
+        #       (first row's sequence only) → wrong for multi-contig FASTA.
+        #   (2) numerator summed raw alignment block lengths across all minimap
+        #       hits including secondary alignments → could exceed the genome
+        #       length for repeat-rich inputs, producing coverage > 100%.
+        rng = StableRNGs.StableRNG(42)
+        shared_a = join(rand(rng, ['A', 'C', 'G', 'T'], 500))
+        shared_b = join(rand(rng, ['A', 'C', 'G', 'T'], 500))
+        unique_q = join(rand(rng, ['A', 'C', 'G', 'T'], 800))
+        unique_r = join(rand(rng, ['A', 'C', 'G', 'T'], 1000))
+
+        # Query: three contigs, shared_a appears in two of them (exact repeat)
+        qry_path = tempname() * ".fna"
+        write(
+            qry_path,
+            """
+            >qry_contig_1
+            $(shared_a)$(unique_q)
+            >qry_contig_2
+            $(shared_a)$(shared_b)
+            >qry_contig_3
+            $(shared_b)
+            """
+        )
+
+        # Reference: single contig with two tandem copies of shared_a and one of shared_b
+        ref_path = tempname() * ".fna"
+        write(
+            ref_path,
+            """
+            >ref_contig_1
+            $(unique_r)$(shared_a)$(shared_a)$(shared_b)
+            """
+        )
+
+        try
+            mm = Mycelia.pairwise_minimap_fasta_comparison(
+                reference_fasta = ref_path,
+                query_fasta = qry_path
+            )
+            Test.@test DataFrames.nrow(mm) == 1
+            row = mm[1, :]
+
+            # Bug-fix invariants: coverage must be mathematically bounded to [0, 100]
+            Test.@test 0.0 <= row.alignment_coverage_query <= 100.0
+            Test.@test 0.0 <= row.alignment_coverage_reference <= 100.0
+
+            # Multi-contig fix: denominator is sum of all contig lengths
+            Test.@test row.query_length == 500 + 800 + 500 + 500 + 500  # 2800
+            Test.@test row.reference_length == 1000 + 500 + 500 + 500   # 2500
+
+            # Transparency columns: unique coverage <= genome length
+            Test.@test row.unique_aligned_bases_query <= row.query_length
+            Test.@test row.unique_aligned_bases_reference <= row.reference_length
+
+            # Raw sum still exposed and >= unique (raw includes duplicate hits)
+            Test.@test row.total_alignment_length >= row.unique_aligned_bases_query
+            Test.@test row.total_alignment_length >= row.unique_aligned_bases_reference
+        finally
+            rm(qry_path; force = true)
+            rm(ref_path; force = true)
+        end
+    end
 end
