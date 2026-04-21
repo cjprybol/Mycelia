@@ -221,3 +221,115 @@ Test.@testset "Checkpointing Tests" begin
         end
     end
 end
+
+Test.@testset "cached_map" begin
+    Test.@testset "first call computes all inputs" begin
+        mktempdir() do dir
+            call_count = Ref(0)
+            inputs = [1, 2, 3]
+            results = Mycelia.cached_map("first_call", dir, inputs) do x
+                call_count[] += 1
+                2x
+            end
+            Test.@test results == [2, 4, 6]
+            Test.@test call_count[] == 3
+            Test.@test isfile(joinpath(dir, "first_call.jld2"))
+        end
+    end
+
+    Test.@testset "second call with same inputs: no recomputation" begin
+        mktempdir() do dir
+            call_count = Ref(0)
+            inputs = [10, 20, 30]
+            fn = x -> begin
+                call_count[] += 1
+                x + 1
+            end
+            first = Mycelia.cached_map("memoized", dir, inputs, fn)
+            Test.@test first == [11, 21, 31]
+            Test.@test call_count[] == 3
+
+            second = Mycelia.cached_map("memoized", dir, inputs, fn)
+            Test.@test second == [11, 21, 31]
+            Test.@test call_count[] == 3  # unchanged: all hits
+        end
+    end
+
+    Test.@testset "incremental growth only computes new inputs" begin
+        mktempdir() do dir
+            call_count = Ref(0)
+            fn = x -> begin
+                call_count[] += 1
+                2x
+            end
+            first = Mycelia.cached_map("grow", dir, [1, 2, 3], fn)
+            Test.@test first == [2, 4, 6]
+            Test.@test call_count[] == 3
+
+            second = Mycelia.cached_map("grow", dir, [1, 2, 3, 4, 5], fn)
+            Test.@test second == [2, 4, 6, 8, 10]
+            Test.@test call_count[] == 5  # only 4 and 5 were new
+        end
+    end
+
+    Test.@testset "custom keyfn supports non-string inputs" begin
+        mktempdir() do dir
+            call_count = Ref(0)
+            # Tuple inputs: key by first element only, second element is metadata
+            inputs = [("a", "meta-1"), ("b", "meta-2"), ("c", "meta-3")]
+            fn = x -> begin
+                call_count[] += 1
+                uppercase(x[1]) * "|" * x[2]
+            end
+            first = Mycelia.cached_map("tuples", dir, inputs, fn; keyfn = x -> x[1])
+            Test.@test first == ["A|meta-1", "B|meta-2", "C|meta-3"]
+            Test.@test call_count[] == 3
+
+            # Add a 4th tuple; existing keys hit cache, new key computes
+            inputs2 = [("a", "meta-1"), ("b", "meta-2"), ("c", "meta-3"), ("d", "meta-4")]
+            second = Mycelia.cached_map("tuples", dir, inputs2, fn; keyfn = x -> x[1])
+            Test.@test second == ["A|meta-1", "B|meta-2", "C|meta-3", "D|meta-4"]
+            Test.@test call_count[] == 4
+        end
+    end
+
+    Test.@testset "force=true ignores cache and recomputes" begin
+        mktempdir() do dir
+            call_count = Ref(0)
+            fn = x -> begin
+                call_count[] += 1
+                x * 10
+            end
+            Mycelia.cached_map("forced", dir, [1, 2, 3], fn)
+            Test.@test call_count[] == 3
+
+            Mycelia.cached_map("forced", dir, [1, 2, 3], fn; force = true)
+            Test.@test call_count[] == 6  # all three recomputed
+        end
+    end
+
+    Test.@testset "corrupted cache file rebuilds gracefully" begin
+        mktempdir() do dir
+            cache_file = joinpath(dir, "corrupt.jld2")
+            write(cache_file, "not a valid jld2 file, just garbage bytes")
+
+            call_count = Ref(0)
+            # @test_logs asserts the warning is emitted and captures no crash
+            results = Test.@test_logs (:warn,) match_mode = :any begin
+                Mycelia.cached_map("corrupt", dir, [1, 2, 3]) do x
+                    call_count[] += 1
+                    x + 100
+                end
+            end
+            Test.@test results == [101, 102, 103]
+            Test.@test call_count[] == 3
+            # Subsequent call should now hit the rebuilt cache
+            results2 = Mycelia.cached_map("corrupt", dir, [1, 2, 3]) do x
+                call_count[] += 1
+                error("should not be called")
+            end
+            Test.@test results2 == [101, 102, 103]
+            Test.@test call_count[] == 3
+        end
+    end
+end

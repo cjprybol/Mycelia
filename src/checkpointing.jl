@@ -107,6 +107,128 @@ function cached_stage(name::String, checkpoint_dir::String, compute_fn::Function
 end
 
 """
+    _atomic_save_dict(cache_file::String, data::Dict)
+
+Write `data` to `cache_file` atomically via a PID-suffixed temp file and
+`mv(...; force=true)`. The temp path includes the process ID to avoid
+collisions between concurrent processes sharing a checkpoint directory.
+"""
+function _atomic_save_dict(cache_file::String, data::Dict)
+    tmp = "$(cache_file).tmp.$(getpid())"
+    JLD2.jldsave(tmp; data = data)
+    mv(tmp, cache_file; force = true)
+    return nothing
+end
+
+"""
+    cached_map(fn::Function, name::String, checkpoint_dir::String,
+               inputs::AbstractVector;
+               keyfn = string, save_every::Int = 50, force::Bool = false)
+
+Per-input memoized map. Stores a single `Dict{String,Any}` at
+`<checkpoint_dir>/<name>.jld2` keyed by `keyfn(input)`.
+
+For each input:
+- If `keyfn(input)` is already in the cached dict and `!force`, return cached.
+- Otherwise, compute `fn(input)` and add to the dict.
+- Atomic save every `save_every` newly-computed entries (tmp-file-then-rename).
+
+Returns a `Vector` aligned with `inputs`. The map iteration is parallel-safe
+via a `ReentrantLock` around cache writes; thread `fn` accordingly.
+
+Unlike `cached_stage` (which is keyed by filename and treats the whole output
+as one opaque blob), `cached_map` memoizes per input, so growing the input set
+incrementally adds new entries without invalidating the existing cache. Use
+`cached_map` for sample sweeps where the input list changes over time.
+
+`keyfn(input)` must be deterministic and unique across inputs. Two distinct
+inputs producing the same key silently overwrite each other.
+
+# Arguments
+- `fn::Function`: Single-argument function mapping one input to one result
+- `name::String`: Cache identifier (becomes filename)
+- `checkpoint_dir::String`: Directory for the cache file
+- `inputs::AbstractVector`: Inputs to map over
+
+# Keywords
+- `keyfn`: Function mapping an input to a `String` cache key. Default `string`.
+- `save_every::Int`: Flush to disk every N newly-computed entries. Default 50.
+- `force::Bool`: If true, ignore any existing cache and recompute everything.
+
+# Example
+```julia
+import DrWatson
+const CHECKPOINT_DIR = DrWatson.datadir("checkpoints")
+
+results = Mycelia.cached_map("phage_mapping", CHECKPOINT_DIR, all_lims_ids) do id
+    process_sample(id)
+end
+
+# Later, add more samples; only new ones are computed
+results = Mycelia.cached_map("phage_mapping", CHECKPOINT_DIR, expanded_ids) do id
+    process_sample(id)
+end
+```
+"""
+function cached_map(fn::Function, name::String, checkpoint_dir::String,
+        inputs::AbstractVector;
+        keyfn = string, save_every::Int = 50, force::Bool = false)
+    mkpath(checkpoint_dir)
+    cache_file = joinpath(checkpoint_dir, "$(name).jld2")
+
+    cached = if isfile(cache_file) && !force
+        try
+            d = JLD2.load(cache_file, "data")
+            if d isa Dict
+                d
+            else
+                Logging.@warn "cached_map('$(name)'): cache at $(cache_file) is not a Dict, rebuilding"
+                Dict{String, Any}()
+            end
+        catch err
+            Logging.@warn "cached_map('$(name)'): cache at $(cache_file) unreadable ($err), rebuilding"
+            Dict{String, Any}()
+        end
+    else
+        Dict{String, Any}()
+    end
+
+    keys_in_order = [string(keyfn(x)) for x in inputs]
+    missing_idx = [i for i in eachindex(inputs) if !haskey(cached, keys_in_order[i])]
+
+    Logging.@info "cached_map('$(name)'): $(length(inputs) - length(missing_idx))/$(length(inputs)) cached, $(length(missing_idx)) to compute"
+
+    if isempty(missing_idx)
+        return Any[cached[k] for k in keys_in_order]
+    end
+
+    cache_lock = Base.ReentrantLock()
+    n_new = Threads.Atomic{Int}(0)
+    Threads.@threads for i in missing_idx
+        result = fn(inputs[i])
+        Base.lock(cache_lock) do
+            cached[keys_in_order[i]] = result
+            n = Threads.atomic_add!(n_new, 1) + 1
+            if n % save_every == 0
+                _atomic_save_dict(cache_file, cached)
+            end
+        end
+    end
+
+    _atomic_save_dict(cache_file, cached)
+    Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
+    return Any[cached[k] for k in keys_in_order]
+end
+
+# Alternative signature with name first (for consistency with do-block syntax)
+function cached_map(name::String, checkpoint_dir::String,
+        inputs::AbstractVector, fn::Function;
+        keyfn = string, save_every::Int = 50, force::Bool = false)
+    cached_map(fn, name, checkpoint_dir, inputs;
+        keyfn = keyfn, save_every = save_every, force = force)
+end
+
+"""
     clear_stage(name::String, checkpoint_dir::String;
                 input_files::Vector{String}=String[]) -> Bool
 
