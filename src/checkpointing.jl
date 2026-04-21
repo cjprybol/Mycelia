@@ -112,11 +112,20 @@ end
 Write `data` to `cache_file` atomically via a PID-suffixed temp file and
 `mv(...; force=true)`. The temp path includes the process ID to avoid
 collisions between concurrent processes sharing a checkpoint directory.
+
+If `jldsave` or `mv` throws (disk full, permission denied, interrupt), the
+temp file is removed before the error is rethrown so stray `.tmp.<pid>`
+files do not accumulate across failed runs.
 """
 function _atomic_save_dict(cache_file::String, data::Dict)
     tmp = "$(cache_file).tmp.$(getpid())"
-    JLD2.jldsave(tmp; data = data)
-    mv(tmp, cache_file; force = true)
+    try
+        JLD2.jldsave(tmp; data = data)
+        mv(tmp, cache_file; force = true)
+    catch
+        isfile(tmp) && rm(tmp; force = true)
+        rethrow()
+    end
     return nothing
 end
 
@@ -143,6 +152,15 @@ incrementally adds new entries without invalidating the existing cache. Use
 
 `keyfn(input)` must be deterministic and unique across inputs. Two distinct
 inputs producing the same key silently overwrite each other.
+
+!!! warning "Single-writer contract"
+    `cached_map` is only safe for a single writer per `name`. The cache is
+    read into memory once per call and fully overwritten on save, so two
+    concurrent processes computing the same `name` will each start from the
+    same on-disk state and the last save wins, silently dropping entries
+    computed by the other process. If you need concurrent writers, shard by
+    assigning each process a distinct `name` (e.g., suffix with worker id)
+    and merge the caches after the sweep completes.
 
 # Arguments
 - `fn::Function`: Single-argument function mapping one input to one result
@@ -180,7 +198,15 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
         try
             d = JLD2.load(cache_file, "data")
             if d isa Dict
-                d
+                # Normalize to Dict{String,Any} so later writes don't fail via
+                # `convert` when fn returns a type narrower/wider than what was
+                # previously serialized (e.g., cache saved as Dict{String,Int}
+                # rejects String values on the next run).
+                normalized = Dict{String, Any}()
+                for (k, v) in d
+                    normalized[string(k)] = v
+                end
+                normalized
             else
                 Logging.@warn "cached_map('$(name)'): cache at $(cache_file) is not a Dict, rebuilding"
                 Dict{String, Any}()
@@ -193,10 +219,14 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
         Dict{String, Any}()
     end
 
-    keys_in_order = [string(keyfn(x)) for x in inputs]
-    missing_idx = [i for i in eachindex(inputs) if !haskey(cached, keys_in_order[i])]
+    # Collect into a 1-based Vector so indexing is safe regardless of whether
+    # `inputs` has offset indices (e.g., OffsetArrays).
+    inputs_vec = collect(inputs)
+    n_inputs = length(inputs_vec)
+    keys_in_order = [string(keyfn(x)) for x in inputs_vec]
+    missing_idx = [i for i in 1:n_inputs if !haskey(cached, keys_in_order[i])]
 
-    Logging.@info "cached_map('$(name)'): $(length(inputs) - length(missing_idx))/$(length(inputs)) cached, $(length(missing_idx)) to compute"
+    Logging.@info "cached_map('$(name)'): $(n_inputs - length(missing_idx))/$(n_inputs) cached, $(length(missing_idx)) to compute"
 
     if isempty(missing_idx)
         return Any[cached[k] for k in keys_in_order]
@@ -204,19 +234,25 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
 
     cache_lock = Base.ReentrantLock()
     n_new = Threads.Atomic{Int}(0)
-    Threads.@threads for i in missing_idx
-        result = fn(inputs[i])
-        Base.lock(cache_lock) do
-            cached[keys_in_order[i]] = result
-            n = Threads.atomic_add!(n_new, 1) + 1
-            if n % save_every == 0
-                _atomic_save_dict(cache_file, cached)
+    # try/finally guarantees partial progress is flushed to disk even if `fn`
+    # throws on some input. Without this, an exception in a long-running sweep
+    # would lose every entry computed since the last `save_every` flush —
+    # exactly the silent-data-loss mode this function was built to prevent.
+    try
+        Threads.@threads for i in missing_idx
+            result = fn(inputs_vec[i])
+            Base.lock(cache_lock) do
+                cached[keys_in_order[i]] = result
+                n = Threads.atomic_add!(n_new, 1) + 1
+                if n % save_every == 0
+                    _atomic_save_dict(cache_file, cached)
+                end
             end
         end
+    finally
+        _atomic_save_dict(cache_file, cached)
+        Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
     end
-
-    _atomic_save_dict(cache_file, cached)
-    Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
     return Any[cached[k] for k in keys_in_order]
 end
 
