@@ -1,5 +1,6 @@
 import Test
 import Mycelia
+import JLD2
 
 Test.@testset "Checkpointing Tests" begin
     # Use a temporary directory for all checkpoint tests
@@ -218,6 +219,190 @@ Test.@testset "Checkpointing Tests" begin
                 Test.@test result == "alt_result"
                 Test.@test call_count[] == 1
             end
+        end
+    end
+end
+
+Test.@testset "cached_map" begin
+    # Counters are `Threads.Atomic{Int}` because `cached_map` runs `fn` via
+    # `Threads.@threads`; non-atomic read-modify-write (`Ref{Int}` / `x[] += 1`)
+    # loses increments under multi-threaded CI.
+    Test.@testset "first call computes all inputs" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            inputs = [1, 2, 3]
+            results = Mycelia.cached_map("first_call", dir, inputs) do x
+                Threads.atomic_add!(call_count, 1)
+                2x
+            end
+            Test.@test results == [2, 4, 6]
+            Test.@test call_count[] == 3
+            Test.@test isfile(joinpath(dir, "first_call.jld2"))
+        end
+    end
+
+    Test.@testset "second call with same inputs: no recomputation" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            inputs = [10, 20, 30]
+            fn = x -> begin
+                Threads.atomic_add!(call_count, 1)
+                x + 1
+            end
+            first = Mycelia.cached_map("memoized", dir, inputs, fn)
+            Test.@test first == [11, 21, 31]
+            Test.@test call_count[] == 3
+
+            second = Mycelia.cached_map("memoized", dir, inputs, fn)
+            Test.@test second == [11, 21, 31]
+            Test.@test call_count[] == 3  # unchanged: all hits
+        end
+    end
+
+    Test.@testset "incremental growth only computes new inputs" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            fn = x -> begin
+                Threads.atomic_add!(call_count, 1)
+                2x
+            end
+            first = Mycelia.cached_map("grow", dir, [1, 2, 3], fn)
+            Test.@test first == [2, 4, 6]
+            Test.@test call_count[] == 3
+
+            second = Mycelia.cached_map("grow", dir, [1, 2, 3, 4, 5], fn)
+            Test.@test second == [2, 4, 6, 8, 10]
+            Test.@test call_count[] == 5  # only 4 and 5 were new
+        end
+    end
+
+    Test.@testset "custom keyfn supports non-string inputs" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            # Tuple inputs: key by first element only, second element is metadata
+            inputs = [("a", "meta-1"), ("b", "meta-2"), ("c", "meta-3")]
+            fn = x -> begin
+                Threads.atomic_add!(call_count, 1)
+                uppercase(x[1]) * "|" * x[2]
+            end
+            first = Mycelia.cached_map("tuples", dir, inputs, fn; keyfn = x -> x[1])
+            Test.@test first == ["A|meta-1", "B|meta-2", "C|meta-3"]
+            Test.@test call_count[] == 3
+
+            # Add a 4th tuple; existing keys hit cache, new key computes
+            inputs2 = [("a", "meta-1"), ("b", "meta-2"), ("c", "meta-3"), ("d", "meta-4")]
+            second = Mycelia.cached_map("tuples", dir, inputs2, fn; keyfn = x -> x[1])
+            Test.@test second == ["A|meta-1", "B|meta-2", "C|meta-3", "D|meta-4"]
+            Test.@test call_count[] == 4
+        end
+    end
+
+    Test.@testset "force=true ignores cache and recomputes" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            fn = x -> begin
+                Threads.atomic_add!(call_count, 1)
+                x * 10
+            end
+            Mycelia.cached_map("forced", dir, [1, 2, 3], fn)
+            Test.@test call_count[] == 3
+
+            Mycelia.cached_map("forced", dir, [1, 2, 3], fn; force = true)
+            Test.@test call_count[] == 6  # all three recomputed
+        end
+    end
+
+    Test.@testset "corrupted cache file rebuilds gracefully" begin
+        mktempdir() do dir
+            cache_file = joinpath(dir, "corrupt.jld2")
+            write(cache_file, "not a valid jld2 file, just garbage bytes")
+
+            call_count = Threads.Atomic{Int}(0)
+            # @test_logs asserts the warning is emitted and captures no crash
+            results = Test.@test_logs (:warn,) match_mode = :any begin
+                Mycelia.cached_map("corrupt", dir, [1, 2, 3]) do x
+                    Threads.atomic_add!(call_count, 1)
+                    x + 100
+                end
+            end
+            Test.@test results == [101, 102, 103]
+            Test.@test call_count[] == 3
+
+            # On-disk cache must be a valid JLD2 file after the rebuild —
+            # otherwise a later run would re-trigger the rebuild path and
+            # recompute everything, defeating the whole point of the cache.
+            reloaded = JLD2.load(cache_file, "data")
+            Test.@test reloaded isa Dict
+            Test.@test length(reloaded) == 3
+
+            # Subsequent call should now hit the rebuilt cache
+            results2 = Mycelia.cached_map("corrupt", dir, [1, 2, 3]) do x
+                Threads.atomic_add!(call_count, 1)
+                error("should not be called")
+            end
+            Test.@test results2 == [101, 102, 103]
+            Test.@test call_count[] == 3
+        end
+    end
+
+    Test.@testset "empty inputs returns empty result" begin
+        mktempdir() do dir
+            call_count = Threads.Atomic{Int}(0)
+            results = Mycelia.cached_map("empty", dir, Int[]) do x
+                Threads.atomic_add!(call_count, 1)
+                x
+            end
+            Test.@test isempty(results)
+            Test.@test call_count[] == 0
+        end
+    end
+
+    Test.@testset "partial progress preserved when fn throws" begin
+        # This is the core invariant of cached_map: if `fn` throws partway
+        # through a long sweep, every successfully-computed entry must be on
+        # disk so the next run picks up where we left off. Without the
+        # try/finally inside cached_map, the final _atomic_save_dict would be
+        # skipped on exception and all in-memory progress would be lost.
+        mktempdir() do dir
+            inputs = [1, 2, 3, 4, 5]
+            # Throw on input 4. With `Threads.@threads`, work is partitioned
+            # into per-thread chunks: when one worker throws mid-chunk, the
+            # remaining items in that chunk never run. So the exact set of
+            # cached entries depends on thread scheduling — we can only
+            # guarantee that the failing key is absent and that *some* progress
+            # was flushed.
+            Test.@test_throws Exception Mycelia.cached_map(
+                "partial", dir, inputs; save_every = 2) do x
+                x == 4 ? error("simulated failure on input $x") : x * 100
+            end
+
+            cache_file = joinpath(dir, "partial.jld2")
+            Test.@test isfile(cache_file)
+            reloaded = JLD2.load(cache_file, "data")
+            Test.@test reloaded isa Dict
+            # The failing input must never be cached (its `fn` threw before
+            # the assignment `cached[key] = result`).
+            Test.@test !haskey(reloaded, "4")
+            # The finally block must flush whatever *did* land in the dict —
+            # at minimum one successful entry, at most four.
+            Test.@test 1 <= length(reloaded) <= 4
+            # Every cached entry must be correct (no partial/garbage values).
+            for (k, v) in reloaded
+                Test.@test v == parse(Int, k) * 100
+            end
+
+            # A subsequent successful run with a non-throwing fn fills in
+            # whatever was missing and returns a complete result.
+            retry_count = Threads.Atomic{Int}(0)
+            missing_before_retry = 5 - length(reloaded)
+            results = Mycelia.cached_map("partial", dir, inputs) do x
+                Threads.atomic_add!(retry_count, 1)
+                x * 100
+            end
+            Test.@test results == [100, 200, 300, 400, 500]
+            # Only the missing entries are recomputed (at minimum input 4,
+            # plus any inputs whose chunk-mate threw before they ran).
+            Test.@test retry_count[] == missing_before_retry
         end
     end
 end
