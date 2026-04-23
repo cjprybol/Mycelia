@@ -84,3 +84,4 @@ trees/
 .codex/mirror-dirty
 .codex/prompts/MIGRATION_STATUS.md
 .codex/state_*.sqlite*
+.worktrees/
