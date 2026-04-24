@@ -121,6 +121,7 @@ function visualize_fastplong_single(data; title = nothing)
 
     # --- Panel 2: Read Lengths ---
     has_n50 = any(df.n50 .> 0)
+    secondary_colors = [(color, 0.55) for color in colors]
 
     ax2 = CairoMakie.Axis(fig[1, 2], title = "Read Lengths", ylabel = "Base Pairs (bp)", xticks = (
         1:2, stages))
@@ -129,7 +130,8 @@ function visualize_fastplong_single(data; title = nothing)
         CairoMakie.barplot!(
             ax2, [0.85, 1.85], df.mean_length, width = 0.3, color = colors, label = "Mean")
         CairoMakie.barplot!(ax2, [1.15, 2.15], df.n50, width = 0.3,
-            color = colors, gap = 0, hatch = :x, label = "N50")
+            color = secondary_colors, gap = 0, strokecolor = :black, strokewidth = 1,
+            label = "N50")
         CairoMakie.axislegend(ax2, position = :lt)
     else
         CairoMakie.barplot!(
@@ -144,7 +146,7 @@ function visualize_fastplong_single(data; title = nothing)
     CairoMakie.barplot!(
         ax3, [0.85, 1.85], df.q20_percent, width = 0.3, color = colors, label = "Q20%")
     CairoMakie.barplot!(ax3, [1.15, 2.15], df.q30_percent, width = 0.3,
-        color = colors, hatch = :/, label = "Q30%")
+        color = secondary_colors, strokecolor = :black, strokewidth = 1, label = "Q30%")
     CairoMakie.hlines!(ax3, [90], color = :gray, linestyle = :dash)
     CairoMakie.axislegend(ax3, position = :rb)
 
@@ -645,7 +647,7 @@ end
         taxa_level::String; 
         top_n::Int = 10,
         sample_id_col::String = "sample_id",
-        filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
+        filter_taxa::Union{AbstractVector{<:Union{String, Missing}}, Nothing} = nothing,
         figure_width::Int = 1500,
         figure_height::Int = 1000,
         bar_width::Float64 = 0.7,
@@ -693,7 +695,7 @@ function plot_taxa_abundances(
         taxa_level::String;
         top_n::Int = 10,
         sample_id_col::String = "sample_id",
-        filter_taxa::Union{Vector{Union{String, Missing}}, Nothing} = nothing,
+        filter_taxa::Union{AbstractVector{<:Union{String, Missing}}, Nothing} = nothing,
         figure_width::Int = 1500,
         figure_height::Int = 1000,
         bar_width::Float64 = 0.7,
@@ -718,6 +720,8 @@ function plot_taxa_abundances(
 
     # Helper function to check if a value represents "missing" in either format
     is_missing_value = x -> x === missing || x == "missing"
+    is_filtered_taxon = isnothing(filter_taxa) ? (_ -> false) :
+                        taxon -> any(isequal(taxon), filter_taxa)
 
     # Step 1: Group by sample_id and count taxa at the specified level
     samples = unique(df[:, sample_id_col])
@@ -774,13 +778,7 @@ function plot_taxa_abundances(
         abundances = Dict{String, Float64}()
 
         # Calculate total counts (excluding filtered taxa)
-        if isnothing(filter_taxa)
-            total_counts = sum(values(counts))
-        else
-            total_counts = sum([count
-                                for (taxon, count) in counts
-                                if !(taxon in filter_taxa)])
-        end
+        total_counts = sum(count for (taxon, count) in counts if !is_filtered_taxon(taxon); init = 0)
 
         # Skip samples with no valid counts
         if total_counts == 0
@@ -792,7 +790,7 @@ function plot_taxa_abundances(
         missing_abundance = 0.0
 
         for (taxon, count) in counts
-            if !isnothing(filter_taxa) && taxon in filter_taxa
+            if is_filtered_taxon(taxon)
                 continue
             elseif is_missing_value(taxon)
                 missing_abundance += count / total_counts
@@ -3660,12 +3658,12 @@ preserving each series marker shape.
 """
 function build_pcoa_group_legend_elements(series_list::Vector{PointSeries})
     [CairoMakie.MarkerElement(
-        color = s.color,
-        marker = s.marker,
-        markersize = 10,
-        strokewidth = 0.5,
-        strokecolor = :black
-    ) for s in series_list]
+         color = s.color,
+         marker = s.marker,
+         markersize = 10,
+         strokewidth = 0.5,
+         strokecolor = :black
+     ) for s in series_list]
 end
 
 """
