@@ -149,6 +149,21 @@ Test.@testset "Binning Tools Integration" begin
         Test.@test_throws ErrorException Mycelia.parse_skder_clusters(
             "missing_cluster_info.tsv"
         )
+        # Duplicate input basename must be rejected (staging would collide).
+        skder_tmp_dup_a = joinpath(mktempdir(), "dup.fna")
+        skder_tmp_dup_b = joinpath(mktempdir(), "dup.fna")
+        open(skder_tmp_dup_a, "w") do io
+            write(io, ">g1\nACGTACGTACGT\n")
+        end
+        open(skder_tmp_dup_b, "w") do io
+            write(io, ">g2\nACGTACGTACGT\n")
+        end
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = [skder_tmp_dup_a, skder_tmp_dup_b],
+            outdir = joinpath(mktempdir(), "skder_dup_out")
+        )
+        rm(skder_tmp_dup_a; force = true)
+        rm(skder_tmp_dup_b; force = true)
         rm(skder_tmp_genome; force = true)
         Test.@test_throws ErrorException Mycelia.run_taxometer(
             contigs_fasta = "missing_contigs.fna",
@@ -419,7 +434,7 @@ Test.@testset "Binning Tools Integration" begin
                 end
 
                 Test.@testset "skDER" begin
-                    outdir = mktempdir()
+                    outdir = joinpath(mktempdir(), "skder_out")
                     try
                         result = Mycelia.run_skder(
                             genomes = genomes,
@@ -427,6 +442,8 @@ Test.@testset "Binning Tools Integration" begin
                             ani_threshold = 95.0,
                             af_threshold = 50.0,
                             mode = :dynamic,
+                            determine_clusters = true,
+                            symlink = true,
                             threads = min(4, Mycelia.get_default_threads())
                         )
                         Test.@test isdir(result.outdir)

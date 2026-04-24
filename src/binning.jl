@@ -409,9 +409,10 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
 end
 
 """
-    run_skder(; genomes, outdir, ani_threshold=99.0, af_threshold=90.0,
-              mode=:dynamic, mgecut=false, small_genomes=false,
-              threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+    run_skder(; genomes, outdir, ani_threshold=99.5, af_threshold=50.0,
+              mode=:dynamic, filter_mge=false, determine_clusters=true,
+              symlink=true, threads::Int=get_default_threads(),
+              extra_args::Vector{String}=String[])
 
 Run skDER for ANI-based reference dereplication.
 
@@ -422,46 +423,64 @@ clustering and minimizes the representative count (best for mapping panels);
 genomics). See Salamzade & Kalan, *Microbial Genomics* 2025
 (https://doi.org/10.1099/mgen.0.001438).
 
+The wrapper stages input genome paths into a temporary directory of symlinks
+before invoking skDER, which sidesteps the `ARG_MAX` command-line limit when
+dereplicating thousands of genomes. It also sanitizes `PYTHONPATH` and sets
+`PYTHONNOUSERSITE=1` in the subprocess env to prevent user-site shadowing of
+the conda env's numpy (which breaks skDER's Python 3.13 install on hosts
+where `~/.local/lib/python3.9/site-packages/numpy` exists).
+
 # Arguments
 - `genomes::Vector{String}`: Genome FASTA files to dereplicate. Must be
   non-empty; every path must exist.
-- `outdir::String`: Output directory; created if missing.
-- `ani_threshold::Float64=99.0`: ANI percentage threshold (passed as `-i`).
-  Typical defaults are 99.0 (skDER default) or 99.5 (Rodriguez-R 2024
-  within-species knee for most bacteria, including E. coli).
-- `af_threshold::Float64=90.0`: Aligned-fraction percentage threshold (passed
-  as `-f`). Defaults to skDER's default. 95.0 is recommended for tighter
-  strain-level dereplication.
-- `mode::Symbol=:dynamic`: `:dynamic` (metagenomic mapping panel) or `:greedy`
-  (comparative genomics / pangenome sampling).
-- `mgecut::Bool=false`: Pass `--mgecut` to mask mobile genetic elements
-  (plasmids, prophages) before ANI/AF computation. Useful for taxa with
-  extensive MGE load (e.g., UPEC).
-- `small_genomes::Bool=false`: Pass `--small-genomes` for viral/plasmid genomes.
-- `threads::Int`: Thread count (default `get_default_threads()`).
+- `outdir::String`: Output directory; created if missing. If it already
+  exists skDER may fail (it refuses to overwrite); callers are responsible
+  for removing stale directories on retry.
+- `ani_threshold::Float64=99.5`: ANI percentage cutoff (skDER `-i`).
+  Rodriguez-R et al. 2024 within-species knee for E. coli.
+- `af_threshold::Float64=50.0`: Aligned-fraction percentage cutoff (skDER
+  `-f`). skDER's default; use 95.0 for tighter strain-level dereplication
+  tied to gene-content similarity.
+- `mode::Symbol=:dynamic`: `:dynamic` (metagenomic mapping panel) or
+  `:greedy` (comparative genomics).
+- `filter_mge::Bool=false`: Pass `--filter-mge` (`-fm`) to mask mobile
+  genetic elements (plasmids, prophages) before ANI/AF computation using
+  PhiSpy. Useful for UPEC and other MGE-heavy taxa.
+- `determine_clusters::Bool=true`: Pass `--determine-clusters` (`-n`) to
+  produce the secondary cluster assignment TSV that `parse_skder_clusters`
+  expects. Keep enabled unless you only need the representative set.
+- `symlink::Bool=true`: Pass `--symlink` (`-l`) so the representative
+  directory contains symlinks to the input files rather than copies.
+- `threads::Int`: Thread count (skDER `-c`; default `get_default_threads()`).
 - `extra_args::Vector{String}`: Additional CLI arguments forwarded to skDER.
 
 # Returns
 Named tuple with:
 - `outdir`: The output directory.
-- `representatives_dir`: Path to the directory containing representative FASTAs
-  (`nothing` if not produced).
-- `representatives`: `Vector{String}` of representative FASTA paths (empty if
-  the directory was not produced).
-- `cluster_info`: Path to the skDER cluster-info TSV mapping redundant genomes
-  to their representative (`nothing` if not produced).
+- `representatives_dir`: Path to the directory containing representative
+  FASTAs (or `nothing` if not produced).
+- `representatives`: `Vector{String}` of representative FASTA paths
+  (resolved to absolute paths when `symlink=true`).
+- `cluster_info`: Path to the skDER cluster-info TSV mapping redundant
+  genomes to their representative (`nothing` if not produced).
 """
 function run_skder(; genomes::Vector{String}, outdir::String,
-        ani_threshold::Float64 = 99.0,
-        af_threshold::Float64 = 90.0,
+        ani_threshold::Float64 = 99.5,
+        af_threshold::Float64 = 50.0,
         mode::Symbol = :dynamic,
-        mgecut::Bool = false,
-        small_genomes::Bool = false,
+        filter_mge::Bool = false,
+        determine_clusters::Bool = true,
+        symlink::Bool = true,
         threads::Int = get_default_threads(),
         extra_args::Vector{String} = String[])
     isempty(genomes) && error("No genomes provided to skDER")
+    seen_basenames = Set{String}()
     for genome in genomes
         isfile(genome) || error("Genome file not found: $(genome)")
+        bn = basename(genome)
+        bn in seen_basenames &&
+            error("Duplicate input basename: $(bn); skDER staging requires unique basenames")
+        push!(seen_basenames, bn)
     end
     mode in (:dynamic, :greedy) ||
         error("Invalid skDER mode: $(mode); expected :dynamic or :greedy")
@@ -473,28 +492,43 @@ function run_skder(; genomes::Vector{String}, outdir::String,
 
     add_bioconda_env("skder")
 
-    cmd_args = String[
-    "skder",
-    "-g"
-]
-    append!(cmd_args, genomes)
-    append!(cmd_args,
-        [
-            "-o", outdir,
-            "-i", string(ani_threshold),
-            "-f", string(af_threshold),
-            "-d", string(mode),
-            "-t", string(threads)
-        ])
-    if mgecut
-        push!(cmd_args, "--mgecut")
-    end
-    if small_genomes
-        push!(cmd_args, "--small-genomes")
-    end
-    append!(cmd_args, extra_args)
+    # Stage input genomes as symlinks in a single directory to avoid ARG_MAX
+    # overflow when dereplicating thousands of genomes.
+    staging_dir = mktempdir(prefix = "skder_inputs_")
+    try
+        for genome in genomes
+            Base.Filesystem.symlink(abspath(genome),
+                joinpath(staging_dir, basename(genome)))
+        end
 
-    run(`$(CONDA_RUNNER) run --live-stream -n skder $(cmd_args)`)
+        cmd_args = String["skder",
+        "-g", staging_dir,
+        "-o", outdir,
+        "-i", string(ani_threshold),
+        "-f", string(af_threshold),
+        "-d", string(mode),
+        "-c", string(threads)]
+        if filter_mge
+            push!(cmd_args, "--filter-mge")
+        end
+        if determine_clusters
+            push!(cmd_args, "--determine-clusters")
+        end
+        if symlink
+            push!(cmd_args, "--symlink")
+        end
+        append!(cmd_args, extra_args)
+
+        # Sanitize Python env: PYTHONNOUSERSITE=1 disables ~/.local/lib user
+        # site-packages which shadow the conda env's numpy; PYTHONPATH= drops
+        # any inherited PYTHONPATH that would poison `import numpy`.
+        cmd = addenv(`$(CONDA_RUNNER) run --live-stream -n skder $(cmd_args)`,
+            "PYTHONNOUSERSITE" => "1",
+            "PYTHONPATH" => "")
+        run(cmd)
+    finally
+        rm(staging_dir; recursive = true, force = true)
+    end
 
     representatives_dir = _find_first_matching_dir(
         outdir,
