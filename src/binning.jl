@@ -529,6 +529,32 @@ function run_skder(; genomes::Vector{String}, outdir::String,
             "PYTHONNOUSERSITE" => "1",
             "PYTHONPATH" => "")
         run(cmd)
+
+        # Resolve representatives BEFORE cleaning up staging_dir: with
+        # --symlink, skDER writes its representatives as symlinks pointing at
+        # the staging dir (which then points at the real source files).
+        # Cleaning up staging_dir leaves dangling links; re-target each
+        # representative symlink at the original source now so the output
+        # directory survives cleanup.
+        representatives_dir = _find_first_matching_dir(
+            outdir,
+            [
+                r"Dereplicated_Representative_Genomes$",
+                r"Representative_Genomes$",
+                r"representatives?$"i
+            ];
+            recursive = true
+        )
+        if !isnothing(representatives_dir) && isdir(representatives_dir) && symlink
+            source_by_basename = Dict(basename(g) => abspath(g) for g in genomes)
+            for f in readdir(representatives_dir; join = true)
+                islink(f) || continue
+                src = get(source_by_basename, basename(f), nothing)
+                isnothing(src) && continue
+                rm(f; force = true)
+                Base.Filesystem.symlink(src, f)
+            end
+        end
     finally
         rm(staging_dir; recursive = true, force = true)
     end
@@ -542,7 +568,9 @@ function run_skder(; genomes::Vector{String}, outdir::String,
     representatives = String[]
     if !isnothing(representatives_dir) && isdir(representatives_dir)
         for f in readdir(representatives_dir; join = true)
-            if isfile(f) && (endswith(f, ".fa") || endswith(f, ".fna") ||
+            # Accept plain files AND valid symlinks (islink + target exists).
+            is_valid = isfile(f) || (islink(f) && isfile(realpath(f)))
+            if is_valid && (endswith(f, ".fa") || endswith(f, ".fna") ||
                 endswith(f, ".fasta") || endswith(f, ".fa.gz") ||
                 endswith(f, ".fna.gz") || endswith(f, ".fasta.gz"))
                 push!(representatives, f)
