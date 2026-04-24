@@ -408,6 +408,162 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
     return (; outdir, winning_genomes)
 end
 
+"""
+    run_skder(; genomes, outdir, ani_threshold=99.0, af_threshold=90.0,
+              mode=:dynamic, mgecut=false, small_genomes=false,
+              threads::Int=get_default_threads(), extra_args::Vector{String}=String[])
+
+Run skDER for ANI-based reference dereplication.
+
+skDER is purpose-built for reducing redundancy in reference panels used for
+metagenomic competitive mapping. `dynamic` mode approximates single-linkage
+clustering and minimizes the representative count (best for mapping panels);
+`greedy` mode strictly enforces the user ANI/AF cutoffs (best for comparative
+genomics). See Salamzade & Kalan, *Microbial Genomics* 2025
+(https://doi.org/10.1099/mgen.0.001438).
+
+# Arguments
+- `genomes::Vector{String}`: Genome FASTA files to dereplicate. Must be
+  non-empty; every path must exist.
+- `outdir::String`: Output directory; created if missing.
+- `ani_threshold::Float64=99.0`: ANI percentage threshold (passed as `-i`).
+  Typical defaults are 99.0 (skDER default) or 99.5 (Rodriguez-R 2024
+  within-species knee for most bacteria, including E. coli).
+- `af_threshold::Float64=90.0`: Aligned-fraction percentage threshold (passed
+  as `-f`). Defaults to skDER's default. 95.0 is recommended for tighter
+  strain-level dereplication.
+- `mode::Symbol=:dynamic`: `:dynamic` (metagenomic mapping panel) or `:greedy`
+  (comparative genomics / pangenome sampling).
+- `mgecut::Bool=false`: Pass `--mgecut` to mask mobile genetic elements
+  (plasmids, prophages) before ANI/AF computation. Useful for taxa with
+  extensive MGE load (e.g., UPEC).
+- `small_genomes::Bool=false`: Pass `--small-genomes` for viral/plasmid genomes.
+- `threads::Int`: Thread count (default `get_default_threads()`).
+- `extra_args::Vector{String}`: Additional CLI arguments forwarded to skDER.
+
+# Returns
+Named tuple with:
+- `outdir`: The output directory.
+- `representatives_dir`: Path to the directory containing representative FASTAs
+  (`nothing` if not produced).
+- `representatives`: `Vector{String}` of representative FASTA paths (empty if
+  the directory was not produced).
+- `cluster_info`: Path to the skDER cluster-info TSV mapping redundant genomes
+  to their representative (`nothing` if not produced).
+"""
+function run_skder(; genomes::Vector{String}, outdir::String,
+        ani_threshold::Float64 = 99.0,
+        af_threshold::Float64 = 90.0,
+        mode::Symbol = :dynamic,
+        mgecut::Bool = false,
+        small_genomes::Bool = false,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[])
+    isempty(genomes) && error("No genomes provided to skDER")
+    for genome in genomes
+        isfile(genome) || error("Genome file not found: $(genome)")
+    end
+    mode in (:dynamic, :greedy) ||
+        error("Invalid skDER mode: $(mode); expected :dynamic or :greedy")
+    0.0 <= ani_threshold <= 100.0 ||
+        error("Invalid skDER ani_threshold: $(ani_threshold); expected in [0, 100]")
+    0.0 <= af_threshold <= 100.0 ||
+        error("Invalid skDER af_threshold: $(af_threshold); expected in [0, 100]")
+    mkpath(outdir)
+
+    add_bioconda_env("skder")
+
+    cmd_args = String[
+    "skder",
+    "-g"
+]
+    append!(cmd_args, genomes)
+    append!(cmd_args,
+        [
+            "-o", outdir,
+            "-i", string(ani_threshold),
+            "-f", string(af_threshold),
+            "-d", string(mode),
+            "-t", string(threads)
+        ])
+    if mgecut
+        push!(cmd_args, "--mgecut")
+    end
+    if small_genomes
+        push!(cmd_args, "--small-genomes")
+    end
+    append!(cmd_args, extra_args)
+
+    run(`$(CONDA_RUNNER) run --live-stream -n skder $(cmd_args)`)
+
+    representatives_dir = _find_first_matching_dir(
+        outdir,
+        [r"Representative_Genomes$", r"representatives?$"i];
+        recursive = true
+    )
+    representatives = String[]
+    if !isnothing(representatives_dir) && isdir(representatives_dir)
+        for f in readdir(representatives_dir; join = true)
+            if isfile(f) && (endswith(f, ".fa") || endswith(f, ".fna") ||
+                endswith(f, ".fasta") || endswith(f, ".fa.gz") ||
+                endswith(f, ".fna.gz") || endswith(f, ".fasta.gz"))
+                push!(representatives, f)
+            end
+        end
+        sort!(representatives)
+    end
+    cluster_info = _find_first_matching_file(
+        outdir,
+        [r"skDER_Cluster_Info\.tsv$", r"Cluster_Info\.tsv$"];
+        recursive = true
+    )
+
+    return (; outdir, representatives_dir, representatives, cluster_info)
+end
+
+"""
+    parse_skder_clusters(file::String)::DataFrames.DataFrame
+
+Parse a skDER cluster-info TSV into a DataFrame with columns
+`genome`, `representative`, and `cluster_id`. Column names in the input file
+may vary by skDER version; the parser accepts common aliases.
+"""
+function parse_skder_clusters(file::String)::DataFrames.DataFrame
+    isfile(file) || error("skDER cluster-info file not found: $(file)")
+    df = DataFrames.DataFrame(CSV.File(file; delim = '\t', ignorerepeated = true))
+    names_map = Dict(string(col) => col for col in DataFrames.names(df))
+
+    genome_key = findfirst(k -> haskey(names_map, k),
+        ("genome", "Genome", "query", "Query"))
+    rep_key = findfirst(k -> haskey(names_map, k),
+        ("representative", "Representative",
+            "Representative_Genome", "representative_genome"))
+    cluster_key = findfirst(k -> haskey(names_map, k),
+        ("cluster_id", "Cluster_ID", "cluster", "Cluster"))
+
+    isnothing(genome_key) &&
+        error("No genome column (genome/Genome/query) found in $(file)")
+    isnothing(rep_key) &&
+        error("No representative column found in $(file)")
+
+    selection = [
+        names_map[("genome", "Genome", "query", "Query")[genome_key]] => :genome,
+        names_map[("representative", "Representative",
+            "Representative_Genome", "representative_genome")[rep_key]] => :representative
+    ]
+    if !isnothing(cluster_key)
+        push!(selection,
+            names_map[("cluster_id", "Cluster_ID", "cluster", "Cluster")[cluster_key]] => :cluster_id)
+    end
+    df_out = DataFrames.select(df, selection...)
+    df_out.genome = string.(df_out.genome)
+    df_out.representative = string.(df_out.representative)
+    if "cluster_id" in names(df_out)
+        df_out.cluster_id = string.(df_out.cluster_id)
+    end
+    return df_out
+end
+
 # -----------------------------------------------------------------------------
 # Parsers
 # -----------------------------------------------------------------------------

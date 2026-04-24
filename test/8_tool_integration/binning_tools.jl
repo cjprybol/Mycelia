@@ -119,6 +119,37 @@ Test.@testset "Binning Tools Integration" begin
             genomes = String[],
             outdir = outdir
         )
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = String[],
+            outdir = outdir
+        )
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = ["missing_genome.fna"],
+            outdir = outdir
+        )
+        skder_tmp_genome = tempname() * ".fna"
+        open(skder_tmp_genome, "w") do io
+            write(io, ">g1\nACGTACGTACGT\n")
+        end
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = [skder_tmp_genome],
+            outdir = outdir,
+            mode = :bogus
+        )
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = [skder_tmp_genome],
+            outdir = outdir,
+            ani_threshold = 150.0
+        )
+        Test.@test_throws ErrorException Mycelia.run_skder(
+            genomes = [skder_tmp_genome],
+            outdir = outdir,
+            af_threshold = -5.0
+        )
+        Test.@test_throws ErrorException Mycelia.parse_skder_clusters(
+            "missing_cluster_info.tsv"
+        )
+        rm(skder_tmp_genome; force = true)
         Test.@test_throws ErrorException Mycelia.run_taxometer(
             contigs_fasta = "missing_contigs.fna",
             depth_file = "missing_depth.tsv",
@@ -386,8 +417,37 @@ Test.@testset "Binning Tools Integration" begin
                         rm(outdir; recursive = true, force = true)
                     end
                 end
+
+                Test.@testset "skDER" begin
+                    outdir = mktempdir()
+                    try
+                        result = Mycelia.run_skder(
+                            genomes = genomes,
+                            outdir = outdir,
+                            ani_threshold = 95.0,
+                            af_threshold = 50.0,
+                            mode = :dynamic,
+                            threads = min(4, Mycelia.get_default_threads())
+                        )
+                        Test.@test isdir(result.outdir)
+                        Test.@test result.representatives_dir !== nothing &&
+                                   isdir(result.representatives_dir)
+                        Test.@test !isempty(result.representatives)
+                        Test.@test all(isfile, result.representatives)
+                        Test.@test length(result.representatives) <= length(genomes)
+                        if result.cluster_info !== nothing
+                            Test.@test isfile(result.cluster_info)
+                            clusters_df = Mycelia.parse_skder_clusters(result.cluster_info)
+                            Test.@test DataFrames.nrow(clusters_df) > 0
+                            Test.@test "genome" in names(clusters_df)
+                            Test.@test "representative" in names(clusters_df)
+                        end
+                    finally
+                        rm(outdir; recursive = true, force = true)
+                    end
+                end
             else
-                @info "Skipping dRep; missing genome FASTA inputs."
+                @info "Skipping dRep/skDER; missing genome FASTA inputs."
             end
 
             if !isempty(bins_dirs) && all(isdir, bins_dirs)
