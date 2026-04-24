@@ -490,7 +490,7 @@ function run_skder(; genomes::Vector{String}, outdir::String,
         error("Invalid skDER af_threshold: $(af_threshold); expected in [0, 100]")
     mkpath(outdir)
 
-    add_bioconda_env("skder")
+    _ensure_skder_env()
 
     # Stage input genomes as symlinks in a single directory to avoid ARG_MAX
     # overflow when dereplicating thousands of genomes.
@@ -532,7 +532,8 @@ function run_skder(; genomes::Vector{String}, outdir::String,
 
     representatives_dir = _find_first_matching_dir(
         outdir,
-        [r"Representative_Genomes$", r"representatives?$"i];
+        [r"Dereplicated_Representative_Genomes$", r"Representative_Genomes$",
+            r"representatives?$"i];
         recursive = true
     )
     representatives = String[]
@@ -548,11 +549,37 @@ function run_skder(; genomes::Vector{String}, outdir::String,
     end
     cluster_info = _find_first_matching_file(
         outdir,
-        [r"skDER_Cluster_Info\.tsv$", r"Cluster_Info\.tsv$"];
+        [r"skDER_Clustering\.txt$", r"skDER_Cluster_Info\.tsv$",
+            r"Cluster_Info\.tsv$"];
         recursive = true
     )
 
     return (; outdir, representatives_dir, representatives, cluster_info)
+end
+
+"""
+    _ensure_skder_env()
+
+Ensure the `skder` conda env exists and is pinned to `numpy<2`. skDER 1.3.4
+crashes in its multiprocessing N50 step under numpy 2.x with
+`only 0-dimensional arrays can be converted to Python scalars`. Upstream fix
+is expected but unreleased as of April 2026; pin aggressively here and relax
+once skDER tags a numpy-2-compatible release.
+"""
+function _ensure_skder_env()
+    env_name = "skder"
+    if check_bioconda_env_is_installed(env_name)
+        numpy_ok = _conda_env_exec_ok(env_name,
+            ["python",
+                "-c",
+                "import numpy as n; import sys; " *
+                "sys.exit(0 if int(n.__version__.split('.')[0]) < 2 else 1)"])
+        numpy_ok && return env_name
+        @info "Existing skder env has incompatible numpy; rebuilding with numpy<2 pin."
+        run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
+    end
+    run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda --strict-channel-priority -y -n $(env_name) skder "numpy<2"`)
+    return env_name
 end
 
 """
@@ -569,9 +596,10 @@ function parse_skder_clusters(file::String)::DataFrames.DataFrame
 
     genome_key = findfirst(k -> haskey(names_map, k),
         ("genome", "Genome", "query", "Query"))
-    rep_key = findfirst(k -> haskey(names_map, k),
-        ("representative", "Representative",
-            "Representative_Genome", "representative_genome"))
+    rep_aliases = ("nearest_representative_genome",
+        "representative", "Representative",
+        "Representative_Genome", "representative_genome")
+    rep_key = findfirst(k -> haskey(names_map, k), rep_aliases)
     cluster_key = findfirst(k -> haskey(names_map, k),
         ("cluster_id", "Cluster_ID", "cluster", "Cluster"))
 
@@ -582,8 +610,7 @@ function parse_skder_clusters(file::String)::DataFrames.DataFrame
 
     selection = [
         names_map[("genome", "Genome", "query", "Query")[genome_key]] => :genome,
-        names_map[("representative", "Representative",
-            "Representative_Genome", "representative_genome")[rep_key]] => :representative
+        names_map[rep_aliases[rep_key]] => :representative
     ]
     if !isnothing(cluster_key)
         push!(selection,
