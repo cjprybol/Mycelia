@@ -488,7 +488,10 @@ function run_skder(; genomes::Vector{String}, outdir::String,
         error("Invalid skDER ani_threshold: $(ani_threshold); expected in [0, 100]")
     0.0 <= af_threshold <= 100.0 ||
         error("Invalid skDER af_threshold: $(af_threshold); expected in [0, 100]")
-    mkpath(outdir)
+    # skDER creates the output directory itself. If it already exists it prompts
+    # interactively (EOFError under `conda run`). Only create the parent dir —
+    # callers are responsible for clearing stale outdir on retry.
+    mkpath(dirname(outdir))
 
     _ensure_skder_env()
 
