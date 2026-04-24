@@ -572,11 +572,23 @@ once skDER tags a numpy-2-compatible release.
 function _ensure_skder_env()
     env_name = "skder"
     if check_bioconda_env_is_installed(env_name)
-        numpy_ok = _conda_env_exec_ok(env_name,
-            ["python",
-                "-c",
-                "import numpy as n; import sys; " *
-                "sys.exit(0 if int(n.__version__.split('.')[0]) < 2 else 1)"])
+        # Sanitized env matters here: on hosts with a stale
+        # ~/.local/lib/*/numpy/ install, `import numpy` without
+        # PYTHONNOUSERSITE picks up the user-site version, not the conda
+        # env's. That would make the check always report numpy>=2 and
+        # trigger a rebuild on every run.
+        numpy_check_script = "import numpy as n; import sys; " *
+                             "sys.exit(0 if int(n.__version__.split('.')[0]) < 2 else 1)"
+        check_cmd = addenv(
+            `$(CONDA_RUNNER) run -n $(env_name) python -c $(numpy_check_script)`,
+            "PYTHONNOUSERSITE" => "1",
+            "PYTHONPATH" => ""
+        )
+        numpy_ok = try
+            success(check_cmd)
+        catch
+            false
+        end
         numpy_ok && return env_name
         @info "Existing skder env has incompatible numpy; rebuilding with numpy<2 pin."
         run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
