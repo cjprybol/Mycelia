@@ -44,6 +44,8 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 16. [16 UN Corpus Ngram vs Token Graphs](generated/tutorials/16_un_corpus_ngram_vs_token_graphs.md) - Graph comparisons on UN corpus data
 17. [17 Viroid Sketch Round Trip](generated/tutorials/17_viroid_sketch_round_trip.md) - BLAST DB export, sketching, and validation
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
+19. [19 Relational Clustering](generated/tutorials/19_relational_clustering.md) - Relational clustering workflows and analysis
+20. [20 Microbiome Visualization](generated/tutorials/20_microbiome_visualization.md) - Microbiome plotting and exploratory visualization
 21. [21 Topological Assembly Optimization](generated/tutorials/21_tda_topological_assembly_optimization.md) - Betti numbers, filtrations, and topology-aware graph scoring
 22. [22 Momentum Fork Resolution](generated/tutorials/22_momentum_fork_resolution.md) - SPRT-based branch decisions for read-evidence forks
 

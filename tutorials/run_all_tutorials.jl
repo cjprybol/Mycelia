@@ -14,7 +14,7 @@
 # julia --project=. tutorials/01_data_acquisition.jl
 #
 # # Convert to notebooks
-# julia --project=. -e 'include("tutorials/run_all_tutorials.jl"); convert_all_to_notebooks()'
+# julia --project=docs -e 'include("tutorials/run_all_tutorials.jl"); convert_all_to_notebooks()'
 # ```
 
 import Pkg
@@ -56,6 +56,10 @@ TUTORIALS = [
     "16_un_corpus_ngram_vs_token_graphs.jl",
     "17_viroid_sketch_round_trip.jl",
     "18_advanced_assembly_theory_and_practice.jl",
+    "19_relational_clustering.jl",
+    "20_microbiome_visualization.jl",
+    "21_cluster_comparison.jl",
+    "21_tda_topological_assembly_optimization.jl",
     "22_momentum_fork_resolution.jl",
 ]
 
@@ -135,7 +139,11 @@ function convert_all_to_notebooks()
     println("=== Converting Tutorials to Notebooks ===")
 
     if !LITERATE_AVAILABLE
-        error("Literate is not available in the active environment; use --project=docs or install Literate")
+        error(
+            "Literate is not available in the active environment; " *
+            "use `julia --project=docs -e 'include(\"tutorials/run_all_tutorials.jl\"); convert_all_to_notebooks()'` " *
+            "or install Literate in the active project"
+        )
     end
     
     ## Create notebooks directory if it doesn't exist

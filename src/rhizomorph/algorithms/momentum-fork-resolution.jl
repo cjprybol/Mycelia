@@ -5,6 +5,10 @@ The resolver models fork decisions as a sequential hypothesis test between a
 reference branch (H0) and whichever competing branch currently has the highest
 weighted evidence (H1). Evidence can be accumulated with linear or saturating
 weighting, or injected directly as a log-likelihood ratio.
+
+Rhizomorph keeps this API under `Rhizomorph.MomentumForkResolver` so the SPRT
+state machine, weighting functions, and branch-decision helpers remain grouped
+under one explicit namespace for tests, tutorials, and downstream callers.
 """
 module MomentumForkResolver
 
@@ -98,6 +102,18 @@ end
     linear_weight(support; slope=1.0, intercept=0.0, cap=nothing)
 
 Convert raw support into an additive linear evidence weight.
+
+# Arguments
+- `support::Real`: Non-negative raw support for the observed branch
+- `slope::Real=1.0`: Non-negative multiplier applied to `support`
+- `intercept::Real=0.0`: Constant offset added before clamping
+- `cap::Union{Nothing, Real}=nothing`: Optional upper bound on the resulting weight
+
+# Returns
+- `Float64`: Non-negative additive evidence weight after scaling and optional clamping
+
+# Notes
+- Throws an error if `support < 0` or `slope < 0`
 """
 function linear_weight(
         support::Real;
@@ -119,6 +135,17 @@ end
 
 Convert raw support into an additive saturating evidence weight using a
 Michaelis-Menten style response curve.
+
+# Arguments
+- `support::Real`: Non-negative raw support for the observed branch
+- `max_weight::Real=1.0`: Positive asymptotic maximum additive evidence
+- `half_saturation::Real=1.0`: Positive support value that yields half of `max_weight`
+
+# Returns
+- `Float64`: Saturating evidence contribution bounded above by `max_weight`
+
+# Notes
+- Throws an error if `support < 0`, `max_weight <= 0`, or `half_saturation <= 0`
 """
 function saturating_weight(
         support::Real;
@@ -140,6 +167,17 @@ end
 
 Compute a direct log-likelihood-ratio contribution for two competing branches.
 Positive values favor the first branch, negative values favor the second.
+
+# Arguments
+- `favored_support::Real`: Non-negative support assigned to the favored branch
+- `competing_support::Real`: Non-negative support assigned to the competing branch
+- `pseudocount::Real=0.5`: Positive smoothing value added to both supports
+
+# Returns
+- `Float64`: Signed log-likelihood-ratio contribution comparing the two supports
+
+# Notes
+- Throws an error if either support is negative or if `pseudocount <= 0`
 """
 function llr_weight(
         favored_support::Real,
@@ -164,6 +202,10 @@ Apply SPRT threshold logic to a signed log-likelihood ratio.
 """
 function sprt_decision(log_likelihood_ratio::Real; alpha::Real = 0.05, beta::Real = 0.05)
     thresholds = SPRTThresholds(; alpha, beta)
+    return sprt_decision(log_likelihood_ratio, thresholds)
+end
+
+function sprt_decision(log_likelihood_ratio::Real, thresholds::SPRTThresholds)
     llr = Float64(log_likelihood_ratio)
     if llr >= thresholds.accept_alternative
         return :accept_alternative
@@ -227,6 +269,11 @@ end
 
 Accumulate a competitive update between two branches using a direct
 log-likelihood-ratio contribution.
+
+# Notes
+- This `observe_fork_event!` overload applies the direct LLR symmetrically as
+  `±direct_llr/2`, so `branch_scores` entries may become negative even though
+  the single-branch overload only adds non-negative weights.
 """
 function observe_fork_event!(
         state::ActiveReadState{B},
@@ -288,6 +335,7 @@ function _ranked_branches(state::ActiveReadState)
 end
 
 function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
+    thresholds = SPRTThresholds(; alpha, beta)
     state.current_branch = best_branch(state)
     reference_score = state.branch_scores[state.reference_branch]
 
@@ -301,7 +349,7 @@ function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
                                      reference_score
     end
 
-    state.decision = sprt_decision(state.log_likelihood_ratio; alpha, beta)
+    state.decision = sprt_decision(state.log_likelihood_ratio, thresholds)
     if state.decision == :accept_alternative
         state.resolved_branch = state.current_branch
     elseif state.decision == :accept_reference

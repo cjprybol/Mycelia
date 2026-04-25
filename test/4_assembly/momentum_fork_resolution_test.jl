@@ -99,6 +99,8 @@ Test.@testset "Momentum Fork Resolution" begin
         resolution = Mycelia.Rhizomorph.MomentumForkResolver.fork_resolution(state)
         Test.@test resolution.decision == :accept_alternative
         Test.@test resolution.resolved_branch == :path_b
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.MomentumForkResolver.observe_fork_event!(
+            state, :path_a, :path_a, 5, 1; alpha = 0.05, beta = 0.05)
     end
 
     Test.@testset "Best-branch helpers" begin
