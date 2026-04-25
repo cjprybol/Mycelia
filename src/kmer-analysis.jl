@@ -2135,10 +2135,13 @@ function fasta_list_to_dense_kmer_counts(;
     kmer_index = Dict{KMER_TYPE, Int}(kmer => i for (i, kmer) in enumerate(sorted_kmers))
     kmer_counts_matrix = zeros(ValType, num_kmers, num_successful_files)
 
-    # Pass 2: fill matrix (multi-threaded, only for successful files)
-    progress2 = ProgressMeter.Progress(num_successful_files; desc = "Filling matrix: ",
-        barglyphs = ProgressMeter.BarGlyphs("[=> ]"), color = :green)
-    Threads.@threads for col in 1:num_successful_files
+    # Pass 2: fill matrix for successful files.
+    progress2 = show_progress ?
+                ProgressMeter.Progress(num_successful_files; desc = "Filling matrix: ",
+        barglyphs = ProgressMeter.BarGlyphs("[=> ]"), color = :green) : nothing
+    progress2_lock = use_threading ? Base.ReentrantLock() : nothing
+
+    function fill_matrix_column!(col)
         orig_idx = sorted_successful_indices[col]
         try
             kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
@@ -2149,14 +2152,33 @@ function fasta_list_to_dense_kmer_counts(;
         catch
             # Optionally log error
         end
-        Base.lock(lock)
-        try
-            ProgressMeter.next!(progress2)
-        finally
-            Base.unlock(lock)
+        if show_progress && !isnothing(progress2)
+            if use_threading
+                Base.lock(progress2_lock)
+            end
+            try
+                ProgressMeter.next!(progress2)
+            finally
+                if use_threading
+                    Base.unlock(progress2_lock)
+                end
+            end
         end
     end
-    ProgressMeter.finish!(progress2)
+
+    if use_threading
+        Threads.@threads for col in 1:num_successful_files
+            fill_matrix_column!(col)
+        end
+    else
+        for col in 1:num_successful_files
+            fill_matrix_column!(col)
+        end
+    end
+
+    if show_progress && !isnothing(progress2)
+        ProgressMeter.finish!(progress2)
+    end
 
     if cleanup_temp
         try

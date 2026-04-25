@@ -579,6 +579,17 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             )
             Test.@test dense_cached == dense_result
 
+            dense_temp_serial_result = Mycelia.fasta_list_to_dense_kmer_counts(
+                fasta_list = [fasta],
+                k = 3,
+                alphabet = :DNA,
+                force_threading = false,
+                force_temp_files = true,
+                force_progress_bars = false
+            )
+            Test.@test size(dense_temp_serial_result.counts, 2) == 1
+            Test.@test dense_temp_serial_result.successful_fasta_list == [fasta]
+
             dense_rna_result = Mycelia.fasta_list_to_dense_kmer_counts(
                 fasta_list = [rna_fasta],
                 k = 2,
