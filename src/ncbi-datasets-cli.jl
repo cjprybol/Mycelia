@@ -222,19 +222,30 @@ function _datasets_summary_dataframe(summary_subcmd::String, args::Vector{String
     add_bioconda_env(NCBI_DATASETS_ENV)
     merged_flags = _datasets_merge_flags(
         flags; api_key = api_key, debug = debug, no_progressbar = no_progressbar)
-    cmd_parts = _datasets_cmd_parts("summary", summary_subcmd, args, merged_flags)
     return with_retry(max_attempts = max_attempts, initial_delay = initial_retry_delay) do
-        datasets_cmd = join(Base.shell_escape.(cmd_parts), " ")
-        dataformat_parts = _dataformat_cmd_parts(schema; format = "tsv", fields = fields, template = template)
-        dataformat_cmd = join(Base.shell_escape.(dataformat_parts), " ")
-        full_cmd = "$(datasets_cmd) | $(dataformat_cmd)"
-        cmd = Cmd([
-            Mycelia.CONDA_RUNNER, "run", "-n", NCBI_DATASETS_ENV, "bash", "-lc", full_cmd])
-        io = open(cmd)
+        summary_output = run_datasets_cli("summary", summary_subcmd, args;
+            flags = merged_flags,
+            capture_output = true,
+            api_key = "",
+            debug = false,
+            no_progressbar = false,
+            max_attempts = 1,
+            initial_retry_delay = initial_retry_delay
+        )
+
+        temp_path, io = mktemp()
         try
-            CSV.read(io, DataFrames.DataFrame, delim = '\t', header = 1)
-        finally
+            write(io, summary_output)
             close(io)
+            datasets_dataformat(temp_path;
+                schema = schema,
+                format = "tsv",
+                fields = fields,
+                template = template
+            )
+        finally
+            isopen(io) && close(io)
+            rm(temp_path; force = true)
         end
     end
 end

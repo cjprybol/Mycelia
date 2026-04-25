@@ -25,6 +25,22 @@ const MYCELIA_RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true
 const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
                              lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 const MYCELIA_SHOW_PLOTS = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
+const MYCELIA_SKIP_AQUA = lowercase(get(ENV, "MYCELIA_SKIP_AQUA", "false")) == "true"
+const MYCELIA_SKIP_JET = lowercase(get(ENV, "MYCELIA_SKIP_JET", "false")) == "true"
+const MYCELIA_SKIP_HPC_ASSEMBLY_WRAPPERS =
+    lowercase(get(ENV, "MYCELIA_SKIP_HPC_ASSEMBLY_WRAPPERS", "false")) == "true"
+const MYCELIA_SKIP_TEST_FILES = let skip_files = Set{String}()
+    raw_skip_files = split(get(ENV, "MYCELIA_SKIP_TEST_FILES", ""), ',')
+    for file in raw_skip_files
+        normalized = strip(file)
+        isempty(normalized) && continue
+        push!(skip_files, normalized)
+    end
+    if MYCELIA_SKIP_HPC_ASSEMBLY_WRAPPERS
+        push!(skip_files, "hpc_assembly_wrappers_test.jl")
+    end
+    skip_files
+end
 const PROJECT_ROOT = dirname(@__DIR__)
 
 # Suppress plot display during tests by default.
@@ -87,6 +103,18 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
     "sequence_comparison.jl"
 ])
 
+function should_skip_test_file(file::AbstractString)::Bool
+    for skip_pattern in MYCELIA_SKIP_TEST_FILES
+        if occursin('*', skip_pattern)
+            regex_pattern = "^" * replace(skip_pattern, "." => "\\.", "*" => ".*") * "\$"
+            occursin(Regex(regex_pattern), file) && return true
+        elseif file == skip_pattern
+            return true
+        end
+    end
+    return false
+end
+
 # Helper function to include all test files in a directory
 function include_all_tests(dir)
     test_count = 0
@@ -97,6 +125,10 @@ function include_all_tests(dir)
         end
         for file in sort(files)
             if endswith(file, ".jl")
+                if should_skip_test_file(file)
+                    skipped_count += 1
+                    continue
+                end
                 # Skip external dependency files unless MYCELIA_RUN_EXTERNAL is set
                 if !MYCELIA_RUN_EXTERNAL
                     if occursin("third_party_assemblers", file) ||
@@ -110,17 +142,24 @@ function include_all_tests(dir)
             end
         end
     end
-    if skipped_count > 0 && !MYCELIA_RUN_EXTERNAL
-        @info "Skipped $skipped_count test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
+    if skipped_count > 0
+        if !MYCELIA_RUN_EXTERNAL
+            @info "Skipped $skipped_count test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
+        elseif !isempty(MYCELIA_SKIP_TEST_FILES)
+            @info "Skipped $skipped_count test file(s) in $(basename(dir)) due to explicit skip flags: $(join(sort!(collect(MYCELIA_SKIP_TEST_FILES)), ", "))."
+        end
     end
     return test_count
 end
 
 # Aqua.jl quality assurance tests
-include("aqua.jl")
+if !MYCELIA_SKIP_AQUA
+    include("aqua.jl")
+end
 
-# JET.jl static analysis - uncomment to enable (can be slow)
-include("jet.jl")
+if !MYCELIA_SKIP_JET
+    include("jet.jl")
+end
 
 # ExplicitImports.jl - enforce import style (no implicit imports from using)
 include("explicit_imports.jl")

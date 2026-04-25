@@ -34,11 +34,13 @@ projects/ME_CFS/*
 deps/build.log
 *.jpg
 *Project.toml
+!coverage/Project.toml
 *.ipynb
 test/test-development.jl
 *.mmi
 *.arrow
 Manifest.toml
+!coverage/Manifest.toml
 !docs/Manifest.toml
 scratch*
 build/*

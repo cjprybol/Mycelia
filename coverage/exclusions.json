@@ -1,29 +1,29 @@
 {
-  "policy": "Modules excluded from coverage targets but still measured. See campaign spec for rationale.",
+  "policy": "Modules excluded from baseline targets but still measured within the package include graph",
   "exclusions": [
     {
-      "file": "Mycelia.jl",
-      "reason": "Module loader — no testable logic"
+      "file": "src/bioconda.jl",
+      "reason": "External environment management and installation side effects"
     },
     {
-      "file": "bioconda.jl",
-      "reason": "External tool installation — network-dependent"
+      "file": "src/Mycelia.jl",
+      "reason": "Module loader and include graph root"
     },
     {
-      "file": "execution.jl",
-      "reason": "Shell execution wrappers — system-dependent"
+      "file": "src/execution.jl",
+      "reason": "Shell execution wrappers depend on the host environment"
     },
     {
-      "file": "precompile_workload.jl",
-      "reason": "Precompilation statements — not runtime code"
+      "file": "src/precompile_workload.jl",
+      "reason": "Precompile workload definitions rather than runtime logic"
     },
     {
-      "file": "slurm-templates.jl",
-      "reason": "HPC template generation — environment-dependent"
+      "file": "src/slurm-templates.jl",
+      "reason": "Template generation for HPC environments"
     },
     {
-      "file": "testing-utilities.jl",
-      "reason": "Test infrastructure helpers — tested transitively"
+      "file": "src/testing-utilities.jl",
+      "reason": "Test helper infrastructure exercised transitively"
     }
   ]
 }
