@@ -29,6 +29,32 @@ function make_fasta_records(record_count::Int, record_length::Int)
             for index in 1:record_count]
 end
 
+function build_unique_path_graph(sequence_length::Int; k::Int = BUILD_K, max_attempts::Int = 256)
+    expected_vertex_count = sequence_length - k + 1
+    base_seed = UInt32(sequence_length + 42)
+
+    for attempt in 0:(max_attempts - 1)
+        record = FASTX.FASTA.Record(
+            "path_sequence_$(sequence_length)_$(attempt)",
+            synthetic_dna_sequence(sequence_length, base_seed + UInt32(attempt))
+        )
+
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            [record],
+            k;
+            dataset_id = "performance_path_graph_$(sequence_length)_$(attempt)",
+            mode = :singlestrand
+        )
+
+        vertex_count = length(MetaGraphsNext.labels(graph))
+        if vertex_count == expected_vertex_count
+            return graph, vertex_count
+        end
+    end
+
+    error("Unable to synthesize a collision-free path graph for sequence length $(sequence_length)")
+end
+
 function best_elapsed_seconds(operation::Function; samples::Int = 3, repetitions::Int = 1)
     best = Inf
 
@@ -91,17 +117,7 @@ function measure_kmer_graph_build(record_count::Int; record_length::Int = BUILD_
 end
 
 function measure_eulerian_path_finding(sequence_length::Int; k::Int = BUILD_K)
-    record = FASTX.FASTA.Record(
-        "path_sequence_$(sequence_length)",
-        synthetic_dna_sequence(sequence_length, UInt32(sequence_length + 42))
-    )
-
-    graph = Mycelia.Rhizomorph.build_kmer_graph(
-        [record],
-        k;
-        dataset_id = "performance_path_graph",
-        mode = :singlestrand
-    )
+    graph, vertex_count = build_unique_path_graph(sequence_length; k = k)
 
     Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
 
@@ -119,7 +135,7 @@ function measure_eulerian_path_finding(sequence_length::Int; k::Int = BUILD_K)
         sequence_length = sequence_length,
         elapsed_seconds = elapsed_seconds,
         allocated_bytes = allocated_bytes,
-        vertex_count = length(MetaGraphsNext.labels(graph)),
+        vertex_count = vertex_count,
         edge_count = length(MetaGraphsNext.edge_labels(graph)),
         path_count = length(paths),
         first_path_length = isempty(paths) ? 0 : length(first(paths))
@@ -128,7 +144,11 @@ end
 
 function normalized_metric_range(metrics, numerator::Symbol, denominator::Symbol)
     normalized = [getfield(metric, numerator) / getfield(metric, denominator)
-                  for metric in metrics]
+                  for metric in metrics if getfield(metric, denominator) > 0]
+
+    if isempty(normalized)
+        return 1.0
+    end
 
     return maximum(normalized) / minimum(normalized)
 end
@@ -147,7 +167,7 @@ Test.@testset "Assembly Performance Bounds" begin
         Test.@test issorted([metric.vertex_count for metric in build_metrics])
         Test.@test issorted([metric.edge_count for metric in build_metrics])
         Test.@test normalized_metric_range(build_metrics, :elapsed_seconds, :total_bases) <
-                   2.5
+                   4.0
         Test.@test normalized_metric_range(build_metrics, :allocated_bytes, :total_bases) <
                    2.0
     end

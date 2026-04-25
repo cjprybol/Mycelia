@@ -31,7 +31,7 @@ end
 
 # Curated tutorial batch in execution order.
 # Exploratory and visualization-heavy tutorials remain opt-in.
-BATCH_TUTORIALS = [
+const BATCH_TUTORIALS = [
     "01_data_acquisition.jl",
     "02_quality_control.jl",
     "03_kmer_analysis.jl",
@@ -123,7 +123,7 @@ function run_all_tutorials()
     end
     
     println()
-    println("Successful: $successful/$(length(TUTORIALS))")
+    println("Successful: $successful/$(length(BATCH_TUTORIALS))")
     println("End time: $(Dates.now())")
     
     return results
@@ -147,7 +147,7 @@ function convert_all_to_notebooks()
         mkdir(notebooks_dir)
     end
     
-    for tutorial in TUTORIALS
+    for tutorial in BATCH_TUTORIALS
         tutorial_path = joinpath(@__DIR__, tutorial)
         if isfile(tutorial_path)
             println("Converting $tutorial to notebook...")
