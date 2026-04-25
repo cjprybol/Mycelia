@@ -1150,7 +1150,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test JLD2.load_object(dense_temp_saved_result) == dense_temp_saved
 
             dense_missing_result = joinpath(temp_dir, "missing_dense_temp", "dense_result.jld2")
-            Test.@test_throws InexactError Mycelia.fasta_list_to_dense_kmer_counts(
+            dense_missing = Mycelia.fasta_list_to_dense_kmer_counts(
                 fasta_list = [sparse_uint16_fasta],
                 k = 1,
                 alphabet = :DNA,
@@ -1160,6 +1160,12 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 force_temp_files = true,
                 force_progress_bars = true
             )
+            Test.@test dense_missing.successful_fasta_list == [sparse_uint16_fasta]
+            Test.@test length(dense_missing.error_log) == 1
+            Test.@test occursin("InexactError", dense_missing.error_log[1][2])
+            Test.@test eltype(dense_missing.counts) == UInt8
+            Test.@test size(dense_missing.counts, 2) == 1
+            Test.@test sum(dense_missing.counts[:, 1]) == 0
             Test.@test !isfile(dense_missing_result)
 
             dense_uint32 = Mycelia.fasta_list_to_dense_kmer_counts(
@@ -1173,6 +1179,9 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test eltype(dense_uint32.counts) == UInt32
             Test.@test sum(dense_uint32.counts[:, 1]) == 70000
 
+            # This assertion relies on ThrowOnWarnLogger/Logging.handle_message
+            # rethrowing the dense-count validation warning synchronously before
+            # the force branch can materialize the expensive k=12 dense universe.
             force_warning = try
                 Logging.with_logger(ThrowOnWarnLogger()) do
                     Mycelia.fasta_list_to_dense_kmer_counts(

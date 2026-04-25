@@ -2156,10 +2156,10 @@ function fasta_list_to_dense_kmer_counts(;
             Base.lock(lock)
             try
                 push!(error_log, (orig_idx, sprint(showerror, e)))
+                @views fill!(kmer_counts_matrix[:, col], zero(ValType))
             finally
                 Base.unlock(lock)
             end
-            rethrow()
         end
         Base.lock(lock)
         try
