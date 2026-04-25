@@ -125,6 +125,9 @@ include("jet.jl")
 # ExplicitImports.jl - enforce import style (no implicit imports from using)
 include("explicit_imports.jl")
 
+# Core executor coverage and dispatch helper tests.
+include("test_executor.jl")
+
 include_all_tests(joinpath(@__DIR__, "1_data_acquisition"))
 # For debugging individual suites, include explicit files instead of the directory sweep.
 # for file in (

@@ -21,7 +21,11 @@ Test.@testset "Executor Resolution" begin
     Test.@test Mycelia.resolve_executor(:slurm) isa Mycelia.SlurmExecutor
     Test.@test Mycelia.resolve_executor(:collect) isa Mycelia.CollectExecutor
     Test.@test Mycelia.resolve_executor(:dry_run) isa Mycelia.DryRunExecutor
+    Test.@test Mycelia.resolve_executor(:dryrun) isa Mycelia.DryRunExecutor
+    local_executor = Mycelia.LocalExecutor()
+    Test.@test Mycelia.resolve_executor(local_executor) === local_executor
     Test.@test_throws ErrorException Mycelia.resolve_executor(:unknown_backend)
+    Test.@test_throws ErrorException Mycelia.resolve_executor("collect")
     Test.@test !isdefined(Mycelia, :Execution)
 end
 
@@ -51,6 +55,53 @@ Test.@testset "Executor Dispatch" begin
     Test.@test result.dry_run
     Test.@test length(dry_executor.jobs) == 1
     Test.@test length(dry_executor.results) == 1
+end
+
+Test.@testset "Execution helpers and local execution" begin
+    Test.@test Mycelia.command_string(`echo hello`) == "echo hello"
+    Test.@test Mycelia.command_string("echo hello") == "echo hello"
+
+    built_job = Mycelia.build_execution_job(
+        cmd = "echo helper",
+        job_name = "helper-job",
+        site = "scg",
+        time_limit = "00:05:00",
+        cpus_per_task = 2,
+        mem_gb = 8,
+        partition = "nih_s10",
+        account = "PI_HELPER",
+        mail_user = "helper@example.org",
+        output_path = "/tmp/helper.out",
+        error_path = "/tmp/helper.err",
+        workdir = "/tmp/helper-workdir",
+        template_name = "slurm/scg/nih_s10.sbatch"
+    )
+    Test.@test built_job.site == :scg
+    Test.@test built_job.cpus_per_task == 2
+    Test.@test built_job.mem_gb == 8.0
+    Test.@test built_job.template_name == "slurm/scg/nih_s10.sbatch"
+
+    mktempdir() do tmpdir
+        workdir = joinpath(tmpdir, "work")
+        stdout_path = joinpath(tmpdir, "logs", "stdout.txt")
+        stderr_path = joinpath(tmpdir, "logs", "stderr.txt")
+        local_job = Mycelia.JobSpec(
+            job_name = "local-executor",
+            cmd = "pwd; echo local-stderr >&2",
+            site = :local,
+            time_limit = "00:01:00",
+            cpus_per_task = 1,
+            mem_gb = 1,
+            output_path = stdout_path,
+            error_path = stderr_path,
+            workdir = workdir
+        )
+
+        Test.@test Mycelia.execute(local_job, Mycelia.LocalExecutor())
+        Test.@test isdir(workdir)
+        Test.@test strip(read(stdout_path, String)) == workdir
+        Test.@test strip(read(stderr_path, String)) == "local-stderr"
+    end
 end
 
 Test.@testset "Wrapper Collection Paths" begin
