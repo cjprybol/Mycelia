@@ -79,6 +79,20 @@ Test.@testset "Wrapper Collection Paths" begin
     Test.@test occursin("megahit", assembly_exec.jobs[1].cmd)
     Test.@test megahit_out.contigs == joinpath(tmpdir, "megahit", "final.contigs.fa")
 
+    metamdbg_exec = Mycelia.CollectExecutor()
+    metamdbg_out = Mycelia.run_metamdbg(
+        hifi_reads = fastq1,
+        outdir = joinpath(tmpdir, "metamdbg"),
+        graph_k = 21,
+        executor = metamdbg_exec,
+        site = :scg
+    )
+    Test.@test length(metamdbg_exec.jobs) == 1
+    Test.@test occursin("metaMDBG asm", metamdbg_exec.jobs[1].cmd)
+    Test.@test occursin("metaMDBG gfa", metamdbg_exec.jobs[1].cmd)
+    Test.@test metamdbg_out.contigs == joinpath(tmpdir, "metamdbg", "contigs.fasta.gz")
+    Test.@test metamdbg_out.graph == joinpath(tmpdir, "metamdbg", "assemblyGraph_k21*.gfa")
+
     classification_exec = Mycelia.CollectExecutor()
     sourmash_out = Mycelia.run_sourmash_search(
         query_sig = query_sig,

@@ -2731,6 +2731,7 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
 
     contigs_file = joinpath(outdir, "contigs.fasta")
     graph_file = joinpath(outdir, "graph.gfa")
+    graph_glob = joinpath(outdir, "assemblyGraph_k$(graph_k)*.gfa")
 
     if executor !== nothing
         asm_cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
@@ -2793,7 +2794,7 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
         return (;
             outdir,
             contigs = joinpath(outdir, "contigs.fasta.gz"),
-            graph = joinpath(outdir, "assemblyGraph_k$(graph_k).gfa")
+            graph = graph_glob
         )
     end
 
