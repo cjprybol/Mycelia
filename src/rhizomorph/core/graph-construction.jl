@@ -673,6 +673,8 @@ function add_observations_to_graph!(
         error("Unsupported k-mer type in graph: $KmerType")
     end
 
+    is_aa = KmerType <: Kmers.AAKmer
+
     # Process each record
     for record in records
         observation_id = String(split(FASTX.identifier(record), ' ')[1])
@@ -682,8 +684,12 @@ function add_observations_to_graph!(
             quality = Vector{UInt8}(FASTX.quality(record))
         end
 
-        # Extract k-mers with positions
-        kmers_with_positions = collect(KmerIterator(sequence))
+        # DNA/RNA iterators return (kmer, position), AA iterators return just kmer.
+        kmers_with_positions = if is_aa
+            [(kmer, i) for (i, kmer) in enumerate(KmerIterator(sequence))]
+        else
+            collect(KmerIterator(sequence))
+        end
 
         # Add vertices and evidence
         for (kmer, position) in kmers_with_positions
