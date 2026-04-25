@@ -670,7 +670,8 @@ Create a stacked bar chart showing taxa relative abundances for each sample.
 - `taxa_level`: Taxonomic level to analyze (e.g., "genus", "species")
 - `top_n`: Number of top taxa to display individually, remainder grouped as "Other"
 - `sample_id_col`: Column name containing sample identifiers
-- `filter_taxa`: Taxa to exclude from visualization (default: nothing - no filtering)
+- `filter_taxa`: Taxa to exclude from visualization as an
+  `AbstractVector{<:Union{String, Missing}}` or `nothing` (default: `nothing`)
 - `figure_width`: Width of the figure in pixels
 - `figure_height`: Height of the figure in pixels
 - `bar_width`: Width of each bar (between 0 and 1)
@@ -720,8 +721,9 @@ function plot_taxa_abundances(
 
     # Helper function to check if a value represents "missing" in either format
     is_missing_value = x -> x === missing || x == "missing"
-    is_filtered_taxon = isnothing(filter_taxa) ? (_ -> false) :
-                        taxon -> any(isequal(taxon), filter_taxa)
+    filtered_taxa_set = isnothing(filter_taxa) ? nothing : Set(filter_taxa)
+    is_filtered_taxon = isnothing(filtered_taxa_set) ? (_ -> false) :
+                        taxon -> in(taxon, filtered_taxa_set)
 
     # Step 1: Group by sample_id and count taxa at the specified level
     samples = unique(df[:, sample_id_col])
@@ -745,8 +747,8 @@ function plot_taxa_abundances(
     end
 
     # Filter out specified taxa if filter_taxa is provided
-    if !isnothing(filter_taxa)
-        for taxon in filter_taxa
+    if !isnothing(filtered_taxa_set)
+        for taxon in filtered_taxa_set
             delete!(joint_counts, taxon)
         end
     end

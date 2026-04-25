@@ -1,34 +1,18 @@
 import Test
+import CSV
 import DataFrames
 import Mycelia
 
-function make_batch_qc_dataframe(; include_n50 = true, stage = "after_filtering")
-    df = DataFrames.DataFrame(
-        stage = [stage, stage, "before_filtering"],
-        yield_gb = [2.4, 1.8, 2.9],
-        total_reads = [2400, 1800, 2900],
-        mean_length = [1200.0, 900.0, 1500.0],
-        q20_percent = [95.0, 93.0, 96.0],
-        q30_percent = [91.0, 88.0, 92.0]
-    )
+const PLOTTING_FIXTURE_DIR = normpath(joinpath(@__DIR__, "..", "metadata", "plotting_utilities"))
 
-    if include_n50
-        df[!, :n50] = [1500.0, 1100.0, 1700.0]
-    end
-
-    return df
-end
-
-function make_fastplong_summary(; n50_values = [2000.0, 1800.0])
-    return DataFrames.DataFrame(
-        total_reads = [1200, 900],
-        yield_gb = [2.2, 1.7],
-        mean_length = [1500.0, 1700.0],
-        n50 = n50_values,
-        q20_percent = [94.0, 96.0],
-        q30_percent = [88.0, 91.0]
-    )
-end
+load_batch_qc_fixture(filename) = CSV.read(
+    joinpath(PLOTTING_FIXTURE_DIR, filename),
+    DataFrames.DataFrame
+)
+load_fastplong_summary_fixture(filename) = CSV.read(
+    joinpath(PLOTTING_FIXTURE_DIR, filename),
+    DataFrames.DataFrame
+)
 
 Test.@testset "Plotting Utilities" begin
     Test.@testset "Optimal subsequence length" begin
@@ -58,14 +42,18 @@ Test.@testset "Plotting Utilities" begin
     end
 
     Test.@testset "Batch QC plotting" begin
-        no_filtered_df = make_batch_qc_dataframe(stage = "before_filtering")
+        no_filtered_df = load_batch_qc_fixture("batch_qc_before_filtering_only.csv")
         fig = Test.@test_logs (:warn, r"No 'after_filtering' data found.") Mycelia.plot_batch_qc_distributions(no_filtered_df)
         Test.@test fig isa Mycelia.CairoMakie.Figure
 
-        fig = Mycelia.plot_batch_qc_distributions(make_batch_qc_dataframe())
+        fig = Mycelia.plot_batch_qc_distributions(
+            load_batch_qc_fixture("batch_qc_after_filtering.csv")
+        )
         Test.@test fig isa Mycelia.CairoMakie.Figure
 
-        fig = Mycelia.plot_batch_qc_distributions(make_batch_qc_dataframe(include_n50 = false))
+        fig = Mycelia.plot_batch_qc_distributions(
+            load_batch_qc_fixture("batch_qc_after_filtering_without_n50.csv")
+        )
         Test.@test fig isa Mycelia.CairoMakie.Figure
     end
 
@@ -73,7 +61,7 @@ Test.@testset "Plotting Utilities" begin
         Test.@test Mycelia.visualize_fastplong_single(nothing) isa Mycelia.CairoMakie.Figure
 
         data_with_drops = (
-            summary = make_fastplong_summary(),
+            summary = load_fastplong_summary_fixture("fastplong_summary_standard.csv"),
             sample_id = "sample-a",
             filtering_stats = Dict(
                 "passed_filter_reads" => 900,
@@ -84,7 +72,7 @@ Test.@testset "Plotting Utilities" begin
         Test.@test Mycelia.visualize_fastplong_single(data_with_drops) isa Mycelia.CairoMakie.Figure
 
         data_with_no_drops = (
-            summary = make_fastplong_summary(n50_values = [0.0, 0.0]),
+            summary = load_fastplong_summary_fixture("fastplong_summary_zero_n50.csv"),
             sample_id = "sample-b",
             filtering_stats = Dict("passed_filter_reads" => 900)
         )
@@ -94,7 +82,7 @@ Test.@testset "Plotting Utilities" begin
         ) isa Mycelia.CairoMakie.Figure
 
         data_without_filter_stats = (
-            summary = make_fastplong_summary(),
+            summary = load_fastplong_summary_fixture("fastplong_summary_standard.csv"),
             sample_id = "sample-c",
             filtering_stats = Dict{String, Int}()
         )
@@ -146,6 +134,19 @@ Test.@testset "Plotting Utilities" begin
         Test.@test fig isa Mycelia.CairoMakie.Figure
         Test.@test ax isa Mycelia.CairoMakie.Axis
         Test.@test Set(keys(taxa_colors)) == Set(["Alpha", "Other", "Missing"])
+
+        filter_view = view(["Gamma", "Alpha"], 1:1)
+        fig_view, ax_view, taxa_colors_view = Mycelia.plot_taxa_abundances(
+            taxa_df,
+            "genus";
+            top_n = 1,
+            filter_taxa = filter_view,
+            sort_samples = true,
+            legend_nbanks = 2
+        )
+        Test.@test fig_view isa Mycelia.CairoMakie.Figure
+        Test.@test ax_view isa Mycelia.CairoMakie.Axis
+        Test.@test Set(keys(taxa_colors_view)) == Set(["Alpha", "Other", "Missing"])
 
         mktempdir() do dir
             save_path = joinpath(dir, "taxa_abundance.png")
