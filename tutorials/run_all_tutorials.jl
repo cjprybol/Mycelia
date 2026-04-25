@@ -1,13 +1,13 @@
-# # Run All Mycelia Tutorials
+# # Run the Curated Mycelia Tutorial Batch
 #
-# This script executes all Mycelia tutorials in sequence.
+# This script executes a curated batch of Mycelia tutorials in sequence.
 # Use with caution - may take significant time and resources.
 # External tool steps are gated by `MYCELIA_RUN_EXTERNAL=true`.
 #
 # ## Usage
 #
 # ```bash
-# # Run all tutorials
+# # Run the curated tutorial batch
 # julia --project=. tutorials/run_all_tutorials.jl
 #
 # # Run specific tutorial
@@ -29,8 +29,9 @@ if LITERATE_AVAILABLE
     import Literate
 end
 
-# List of all tutorials in execution order
-TUTORIALS = [
+# Curated tutorial batch in execution order.
+# Exploratory and visualization-heavy tutorials remain opt-in.
+const BATCH_TUTORIALS = [
     "01_data_acquisition.jl",
     "02_quality_control.jl",
     "03_kmer_analysis.jl",
@@ -57,12 +58,14 @@ TUTORIALS = [
     "17_viroid_sketch_round_trip.jl",
     "18_advanced_assembly_theory_and_practice.jl",
     "22_momentum_fork_resolution.jl",
+    "23_variant_calling_workflow.jl",
 ]
 
 """
     run_all_tutorials()
 
-Execute all tutorials in sequence, collecting timing and status information.
+Execute the curated tutorial batch in sequence, collecting timing and status
+information.
 """
 function run_all_tutorials()
     println("=== Running All Mycelia Tutorials ===")
@@ -72,7 +75,7 @@ function run_all_tutorials()
     results = []
     total_start = time()
     
-    for tutorial in TUTORIALS
+    for tutorial in BATCH_TUTORIALS
         tutorial_path = joinpath(@__DIR__, tutorial)
         if isfile(tutorial_path)
             println("Running $tutorial...")
@@ -120,7 +123,7 @@ function run_all_tutorials()
     end
     
     println()
-    println("Successful: $successful/$(length(TUTORIALS))")
+    println("Successful: $successful/$(length(BATCH_TUTORIALS))")
     println("End time: $(Dates.now())")
     
     return results
@@ -144,7 +147,7 @@ function convert_all_to_notebooks()
         mkdir(notebooks_dir)
     end
     
-    for tutorial in TUTORIALS
+    for tutorial in BATCH_TUTORIALS
         tutorial_path = joinpath(@__DIR__, tutorial)
         if isfile(tutorial_path)
             println("Converting $tutorial to notebook...")
@@ -202,7 +205,7 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     ## Only run if this script is executed directly
     if length(ARGS) == 0
-        ## Run all tutorials
+        ## Run the curated tutorial batch
         results = run_all_tutorials()
     elseif ARGS[1] == "convert"
         ## Convert to notebooks
