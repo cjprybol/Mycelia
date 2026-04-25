@@ -106,6 +106,35 @@ Test.@testset "Momentum Fork Resolution" begin
         Test.@test resolution.resolved_branch == :path_b
     end
 
+    Test.@testset "Paired weighted updates" begin
+        state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+            "read-3b", [:path_a, :path_b]; reference_branch = :path_a)
+
+        decision = Mycelia.Rhizomorph.MomentumForkResolver.observe_weighted_fork_event!(
+            state,
+            :path_a,
+            1,
+            :path_b,
+            6;
+            weight_fn = Mycelia.Rhizomorph.MomentumForkResolver.linear_weight
+        )
+
+        Test.@test decision == :accept_alternative
+        Test.@test state.observations == 1
+        Test.@test state.branch_support[:path_a] == 1.0
+        Test.@test state.branch_support[:path_b] == 6.0
+        Test.@test state.current_branch == :path_b
+        Test.@test state.resolved_branch == :path_b
+    end
+
+    Test.@testset "Direct LLR updates require reference branch" begin
+        state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+            "read-3c", [:path_a, :path_b, :path_c]; reference_branch = :path_a)
+
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.MomentumForkResolver.observe_fork_event!(
+            state, :path_b, :path_c, 8, 2; alpha = 0.05, beta = 0.05)
+    end
+
     Test.@testset "Best-branch helpers" begin
         state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
             "read-4", ["left", "right", "center"]; reference_branch = "center")

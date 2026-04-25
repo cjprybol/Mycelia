@@ -166,29 +166,43 @@ function observe_weighted_window!(
     end
 
     if weight_mode == :uniform
-        weighted_reference = Mycelia.Rhizomorph.MomentumForkResolver.uniform_weight(reference_support)
-        weighted_alternative = Mycelia.Rhizomorph.MomentumForkResolver.uniform_weight(alternative_support)
+        return Mycelia.Rhizomorph.MomentumForkResolver.observe_weighted_fork_event!(
+            state,
+            :reference,
+            reference_support,
+            :alternative,
+            alternative_support;
+            weight_fn = Mycelia.Rhizomorph.MomentumForkResolver.uniform_weight,
+            alpha = alpha,
+            beta = beta
+        )
     elseif weight_mode == :linear
-        weighted_reference = Mycelia.Rhizomorph.MomentumForkResolver.linear_weight(reference_support)
-        weighted_alternative = Mycelia.Rhizomorph.MomentumForkResolver.linear_weight(alternative_support)
+        return Mycelia.Rhizomorph.MomentumForkResolver.observe_weighted_fork_event!(
+            state,
+            :reference,
+            reference_support,
+            :alternative,
+            alternative_support;
+            weight_fn = Mycelia.Rhizomorph.MomentumForkResolver.linear_weight,
+            alpha = alpha,
+            beta = beta
+        )
     elseif weight_mode == :saturating
-        max_weight = max(2.0, scenario.coverage / 3)
-        half_saturation = max(1.0, scenario.coverage / 5)
-        weighted_reference = Mycelia.Rhizomorph.MomentumForkResolver.saturating_weight(
-            reference_support; max_weight = max_weight, half_saturation = half_saturation)
-        weighted_alternative = Mycelia.Rhizomorph.MomentumForkResolver.saturating_weight(
-            alternative_support; max_weight = max_weight, half_saturation = half_saturation)
+        return Mycelia.Rhizomorph.MomentumForkResolver.observe_weighted_fork_event!(
+            state,
+            :reference,
+            reference_support,
+            :alternative,
+            alternative_support;
+            weight_fn = Mycelia.Rhizomorph.MomentumForkResolver.saturating_weight,
+            alpha = alpha,
+            beta = beta,
+            max_weight = max(2.0, scenario.coverage / 3),
+            half_saturation = max(1.0, scenario.coverage / 5)
+        )
     else
         error("Unsupported weight mode: $(weight_mode)")
     end
-
-    state.branch_support[:reference] += Float64(reference_support)
-    state.branch_support[:alternative] += Float64(alternative_support)
-    state.branch_scores[:reference] += weighted_reference
-    state.branch_scores[:alternative] += weighted_alternative
-    state.observations += 1
-    Mycelia.Rhizomorph.MomentumForkResolver._refresh_state!(state; alpha = alpha, beta = beta)
-    return state.decision
 end
 
 function run_resolver_trial(

@@ -24,11 +24,6 @@ end
 
 import Dates
 
-const LITERATE_AVAILABLE = Base.find_package("Literate") !== nothing
-if LITERATE_AVAILABLE
-    import Literate
-end
-
 # List of all tutorials in execution order
 TUTORIALS = [
     "01_data_acquisition.jl",
@@ -58,6 +53,22 @@ TUTORIALS = [
     "18_advanced_assembly_theory_and_practice.jl",
     "22_momentum_fork_resolution.jl",
 ]
+
+function literate_available()
+    return Base.find_package("Literate") !== nothing
+end
+
+function ensure_literate_loaded()
+    if !literate_available()
+        error("Literate.jl is required for notebook conversion. Install it or use --project=docs.")
+    end
+
+    if !isdefined(@__MODULE__, :Literate)
+        @eval import Literate
+    end
+
+    return Literate
+end
 
 """
     run_all_tutorials()
@@ -134,9 +145,7 @@ Convert all tutorials to Jupyter notebooks using Literate.jl.
 function convert_all_to_notebooks()
     println("=== Converting Tutorials to Notebooks ===")
 
-    if !LITERATE_AVAILABLE
-        error("Literate is not available in the active environment; use --project=docs or install Literate")
-    end
+    literate = ensure_literate_loaded()
     
     ## Create notebooks directory if it doesn't exist
     notebooks_dir = joinpath(@__DIR__, "notebooks")
@@ -151,7 +160,7 @@ function convert_all_to_notebooks()
             
             try
                 ## Convert to notebook
-                Literate.notebook(tutorial_path, notebooks_dir, execute=false)
+                literate.notebook(tutorial_path, notebooks_dir, execute=false)
                 println("✓ Converted $tutorial")
                 
             catch e

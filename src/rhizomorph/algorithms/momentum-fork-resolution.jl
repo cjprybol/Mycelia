@@ -48,7 +48,7 @@ Track sequential branch evidence for one read traversing a fork.
 - `read_id::String`: Read identifier
 - `reference_branch`: Null-hypothesis branch used by the SPRT
 - `current_branch`: Branch with the highest cumulative weighted evidence
-- `branch_scores::Dict`: Per-branch weighted evidence totals
+- `branch_scores::Dict`: Per-branch signed weighted evidence scores; may be negative
 - `branch_support::Dict`: Per-branch raw support totals
 - `log_likelihood_ratio::Float64`: Signed LLR relative to `reference_branch`
 - `observations::Int`: Number of sequential updates applied
@@ -231,6 +231,37 @@ function observe_fork_event!(
 end
 
 """
+    observe_weighted_fork_event!(state, branch_a, support_a, branch_b, support_b; weight_fn=linear_weight, alpha=0.05, beta=0.05, weight_kwargs...)
+
+Accumulate weighted support for two competing branches as a single sequential
+observation, then update the SPRT decision state.
+"""
+function observe_weighted_fork_event!(
+        state::ActiveReadState{B},
+        branch_a::B,
+        support_a::Real,
+        branch_b::B,
+        support_b::Real;
+        weight_fn = linear_weight,
+        alpha::Real = 0.05,
+        beta::Real = 0.05,
+        weight_kwargs...
+) where {B}
+    _require_known_branch(state, branch_a)
+    _require_known_branch(state, branch_b)
+    support_a >= 0 || error("support_a must be non-negative, got $(support_a)")
+    support_b >= 0 || error("support_b must be non-negative, got $(support_b)")
+
+    state.branch_support[branch_a] += Float64(support_a)
+    state.branch_support[branch_b] += Float64(support_b)
+    state.branch_scores[branch_a] += Float64(weight_fn(support_a; weight_kwargs...))
+    state.branch_scores[branch_b] += Float64(weight_fn(support_b; weight_kwargs...))
+    state.observations += 1
+    _refresh_state!(state; alpha, beta)
+    return state.decision
+end
+
+"""
     observe_fork_event!(state, branch_a, branch_b, support_a, support_b; alpha=0.05, beta=0.05, pseudocount=0.5)
 
 Accumulate a competitive update between two branches using a direct
@@ -248,6 +279,8 @@ function observe_fork_event!(
 ) where {B}
     _require_known_branch(state, branch_a)
     _require_known_branch(state, branch_b)
+    branch_a == state.reference_branch || branch_b == state.reference_branch ||
+        error("Direct LLR updates must compare against reference_branch $(state.reference_branch)")
     support_a >= 0 || error("support_a must be non-negative, got $(support_a)")
     support_b >= 0 || error("support_b must be non-negative, got $(support_b)")
 
