@@ -272,6 +272,7 @@ function nersc_sbatch(;
         requeue = requeue,
         output_path = joinpath(logdir, "%j.%x.out"),
         error_path = joinpath(logdir, "%j.%x.err"),
+        artifact_path = script_path,
         mail_user = mail_user,
         mail_type = mail_type
     )

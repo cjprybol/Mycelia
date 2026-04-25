@@ -27,6 +27,7 @@ struct JobSpec
     account::Union{Nothing, String}
     output_path::Union{Nothing, String}
     error_path::Union{Nothing, String}
+    artifact_path::Union{Nothing, String}
     mail_user::Union{Nothing, String}
     mail_type::Union{Nothing, Vector{String}}
     requeue::Bool
@@ -103,6 +104,7 @@ function JobSpec(;
         account = nothing,
         output_path = nothing,
         error_path = nothing,
+        artifact_path = nothing,
         mail_user = nothing,
         mail_type = nothing,
         requeue::Bool = false,
@@ -136,6 +138,7 @@ function JobSpec(;
         _normalize_optional_string(account),
         _normalize_optional_string(output_path),
         _normalize_optional_string(error_path),
+        _normalize_optional_string(artifact_path),
         _normalize_optional_string(mail_user),
         _normalize_mail_type(mail_type),
         requeue,
@@ -284,6 +287,7 @@ function job_spec_to_dict(job::JobSpec)::Dict{String, Any}
         "account" => job.account,
         "output_path" => job.output_path,
         "error_path" => job.error_path,
+        "artifact_path" => job.artifact_path,
         "mail_user" => job.mail_user,
         "mail_type" => job.mail_type,
         "requeue" => job.requeue,
@@ -325,6 +329,7 @@ function job_spec_from_dict(data::AbstractDict)::JobSpec
         account = _dict_get(data, "account"),
         output_path = _dict_get(data, "output_path"),
         error_path = _dict_get(data, "error_path"),
+        artifact_path = _dict_get(data, "artifact_path"),
         mail_user = _dict_get(data, "mail_user"),
         mail_type = _dict_get(data, "mail_type"),
         requeue = Bool(_dict_get(data, "requeue", false)),

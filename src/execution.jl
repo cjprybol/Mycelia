@@ -150,7 +150,7 @@ function execute(job::JobSpec, ::LocalExecutor)
 end
 
 function execute(job::JobSpec, executor::SlurmExecutor)::SubmitResult
-    return submit(job; dry_run = executor.dry_run)
+    return submit(job; dry_run = executor.dry_run, path = job.artifact_path)
 end
 
 function execute(job::JobSpec, executor::CollectExecutor)::Int
@@ -160,7 +160,7 @@ end
 
 function execute(job::JobSpec, executor::DryRunExecutor)::SubmitResult
     push!(executor.jobs, job)
-    result = submit(job; dry_run = true)
+    result = submit(job; dry_run = true, path = job.artifact_path)
     push!(executor.results, result)
     return result
 end

@@ -601,26 +601,31 @@ Test.@testset "SLURM wrapper entrypoints" begin
                 Test.@test job.gpus_per_node == 1
                 Test.@test job.output_path == joinpath(logdir, "%j.%x.out")
                 Test.@test job.error_path == joinpath(logdir, "%j.%x.err")
+                Test.@test startswith(something(job.artifact_path, ""), scriptdir * "/")
             end
         end
 
         mktempdir() do logdir
-            result = Mycelia.nersc_sbatch(
-                job_name = "nersc-dry-run",
-                mail_user = "user@example.org",
-                account = "m3456",
-                cmd = "echo dry-run",
-                logdir = logdir,
-                dry_run = true,
-                executor = :slurm
-            )
+            mktempdir() do scriptdir
+                result = Mycelia.nersc_sbatch(
+                    job_name = "nersc-dry-run",
+                    mail_user = "user@example.org",
+                    account = "m3456",
+                    cmd = "echo dry-run",
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    dry_run = true,
+                    executor = :slurm
+                )
 
-            Test.@test result isa Mycelia.SubmitResult
-            Test.@test result.ok
-            Test.@test result.dry_run
-            Test.@test result.backend == :sbatch
-            Test.@test result.site == :nersc
-            Test.@test occursin("#SBATCH --constraint=cpu", something(result.artifact_text, ""))
+                Test.@test result isa Mycelia.SubmitResult
+                Test.@test result.ok
+                Test.@test result.dry_run
+                Test.@test result.backend == :sbatch
+                Test.@test result.site == :nersc
+                Test.@test startswith(something(result.artifact_path, ""), scriptdir * "/")
+                Test.@test occursin("#SBATCH --constraint=cpu", something(result.artifact_text, ""))
+            end
         end
     end
 
