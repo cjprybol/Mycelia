@@ -51,6 +51,10 @@ function _collect_dynamic_k_sequences(observations)
     return sequences
 end
 
+function _dynamic_k_character_sequences(sequences::Vector{String})::Vector{Vector{Char}}
+    return [collect(sequence) for sequence in sequences]
+end
+
 function _dynamic_k_search_space(min_k::Int, max_k::Int)::Vector{Int}
     if max_k < 1
         return Int[]
@@ -85,14 +89,21 @@ function _dynamic_k_alphabet_size(sequences::Vector{String})::Int
     return max(1, length(alphabet))
 end
 
-function _calculate_dynamic_k_sparsity(sequences::Vector{String}, k::Int)::Float64
-    observed_kmers = Set{String}()
+function _dynamic_k_window_hash(characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
+    return UInt64(hash(view(characters, start_index:(start_index + k - 1))))
+end
 
-    for sequence in sequences
-        chars = collect(sequence)
-        if length(chars) >= k
-            for start_index in 1:(length(chars) - k + 1)
-                push!(observed_kmers, String(chars[start_index:(start_index + k - 1)]))
+function _calculate_dynamic_k_sparsity(
+        character_sequences::Vector{Vector{Char}},
+        alphabet_size::Int,
+        k::Int
+)::Float64
+    observed_kmers = Set{UInt64}()
+
+    for characters in character_sequences
+        if length(characters) >= k
+            for start_index in 1:(length(characters) - k + 1)
+                push!(observed_kmers, _dynamic_k_window_hash(characters, start_index, k))
             end
         end
     end
@@ -101,25 +112,23 @@ function _calculate_dynamic_k_sparsity(sequences::Vector{String}, k::Int)::Float
         return 1.0
     end
 
-    alphabet_size = _dynamic_k_alphabet_size(sequences)
     theoretical_space = float(alphabet_size)^k
     sparsity = 1.0 - (length(observed_kmers) / theoretical_space)
     return clamp(sparsity, 0.0, 1.0)
 end
 
 function _dynamic_k_errors_are_singletons(
-        sequences::Vector{String},
+        character_sequences::Vector{Vector{Char}},
         k::Int;
         singleton_threshold::Int = 2
 )::Bool
-    kmer_counts = Dict{String, Int}()
+    kmer_counts = Dict{UInt64, Int}()
 
-    for sequence in sequences
-        chars = collect(sequence)
-        if length(chars) >= k
-            for start_index in 1:(length(chars) - k + 1)
-                kmer = String(chars[start_index:(start_index + k - 1)])
-                kmer_counts[kmer] = get(kmer_counts, kmer, 0) + 1
+    for characters in character_sequences
+        if length(characters) >= k
+            for start_index in 1:(length(characters) - k + 1)
+                kmer_hash = _dynamic_k_window_hash(characters, start_index, k)
+                kmer_counts[kmer_hash] = get(kmer_counts, kmer_hash, 0) + 1
             end
         end
     end
@@ -230,7 +239,9 @@ function select_dynamic_kmer_plan(
         throw(ArgumentError("Dynamic k-mer selection requires at least one non-empty observation"))
     end
 
+    character_sequences = _dynamic_k_character_sequences(sequences)
     sequence_lengths = length.(sequences)
+    alphabet_size = _dynamic_k_alphabet_size(sequences)
     bounded_max_k = minimum(sequence_lengths)
     bounded_max_k = min(bounded_max_k, max_search_k)
     if max_k !== nothing
@@ -243,9 +254,9 @@ function select_dynamic_kmer_plan(
     singleton_separation_by_k = Dict{Int, Bool}()
 
     for k in search_space
-        sparsity = _calculate_dynamic_k_sparsity(sequences, k)
+        sparsity = _calculate_dynamic_k_sparsity(character_sequences, alphabet_size, k)
         separated_singletons = _dynamic_k_errors_are_singletons(
-            sequences,
+            character_sequences,
             k;
             singleton_threshold = singleton_threshold
         )

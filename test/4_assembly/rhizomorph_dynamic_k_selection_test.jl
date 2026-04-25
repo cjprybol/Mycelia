@@ -95,4 +95,25 @@ Test.@testset "Rhizomorph Dynamic K Selection" begin
         Test.@test plan.sequence_count == 3
         Test.@test plan.singleton_separation_by_k[5]
     end
+
+    Test.@testset "Unicode string observations are indexed safely" begin
+        observations = [
+            "αβγαβγαβγ",
+            "αβγαβγαβγ",
+            "αβγαβδαβγ"
+        ]
+
+        plan = Mycelia.Rhizomorph.select_dynamic_kmer_plan(
+            observations;
+            min_k = 3,
+            max_k = 7,
+            sparsity_threshold = 0.9,
+            singleton_threshold = 1
+        )
+
+        Test.@test plan.initial_k == 3
+        Test.@test plan.search_space == [3, 5, 7]
+        Test.@test plan.sequence_count == 3
+        Test.@test haskey(plan.sparsity_by_k, 3)
+    end
 end
