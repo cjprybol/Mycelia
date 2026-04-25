@@ -7,15 +7,15 @@ import StableRNGs
 
 const BUILD_READ_LENGTH = 256
 const BUILD_K = 15
+const BASES = UInt8[0x41, 0x43, 0x47, 0x54]
 const BENCHMARK_SINK = Base.RefValue{Any}(nothing)
 
-function synthetic_dna_sequence(length::Int, seed::UInt32)
-    bases = UInt8[0x41, 0x43, 0x47, 0x54]
-    data = Vector{UInt8}(undef, length)
+function synthetic_dna_sequence(sequence_length::Int, seed::UInt32)
+    data = Vector{UInt8}(undef, sequence_length)
     rng = StableRNGs.StableRNG(seed)
 
-    for i in 1:length
-        data[i] = rand(rng, bases)
+    for i in 1:sequence_length
+        data[i] = rand(rng, BASES)
     end
 
     return BioSequences.LongDNA{4}(String(data))
@@ -91,20 +91,16 @@ function measure_kmer_graph_build(record_count::Int; record_length::Int = BUILD_
         repetitions = 3
     )
 
+    graph = nothing
     GC.gc()
-    allocated_bytes = @allocated Mycelia.Rhizomorph.build_kmer_graph(
-        records,
-        k;
-        dataset_id = "performance_build_allocations",
-        mode = :singlestrand
-    )
-
-    graph = Mycelia.Rhizomorph.build_kmer_graph(
-        records,
-        k;
-        dataset_id = "performance_build_graph",
-        mode = :singlestrand
-    )
+    allocated_bytes = @allocated begin
+        graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records,
+            k;
+            dataset_id = "performance_build_allocations",
+            mode = :singlestrand
+        )
+    end
 
     return (
         record_count = record_count,
@@ -127,9 +123,11 @@ function measure_eulerian_path_finding(sequence_length::Int; k::Int = BUILD_K)
         repetitions = 10
     )
 
+    paths = nothing
     GC.gc()
-    allocated_bytes = @allocated Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
-    paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+    allocated_bytes = @allocated begin
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+    end
 
     return (
         sequence_length = sequence_length,
@@ -144,7 +142,9 @@ end
 
 function normalized_metric_range(metrics, numerator::Symbol, denominator::Symbol)
     normalized = [getfield(metric, numerator) / getfield(metric, denominator)
-                  for metric in metrics if getfield(metric, denominator) > 0]
+                  for metric in metrics
+                  if getfield(metric, numerator) > 0 &&
+                     getfield(metric, denominator) > 0]
 
     if isempty(normalized)
         return 1.0

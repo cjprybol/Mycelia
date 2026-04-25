@@ -1,4 +1,4 @@
-# # Run All Mycelia Tutorials
+# # Run the Curated Mycelia Tutorial Batch
 #
 # This script executes a curated batch of Mycelia tutorials in sequence.
 # Use with caution - may take significant time and resources.
@@ -7,7 +7,7 @@
 # ## Usage
 #
 # ```bash
-# # Run all tutorials
+# # Run the curated tutorial batch
 # julia --project=. tutorials/run_all_tutorials.jl
 #
 # # Run specific tutorial
@@ -205,7 +205,7 @@ end
 if abspath(PROGRAM_FILE) == @__FILE__
     ## Only run if this script is executed directly
     if length(ARGS) == 0
-        ## Run all tutorials
+        ## Run the curated tutorial batch
         results = run_all_tutorials()
     elseif ARGS[1] == "convert"
         ## Convert to notebooks
