@@ -52,6 +52,224 @@ Test.@testset "Utility Functions" begin
         end
     end
 
+    Test.@testset "Retry helper callbacks and archive extraction" begin
+        attempts = Ref(0)
+        retry_attempts = Int[]
+        retry_delays = Float64[]
+        retry_messages = String[]
+
+        result = Mycelia.with_retry(
+            max_attempts = 3,
+            initial_delay = 0.001,
+            max_delay = 0.001,
+            backoff_factor = 10.0,
+            log_on_retry = false,
+            log_on_failure = false,
+            on_retry = (attempt, exception, delay) -> begin
+                push!(retry_attempts, attempt)
+                push!(retry_delays, delay)
+                push!(retry_messages, sprint(showerror, exception))
+            end
+        ) do
+            attempts[] += 1
+            attempts[] < 3 && error("transient $(attempts[])")
+            "recovered"
+        end
+
+        Test.@test result == "recovered"
+        Test.@test attempts[] == 3
+        Test.@test retry_attempts == [1, 2]
+        Test.@test retry_delays == [0.001, 0.001]
+        Test.@test all(occursin("transient", message) for message in retry_messages)
+
+        temp_dir = mktempdir()
+        source_dir = joinpath(temp_dir, "tar_source")
+        nested_dir = joinpath(source_dir, "nested")
+        mkpath(nested_dir)
+        write(joinpath(source_dir, "alpha.txt"), "alpha\n")
+        write(joinpath(nested_dir, "beta.txt"), "beta\n")
+
+        archive = joinpath(temp_dir, "fixture.tar.gz")
+        run(`tar --create --gzip --file=$(archive) -C $(source_dir) .`)
+
+        quiet_extract_dir = joinpath(temp_dir, "quiet_extract")
+        verbose_extract_dir = joinpath(temp_dir, "verbose_extract")
+        mkpath(quiet_extract_dir)
+        mkpath(verbose_extract_dir)
+
+        Test.@test Mycelia.tar_extract(tarchive = archive, directory = quiet_extract_dir) ==
+                   quiet_extract_dir
+        Test.@test read(joinpath(quiet_extract_dir, "alpha.txt"), String) == "alpha\n"
+        Test.@test read(joinpath(quiet_extract_dir, "nested", "beta.txt"), String) == "beta\n"
+
+        Test.@test Mycelia.tar_extract(
+            tarchive = archive, directory = verbose_extract_dir, verbose = true) ==
+                   verbose_extract_dir
+        Test.@test read(joinpath(verbose_extract_dir, "nested", "beta.txt"), String) == "beta\n"
+    end
+
+    Test.@testset "Scheduler environment helpers" begin
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => " 24(x2)") do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) == 24
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => "7") do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) == 7
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => "0") do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) === nothing
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => "-4") do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) === nothing
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => "abc") do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) === nothing
+        Test.@test (Base.withenv("MYCELIA_TEST_POSITIVE_ENV_INT" => nothing) do
+            Mycelia._parse_positive_env_int("MYCELIA_TEST_POSITIVE_ENV_INT")
+        end) === nothing
+
+        Test.@test !(Base.withenv(
+            "SLURM_JOB_ID" => nothing,
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._in_slurm_environment()
+        end)
+        Test.@test Base.withenv(
+            "SLURM_JOB_ID" => "12345",
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._in_slurm_environment()
+        end
+
+        Test.@test Mycelia._parse_gpu_list(nothing) === nothing
+        Test.@test Mycelia._parse_gpu_list("") === nothing
+        Test.@test Mycelia._parse_gpu_list("3") == 3
+        Test.@test Mycelia._parse_gpu_list("2-4") == 3
+        Test.@test Mycelia._parse_gpu_list("gpu-list") === nothing
+
+        Test.@test Mycelia._parse_gres_gpus(nothing) === nothing
+        Test.@test Mycelia._parse_gres_gpus("cpu:8,mem:64G") === nothing
+        Test.@test Mycelia._parse_gres_gpus("gpu:a100:2,gpu:rtx6000:1") == 3
+
+        Test.@test (Base.withenv(
+            "CUDA_VISIBLE_DEVICES" => "0, 2, 4",
+            "ROCR_VISIBLE_DEVICES" => nothing
+        ) do
+            Mycelia._detect_visible_gpus(9)
+        end) == 3
+        Test.@test (Base.withenv(
+            "CUDA_VISIBLE_DEVICES" => "NoDevFiles",
+            "ROCR_VISIBLE_DEVICES" => nothing
+        ) do
+            Mycelia._detect_visible_gpus(9)
+        end) == 0
+        Test.@test (Base.withenv(
+            "CUDA_VISIBLE_DEVICES" => nothing,
+            "ROCR_VISIBLE_DEVICES" => "0,1"
+        ) do
+            Mycelia._detect_visible_gpus(5)
+        end) == 2
+        Test.@test (Base.withenv(
+            "CUDA_VISIBLE_DEVICES" => nothing,
+            "ROCR_VISIBLE_DEVICES" => nothing
+        ) do
+            Mycelia._detect_visible_gpus(5)
+        end) == 5
+
+        Test.@test (Base.withenv(
+            "SLURM_GPUS_ON_NODE" => nothing,
+            "SLURM_GPUS" => nothing,
+            "SLURM_GPUS_PER_TASK" => "2",
+            "SLURM_TASKS_PER_NODE" => nothing,
+            "SLURM_JOB_GPUS" => nothing,
+            "SLURM_STEP_GPUS" => nothing,
+            "SLURM_JOB_GRES" => nothing
+        ) do
+            Mycelia._detect_slurm_gpu_allocation()
+        end) == 2
+        Test.@test (Base.withenv(
+            "SLURM_GPUS_ON_NODE" => nothing,
+            "SLURM_GPUS" => nothing,
+            "SLURM_GPUS_PER_TASK" => nothing,
+            "SLURM_TASKS_PER_NODE" => nothing,
+            "SLURM_JOB_GPUS" => nothing,
+            "SLURM_STEP_GPUS" => nothing,
+            "SLURM_JOB_GRES" => "gpu:a100:2,gpu:rtx6000:1"
+        ) do
+            Mycelia._detect_slurm_gpu_allocation()
+        end) == 3
+
+        mib = 1024^2
+        Test.@test (Base.withenv(
+            "SLURM_MEM_PER_NODE" => "8",
+            "SLURM_MEM_PER_CPU" => nothing,
+            "SLURM_MEM_PER_GPU" => nothing,
+            "SLURM_JOB_ID" => nothing,
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._detect_slurm_memory_bytes(
+                cpu_allocation = 4,
+                gpu_allocation = 2,
+                total_memory = 100 * mib,
+                available_memory = 60 * mib
+            )
+        end) == (8 * mib, :per_node)
+        Test.@test (Base.withenv(
+            "SLURM_MEM_PER_NODE" => nothing,
+            "SLURM_MEM_PER_CPU" => nothing,
+            "SLURM_MEM_PER_GPU" => "6",
+            "SLURM_JOB_ID" => nothing,
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._detect_slurm_memory_bytes(
+                cpu_allocation = nothing,
+                gpu_allocation = 2,
+                total_memory = 100 * mib,
+                available_memory = 60 * mib
+            )
+        end) == (12 * mib, :per_gpu)
+        Test.@test (Base.withenv(
+            "SLURM_MEM_PER_NODE" => nothing,
+            "SLURM_MEM_PER_CPU" => nothing,
+            "SLURM_MEM_PER_GPU" => nothing,
+            "SLURM_JOB_ID" => "12345",
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._detect_slurm_memory_bytes(
+                cpu_allocation = nothing,
+                gpu_allocation = nothing,
+                total_memory = 100 * mib,
+                available_memory = 60 * mib
+            )
+        end) == (Int(floor(60 * mib * 0.90)), :inferred)
+        Test.@test (Base.withenv(
+            "SLURM_MEM_PER_NODE" => nothing,
+            "SLURM_MEM_PER_CPU" => nothing,
+            "SLURM_MEM_PER_GPU" => nothing,
+            "SLURM_JOB_ID" => nothing,
+            "SLURM_CLUSTER_NAME" => nothing,
+            "SLURM_JOB_NAME" => nothing,
+            "SLURM_STEP_ID" => nothing
+        ) do
+            Mycelia._detect_slurm_memory_bytes(
+                cpu_allocation = nothing,
+                gpu_allocation = nothing,
+                total_memory = 100 * mib,
+                available_memory = 60 * mib
+            )
+        end) == (nothing, nothing)
+    end
+
     Test.@testset "Directory listing" begin
         temp_dir = mktempdir()
         nested_dir = joinpath(temp_dir, "a", "b")
