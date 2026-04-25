@@ -36,6 +36,14 @@ Test.@testset "Assembly Core Coverage" begin
         Test.@test occursin("megahit -1 \"sample_R1.fastq.gz\" -2 \"sample_R2.fastq.gz\"", paired_end.cmd)
         Test.@test occursin("gfatools view", paired_end.cmd)
 
+        mismatched_pair = Mycelia.megahit_cmd(
+            fastq1 = "alpha.fastq.gz",
+            fastq2 = "beta.fastq.gz"
+        )
+        Test.@test mismatched_pair.outdir == "alpha_megahit"
+        Test.@test mismatched_pair.contigs == joinpath("alpha_megahit", "final.contigs.fa")
+        Test.@test occursin("megahit -1 \"alpha.fastq.gz\" -2 \"beta.fastq.gz\"", mismatched_pair.cmd)
+
         success_result, success_runtime = Mycelia.run_assembler("ok", () -> 42)
         Test.@test success_result == 42
         Test.@test success_runtime isa Real
