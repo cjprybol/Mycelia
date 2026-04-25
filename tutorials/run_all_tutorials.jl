@@ -1,6 +1,6 @@
 # # Run All Mycelia Tutorials
 #
-# This script executes all Mycelia tutorials in sequence.
+# This script executes a curated batch of Mycelia tutorials in sequence.
 # Use with caution - may take significant time and resources.
 # External tool steps are gated by `MYCELIA_RUN_EXTERNAL=true`.
 #
@@ -29,8 +29,9 @@ if LITERATE_AVAILABLE
     import Literate
 end
 
-# List of all tutorials in execution order
-TUTORIALS = [
+# Curated tutorial batch in execution order.
+# Exploratory and visualization-heavy tutorials remain opt-in.
+BATCH_TUTORIALS = [
     "01_data_acquisition.jl",
     "02_quality_control.jl",
     "03_kmer_analysis.jl",
@@ -63,7 +64,8 @@ TUTORIALS = [
 """
     run_all_tutorials()
 
-Execute all tutorials in sequence, collecting timing and status information.
+Execute the curated tutorial batch in sequence, collecting timing and status
+information.
 """
 function run_all_tutorials()
     println("=== Running All Mycelia Tutorials ===")
@@ -73,7 +75,7 @@ function run_all_tutorials()
     results = []
     total_start = time()
     
-    for tutorial in TUTORIALS
+    for tutorial in BATCH_TUTORIALS
         tutorial_path = joinpath(@__DIR__, tutorial)
         if isfile(tutorial_path)
             println("Running $tutorial...")

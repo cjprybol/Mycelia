@@ -164,7 +164,6 @@ end
 # `bcftools norm` also rely on it.
 
 gatk_vcf = joinpath(workdir, "gatk", "variants.gatk.vcf")
-normalized_gatk_vcf = replace(gatk_vcf, ".vcf" => ".sorted.normalized.vcf.gz")
 gatk_consensus_fasta = joinpath(workdir, "gatk", "consensus.fa")
 
 if RUN_EXTERNAL

@@ -3,18 +3,19 @@ import Mycelia
 import FASTX
 import BioSequences
 import MetaGraphsNext
+import StableRNGs
 
 const BUILD_READ_LENGTH = 256
 const BUILD_K = 15
+const BENCHMARK_SINK = Base.RefValue{Any}(nothing)
 
 function synthetic_dna_sequence(length::Int, seed::UInt32)
     bases = UInt8[0x41, 0x43, 0x47, 0x54]
     data = Vector{UInt8}(undef, length)
-    state = seed
+    rng = StableRNGs.StableRNG(seed)
 
     for i in 1:length
-        state = state * UInt32(1664525) + UInt32(1013904223)
-        data[i] = bases[Int((state >> 30) % UInt32(4)) + 1]
+        data[i] = rand(rng, bases)
     end
 
     return BioSequences.LongDNA{4}(String(data))
@@ -35,7 +36,7 @@ function best_elapsed_seconds(operation::Function; samples::Int = 3, repetitions
         GC.gc()
         start_ns = Base.time_ns()
         for _ in 1:repetitions
-            operation()
+            BENCHMARK_SINK[] = operation()
         end
         best = min(best, (Base.time_ns() - start_ns) / repetitions / 1e9)
     end
