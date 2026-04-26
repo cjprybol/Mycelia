@@ -2153,10 +2153,10 @@ function fasta_list_to_dense_kmer_counts(;
                 kmer_counts_matrix[row, col] = ValType(count)
             end
         catch e
+            @views fill!(kmer_counts_matrix[:, col], zero(ValType))
             Base.lock(lock)
             try
                 push!(error_log, (orig_idx, sprint(showerror, e)))
-                @views fill!(kmer_counts_matrix[:, col], zero(ValType))
             finally
                 Base.unlock(lock)
             end
