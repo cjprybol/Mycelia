@@ -57,6 +57,40 @@ Test.@testset "Annotation Parsing" begin
         end
     end
 
+    Test.@testset "TransTerm parsing edge cases" begin
+        mktempdir() do dir
+            multi_output_path = joinpath(dir, "transterm_multi.out")
+            open(multi_output_path, "w") do io
+                println(io, "comment ignored")
+                println(io, "SEQUENCE seqA")
+                println(io, "TERM 2  15 - 28  -  g  87  -9.5 -2.1 |  opposite strand  ")
+                println(io, "SEQUENCE seqB")
+                println(io, "TERM 3  40 - 55  +  R  91  -11.0 -3.2 |tail note")
+            end
+
+            parsed_multi = Mycelia.parse_transterm_output(multi_output_path)
+            Test.@test Mycelia.DataFrames.nrow(parsed_multi) == 2
+            Test.@test parsed_multi[1, "chromosome"] == "seqA"
+            Test.@test parsed_multi[1, "location"] == "g"
+            Test.@test parsed_multi[1, "notes"] == "opposite strand"
+            Test.@test parsed_multi[2, "chromosome"] == "seqB"
+            Test.@test parsed_multi[2, "term_id"] == "TERM 3"
+
+            empty_output_path = joinpath(dir, "transterm_empty.out")
+            write(empty_output_path, "SEQUENCE seq_only\n")
+
+            parsed_empty = Mycelia.parse_transterm_output(empty_output_path)
+            Test.@test Mycelia.DataFrames.nrow(parsed_empty) == 0
+
+            empty_gff_path = Mycelia.transterm_output_to_gff(empty_output_path)
+            Test.@test isfile(empty_gff_path)
+            empty_gff_lines = split(chomp(read(empty_gff_path, String)), '\n')
+            Test.@test length(empty_gff_lines) == 1
+            Test.@test empty_gff_lines[1] ==
+                       "#seqid\tsource\ttype\tstart\tend\tscore\tstrand\tphase\tattributes"
+        end
+    end
+
     Test.@testset "VirSorter score parsing" begin
         mktempdir() do dir
             tsv_path = joinpath(dir, "virsorter.tsv")
