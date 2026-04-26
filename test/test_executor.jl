@@ -104,15 +104,18 @@ Test.@testset "Wrapper Collection Paths" begin
     Test.@test endswith(blast_out, "_blastp_results.tsv")
 
     cluster_exec = Mycelia.CollectExecutor()
+    cluster_tmp = mktempdir()
     cluster_out = Mycelia.mmseqs_easy_cluster(
         fasta = cluster_fasta,
         output = joinpath(tmpdir, "mmseqs_cluster"),
-        tmp = joinpath(tmpdir, "mmseqs_tmp"),
+        tmp = cluster_tmp,
         executor = cluster_exec,
         site = :scg
     )
     Test.@test length(cluster_exec.jobs) == 1
     Test.@test occursin("easy-cluster", cluster_exec.jobs[1].cmd)
+    Test.@test occursin("rm -rf \"$(cluster_tmp)\"", cluster_exec.jobs[1].cmd)
+    Test.@test isdir(cluster_tmp)
     Test.@test endswith(cluster_out, "_cluster.tsv")
 
     pangenome_exec = Mycelia.CollectExecutor()

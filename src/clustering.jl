@@ -173,7 +173,6 @@ function mmseqs_easy_cluster(;
             mail_user = mail_user
         )
         Mycelia.execute(job, Mycelia.resolve_executor(executor))
-        rm(tmp, recursive = true, force = true)
         return outfile
     end
 
