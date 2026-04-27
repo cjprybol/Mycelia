@@ -1,4 +1,36 @@
 """
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Save a CairoMakie figure to PNG, SVG, and PDF in one call.
+
+Writes three files: `\$(filepath_stem).png`, `\$(filepath_stem).svg`,
+`\$(filepath_stem).pdf`. PNG raster density is controlled by `px_per_unit`
+(SVG and PDF ignore it).
+
+# Arguments
+- `fig`: A `CairoMakie.Figure` (or any Makie figure that CairoMakie can render).
+- `filepath_stem::AbstractString`: Path stem without extension. Parent
+  directory must exist.
+
+# Keyword Arguments
+- `px_per_unit::Real = 3`: Raster density for PNG. 3× gives ~300 DPI from
+  72-pt Makie units.
+
+# Returns
+- `Vector{String}` of the three written paths.
+"""
+function save_figure(fig, filepath_stem::AbstractString; px_per_unit::Real = 3)
+    paths = String[]
+    for (ext, kwargs) in
+        [("png", (; px_per_unit)), ("svg", NamedTuple()), ("pdf", NamedTuple())]
+        path = "$(filepath_stem).$(ext)"
+        CairoMakie.save(path, fig; kwargs...)
+        push!(paths, path)
+    end
+    return paths
+end
+
+"""
     plot_batch_qc_distributions(df::DataFrames.DataFrame; title="Batch QC Summary")
 
 Visualize distributions of QC metrics across multiple samples.
@@ -3660,12 +3692,12 @@ preserving each series marker shape.
 """
 function build_pcoa_group_legend_elements(series_list::Vector{PointSeries})
     [CairoMakie.MarkerElement(
-        color = s.color,
-        marker = s.marker,
-        markersize = 10,
-        strokewidth = 0.5,
-        strokecolor = :black
-    ) for s in series_list]
+         color = s.color,
+         marker = s.marker,
+         markersize = 10,
+         strokewidth = 0.5,
+         strokecolor = :black
+     ) for s in series_list]
 end
 
 """

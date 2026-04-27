@@ -490,6 +490,45 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Count records in a SAM/BAM/CRAM file via `samtools view -c`.
+
+# Arguments
+- `xam::AbstractString`: Path to input alignment file.
+
+# Keyword Arguments
+- `primary_only::Bool = false`: When `true`, exclude secondary (`-F 256`) and
+  supplementary (`-F 2048`) alignments by passing `-F 2304` to samtools. The
+  result counts each read at most once regardless of multi-mapping.
+- `mapped_only::Bool = false`: When `true`, count only mapped records by
+  adding `-F 4`.
+
+# Returns
+- `Int`: Number of records matching the filter (total records by default).
+
+# Requirements
+- Requires `samtools` available via Bioconda.
+"""
+function count_xam_reads(xam::AbstractString; primary_only::Bool = false, mapped_only::Bool = false)
+    Mycelia.add_bioconda_env("samtools")
+    flag_mask = 0
+    if primary_only
+        flag_mask |= 256 | 2048
+    end
+    if mapped_only
+        flag_mask |= 4
+    end
+    cmd = if flag_mask == 0
+        `$(Mycelia.CONDA_RUNNER) run -n samtools samtools view -c $(xam)`
+    else
+        `$(Mycelia.CONDA_RUNNER) run -n samtools samtools view -c -F $(flag_mask) $(xam)`
+    end
+    out = read(cmd, String)
+    return parse(Int, strip(out))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Calculate mapping statistics by comparing sequence alignments (BAM/SAM) to a reference FASTA.
 
 # Arguments
