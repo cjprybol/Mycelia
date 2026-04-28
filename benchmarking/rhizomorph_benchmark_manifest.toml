@@ -1,0 +1,341 @@
+schema_version = 1
+title = "Rhizomorph H1-H7 benchmark manifest"
+description = "Dataset and hypothesis-slice manifest for reproducible Rhizomorph public-record benchmarks."
+
+[schema]
+dataset_required_fields = [
+    "id",
+    "name",
+    "category",
+    "ci_suitability",
+    "materialization",
+    "provenance",
+    "expected_inputs",
+    "expected_outputs"
+]
+hypothesis_required_fields = [
+    "id",
+    "title",
+    "dataset_ids",
+    "entrypoint",
+    "expected_inputs",
+    "expected_outputs"
+]
+ci_suitability_values = ["ci", "full", "candidate"]
+
+[[datasets]]
+id = "synthetic_isolate_5386"
+name = "Synthetic 5.4 kb isolate fixture"
+category = "toy_control"
+ci_suitability = "ci"
+materialization = "implemented"
+fixture_entrypoint = "benchmarking/standard_assembler_fixtures.jl:materialize_standard_assembler_fixture"
+description = "Single deterministic short-read isolate fixture matching PhiX174 scale."
+expected_inputs = ["reference_fasta", "paired_fastq", "truth_table"]
+expected_outputs = ["contigs_fasta", "assembly_metrics_csv", "graph_summary_json"]
+notes = "Already covered by test/4_assembly/standard_assembler_fixture_catalog_test.jl."
+[datasets.provenance]
+kind = "generated"
+source = "BioSequences.randdnaseq with StableRNGs seed 17401"
+accessions = []
+
+[[datasets]]
+id = "synthetic_metagenome_pair"
+name = "Synthetic two-genome low-complexity metagenome"
+category = "toy_control"
+ci_suitability = "ci"
+materialization = "implemented"
+fixture_entrypoint = "benchmarking/standard_assembler_fixtures.jl:materialize_standard_assembler_fixture"
+description = "Deterministic two-genome community with uneven coverage."
+expected_inputs = ["reference_fasta", "paired_fastq", "truth_table"]
+expected_outputs = ["bin_membership_table", "contigs_fasta", "assembly_metrics_csv", "community_recovery_csv"]
+notes = "Small enough for CI dry-runs and targeted correctness checks."
+[datasets.provenance]
+kind = "generated"
+source = "BioSequences.randdnaseq with StableRNGs seeds 17402 and 17403"
+accessions = []
+
+[[datasets]]
+id = "synthetic_repeat_fork_panel"
+name = "Synthetic repeat-fork calibration panel"
+category = "toy_control"
+ci_suitability = "ci"
+materialization = "implemented"
+fixture_entrypoint = "benchmarking/08_momentum_fork_resolution_benchmark.jl:benchmark_config"
+description = "Controlled repeat length, divergence, coverage, and threshold sweeps for fork resolution."
+expected_inputs = ["repeat_length_grid", "divergence_grid", "coverage_grid", "threshold_grid"]
+expected_outputs = ["scenario_csv", "threshold_csv", "benchmark_summary_json"]
+notes = "Existing benchmark writes scenario and threshold CSV files."
+[datasets.provenance]
+kind = "generated"
+source = "StableRNGs repeat-window simulator"
+accessions = []
+
+[[datasets]]
+id = "rhizomorph_graph_unit_fixtures"
+name = "Rhizomorph graph unit fixture suite"
+category = "toy_control"
+ci_suitability = "ci"
+materialization = "implemented"
+fixture_entrypoint = "test/4_assembly/rhizomorph_*_test.jl"
+description = "Small graph fixtures covering k-mer, qualmer, FASTA, FASTQ, string, strand-mode, GFA, and path-finding behavior."
+expected_inputs = ["in-memory_sequences", "temporary_fasta", "temporary_fastq", "graph_literals"]
+expected_outputs = ["graph_metrics", "path_sequences", "gfa_files", "evidence_tables"]
+notes = "Inventory target for converting unit fixtures into reusable benchmark microcases."
+[datasets.provenance]
+kind = "repo_fixture"
+source = "test/4_assembly Rhizomorph fixtures"
+accessions = []
+
+[[datasets]]
+id = "pstv_viroid"
+name = "Potato spindle tuber viroid reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "Tiny RNA reference used in existing Rhizomorph real-genome k sweeps."
+expected_inputs = ["reference_fasta"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "quast_metrics"]
+notes = "Use for full benchmark runs because it requires public reference retrieval."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_002030"]
+
+[[datasets]]
+id = "cccv_viroid"
+name = "Coconut cadang-cadang viroid reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "Tiny RNA reference used in existing Rhizomorph real-genome k sweeps."
+expected_inputs = ["reference_fasta"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "quast_metrics"]
+notes = "The existing benchmark now measures actual downloaded sequence length."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_003540"]
+
+[[datasets]]
+id = "hsvd_viroid"
+name = "Hop stunt viroid reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "Tiny RNA reference used in existing Rhizomorph real-genome k sweeps."
+expected_inputs = ["reference_fasta"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "quast_metrics"]
+notes = "Suitable for full lightweight public-reference runs."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_001351"]
+
+[[datasets]]
+id = "phix174"
+name = "Enterobacteria phage PhiX174 reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "5.4 kb circular ssDNA phage reference for isolate-scale k sweeps and assembler comparisons."
+expected_inputs = ["reference_fasta", "optional_simulated_reads"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "assembly_metrics_csv"]
+notes = "Public counterpart to synthetic_isolate_5386."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_001422"]
+
+[[datasets]]
+id = "lambda_phage"
+name = "Enterobacteria phage lambda reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "48.5 kb dsDNA phage reference for medium isolate sweeps."
+expected_inputs = ["reference_fasta", "optional_simulated_reads"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "assembly_metrics_csv"]
+notes = "Existing benchmark shows full-length assembly at k >= 21."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_001416"]
+
+[[datasets]]
+id = "t4_phage"
+name = "Enterobacteria phage T4 reference"
+category = "public_isolate"
+ci_suitability = "full"
+materialization = "download"
+fixture_entrypoint = "benchmarking/real_genome_benchmark.jl"
+description = "168.9 kb repetitive dsDNA phage reference for repeat-heavy isolate sweeps."
+expected_inputs = ["reference_fasta", "optional_simulated_reads"]
+expected_outputs = ["k_sweep_metrics_csv", "contigs_fasta", "repeat_resolution_metrics_csv"]
+notes = "Full benchmark only; current results remain fragmented at all tested k values."
+[datasets.provenance]
+kind = "ncbi_refseq"
+source = "NCBI RefSeq"
+accessions = ["NC_000866"]
+
+[[datasets]]
+id = "cami_toy_low_complexity"
+name = "CAMI toy low-complexity metagenome"
+category = "heterogeneous_candidate"
+ci_suitability = "candidate"
+materialization = "planned_download"
+fixture_entrypoint = "follow-on: CAMI manifest materializer"
+description = "Candidate public heterogeneous sample for low-complexity community assembly validation."
+expected_inputs = ["paired_fastq", "reference_genomes", "taxonomic_truth"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "community_recovery_csv", "taxonomic_profile_csv"]
+notes = "Do not run in CI until a small pinned artifact strategy exists."
+[datasets.provenance]
+kind = "public_challenge"
+source = "CAMI Challenge toy datasets"
+accessions = []
+
+[[datasets]]
+id = "zymo_d6300"
+name = "ZymoBIOMICS Microbial Community Standard D6300"
+category = "heterogeneous_candidate"
+ci_suitability = "candidate"
+materialization = "planned_external_input"
+fixture_entrypoint = "follow-on: physical mock-community manifest materializer"
+description = "Low-complexity bacterial and yeast mock community candidate."
+expected_inputs = ["paired_fastq_or_long_reads", "strain_truth", "reference_genomes"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "strain_recovery_csv", "abundance_error_csv"]
+notes = "Candidate full benchmark dataset; no reads are committed."
+[datasets.provenance]
+kind = "physical_mock"
+source = "Zymo Research D6300"
+accessions = []
+
+[[datasets]]
+id = "zymo_d6331"
+name = "ZymoBIOMICS Gut Microbiome Standard D6331"
+category = "heterogeneous_candidate"
+ci_suitability = "candidate"
+materialization = "planned_external_input"
+fixture_entrypoint = "follow-on: physical mock-community manifest materializer"
+description = "Medium-complexity gut mock-community candidate."
+expected_inputs = ["paired_fastq_or_long_reads", "strain_truth", "reference_genomes"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "strain_recovery_csv", "abundance_error_csv"]
+notes = "Candidate full benchmark dataset; no reads are committed."
+[datasets.provenance]
+kind = "physical_mock"
+source = "Zymo Research D6331"
+accessions = []
+
+[[datasets]]
+id = "atcc_msa_1002"
+name = "ATCC MSA-1002 even mock community"
+category = "heterogeneous_candidate"
+ci_suitability = "candidate"
+materialization = "planned_external_input"
+fixture_entrypoint = "follow-on: physical mock-community manifest materializer"
+description = "20-strain even-mix candidate for abundance and strain recovery checks."
+expected_inputs = ["paired_fastq_or_long_reads", "strain_truth", "reference_genomes"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "strain_recovery_csv", "abundance_error_csv"]
+notes = "Candidate full benchmark dataset; no reads are committed."
+[datasets.provenance]
+kind = "physical_mock"
+source = "ATCC MSA-1002"
+accessions = []
+
+[[datasets]]
+id = "atcc_msa_1003"
+name = "ATCC MSA-1003 staggered mock community"
+category = "heterogeneous_candidate"
+ci_suitability = "candidate"
+materialization = "planned_external_input"
+fixture_entrypoint = "follow-on: physical mock-community manifest materializer"
+description = "20-strain staggered-mix candidate for abundance-range stress testing."
+expected_inputs = ["paired_fastq_or_long_reads", "strain_truth", "reference_genomes"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "strain_recovery_csv", "abundance_error_csv"]
+notes = "Candidate full benchmark dataset; no reads are committed."
+[datasets.provenance]
+kind = "physical_mock"
+source = "ATCC MSA-1003"
+accessions = []
+
+[[hypothesis_slices]]
+id = "H1"
+title = "Graph construction scaling"
+summary = "Measure fixed-length and variable-length Rhizomorph graph construction time, memory, and graph-size growth."
+dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "rhizomorph_graph_unit_fixtures", "phix174", "lambda_phage", "t4_phage"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H1"
+status = "stub"
+expected_inputs = ["sequence_records", "k_values", "strand_modes", "graph_type"]
+expected_outputs = ["graph_construction_metrics_csv", "memory_profile_json", "graph_summary_json"]
+follow_on_work = "Implement construction runners for k-mer, qualmer, FASTA, FASTQ, and string graph builders."
+
+[[hypothesis_slices]]
+id = "H2"
+title = "Assembly contiguity across k and strand modes"
+summary = "Compare Rhizomorph contig recovery as k and strand mode change across toy and public isolate inputs."
+dataset_ids = ["synthetic_isolate_5386", "pstv_viroid", "cccv_viroid", "hsvd_viroid", "phix174", "lambda_phage", "t4_phage"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H2"
+status = "stub"
+expected_inputs = ["reference_fasta", "optional_reads", "k_values", "strand_modes"]
+expected_outputs = ["contigs_fasta", "assembly_metrics_csv", "k_sweep_summary_csv"]
+follow_on_work = "Normalize existing real_genome_benchmark outputs into the harness result schema."
+
+[[hypothesis_slices]]
+id = "H3"
+title = "Repeat and fork resolution"
+summary = "Stress repeat-aware branch selection, unresolved rate, and misassembly behavior."
+dataset_ids = ["synthetic_repeat_fork_panel", "t4_phage", "cami_toy_low_complexity"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H3"
+status = "stub"
+expected_inputs = ["repeat_scenarios", "threshold_grid", "coverage_grid", "reference_fasta"]
+expected_outputs = ["scenario_csv", "threshold_csv", "misassembly_summary_csv", "repeat_resolution_metrics_csv"]
+follow_on_work = "Promote 08_momentum_fork_resolution_benchmark.jl into a slice runner."
+
+[[hypothesis_slices]]
+id = "H4"
+title = "Quality-weighted graph robustness"
+summary = "Measure qualmer and FASTQ graph robustness under quality decay, error injection, and coverage changes."
+dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "rhizomorph_graph_unit_fixtures"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H4"
+status = "stub"
+expected_inputs = ["paired_fastq", "quality_profiles", "error_rates", "coverage_grid"]
+expected_outputs = ["error_correction_metrics_csv", "qualmer_graph_summary_json", "contig_quality_csv"]
+follow_on_work = "Add deterministic quality-profile generators and qualmer graph comparison metrics."
+
+[[hypothesis_slices]]
+id = "H5"
+title = "Heterogeneous community recovery"
+summary = "Evaluate low- and medium-complexity mixed-sample assembly, bin recovery, and abundance distortion."
+dataset_ids = ["synthetic_metagenome_pair", "cami_toy_low_complexity", "zymo_d6300", "zymo_d6331", "atcc_msa_1002", "atcc_msa_1003"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H5"
+status = "stub"
+expected_inputs = ["paired_fastq_or_long_reads", "reference_genomes", "community_truth"]
+expected_outputs = ["contigs_fasta", "bin_membership_table", "community_recovery_csv", "abundance_error_csv"]
+follow_on_work = "Define truth-table schema for synthetic and physical mock communities."
+
+[[hypothesis_slices]]
+id = "H6"
+title = "Generative sequence fidelity"
+summary = "Evaluate graph-walk sequence generation against source distributions and graph topology constraints."
+dataset_ids = ["rhizomorph_graph_unit_fixtures", "synthetic_isolate_5386", "synthetic_metagenome_pair"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H6"
+status = "stub"
+expected_inputs = ["weighted_graph", "walk_length", "sample_count", "seed"]
+expected_outputs = ["generated_sequences_fasta", "generation_quality_csv", "transition_entropy_json"]
+follow_on_work = "Route Mycelia.Rhizomorph.generate_sequences and evaluate_generation_quality through benchmark outputs."
+
+[[hypothesis_slices]]
+id = "H7"
+title = "External assembler comparison"
+summary = "Compare Rhizomorph outputs against accepted assemblers on the same fixture materializations."
+dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "phix174", "lambda_phage", "cami_toy_low_complexity"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H7"
+status = "stub"
+expected_inputs = ["paired_fastq", "reference_fasta", "assembler_list"]
+expected_outputs = ["benchmark_plan_csv", "assembler_comparison_csv", "contigs_fasta", "tool_versions_json"]
+follow_on_work = "Wrap assembler_comparison_standard_fixtures.jl and external-tool checks in a scale-aware runner."
