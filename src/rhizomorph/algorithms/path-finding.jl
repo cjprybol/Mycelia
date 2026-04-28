@@ -89,6 +89,85 @@ function GraphPath(steps::Vector{WalkStep{T}}) where {T}
 end
 
 """
+    LocalPathEnumerationProvenance{T}
+
+Records how a local path enumeration was bounded and whether it was truncated.
+
+# Fields
+- `entry_vertex::T`: Local region entry vertex
+- `exit_vertex::T`: Local region exit vertex
+- `method::Symbol`: Enumeration method used
+- `max_paths::Int`: Maximum alternatives requested
+- `max_depth::Int`: Maximum edge depth explored per path
+- `max_expansions::Int`: Maximum partial-path expansions allowed
+- `expansions::Int`: Number of partial paths expanded
+- `truncated::Bool`: Whether a guard stopped enumeration before exhaustion
+- `reason::Symbol`: Completion reason (`:complete`, `:max_paths`,
+  `:max_depth`, or `:max_expansions`)
+
+# Example
+```julia
+result = Mycelia.Rhizomorph.enumerate_local_paths(weighted, source, target)
+result.provenance.truncated
+```
+"""
+struct LocalPathEnumerationProvenance{T}
+    entry_vertex::T
+    exit_vertex::T
+    method::Symbol
+    max_paths::Int
+    max_depth::Int
+    max_expansions::Int
+    expansions::Int
+    truncated::Bool
+    reason::Symbol
+end
+
+"""
+    RankedPathAlternative{T}
+
+A ranked local path alternative with score and provenance metadata.
+
+# Fields
+- `rank::Int`: One-based rank after deterministic sorting
+- `path::GraphPath{T}`: Enumerated graph path
+- `score::Float64`: Path score; currently the path total probability
+- `provenance::LocalPathEnumerationProvenance{T}`: Shared enumeration metadata
+
+# Example
+```julia
+alternative = first(Mycelia.Rhizomorph.enumerate_local_paths(weighted, "A", "D").alternatives)
+alternative.score == alternative.path.total_probability
+```
+"""
+struct RankedPathAlternative{T}
+    rank::Int
+    path::GraphPath{T}
+    score::Float64
+    provenance::LocalPathEnumerationProvenance{T}
+end
+
+"""
+    LocalPathEnumerationResult{T}
+
+Result container for bounded local path enumeration.
+
+# Fields
+- `alternatives::Vector{RankedPathAlternative{T}}`: Ranked alternatives
+- `provenance::LocalPathEnumerationProvenance{T}`: Search bounds and status
+
+# Example
+```julia
+result = Mycelia.Rhizomorph.enumerate_local_paths(weighted, source, target; max_paths=5)
+paths = [alternative.path for alternative in result.alternatives]
+```
+"""
+struct LocalPathEnumerationResult{T}
+    alternatives::Vector{RankedPathAlternative{T}}
+    provenance::LocalPathEnumerationProvenance{T}
+end
+
+"""
     StrandWeightedEdgeData
 
 Edge payload for probabilistic path algorithms with explicit strand tracking.
@@ -1027,6 +1106,352 @@ function k_shortest_paths(
     # Sort results by descending probability
     sort!(A; by = p -> p.total_probability, rev = true)
     return A
+end
+
+# ============================================================================
+# Bounded Local Path Enumeration
+# ============================================================================
+
+function _path_state_sort_key(states::Vector{Tuple{T, StrandOrientation}}) where {T}
+    return join((string(vertex) * ":" * string(strand) for (vertex, strand) in states), ">")
+end
+
+function _graph_path_sort_key(path::GraphPath)
+    return join(
+        (string(step.vertex_label) * ":" * string(step.strand) for step in path.steps),
+        ">"
+    )
+end
+
+function _is_strand_weighted_graph(graph::MetaGraphsNext.MetaGraph)
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        return graph[edge_label...] isa StrandWeightedEdgeData
+    end
+    return true
+end
+
+function _path_enumeration_graph(
+        graph::MetaGraphsNext.MetaGraph;
+        default_weight::Float64,
+        edge_weight::Function
+)
+    if _is_strand_weighted_graph(graph)
+        return graph
+    end
+    return weighted_graph_from_rhizomorph(
+        graph; default_weight = default_weight, edge_weight = edge_weight)
+end
+
+function _validate_local_path_enumeration_args(
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T,
+        max_paths::Int,
+        max_depth::Int,
+        max_expansions::Int,
+        min_probability::Float64
+) where {T}
+    labels = collect(MetaGraphsNext.labels(graph))
+    if !(source in labels)
+        throw(ArgumentError("Source vertex $source not found in graph"))
+    end
+    if !(target in labels)
+        throw(ArgumentError("Target vertex $target not found in graph"))
+    end
+    if max_paths < 0
+        throw(ArgumentError("max_paths must be non-negative, got $max_paths"))
+    end
+    if max_depth < 0
+        throw(ArgumentError("max_depth must be non-negative, got $max_depth"))
+    end
+    if max_expansions < 0
+        throw(ArgumentError("max_expansions must be non-negative, got $max_expansions"))
+    end
+    if min_probability < 0.0 || min_probability > 1.0
+        throw(ArgumentError("min_probability must be in [0, 1], got $min_probability"))
+    end
+    return nothing
+end
+
+function _rank_local_path_alternatives(
+        paths::Vector{GraphPath{T}},
+        provenance::LocalPathEnumerationProvenance{T}
+) where {T}
+    sort!(paths; by = path -> (-path.total_probability, _graph_path_sort_key(path)))
+
+    alternatives = RankedPathAlternative{T}[]
+    for (rank, path) in enumerate(paths)
+        push!(alternatives, RankedPathAlternative(rank, path, path.total_probability, provenance))
+    end
+
+    return alternatives
+end
+
+function _local_path_result(
+        paths::Vector{GraphPath{T}},
+        entry_vertex::T,
+        exit_vertex::T,
+        method::Symbol,
+        max_paths::Int,
+        max_depth::Int,
+        max_expansions::Int,
+        expansions::Int,
+        truncated::Bool,
+        reason::Symbol
+) where {T}
+    provenance = LocalPathEnumerationProvenance(
+        entry_vertex,
+        exit_vertex,
+        method,
+        max_paths,
+        max_depth,
+        max_expansions,
+        expansions,
+        truncated,
+        reason
+    )
+    alternatives = _rank_local_path_alternatives(paths, provenance)
+    return LocalPathEnumerationResult(alternatives, provenance)
+end
+
+function _enumerate_local_paths_impl(
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T,
+        method::Symbol;
+        max_paths::Int = 10,
+        max_depth::Int = 100,
+        max_expansions::Int = 10_000,
+        min_probability::Float64 = 0.0,
+        default_weight::Float64 = 1e-10,
+        edge_weight::Function = count_evidence
+) where {T}
+    _validate_local_path_enumeration_args(
+        graph, source, target, max_paths, max_depth, max_expansions, min_probability)
+
+    search_graph = _path_enumeration_graph(
+        graph; default_weight = default_weight, edge_weight = edge_weight)
+
+    if max_paths == 0
+        return _local_path_result(
+            GraphPath{T}[],
+            source,
+            target,
+            method,
+            max_paths,
+            max_depth,
+            max_expansions,
+            0,
+            true,
+            :max_paths
+        )
+    end
+
+    if source == target
+        path = _build_graph_path_from_vertices(search_graph, [(source, Forward)])
+        return _local_path_result(
+            GraphPath{T}[path],
+            source,
+            target,
+            method,
+            max_paths,
+            max_depth,
+            max_expansions,
+            0,
+            false,
+            :complete
+        )
+    end
+
+    paths = GraphPath{T}[]
+    seen_paths = Set{String}()
+    candidate_states = Dict{Int, Vector{Tuple{T, StrandOrientation}}}()
+    candidate_distances = Dict{Int, Float64}()
+    candidate_probabilities = Dict{Int, Float64}()
+    queue = DataStructures.PriorityQueue{Int, Tuple{Float64, String}}()
+    next_candidate_id = 0
+
+    for strand in (Forward, Reverse)
+        states = Tuple{T, StrandOrientation}[(source, strand)]
+        next_candidate_id += 1
+        candidate_states[next_candidate_id] = states
+        candidate_distances[next_candidate_id] = 0.0
+        candidate_probabilities[next_candidate_id] = 1.0
+        DataStructures.enqueue!(queue, next_candidate_id, (0.0, _path_state_sort_key(states)))
+    end
+
+    expansions = 0
+    truncated = false
+    reason = :complete
+
+    while !isempty(queue)
+        candidate_id = DataStructures.dequeue!(queue)
+        states = candidate_states[candidate_id]
+        distance = candidate_distances[candidate_id]
+        probability = candidate_probabilities[candidate_id]
+        current_vertex, current_strand = last(states)
+
+        delete!(candidate_states, candidate_id)
+        delete!(candidate_distances, candidate_id)
+        delete!(candidate_probabilities, candidate_id)
+
+        if current_vertex == target
+            path_key = _path_state_sort_key(states)
+            if !(path_key in seen_paths) && probability >= min_probability
+                path = _build_graph_path_from_vertices(search_graph, states)
+                push!(paths, path)
+                push!(seen_paths, path_key)
+            end
+            if length(paths) >= max_paths
+                if !isempty(queue)
+                    truncated = true
+                    reason = :max_paths
+                end
+                break
+            end
+            continue
+        end
+
+        if length(states) - 1 >= max_depth
+            if !isempty(_get_valid_transitions(search_graph, current_vertex, current_strand))
+                truncated = true
+                reason = :max_depth
+            end
+            continue
+        end
+
+        if expansions >= max_expansions
+            truncated = true
+            reason = :max_expansions
+            break
+        end
+        expansions += 1
+
+        transitions = _get_valid_transitions(search_graph, current_vertex, current_strand)
+        sort!(transitions; by = transition -> (
+            string(transition[:target_vertex]),
+            string(transition[:target_strand])
+        ))
+
+        total_out = _total_outgoing_weight(search_graph, current_vertex, current_strand)
+
+        for transition in transitions
+            next_vertex = transition[:target_vertex]::T
+            next_strand = transition[:target_strand]::StrandOrientation
+            if any(state -> state[1] == next_vertex, states)
+                continue
+            end
+
+            edge_w = max(edge_data_weight(transition[:edge_data]), _KSP_MIN_WEIGHT)
+            step_probability = edge_w / total_out
+            if step_probability <= 0.0
+                continue
+            end
+
+            next_probability = probability * step_probability
+            if next_probability < min_probability
+                continue
+            end
+
+            next_states = copy(states)
+            push!(next_states, (next_vertex, next_strand))
+            next_distance = distance - log(step_probability)
+            next_candidate_id += 1
+            candidate_states[next_candidate_id] = next_states
+            candidate_distances[next_candidate_id] = next_distance
+            candidate_probabilities[next_candidate_id] = next_probability
+            DataStructures.enqueue!(
+                queue,
+                next_candidate_id,
+                (next_distance, _path_state_sort_key(next_states))
+            )
+        end
+    end
+
+    return _local_path_result(
+        paths,
+        source,
+        target,
+        method,
+        max_paths,
+        max_depth,
+        max_expansions,
+        expansions,
+        truncated,
+        reason
+    )
+end
+
+"""
+    enumerate_local_paths(graph, source, target; max_paths=10, max_depth=100, max_expansions=10000, min_probability=0.0)
+
+Enumerate ranked loopless alternatives between two local graph vertices with
+explicit bounds to prevent global path explosion.
+
+The search uses a best-first queue ordered by negative log transition
+probability, then deterministically breaks equal-score ties by the vertex/strand
+path key. Source graphs with evidence-backed Rhizomorph edge data are converted
+with `weighted_graph_from_rhizomorph`; already weighted graphs with
+`StrandWeightedEdgeData` are used directly.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Rhizomorph or weighted graph
+- `source`: Entry vertex label
+- `target`: Exit vertex label
+
+# Keywords
+- `max_paths::Int=10`: Maximum number of alternatives to return
+- `max_depth::Int=100`: Maximum number of edges per path
+- `max_expansions::Int=10000`: Maximum partial paths to expand
+- `min_probability::Float64=0.0`: Prune paths below this cumulative probability
+- `default_weight::Float64=1e-10`: Fallback edge weight during conversion
+- `edge_weight::Function=count_evidence`: Edge scoring callback during conversion
+
+# Returns
+- `LocalPathEnumerationResult`: Ranked alternatives plus provenance metadata
+
+# Notes
+- Enumerated paths are vertex-simple. Non-trivial cycles from a vertex back to
+  itself are intentionally not enumerated.
+- Highly repetitive regions should be bounded with `max_paths`, `max_depth`, and
+  `max_expansions`. If a guard stops the search, `result.provenance.truncated`
+  is `true` and `result.provenance.reason` identifies the guard.
+
+# Example
+```julia
+result = Mycelia.Rhizomorph.enumerate_local_paths(
+    weighted_graph,
+    "A",
+    "D";
+    max_paths = 5,
+    max_depth = 20,
+)
+scores = [alternative.score for alternative in result.alternatives]
+```
+"""
+function enumerate_local_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        source::T,
+        target::T;
+        max_paths::Int = 10,
+        max_depth::Int = 100,
+        max_expansions::Int = 10_000,
+        min_probability::Float64 = 0.0,
+        default_weight::Float64 = 1e-10,
+        edge_weight::Function = count_evidence
+) where {T}
+    return _enumerate_local_paths_impl(
+        graph,
+        source,
+        target,
+        :bounded_best_first;
+        max_paths = max_paths,
+        max_depth = max_depth,
+        max_expansions = max_expansions,
+        min_probability = min_probability,
+        default_weight = default_weight,
+        edge_weight = edge_weight
+    )
 end
 
 # ============================================================================
