@@ -479,17 +479,23 @@ function _build_qualmer_graph_core(
         error("Unsupported k-mer type: $KmerType")
     end
 
-    # Get actual kmer type from iterator (includes all type parameters)
-    test_seq = FASTX.sequence(SeqType, records[1])
-
-    # DNA/RNA iterators return (kmer, position), AA iterators return just kmer
+    # Get actual kmer type from the first record that yields a k-mer.
+    # Short/ambiguous inputs can yield no k-mers; fall back to the requested type.
     is_aa = KmerType <: Kmers.AAKmer
-    if is_aa
-        test_kmer = first(KmerIterator(test_seq))
-    else
-        test_kmer, _ = first(KmerIterator(test_seq))
+    actual_kmer_type = nothing
+    for record in records
+        test_seq = FASTX.sequence(SeqType, record)
+        iter = KmerIterator(test_seq)
+        first_item = iterate(iter)
+        if first_item === nothing
+            continue
+        end
+        value = first_item[1]
+        test_kmer = is_aa ? value : value[1]
+        actual_kmer_type = typeof(test_kmer)
+        break
     end
-    ActualKmerType = typeof(test_kmer)
+    ActualKmerType = actual_kmer_type === nothing ? KmerType : actual_kmer_type
 
     # Create empty directed graph with actual kmer type as vertex labels
     # ALWAYS use directed graphs - MetaGraph with DiGraph backend
