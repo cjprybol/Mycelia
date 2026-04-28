@@ -1332,42 +1332,79 @@ function parse_metabuli_classifications(classifications_file::String)::DataFrame
     return df
 end
 
+# pyMLST citation: Biguenet et al. (2023), DOI: 10.1099/mgen.0.001126.
 """
     run_clamlst(genome_file::String; 
-                db_dir::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                db_path::String=joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+                db_dir::Union{Nothing, String}=nothing,
                 species::String="Escherichia coli", 
                 outdir::String=dirname(genome_file),
                 threads::Int=get_default_threads(),
-                force_db_update::Bool=false)
+                force_db_update::Bool=false,
+                executor=nothing,
+                site::Symbol=:local,
+                job_name::String="clamlst",
+                time_limit::String="1-00:00:00",
+                partition::Union{Nothing, String}=nothing,
+                account::Union{Nothing, String}=nothing,
+                mem_gb::Union{Nothing, Real}=nothing,
+                qos::Union{Nothing, String}=nothing,
+                mail_user::Union{Nothing, String}=nothing)
 
 Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
 
 # Arguments
 - `genome_file`: Path to the input genome FASTA file (gzip supported).
 - `db_path`: Path to store/look for the claMLST database. Defaults to `~/workspace/pymlst/claMLSTDB`.
+- `db_dir`: Deprecated alias for `db_path`.
 - `species`: Species name to import/search if the database needs initialization (default: "Escherichia coli").
 - `outdir`: Directory for output files.
 - `threads`: Number of threads to use.
 - `force_db_update`: If `true`, re-imports the database even if it exists.
+- `executor`: Optional execution backend. When provided, execution/job metadata keywords are forwarded to `Mycelia.build_execution_job`.
+- `site`: Execution site identifier used when `executor` is provided.
+- `job_name`: Job name used when `executor` is provided.
+- `time_limit`: Scheduler time limit used when `executor` is provided.
+- `partition`: Optional scheduler partition passed through when `executor` is provided.
+- `account`: Optional scheduler account passed through when `executor` is provided.
+- `mem_gb`: Optional scheduler memory request in gigabytes when `executor` is provided.
+- `qos`: Optional scheduler QoS passed through when `executor` is provided.
+- `mail_user`: Optional scheduler email recipient passed through when `executor` is provided.
 
 # Details
 This function automatically:
 1. Installs the `pymlst` conda environment.
 2. Checks if the `claMLST` database exists at `db_path`. If not, it imports it for the specified `species`.
 3. Decompresses the input genome to a temporary file (required by `claMLST`).
-4. Runs the search and returns the path to the output.
+4. Runs the search locally or emits an execution job when `executor` is provided, then returns the expected output path.
 
 # Returns
-- `String`: Path to the output directory.
+- `String`: Path to the `claMLST` output TSV file.
 """
 function run_clamlst(genome_file::String;
         db_path::String = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB"),
+        db_dir::Union{Nothing, String} = nothing,
         species::String = "Escherichia coli",
         outdir::String = dirname(genome_file),
         threads::Int = get_default_threads(),
-        force_db_update::Bool = false)
-    mkpath(outdir)
-    mkpath(dirname(db_path))
+        force_db_update::Bool = false,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "clamlst",
+        time_limit::String = "1-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing)
+    default_db_path = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB")
+    if !isnothing(db_dir)
+        if db_path != default_db_path && db_path != db_dir
+            error("Provide only one of db_path or db_dir for run_clamlst().")
+        end
+        Base.depwarn("Keyword argument db_dir is deprecated; use db_path instead.", :run_clamlst)
+        db_path = db_dir
+    end
 
     # Fix 1: naming output based on original file, not temp file
     base_name = replace(basename(genome_file), r"\.gz$" => "")
@@ -1379,30 +1416,97 @@ function run_clamlst(genome_file::String;
         return output_tsv
     end
 
-    # only install if we need to make the file - skip if it's already present
-    Mycelia.add_bioconda_env("pymlst")
+    isfile(genome_file) || error("Genome file not found: $(genome_file)")
 
-    # Fix 2: Simplified DB check. 
+    mkpath(outdir)
+
+    resolved_executor = executor === nothing ? nothing : Mycelia.resolve_executor(executor)
+    if resolved_executor === nothing ||
+       !(resolved_executor isa Mycelia.CollectExecutor || resolved_executor isa Mycelia.DryRunExecutor)
+        # Only install if we need to make the file; skip cached outputs and pure collection backends.
+        Mycelia.add_bioconda_env("pymlst")
+    end
+
+    # Fix 2: Simplified DB check.
     # If the database exists, we assume the DB is already present
     db_exists = isfile(db_path) || isdir(db_path)
+    base_import_args = String[
+        "run", "--live-stream", "-n", "pymlst",
+        "claMLST", "import", db_path, species
+    ]
+    import_args = copy(base_import_args)
+    import_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(base_import_args)`)
+    if db_exists && force_db_update
+        push!(import_args, "--force")
+    end
+    import_force_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(vcat(base_import_args, "--force"))`)
+
+    if resolved_executor !== nothing
+        script_lines = String[
+            "set -euo pipefail",
+            "mkdir -p \"$(outdir)\"",
+            "if [ ! -f \"$(output_tsv)\" ]; then",
+            "  mkdir -p \"$(dirname(db_path))\""
+        ]
+
+        if force_db_update
+            append!(script_lines, [
+                "  if [ -e \"$(db_path)\" ]; then",
+                "    $(import_force_cmd)",
+                "  else",
+                "    $(import_cmd)",
+                "  fi"
+            ])
+        else
+            append!(script_lines, [
+                "  if [ ! -e \"$(db_path)\" ]; then",
+                "    $(import_cmd)",
+                "  fi"
+            ])
+        end
+
+        if endswith(genome_file, ".gz")
+            temp_template = joinpath(outdir, "clamlst_input.XXXXXX")
+            append!(script_lines, [
+                "  temp_input=\$(mktemp \"$(temp_template)\")",
+                "  trap 'rm -f \"\$temp_input\"' EXIT",
+                "  gunzip -c \"$(genome_file)\" > \"\$temp_input\"",
+                "  input_path=\"\$temp_input\""
+            ])
+        else
+            push!(script_lines, "  input_path=\"$(genome_file)\"")
+        end
+
+        push!(
+            script_lines,
+            "  $(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search \"$(db_path)\" \"\$input_path\" > \"$(output_tsv)\""
+        )
+        push!(script_lines, "fi")
+
+        job = Mycelia.build_execution_job(
+            cmd = join(script_lines, "\n"),
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user
+        )
+        Mycelia.execute(job, resolved_executor)
+        return output_tsv
+    end
+
     if !db_exists || force_db_update
         @info "Initializing claMLST database for $species at $db_path..."
         try
-            # Prepare arguments
-            cmd_args = ["run", "--live-stream", "-n", "pymlst",
-                "claMLST", "import", db_path, species]
-
-            # If forcing an update on an existing DB, attempt to use --force if supported, 
-            # or the user might need to manually clear the folder. 
-            # The error message "use --force to override it" suggests the flag exists.
-            if db_exists && force_db_update
-                push!(cmd_args, "--force")
-            end
-
-            run(`$(Mycelia.CONDA_RUNNER) $cmd_args`)
+            mkpath(dirname(db_path))
+            run(`$(Mycelia.CONDA_RUNNER) $import_args`)
         catch e
             @warn "Failed to import claMLST database: $e"
-            # If strictly required, you might want to rethrow() here, 
+            # If strictly required, you might want to rethrow() here,
             # but usually we proceed to check if search works.
         end
     end
