@@ -89,6 +89,114 @@ function GraphPath(steps::Vector{WalkStep{T}}) where {T}
 end
 
 """
+    PathFindingStrategy
+
+Abstract interface for Rhizomorph path-finding algorithms.
+
+Concrete strategies are passed to `Mycelia.Rhizomorph.find_paths`, which always
+returns a vector of `GraphPath` values. This gives callers a single dispatch
+point for deterministic walks, stochastic walks, shortest-probability paths,
+and K-shortest path enumeration.
+"""
+abstract type PathFindingStrategy end
+
+"""
+    GreedyWalkStrategy(max_steps; weight_function=edge_data_weight)
+
+Strategy for a deterministic walk that chooses the highest-weight transition
+at each step.
+
+# Arguments
+- `max_steps::Int`: Maximum number of edge traversals
+- `weight_function`: Callback used to score each outgoing edge
+
+# Example
+```julia
+strategy = Mycelia.Rhizomorph.GreedyWalkStrategy(25)
+paths = Mycelia.Rhizomorph.find_paths(weighted, strategy; start_vertex=start)
+```
+"""
+struct GreedyWalkStrategy{F} <: PathFindingStrategy
+    max_steps::Int
+    weight_function::F
+end
+
+function GreedyWalkStrategy(max_steps::Int; weight_function = edge_data_weight)
+    if max_steps < 0
+        throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
+    end
+    return GreedyWalkStrategy{typeof(weight_function)}(max_steps, weight_function)
+end
+
+"""
+    ProbabilisticWalkStrategy(max_steps; seed=nothing)
+
+Strategy for a weighted random walk from a starting vertex.
+
+# Arguments
+- `max_steps::Int`: Maximum number of edge traversals
+- `seed::Union{Nothing, Int}=nothing`: Optional RNG seed for reproducibility
+
+# Example
+```julia
+strategy = Mycelia.Rhizomorph.ProbabilisticWalkStrategy(25; seed = 42)
+paths = Mycelia.Rhizomorph.find_paths(weighted, strategy; start_vertex=start)
+```
+"""
+struct ProbabilisticWalkStrategy <: PathFindingStrategy
+    max_steps::Int
+    seed::Union{Nothing, Int}
+
+    function ProbabilisticWalkStrategy(
+            max_steps::Int;
+            seed::Union{Nothing, Int} = nothing
+    )
+        if max_steps < 0
+            throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
+        end
+        return new(max_steps, seed)
+    end
+end
+
+"""
+    ShortestProbabilityPathStrategy()
+
+Strategy for the single highest-probability path between a source and target.
+
+# Example
+```julia
+strategy = Mycelia.Rhizomorph.ShortestProbabilityPathStrategy()
+paths = Mycelia.Rhizomorph.find_paths(weighted, strategy; source=src, target=dst)
+```
+"""
+struct ShortestProbabilityPathStrategy <: PathFindingStrategy end
+
+"""
+    KShortestPathsStrategy(k)
+
+Strategy for Yen K-shortest loopless paths, ranked by path probability.
+
+# Arguments
+- `k::Int`: Maximum number of paths to return
+
+# Example
+```julia
+strategy = Mycelia.Rhizomorph.KShortestPathsStrategy(5)
+paths = Mycelia.Rhizomorph.find_paths(weighted, strategy; source=src, target=dst)
+```
+"""
+struct KShortestPathsStrategy <: PathFindingStrategy
+    k::Int
+
+    function KShortestPathsStrategy(k::Int)
+        if k < 0
+            throw(ArgumentError("k must be non-negative, got $k"))
+        end
+        return new(k)
+    end
+end
+
+"""
     StrandWeightedEdgeData
 
 Edge payload for probabilistic path algorithms with explicit strand tracking.
@@ -1027,6 +1135,111 @@ function k_shortest_paths(
     # Sort results by descending probability
     sort!(A; by = p -> p.total_probability, rev = true)
     return A
+end
+
+"""
+    find_paths(graph, strategy; start_vertex=nothing, source=nothing, target=nothing)
+
+Run a concrete `PathFindingStrategy` through a single Rhizomorph API.
+
+All strategies return a vector of `GraphPath` values:
+- `GreedyWalkStrategy` and `ProbabilisticWalkStrategy` return one path from
+  `start_vertex` (or `source` as a convenience alias).
+- `ShortestProbabilityPathStrategy` returns zero or one path from `source` to
+  `target`.
+- `KShortestPathsStrategy` returns up to `k` paths from `source` to `target`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted Rhizomorph graph
+- `strategy::PathFindingStrategy`: Concrete path-finding strategy
+- `start_vertex`: Start label for walk strategies
+- `source`: Source label for source-target strategies, or alias for start vertex
+- `target`: Target label for source-target strategies
+
+# Returns
+- `Vector{GraphPath}`: Strategy-specific path results with a common shape
+
+# Example
+```julia
+strategy = Mycelia.Rhizomorph.KShortestPathsStrategy(3)
+paths = Mycelia.Rhizomorph.find_paths(weighted, strategy; source=src, target=dst)
+```
+"""
+function find_paths end
+
+function _require_start_vertex(strategy_name::AbstractString, start_vertex, source)
+    vertex = start_vertex === nothing ? source : start_vertex
+    if vertex === nothing
+        throw(ArgumentError("$strategy_name requires start_vertex or source"))
+    end
+    return vertex
+end
+
+function _require_source_target(strategy_name::AbstractString, source, target)
+    if source === nothing
+        throw(ArgumentError("$strategy_name requires source"))
+    end
+    if target === nothing
+        throw(ArgumentError("$strategy_name requires target"))
+    end
+    return source, target
+end
+
+function find_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        strategy::GreedyWalkStrategy;
+        start_vertex = nothing,
+        source = nothing,
+        target = nothing
+)
+    vertex = _require_start_vertex("GreedyWalkStrategy", start_vertex, source)
+    path = maximum_weight_walk_next(
+        graph,
+        vertex,
+        strategy.max_steps;
+        weight_function = strategy.weight_function
+    )
+    return [path]
+end
+
+function find_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        strategy::ProbabilisticWalkStrategy;
+        start_vertex = nothing,
+        source = nothing,
+        target = nothing
+)
+    vertex = _require_start_vertex("ProbabilisticWalkStrategy", start_vertex, source)
+    path = probabilistic_walk_next(
+        graph,
+        vertex,
+        strategy.max_steps;
+        seed = strategy.seed
+    )
+    return [path]
+end
+
+function find_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        strategy::ShortestProbabilityPathStrategy;
+        start_vertex = nothing,
+        source = nothing,
+        target = nothing
+)
+    src, dst = _require_source_target("ShortestProbabilityPathStrategy", source, target)
+    path = shortest_probability_path_next(graph, src, dst)
+    return path === nothing ? GraphPath{typeof(src)}[] : [path]
+end
+
+function find_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        strategy::KShortestPathsStrategy;
+        start_vertex = nothing,
+        source = nothing,
+        target = nothing
+)
+    src, dst = _require_source_target("KShortestPathsStrategy", source, target)
+    return k_shortest_paths(graph, src, dst, strategy.k)
 end
 
 # ============================================================================
