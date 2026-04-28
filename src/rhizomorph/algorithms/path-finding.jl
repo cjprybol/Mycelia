@@ -89,6 +89,33 @@ function GraphPath(steps::Vector{WalkStep{T}}) where {T}
 end
 
 """
+    ViterbiDecodingResult
+
+Result bundle returned by Viterbi-style graph decoders.
+
+# Fields
+- `path::Union{Nothing, GraphPath}`: Best decoded path, or `nothing` if no
+  requested target is reachable within the decoding horizon
+- `score::Float64`: Log-probability score of the decoded path
+- `diagnostics::Dict{Symbol, Any}`: Algorithm metadata for benchmarks and debugging
+
+# Notes
+Scores are in log-probability space. The returned `GraphPath.total_probability`
+is the corresponding probability product.
+
+# Example
+```julia
+result = Mycelia.Rhizomorph.viterbi_decode_next(weighted, source, 100)
+path = result.path
+```
+"""
+struct ViterbiDecodingResult
+    path::Union{Nothing, GraphPath}
+    score::Float64
+    diagnostics::Dict{Symbol, Any}
+end
+
+"""
     StrandWeightedEdgeData
 
 Edge payload for probabilistic path algorithms with explicit strand tracking.
@@ -729,6 +756,364 @@ function _build_graph_path_from_vertices(
     end
 
     return GraphPath(steps)
+end
+
+# ============================================================================
+# Viterbi Decoding
+# ============================================================================
+
+"""
+    viterbi_decode_next(graph, start_vertex, max_steps; target_vertex=nothing, start_strand=Forward)
+
+Run exact dynamic-programming Viterbi decoding over a weighted Rhizomorph graph.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
+- `start_vertex`: Vertex label where decoding starts
+- `max_steps::Int`: Maximum number of edge traversals to decode
+- `target_vertex=nothing`: Optional target label. If provided, the best path
+  reaching this target within `max_steps` is returned.
+- `start_strand=Forward`: Strand state used for the initial vertex
+
+# Returns
+- `ViterbiDecodingResult`: Contains `path`, log-probability `score`, and
+  diagnostic metadata.
+
+# Notes
+Transition scores are normalized outgoing edge weights:
+`edge_weight / total_outgoing_weight(source, strand)`. Without a target, the
+decoder returns the best path on the deepest non-empty dynamic-programming
+frontier, stopping early only when no frontier can be expanded.
+
+# Example
+```julia
+weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
+result = Mycelia.Rhizomorph.viterbi_decode_next(weighted, source, 50)
+```
+"""
+function viterbi_decode_next(
+        graph::MetaGraphsNext.MetaGraph,
+        start_vertex::T,
+        max_steps::Int;
+        target_vertex = nothing,
+        start_strand = Forward
+) where {T}
+    return _viterbi_decode_next_impl(
+        graph,
+        start_vertex,
+        max_steps;
+        target_vertex = target_vertex,
+        start_strand = start_strand,
+        beam_width = typemax(Int),
+        beam_log_threshold = Inf,
+        exact = true
+    )
+end
+
+"""
+    beam_pruned_viterbi_decode_next(graph, start_vertex, max_steps; target_vertex=nothing,
+                                    start_strand=Forward, beam_width=64,
+                                    beam_log_threshold=Inf)
+
+Run beam-pruned Viterbi decoding over a weighted Rhizomorph graph.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Weighted graph from `weighted_graph_from_rhizomorph`
+- `start_vertex`: Vertex label where decoding starts
+- `max_steps::Int`: Maximum number of edge traversals to decode
+- `target_vertex=nothing`: Optional target label. If provided, the best retained
+  path reaching this target within `max_steps` is returned.
+- `start_strand=Forward`: Strand state used for the initial vertex
+- `beam_width::Int=64`: Maximum number of dynamic-programming states retained
+  after each expansion
+- `beam_log_threshold::Float64=Inf`: Keep states within this log-score distance
+  of the best state in the frontier. `Inf` disables threshold pruning.
+
+# Returns
+- `ViterbiDecodingResult`: Contains `path`, log-probability `score`, and
+  diagnostic metadata.
+
+# Notes
+The safe default beam keeps up to 64 states and performs no score-threshold
+pruning. Narrower beams are faster but can prune the exact optimum.
+
+# Example
+```julia
+result = Mycelia.Rhizomorph.beam_pruned_viterbi_decode_next(
+    weighted,
+    source,
+    200;
+    beam_width = 128,
+)
+```
+"""
+function beam_pruned_viterbi_decode_next(
+        graph::MetaGraphsNext.MetaGraph,
+        start_vertex::T,
+        max_steps::Int;
+        target_vertex = nothing,
+        start_strand = Forward,
+        beam_width::Int = 64,
+        beam_log_threshold = Inf
+) where {T}
+    return _viterbi_decode_next_impl(
+        graph,
+        start_vertex,
+        max_steps;
+        target_vertex = target_vertex,
+        start_strand = start_strand,
+        beam_width = beam_width,
+        beam_log_threshold = Float64(beam_log_threshold),
+        exact = false
+    )
+end
+
+function _viterbi_decode_next_impl(
+        graph::MetaGraphsNext.MetaGraph,
+        start_vertex::T,
+        max_steps::Int;
+        target_vertex,
+        start_strand,
+        beam_width::Int,
+        beam_log_threshold::Float64,
+        exact::Bool
+) where {T}
+    if max_steps < 0
+        throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
+    end
+    if beam_width <= 0
+        throw(ArgumentError("beam_width must be positive, got $beam_width"))
+    end
+    if beam_log_threshold < 0
+        throw(ArgumentError(
+            "beam_log_threshold must be non-negative, got $beam_log_threshold"))
+    end
+    if !(start_vertex in MetaGraphsNext.labels(graph))
+        throw(ArgumentError("Start vertex $start_vertex not found in graph"))
+    end
+
+    algorithm = exact ? :viterbi_exact : :viterbi_beam_pruned
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => algorithm,
+        :exact => exact,
+        :max_steps => max_steps,
+        :target_vertex => target_vertex,
+        :start_strand => _normalize_strand(start_strand),
+        :score_domain => :log_probability,
+        :transition_scoring => :normalized_edge_weight,
+        :beam_width => exact ? nothing : beam_width,
+        :beam_log_threshold => exact ? nothing : beam_log_threshold,
+        :expanded_states => 0,
+        :generated_states => 0,
+        :retained_states => 1,
+        :pruned_states => 0,
+        :completed_steps => 0,
+        :reached_target => target_vertex === nothing ? nothing : false
+    )
+
+    if target_vertex !== nothing && !(target_vertex in MetaGraphsNext.labels(graph))
+        diagnostics[:reason] = :target_not_found
+        return ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+
+    start_state = (start_vertex, _normalize_strand(start_strand))
+    active_scores = Dict{Tuple{T, StrandOrientation}, Float64}(start_state => 0.0)
+    predecessors_by_depth = Vector{
+        Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}
+    }()
+
+    best_state = start_state
+    best_depth = 0
+    best_score = if target_vertex === nothing || start_vertex == target_vertex
+        0.0
+    else
+        -Inf
+    end
+
+    for depth in 1:max_steps
+        next_scores = Dict{Tuple{T, StrandOrientation}, Float64}()
+        next_predecessors =
+            Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
+
+        for (state, state_score) in active_scores
+            current_vertex, current_strand = state
+            transitions = _get_valid_transitions(graph, current_vertex, current_strand)
+            diagnostics[:expanded_states] += 1
+
+            if isempty(transitions)
+                continue
+            end
+
+            total_out = _total_outgoing_weight(graph, current_vertex, current_strand)
+            for transition in transitions
+                next_vertex = convert(T, transition[:target_vertex])
+                next_strand = _normalize_strand(transition[:target_strand])
+                edge_w = max(edge_data_weight(transition[:edge_data]), _KSP_MIN_WEIGHT)
+                transition_prob = edge_w / total_out
+                if transition_prob <= 0.0
+                    continue
+                end
+
+                next_state = (next_vertex, next_strand)
+                next_score = state_score + log(transition_prob)
+                diagnostics[:generated_states] += 1
+
+                if !haskey(next_scores, next_state) ||
+                   next_score > next_scores[next_state]
+                    next_scores[next_state] = next_score
+                    next_predecessors[next_state] = (state, transition_prob)
+                end
+            end
+        end
+
+        if isempty(next_scores)
+            break
+        end
+
+        if !exact
+            pre_prune_count = length(next_scores)
+            next_scores, next_predecessors = _prune_viterbi_beam(
+                next_scores,
+                next_predecessors,
+                beam_width,
+                beam_log_threshold
+            )
+            diagnostics[:pruned_states] += pre_prune_count - length(next_scores)
+        end
+
+        if isempty(next_scores)
+            break
+        end
+
+        push!(predecessors_by_depth, next_predecessors)
+        active_scores = next_scores
+        diagnostics[:retained_states] += length(active_scores)
+        diagnostics[:completed_steps] = depth
+
+        if target_vertex === nothing
+            best_state, best_score = _best_viterbi_state(active_scores)
+            best_depth = depth
+        else
+            target_state, target_score =
+                _best_viterbi_target_state(active_scores, target_vertex)
+            if target_state !== nothing && target_score > best_score
+                best_state = target_state
+                best_score = target_score
+                best_depth = depth
+                diagnostics[:reached_target] = true
+            end
+        end
+    end
+
+    if target_vertex !== nothing && !isfinite(best_score)
+        diagnostics[:reason] = :target_unreachable
+        return ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+
+    path = _reconstruct_viterbi_path(
+        graph,
+        best_state,
+        best_depth,
+        predecessors_by_depth
+    )
+    diagnostics[:path_length] = length(path.steps)
+    return ViterbiDecodingResult(path, best_score, diagnostics)
+end
+
+function _best_viterbi_state(scores::Dict{Tuple{T, StrandOrientation}, Float64}) where {T}
+    best_state = nothing
+    best_score = -Inf
+    for (state, score) in scores
+        if _is_better_viterbi_candidate(state, score, best_state, best_score)
+            best_state = state
+            best_score = score
+        end
+    end
+    return best_state, best_score
+end
+
+function _best_viterbi_target_state(
+        scores::Dict{Tuple{T, StrandOrientation}, Float64},
+        target_vertex
+) where {T}
+    best_state = nothing
+    best_score = -Inf
+    for (state, score) in scores
+        if state[1] == target_vertex &&
+           _is_better_viterbi_candidate(state, score, best_state, best_score)
+            best_state = state
+            best_score = score
+        end
+    end
+    return best_state, best_score
+end
+
+function _is_better_viterbi_candidate(state, score, best_state, best_score)
+    if best_state === nothing
+        return true
+    end
+    if score > best_score
+        return true
+    end
+    if score == best_score && _viterbi_state_sort_key(state) < _viterbi_state_sort_key(best_state)
+        return true
+    end
+    return false
+end
+
+function _viterbi_state_sort_key(state)
+    return (string(state[1]), Int(state[2]))
+end
+
+function _prune_viterbi_beam(
+        scores::Dict{Tuple{T, StrandOrientation}, Float64},
+        predecessors::Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}},
+        beam_width::Int,
+        beam_log_threshold::Float64
+) where {T}
+    ordered = sort(
+        collect(scores);
+        by = item -> (-item[2], _viterbi_state_sort_key(item[1]))
+    )
+    best_score = first(ordered)[2]
+
+    retained_scores = Dict{Tuple{T, StrandOrientation}, Float64}()
+    retained_predecessors =
+        Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
+
+    for (state, score) in ordered
+        if length(retained_scores) >= beam_width
+            break
+        end
+        if best_score - score > beam_log_threshold
+            continue
+        end
+        retained_scores[state] = score
+        retained_predecessors[state] = predecessors[state]
+    end
+
+    return retained_scores, retained_predecessors
+end
+
+function _reconstruct_viterbi_path(
+        graph::MetaGraphsNext.MetaGraph,
+        end_state::Tuple{T, StrandOrientation},
+        depth::Int,
+        predecessors_by_depth::Vector{
+            Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}
+        }
+) where {T}
+    path_states = Vector{Tuple{T, StrandOrientation}}(undef, depth + 1)
+    current_state = end_state
+
+    for path_index in reverse(2:(depth + 1))
+        path_states[path_index] = current_state
+        predecessor_entry = predecessors_by_depth[path_index - 1][current_state]
+        current_state = predecessor_entry[1]
+    end
+    path_states[1] = current_state
+
+    return _build_graph_path_from_vertices(graph, path_states)
 end
 
 """
