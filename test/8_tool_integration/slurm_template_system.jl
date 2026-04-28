@@ -1,7 +1,6 @@
 import Test
 import Mycelia
 
-const LEGACY_FIXTURE_LOGDIR = "/Users/cameronprybol/workspace/slurmlogs"
 const FAKE_LAWRENCIUM_ASSOCIATIONS = "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
 
 function _has_message(messages::Vector{String}, needle::String)
@@ -34,10 +33,26 @@ function _with_env(f::Function, overrides::AbstractDict)
 end
 
 function _normalize_fixture_logdir(text::AbstractString)
-    return replace(String(text), LEGACY_FIXTURE_LOGDIR => Mycelia.DEFAULT_SLURM_LOGDIR)
+    output_path = joinpath(Mycelia.DEFAULT_SLURM_LOGDIR, "%j.%x.out")
+    error_path = joinpath(Mycelia.DEFAULT_SLURM_LOGDIR, "%j.%x.err")
+    normalized = replace(
+        String(text),
+        r"(?m)^#SBATCH --output=.*$" => "#SBATCH --output=$(output_path)"
+    )
+    return replace(
+        normalized,
+        r"(?m)^#SBATCH --error=.*$" => "#SBATCH --error=$(error_path)"
+    )
+end
+
+function _skip_missing_git()
+    Test.@test_skip Sys.which("git") !== nothing
+    return nothing
 end
 
 function _with_git_email(f::Function, email::AbstractString)
+    Sys.which("git") === nothing && return _skip_missing_git()
+
     mktempdir() do repo_dir
         _with_env(Dict(
             "GIT_AUTHOR_EMAIL" => nothing,
@@ -54,6 +69,8 @@ function _with_git_email(f::Function, email::AbstractString)
 end
 
 function _without_git_email(f::Function)
+    Sys.which("git") === nothing && return _skip_missing_git()
+
     mktempdir() do repo_dir
         run(`git -C $repo_dir init --quiet`)
         empty_config = joinpath(repo_dir, "empty.gitconfig")
