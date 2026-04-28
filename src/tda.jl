@@ -134,6 +134,19 @@ Compute graph-theoretic Betti numbers on the underlying undirected simple graph:
 - Betti₁ = cycle rank (|E| - |V| + Betti₀)
 
 Accepts `Graphs.AbstractGraph` and Rhizomorph `MetaGraphsNext.MetaGraph` inputs.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+
+# Returns
+- A tuple `(betti0, betti1)` with integer component and cycle-rank counts.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+Graphs.add_edge!(graph, 1, 2)
+betti0, betti1 = Mycelia.tda_betti_numbers(graph)
+```
 """
 function tda_betti_numbers(g)
     graph = _tda_graph(g)
@@ -152,6 +165,17 @@ end
     tda_graph_stats(g) -> NamedTuple
 
 Return lightweight graph statistics useful for logging.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+
+# Returns
+- A named tuple with `nv`, `ne`, `directed`, and `density`.
+
+# Example
+```julia
+stats = Mycelia.tda_graph_stats(Graphs.SimpleGraph(4))
+```
 """
 function tda_graph_stats(g)
     graph = _tda_graph(g)
@@ -181,6 +205,25 @@ Compute Betti₀ and Betti₁ across a vertex-weight filtration, where for each 
 we take the induced subgraph on vertices with `vertex_weights[v] >= t`.
 
 This provides an initial “topology signal” without requiring persistent homology.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to filter.
+- `thresholds`: Real-valued filtration thresholds.
+- `vertex_weights`: Vector aligned with graph vertex codes, integer-keyed dictionary
+  for plain graphs, or label-keyed dictionary for `MetaGraphsNext.MetaGraph`.
+
+# Returns
+- `TDAMetrics` containing sorted thresholds and Betti curves.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+metrics = Mycelia.tda_betti_curves(
+    graph;
+    thresholds = [0.0, 1.0],
+    vertex_weights = ones(Float64, Graphs.nv(graph))
+)
+```
 """
 function tda_betti_curves(
         g;
@@ -223,6 +266,21 @@ Compute a standardized TDA summary for a graph.
 dictionary keyed by integer vertex id. For Rhizomorph `MetaGraphsNext.MetaGraph`,
 pass either a vector aligned with internal vertex codes or a dictionary keyed by
 vertex label. If omitted, all vertices are given weight 1.0.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+- `cfg`: `TDAConfig` controlling backend, maximum dimension, and thresholds.
+- `vertex_weights = nothing`: Optional weights for the vertex filtration.
+
+# Returns
+- `TDARunSummary` with configuration, graph statistics, and `TDAMetrics`.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+cfg = Mycelia.TDAConfig(thresholds = [0.0])
+summary = Mycelia.tda_on_graph(graph, cfg)
+```
 """
 function tda_on_graph(
         g,
@@ -247,12 +305,23 @@ Convert a `TDARunSummary` into stable, table-ready rows. One row is emitted per
 filtration threshold, with graph statistics, Betti values, summary score, and a
 provenance tuple that records the TDA configuration and filtration choices.
 
-# Keyword Arguments
+# Arguments
+- `summary`: `TDARunSummary` returned by `tda_on_graph`.
 - `graph_id = "graph"`: Identifier copied into every row.
 - `filtration = :vertex_weight_threshold`: Filtration recipe name.
 - `weight_name = :uniform`: Name of the vertex weight signal.
 - `weight_stats = (weight_min = NaN, weight_max = NaN, weight_mean = NaN)`: Weight summary.
 - `provenance = (; )`: Extra user provenance merged into the generated provenance tuple.
+
+# Returns
+- `Vector{NamedTuple}` with one table-ready row per threshold.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+summary = Mycelia.tda_on_graph(graph, Mycelia.TDAConfig(thresholds = [0.0]))
+rows = Mycelia.tda_metric_rows(summary; graph_id = "assembly_graph")
+```
 """
 function tda_metric_rows(
         summary::TDARunSummary;
@@ -274,7 +343,7 @@ function tda_metric_rows(
         filtration = filtration,
         weight_name = weight_name
     )
-    row_provenance = merge(generated_provenance, provenance)
+    row_provenance = merge(provenance, generated_provenance)
 
     rows = Vector{NamedTuple}(undef, length(metrics.thresholds))
     for i in eachindex(metrics.thresholds)
@@ -308,6 +377,20 @@ end
     tda_metric_table(summary::TDARunSummary; kwargs...) -> DataFrames.DataFrame
 
 Return `tda_metric_rows(summary; kwargs...)` as a `DataFrames.DataFrame`.
+
+# Arguments
+- `summary`: `TDARunSummary` returned by `tda_on_graph`.
+- `kwargs...`: Keyword arguments forwarded to `tda_metric_rows`.
+
+# Returns
+- `DataFrames.DataFrame` with one row per filtration threshold.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+summary = Mycelia.tda_on_graph(graph, Mycelia.TDAConfig(thresholds = [0.0]))
+table = Mycelia.tda_metric_table(summary)
+```
 """
 function tda_metric_table(summary::TDARunSummary; kwargs...)
     return DataFrames.DataFrame(tda_metric_rows(summary; kwargs...))
@@ -320,13 +403,28 @@ Compute graph Betti/TDA metrics and return one table-ready row per filtration
 threshold. This is the convenience entry point for downstream assembly-quality
 correlation analyses.
 
-# Keyword Arguments
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+- `cfg = TDAConfig()`: TDA configuration.
 - `vertex_weights = nothing`: Uniform weights, a vector, or a graph-label dictionary.
 - `graph_id = "graph"`: Assembly graph identifier copied into every row.
 - `filtration = :vertex_weight_threshold`: Filtration recipe name recorded in provenance.
 - `weight_name`: Defaults to `:uniform` when `vertex_weights` is omitted, otherwise
   `:vertex_weight`.
 - `provenance = (; )`: Extra run metadata merged into each row's provenance tuple.
+
+# Returns
+- `DataFrames.DataFrame` with stable TDA metric rows and provenance.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+table = Mycelia.extract_tda_metrics(
+    graph,
+    Mycelia.TDAConfig(thresholds = [0.0]);
+    graph_id = "assembly_graph"
+)
+```
 """
 function extract_tda_metrics(
         g,

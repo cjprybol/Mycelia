@@ -135,5 +135,41 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test table.provenance[1].filtration == :coverage_min
         Test.@test table.provenance[1].assembly_id == "fixture"
         Test.@test table.provenance[1].graph_family == :bubble
+
+        conflict_table = Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = vertex_weights,
+            graph_id = "diamond_bubble",
+            filtration = :coverage_min,
+            weight_name = :coverage,
+            provenance = (
+                backend = :caller_supplied,
+                thresholds = [99.0],
+                filtration = :caller_supplied,
+                assembly_id = "fixture"
+            )
+        )
+
+        Test.@test conflict_table.provenance[1].backend == :graph_betti
+        Test.@test conflict_table.provenance[1].thresholds == [1.0, 2.5, 4.0]
+        Test.@test conflict_table.provenance[1].filtration == :coverage_min
+        Test.@test conflict_table.provenance[1].assembly_id == "fixture"
+
+        Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = [1.0, 2.0]
+        )
+        Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = Dict("A" => 3.0, "B" => 2.0, "D" => 3.0)
+        )
+        Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = "invalid"
+        )
     end
 end
