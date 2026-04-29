@@ -93,6 +93,23 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test length(env_names) == 3
     end
 
+    Test.@testset "Conda env list parsing helpers" begin
+        Test.@test Mycelia._parse_conda_env_list_line("# conda environments:") === nothing
+        Test.@test Mycelia._parse_conda_env_list_line("") === nothing
+
+        parsed_line = Mycelia._parse_conda_env_list_line(
+            "vibrant * /tmp/conda envs/vibrant"
+        )
+        Test.@test !isnothing(parsed_line)
+        Test.@test parsed_line.env_name == "vibrant"
+        Test.@test parsed_line.env_prefix == "/tmp/conda envs/vibrant"
+
+        inactive_line = Mycelia._parse_conda_env_list_line("base /opt/conda")
+        Test.@test !isnothing(inactive_line)
+        Test.@test inactive_line.env_name == "base"
+        Test.@test inactive_line.env_prefix == "/opt/conda"
+    end
+
     Test.@testset "Filesystem environment fallback" begin
         mktempdir() do dir
             envs_dir = joinpath(dir, "envs")
@@ -136,6 +153,12 @@ Test.@testset "Bioconda Environment Management Tests" begin
             Test.@test "local_env" in env_names
             Test.@test "configured_env" in env_names
             Test.@test length(env_names) == 3
+
+            Test.@test Mycelia._conda_env_prefix_from_envs_dir("base", envs_dir) == dir
+            Test.@test Mycelia._conda_env_prefix_from_envs_dir("local_env", envs_dir) ==
+                       joinpath(envs_dir, "local_env")
+            Test.@test Mycelia._conda_env_prefix_from_runner("configured_env", runner_path) ==
+                       "/custom/envs/configured_env"
         end
     end
 
@@ -226,6 +249,73 @@ Test.@testset "Bioconda Environment Management Tests" begin
         channel_cmd = `$(Mycelia.CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`
         Test.@test channel_cmd isa Cmd
         Test.@test "$(channel)::$(pkg)" in channel_cmd.exec
+    end
+
+    Test.@testset "VIBRANT candidate precedence" begin
+        prefix_candidates = [
+            "/tmp/vibrant-prefix/share/vibrant-1.1/db",
+            "/tmp/vibrant-prefix/share/vibrant-1.2/db"
+        ]
+
+        Test.@test Mycelia._collect_vibrant_data_path_candidates(
+            "/tmp/from-conda",
+            " /tmp/from-process ",
+            prefix_candidates
+        ) == [
+            "/tmp/from-conda",
+            "/tmp/from-process",
+            prefix_candidates...
+        ]
+
+        Test.@test Mycelia._collect_vibrant_data_path_candidates(
+            "/tmp/shared",
+            "/tmp/shared",
+            ["/tmp/shared", "/tmp/other"]
+        ) == ["/tmp/shared", "/tmp/other"]
+    end
+
+    Test.@testset "VIBRANT database detection" begin
+        mktempdir() do tempdir
+            empty_db_dir = joinpath(tempdir, "empty")
+            mkpath(empty_db_dir)
+            Test.@test Mycelia._vibrant_databases_exist(empty_db_dir) == false
+            Test.@test Mycelia._first_vibrant_database_path([empty_db_dir]) === nothing
+        end
+
+        mktempdir() do tempdir
+            data_dir = joinpath(tempdir, "share", "vibrant-1.2.1", "db")
+            mkpath(joinpath(data_dir, "databases", "profile_names"))
+            mkpath(joinpath(data_dir, "files"))
+            write(joinpath(data_dir, "files", "VIBRANT_machine_model.sav"), "model")
+            write(joinpath(data_dir, "files", "VIBRANT_names.tsv"), "names")
+
+            Test.@test Mycelia._vibrant_databases_exist(data_dir) == false
+            Test.@test Mycelia._first_vibrant_database_path([data_dir]) === nothing
+            missing_vibrant_env = "vibrant-missing-$(rand(1000:9999))"
+            Base.withenv("VIBRANT_DATA_PATH" => nothing) do
+                Test.@test Mycelia._vibrant_database_path(missing_vibrant_env) === nothing
+            end
+        end
+
+        mktempdir() do tempdir
+            env_prefix = joinpath(tempdir, "envs", "vibrant")
+            data_dir = joinpath(env_prefix, "share", "vibrant-1.2.1", "db")
+
+            for relpath in Mycelia.VIBRANT_REQUIRED_DATA_FILES
+                fullpath = joinpath(data_dir, relpath)
+                mkpath(dirname(fullpath))
+                write(fullpath, "present")
+            end
+
+            Test.@test Mycelia._vibrant_databases_exist(data_dir)
+            Test.@test Mycelia._first_vibrant_database_path([joinpath(tempdir, "missing"), data_dir]) ==
+                       data_dir
+            Test.@test Mycelia._vibrant_data_path_candidates_from_prefix(env_prefix) == [data_dir]
+            Base.withenv("VIBRANT_DATA_PATH" => data_dir) do
+                Test.@test Mycelia._vibrant_database_path("vibrant-missing-$(rand(1000:9999))") ==
+                           data_dir
+            end
+        end
     end
 end
 

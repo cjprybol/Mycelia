@@ -79,8 +79,333 @@ function _conda_environment_names()
     return _conda_environment_names(CONDA_RUNNER, _conda_envs_dir())
 end
 
+function _conda_env_prefix_from_envs_dir(env_name::AbstractString, envs_dir::AbstractString)
+    if env_name == "base"
+        root_prefix = dirname(envs_dir)
+        return isdir(joinpath(root_prefix, "conda-meta")) ? root_prefix : nothing
+    end
+
+    env_prefix = joinpath(envs_dir, env_name)
+    return isdir(joinpath(env_prefix, "conda-meta")) ? env_prefix : nothing
+end
+
 """
-    _install_vibrant()
+    _parse_conda_env_list_line(line::AbstractString) -> Union{Nothing, NamedTuple{(:env_name, :env_prefix), Tuple{String, String}}}
+
+Parse one `conda env list` output line into an environment name and prefix.
+
+# Arguments
+- `line::AbstractString`: Raw output line from `conda env list`.
+
+# Returns
+- `Union{Nothing, NamedTuple{(:env_name, :env_prefix), Tuple{String, String}}}`:
+  Parsed environment metadata, or `nothing` for blank/comment/unparseable lines.
+
+# Example
+```julia
+parsed = Mycelia._parse_conda_env_list_line("vibrant * /tmp/conda envs/vibrant")
+```
+"""
+function _parse_conda_env_list_line(line::AbstractString)
+    stripped_line = strip(line)
+    if isempty(stripped_line) || startswith(stripped_line, "#")
+        return nothing
+    end
+
+    match_result = match(r"^(\S+)\s+(\*)?\s*(.+?)\s*$", stripped_line)
+    if isnothing(match_result)
+        return nothing
+    end
+
+    return (env_name = match_result.captures[1], env_prefix = match_result.captures[3])
+end
+
+function _conda_env_prefix_from_runner(env_name::AbstractString, conda_runner::AbstractString)
+    if !isfile(conda_runner)
+        return nothing
+    end
+
+    try
+        for line in readlines(pipeline(`$(conda_runner) env list`, stderr = devnull))
+            parsed_line = _parse_conda_env_list_line(line)
+            if !isnothing(parsed_line) && parsed_line.env_name == env_name
+                return parsed_line.env_prefix
+            end
+        end
+    catch e
+        @debug "conda env prefix lookup failed" exception = e
+    end
+    return nothing
+end
+
+"""
+    _conda_env_prefix(env_name::AbstractString) -> Union{Nothing, String}
+
+Return the filesystem prefix for a named conda environment.
+
+# Arguments
+- `env_name::AbstractString`: Conda environment name to resolve.
+
+# Returns
+- `Union{Nothing, String}`: Filesystem prefix for `env_name`, or `nothing` when
+  the environment cannot be determined.
+
+# Example
+```julia
+prefix = Mycelia._conda_env_prefix("vibrant")
+```
+"""
+function _conda_env_prefix(env_name::AbstractString)
+    _ensure_conda_env_vars!()
+    env_prefix = _conda_env_prefix_from_envs_dir(env_name, _conda_envs_dir())
+    if !isnothing(env_prefix)
+        return env_prefix
+    end
+    return _conda_env_prefix_from_runner(env_name, Mycelia.CONDA_RUNNER)
+end
+
+"""
+    _conda_env_variable(env_name::AbstractString, variable_name::AbstractString) -> Union{Nothing, String}
+
+Read one environment variable from a named conda environment.
+
+# Arguments
+- `env_name::AbstractString`: Conda environment name to inspect.
+- `variable_name::AbstractString`: Environment variable name to read.
+
+# Returns
+- `Union{Nothing, String}`: Trimmed variable value, or `nothing` when the
+  environment, runner, or variable value is unavailable.
+
+# Example
+```julia
+data_path = Mycelia._conda_env_variable("vibrant", "VIBRANT_DATA_PATH")
+```
+"""
+function _conda_env_variable(env_name::AbstractString, variable_name::AbstractString)
+    _ensure_conda_env_vars!()
+    if !isfile(Mycelia.CONDA_RUNNER)
+        return nothing
+    end
+    try
+        cmd = Cmd([
+            Mycelia.CONDA_RUNNER, "run", "-n", env_name, "python", "-c",
+            "import os; print(os.environ.get($(repr(variable_name)), ''))"
+        ])
+        value = strip(read(pipeline(cmd, stderr = devnull), String))
+        return isempty(value) ? nothing : value
+    catch e
+        @debug "conda env variable lookup failed" exception = e
+        return nothing
+    end
+end
+
+"""
+    _vibrant_data_path_candidates_from_prefix(env_prefix::AbstractString) -> Vector{String}
+
+Return candidate VIBRANT data directories under a conda environment prefix.
+
+# Arguments
+- `env_prefix::AbstractString`: Conda environment prefix to inspect.
+
+# Returns
+- `Vector{String}`: Sorted candidate database directories under the
+  environment's `share/` directory.
+
+# Example
+```julia
+candidates = Mycelia._vibrant_data_path_candidates_from_prefix("/opt/conda/envs/vibrant")
+```
+"""
+function _vibrant_data_path_candidates_from_prefix(env_prefix::AbstractString)
+    share_dir = joinpath(env_prefix, "share")
+    if !isdir(share_dir)
+        return String[]
+    end
+    candidates = joinpath.(
+        Ref(share_dir),
+        filter(name -> startswith(name, "vibrant"), readdir(share_dir)),
+        Ref("db")
+    )
+    sort!(candidates)
+    return candidates
+end
+
+const VIBRANT_REQUIRED_DATA_FILES = (
+    joinpath("databases", "KEGG_profiles_prokaryotes.HMM"),
+    joinpath("databases", "KEGG_profiles_prokaryotes.HMM.h3f"),
+    joinpath("databases", "KEGG_profiles_prokaryotes.HMM.h3i"),
+    joinpath("databases", "KEGG_profiles_prokaryotes.HMM.h3m"),
+    joinpath("databases", "KEGG_profiles_prokaryotes.HMM.h3p"),
+    joinpath("databases", "Pfam-A_v32.HMM"),
+    joinpath("databases", "Pfam-A_v32.HMM.h3f"),
+    joinpath("databases", "Pfam-A_v32.HMM.h3i"),
+    joinpath("databases", "Pfam-A_v32.HMM.h3m"),
+    joinpath("databases", "Pfam-A_v32.HMM.h3p"),
+    joinpath("databases", "VOGDB94_phage.HMM"),
+    joinpath("databases", "VOGDB94_phage.HMM.h3f"),
+    joinpath("databases", "VOGDB94_phage.HMM.h3i"),
+    joinpath("databases", "VOGDB94_phage.HMM.h3m"),
+    joinpath("databases", "VOGDB94_phage.HMM.h3p"),
+    joinpath("files", "VIBRANT_machine_model.sav"),
+    joinpath("files", "VIBRANT_names.tsv")
+)
+
+"""
+    _collect_vibrant_data_path_candidates(
+        conda_env_data_path::Union{Nothing, AbstractString},
+        process_data_path::Union{Nothing, AbstractString},
+        prefix_candidates::AbstractVector{<:AbstractString}
+    ) -> Vector{String}
+
+Combine VIBRANT data-path candidates in lookup order.
+
+# Arguments
+- `conda_env_data_path::Union{Nothing, AbstractString}`: `VIBRANT_DATA_PATH`
+  value resolved from the conda environment.
+- `process_data_path::Union{Nothing, AbstractString}`: `VIBRANT_DATA_PATH`
+  value from the current Julia process.
+- `prefix_candidates::AbstractVector{<:AbstractString}`: Paths discovered under
+  the conda environment prefix.
+
+# Returns
+- `Vector{String}`: Ordered unique candidate paths, prioritizing the conda
+  environment variable, then the current process variable, then prefix-derived
+  paths.
+
+# Example
+```julia
+candidates = Mycelia._collect_vibrant_data_path_candidates("/tmp/db", nothing, String[])
+```
+"""
+function _collect_vibrant_data_path_candidates(
+    conda_env_data_path::Union{Nothing, AbstractString},
+    process_data_path::Union{Nothing, AbstractString},
+    prefix_candidates::AbstractVector{<:AbstractString}
+)
+    candidates = String[]
+    if !isnothing(conda_env_data_path) && !isempty(strip(conda_env_data_path))
+        push!(candidates, strip(conda_env_data_path))
+    end
+    if !isnothing(process_data_path) && !isempty(strip(process_data_path))
+        push!(candidates, strip(process_data_path))
+    end
+    append!(candidates, prefix_candidates)
+    return unique(candidates)
+end
+
+"""
+    _vibrant_databases_exist(data_path::AbstractString) -> Bool
+
+Return whether a VIBRANT data directory contains all required artifacts.
+
+# Arguments
+- `data_path::AbstractString`: Candidate VIBRANT database directory.
+
+# Returns
+- `Bool`: `true` when every file in `VIBRANT_REQUIRED_DATA_FILES` exists below
+  `data_path`; otherwise `false`.
+
+# Example
+```julia
+has_databases = Mycelia._vibrant_databases_exist("/tmp/vibrant/db")
+```
+"""
+function _vibrant_databases_exist(data_path::AbstractString)
+    if !isdir(data_path)
+        return false
+    end
+    return all(isfile(joinpath(data_path, relpath))
+    for relpath in VIBRANT_REQUIRED_DATA_FILES)
+end
+
+"""
+    _vibrant_data_path_candidates(env_name::AbstractString="vibrant") -> Vector{String}
+
+Return possible VIBRANT data directories for a named conda environment.
+
+# Arguments
+- `env_name::AbstractString`: Conda environment name to inspect. Defaults to
+  `"vibrant"`.
+
+# Returns
+- `Vector{String}`: Ordered unique candidate data directories discovered from
+  conda environment variables, process environment variables, and the conda
+  environment prefix.
+
+# Example
+```julia
+candidates = Mycelia._vibrant_data_path_candidates("vibrant")
+```
+"""
+function _vibrant_data_path_candidates(env_name::AbstractString = "vibrant")
+    conda_env_data_path = _conda_env_variable(env_name, "VIBRANT_DATA_PATH")
+    process_data_path = get(ENV, "VIBRANT_DATA_PATH", nothing)
+    env_prefix = _conda_env_prefix(env_name)
+    prefix_candidates = String[]
+    if !isnothing(env_prefix)
+        prefix_candidates = _vibrant_data_path_candidates_from_prefix(env_prefix)
+    end
+    return _collect_vibrant_data_path_candidates(
+        conda_env_data_path,
+        process_data_path,
+        prefix_candidates
+    )
+end
+
+"""
+    _first_vibrant_database_path(candidates::AbstractVector{<:AbstractString}) -> Union{Nothing, String}
+
+Return the first candidate path containing a complete VIBRANT database.
+
+# Arguments
+- `candidates::AbstractVector{<:AbstractString}`: Candidate VIBRANT database
+  directories to inspect in order.
+
+# Returns
+- `Union{Nothing, String}`: First path satisfying
+  `Mycelia._vibrant_databases_exist`, or `nothing` when no candidates are
+  complete.
+
+# Example
+```julia
+database_path = Mycelia._first_vibrant_database_path(["/tmp/vibrant/db"])
+```
+"""
+function _first_vibrant_database_path(candidates::AbstractVector{<:AbstractString})
+    for candidate in candidates
+        if _vibrant_databases_exist(candidate)
+            return candidate
+        end
+    end
+    return nothing
+end
+
+"""
+    _vibrant_database_path(env_name::AbstractString="vibrant") -> Union{Nothing, String}
+
+Return the first detected VIBRANT data directory containing downloaded
+databases.
+
+# Arguments
+- `env_name::AbstractString`: Conda environment name to inspect. Defaults to
+  `"vibrant"`.
+
+# Returns
+- `Union{Nothing, String}`: First detected VIBRANT data directory with all
+  required database artifacts, or `nothing` when none are found.
+
+# Example
+```julia
+database_path = Mycelia._vibrant_database_path("vibrant")
+```
+"""
+function _vibrant_database_path(env_name::AbstractString = "vibrant")
+    return _first_vibrant_database_path(_vibrant_data_path_candidates(env_name))
+end
+
+"""
+    _install_vibrant() -> Union{Nothing, String}
 
 Install VIBRANT (Virus Identification By iteRative ANnoTation) from Bioconda and download its required databases.
 
@@ -88,20 +413,12 @@ Install VIBRANT (Virus Identification By iteRative ANnoTation) from Bioconda and
 This function performs two main tasks:
 1. Creates a new conda environment named 'vibrant' and installs the VIBRANT package
 2. Downloads the required HMM databases using VIBRANT's download-db.sh script
-
-# ⚠️ Warning
-**Database Re-downloading Issue**: Currently, this function will re-download the VIBRANT databases
-on every run because it does not check if the databases already exist. This wastes bandwidth and time.
-The databases are stored in VIBRANT's default location within the conda environment.
-
-# TODO
-- Add logic to check if databases already exist before downloading
-- Allow configuration of custom database location using -d and -m flags
-- Store databases in a persistent location outside the conda environment
+   when they are not already present
 
 # Implementation Notes
 - The database location is fixed to VIBRANT's default location
 - Uses CONDA_RUNNER to execute commands within the vibrant environment
+- Returns the detected VIBRANT database path when one is available
 
 # Internal Use
 This function is called internally by `run_vibrant` to ensure VIBRANT is properly installed
@@ -112,14 +429,24 @@ function _install_vibrant()
     # run(`conda install -y -c bioconda vibrant`)
     Mycelia.add_bioconda_env("vibrant")
 
-    # ⚠️ WARNING: This will re-download databases every time it's called
-    # TODO: Check if databases exist before downloading
-    @warn "VIBRANT databases will be re-downloaded. This needs to be fixed to check for existing databases first."
+    existing_data_path = _vibrant_database_path("vibrant")
+    if !isnothing(existing_data_path)
+        @info "VIBRANT databases already present at $(existing_data_path); skipping download."
+        return existing_data_path
+    end
 
     # download required HMM databases
     # run(`bash -lc "download-db.sh"`)
     # don't love the default location, but that's ok for now - no obvious way to set to a different location
     run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n vibrant download-db.sh`)
+    downloaded_data_path = _vibrant_database_path("vibrant")
+    if isnothing(downloaded_data_path)
+        error(
+            "VIBRANT database download completed, but _vibrant_database_path(\"vibrant\") " *
+            "still returned nothing before VIBRANT_run.py could execute."
+        )
+    end
+    return downloaded_data_path
     # Likely unused optional arguments
 
     # -d: specify the location of the databases/ directory if moved from its default location.
@@ -225,7 +552,8 @@ function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
         output = read(cmd, String)
         line = strip(first(split(output, '\n')))
         return isempty(line) ? missing : line
-    catch
+    catch e
+        @debug "conda tool version check failed" exception = e
         return missing
     end
 end
