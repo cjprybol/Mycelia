@@ -17,12 +17,20 @@ Test.@testset "Rhizomorph benchmark manifest" begin
     Test.@test "synthetic_isolate_5386" in datasets.id
     Test.@test "phix174" in datasets.id
     Test.@test "zymo_d6300" in datasets.id
+    Test.@test datasets.accessions[findfirst(==("cccv_viroid"), datasets.id)] == "NC_001462.1"
 
     slices = list_rhizomorph_benchmark_slices()
     Test.@test DataFrames.nrow(slices) == 7
     Test.@test Set(slices.id) == Set(["H1", "H2", "H3", "H4", "H5", "H6", "H7"])
     Test.@test all(occursin("benchmarking/rhizomorph_benchmark_harness.jl", entrypoint)
         for entrypoint in slices.entrypoint)
+
+    for dataset in manifest["datasets"]
+        provenance = dataset["provenance"]
+        if provenance["kind"] == "ncbi_refseq"
+            Test.@test all(occursin(".", accession) for accession in provenance["accessions"])
+        end
+    end
 end
 
 Test.@testset "Rhizomorph benchmark dry-run plans" begin
@@ -50,4 +58,11 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(hypothesis_ids = ["H9"])
     Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
     Test.@test_throws ErrorException run_rhizomorph_benchmark_harness(dry_run = false)
+
+    invalid_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
+    invalid_manifest["schema"]["ci_suitability_values"] = ["ci", "full", "tiny"]
+    Test.@test_throws ErrorException validate_rhizomorph_benchmark_manifest(invalid_manifest)
+
+    Test.@test_throws ErrorException _flag_values(["--scale", "--slice"], "--scale")
+    Test.@test_throws ErrorException main(["--unknown"])
 end

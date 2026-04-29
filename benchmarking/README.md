@@ -80,6 +80,7 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - CSV outputs for per-scenario and per-threshold summaries plus JSON benchmark metadata
 
 ### Rhizomorph Public-Record Harness (`rhizomorph_benchmark_harness.jl`)
+
 - Dataset manifest for toy controls, public isolate references, and heterogeneous-sample candidates
 - H1-H7 dry-run benchmark slices with expected inputs, outputs, and follow-on runner entry points
 - CI/full/candidate scale filtering so benchmark plans can be inspected without downloading data

@@ -101,7 +101,7 @@ notes = "Use for full benchmark runs because it requires public reference retrie
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_002030"]
+accessions = ["NC_002030.1"]
 
 [[datasets]]
 id = "cccv_viroid"
@@ -117,7 +117,7 @@ notes = "The existing benchmark now measures actual downloaded sequence length."
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_003540"]
+accessions = ["NC_001462.1"]
 
 [[datasets]]
 id = "hsvd_viroid"
@@ -133,7 +133,7 @@ notes = "Suitable for full lightweight public-reference runs."
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_001351"]
+accessions = ["NC_001351.1"]
 
 [[datasets]]
 id = "phix174"
@@ -149,7 +149,7 @@ notes = "Public counterpart to synthetic_isolate_5386."
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_001422"]
+accessions = ["NC_001422.1"]
 
 [[datasets]]
 id = "lambda_phage"
@@ -165,7 +165,7 @@ notes = "Existing benchmark shows full-length assembly at k >= 21."
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_001416"]
+accessions = ["NC_001416.1"]
 
 [[datasets]]
 id = "t4_phage"
@@ -181,7 +181,7 @@ notes = "Full benchmark only; current results remain fragmented at all tested k 
 [datasets.provenance]
 kind = "ncbi_refseq"
 source = "NCBI RefSeq"
-accessions = ["NC_000866"]
+accessions = ["NC_000866.4"]
 
 [[datasets]]
 id = "cami_toy_low_complexity"

@@ -40,6 +40,11 @@ function validate_rhizomorph_benchmark_manifest(manifest::AbstractDict)
     dataset_required_fields = schema["dataset_required_fields"]
     hypothesis_required_fields = schema["hypothesis_required_fields"]
     allowed_suitability = Set(get(schema, "ci_suitability_values", collect(keys(RHIZOMORPH_BENCHMARK_SCALE_RANK))))
+    canonical_suitability = Set(keys(RHIZOMORPH_BENCHMARK_SCALE_RANK))
+    unsupported_suitability = setdiff(allowed_suitability, canonical_suitability)
+    if !isempty(unsupported_suitability)
+        error("Unsupported ci_suitability_values in schema: $(join(sort(collect(unsupported_suitability)), ", "))")
+    end
 
     dataset_ids = Set{String}()
     for dataset in manifest["datasets"]
@@ -254,6 +259,9 @@ function _flag_values(args, flag::AbstractString)
             if index == length(args)
                 error("Missing value after $(flag)")
             end
+            if startswith(args[index + 1], "-")
+                error("Missing value after $(flag)")
+            end
             push!(values, args[index + 1])
             index += 2
         else
@@ -283,6 +291,24 @@ function print_rhizomorph_benchmark_usage()
 end
 
 function main(args = ARGS)
+    known_flags = Set([
+        "--help",
+        "-h",
+        "--list-datasets",
+        "--list-slices",
+        "--plan",
+        "--scale",
+        "--slice",
+        "--dataset",
+        "--manifest",
+        "--execute"
+    ])
+    for arg in args
+        if startswith(arg, "-") && !(arg in known_flags)
+            error("Unknown flag: $(arg)")
+        end
+    end
+
     if "--help" in args || "-h" in args
         print_rhizomorph_benchmark_usage()
         return nothing
