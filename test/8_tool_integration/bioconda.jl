@@ -79,22 +79,35 @@ Test.@testset "Bioconda Environment Management Tests" begin
         mock_output = [
             "# conda environments:",
             "#",
-            "base                     /opt/conda",
+            "base                  *  /opt/conda",
             "test_env                 /opt/conda/envs/test_env",
             "another_env              /opt/conda/envs/another_env",
             ""
         ]
 
-        # Apply the filtering logic from check_bioconda_env_is_installed
-        filtered_lines = filter(x -> !occursin(r"^#", x), mock_output)
-        split_lines = split.(filtered_lines)
-        two_part_lines = filter(x -> length(x) == 2, split_lines)
-        env_names = Set(first.(two_part_lines))
+        env_names = Mycelia._conda_env_names_from_lines(mock_output)
 
         Test.@test "test_env" in env_names
         Test.@test "another_env" in env_names
         Test.@test "base" in env_names
         Test.@test length(env_names) == 3
+    end
+
+    Test.@testset "Filesystem environment fallback" begin
+        mktempdir() do dir
+            envs_dir = joinpath(dir, "envs")
+            mkpath(joinpath(envs_dir, "test_env", "conda-meta"))
+            mkpath(joinpath(envs_dir, "another_env", "conda-meta"))
+            mkpath(joinpath(envs_dir, ".cache"))
+            mkpath(joinpath(dir, "conda-meta"))
+
+            env_names = Mycelia._conda_env_names_from_envs_dir(envs_dir)
+
+            Test.@test "test_env" in env_names
+            Test.@test "another_env" in env_names
+            Test.@test "base" in env_names
+            Test.@test !(".cache" in env_names)
+        end
     end
 
     Test.@testset "Error handling and edge cases" begin

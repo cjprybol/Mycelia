@@ -690,7 +690,16 @@ function parse_dnadiff_report(report_file::String)
     if !isempty(sections)
         primary_section = haskey(sections, Symbol("1_to_1")) ? Symbol("1_to_1") :
                           first(keys(sections))
-        summary = get(sections, primary_section, Dict{Symbol, Any}())
+        # Merge the :global section (which holds TotalBases/AlignedBases/
+        # UnalignedBases — top-level [Bases] fields that live outside the
+        # 1-to-1/M-to-M alignment sections) into the primary section's dict
+        # so callers can find both the per-alignment AvgIdentity and the
+        # base-count totals in one summary NamedTuple. 1_to_1 keys win on
+        # overlap, preserving prior behavior.
+        summary = merge(
+            get(sections, Symbol("global"), Dict{Symbol, Any}()),
+            get(sections, primary_section, Dict{Symbol, Any}())
+        )
     end
 
     avg_identity = get(summary, :avg_identity, missing)

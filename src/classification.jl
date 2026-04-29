@@ -1386,11 +1386,11 @@ function run_clamlst(genome_file::String;
     # If the database exists, we assume the DB is already present
     db_exists = isfile(db_path) || isdir(db_path)
     if !db_exists || force_db_update
-        @info "Initializing claMLST database for $species at $db_dir..."
+        @info "Initializing claMLST database for $species at $db_path..."
         try
             # Prepare arguments
             cmd_args = ["run", "--live-stream", "-n", "pymlst",
-                "claMLST", "import", db_dir, species]
+                "claMLST", "import", db_path, species]
 
             # If forcing an update on an existing DB, attempt to use --force if supported, 
             # or the user might need to manually clear the folder. 
@@ -1423,7 +1423,7 @@ function run_clamlst(genome_file::String;
         end
 
         # Run Search
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_dir) $(input_path_to_use)`
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_path) $(input_path_to_use)`
 
         open(output_tsv, "w") do io
             run(pipeline(cmd, stdout = io))
