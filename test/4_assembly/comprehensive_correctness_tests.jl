@@ -44,6 +44,38 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     high_quality = [40, 40, 40, 40, 40, 40, 40, 40]  # High confidence
     mixed_quality = [20, 40, 30, 35, 25, 40, 30, 35]  # Mixed confidence
 
+    function reconstruct_sequences(graph)
+        reconstructed_sequences = Any[]
+        paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
+
+        for path_vector in paths
+            isempty(path_vector) && continue
+
+            try
+                first_vertex = first(path_vector)
+                vertex_type = typeof(first_vertex)
+                walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
+
+                for (i, vertex_label) in enumerate(path_vector)
+                    push!(walk_steps, Mycelia.Rhizomorph.WalkStep(
+                        vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i)))
+                end
+
+                graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
+                reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
+
+                if reconstructed !== nothing
+                    push!(reconstructed_sequences, reconstructed)
+                    @info "Successfully reconstructed sequence: $(typeof(reconstructed)) of length $(length(reconstructed))"
+                end
+            catch e
+                @warn "Path reconstruction failed: $e"
+            end
+        end
+
+        return reconstructed_sequences
+    end
+
     """
     Comprehensive validation function for any graph type.
 
@@ -56,6 +88,7 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     function validate_graph_comprehensive(
             graph, input_sequences, expected_vertices, expected_edges, graph_type_name)
         @info "Validating $graph_type_name graph..."
+        reconstructed_sequences = Any[]
 
         # 1. Basic structure validation
         vertices = collect(MetaGraphsNext.labels(graph))
@@ -104,38 +137,10 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
         paths = Mycelia.Rhizomorph.find_eulerian_paths_next(graph)
         Test.@test !isempty(paths)
 
-        reconstruction_success = false
-        for path_vector in paths
-            if !isempty(path_vector)
-                try
-                    # Create properly typed WalkStep objects
-                    first_vertex = first(path_vector)
-                    vertex_type = typeof(first_vertex)
-                    walk_steps = Mycelia.Rhizomorph.WalkStep{vertex_type}[]
+        reconstructed_sequences = reconstruct_sequences(graph)
+        Test.@test !isempty(reconstructed_sequences)
 
-                    for (i, vertex_label) in enumerate(path_vector)
-                        step = Mycelia.Rhizomorph.WalkStep(
-                            vertex_label, Mycelia.Rhizomorph.Forward, 1.0, Float64(i))
-                        push!(walk_steps, step)
-                    end
-
-                    graph_path = Mycelia.Rhizomorph.GraphPath(walk_steps)
-                    reconstructed = Mycelia.Rhizomorph.path_to_sequence(graph_path, graph)
-
-                    if reconstructed !== nothing
-                        reconstruction_success = true
-                        @info "Successfully reconstructed sequence: $(typeof(reconstructed)) of length $(length(reconstructed))"
-                        break
-                    end
-                catch e
-                    @warn "Path reconstruction failed: $e"
-                end
-            end
-        end
-
-        Test.@test reconstruction_success
-
-        return true
+        return reconstructed_sequences
     end
 
     """
@@ -177,20 +182,25 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
     function test_round_trip_io(graph, reconstructed_sequences, graph_type_name)
         @info "Testing round-trip I/O for $graph_type_name..."
 
-        # For now, test sequence identity preservation
-        # TODO: Add actual graph serialization/deserialization when implemented
+        mktempdir() do tmpdir
+            serialized_graph = joinpath(
+                tmpdir,
+                replace(graph_type_name, r"[^A-Za-z0-9]+" => "_") * ".jld2")
+            Mycelia.JLD2.save(serialized_graph, "graph", graph)
+            restored_graph = Mycelia.JLD2.load(serialized_graph, "graph")
 
-        for (i, seq) in enumerate(reconstructed_sequences)
-            if isa(seq, BioSequences.BioSequence)
-                # Test BioSequence consistency
-                seq_copy = deepcopy(seq)
-                Test.@test seq == seq_copy
-                Test.@test string(seq) == string(seq_copy)
-            elseif isa(seq, String)
-                # Test String consistency
-                seq_copy = String(seq)
-                Test.@test seq == seq_copy
-            end
+            Test.@test typeof(restored_graph) == typeof(graph)
+            original_vertices = Set(MetaGraphsNext.labels(graph))
+            restored_vertices = Set(MetaGraphsNext.labels(restored_graph))
+            original_edges = Set(MetaGraphsNext.edge_labels(graph))
+            restored_edges = Set(MetaGraphsNext.edge_labels(restored_graph))
+
+            Test.@test original_vertices == restored_vertices
+            Test.@test original_edges == restored_edges
+            Test.@test MetaGraphsNext.ne(restored_graph) == MetaGraphsNext.ne(graph)
+            restored_sequences = reconstruct_sequences(restored_graph)
+            Test.@test sort(string.(restored_sequences)) ==
+                        sort(string.(reconstructed_sequences))
         end
 
         return true
@@ -207,8 +217,10 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # ATC, TCG, CGA, GAT
             expected_edges = 4     # ATC->TCG, TCG->CGA, CGA->GAT, GAT->ATC
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+            reconstructed_sequences = validate_graph_comprehensive(
+                graph, [known_dna], expected_vertices,
                 expected_edges, "DNA K-mer SingleStrand")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA K-mer SingleStrand")
         end
 
         Test.@testset "DNA K-mer DoubleStrand Detailed" begin
@@ -219,8 +231,10 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # ATC, TCG, CGA, GAT for this sequence
             expected_edges = nothing
 
-            validate_graph_comprehensive(graph, [known_dna], expected_vertices,
+            reconstructed_sequences = validate_graph_comprehensive(
+                graph, [known_dna], expected_vertices,
                 expected_edges, "DNA K-mer DoubleStrand")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA K-mer DoubleStrand")
 
             # Additional validation: check that both orientations are tracked
             found_both_orientations = false
@@ -249,8 +263,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4  # Same structure as k-mer graph
             expected_edges = 4
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, reads, expected_vertices, expected_edges, "DNA Qualmer")
+            test_round_trip_io(graph, reconstructed_sequences, "DNA Qualmer")
             validate_quality_handling(graph, reads, "DNA Qualmer")
         end
 
@@ -298,8 +313,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4
             expected_edges = 3  # ABC->BCD, BCD->CDE, CDE->DEF
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, [known_string], expected_vertices, expected_edges, "String N-gram")
+            test_round_trip_io(graph, reconstructed_sequences, "String N-gram")
         end
 
         Test.@testset "String N-gram Graph from FASTQ Inputs" begin
@@ -313,8 +329,9 @@ Test.@testset "Comprehensive Graph Correctness Tests" begin
             expected_vertices = 4
             expected_edges = 3
 
-            validate_graph_comprehensive(
+            reconstructed_sequences = validate_graph_comprehensive(
                 graph, reads, expected_vertices, expected_edges, "String N-gram from FASTQ")
+            test_round_trip_io(graph, reconstructed_sequences, "String N-gram from FASTQ")
         end
     end
 
