@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Step 23: Variant Calling Workflow · Mycelia</title><meta name="title" content="Step 23: Variant Calling Workflow · Mycelia"/><meta property="og:title" content="Step 23: Variant Calling Workflow · Mycelia"/><meta property="twitter:title" content="Step 23: Variant Calling Workflow · Mycelia"/><meta name="description" content="Documentation for Mycelia."/><meta property="og:description" content="Documentation for Mycelia."/><meta property="twitter:description" content="Documentation for Mycelia."/><script data-outdated-warner src="../../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../../assets/documenter.js"></script><script src="../../../search_index.js"></script><script src="../../../siteinfo.js"></script><script src="../../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../../../">Mycelia</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../../">Home</a></li><li><a class="tocitem" href="../../../getting-started/">Getting Started</a></li><li><a class="tocitem" href="../../../installation/">Installation</a></li><li><a class="tocitem" href="../../../concepts/">Concepts</a></li><li><a class="tocitem" href="../../../topological-assembly-optimization/">Topological Assembly Optimization</a></li><li><a class="tocitem" href="../../../workflow-map/">Workflow Map</a></li><li><a class="tocitem" href="../../../hpc-job-templates/">HPC Job Templates</a></li><li><a class="tocitem" href="../../../metagenomic-workflow/">Metagenomic Workflow</a></li><li><a class="tocitem" href="../../../microbiome-visualization/">Microbiome Visualization</a></li><li><span class="tocitem">Tutorials</span><ul><li><a class="tocitem" href="../../../tutorials/">Overview</a></li><li><a class="tocitem" href="../01_data_acquisition/">Step 1: Data Acquisition</a></li><li><a class="tocitem" href="../02_quality_control/">Step 2: Quality Control</a></li><li><a class="tocitem" href="../03_kmer_analysis/">Step 3: K-mer Analysis</a></li><li><a class="tocitem" href="../04_genome_assembly/">Step 4: Genome Assembly</a></li><li><a class="tocitem" href="../04_graph_type_tutorials/">Step 4b: Graph Type Tutorials</a></li><li><a class="tocitem" href="../05_assembly_validation/">Step 5: Assembly Validation</a></li><li><a class="tocitem" href="../06_gene_annotation/">Step 6: Gene Annotation</a></li><li><a class="tocitem" href="../07_comparative_genomics/">Step 7: Comparative Genomics</a></li><li><a class="tocitem" href="../08_tool_integration/">Step 8: Tool Integration</a></li><li><a class="tocitem" href="../09_round_trip_01_string_graphs/">Round-Trip 01: String Graphs</a></li><li><a class="tocitem" href="../09_round_trip_02_ngram_to_string/">Round-Trip 02: N-gram to String</a></li><li><a class="tocitem" href="../09_round_trip_03_fasta_sequences/">Round-Trip 03: FASTA Sequences</a></li><li><a class="tocitem" href="../09_round_trip_04_kmer_to_sequence/">Round-Trip 04: K-mer to Sequence</a></li><li><a class="tocitem" href="../09_round_trip_05_fastq_graphs/">Round-Trip 05: FASTQ Graphs</a></li><li><a class="tocitem" href="../09_round_trip_06_qualmer_graphs/">Round-Trip 06: Qualmer Graphs</a></li><li><a class="tocitem" href="../10_viroid_assembly_workflow/">Step 10: Viroid Assembly Workflow</a></li><li><a class="tocitem" href="../11_reduced_amino_acid_alphabets/">Step 11: Reduced Amino Acid Alphabets</a></li><li><a class="tocitem" href="../12_coverm_coverage/">Step 12: CoverM Coverage</a></li><li><a class="tocitem" href="../13_rhizomorph_assembly/">Step 13: Rhizomorph Assembly</a></li><li><a class="tocitem" href="../14_binning_workflow/">Step 14a: Binning Workflow</a></li><li><a class="tocitem" href="../14_mash_classification/">Step 14b: Mash Classification</a></li><li><a class="tocitem" href="../15_round_trip_benchmarking/">Step 15: Round Trip Benchmarking</a></li><li><a class="tocitem" href="../16_un_corpus_ngram_vs_token_graphs/">Step 16: UN Corpus Ngram vs Token Graphs</a></li><li><a class="tocitem" href="../17_viroid_sketch_round_trip/">Step 17: Viroid Sketch Round Trip</a></li><li><a class="tocitem" href="../18_advanced_assembly_theory_and_practice/">Step 18: Advanced Assembly Theory and Practice</a></li><li><a class="tocitem" href="../19_relational_clustering/">Step 19: Relational Clustering</a></li><li><a class="tocitem" href="../20_microbiome_visualization/">Step 20: Microbiome Visualization</a></li><li><a class="tocitem" href="../21_tda_topological_assembly_optimization/">Step 21: Topological Assembly Optimization</a></li><li><a class="tocitem" href="../22_momentum_fork_resolution/">Step 22: Momentum Fork Resolution</a></li><li class="is-active"><a class="tocitem" href>Step 23: Variant Calling Workflow</a><ul class="internal"><li><a class="tocitem" href="#Learning-Objectives"><span>Learning Objectives</span></a></li><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#Part-1:-Create-a-tiny-synthetic-truth-set"><span>Part 1: Create a tiny synthetic truth set</span></a></li><li><a class="tocitem" href="#Part-2:-Materialize-a-mutated-haplotype-FASTA"><span>Part 2: Materialize a mutated haplotype FASTA</span></a></li><li><a class="tocitem" href="#Part-3:-Simulate-paired-end-reads-and-align-them-with-minimap2"><span>Part 3: Simulate paired-end reads and align them with minimap2</span></a></li><li><a class="tocitem" href="#Part-4:-Call-variants-with-GATK-HaplotypeCaller"><span>Part 4: Call variants with GATK HaplotypeCaller</span></a></li><li><a class="tocitem" href="#Part-5:-Benchmark-against-the-truth-set-with-RTG-vcfeval"><span>Part 5: Benchmark against the truth set with RTG vcfeval</span></a></li><li><a class="tocitem" href="#Part-6:-Optional-Clair3-workflow"><span>Part 6: Optional Clair3 workflow</span></a></li><li><a class="tocitem" href="#Part-7:-Alternative-callers"><span>Part 7: Alternative callers</span></a></li><li><a class="tocitem" href="#Citation-Guidance"><span>Citation Guidance</span></a></li></ul></li><li><a class="tocitem" href="../21_cluster_comparison/">Cluster Comparison</a></li><li><a class="tocitem" href="../conceptual_figures/">Conceptual Figures</a></li><li><a class="tocitem" href="../run_all_tutorials/">Run All Tutorials</a></li></ul></li><li><span class="tocitem">API Reference</span><ul><li><a class="tocitem" href="../../../api/all-functions/">Complete API Surface</a></li></ul></li><li><a class="tocitem" href="../../../benchmarks/">Benchmarks</a></li><li><a class="tocitem" href="../../../references/">References</a></li><li><a class="tocitem" href="../../../contributing/">Contributing</a></li><li><a class="tocitem" href="../../../related-projects/">Related Projects</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials</a></li><li class="is-active"><a href>Step 23: Variant Calling Workflow</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Step 23: Variant Calling Workflow</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/cjprybol/Mycelia/blob/master/tutorials/23_variant_calling_workflow.jl" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial-23:-Variant-Calling-Workflow"><a class="docs-heading-anchor" href="#Tutorial-23:-Variant-Calling-Workflow">Tutorial 23: Variant Calling Workflow</a><a id="Tutorial-23:-Variant-Calling-Workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial-23:-Variant-Calling-Workflow" title="Permalink"></a></h1><p>This tutorial demonstrates a compact end-to-end small-variant workflow in Mycelia using:</p><ul><li><code>minimap2</code> for read alignment</li><li><code>GATK HaplotypeCaller</code> for short-read variant calling</li><li><code>Clair3</code> for an optional deep-learning caller walkthrough</li><li><code>RTG vcfeval</code> for optional truth-set benchmarking</li></ul><p>The tutorial builds a tiny synthetic truth set so the control flow is easy to inspect and adapt for real projects.</p><h2 id="Learning-Objectives"><a class="docs-heading-anchor" href="#Learning-Objectives">Learning Objectives</a><a id="Learning-Objectives-1"></a><a class="docs-heading-anchor-permalink" href="#Learning-Objectives" title="Permalink"></a></h2><p>By the end of this tutorial, you will understand how to:</p><ul><li>create a toy truth VCF from a reference sequence</li><li>simulate a perturbed haplotype and align reads back to the original reference</li><li>call variants with <code>Mycelia.run_gatk_haplotypecaller</code></li><li>normalize and benchmark a callset with <code>normalize_vcf</code> and <code>evaluate_variant_calling_accuracy</code></li><li>run the corresponding Clair3 workflow for Illumina-style data</li><li>update a reference FASTA with a VCF consensus</li></ul><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><p>From the Mycelia base directory, convert this tutorial to a notebook:</p><pre><code class="language-bash hljs">julia --project=. -e &#39;import Literate; Literate.notebook(&quot;tutorials/23_variant_calling_workflow.jl&quot;, &quot;tutorials/notebooks&quot;, execute=false)&#39;</code></pre><p>To execute the external-tool sections, opt in with:</p><pre><code class="language-bash hljs">MYCELIA_RUN_EXTERNAL=true julia --project=. tutorials/23_variant_calling_workflow.jl</code></pre><p>To also run RTG vcfeval benchmarking:</p><pre><code class="language-bash hljs">MYCELIA_RUN_EXTERNAL=true MYCELIA_RUN_VCFEVAL_TUTORIAL=true julia --project=. tutorials/23_variant_calling_workflow.jl</code></pre><p>To also run Clair3:</p><pre><code class="language-bash hljs">MYCELIA_RUN_EXTERNAL=true MYCELIA_RUN_CLAIR3_TUTORIAL=true julia --project=. tutorials/23_variant_calling_workflow.jl</code></pre><pre><code class="language-julia hljs">import Pkg
+if isinteractive()
+    Pkg.activate(&quot;..&quot;)
+end
+
+import DataFrames
+import Mycelia
+import StableRNGs
+import Test
+
+const RUN_EXTERNAL = lowercase(get(ENV, &quot;MYCELIA_RUN_EXTERNAL&quot;, &quot;false&quot;)) == &quot;true&quot;
+const RUN_CLAIR3 = RUN_EXTERNAL &amp;&amp;
+                   lowercase(get(ENV, &quot;MYCELIA_RUN_CLAIR3_TUTORIAL&quot;, &quot;false&quot;)) == &quot;true&quot;
+const RUN_VCFEVAL = RUN_EXTERNAL &amp;&amp;
+                    lowercase(get(ENV, &quot;MYCELIA_RUN_VCFEVAL_TUTORIAL&quot;, &quot;false&quot;)) == &quot;true&quot;
+
+println(&quot;=== Variant Calling Workflow Tutorial ===&quot;)
+println(&quot;External wrappers enabled: &quot;, RUN_EXTERNAL)
+println(&quot;Clair3 demo enabled: &quot;, RUN_CLAIR3)
+println(&quot;RTG vcfeval enabled: &quot;, RUN_VCFEVAL)</code></pre><h2 id="Part-1:-Create-a-tiny-synthetic-truth-set"><a class="docs-heading-anchor" href="#Part-1:-Create-a-tiny-synthetic-truth-set">Part 1: Create a tiny synthetic truth set</a><a id="Part-1:-Create-a-tiny-synthetic-truth-set-1"></a><a class="docs-heading-anchor-permalink" href="#Part-1:-Create-a-tiny-synthetic-truth-set" title="Permalink"></a></h2><p>We start with a random reference, simulate a handful of variants, and write them as a VCF. This part is pure Julia and can run without external tools.</p><pre><code class="language-julia hljs">rng = StableRNGs.StableRNG(42)
+workdir = mktempdir()
+println(&quot;Workspace: &quot;, workdir)
+
+reference_record = Mycelia.random_fasta_record(
+    moltype = :DNA,
+    seed = rand(rng, 0:typemax(Int)),
+    L = 20_000
+)
+reference_fasta = joinpath(workdir, &quot;reference.fa&quot;)
+Mycelia.write_fasta(outfile = reference_fasta, records = [reference_record])
+
+truth_vcf = reference_fasta * &quot;.vcf&quot;
+truth_table = Mycelia.simulate_variants(reference_record; n_variants = 12)
+Mycelia.write_vcf_table(vcf_file = truth_vcf, vcf_table = truth_table, fasta_file = reference_fasta)
+
+Test.@test isfile(reference_fasta)
+Test.@test isfile(truth_vcf)
+Test.@test DataFrames.nrow(truth_table) &gt; 0
+
+println(&quot;Reference FASTA: &quot;, reference_fasta)
+println(&quot;Truth VCF: &quot;, truth_vcf)
+println(&quot;Simulated truth variants: &quot;, DataFrames.nrow(truth_table))</code></pre><h2 id="Part-2:-Materialize-a-mutated-haplotype-FASTA"><a class="docs-heading-anchor" href="#Part-2:-Materialize-a-mutated-haplotype-FASTA">Part 2: Materialize a mutated haplotype FASTA</a><a id="Part-2:-Materialize-a-mutated-haplotype-FASTA-1"></a><a class="docs-heading-anchor-permalink" href="#Part-2:-Materialize-a-mutated-haplotype-FASTA" title="Permalink"></a></h2><p><code>update_fasta_with_vcf</code> applies the truth VCF to the original reference so we can simulate reads from the altered haplotype and map them back to the unmodified reference.</p><pre><code class="language-julia hljs">mutant_fasta = joinpath(workdir, &quot;truth_haplotype.fa&quot;)
+
+if RUN_EXTERNAL
+    Mycelia.add_bioconda_env(&quot;samtools&quot;)
+    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n samtools samtools faidx $(reference_fasta)`)
+
+    truth_vcf_copy = joinpath(workdir, &quot;truth_for_consensus.vcf&quot;)
+    cp(truth_vcf, truth_vcf_copy; force = true)
+    Mycelia.update_fasta_with_vcf(
+        in_fasta = reference_fasta,
+        vcf_file = truth_vcf_copy,
+        out_fasta = mutant_fasta
+    )
+    Test.@test isfile(mutant_fasta)
+    Test.@test isfile(truth_vcf)
+    println(&quot;Mutated haplotype FASTA: &quot;, mutant_fasta)
+else
+    println(&quot;Skipping consensus FASTA materialization.&quot;)
+    println(&quot;Set MYCELIA_RUN_EXTERNAL=true to run bcftools/minimap2/GATK steps.&quot;)
+    println(&quot;Add MYCELIA_RUN_VCFEVAL_TUTORIAL=true or MYCELIA_RUN_CLAIR3_TUTORIAL=true for optional sections.&quot;)
+end</code></pre><h2 id="Part-3:-Simulate-paired-end-reads-and-align-them-with-minimap2"><a class="docs-heading-anchor" href="#Part-3:-Simulate-paired-end-reads-and-align-them-with-minimap2">Part 3: Simulate paired-end reads and align them with minimap2</a><a id="Part-3:-Simulate-paired-end-reads-and-align-them-with-minimap2-1"></a><a class="docs-heading-anchor-permalink" href="#Part-3:-Simulate-paired-end-reads-and-align-them-with-minimap2" title="Permalink"></a></h2><p>The same BAM can feed multiple callers. This is usually the first point where real projects branch into short-read versus long-read pipelines.</p><pre><code class="language-julia hljs">bam_file = &quot;&quot;
+
+if RUN_EXTERNAL
+    reads = Mycelia.simulate_illumina_reads(
+        fasta = mutant_fasta,
+        coverage = 40,
+        read_length = 150,
+        mflen = 350,
+        sdev = 25,
+        rndSeed = rand(rng, 0:typemax(Int)),
+        quiet = true
+    )
+
+    map_result = Mycelia.minimap_map_paired_end(
+        fasta = reference_fasta,
+        forward = reads.forward_reads,
+        reverse = reads.reverse_reads,
+        threads = 2,
+        outdir = joinpath(workdir, &quot;alignment&quot;)
+    )
+    run(map_result.cmd)
+    bam_file = map_result.outfile
+
+    Test.@test isfile(bam_file)
+
+    println(&quot;Forward reads: &quot;, reads.forward_reads)
+    println(&quot;Reverse reads: &quot;, reads.reverse_reads)
+    println(&quot;Aligned BAM: &quot;, bam_file)
+else
+    println(&quot;Alignment section skipped because external execution is disabled.&quot;)
+end</code></pre><h2 id="Part-4:-Call-variants-with-GATK-HaplotypeCaller"><a class="docs-heading-anchor" href="#Part-4:-Call-variants-with-GATK-HaplotypeCaller">Part 4: Call variants with GATK HaplotypeCaller</a><a id="Part-4:-Call-variants-with-GATK-HaplotypeCaller-1"></a><a class="docs-heading-anchor-permalink" href="#Part-4:-Call-variants-with-GATK-HaplotypeCaller" title="Permalink"></a></h2><p>Mycelia handles environment setup, BAM indexing, and GATK sequence dictionary generation. We add a FASTA index up front because downstream tools such as <code>bcftools norm</code> also rely on it.</p><pre><code class="language-julia hljs">gatk_vcf = joinpath(workdir, &quot;gatk&quot;, &quot;variants.gatk.vcf&quot;)
+normalized_gatk_vcf = replace(gatk_vcf, &quot;.vcf&quot; =&gt; &quot;.sorted.normalized.vcf.gz&quot;)
+gatk_consensus_fasta = joinpath(workdir, &quot;gatk&quot;, &quot;consensus.fa&quot;)
+
+if RUN_EXTERNAL
+    Mycelia.run_gatk_haplotypecaller(
+        bam_file,
+        reference_fasta,
+        gatk_vcf;
+        ploidy = 1,
+        memory_gb = 4,
+        threads = 2
+    )
+    Test.@test isfile(gatk_vcf)
+
+    normalized_gatk_vcf = Mycelia.normalize_vcf(
+        reference_fasta = reference_fasta,
+        vcf_file = gatk_vcf
+    )
+    Test.@test isfile(normalized_gatk_vcf)
+
+    gatk_vcf_copy = joinpath(workdir, &quot;gatk_for_consensus.vcf&quot;)
+    cp(gatk_vcf, gatk_vcf_copy; force = true)
+    Mycelia.update_fasta_with_vcf(
+        in_fasta = reference_fasta,
+        vcf_file = gatk_vcf_copy,
+        out_fasta = gatk_consensus_fasta
+    )
+    Test.@test isfile(gatk_consensus_fasta)
+    Test.@test isfile(gatk_vcf)
+
+    println(&quot;GATK VCF: &quot;, gatk_vcf)
+    println(&quot;Normalized GATK VCF: &quot;, normalized_gatk_vcf)
+    println(&quot;GATK consensus FASTA: &quot;, gatk_consensus_fasta)
+else
+    println(&quot;GATK execution skipped.&quot;)
+end</code></pre><h2 id="Part-5:-Benchmark-against-the-truth-set-with-RTG-vcfeval"><a class="docs-heading-anchor" href="#Part-5:-Benchmark-against-the-truth-set-with-RTG-vcfeval">Part 5: Benchmark against the truth set with RTG vcfeval</a><a id="Part-5:-Benchmark-against-the-truth-set-with-RTG-vcfeval-1"></a><a class="docs-heading-anchor-permalink" href="#Part-5:-Benchmark-against-the-truth-set-with-RTG-vcfeval" title="Permalink"></a></h2><p><code>evaluate_variant_calling_accuracy</code> wraps the full vcfeval flow and returns parsed ROC tables plus summary metrics.</p><pre><code class="language-julia hljs">if RUN_VCFEVAL
+    gatk_eval = Mycelia.evaluate_variant_calling_accuracy(
+        truth_vcf,
+        normalized_gatk_vcf,
+        reference_fasta,
+        joinpath(workdir, &quot;gatk&quot;, &quot;vcfeval&quot;);
+        generate_plots = false,
+        threads = 2,
+        memory_gb = 4
+    )
+
+    println(&quot;GATK evaluation summary:&quot;)
+    println(gatk_eval.summary_stats)
+else
+    println(&quot;vcfeval section skipped.&quot;)
+end</code></pre><h2 id="Part-6:-Optional-Clair3-workflow"><a class="docs-heading-anchor" href="#Part-6:-Optional-Clair3-workflow">Part 6: Optional Clair3 workflow</a><a id="Part-6:-Optional-Clair3-workflow-1"></a><a class="docs-heading-anchor-permalink" href="#Part-6:-Optional-Clair3-workflow" title="Permalink"></a></h2><p>Clair3 is often the first long-read-oriented or hybrid benchmarking target users want beside GATK. The wrapper below uses the Illumina model because this tutorial simulates paired-end short reads.</p><pre><code class="language-julia hljs">clair3_output_dir = joinpath(workdir, &quot;clair3&quot;)
+
+if RUN_CLAIR3
+    clair3_vcf = Mycelia.run_clair3(
+        bam_file,
+        reference_fasta,
+        clair3_output_dir;
+        platform = &quot;ilmn&quot;,
+        threads = 2,
+        haploid_precise = true
+    )
+    Test.@test isfile(clair3_vcf)
+
+    normalized_clair3_vcf = Mycelia.normalize_vcf(
+        reference_fasta = reference_fasta,
+        vcf_file = clair3_vcf
+    )
+    Test.@test isfile(normalized_clair3_vcf)
+
+    println(&quot;Clair3 VCF: &quot;, clair3_vcf)
+    println(&quot;Normalized Clair3 VCF: &quot;, normalized_clair3_vcf)
+
+    if RUN_VCFEVAL
+        clair3_eval = Mycelia.evaluate_variant_calling_accuracy(
+            truth_vcf,
+            normalized_clair3_vcf,
+            reference_fasta,
+            joinpath(clair3_output_dir, &quot;vcfeval&quot;);
+            generate_plots = false,
+            threads = 2,
+            memory_gb = 4
+        )
+        println(&quot;Clair3 evaluation summary:&quot;)
+        println(clair3_eval.summary_stats)
+    end
+else
+    println(&quot;Clair3 execution skipped.&quot;)
+    println(&quot;Enable it with MYCELIA_RUN_CLAIR3_TUTORIAL=true after verifying the Clair3 model environment.&quot;)
+end</code></pre><h2 id="Part-7:-Alternative-callers"><a class="docs-heading-anchor" href="#Part-7:-Alternative-callers">Part 7: Alternative callers</a><a id="Part-7:-Alternative-callers-1"></a><a class="docs-heading-anchor-permalink" href="#Part-7:-Alternative-callers" title="Permalink"></a></h2><p>The same alignment can also feed the other wrappers in <code>variant-analysis.jl</code>.</p><pre><code class="language-julia hljs">freebayes_vcf = Mycelia.run_freebayes(
+    bam_file,
+    reference_fasta,
+    joinpath(workdir, &quot;freebayes&quot;, &quot;variants.freebayes.vcf&quot;);
+    ploidy = 1
+)
+
+bcftools_vcf = Mycelia.run_bcftools_call(
+    bam_file,
+    reference_fasta,
+    joinpath(workdir, &quot;bcftools&quot;, &quot;variants.bcftools.vcf&quot;);
+    threads = 2
+)</code></pre><p>For side-by-side benchmarking, use:</p><pre><code class="language-julia hljs">comparison = Mycelia.run_variant_calling_comparison(
+    bam_file,
+    reference_fasta,
+    joinpath(workdir, &quot;comparison&quot;);
+    callers = [&quot;gatk&quot;, &quot;clair3&quot;, &quot;bcftools&quot;],
+    platform = &quot;ilmn&quot;,
+    baseline_vcf = truth_vcf
+)</code></pre><h2 id="Citation-Guidance"><a class="docs-heading-anchor" href="#Citation-Guidance">Citation Guidance</a><a id="Citation-Guidance-1"></a><a class="docs-heading-anchor-permalink" href="#Citation-Guidance" title="Permalink"></a></h2><p>If you publish results from this workflow, cite Mycelia and the wrapped tools you used, especially <code>minimap2</code>, <code>GATK</code>, <code>Clair3</code>, <code>BCFtools/HTSlib</code>, and <code>RTG vcfeval</code>. The project-wide citation checklist lives in <code>docs/src/references.md</code>.</p><pre><code class="language-julia hljs">println(&quot;Variant calling tutorial complete. Workspace: &quot;, workdir)</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../22_momentum_fork_resolution/">« Step 22: Momentum Fork Resolution</a><a class="docs-footer-nextpage" href="../21_cluster_comparison/">Cluster Comparison »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 29 April 2026 16:09">Wednesday 29 April 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
