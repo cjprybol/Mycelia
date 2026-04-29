@@ -221,9 +221,8 @@ Test.@testset "Checkpointing Tests" begin
             end
         end
     end
-end
 
-Test.@testset "cached_map" begin
+    Test.@testset "cached_map" begin
     # Counters are `Threads.Atomic{Int}` because `cached_map` runs `fn` via
     # `Threads.@threads`; non-atomic read-modify-write (`Ref{Int}` / `x[] += 1`)
     # loses increments under multi-threaded CI.
@@ -238,6 +237,7 @@ Test.@testset "cached_map" begin
             Test.@test results == [2, 4, 6]
             Test.@test call_count[] == 3
             Test.@test isfile(joinpath(dir, "first_call.jld2"))
+            Test.@test !isfile(joinpath(dir, "first_call.jld2.lock"))
         end
     end
 
@@ -361,8 +361,8 @@ Test.@testset "cached_map" begin
         # This is the core invariant of cached_map: if `fn` throws partway
         # through a long sweep, every successfully-computed entry must be on
         # disk so the next run picks up where we left off. Without the
-        # try/finally inside cached_map, the final _atomic_save_dict would be
-        # skipped on exception and all in-memory progress would be lost.
+        # exception handler inside cached_map, the final _atomic_save_dict
+        # would be skipped on exception and all in-memory progress would be lost.
         mktempdir() do dir
             inputs = [1, 2, 3, 4, 5]
             # Throw on input 4. With `Threads.@threads`, work is partitioned
@@ -405,4 +405,5 @@ Test.@testset "cached_map" begin
             Test.@test retry_count[] == missing_before_retry
         end
     end
+end
 end

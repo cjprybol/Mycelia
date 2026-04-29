@@ -142,8 +142,10 @@ For each input:
 - Otherwise, compute `fn(input)` and add to the dict.
 - Atomic save every `save_every` newly-computed entries (tmp-file-then-rename).
 
-Returns a `Vector` aligned with `inputs`. The map iteration is parallel-safe
-via a `ReentrantLock` around cache writes; thread `fn` accordingly.
+Returns a `Vector` aligned with `inputs`. Within one process, the threaded map
+uses a `ReentrantLock` around cache writes; across processes, calls for the same
+`name` serialize through a pidfile lock next to the cache file. Thread `fn`
+accordingly.
 
 Unlike `cached_stage` (which is keyed by filename and treats the whole output
 as one opaque blob), `cached_map` memoizes per input, so growing the input set
@@ -152,15 +154,6 @@ incrementally adds new entries without invalidating the existing cache. Use
 
 `keyfn(input)` must be deterministic and unique across inputs. Two distinct
 inputs producing the same key silently overwrite each other.
-
-!!! warning "Single-writer contract"
-    `cached_map` is only safe for a single writer per `name`. The cache is
-    read into memory once per call and fully overwritten on save, so two
-    concurrent processes computing the same `name` will each start from the
-    same on-disk state and the last save wins, silently dropping entries
-    computed by the other process. If you need concurrent writers, shard by
-    assigning each process a distinct `name` (e.g., suffix with worker id)
-    and merge the caches after the sweep completes.
 
 # Arguments
 - `fn::Function`: Single-argument function mapping one input to one result
@@ -172,6 +165,10 @@ inputs producing the same key silently overwrite each other.
 - `keyfn`: Function mapping an input to a `String` cache key. Default `string`.
 - `save_every::Int`: Flush to disk every N newly-computed entries. Default 50.
 - `force::Bool`: If true, ignore any existing cache and recompute everything.
+
+# Returns
+- `Vector{Any}` whose length matches `length(inputs)`. Element `i` is either
+  the cached value for `inputs[i]` or the result of `fn(inputs[i])`.
 
 # Example
 ```julia
@@ -193,7 +190,16 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
         keyfn = string, save_every::Int = 50, force::Bool = false)
     mkpath(checkpoint_dir)
     cache_file = joinpath(checkpoint_dir, "$(name).jld2")
+    lock_file = "$(cache_file).lock"
+    return FileWatching.Pidfile.mkpidlock(lock_file; stale_age = 0) do
+        _cached_map_locked(fn, name, inputs, cache_file;
+            keyfn = keyfn, save_every = save_every, force = force)
+    end
+end
 
+function _cached_map_locked(fn::Function, name::String, inputs::AbstractVector,
+        cache_file::String;
+        keyfn = string, save_every::Int = 50, force::Bool = false)
     cached = if isfile(cache_file) && !force
         try
             d = JLD2.load(cache_file, "data")
@@ -234,10 +240,6 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
 
     cache_lock = Base.ReentrantLock()
     n_new = Threads.Atomic{Int}(0)
-    # try/finally guarantees partial progress is flushed to disk even if `fn`
-    # throws on some input. Without this, an exception in a long-running sweep
-    # would lose every entry computed since the last `save_every` flush —
-    # exactly the silent-data-loss mode this function was built to prevent.
     try
         Threads.@threads for i in missing_idx
             result = fn(inputs_vec[i])
@@ -249,10 +251,17 @@ function cached_map(fn::Function, name::String, checkpoint_dir::String,
                 end
             end
         end
-    finally
-        _atomic_save_dict(cache_file, cached)
-        Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
+    catch
+        try
+            _atomic_save_dict(cache_file, cached)
+            Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
+        catch save_err
+            Logging.@error "cached_map('$(name)'): failed to flush cache to $(cache_file) ($(save_err)); $(length(cached)) entries were not persisted"
+        end
+        rethrow()
     end
+    _atomic_save_dict(cache_file, cached)
+    Logging.@info "cached_map('$(name)'): saved $(length(cached)) total entries to $(cache_file)"
     return Any[cached[k] for k in keys_in_order]
 end
 
