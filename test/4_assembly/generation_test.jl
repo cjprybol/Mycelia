@@ -68,6 +68,11 @@ Test.@testset "Generation - generate_sequences" begin
         Test.@test r.walk_probability > 0.0
         Test.@test r.length > 0
     end
+
+    cycled_results = Mycelia.Rhizomorph.generate_sequences(
+        graph, 4; walk_length = 2, seed = 7, start_vertices = ["ABC"])
+    Test.@test length(cycled_results) == 4
+    Test.@test all(result -> first(result.path.steps).vertex_label == "ABC", cycled_results)
 end
 
 Test.@testset "Generation - select_start_vertices" begin
@@ -83,6 +88,16 @@ Test.@testset "Generation - select_start_vertices" begin
             Test.@test v in all_labels
         end
     end
+
+    empty_graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData
+    )
+    Test.@test isempty(Mycelia.Rhizomorph.select_start_vertices(empty_graph, 3))
+    Test.@test_throws ArgumentError Mycelia.Rhizomorph.select_start_vertices(
+        weighted, 1; strategy = :unknown)
 end
 
 Test.@testset "Generation - compute_sequence_likelihood" begin
@@ -101,6 +116,27 @@ Test.@testset "Generation - compute_sequence_likelihood" begin
     # A sequence with impossible k-mer transition → -Inf
     ll_impossible = Mycelia.Rhizomorph.compute_sequence_likelihood("XYZXYZ", weighted; k = 3)
     Test.@test ll_impossible == -Inf
+
+    ll_from_evidence = Mycelia.Rhizomorph.compute_sequence_likelihood("ABCDEF", graph; k = 3)
+    Test.@test ll_from_evidence ≈ ll atol = 1e-12
+
+    zero_weight_graph = MetaGraphsNext.MetaGraph(
+        MetaGraphsNext.DiGraph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0
+    )
+    zero_weight_graph["AAA"] = nothing
+    zero_weight_graph["AAT"] = nothing
+    zero_weight_graph["AAA", "AAT"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        0.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+    Test.@test Mycelia.Rhizomorph._compute_edge_transition_probability(
+        zero_weight_graph, "AAA", "AAT") == 0.0
+    Test.@test Mycelia.Rhizomorph.compute_sequence_likelihood(
+        "AAAT", zero_weight_graph; k = 3) == -Inf
 end
 
 Test.@testset "Generation - temperature control" begin

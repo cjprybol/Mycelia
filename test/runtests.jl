@@ -88,7 +88,7 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
 ])
 
 # Helper function to include all test files in a directory
-function include_all_tests(dir)
+function include_all_tests(dir; skip_files = Set{String}())
     test_count = 0
     skipped_count = 0
     for (root, dirs, files) in walkdir(dir)
@@ -97,6 +97,9 @@ function include_all_tests(dir)
         end
         for file in sort(files)
             if endswith(file, ".jl")
+                if file in skip_files
+                    continue
+                end
                 # Skip external dependency files unless MYCELIA_RUN_EXTERNAL is set
                 if !MYCELIA_RUN_EXTERNAL
                     if occursin("third_party_assemblers", file) ||
@@ -295,8 +298,9 @@ include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
 #     include(joinpath(@__DIR__, file))
 # end
 
+include(joinpath(@__DIR__, "8_tool_integration", "bioconda.jl"))
 if MYCELIA_RUN_EXTERNAL
-    include_all_tests(joinpath(@__DIR__, "8_tool_integration"))
+    include_all_tests(joinpath(@__DIR__, "8_tool_integration"); skip_files = Set(["bioconda.jl"]))
 else
     @info "Skipping tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end

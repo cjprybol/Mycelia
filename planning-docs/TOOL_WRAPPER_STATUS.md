@@ -1,6 +1,6 @@
 # Tool Wrapper Status
 
-**Verified**: 2026-04-03
+**Verified**: 2026-04-04
 **Supersedes**: the archived 2026-01-17 snapshot that still referenced deleted `planning-docs/TODO.md` files
 
 ## Scope
@@ -32,12 +32,15 @@ were cross-checked against:
 - The old archived claims that variant-calling and pangenome wrappers were
   missing are now false: those wrappers exist in `src/variant-analysis.jl` and
   `src/pangenome-analysis.jl`.
+- The archived PenguiN "missing from metagenomic workflow docs" claim is also
+  stale: `docs/src/metagenomic-workflow.md` already lists PenguiN in the
+  short-read assembly workflow and tool table.
 - Recently expanded comparative/pangenome wrapper coverage is now green in the
   default suite: `test/7_comparative_pangenomics/pangenome_wrappers.jl` passed
   25/25 assertions, `test/7_comparative_pangenomics/pangenome_analysis.jl`
   passed 80/80 assertions overall with 9/9 wrapper-specific validation checks,
   and `test/7_comparative_pangenomics/sequence_comparison_helpers_test.jl`
-  passed 27/27 assertions on 2026-04-03.
+  passed 27/27 assertions on 2026-04-04.
 - HyLight should be treated as broken rather than merely undercovered: the
   active suite only proves a missing-input guard (1/1 passing assertion in
   `test/4_assembly/third_party_assemblers_hybrid.jl`), while the legacy smoke
@@ -47,19 +50,21 @@ were cross-checked against:
 ## Recent Verification Counts
 
 - `test/7_comparative_pangenomics/pangenome_wrappers.jl`: 25/25 passing on
-  2026-04-03 for PGGB/Cactus validation, executor collection, and index guards.
+  2026-04-04 for PGGB/Cactus validation, executor collection, and index guards.
 - `test/7_comparative_pangenomics/pangenome_analysis.jl`: 80/80 passing on
-  2026-04-03 overall; wrapper-specific PGGB/Cactus/vg conversion/index blocks
+  2026-04-04 overall; wrapper-specific PGGB/Cactus/vg conversion/index blocks
   contributed 9/9 passing assertions.
 - `test/7_comparative_pangenomics/sequence_comparison_helpers_test.jl`: 27/27
-  passing on 2026-04-03, including default validation for `skani_triangle`,
+  passing on 2026-04-04, including default validation for `skani_triangle`,
   `skani_dist`, and `run_sylph_profile`.
 - `test/4_assembly/third_party_assemblers_hybrid.jl`: 8/8 passing on
-  2026-04-03 with external tool runs disabled; HyLight contributes only a 1/1
-  missing-input validation check in this file.
-- `test/in_development/third_party_assemblers_legacy_hylight.jl`: HyLight
-  legacy smoke remains explicitly `@test_broken`, so it is not counted as a
-  passing supported wrapper path.
+  2026-04-04 with external tool runs disabled (`Hybrid Assembly Tools` 7/7 plus
+  `Hybrid Metagenomic Assembly - HyLight` 1/1); HyLight still contributes only
+  a missing-input validation check in this file.
+- `test/in_development/third_party_assemblers_legacy_hylight.jl`: on
+  2026-04-04 the HyLight placeholder remained `Broken 1/1`, and the same file's
+  `Strain-aware workflows (STRONG/Strainy)` block errored before any supported
+  smoke path could be counted.
 
 ## Status Matrix
 
@@ -78,11 +83,12 @@ were cross-checked against:
 | Long-read assembly | `run_flye`, `run_metaflye`, `run_canu`, `run_hifiasm`, `run_metamdbg` | `src/assembly.jl` | opt-in integration via Stage 4 long-read/metagenomic suites | `run_metaflye` has an active metagenomic suite; others remain external-gated. |
 | Hybrid / specialized assembly | `run_unicycler`, `run_plass_assemble`, `run_penguin_guided_nuclassemble`, `run_penguin_nuclassemble` | `src/assembly.jl` | opt-in integration for Unicycler/PLASS/PenguiN; some older coverage is legacy/in-development | Wrappers exist; not part of default suite. |
 | Legacy/edge assembly | `run_hifiasm_meta` | `src/assembly.jl` | legacy/in-development via `test/4_assembly/third_party_assemblers_legacy_metagenome.jl` | Implemented but not promoted into the main active test sweep. |
-| Strain-aware assembly | `run_hylight` | `src/assembly.jl` | validation only in `test/4_assembly/third_party_assemblers_hybrid.jl`; broken legacy smoke in `test/in_development/third_party_assemblers_legacy_hylight.jl` | Active coverage is limited to a missing-input guard; the legacy smoke path is explicitly `@test_broken`, so HyLight should currently be treated as broken. |
-| Strain-aware assembly | `run_strong`, `run_strainy` | `src/assembly.jl` | legacy/in-development via `test/in_development/third_party_assemblers_legacy_hylight.jl` | Implemented, but active-suite support still lags behind the core assemblers. |
+| Strain-aware assembly | `run_hylight` | `src/assembly.jl` | validation only in `test/4_assembly/third_party_assemblers_hybrid.jl`; broken legacy smoke in `test/in_development/third_party_assemblers_legacy_hylight.jl` | Active coverage is limited to a missing-input guard; the 2026-04-04 legacy run still reported HyLight as `Broken 1/1`, so HyLight should currently be treated as broken. |
+| Strain-aware assembly | `run_strong`, `run_strainy` | `src/assembly.jl` | legacy/in-development via `test/in_development/third_party_assemblers_legacy_hylight.jl` | Implemented, but the legacy strain-aware block currently errors before providing a reliable smoke path, so active-suite support still lags behind the core assemblers. |
 | Binning | `run_vamb`, `run_metabat2`, `run_metacoag`, `run_comebin`, `run_taxometer`, `run_taxvamb` | `src/binning.jl` | opt-in integration via `test/8_tool_integration/binning_tools.jl` | This file includes both validation and real tool-run blocks under external gating. |
 | Post-binning | `run_drep_dereplicate`, `run_magmax_merge` | `src/binning.jl` | opt-in integration via `test/8_tool_integration/binning_tools.jl` | Implemented and externally exercised. |
 | Binning gap | `run_genomeface` | `src/binning.jl` | validation only | Wrapper intentionally disabled: code raises `GenomeFace wrapper disabled`. |
+| Annotation gap | `run_egapx` | `src/annotation.jl` | validation only | Intentional placeholder wrapper: `run_egapx` always throws `ArgumentError` documenting that EGAPx is not currently supported in Mycelia. |
 | Pangenome | `construct_pangenome_pggb`, `construct_pangenome_cactus` | `src/pangenome-analysis.jl` | default coverage via `test/7_comparative_pangenomics/pangenome_wrappers.jl` and validation coverage in `test/7_comparative_pangenomics/pangenome_analysis.jl` | Contrary to the archived snapshot, these wrappers do exist. |
 | Graph/pangenome utilities | `call_variants_from_pggb_graph`, indexing/conversion helpers | `src/pangenome-analysis.jl` | default validation via `test/7_comparative_pangenomics/pangenome_wrappers.jl` | Current coverage is validation/executor oriented. |
 | Variant evaluation | `run_vcfeval`, parsing and summary helpers | `src/variant-analysis.jl` | default helper coverage in `test/5_validation/variant_analysis_parsing_test.jl`; no direct wrapper execution test found | Wrapper exists; execution coverage gap remains. |
@@ -100,6 +106,8 @@ artifact. The main corrections are:
   `src/pangenome-analysis.jl`.
 - `run_vcfeval`, `run_gatk_haplotypecaller`, `run_freebayes`, `run_clair3`, and
   `run_bcftools_call` exist in `src/variant-analysis.jl`.
+- `docs/src/metagenomic-workflow.md` already documents PenguiN support; the
+  stale claim lived in this planning snapshot, not in the workflow docs.
 - The dominant problem is coverage quality, not outright absence of wrappers.
 
 ## Highest-Priority Gaps
@@ -111,5 +119,6 @@ artifact. The main corrections are:
 4. Repair or retire `run_hylight`, then decide whether `run_hifiasm_meta`,
    `run_strong`, and `run_strainy` should be promoted out of
    legacy/in-development coverage.
-5. Keep `docs/src/workflow-map.md` and `docs/src/metagenomic-workflow.md` aligned
-   with this file when wrapper support changes.
+5. Audit stale planning-text carryovers from archived wrapper snapshots; the
+   PenguiN follow-up here outlived the actual docs gap and is the pattern to
+   avoid when wrapper support changes.

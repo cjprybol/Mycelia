@@ -50,6 +50,7 @@ Test.@testset "Graph cleanup" begin
     Test.@test length(components) == 2
     Test.@test any(component -> Set(component) == Set([1, 2]), components)
     Test.@test any(component -> Set(component) == Set([3]), components)
+    Test.@test_throws ArgumentError Mycelia.get_node_neighbors(component_graph, 2, :sideways)
 end
 
 Test.@testset "assess_sequence_quality - DNA case handling" begin
@@ -267,4 +268,112 @@ Test.@testset "Graph cleanup with sequences containing N" begin
     )
 
     Test.@test stats[:tips_removed] >= 0
+end
+
+struct GraphCleanupPropertyNodeData
+    coverage::Float64
+    sequence::String
+    edge_weights::Vector{Float64}
+    long_read_support::Int
+end
+
+function make_cleanup_bubble_graph(; high_coverage::Float64 = 10.0, low_coverage::Float64 = 1.0)
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.DiGraph();
+        label_type = Int,
+        vertex_data_type = Dict{Symbol, Any},
+        edge_data_type = Nothing
+    )
+
+    graph[1] = Dict(:coverage => 12.0)
+    graph[2] = Dict(:coverage => high_coverage)
+    graph[3] = Dict(:coverage => low_coverage)
+    graph[4] = Dict(:coverage => high_coverage)
+    graph[5] = Dict(:coverage => low_coverage)
+    graph[6] = Dict(:coverage => 12.0)
+
+    Graphs.add_edge!(graph, 1, 2)
+    Graphs.add_edge!(graph, 2, 4)
+    Graphs.add_edge!(graph, 4, 6)
+    Graphs.add_edge!(graph, 1, 3)
+    Graphs.add_edge!(graph, 3, 5)
+    Graphs.add_edge!(graph, 5, 6)
+
+    return graph
+end
+
+Test.@testset "Graph cleanup helper functions" begin
+    Test.@testset "is_high_quality_tip checks sequence, edge, and long-read signals" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = Int,
+            vertex_data_type = GraphCleanupPropertyNodeData,
+            edge_data_type = Nothing
+        )
+
+        graph[1] = GraphCleanupPropertyNodeData(1.0, "ACGT", [1.0], 0)
+        graph[2] = GraphCleanupPropertyNodeData(1.0, "AAAA", [11.0], 0)
+        graph[3] = GraphCleanupPropertyNodeData(1.0, "AAAA", [1.0], 6)
+        graph[4] = GraphCleanupPropertyNodeData(1.0, "AAAA", [1.0], 0)
+
+        Test.@test Mycelia.is_high_quality_tip(graph, 1)
+        Test.@test Mycelia.is_high_quality_tip(graph, 2)
+        Test.@test Mycelia.is_high_quality_tip(graph, 3)
+        Test.@test !Mycelia.is_high_quality_tip(graph, 4)
+    end
+
+    Test.@testset "small connected components skip statistical clipping" begin
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = Int,
+            vertex_data_type = Dict{Symbol, Any},
+            edge_data_type = Nothing
+        )
+        graph[1] = Dict(:coverage => 1.0)
+
+        stats = Mycelia.process_connected_component_tips(graph, [1], 1, 3.0, true)
+
+        Test.@test stats[:tips_removed] == 0
+        Test.@test stats[:single_coverage_removed] == 0
+        Test.@test stats[:statistical_threshold_removed] == 0
+        Test.@test stats[:high_quality_preserved] == 0
+    end
+
+    Test.@testset "bubble tracing helpers find candidates, paths, and coverage" begin
+        graph = make_cleanup_bubble_graph()
+
+        Test.@test Mycelia.find_bubble_start_candidates(graph) == [1]
+        Test.@test Mycelia.trace_path(graph, 2, 10) == [2, 4, 6]
+        Test.@test Mycelia.trace_path(graph, 3, 1) == [3, 5]
+        Test.@test Mycelia.paths_reconverge([2, 4, 6], [3, 5, 6])
+        Test.@test !Mycelia.paths_reconverge(Int[], [3, 5, 6])
+        Test.@test Mycelia.calculate_path_coverage(graph, [2, 4, 6]) == 32 / 3
+        Test.@test Mycelia.calculate_path_coverage(graph, Int[]) == 0.0
+    end
+
+    Test.@testset "identify_and_remove_bubble removes the lower-coverage internal path node" begin
+        graph = make_cleanup_bubble_graph()
+
+        result = Mycelia.identify_and_remove_bubble(graph, 1, 10, 0.5)
+
+        Test.@test result[:bubble_detected]
+        Test.@test result[:removed]
+        Test.@test result[:nodes_removed] == 1
+        Test.@test result[:coverage_ratio] < 0.5
+        Test.@test MetaGraphsNext.haskey(graph, 3)
+        Test.@test !MetaGraphsNext.haskey(graph, 5)
+    end
+
+    Test.@testset "remove_simple_bubbles leaves balanced paths untouched" begin
+        graph = make_cleanup_bubble_graph(; high_coverage = 10.0, low_coverage = 9.0)
+
+        cleaned_graph, stats = Mycelia.remove_simple_bubbles(
+            graph; max_bubble_length = 10, coverage_ratio_threshold = 0.3)
+
+        Test.@test cleaned_graph === graph
+        Test.@test stats[:bubbles_examined] == 1
+        Test.@test stats[:bubbles_removed] == 0
+        Test.@test stats[:nodes_removed] == 0
+        Test.@test MetaGraphsNext.haskey(graph, 5)
+    end
 end

@@ -41,11 +41,11 @@ Writes:
 
 # Example
 ```julia
-graph = build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
-write_gfa_next(graph, "assembly.gfa")
+graph = Mycelia.Rhizomorph.build_kmer_graph(records, 31; dataset_id="dataset_01", mode=:singlestrand)
+Mycelia.Rhizomorph.write_gfa_next(graph, "assembly.gfa")
 
 # For Bandage visualization with node labels
-write_gfa_next(graph, "assembly_labeled.gfa"; segment_naming=:sequence)
+Mycelia.Rhizomorph.write_gfa_next(graph, "assembly_labeled.gfa"; segment_naming=:sequence)
 ```
 """
 function write_gfa_next(graph::MetaGraphsNext.MetaGraph, outfile::AbstractString;
@@ -173,10 +173,14 @@ Parses GFA v1.0:
 # Example
 ```julia
 # Read as DNA k-mer graph in double-strand mode
-graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31})
+graph = Mycelia.Rhizomorph.read_gfa_next("assembly.gfa", Kmers.DNAKmer{31})
 
 # Read as single-strand
-graph = read_gfa_next("assembly.gfa", Kmers.DNAKmer{31}, SingleStrand)
+graph = Mycelia.Rhizomorph.read_gfa_next(
+    "assembly.gfa",
+    Kmers.DNAKmer{31},
+    Mycelia.Rhizomorph.SingleStrand,
+)
 ```
 """
 function read_gfa_next(gfa_file::AbstractString, kmer_type::Type, graph_mode::GraphMode = DoubleStrand)
@@ -359,10 +363,10 @@ Read a GFA file and auto-detect whether to create a k-mer graph or BioSequence g
 # Example
 ```julia
 # Auto-detect graph type
-graph = read_gfa_next("assembly.gfa")
+graph = Mycelia.Rhizomorph.read_gfa_next("assembly.gfa")
 
 # Force BioSequence graph
-graph = read_gfa_next("assembly.gfa", force_biosequence_graph=true)
+graph = Mycelia.Rhizomorph.read_gfa_next("assembly.gfa", force_biosequence_graph=true)
 ```
 """
 function read_gfa_next(gfa_file::AbstractString, graph_mode::GraphMode = DoubleStrand;
