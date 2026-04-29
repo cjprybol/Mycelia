@@ -28,6 +28,9 @@ Test.@testset "Aqua.jl" begin
         Mycelia;
         ambiguities = (broken=true),
         deps_compat = false,
+        # BenchmarkTools is used by repo-level benchmarking scripts outside
+        # the Mycelia module, so it is intentionally not loaded by the package.
+        stale_deps = (ignore = [:BenchmarkTools],),
         # persistent_tasks test fails due to background tasks spawned by dependencies
         # (e.g., HTTP.jl, Makie.jl, etc.) during package loading - not a Mycelia issue
         persistent_tasks = false

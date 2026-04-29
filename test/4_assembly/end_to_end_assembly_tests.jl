@@ -114,7 +114,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                 # Test SingleStrand mode for amino acids
                 kmer_type = Kmers.AAKmer{5}
                 graph = Mycelia.Rhizomorph.build_kmer_graph(
-                    [reference_record], 5; dataset_id = "test", mode = :singlestrand)
+                    [reference_record],
+                    5;
+                    dataset_id = "test",
+                    mode = :singlestrand,
+                    type_hint = :AA
+                )
                 Test.@test graph isa MetaGraphsNext.MetaGraph
                 Test.@test !isempty(MetaGraphsNext.labels(graph))
 
@@ -465,7 +470,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Build k-mer graph in SingleStrand mode
                         kmer_type = Kmers.AAKmer{3}  # Shorter k-mers for AA
                         graph = Mycelia.Rhizomorph.build_kmer_graph(
-                            reads, 3; dataset_id = "test", mode = :singlestrand)
+                            reads,
+                            3;
+                            dataset_id = "test",
+                            mode = :singlestrand,
+                            type_hint = :AA
+                        )
 
                         Test.@test graph isa MetaGraphsNext.MetaGraph
                         Test.@test !isempty(MetaGraphsNext.labels(graph))
@@ -495,7 +505,12 @@ Test.@testset "End-to-End Assembly Tests" begin
                         # Test quality-aware assembly from k-mer graph to FASTQ
                         # Build qualmer graph for quality-aware processing
                         qualmer_graph = Mycelia.Rhizomorph.build_qualmer_graph(
-                            reads, 3; dataset_id = "test", mode = :singlestrand)
+                            reads,
+                            3;
+                            dataset_id = "test",
+                            mode = :singlestrand,
+                            type_hint = :AA
+                        )
                         Test.@test qualmer_graph isa MetaGraphsNext.MetaGraph
 
                         # Convert to quality-aware BioSequence graph
