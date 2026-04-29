@@ -43,6 +43,7 @@ import Downloads
 import EzXML
 import FASTX
 import FileIO
+import FileWatching
 import GenomicAnnotations
 import GFF3
 # import GeoMakie
