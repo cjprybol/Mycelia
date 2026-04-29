@@ -950,10 +950,51 @@ DataFrame with the following columns:
 
 # Notes
 - Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
-- Returns empty string values for alignment statistics if no alignment is found
+- Returns typed `missing` values for alignment statistics if no alignment is found
 - Requires minimap2 to be installed and accessible in PATH
 """
 # uses minimap
+function pairwise_minimap_fasta_comparison_result(;
+        alignment_percent_identity,
+        total_equivalent_bases,
+        total_alignment_length,
+        query_length,
+        total_variants,
+        total_snps,
+        total_indels,
+        alignment_coverage_query,
+        alignment_coverage_reference,
+        size_equivalence_to_reference)
+    return DataFrames.DataFrame(
+        alignment_percent_identity = Union{Missing, Float64}[alignment_percent_identity],
+        total_equivalent_bases = Union{Missing, Int}[total_equivalent_bases],
+        total_alignment_length = Union{Missing, Int}[total_alignment_length],
+        query_length = Int[query_length],
+        total_variants = Union{Missing, Int}[total_variants],
+        total_snps = Union{Missing, Int}[total_snps],
+        total_indels = Union{Missing, Int}[total_indels],
+        alignment_coverage_query = Float64[alignment_coverage_query],
+        alignment_coverage_reference = Float64[alignment_coverage_reference],
+        size_equivalence_to_reference = Float64[size_equivalence_to_reference]
+    )
+end
+
+function pairwise_minimap_fasta_comparison_empty_result(; query_length, target_length)
+    size_equivalence_to_reference = round(query_length / target_length * 100, digits = 2)
+    return pairwise_minimap_fasta_comparison_result(
+        alignment_percent_identity = missing,
+        total_equivalent_bases = missing,
+        total_alignment_length = missing,
+        query_length = query_length,
+        total_variants = missing,
+        total_snps = missing,
+        total_indels = missing,
+        alignment_coverage_query = 0.0,
+        alignment_coverage_reference = 0.0,
+        size_equivalence_to_reference = size_equivalence_to_reference
+    )
+end
+
 function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     header = [
         "Query",
@@ -974,19 +1015,15 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     Mycelia.add_bioconda_env("minimap2")
     #     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
     results5 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
-    if !isempty(results5)
-        results = results5
-    else
+    results = results5
+    if isempty(results)
         @warn "no hit with asm5, trying asm10"
         results10 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
-        if !isempty(results10)
-            results = results10
-        else
+        results = results10
+        if isempty(results)
             @warn "no hits with asm5 or asm10, trying asm20"
             results20 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
-            if !isempty(results20)
-                results = results20
-            end
+            results = results20
         end
     end
     if !isempty(results)
@@ -1028,7 +1065,7 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
         alignment_coverage_reference = round(
             total_alignment_length / minimap_results[1, "Target length"] * 100, digits = 2)
 
-        results = DataFrames.DataFrame(
+        results = pairwise_minimap_fasta_comparison_result(
             alignment_percent_identity = alignment_percent_identity,
             total_equivalent_bases = total_equivalent_bases,
             total_alignment_length = total_alignment_length,
@@ -1043,21 +1080,8 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     else
         query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
         target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
-        size_equivalence_to_reference = round(query_length/target_length * 100, digits = 2)
-
-        # unable to find any matches
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = "",
-            total_equivalent_bases = "",
-            total_alignment_length = "",
-            query_length = query_length,
-            total_variants = "",
-            total_snps = "",
-            total_indels = "",
-            alignment_coverage_query = 0,
-            alignment_coverage_reference = 0,
-            size_equivalence_to_reference = size_equivalence_to_reference
-        )
+        results = pairwise_minimap_fasta_comparison_empty_result(
+            query_length = query_length, target_length = target_length)
     end
     return results
 end
@@ -2678,6 +2702,17 @@ function _conda_env_exec_ok(env_name::String, exec_parts::Vector{String})
     return Base.success(pipeline(cmd, stdout = Base.devnull, stderr = Base.devnull))
 end
 
+function sanitized_conda_run_cmd(
+        env_name::AbstractString,
+        exec_parts::Vector{String};
+        live_stream::Bool = false)
+    cmd_parts = live_stream ?
+                vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name], exec_parts) :
+                vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], exec_parts)
+    cmd = Cmd(cmd_parts)
+    return addenv(cmd, "PYTHONNOUSERSITE" => "1", "PYTHONPATH" => "")
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2820,7 +2855,10 @@ function run_pyorthoani(;
     if force || !isfile(output_path) || filesize(output_path) == 0
         cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
         append!(cmd_parts, additional_args)
-        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        # Prevent the user-site (~/.local/...) from shadowing the conda env's
+        # site-packages. Without this, a stray py3.9 numpy in ~/.local/ breaks
+        # Biopython's numpy import inside a py3.11 conda env.
+        cmd = sanitized_conda_run_cmd("pyorthoani", cmd_parts; live_stream = true)
         output = read(cmd, String)
         write(output_path, output)
     end

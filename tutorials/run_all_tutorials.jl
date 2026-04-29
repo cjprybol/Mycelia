@@ -57,6 +57,7 @@ TUTORIALS = [
     "17_viroid_sketch_round_trip.jl",
     "18_advanced_assembly_theory_and_practice.jl",
     "22_momentum_fork_resolution.jl",
+    "23_variant_calling_workflow.jl",
 ]
 
 """
