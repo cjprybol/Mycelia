@@ -113,6 +113,17 @@ Test.@testset "Viterbi Decoding" begin
     Test.@testset "input validation and unreachable targets" begin
         graph = create_ambiguous_decoding_graph()
 
+        self_target = Mycelia.Rhizomorph.viterbi_decode_next(
+            graph,
+            "S",
+            0;
+            target_vertex = "S"
+        )
+        Test.@test self_target.path !== nothing
+        Test.@test path_labels(something(self_target.path)) == ["S"]
+        Test.@test self_target.score == 0.0
+        Test.@test self_target.diagnostics[:reached_target] == true
+
         missing = Mycelia.Rhizomorph.viterbi_decode_next(
             graph,
             "S",
