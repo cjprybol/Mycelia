@@ -1370,6 +1370,7 @@ Run `claMLST` (from `pymlst`) to perform MLST typing on a genome.
 - `mem_gb`: Optional scheduler memory request in gigabytes when `executor` is provided.
 - `qos`: Optional scheduler QoS passed through when `executor` is provided.
 - `mail_user`: Optional scheduler email recipient passed through when `executor` is provided.
+- `conda_runner`: Conda executable used for `claMLST` commands.
 
 # Details
 This function automatically:
@@ -1396,7 +1397,8 @@ function run_clamlst(genome_file::String;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
+        mail_user::Union{Nothing, String} = nothing,
+        conda_runner::String = Mycelia.CONDA_RUNNER)
     default_db_path = joinpath(homedir(), "workspace", "pymlst", "claMLSTDB")
     if !isnothing(db_dir)
         if db_path != default_db_path && db_path != db_dir
@@ -1435,11 +1437,11 @@ function run_clamlst(genome_file::String;
         "claMLST", "import", db_path, species
     ]
     import_args = copy(base_import_args)
-    import_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(base_import_args)`)
+    import_cmd = Mycelia.command_string(`$(conda_runner) $(base_import_args)`)
     if db_exists && force_db_update
         push!(import_args, "--force")
     end
-    import_force_cmd = Mycelia.command_string(`$(Mycelia.CONDA_RUNNER) $(vcat(base_import_args, "--force"))`)
+    import_force_cmd = Mycelia.command_string(`$(conda_runner) $(vcat(base_import_args, "--force"))`)
 
     if resolved_executor !== nothing
         script_lines = String[
@@ -1479,7 +1481,7 @@ function run_clamlst(genome_file::String;
 
         push!(
             script_lines,
-            "  $(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search \"$(db_path)\" \"\$input_path\" > \"$(output_tsv)\""
+            "  $(conda_runner) run --live-stream -n pymlst claMLST search \"$(db_path)\" \"\$input_path\" > \"$(output_tsv)\""
         )
         push!(script_lines, "fi")
 
@@ -1503,7 +1505,7 @@ function run_clamlst(genome_file::String;
         @info "Initializing claMLST database for $species at $db_path..."
         try
             mkpath(dirname(db_path))
-            run(`$(Mycelia.CONDA_RUNNER) $import_args`)
+            run(`$(conda_runner) $import_args`)
         catch e
             @warn "Failed to import claMLST database: $e"
             # If strictly required, you might want to rethrow() here,
@@ -1527,7 +1529,7 @@ function run_clamlst(genome_file::String;
         end
 
         # Run Search
-        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n pymlst claMLST search $(db_path) $(input_path_to_use)`
+        cmd = `$(conda_runner) run --live-stream -n pymlst claMLST search $(db_path) $(input_path_to_use)`
 
         open(output_tsv, "w") do io
             run(pipeline(cmd, stdout = io))

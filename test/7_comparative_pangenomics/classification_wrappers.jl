@@ -2,22 +2,14 @@ import Test
 import Mycelia
 
 @eval Mycelia begin
-    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+    function add_bioconda_env(pkg; force = false, quiet = false)
         return nothing
     end
 end
 
 function with_fake_conda_runner(f::Function)
-    runner_path = Mycelia.CONDA_RUNNER
-    runner_dir = dirname(runner_path)
-    backup_dir = mktempdir()
-    backup_path = joinpath(backup_dir, "conda")
-
-    if isfile(runner_path)
-        mv(runner_path, backup_path; force = true)
-    end
-
-    mkpath(runner_dir)
+    runner_dir = mktempdir()
+    runner_path = joinpath(runner_dir, "conda")
     open(runner_path, "w") do io
         write(io, raw"""
         #!/bin/sh
@@ -46,13 +38,9 @@ function with_fake_conda_runner(f::Function)
     chmod(runner_path, 0o755)
 
     try
-        return f()
+        return f(runner_path)
     finally
-        rm(runner_path; force = true)
-        if isfile(backup_path)
-            mv(backup_path, runner_path; force = true)
-        end
-        rm(backup_dir; recursive = true, force = true)
+        rm(runner_dir; recursive = true, force = true)
     end
 end
 
@@ -144,11 +132,12 @@ Test.@testset "Classification wrapper uncached local execution" begin
 
         db_path = joinpath(temp_dir, "local", "claMLSTDB")
         outdir = joinpath(temp_dir, "local_out")
-        output_tsv = with_fake_conda_runner() do
+        output_tsv = with_fake_conda_runner() do conda_runner
             Mycelia.run_clamlst(
                 genome_file;
                 db_path = db_path,
-                outdir = outdir
+                outdir = outdir,
+                conda_runner = conda_runner
             )
         end
 
