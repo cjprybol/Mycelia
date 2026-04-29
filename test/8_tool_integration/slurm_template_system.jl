@@ -74,13 +74,19 @@ function _without_git_email(f::Function)
     mktempdir() do repo_dir
         run(`git -C $repo_dir init --quiet`)
         empty_config = joinpath(repo_dir, "empty.gitconfig")
+        empty_xdg_config = joinpath(repo_dir, "empty-xdg")
+        empty_home = joinpath(repo_dir, "empty-home")
         write(empty_config, "")
+        mkpath(empty_xdg_config)
+        mkpath(empty_home)
 
         _with_env(Dict(
             "GIT_CONFIG_GLOBAL" => empty_config,
             "GIT_CONFIG_NOSYSTEM" => "1",
             "GIT_AUTHOR_EMAIL" => nothing,
-            "GIT_COMMITTER_EMAIL" => nothing
+            "GIT_COMMITTER_EMAIL" => nothing,
+            "HOME" => empty_home,
+            "XDG_CONFIG_HOME" => empty_xdg_config
         )) do
             cd(repo_dir) do
                 return f()
