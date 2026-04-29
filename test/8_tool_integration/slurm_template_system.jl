@@ -1,8 +1,93 @@
 import Test
 import Mycelia
 
+const LEGACY_FIXTURE_LOGDIR = "/Users/cameronprybol/workspace/slurmlogs"
+const FAKE_LAWRENCIUM_ASSOCIATIONS = "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
+
 function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
+end
+
+function _with_env(f::Function, overrides::AbstractDict)
+    previous = Dict{String, Union{Nothing, String}}()
+    for (key, value) in overrides
+        key_string = String(key)
+        previous[key_string] = get(ENV, key_string, nothing)
+        if value === nothing
+            pop!(ENV, key_string, nothing)
+        else
+            ENV[key_string] = String(value)
+        end
+    end
+
+    try
+        return f()
+    finally
+        for (key, value) in previous
+            if value === nothing
+                pop!(ENV, key, nothing)
+            else
+                ENV[key] = value
+            end
+        end
+    end
+end
+
+function _normalize_fixture_logdir(text::AbstractString)
+    return replace(String(text), LEGACY_FIXTURE_LOGDIR => Mycelia.DEFAULT_SLURM_LOGDIR)
+end
+
+function _with_git_email(f::Function, email::AbstractString)
+    mktempdir() do repo_dir
+        _with_env(Dict(
+            "GIT_AUTHOR_EMAIL" => nothing,
+            "GIT_COMMITTER_EMAIL" => nothing
+        )) do
+            run(`git -C $repo_dir init --quiet`)
+            run(`git -C $repo_dir config user.name TestUser`)
+            run(`git -C $repo_dir config user.email $email`)
+            cd(repo_dir) do
+                return f()
+            end
+        end
+    end
+end
+
+function _without_git_email(f::Function)
+    mktempdir() do repo_dir
+        run(`git -C $repo_dir init --quiet`)
+        empty_config = joinpath(repo_dir, "empty.gitconfig")
+        write(empty_config, "")
+
+        _with_env(Dict(
+            "GIT_CONFIG_GLOBAL" => empty_config,
+            "GIT_CONFIG_NOSYSTEM" => "1",
+            "GIT_AUTHOR_EMAIL" => nothing,
+            "GIT_COMMITTER_EMAIL" => nothing
+        )) do
+            cd(repo_dir) do
+                return f()
+            end
+        end
+    end
+end
+
+function _with_fake_lawrencium_associations(f::Function)
+    mktempdir() do bindir
+        sacctmgr_path = joinpath(bindir, "sacctmgr")
+        write(
+            sacctmgr_path,
+            "#!/bin/sh\ncat <<'EOF'\n$(FAKE_LAWRENCIUM_ASSOCIATIONS)EOF\n")
+        chmod(sacctmgr_path, 0o755)
+
+        path_entries = filter(!isempty, [bindir, get(ENV, "PATH", "")])
+        _with_env(Dict(
+            "PATH" => join(path_entries, ":"),
+            "USER" => "user"
+        )) do
+            return f()
+        end
+    end
 end
 
 Test.@testset "JobSpec JSON roundtrip" begin
@@ -202,8 +287,10 @@ Test.@testset "Template rendering and fixture checks" begin
 
     fixture_root = joinpath(dirname(@__DIR__), "fixtures", "job_templates")
 
-    expected_nersc = read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String)
-    expected_scg = read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String)
+    expected_nersc = _normalize_fixture_logdir(
+        read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String))
+    expected_scg = _normalize_fixture_logdir(
+        read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String))
     expected_docker = read(joinpath(fixture_root, "docker_run.sh"), String)
     expected_cloud = read(joinpath(fixture_root, "cloudbuild_prebuilt.yaml"), String)
 
@@ -211,6 +298,468 @@ Test.@testset "Template rendering and fixture checks" begin
     Test.@test rendered_scg == expected_scg
     Test.@test rendered_docker == expected_docker
     Test.@test rendered_cloud == expected_cloud
+end
+
+Test.@testset "SLURM wrapper entrypoints" begin
+    Test.@testset "lawrencium_sbatch uses env fallbacks with collect executor" begin
+        mktempdir() do logdir
+            _with_env(Dict(
+                "LRC_ACCOUNT" => "pc_example",
+                "SLURM_MAIL_USER" => "slurm@example.org"
+            )) do
+                collector = Mycelia.CollectExecutor()
+                outcome = Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-wrapper",
+                    cmd = "echo hello",
+                    logdir = logdir,
+                    executor = collector
+                )
+
+                Test.@test outcome == 1
+                Test.@test length(collector.jobs) == 1
+
+                job = only(collector.jobs)
+                Test.@test job.site == :lawrencium
+                Test.@test job.partition == "lr6"
+                Test.@test job.qos == "lr_normal"
+                Test.@test job.account == "pc_example"
+                Test.@test job.mail_user == "slurm@example.org"
+                Test.@test job.output_path == joinpath(logdir, "%j.%x.out")
+                Test.@test job.error_path == joinpath(logdir, "%j.%x.err")
+            end
+        end
+    end
+
+    Test.@testset "lawrencium_sbatch falls back to git email" begin
+        mktempdir() do logdir
+            _with_env(Dict(
+                "LRC_ACCOUNT" => "pc_git",
+                "SLURM_MAIL_USER" => nothing
+            )) do
+                _with_git_email("git-lawrencium@example.org") do
+                    collector = Mycelia.CollectExecutor()
+                    outcome = Mycelia.lawrencium_sbatch(
+                        job_name = "lawrencium-git-fallback",
+                        cmd = "echo hello",
+                        logdir = logdir,
+                        executor = collector
+                    )
+
+                    Test.@test outcome == 1
+                    Test.@test only(collector.jobs).mail_user ==
+                               "git-lawrencium@example.org"
+                end
+            end
+        end
+    end
+
+    Test.@testset "lawrencium_sbatch errors when no mail source is available" begin
+        _without_git_email() do
+            _with_env(Dict(
+                "SLURM_MAIL_USER" => nothing
+            )) do
+                err = try
+                    Mycelia.lawrencium_sbatch(
+                        job_name = "lawrencium-missing-mail",
+                        account = "pc_nomail",
+                        cmd = "echo fail before submit",
+                        executor = Mycelia.CollectExecutor()
+                    )
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("mail", lowercase(err.msg))
+            end
+        end
+    end
+
+    Test.@testset "lawrencium_sbatch dry_run delegates to slurm submit executor" begin
+        mktempdir() do logdir
+            result = Mycelia.lawrencium_sbatch(
+                job_name = "lawrencium-dry-run",
+                mail_user = "dryrun@example.org",
+                account = "pc_dryrun",
+                cmd = "echo dry-run",
+                logdir = logdir,
+                dry_run = true,
+                executor = :slurm
+            )
+
+            Test.@test result isa Mycelia.SubmitResult
+            Test.@test result.ok
+            Test.@test result.dry_run
+            Test.@test result.backend == :sbatch
+            Test.@test result.site == :lawrencium
+            Test.@test occursin("#SBATCH --partition=lr6", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "lawrencium_sbatch direct dry_run succeeds and validation failures return false" begin
+        mktempdir() do logdir
+            _with_fake_lawrencium_associations() do
+                Test.@test Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-direct-dry-run",
+                    mail_user = "explicit@example.org",
+                    account = "pc_test",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        mktempdir() do logdir
+            _with_fake_lawrencium_associations() do
+                Test.@test !Mycelia.lawrencium_sbatch(
+                    job_name = "lawrencium-invalid",
+                    mail_user = "explicit@example.org",
+                    account = "pc_test",
+                    cpus_per_task = 0,
+                    cmd = "echo should fail validation",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
+        end
+    end
+
+    Test.@testset "scg_sbatch keeps explicit overrides" begin
+        mktempdir() do logdir
+            collector = Mycelia.CollectExecutor()
+            outcome = Mycelia.scg_sbatch(
+                job_name = "scg-wrapper",
+                mail_user = "override@example.org",
+                account = "PI_OVERRIDE",
+                partition = "owners",
+                time = "12:00:00",
+                cpus_per_task = 8,
+                mem_gb = 32,
+                cmd = "echo hi",
+                logdir = logdir,
+                executor = collector
+            )
+
+            Test.@test outcome == 1
+            job = only(collector.jobs)
+            Test.@test job.site == :scg
+            Test.@test job.partition == "owners"
+            Test.@test job.account == "PI_OVERRIDE"
+            Test.@test job.mail_user == "override@example.org"
+            Test.@test job.time_limit == "12:00:00"
+            Test.@test job.cpus_per_task == 8
+            Test.@test job.mem_gb == 32.0
+        end
+    end
+
+    Test.@testset "scg_sbatch falls back to git email" begin
+        mktempdir() do logdir
+            _with_env(Dict("SLURM_MAIL_USER" => nothing)) do
+                _with_git_email("git-scg@example.org") do
+                    collector = Mycelia.CollectExecutor()
+                    outcome = Mycelia.scg_sbatch(
+                        job_name = "scg-git-fallback",
+                        account = "PI_GIT",
+                        cmd = "echo hi",
+                        logdir = logdir,
+                        executor = collector
+                    )
+
+                    Test.@test outcome == 1
+                    Test.@test only(collector.jobs).mail_user == "git-scg@example.org"
+                end
+            end
+        end
+    end
+
+    Test.@testset "scg_sbatch dry_run delegates to slurm submit executor" begin
+        mktempdir() do logdir
+            result = Mycelia.scg_sbatch(
+                job_name = "scg-dry-run",
+                mail_user = "dryrun@example.org",
+                account = "PI_DRYRUN",
+                cmd = "echo dry-run",
+                logdir = logdir,
+                dry_run = true,
+                executor = :slurm
+            )
+
+            Test.@test result isa Mycelia.SubmitResult
+            Test.@test result.ok
+            Test.@test result.dry_run
+            Test.@test result.backend == :sbatch
+            Test.@test result.site == :scg
+            Test.@test occursin("sbatch", something(result.submit_command, ""))
+            Test.@test occursin("#SBATCH --partition=nih_s10", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "scg_sbatch direct dry_run covers env fallback and missing mail sources" begin
+        mktempdir() do logdir
+            _with_env(Dict(
+                "SCG_ACCOUNT" => "PI_ENV",
+                "SLURM_MAIL_USER" => "env-scg@example.org"
+            )) do
+                Test.@test Mycelia.scg_sbatch(
+                    job_name = "scg-direct-dry-run",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        mktempdir() do logdir
+            Test.@test !Mycelia.scg_sbatch(
+                job_name = "scg-direct-invalid",
+                mail_user = "env-scg@example.org",
+                account = "PI_ENV",
+                cpus_per_task = 0,
+                cmd = "echo invalid scg direct dry-run",
+                logdir = logdir,
+                dry_run = true
+            )
+        end
+
+        _without_git_email() do
+            _with_env(Dict(
+                "SLURM_MAIL_USER" => nothing
+            )) do
+                err = try
+                    Mycelia.scg_sbatch(
+                        job_name = "scg-missing-mail",
+                        account = "PI_FAIL",
+                        cmd = "echo fail before submit",
+                        executor = Mycelia.CollectExecutor()
+                    )
+                    nothing
+                catch e
+                    e
+                end
+                Test.@test err isa ErrorException
+                Test.@test occursin("mail", lowercase(err.msg))
+            end
+        end
+    end
+
+    Test.@testset "nersc wrappers validate account and join command vectors" begin
+        _with_env(Dict("NERSC_ACCOUNT" => nothing)) do
+            Test.@test_throws ErrorException Mycelia.nersc_sbatch_shared(
+                job_name = "missing-account",
+                mail_user = "user@example.org",
+                cmd = "echo fail"
+            )
+            Test.@test_throws ErrorException Mycelia.nersc_sbatch(
+                job_name = "missing-direct-account",
+                mail_user = "user@example.org",
+                cmd = "echo fail"
+            )
+        end
+
+        mktempdir() do logdir
+            _with_env(Dict("NERSC_ACCOUNT" => "m1234")) do
+                collector = Mycelia.CollectExecutor()
+                outcome = Mycelia.nersc_sbatch_shared(
+                    job_name = "nersc-shared-wrapper",
+                    mail_user = "user@example.org",
+                    cmd = "echo shared",
+                    logdir = logdir,
+                    executor = collector
+                )
+
+                Test.@test outcome == 1
+                shared_job = only(collector.jobs)
+                Test.@test shared_job.site == :nersc
+                Test.@test shared_job.qos == "shared"
+                Test.@test shared_job.account == "m1234"
+                Test.@test shared_job.constraint == "cpu"
+                Test.@test shared_job.mem_gb == 2.0
+            end
+        end
+
+        mktempdir() do logdir
+            mktempdir() do scriptdir
+                collector = Mycelia.CollectExecutor()
+                outcome = Mycelia.nersc_sbatch(
+                    job_name = "nersc-command-block",
+                    mail_user = "user@example.org",
+                    account = "m5678",
+                    cmd = ["module load myenv", "python workflow.py --epochs 1"],
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    constraint = "gpu",
+                    gpus_per_node = 1,
+                    executor = collector
+                )
+
+                Test.@test outcome == 1
+                job = only(collector.jobs)
+                Test.@test job.cmd == "module load myenv\npython workflow.py --epochs 1"
+                Test.@test job.site == :nersc
+                Test.@test job.constraint == "gpu"
+                Test.@test job.gpus_per_node == 1
+                Test.@test job.output_path == joinpath(logdir, "%j.%x.out")
+                Test.@test job.error_path == joinpath(logdir, "%j.%x.err")
+            end
+        end
+
+        mktempdir() do logdir
+            result = Mycelia.nersc_sbatch(
+                job_name = "nersc-dry-run",
+                mail_user = "user@example.org",
+                account = "m3456",
+                cmd = "echo dry-run",
+                logdir = logdir,
+                dry_run = true,
+                executor = :slurm
+            )
+
+            Test.@test result isa Mycelia.SubmitResult
+            Test.@test result.ok
+            Test.@test result.dry_run
+            Test.@test result.backend == :sbatch
+            Test.@test result.site == :nersc
+            Test.@test occursin("#SBATCH --constraint=cpu", something(result.artifact_text, ""))
+        end
+    end
+
+    Test.@testset "nersc_sbatch direct dry_run returns true and false on validation failure" begin
+        mktempdir() do logdir
+            mktempdir() do scriptdir
+                Test.@test Mycelia.nersc_sbatch(
+                    job_name = "nersc-direct-dry-run",
+                    mail_user = "user@example.org",
+                    account = "m2468",
+                    cmd = "echo direct dry-run",
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        mktempdir() do logdir
+            mktempdir() do scriptdir
+                Test.@test !Mycelia.nersc_sbatch(
+                    job_name = "nersc-direct-invalid",
+                    mail_user = "user@example.org",
+                    account = "m2468",
+                    cpus_per_task = 0,
+                    cmd = "echo invalid nersc direct dry-run",
+                    logdir = logdir,
+                    scriptdir = scriptdir,
+                    dry_run = true
+                )
+            end
+        end
+
+        _with_env(Dict("NERSC_ACCOUNT" => nothing)) do
+            Test.@test_throws ErrorException Mycelia.nersc_sbatch(
+                job_name = "nersc-direct-missing-account",
+                mail_user = "user@example.org",
+                cmd = "echo fail"
+            )
+        end
+    end
+
+    Test.@testset "lovelace_run writes logs and reports failures" begin
+        mktempdir() do logdir
+            Test.@test Mycelia.lovelace_run(
+                cmd = "printf 'hello from lovelace'",
+                logdir = logdir,
+                job_name = "lovelace-success"
+            )
+
+            out_files = filter(name -> endswith(name, ".out"), readdir(logdir))
+            err_files = filter(name -> endswith(name, ".err"), readdir(logdir))
+            Test.@test length(out_files) == 1
+            Test.@test length(err_files) == 1
+            Test.@test read(joinpath(logdir, only(out_files)), String) ==
+                       "hello from lovelace"
+            Test.@test isempty(read(joinpath(logdir, only(err_files)), String))
+        end
+
+        mktempdir() do logdir
+            Test.@test !Mycelia.lovelace_run(
+                cmd = "echo boom >&2; exit 7",
+                logdir = logdir,
+                job_name = "lovelace-failure"
+            )
+
+            err_files = filter(name -> endswith(name, ".err"), readdir(logdir))
+            Test.@test length(err_files) == 1
+            Test.@test occursin("boom", read(joinpath(logdir, only(err_files)), String))
+        end
+    end
+
+    Test.@testset "submit_job routes to configured backend" begin
+        mktempdir() do logdir
+            _with_env(Dict(
+                "LRC_ACCOUNT" => "pc_submit",
+                "SLURM_MAIL_USER" => "route@example.org"
+            )) do
+                collector = Mycelia.CollectExecutor()
+                outcome = Mycelia.submit_job(
+                    site = "lawrencium",
+                    job_name = "submit-lawrencium",
+                    cmd = "echo routed lawrencium",
+                    logdir = logdir,
+                    executor = collector
+                )
+
+                Test.@test outcome == 1
+                Test.@test only(collector.jobs).site == :lawrencium
+            end
+        end
+
+        mktempdir() do logdir
+            collector = Mycelia.CollectExecutor()
+            outcome = Mycelia.submit_job(
+                site = "SCG",
+                job_name = "submit-route",
+                mail_user = "user@example.org",
+                account = "PI_ROUTED",
+                cmd = "echo routed",
+                logdir = logdir,
+                executor = collector
+            )
+
+            Test.@test outcome == 1
+            Test.@test only(collector.jobs).site == :scg
+        end
+
+        mktempdir() do logdir
+            collector = Mycelia.CollectExecutor()
+            outcome = Mycelia.submit_job(
+                site = "nersc",
+                job_name = "submit-nersc",
+                mail_user = "user@example.org",
+                account = "m9012",
+                cmd = "echo routed nersc",
+                logdir = logdir,
+                executor = collector
+            )
+
+            Test.@test outcome == 1
+            Test.@test only(collector.jobs).site == :nersc
+        end
+
+        mktempdir() do logdir
+            Test.@test Mycelia.submit_job(
+                site = "lovelace",
+                job_name = "submit-lovelace",
+                cmd = "printf routed",
+                logdir = logdir
+            )
+        end
+
+        Test.@test_throws ErrorException Mycelia.submit_job(
+            site = "unknown-site",
+            job_name = "bad-route",
+            cmd = "echo nope"
+        )
+    end
 end
 
 Test.@testset "Lawrencium sacctmgr parser" begin

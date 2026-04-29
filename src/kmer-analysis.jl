@@ -89,12 +89,13 @@ function load_kmer_results(filename::AbstractString)
             metadata["k"] = loaded_data["metadata/k"]
         end
         if haskey(loaded_data, "metadata/alphabet")
-            # Attempt to convert back to Symbol, fallback to string if error
-            try
-                metadata["alphabet"] = Symbol(loaded_data["metadata/alphabet"])
-            catch
-                @warn "Could not convert loaded alphabet '$(loaded_data["metadata/alphabet"])' back to Symbol. Storing as String."
-                metadata["alphabet"] = loaded_data["metadata/alphabet"]
+            loaded_alphabet = loaded_data["metadata/alphabet"]
+            if loaded_alphabet isa Symbol
+                metadata["alphabet"] = loaded_alphabet
+            elseif loaded_alphabet isa AbstractString
+                metadata["alphabet"] = Symbol(loaded_alphabet)
+            else
+                metadata["alphabet"] = loaded_alphabet
             end
         end
         # Add other metadata fields if they exist
