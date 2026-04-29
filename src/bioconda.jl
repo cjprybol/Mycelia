@@ -15,6 +15,80 @@ function _ensure_conda_env_vars!()
     end
 end
 
+function _conda_root_prefix()
+    return normpath(joinpath(dirname(CONDA_RUNNER), ".."))
+end
+
+function _conda_envs_dir()
+    return joinpath(_conda_root_prefix(), "envs")
+end
+
+function _conda_env_names_from_lines(lines)
+    env_names = Set{String}()
+    for line in lines
+        stripped = strip(line)
+        isempty(stripped) && continue
+        startswith(stripped, "#") && continue
+        push!(env_names, first(split(stripped)))
+    end
+    return env_names
+end
+
+function _conda_env_names_from_envs_dir(envs_dir::AbstractString)
+    env_names = Set{String}()
+    if !isdir(envs_dir)
+        return env_names
+    end
+
+    for entry in readdir(envs_dir)
+        startswith(entry, ".") && continue
+        env_dir = joinpath(envs_dir, entry)
+        if isdir(env_dir) && isdir(joinpath(env_dir, "conda-meta"))
+            push!(env_names, entry)
+        end
+    end
+
+    root_prefix = dirname(envs_dir)
+    if isdir(joinpath(root_prefix, "conda-meta"))
+        push!(env_names, "base")
+    end
+
+    return env_names
+end
+
+function _conda_env_names_from_runner(conda_runner::AbstractString)
+    if !isfile(conda_runner)
+        return Set{String}()
+    end
+
+    try
+        return _conda_env_names_from_lines(readlines(`$(conda_runner) env list`))
+    catch
+        return Set{String}()
+    end
+end
+
+function _conda_environment_names(conda_runner::AbstractString, envs_dir::AbstractString)
+    env_names = _conda_env_names_from_envs_dir(envs_dir)
+    union!(env_names, _conda_env_names_from_runner(conda_runner))
+    return env_names
+end
+
+function _conda_environment_names()
+    _ensure_conda_env_vars!()
+    return _conda_environment_names(CONDA_RUNNER, _conda_envs_dir())
+end
+
+function _conda_env_prefix_from_envs_dir(env_name::AbstractString, envs_dir::AbstractString)
+    if env_name == "base"
+        root_prefix = dirname(envs_dir)
+        return isdir(joinpath(root_prefix, "conda-meta")) ? root_prefix : nothing
+    end
+
+    env_prefix = joinpath(envs_dir, env_name)
+    return isdir(joinpath(env_prefix, "conda-meta")) ? env_prefix : nothing
+end
+
 """
     _parse_conda_env_list_line(line::AbstractString) -> Union{Nothing, NamedTuple{(:env_name, :env_prefix), Tuple{String, String}}}
 
@@ -46,6 +120,24 @@ function _parse_conda_env_list_line(line::AbstractString)
     return (env_name = match_result.captures[1], env_prefix = match_result.captures[3])
 end
 
+function _conda_env_prefix_from_runner(env_name::AbstractString, conda_runner::AbstractString)
+    if !isfile(conda_runner)
+        return nothing
+    end
+
+    try
+        for line in readlines(pipeline(`$(conda_runner) env list`, stderr = devnull))
+            parsed_line = _parse_conda_env_list_line(line)
+            if !isnothing(parsed_line) && parsed_line.env_name == env_name
+                return parsed_line.env_prefix
+            end
+        end
+    catch e
+        @debug "conda env prefix lookup failed" exception = e
+    end
+    return nothing
+end
+
 """
     _conda_env_prefix(env_name::AbstractString) -> Union{Nothing, String}
 
@@ -65,18 +157,11 @@ prefix = Mycelia._conda_env_prefix("vibrant")
 """
 function _conda_env_prefix(env_name::AbstractString)
     _ensure_conda_env_vars!()
-    try
-        for line in readlines(pipeline(`$(Mycelia.CONDA_RUNNER) env list`, stderr = devnull))
-            parsed_line = _parse_conda_env_list_line(line)
-            if !isnothing(parsed_line) && parsed_line.env_name == env_name
-                return parsed_line.env_prefix
-            end
-        end
-    catch e
-        @debug "conda env prefix lookup failed" exception = e
-        return nothing
+    env_prefix = _conda_env_prefix_from_envs_dir(env_name, _conda_envs_dir())
+    if !isnothing(env_prefix)
+        return env_prefix
     end
-    return nothing
+    return _conda_env_prefix_from_runner(env_name, Mycelia.CONDA_RUNNER)
 end
 
 """
@@ -199,7 +284,7 @@ function _collect_vibrant_data_path_candidates(
     prefix_candidates::AbstractVector{<:AbstractString}
 )
     candidates = String[]
-    if !isnothing(conda_env_data_path)
+    if !isnothing(conda_env_data_path) && !isempty(strip(conda_env_data_path))
         push!(candidates, strip(conda_env_data_path))
     end
     if !isnothing(process_data_path) && !isempty(strip(process_data_path))
@@ -448,14 +533,7 @@ end
 Check if a conda environment exists.
 """
 function _check_conda_env_exists(env_name::AbstractString)
-    _ensure_conda_env_vars!()
-    try
-        result = Base.read(`$(Mycelia.CONDA_RUNNER) env list`, String)
-        return Base.occursin(env_name, result)
-    catch e
-        @debug "conda env existence check failed" exception = e
-        return false
-    end
+    return env_name in _conda_environment_names()
 end
 
 """
@@ -613,14 +691,7 @@ function check_bioconda_env_is_installed(pkg)
             Conda.update()
         end
     end
-    # try
-    current_environments = Set(first.(filter(x -> length(x) == 2,
-        split.(filter(x -> !occursin(r"^#", x), readlines(`$(CONDA_RUNNER) env list`))))))
-    if pkg in current_environments
-        return true
-    else
-        return false
-    end
+    return pkg in _conda_environment_names()
 end
 
 """

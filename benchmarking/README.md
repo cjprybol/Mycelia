@@ -73,6 +73,19 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - Uses user-supplied contigs/depth/coverage inputs
 - Records wall-clock durations for tool runs
 
+### 8. Momentum Fork Resolution Benchmarks (`08_momentum_fork_resolution_benchmark.jl`)
+- Synthetic repeat-fork scenarios with controlled repeat length, divergence, and coverage
+- Threshold sweeps over SPRT error rates to expose contiguity vs correctness tradeoffs
+- Fork accuracy, unresolved rate, and misassembly counts across `MomentumForkResolver` weighting modes
+- CSV outputs for per-scenario and per-threshold summaries plus JSON benchmark metadata
+
+### Rhizomorph Public-Record Harness (`rhizomorph_benchmark_harness.jl`)
+
+- Dataset manifest for toy controls, public isolate references, and heterogeneous-sample candidates
+- H1-H7 dry-run benchmark slices with expected inputs, outputs, and follow-on runner entry points
+- CI/full/candidate scale filtering so benchmark plans can be inspected without downloading data
+- Manifest validation for dataset identifiers, provenance, expected outputs, and slice references
+
 ## Usage
 
 ### Prerequisites
@@ -125,6 +138,15 @@ julia --project=. benchmarking/assembler_comparison_standard_fixtures.jl synthet
 
 # Run annotation benchmark
 julia --project=. benchmarking/04_annotation_benchmark.jl
+
+# Run synthetic repeat benchmarks for MomentumForkResolver
+julia --project=. benchmarking/08_momentum_fork_resolution_benchmark.jl
+
+# Inspect Rhizomorph public-record datasets and H1-H7 dry-run plans
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-datasets
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-slices
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slice H7 --scale full
 ```
 
 ### Running Complete Benchmark Suite

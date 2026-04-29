@@ -52,6 +52,8 @@ TUTORIALS = [
     "16_un_corpus_ngram_vs_token_graphs.jl",
     "17_viroid_sketch_round_trip.jl",
     "18_advanced_assembly_theory_and_practice.jl",
+    "22_momentum_fork_resolution.jl",
+    "23_variant_calling_workflow.jl",
 ]
 
 """
@@ -68,13 +70,14 @@ function run_all_tutorials()
     total_start = time()
     
     for tutorial in TUTORIALS
-        if isfile(tutorial)
+        tutorial_path = joinpath(@__DIR__, tutorial)
+        if isfile(tutorial_path)
             println("Running $tutorial...")
             start_time = time()
             
             try
                 ## Execute tutorial
-                include(tutorial)
+                include(tutorial_path)
                 
                 elapsed = time() - start_time
                 push!(results, (tutorial, :success, elapsed))
@@ -127,20 +130,21 @@ Convert all tutorials to Jupyter notebooks using Literate.jl.
 """
 function convert_all_to_notebooks()
     println("=== Converting Tutorials to Notebooks ===")
-    
+
     ## Create notebooks directory if it doesn't exist
-    notebooks_dir = "notebooks"
+    notebooks_dir = joinpath(@__DIR__, "notebooks")
     if !isdir(notebooks_dir)
         mkdir(notebooks_dir)
     end
     
     for tutorial in TUTORIALS
-        if isfile(tutorial)
+        tutorial_path = joinpath(@__DIR__, tutorial)
+        if isfile(tutorial_path)
             println("Converting $tutorial to notebook...")
             
             try
                 ## Convert to notebook
-                Literate.notebook(tutorial, notebooks_dir, execute=false)
+                Literate.notebook(tutorial_path, notebooks_dir, execute=false)
                 println("✓ Converted $tutorial")
                 
             catch e
@@ -165,12 +169,13 @@ function run_tutorial(tutorial_name)
         tutorial_name *= ".jl"
     end
     
-    if isfile(tutorial_name)
+    tutorial_path = joinpath(@__DIR__, tutorial_name)
+    if isfile(tutorial_path)
         println("Running $tutorial_name...")
         start_time = time()
         
         try
-            include(tutorial_name)
+            include(tutorial_path)
             elapsed = time() - start_time
             println("✓ $tutorial_name completed in $(round(elapsed, digits=2))s")
             return true

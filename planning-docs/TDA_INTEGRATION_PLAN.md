@@ -110,5 +110,24 @@ Implemented as a new core file: `src/tda.jl`.
 
 ## Implementation Status (as of this doc)
 
+- **Estimated overall completion (2026-04-04): 30%**
+- **Phase 0: 5%** complete. `TDAConfig` already has a backend selector, but no
+  optional persistent-homology backend or weakdep/extension wiring has landed.
+- **Phase 1: 70%** complete. `src/tda.jl` implements graph Betti summaries,
+  filtration curves, `TDARunSummary`, and scoring primitives; tests live in
+  `test/4_assembly/tda_metrics_test.jl`; docs/tutorial entry points exist in
+  `docs/src/topological-assembly-optimization.md` and
+  `tutorials/21_tda_topological_assembly_optimization.jl`. Remaining work is
+  mostly graph-type-specific weight adapters and standardized filtration
+  recipes.
+- **Phase 2: 10%** complete. The scalar scoring primitive exists, but there is
+  no `choose_threshold_via_tda` helper or graph-cleaning integration yet.
+- **Phase 3: 5%** complete. TDA metrics are not yet recorded in assembly
+  results, and no topology-aware assembly objective/search driver exists.
+- **Phase 4: 0%** complete. No local subgraph TDA workflow for
+  bubble/repeat/strain resolution is present yet.
+- **Phase 5: 60%** complete. Narrative docs and a tutorial source file exist,
+  but broader API/tutorial coverage is still incomplete.
+
 - `src/tda.jl`: implemented graph Betti invariants and filtration curves (graph-only backend).
 - `test/4_assembly/tda_metrics_test.jl`: tests exist for cycle vs path and filtration sanity.

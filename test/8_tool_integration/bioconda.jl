@@ -79,17 +79,13 @@ Test.@testset "Bioconda Environment Management Tests" begin
         mock_output = [
             "# conda environments:",
             "#",
-            "base                     /opt/conda",
+            "base                  *  /opt/conda",
             "test_env                 /opt/conda/envs/test_env",
             "another_env              /opt/conda/envs/another_env",
             ""
         ]
 
-        # Apply the filtering logic from check_bioconda_env_is_installed
-        filtered_lines = filter(x -> !occursin(r"^#", x), mock_output)
-        split_lines = split.(filtered_lines)
-        two_part_lines = filter(x -> length(x) == 2, split_lines)
-        env_names = Set(first.(two_part_lines))
+        env_names = Mycelia._conda_env_names_from_lines(mock_output)
 
         Test.@test "test_env" in env_names
         Test.@test "another_env" in env_names
@@ -112,6 +108,58 @@ Test.@testset "Bioconda Environment Management Tests" begin
         Test.@test !isnothing(inactive_line)
         Test.@test inactive_line.env_name == "base"
         Test.@test inactive_line.env_prefix == "/opt/conda"
+    end
+
+    Test.@testset "Filesystem environment fallback" begin
+        mktempdir() do dir
+            envs_dir = joinpath(dir, "envs")
+            mkpath(joinpath(envs_dir, "test_env", "conda-meta"))
+            mkpath(joinpath(envs_dir, "another_env", "conda-meta"))
+            mkpath(joinpath(envs_dir, ".cache"))
+            mkpath(joinpath(dir, "conda-meta"))
+
+            env_names = Mycelia._conda_env_names_from_envs_dir(envs_dir)
+
+            Test.@test "test_env" in env_names
+            Test.@test "another_env" in env_names
+            Test.@test "base" in env_names
+            Test.@test !(".cache" in env_names)
+        end
+    end
+
+    Test.@testset "Environment sources are merged" begin
+        mktempdir() do dir
+            envs_dir = joinpath(dir, "envs")
+            mkpath(joinpath(envs_dir, "local_env", "conda-meta"))
+            mkpath(joinpath(dir, "conda-meta"))
+
+            runner_path = joinpath(dir, "fake-conda")
+            runner_output = """
+            #!/bin/sh
+            cat <<'EOF'
+            # conda environments:
+            #
+            base                  *  /tmp/conda
+            local_env                /tmp/conda/envs/local_env
+            configured_env           /custom/envs/configured_env
+            EOF
+            """
+            write(runner_path, runner_output)
+            chmod(runner_path, 0o755)
+
+            env_names = Mycelia._conda_environment_names(runner_path, envs_dir)
+
+            Test.@test "base" in env_names
+            Test.@test "local_env" in env_names
+            Test.@test "configured_env" in env_names
+            Test.@test length(env_names) == 3
+
+            Test.@test Mycelia._conda_env_prefix_from_envs_dir("base", envs_dir) == dir
+            Test.@test Mycelia._conda_env_prefix_from_envs_dir("local_env", envs_dir) ==
+                       joinpath(envs_dir, "local_env")
+            Test.@test Mycelia._conda_env_prefix_from_runner("configured_env", runner_path) ==
+                       "/custom/envs/configured_env"
+        end
     end
 
     Test.@testset "Error handling and edge cases" begin

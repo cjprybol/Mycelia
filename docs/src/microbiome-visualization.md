@@ -1,5 +1,9 @@
 # Microbiome Visualization
 
+```@meta
+CurrentModule = Mycelia
+```
+
 Mycelia provides a unified visualization system for microbiome abundance data, designed to handle datasets ranging from a few samples to 600+ samples with adaptive sizing and automatic view selection.
 
 ## Overview
@@ -213,21 +217,21 @@ prepared_data = results[:data]       # NamedTuple with processed matrices
 
 ### Main Functions
 
-- [`plot_microbiome_abundance`](@ref) - Main entry point for visualization
-- [`save_plot`](@ref) - Save figures in multiple formats
+- `plot_microbiome_abundance` - Main entry point for visualization
+- `save_plot` - Save figures in multiple formats
 
 ### Configuration Types
 
-- [`MicrobiomePlotConfig`](@ref) - Comprehensive configuration struct
-- [`AxisOrdering`](@ref) - Ordering specification for axes
+- `MicrobiomePlotConfig` - Comprehensive configuration struct
+- `AxisOrdering` - Ordering specification for axes
 
 ### Utility Functions
 
-- [`adaptive_label_fontsize`](@ref) - Calculate font size based on sample count
-- [`calculate_figure_size`](@ref) - Calculate figure dimensions
-- [`compute_axis_ordering`](@ref) - Compute sample/taxa ordering
-- [`determine_view_types`](@ref) - Select view types based on sample count
-- [`calculate_tick_step`](@ref) - Calculate label spacing
+- `adaptive_label_fontsize` - Calculate font size based on sample count
+- `calculate_figure_size` - Calculate figure dimensions
+- `compute_axis_ordering` - Compute sample/taxa ordering
+- `determine_view_types` - Select view types based on sample count
+- `calculate_tick_step` - Calculate label spacing
 
 ## Coverage-Weighted Abundance
 
@@ -408,19 +412,19 @@ Results are sorted by relative abundance (descending), ready for visualization.
 
 #### Core Functions
 
-- [`merge_coverage_with_taxonomy`](@ref) - Merge coverage and taxonomy DataFrames
-- [`compute_coverage_weighted_abundance`](@ref) - Calculate weighted abundance at taxonomic rank
+- `merge_coverage_with_taxonomy` - Merge coverage and taxonomy DataFrames
+- `compute_coverage_weighted_abundance` - Calculate weighted abundance at taxonomic rank
 
 #### Convenience Functions
 
-- [`blast_coverage_abundance`](@ref) - One-step BLAST + coverage workflow
-- [`mmseqs_coverage_abundance`](@ref) - One-step MMseqs2 + coverage workflow
-- [`process_samples_coverage_abundance`](@ref) - Multi-sample batch processing
+- `blast_coverage_abundance` - One-step BLAST + coverage workflow
+- `mmseqs_coverage_abundance` - One-step MMseqs2 + coverage workflow
+- `process_samples_coverage_abundance` - Multi-sample batch processing
 
 #### Internal Helpers
 
-- [`_load_taxonomy_file`](@ref) - Load taxonomy file with format detection
-- [`_detect_contig_column`](@ref) - Auto-detect contig ID column name
+- `_load_taxonomy_file` - Load taxonomy file with format detection
+- `_detect_contig_column` - Auto-detect contig ID column name
 
 ## See Also
 

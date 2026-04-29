@@ -7,7 +7,17 @@ Phased plan for integrating HPC-driven CI while keeping GitHub Actions as-is. Mi
 - Add HPC-only coverage, extended correctness tests, and benchmarks; surface results back to GitHub with extra Codecov flag(s), badges, and optional PR/status checks.
 - Assume HPC harness can emit coverage (`lcov.info`), benchmark JSON/HTML, and correctness summaries (pass/fail counts, regression info).
 
-**Status (2026-01-17)**: Phase 1 is in use; HPC coverage is uploaded to Codecov with a dedicated flag and displayed via the README badge. Remaining phases focus on automated results publishing and benchmarking summaries.
+**Status (2026-04-04)**: overall completion is estimated at **60%**.
+
+- **Phase 1: 100%** complete. `ci/hpc/run_hpc_ci.sh` uploads the `hpc-extended`
+  Codecov flag, and the README/docs already expose the HPC coverage badge.
+- **Phase 2: 70%** complete. `ci/hpc/publish_hpc_results.sh`,
+  `ci/hpc/render_hpc_results_site.jl`, the `hpc-results` publication flow, and
+  badge-backed summaries in `README.md` and `docs/src/benchmarks.md` are in
+  place, but there is still no dedicated GitHub workflow/status-comment layer
+  for automated ingestion and PR feedback.
+- **Phase 3: 10%** complete. The reusable HPC driver pieces exist, but there is
+  no `.gitlab-ci.yml`/Jacamar configuration in the repo yet.
 
 ## 1. Common Building Blocks (All Phases)
 - **Single HPC driver**: `ci/hpc/run_hpc_ci.sh` (or `.jl` wrapper) that:

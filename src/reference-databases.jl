@@ -1007,6 +1007,33 @@ function fasterq_dump(; outdir = pwd(), srr_identifier = "")
     )
 end
 
+function _download_sra_data_result(srr_identifier::String, fasterq_dump_result)
+    has_forward_reads = !ismissing(fasterq_dump_result.forward_reads)
+    has_reverse_reads = !ismissing(fasterq_dump_result.reverse_reads)
+    has_single_reads = !ismissing(fasterq_dump_result.unpaired_reads)
+
+    if has_forward_reads && has_reverse_reads
+        download_dir = dirname(fasterq_dump_result.forward_reads)
+        return (
+            srr_id = srr_identifier,
+            outdir = download_dir,
+            files = [fasterq_dump_result.forward_reads, fasterq_dump_result.reverse_reads],
+            is_paired = true
+        )
+    elseif has_forward_reads || has_reverse_reads
+        error("Incomplete paired FASTQ output detected for SRA identifier: $(srr_identifier)")
+    elseif has_single_reads
+        return (
+            srr_id = srr_identifier,
+            outdir = dirname(fasterq_dump_result.unpaired_reads),
+            files = [fasterq_dump_result.unpaired_reads],
+            is_paired = false
+        )
+    else
+        error("No FASTQ files found after download. Check SRA identifier: $(srr_identifier)")
+    end
+end
+
 # """
 # $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1040,7 +1067,7 @@ Users should apply quality control based on their knowledge of the data type.
 # Returns
 Named tuple with:
 - `srr_id`: The SRA identifier
-- `outdir`: Output directory path
+- `outdir`: Output directory containing the downloaded FASTQ files
 - `files`: Vector of downloaded file paths (1 file for single-end, 2 for paired-end)
 - `is_paired`: Boolean indicating if data is paired-end
 
@@ -1065,32 +1092,8 @@ function download_sra_data(srr_identifier::String; outdir::String = pwd())
     end
 
     @info "Downloading SRA data: $(srr_identifier)"
-    fasterq_dump(outdir = outdir, srr_identifier = srr_identifier)
-
-    # Check what files were created to determine data type
-    forward_reads = joinpath(outdir, "$(srr_identifier)_1.fastq.gz")
-    reverse_reads = joinpath(outdir, "$(srr_identifier)_2.fastq.gz")
-    single_reads = joinpath(outdir, "$(srr_identifier).fastq.gz")
-
-    if isfile(forward_reads) && isfile(reverse_reads)
-        # Paired-end data
-        return (
-            srr_id = srr_identifier,
-            outdir = outdir,
-            files = [forward_reads, reverse_reads],
-            is_paired = true
-        )
-    elseif isfile(single_reads)
-        # Single-end data
-        return (
-            srr_id = srr_identifier,
-            outdir = outdir,
-            files = [single_reads],
-            is_paired = false
-        )
-    else
-        error("No FASTQ files found after download. Check SRA identifier: $(srr_identifier)")
-    end
+    fasterq_dump_result = fasterq_dump(outdir = outdir, srr_identifier = srr_identifier)
+    return _download_sra_data_result(srr_identifier, fasterq_dump_result)
 end
 
 """

@@ -15,6 +15,11 @@ Represents a repetitive region in the assembly graph.
 - `copy_number_estimate::Float64`: Estimated repeat copy number
 - `repeat_type::Symbol`: Repeat classification (`:tandem`, `:interspersed`, `:palindromic`)
 - `confidence::Float64`: Confidence score in `[0, 1]`
+
+# Example
+```julia
+repeats = Mycelia.Rhizomorph.resolve_repeats_next(graph; min_repeat_length=10)
+```
 """
 struct RepeatRegion{T}
     repeat_vertices::Vector{T}
@@ -41,6 +46,18 @@ end
 
 Identify and characterize repetitive regions in the assembly graph.
 Returns a vector of `RepeatRegion` objects specific to the graph's vertex label type.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to analyze
+- `min_repeat_length::Int=10`: Minimum local subgraph size to retain as a repeat
+
+# Returns
+- `Vector{RepeatRegion}`: Merged repeat calls for the input graph
+
+# Example
+```julia
+repeats = Mycelia.Rhizomorph.resolve_repeats_next(graph; min_repeat_length=8)
+```
 """
 function resolve_repeats_next(graph::MetaGraphsNext.MetaGraph; min_repeat_length::Int = 10)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -65,7 +82,20 @@ function resolve_repeats_next(graph::MetaGraphsNext.MetaGraph; min_repeat_length
 end
 
 """
-Calculate in-degrees and out-degrees for all vertices.
+    calculate_degrees(graph::MetaGraphsNext.MetaGraph)
+
+Compute in-degree and out-degree tables for each vertex label in `graph`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to summarize
+
+# Returns
+- `Tuple{Dict, Dict}`: `(in_degrees, out_degrees)` keyed by vertex label
+
+# Example
+```julia
+in_degrees, out_degrees = Mycelia.Rhizomorph.calculate_degrees(graph)
+```
 """
 function calculate_degrees(graph::MetaGraphsNext.MetaGraph{
         <:Integer, <:Any, T, <:Any, <:Any, <:Any, <:Any, <:Any}) where {T}
@@ -88,7 +118,21 @@ function calculate_degrees(graph::MetaGraphsNext.MetaGraph{
 end
 
 """
-Find vertices that could be part of repeat regions.
+    find_repeat_candidates(in_degrees::Dict{T, Int}, out_degrees::Dict{T, Int}) where T
+
+Select vertices whose local degree pattern suggests repeat structure.
+
+# Arguments
+- `in_degrees::Dict{T, Int}`: In-degree per vertex
+- `out_degrees::Dict{T, Int}`: Out-degree per vertex
+
+# Returns
+- `Vector{T}`: Candidate repeat vertices
+
+# Example
+```julia
+candidates = Mycelia.Rhizomorph.find_repeat_candidates(in_degrees, out_degrees)
+```
 """
 function find_repeat_candidates(in_degrees::Dict{T, Int}, out_degrees::Dict{
         T, Int}) where {T}
@@ -105,7 +149,23 @@ function find_repeat_candidates(in_degrees::Dict{T, Int}, out_degrees::Dict{
 end
 
 """
-Analyze a potential repeat region starting from a vertex.
+    analyze_repeat_region(graph::MetaGraphsNext.MetaGraph, start_vertex, min_length)
+
+Analyze the local neighborhood around `start_vertex` and, when supported,
+construct a `RepeatRegion`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to analyze
+- `start_vertex`: Candidate repeat seed
+- `min_length::Int`: Minimum region size required for a call
+
+# Returns
+- `Union{Nothing, RepeatRegion}`: Characterized repeat region or `nothing`
+
+# Example
+```julia
+region = Mycelia.Rhizomorph.analyze_repeat_region(graph, candidate, 10)
+```
 """
 function analyze_repeat_region(
         graph::MetaGraphsNext.MetaGraph{
@@ -147,7 +207,22 @@ function analyze_repeat_region(
 end
 
 """
-Get local subgraph around a vertex within the provided radius.
+    get_local_subgraph(graph::MetaGraphsNext.MetaGraph, center_vertex, radius)
+
+Collect vertices reachable within `radius` steps of `center_vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to traverse
+- `center_vertex`: Seed vertex label
+- `radius::Int`: Search radius in graph steps
+
+# Returns
+- `Vector`: Vertex labels in the local neighborhood
+
+# Example
+```julia
+local_vertices = Mycelia.Rhizomorph.get_local_subgraph(graph, candidate, 5)
+```
 """
 function get_local_subgraph(
         graph::MetaGraphsNext.MetaGraph{
@@ -184,7 +259,21 @@ function get_local_subgraph(
 end
 
 """
-Estimate copy number for repeat region based on evidence counts.
+    estimate_copy_number(graph::MetaGraphsNext.MetaGraph, vertices::Vector)
+
+Estimate repeat copy number from the aggregate support of `vertices`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Source graph
+- `vertices::Vector`: Vertices assigned to the repeat region
+
+# Returns
+- `Float64`: Approximate copy-number estimate bounded below by `1.0`
+
+# Example
+```julia
+copy_number = Mycelia.Rhizomorph.estimate_copy_number(graph, local_vertices)
+```
 """
 function estimate_copy_number(
         graph::MetaGraphsNext.MetaGraph{
@@ -209,7 +298,24 @@ function estimate_copy_number(
 end
 
 """
-Classify the type of repeat based on connectivity.
+    classify_repeat_type(graph::MetaGraphsNext.MetaGraph, vertices, incoming_edges, outgoing_edges)
+
+Classify a repeat as tandem, interspersed, or palindromic from its boundary
+connectivity.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Source graph
+- `vertices::Vector`: Repeat vertices
+- `incoming_edges::Vector{Tuple}`: Edges entering the repeat
+- `outgoing_edges::Vector{Tuple}`: Edges leaving the repeat
+
+# Returns
+- `Symbol`: One of `:tandem`, `:interspersed`, or `:palindromic`
+
+# Example
+```julia
+repeat_type = Mycelia.Rhizomorph.classify_repeat_type(graph, vertices, incoming_edges, outgoing_edges)
+```
 """
 function classify_repeat_type(
         graph::MetaGraphsNext.MetaGraph{
@@ -230,7 +336,22 @@ function classify_repeat_type(
 end
 
 """
-Calculate confidence in repeat identification.
+    calculate_repeat_confidence(graph::MetaGraphsNext.MetaGraph, vertices::Vector, copy_number::Float64)
+
+Score confidence for a repeat call from region size and copy-number estimate.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Source graph
+- `vertices::Vector`: Repeat vertices
+- `copy_number::Float64`: Estimated copy number
+
+# Returns
+- `Float64`: Confidence score in `[0, 1]`
+
+# Example
+```julia
+confidence = Mycelia.Rhizomorph.calculate_repeat_confidence(graph, vertices, copy_number)
+```
 """
 function calculate_repeat_confidence(graph::MetaGraphsNext.MetaGraph,
         vertices::Vector,
@@ -242,7 +363,20 @@ function calculate_repeat_confidence(graph::MetaGraphsNext.MetaGraph,
 end
 
 """
-Merge overlapping repeat regions.
+    merge_overlapping_repeats(repeats::Vector{RepeatRegion{T}}) where T
+
+Merge repeat calls that share one or more vertices.
+
+# Arguments
+- `repeats::Vector{RepeatRegion{T}}`: Repeat calls to merge
+
+# Returns
+- `Vector{RepeatRegion{T}}`: Repeat regions after overlap consolidation
+
+# Example
+```julia
+merged = Mycelia.Rhizomorph.merge_overlapping_repeats(repeats)
+```
 """
 function merge_overlapping_repeats(repeats::Vector{RepeatRegion{T}}) where {T}
     if isempty(repeats)
@@ -282,14 +416,41 @@ function merge_overlapping_repeats(repeats::Vector{RepeatRegion{T}}) where {T}
 end
 
 """
-Check if two repeat regions overlap.
+    regions_overlap(r1::RepeatRegion{T}, r2::RepeatRegion{T}) where T
+
+Test whether two repeat calls share any vertex labels.
+
+# Arguments
+- `r1::RepeatRegion{T}`: First repeat region
+- `r2::RepeatRegion{T}`: Second repeat region
+
+# Returns
+- `Bool`: `true` when the regions overlap
+
+# Example
+```julia
+overlap = Mycelia.Rhizomorph.regions_overlap(repeats[1], repeats[2])
+```
 """
 function regions_overlap(r1::RepeatRegion{T}, r2::RepeatRegion{T}) where {T}
     return !isempty(intersect(Set(r1.repeat_vertices), Set(r2.repeat_vertices)))
 end
 
 """
-Merge multiple repeat regions into one.
+    merge_repeat_regions(regions::Vector{RepeatRegion{T}}) where T
+
+Merge multiple repeat calls into a single summary region.
+
+# Arguments
+- `regions::Vector{RepeatRegion{T}}`: Repeat regions to combine
+
+# Returns
+- `RepeatRegion{T}`: Union of vertices, boundary edges, and averaged scores
+
+# Example
+```julia
+merged = Mycelia.Rhizomorph.merge_repeat_regions(repeats[1:2])
+```
 """
 function merge_repeat_regions(regions::Vector{RepeatRegion{T}}) where {T}
     all_vertices = Vector{T}()

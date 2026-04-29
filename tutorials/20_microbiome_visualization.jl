@@ -441,4 +441,4 @@ end
 # 7. `compute_coverage_weighted_abundance` calculates relative abundance from coverage
 # 8. Coverage-based abundance works at any taxonomic rank (domain to species)
 #
-# For more details, see the [Microbiome Visualization](../docs/src/microbiome-visualization.md) documentation.
+# For more details, see the [Microbiome Visualization](../../microbiome-visualization.md) documentation.

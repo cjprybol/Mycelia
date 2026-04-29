@@ -50,6 +50,9 @@ try
     println("\n=== Binning Benchmark ===")
     include("07_binning_benchmark.jl")
 
+    println("\n=== Momentum Fork Resolution Benchmark ===")
+    include("08_momentum_fork_resolution_benchmark.jl")
+
     println("\n=== Round-Trip Benchmark ===")
     include("15_round_trip_benchmark.jl")
     
