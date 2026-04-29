@@ -2,7 +2,7 @@ import Test
 import Mycelia
 
 @eval Mycelia begin
-    function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
+    function add_bioconda_env(pkg; force = false, quiet = false)
         return nothing
     end
 end
