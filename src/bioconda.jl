@@ -56,22 +56,27 @@ function _conda_env_names_from_envs_dir(envs_dir::AbstractString)
     return env_names
 end
 
+function _conda_env_names_from_runner(conda_runner::AbstractString)
+    if !isfile(conda_runner)
+        return Set{String}()
+    end
+
+    try
+        return _conda_env_names_from_lines(readlines(`$(conda_runner) env list`))
+    catch
+        return Set{String}()
+    end
+end
+
+function _conda_environment_names(conda_runner::AbstractString, envs_dir::AbstractString)
+    env_names = _conda_env_names_from_envs_dir(envs_dir)
+    union!(env_names, _conda_env_names_from_runner(conda_runner))
+    return env_names
+end
+
 function _conda_environment_names()
     _ensure_conda_env_vars!()
-    envs_dir = _conda_envs_dir()
-    if isdir(envs_dir)
-        return _conda_env_names_from_envs_dir(envs_dir)
-    end
-
-    if isfile(CONDA_RUNNER)
-        try
-            return _conda_env_names_from_lines(readlines(`$(CONDA_RUNNER) env list`))
-        catch
-            return Set{String}()
-        end
-    end
-
-    return Set{String}()
+    return _conda_environment_names(CONDA_RUNNER, _conda_envs_dir())
 end
 
 """
