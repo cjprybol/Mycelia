@@ -5,9 +5,9 @@ import Mycelia
 Test.@testset "Read Quality Control" begin
     q40(n) = fill(40, n)
 
-    Test.@testset "gc_content_per_read — type safety regression (td-zyf99)" begin
+    Test.@testset "gc_content_per_read - type safety regression (td-zyf99)" begin
         # Regression guard: the function must use FASTX.sequence(LongDNA{4}, record)
-        # so BioSequences symbol comparisons work.  If it reverts to plain
+        # so BioSequences symbol comparisons work. If it reverts to plain
         # FASTX.sequence(record) (returns String), all GC fractions would be 0.0.
 
         all_gc = Mycelia.fastq_record(identifier = "all_gc", sequence = "GCGCGCGC", quality_scores = q40(8))
@@ -22,7 +22,7 @@ Test.@testset "Read Quality Control" begin
         Test.@test fracs[1] ≈ 1.0
         Test.@test fracs[2] ≈ 0.0
         Test.@test fracs[3] ≈ 0.5
-        Test.@test fracs[4] == 0.0   # empty record → 0.0, not NaN
+        Test.@test fracs[4] == 0.0
     end
 
     Test.@testset "per-base and per-read quality summaries" begin

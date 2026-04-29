@@ -5,7 +5,6 @@ authors = ["Cameron Prybol <cameron.prybol@gmail.com> and contributors"]
 version = "0.1.0"
 
 [deps]
-AlgebraOfGraphics = "cbdf2221-f076-402e-a563-3d30da359d67"
 Arrow = "69666777-d1a9-59fb-9406-91d4454c9d45"
 Base58 = "a832ea1e-0ca7-55ca-a41a-6462721bb861"
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
