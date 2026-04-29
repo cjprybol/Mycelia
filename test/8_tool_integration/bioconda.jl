@@ -110,6 +110,35 @@ Test.@testset "Bioconda Environment Management Tests" begin
         end
     end
 
+    Test.@testset "Environment sources are merged" begin
+        mktempdir() do dir
+            envs_dir = joinpath(dir, "envs")
+            mkpath(joinpath(envs_dir, "local_env", "conda-meta"))
+            mkpath(joinpath(dir, "conda-meta"))
+
+            runner_path = joinpath(dir, "fake-conda")
+            runner_output = """
+            #!/bin/sh
+            cat <<'EOF'
+            # conda environments:
+            #
+            base                  *  /tmp/conda
+            local_env                /tmp/conda/envs/local_env
+            configured_env           /custom/envs/configured_env
+            EOF
+            """
+            write(runner_path, runner_output)
+            chmod(runner_path, 0o755)
+
+            env_names = Mycelia._conda_environment_names(runner_path, envs_dir)
+
+            Test.@test "base" in env_names
+            Test.@test "local_env" in env_names
+            Test.@test "configured_env" in env_names
+            Test.@test length(env_names) == 3
+        end
+    end
+
     Test.@testset "Error handling and edge cases" begin
         # Test with empty string
         Test.@test !occursin("::", "")
