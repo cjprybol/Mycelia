@@ -27,13 +27,13 @@ Extract a subgraph containing only the largest connected components.
 # Examples
 ```julia
 # Keep only the largest connected component
-subgraph = filter_largest_components(graph; max_components=1)
+subgraph = Mycelia.Rhizomorph.filter_largest_components(graph; max_components=1)
 
 # Keep components representing the top 10% of nodes
-subgraph = filter_largest_components(graph; min_fraction=0.10)
+subgraph = Mycelia.Rhizomorph.filter_largest_components(graph; min_fraction=0.10)
 
 # Keep components with at least 5 nodes
-subgraph = filter_largest_components(graph; min_nodes=5)
+subgraph = Mycelia.Rhizomorph.filter_largest_components(graph; min_nodes=5)
 ```
 """
 function filter_largest_components(graph::MetaGraphsNext.MetaGraph;
@@ -84,6 +84,11 @@ Extract a subgraph containing only nodes in the top fraction by depth/coverage.
 
 # Returns
 - `MetaGraphsNext.MetaGraph`: A new graph with only high-coverage nodes and their edges
+
+# Example
+```julia
+subgraph = Mycelia.Rhizomorph.filter_top_coverage(graph; top_fraction=0.2)
+```
 """
 function filter_top_coverage(graph::MetaGraphsNext.MetaGraph;
         top_fraction::Float64 = 0.1)

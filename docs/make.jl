@@ -1,11 +1,22 @@
 # generate docs locally with
 # julia --project=docs -e 'include("docs/make.jl")'
 
+import Pkg
+
+const DOCS_ROOT = @__DIR__
+const PROJECT_ROOT = abspath(joinpath(DOCS_ROOT, ".."))
+
+# Bootstrap the docs environment so builds work in fresh clones and alternate worktrees.
+Pkg.activate(DOCS_ROOT)
+cd(DOCS_ROOT) do
+    Pkg.develop(path="..")
+    Pkg.instantiate()
+end
+
 import Documenter
 import Mycelia
 import Literate
 
-const PROJECT_ROOT = abspath(joinpath(@__DIR__, ".."))
 const TUTORIALS_DIR = joinpath(PROJECT_ROOT, "tutorials")
 const LITERATE_SRC_DIR = joinpath(PROJECT_ROOT, "test")
 const GENERATED_DOCS_DIR = joinpath(@__DIR__, "src", "generated")
@@ -120,6 +131,7 @@ tutorial_order = [
     ("Step 19: Relational Clustering", "19_relational_clustering.md"),
     ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
     ("Step 21: Topological Assembly Optimization", "21_tda_topological_assembly_optimization.md"),
+    ("Step 22: Momentum Fork Resolution", "22_momentum_fork_resolution.md"),
 ]
 
 # Add tutorials that exist in the specified order

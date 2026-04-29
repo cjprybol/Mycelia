@@ -8,6 +8,41 @@ import BioSequences
 import FASTX
 
 threads = clamp(something(tryparse(Int, get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2")), 2), 1, 4)
+const RUN_EXTERNAL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true" ||
+                     lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+
+function legacy_conda_tool_available(env_name::AbstractString, cmd_parts::Vector{String})
+    if !isfile(Mycelia.CONDA_RUNNER)
+        return false
+    end
+
+    try
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(env_name) $(cmd_parts)`,
+            stdout = devnull,
+            stderr = devnull
+        ))
+        return true
+    catch
+        return false
+    end
+end
+
+function legacy_strain_workflow_tools_available()
+    return RUN_EXTERNAL &&
+           legacy_conda_tool_available("badread", ["badread", "simulate", "--help"]) &&
+           legacy_conda_tool_available("flye", ["flye", "--version"]) &&
+           legacy_conda_tool_available("strong", ["STRONG", "--help"]) &&
+           legacy_conda_tool_available("strainy", ["strainy", "--help"]) &&
+           legacy_conda_tool_available("strainy", ["minimap2", "--version"]) &&
+           legacy_conda_tool_available("strainy", ["samtools", "--version"])
+end
+
+function legacy_plass_smoke_tools_available()
+    return RUN_EXTERNAL &&
+           legacy_conda_tool_available("plass", ["plass", "--help"]) &&
+           legacy_conda_tool_available("plass", ["penguin", "--help"])
+end
 
 #     Test.@testset "5. Hybrid Assembly" begin
 #         Test.@testset "5a. Hybrid Isolate Assembly" begin
@@ -565,91 +600,97 @@ end
 # end
 
 Test.@testset "Strain-aware workflows (STRONG/Strainy)" begin
-    mktempdir() do dir
-        # Two small strains
-        base_ref_fasta = joinpath(dir, "base_strain.fasta")
-        variant_ref_fasta = joinpath(dir, "variant_strain.fasta")
-        rng_base = StableRNGs.StableRNG(901)
-        rng_variant = StableRNGs.StableRNG(902)
-        base_genome = BioSequences.randdnaseq(rng_base, 5000)
-        variant_genome = BioSequences.randdnaseq(rng_variant, 5000)
-        Mycelia.write_fasta(outfile = base_ref_fasta,
-            records = [FASTX.FASTA.Record("base_strain", base_genome)])
-        Mycelia.write_fasta(outfile = variant_ref_fasta,
-            records = [FASTX.FASTA.Record("variant_strain", variant_genome)])
+    if !RUN_EXTERNAL
+        Test.@test_skip "Set MYCELIA_RUN_EXTERNAL=true to run legacy STRONG/Strainy smoke tests"
+    elseif !legacy_strain_workflow_tools_available()
+        Test.@test_skip "Legacy STRONG/Strainy smoke test requires working badread, flye, STRONG, strainy, minimap2, and samtools tooling"
+    else
+        mktempdir() do dir
+            # Two small strains
+            base_ref_fasta = joinpath(dir, "base_strain.fasta")
+            variant_ref_fasta = joinpath(dir, "variant_strain.fasta")
+            rng_base = StableRNGs.StableRNG(901)
+            rng_variant = StableRNGs.StableRNG(902)
+            base_genome = BioSequences.randdnaseq(rng_base, 5000)
+            variant_genome = BioSequences.randdnaseq(rng_variant, 5000)
+            Mycelia.write_fasta(outfile = base_ref_fasta,
+                records = [FASTX.FASTA.Record("base_strain", base_genome)])
+            Mycelia.write_fasta(outfile = variant_ref_fasta,
+                records = [FASTX.FASTA.Record("variant_strain", variant_genome)])
 
-        # Simulate reads (uneven coverage)
-        base_reads_gz = Mycelia.simulate_nanopore_reads(fasta = base_ref_fasta, quantity = "12x")
-        variant_reads_gz = Mycelia.simulate_nanopore_reads(fasta = variant_ref_fasta, quantity = "4x")
+            # Simulate reads (uneven coverage)
+            base_reads_gz = Mycelia.simulate_nanopore_reads(fasta = base_ref_fasta, quantity = "12x")
+            variant_reads_gz = Mycelia.simulate_nanopore_reads(fasta = variant_ref_fasta, quantity = "4x")
 
-        base_fastq = joinpath(dir, "base_strain_reads.fq")
-        variant_fastq = joinpath(dir, "variant_strain_reads.fq")
-        mixed_fastq = joinpath(dir, "mixed_strain_reads.fq")
-        run(pipeline(`gunzip -c $(base_reads_gz)`, base_fastq))
-        run(pipeline(`gunzip -c $(variant_reads_gz)`, variant_fastq))
-        run(pipeline(`cat $(base_fastq) $(variant_fastq)`, mixed_fastq))
+            base_fastq = joinpath(dir, "base_strain_reads.fq")
+            variant_fastq = joinpath(dir, "variant_strain_reads.fq")
+            mixed_fastq = joinpath(dir, "mixed_strain_reads.fq")
+            run(pipeline(`gunzip -c $(base_reads_gz)`, base_fastq))
+            run(pipeline(`gunzip -c $(variant_reads_gz)`, variant_fastq))
+            run(pipeline(`cat $(base_fastq) $(variant_fastq)`, mixed_fastq))
 
-        # STRONG: requires assembly graph; generate via metaFlye
-        metaflye_for_graph_outdir = joinpath(dir, "metaflye_for_graph")
-        assembly_graph_gfa = joinpath(metaflye_for_graph_outdir, "assembly_graph.gfa")
-        try
-            Mycelia.run_metaflye(fastq = mixed_fastq, outdir = metaflye_for_graph_outdir,
-                genome_size = "5k", read_type = "nano-raw", min_overlap = 1000)
+            # STRONG: requires assembly graph; generate via metaFlye
+            metaflye_for_graph_outdir = joinpath(dir, "metaflye_for_graph")
+            assembly_graph_gfa = joinpath(metaflye_for_graph_outdir, "assembly_graph.gfa")
+            try
+                Mycelia.run_metaflye(fastq = mixed_fastq, outdir = metaflye_for_graph_outdir,
+                    genome_size = "5k", read_type = "nano-raw", min_overlap = 1000)
 
-            strong_outdir = joinpath(dir, "strong_assembly")
-            if isfile(assembly_graph_gfa)
-                try
-                    result = Mycelia.run_strong(assembly_graph_gfa, mixed_fastq,
-                        outdir = strong_outdir, nb_strains = 2)
-                    Test.@test result.outdir == strong_outdir
-                    Test.@test result.strain_unitigs ==
-                               joinpath(strong_outdir, "strain_unitigs.fasta")
-                catch e
-                    @error "STRONG test failed." exception=(e, catch_backtrace())
+                strong_outdir = joinpath(dir, "strong_assembly")
+                if isfile(assembly_graph_gfa)
+                    try
+                        result = Mycelia.run_strong(assembly_graph_gfa, mixed_fastq,
+                            outdir = strong_outdir, nb_strains = 2)
+                        Test.@test result.outdir == strong_outdir
+                        Test.@test result.strain_unitigs ==
+                                   joinpath(strong_outdir, "strain_unitigs.fasta")
+                    catch e
+                        @error "STRONG test failed." exception=(e, catch_backtrace())
+                        Test.@test false
+                    end
+                else
+                    @error "STRONG test failed: metaFlye did not produce an assembly graph."
                     Test.@test false
                 end
-            else
-                @error "STRONG test failed: metaFlye did not produce an assembly graph."
+            catch e
+                @error "STRONG test failed: metaFlye could not generate assembly graph." exception=(
+                    e, catch_backtrace())
                 Test.@test false
             end
-        catch e
-            @error "STRONG test failed: metaFlye could not generate assembly graph." exception=(
-                e, catch_backtrace())
-            Test.@test false
-        end
-        isdir(metaflye_for_graph_outdir) &&
-            rm(metaflye_for_graph_outdir, recursive = true, force = true)
+            isdir(metaflye_for_graph_outdir) &&
+                rm(metaflye_for_graph_outdir, recursive = true, force = true)
 
-        # Strainy: requires assembly FASTA; generate via metaFlye
-        metaflye_for_strainy_outdir = joinpath(dir, "metaflye_for_strainy")
-        metaflye_assembly = joinpath(metaflye_for_strainy_outdir, "assembly.fasta")
-        try
-            Mycelia.run_metaflye(fastq = mixed_fastq, outdir = metaflye_for_strainy_outdir,
-                genome_size = "5k", read_type = "nano-raw", min_overlap = 1000)
+            # Strainy: requires assembly FASTA; generate via metaFlye
+            metaflye_for_strainy_outdir = joinpath(dir, "metaflye_for_strainy")
+            metaflye_assembly = joinpath(metaflye_for_strainy_outdir, "assembly.fasta")
+            try
+                Mycelia.run_metaflye(fastq = mixed_fastq, outdir = metaflye_for_strainy_outdir,
+                    genome_size = "5k", read_type = "nano-raw", min_overlap = 1000)
 
-            if isfile(metaflye_assembly)
-                strainy_outdir = joinpath(dir, "strainy_assembly")
-                try
-                    result = Mycelia.run_strainy(metaflye_assembly, mixed_fastq,
-                        outdir = strainy_outdir, mode = "phase")
-                    Test.@test result.outdir == strainy_outdir
-                    Test.@test result.strain_assemblies ==
-                               joinpath(strainy_outdir, "strain_assemblies.fasta")
-                catch e
-                    @error "Strainy test failed." exception=(e, catch_backtrace())
+                if isfile(metaflye_assembly)
+                    strainy_outdir = joinpath(dir, "strainy_assembly")
+                    try
+                        result = Mycelia.run_strainy(metaflye_assembly, mixed_fastq,
+                            outdir = strainy_outdir, mode = "phase")
+                        Test.@test result.outdir == strainy_outdir
+                        Test.@test result.strain_assemblies ==
+                                   joinpath(strainy_outdir, "strain_assemblies.fasta")
+                    catch e
+                        @error "Strainy test failed." exception=(e, catch_backtrace())
+                        Test.@test false
+                    end
+                else
+                    @error "Strainy test failed: metaFlye did not produce an assembly."
                     Test.@test false
                 end
-            else
-                @error "Strainy test failed: metaFlye did not produce an assembly."
+            catch e
+                @error "Strainy test failed: metaFlye could not generate assembly." exception=(
+                    e, catch_backtrace())
                 Test.@test false
             end
-        catch e
-            @error "Strainy test failed: metaFlye could not generate assembly." exception=(
-                e, catch_backtrace())
-            Test.@test false
+            isdir(metaflye_for_strainy_outdir) &&
+                rm(metaflye_for_strainy_outdir, recursive = true, force = true)
         end
-        isdir(metaflye_for_strainy_outdir) &&
-            rm(metaflye_for_strainy_outdir, recursive = true, force = true)
     end
 end
 
@@ -658,96 +699,108 @@ end
 # ---------------------------------------------------------------------------
 
 Test.@testset "Protein Assembly - PLASS (simulated reads)" begin
-    mktempdir() do dir
-        ref_fasta = joinpath(dir, "ref.fasta")
-        rng = StableRNGs.StableRNG(42)
-        seq = BioSequences.randdnaseq(rng, 2000)
-        Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
+    if !legacy_plass_smoke_tools_available()
+        Test.@test_skip "Legacy PLASS smoke test requires working plass and penguin tooling"
+    else
+        mktempdir() do dir
+            ref_fasta = joinpath(dir, "ref.fasta")
+            rng = StableRNGs.StableRNG(42)
+            seq = BioSequences.randdnaseq(rng, 2000)
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
-        sim = Mycelia.simulate_illumina_reads(
-            fasta = ref_fasta,
-            coverage = 5,
-            outbase = joinpath(dir, "sim_plass"),
-            read_length = 100,
-            mflen = 200,
-            seqSys = "HS25",
-            paired = true,
-            errfree = true,
-            quiet = true
-        )
+            sim = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_plass"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                quiet = true
+            )
 
-        outdir = joinpath(dir, "plass_out")
-        try
-            result = Mycelia.run_plass_assemble(
-                reads1 = sim.forward_reads, reads2 = sim.reverse_reads,
-                outdir = outdir, min_length = 20, num_iterations = 1)
-            Test.@test isfile(result.assembly)
-        catch e
-            @error "PLASS test failed." exception=(e, catch_backtrace())
-            Test.@test false
+            outdir = joinpath(dir, "plass_out")
+            try
+                result = Mycelia.run_plass_assemble(
+                    reads1 = sim.forward_reads, reads2 = sim.reverse_reads,
+                    outdir = outdir, min_length = 20, num_iterations = 1)
+                Test.@test isfile(result.assembly)
+            catch e
+                @error "PLASS test failed." exception=(e, catch_backtrace())
+                Test.@test false
+            end
         end
     end
 end
 
 Test.@testset "Nucleotide Assembly - PenguiN guided_nuclassemble (simulated reads)" begin
-    mktempdir() do dir
-        ref_fasta = joinpath(dir, "ref.fasta")
-        rng = StableRNGs.StableRNG(43)
-        seq = BioSequences.randdnaseq(rng, 2000)
-        Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
+    if !legacy_plass_smoke_tools_available()
+        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+    else
+        mktempdir() do dir
+            ref_fasta = joinpath(dir, "ref.fasta")
+            rng = StableRNGs.StableRNG(43)
+            seq = BioSequences.randdnaseq(rng, 2000)
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
-        sim = Mycelia.simulate_illumina_reads(
-            fasta = ref_fasta,
-            coverage = 5,
-            outbase = joinpath(dir, "sim_penguin_guided"),
-            read_length = 100,
-            mflen = 200,
-            seqSys = "HS25",
-            paired = true,
-            errfree = true,
-            quiet = true
-        )
+            sim = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_penguin_guided"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                quiet = true
+            )
 
-        outdir = joinpath(dir, "penguin_guided_out")
-        try
-            result = Mycelia.run_penguin_guided_nuclassemble(
-                reads1 = sim.forward_reads, reads2 = sim.reverse_reads, outdir = outdir)
-            Test.@test isfile(result.assembly)
-        catch e
-            @error "PenguiN guided_nuclassemble test failed." exception=(
-                e, catch_backtrace())
-            Test.@test false
+            outdir = joinpath(dir, "penguin_guided_out")
+            try
+                result = Mycelia.run_penguin_guided_nuclassemble(
+                    reads1 = sim.forward_reads, reads2 = sim.reverse_reads, outdir = outdir)
+                Test.@test isfile(result.assembly)
+            catch e
+                @error "PenguiN guided_nuclassemble test failed." exception=(
+                    e, catch_backtrace())
+                Test.@test false
+            end
         end
     end
 end
 
 Test.@testset "Nucleotide Assembly - PenguiN nuclassemble (simulated reads)" begin
-    mktempdir() do dir
-        ref_fasta = joinpath(dir, "ref.fasta")
-        rng = StableRNGs.StableRNG(44)
-        seq = BioSequences.randdnaseq(rng, 2000)
-        Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
+    if !legacy_plass_smoke_tools_available()
+        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+    else
+        mktempdir() do dir
+            ref_fasta = joinpath(dir, "ref.fasta")
+            rng = StableRNGs.StableRNG(44)
+            seq = BioSequences.randdnaseq(rng, 2000)
+            Mycelia.write_fasta(outfile = ref_fasta, records = [FASTX.FASTA.Record("ref", seq)])
 
-        sim = Mycelia.simulate_illumina_reads(
-            fasta = ref_fasta,
-            coverage = 5,
-            outbase = joinpath(dir, "sim_penguin"),
-            read_length = 100,
-            mflen = 200,
-            seqSys = "HS25",
-            paired = true,
-            errfree = true,
-            quiet = true
-        )
+            sim = Mycelia.simulate_illumina_reads(
+                fasta = ref_fasta,
+                coverage = 5,
+                outbase = joinpath(dir, "sim_penguin"),
+                read_length = 100,
+                mflen = 200,
+                seqSys = "HS25",
+                paired = true,
+                errfree = true,
+                quiet = true
+            )
 
-        outdir = joinpath(dir, "penguin_out")
-        try
-            result = Mycelia.run_penguin_nuclassemble(
-                reads1 = sim.forward_reads, reads2 = sim.reverse_reads, outdir = outdir)
-            Test.@test isfile(result.assembly)
-        catch e
-            @error "PenguiN nuclassemble test failed." exception=(e, catch_backtrace())
-            Test.@test false
+            outdir = joinpath(dir, "penguin_out")
+            try
+                result = Mycelia.run_penguin_nuclassemble(
+                    reads1 = sim.forward_reads, reads2 = sim.reverse_reads, outdir = outdir)
+                Test.@test isfile(result.assembly)
+            catch e
+                @error "PenguiN nuclassemble test failed." exception=(e, catch_backtrace())
+                Test.@test false
+            end
         end
     end
 end

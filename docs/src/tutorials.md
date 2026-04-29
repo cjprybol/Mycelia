@@ -38,13 +38,14 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 11. [11 Reduced Amino Acid Alphabets](generated/tutorials/11_reduced_amino_acid_alphabets.md) - Reduced alphabet encodings and analysis
 12. [12 CoverM Coverage](generated/tutorials/12_coverm_coverage.md) - Coverage profiling and reporting
 13. [13 Rhizomorph Assembly](generated/tutorials/13_rhizomorph_assembly.md) - Rhizomorph assembly workflows
-14a. [14 Binning Workflow](generated/tutorials/14_binning_workflow.md) - Binning and post-binning workflows
+14a. [14 Binning Workflow](generated/tutorials/14_binning_workflow.md) - Reproducible VAMB/MetaBAT2 binning plus dRep dereplication
 14b. [14 Mash Classification](generated/tutorials/14_mash_classification.md) - Mash sketching and screening
 15. [15 Round Trip Benchmarking](generated/tutorials/15_round_trip_benchmarking.md) - Reference download and simulation harness
 16. [16 UN Corpus Ngram vs Token Graphs](generated/tutorials/16_un_corpus_ngram_vs_token_graphs.md) - Graph comparisons on UN corpus data
 17. [17 Viroid Sketch Round Trip](generated/tutorials/17_viroid_sketch_round_trip.md) - BLAST DB export, sketching, and validation
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
 21. [21 Topological Assembly Optimization](generated/tutorials/21_tda_topological_assembly_optimization.md) - Betti numbers, filtrations, and topology-aware graph scoring
+22. [22 Momentum Fork Resolution](generated/tutorials/22_momentum_fork_resolution.md) - SPRT-based branch decisions for read-evidence forks
 
 ## Tutorial Gaps (TODO)
 

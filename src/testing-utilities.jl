@@ -50,6 +50,57 @@ function create_test_genome_fasta(; length::Int = 5386, seed::Int = 42)
 end
 
 """
+    Mycelia.create_test_fasta_records(count; moltype=:DNA, seed=42, length=100, id_prefix="test_record") -> Vector{FASTX.FASTA.Record}
+
+Create deterministic FASTA records for tests.
+
+This helper generates a small collection of FASTA records with stable sequence
+content and predictable identifiers, making it useful for tests that need
+multiple fixture records without touching the filesystem.
+
+# Arguments
+- `count::Integer`: Number of records to generate
+- `moltype::Symbol=:DNA`: Molecule type (`:DNA`, `:RNA`, or `:AA`)
+- `seed::Int=42`: Starting seed used to deterministically generate record sequences
+- `length::Int=100`: Sequence length for each generated record
+- `id_prefix::AbstractString="test_record"`: Prefix used for record identifiers
+
+# Returns
+- `Vector{FASTX.FASTA.Record}`: Deterministic FASTA records with identifiers like `"test_record_1"`
+
+# Errors
+- Throws `ArgumentError` when `count < 0` or `length < 0`
+
+# Example
+```julia
+records = Mycelia.create_test_fasta_records(3; length = 12, seed = 7, id_prefix = "fixture")
+
+FASTX.identifier.(records)
+# ["fixture_1", "fixture_2", "fixture_3"]
+```
+
+# See Also
+- [`Mycelia.random_fasta_record`](@ref): Generate a single deterministic FASTA record
+- [`Mycelia.create_test_genome_fasta`](@ref): Write a single test genome to disk
+"""
+function create_test_fasta_records(count::Integer;
+        moltype::Symbol = :DNA,
+        seed::Int = 42,
+        length::Int = 100,
+        id_prefix::AbstractString = "test_record")
+    count < 0 && throw(ArgumentError("count must be non-negative"))
+    length < 0 && throw(ArgumentError("length must be non-negative"))
+
+    records = FASTX.FASTA.Record[]
+    for index in 1:count
+        record = random_fasta_record(moltype = moltype, seed = seed + index - 1, L = length)
+        push!(records, FASTX.FASTA.Record("$(id_prefix)_$(index)", FASTX.sequence(record)))
+    end
+
+    return records
+end
+
+"""
     Mycelia.get_test_genome_fasta(;use_ncbi=true, accession="GCF_000819615.1", outdir=nothing, cleanup_at_exit=true) -> NamedTuple
 
 Get a FASTA file for testing, with automatic fallback to simulated genome.

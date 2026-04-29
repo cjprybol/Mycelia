@@ -275,6 +275,47 @@ Test.@testset "Reference Database Parsing" begin
         Test.@test_throws ErrorException Mycelia.download_sra_data("")
     end
 
+    Test.@testset "download_sra_data path resolution" begin
+        requested_outdir = "/tmp/sra-downloads"
+        resolved_outdir = joinpath(requested_outdir, "SRR1234567")
+
+        paired_result = Mycelia._download_sra_data_result(
+            "SRR1234567",
+            (
+                forward_reads = joinpath(resolved_outdir, "SRR1234567_1.fastq.gz"),
+                reverse_reads = joinpath(resolved_outdir, "SRR1234567_2.fastq.gz"),
+                unpaired_reads = missing
+            )
+        )
+        Test.@test paired_result.outdir == resolved_outdir
+        Test.@test paired_result.files == [
+            joinpath(resolved_outdir, "SRR1234567_1.fastq.gz"),
+            joinpath(resolved_outdir, "SRR1234567_2.fastq.gz")
+        ]
+        Test.@test paired_result.is_paired
+
+        single_result = Mycelia._download_sra_data_result(
+            "SRR7654321",
+            (
+                forward_reads = missing,
+                reverse_reads = missing,
+                unpaired_reads = joinpath(requested_outdir, "SRR7654321", "SRR7654321.fastq.gz")
+            )
+        )
+        Test.@test single_result.outdir == joinpath(requested_outdir, "SRR7654321")
+        Test.@test single_result.files == [joinpath(requested_outdir, "SRR7654321", "SRR7654321.fastq.gz")]
+        Test.@test !single_result.is_paired
+
+        Test.@test_throws ErrorException Mycelia._download_sra_data_result(
+            "SRR000001",
+            (
+                forward_reads = joinpath(resolved_outdir, "SRR000001_1.fastq.gz"),
+                reverse_reads = missing,
+                unpaired_reads = missing
+            )
+        )
+    end
+
     Test.@testset "prefetch_sra_runs error path" begin
         Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
     end

@@ -42,6 +42,7 @@ import ..Mycelia
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
 import DataStructures
+import DocStringExtensions
 import FASTX
 import Graphs
 import Kmers
@@ -69,6 +70,7 @@ include("algorithms/generation.jl")
 include("algorithms/metrics.jl")
 include("algorithms/error-correction.jl")
 include("algorithms/filtering.jl")
+include("algorithms/momentum-fork-resolution.jl")
 
 # Load analysis modules
 include("analysis/information-theory.jl")

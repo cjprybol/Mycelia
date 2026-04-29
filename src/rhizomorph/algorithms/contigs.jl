@@ -7,6 +7,18 @@
     ContigPath{T, S}
 
 Represents a linear path through the graph forming a contig.
+
+# Fields
+- `vertices::Vector{T}`: Ordered vertex labels in the contig
+- `sequence::S`: Reconstructed contig sequence
+- `coverage_profile::Vector{Float64}`: Per-vertex support profile
+- `length::Int`: Sequence length
+- `n50_contribution::Float64`: Reserved slot for downstream N50 calculations
+
+# Example
+```julia
+contigs = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=500)
+```
 """
 struct ContigPath{T, S}
     vertices::Vector{T}
@@ -26,6 +38,18 @@ end
 
 Extract linear contigs from the assembly graph. Returns contigs whose assembled
 sequence length is at least `min_contig_length`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to scan for linear contigs
+- `min_contig_length::Int=500`: Minimum reconstructed contig length to retain
+
+# Returns
+- `Vector{ContigPath}`: Contigs sorted by descending sequence length
+
+# Example
+```julia
+contigs = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1000)
+```
 """
 function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int = 500)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -61,7 +85,24 @@ function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::I
 end
 
 """
-Find a linear path through the graph starting from a vertex.
+    find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited::Set)
+
+Trace a maximal linear path extending forward and backward from `start_vertex`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to traverse
+- `start_vertex`: Seed vertex label
+- `visited::Set`: Vertices already assigned to earlier contigs
+
+# Returns
+- `Vector`: Ordered path of vertex labels, or an empty vector if `start_vertex`
+  has already been visited
+
+# Example
+```julia
+labels = collect(MetaGraphsNext.labels(graph))
+path = Mycelia.Rhizomorph.find_linear_path(graph, first(labels), Set())
+```
 """
 function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited::Set)
     if start_vertex in visited
@@ -177,7 +218,22 @@ function _edge_is_dominant_among_outgoing(graph, src, dst)
 end
 
 """
-Generate an assembled sequence for a contig path.
+    generate_contig_sequence(graph::MetaGraphsNext.MetaGraph, path::Vector)
+
+Reconstruct the contig sequence represented by `path`.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Source graph
+- `path::Vector`: Ordered path of vertex labels
+
+# Returns
+- Sequence object or `String`: Assembled sequence using graph-specific overlap rules
+
+# Example
+```julia
+contigs = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1)
+sequence = Mycelia.Rhizomorph.generate_contig_sequence(graph, first(contigs).vertices)
+```
 """
 function generate_contig_sequence(
         graph::MetaGraphsNext.MetaGraph{
@@ -223,7 +279,21 @@ function generate_contig_sequence(
 end
 
 """
-Generate coverage profile for a contig path based on evidence counts.
+    generate_coverage_profile(graph::MetaGraphsNext.MetaGraph, path::Vector)
+
+Compute a per-vertex coverage profile for a contig path.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Source graph
+- `path::Vector`: Ordered path of vertex labels
+
+# Returns
+- `Vector{Float64}`: Coverage estimate for each vertex in `path`
+
+# Example
+```julia
+profile = Mycelia.Rhizomorph.generate_coverage_profile(graph, path)
+```
 """
 function generate_coverage_profile(graph::MetaGraphsNext.MetaGraph, path::Vector)
     coverage = Float64[]
@@ -242,7 +312,20 @@ function generate_coverage_profile(graph::MetaGraphsNext.MetaGraph, path::Vector
 end
 
 """
-Sort contigs by sequence length (descending).
+    sort_contigs_by_length(contigs::Vector{ContigPath})
+
+Sort contigs by descending sequence length.
+
+# Arguments
+- `contigs::Vector{ContigPath}`: Contigs to sort
+
+# Returns
+- `Vector{ContigPath}`: Sorted contig collection
+
+# Example
+```julia
+sorted = Mycelia.Rhizomorph.sort_contigs_by_length(contigs)
+```
 """
 function sort_contigs_by_length(contigs::Vector{ContigPath})
     return sort(contigs, by = c -> c.length, rev = true)

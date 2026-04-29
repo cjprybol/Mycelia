@@ -7,7 +7,7 @@
 import LinearAlgebra
 
 """
-    compute_eigenvector_centrality(g; max_iter::Int=100, tol::Float64=1e-6)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Compute eigenvector centrality using power iteration.
 
@@ -21,6 +21,11 @@ For MetaGraphs, operates on the underlying `.graph` field.
 
 # Returns
 - `Vector{Float64}`: Centrality values per vertex (normalized)
+
+# Example
+```julia
+centrality = Mycelia.Rhizomorph.compute_eigenvector_centrality(graph; max_iter = 50)
+```
 """
 function compute_eigenvector_centrality(g; max_iter::Int = 100, tol::Float64 = 1e-6)
     graph = g isa MetaGraphsNext.MetaGraph ? g.graph : g
@@ -48,15 +53,23 @@ function compute_eigenvector_centrality(g; max_iter::Int = 100, tol::Float64 = 1
 end
 
 """
-    compute_modularity(g)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Compute modularity Q using connected components as communities.
 Q = (1/m) Σ_edges [δ(c_i, c_j) * (1 - k_i*k_j/(2m))]
 
 Works on both `Graphs.AbstractGraph` and `MetaGraphsNext.MetaGraph` objects.
 
+# Arguments
+- `g`: Graph (Graphs.jl `AbstractGraph` or `MetaGraphsNext.MetaGraph`).
+
 # Returns
 - `Tuple{Float64, Vector{Int}}`: (modularity Q, community labels per vertex)
+
+# Example
+```julia
+modularity, labels = Mycelia.Rhizomorph.compute_modularity(graph)
+```
 """
 function compute_modularity(g)
     graph = g isa MetaGraphsNext.MetaGraph ? g.graph : g
@@ -90,15 +103,24 @@ function compute_modularity(g)
 end
 
 """
-    compute_closeness_centrality(g; sample_size::Int=1000)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Compute closeness centrality: C(v) = (n-1) / Σ d(v, u).
 For large graphs, samples `sample_size` random vertices.
 
 Works on both `Graphs.AbstractGraph` and `MetaGraphsNext.MetaGraph` objects.
 
+# Arguments
+- `g`: Graph (Graphs.jl `AbstractGraph` or `MetaGraphsNext.MetaGraph`).
+- `sample_size::Int=1000`: Maximum number of vertices to sample when the graph is large.
+
 # Returns
 - `Vector{Float64}`: Closeness centrality per sampled vertex
+
+# Example
+```julia
+closeness = Mycelia.Rhizomorph.compute_closeness_centrality(graph; sample_size = 100)
+```
 """
 function compute_closeness_centrality(g; sample_size::Int = 1000)
     graph = g isa MetaGraphsNext.MetaGraph ? g.graph : g
@@ -122,7 +144,7 @@ function compute_closeness_centrality(g; sample_size::Int = 1000)
 end
 
 """
-    compute_betti_numbers(g)
+$(DocStringExtensions.TYPEDSIGNATURES)
 
 Compute Betti numbers for a graph:
 - β₀ = number of connected components
@@ -130,8 +152,16 @@ Compute Betti numbers for a graph:
 
 Works on both `Graphs.AbstractGraph` and `MetaGraphsNext.MetaGraph` objects.
 
+# Arguments
+- `g`: Graph (Graphs.jl `AbstractGraph` or `MetaGraphsNext.MetaGraph`).
+
 # Returns
 - `Tuple{Int, Int}`: (β₀, β₁)
+
+# Example
+```julia
+beta_0, beta_1 = Mycelia.Rhizomorph.compute_betti_numbers(graph)
+```
 """
 function compute_betti_numbers(g)
     graph = g isa MetaGraphsNext.MetaGraph ? g.graph : g
