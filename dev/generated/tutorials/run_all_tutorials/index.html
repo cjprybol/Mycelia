@@ -12,11 +12,7 @@ if isinteractive()
 end
 
 import Dates
-
-const LITERATE_AVAILABLE = Base.find_package(&quot;Literate&quot;) !== nothing
-if LITERATE_AVAILABLE
-    import Literate
-end</code></pre><p>List of all tutorials in execution order</p><pre><code class="language-julia hljs">TUTORIALS = [
+import Literate</code></pre><p>List of all tutorials in execution order</p><pre><code class="language-julia hljs">TUTORIALS = [
     &quot;01_data_acquisition.jl&quot;,
     &quot;02_quality_control.jl&quot;,
     &quot;03_kmer_analysis.jl&quot;,
@@ -121,10 +117,6 @@ Convert all tutorials to Jupyter notebooks using Literate.jl.
 function convert_all_to_notebooks()
     println(&quot;=== Converting Tutorials to Notebooks ===&quot;)
 
-    if !LITERATE_AVAILABLE
-        error(&quot;Literate is not available in the active environment; use --project=docs or install Literate&quot;)
-    end
-
     # Create notebooks directory if it doesn&#39;t exist
     notebooks_dir = joinpath(@__DIR__, &quot;notebooks&quot;)
     if !isdir(notebooks_dir)
@@ -196,4 +188,4 @@ end</code></pre><p>Main execution</p><pre><code class="language-julia hljs">if a
         tutorial_name = ARGS[1]
         run_tutorial(tutorial_name)
     end
-end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../conceptual_figures/">« Conceptual Figures</a><a class="docs-footer-nextpage" href="../../../api/all-functions/">Complete API Surface »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 29 April 2026 17:49">Wednesday 29 April 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../conceptual_figures/">« Conceptual Figures</a><a class="docs-footer-nextpage" href="../../../api/all-functions/">Complete API Surface »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Wednesday 29 April 2026 17:50">Wednesday 29 April 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
