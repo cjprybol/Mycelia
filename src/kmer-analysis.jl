@@ -95,8 +95,8 @@ function load_kmer_results(filename::AbstractString)
             elseif loaded_alphabet isa AbstractString
                 try
                     metadata["alphabet"] = Symbol(loaded_alphabet)
-                catch
-                    @warn "Could not convert loaded alphabet '$loaded_alphabet' back to Symbol. Storing raw metadata value."
+                catch err
+                    @warn "Could not convert loaded alphabet '$loaded_alphabet' back to Symbol. Storing raw metadata value." exception=err
                     metadata["alphabet"] = loaded_alphabet
                 end
             else
@@ -2154,18 +2154,26 @@ function fasta_list_to_dense_kmer_counts(;
             end
         catch e
             @views fill!(kmer_counts_matrix[:, col], zero(ValType))
-            Base.lock(lock)
+            if use_threading
+                Base.lock(lock)
+            end
             try
                 push!(error_log, (orig_idx, sprint(showerror, e)))
             finally
-                Base.unlock(lock)
+                if use_threading
+                    Base.unlock(lock)
+                end
             end
         end
-        Base.lock(lock)
+        if use_threading
+            Base.lock(lock)
+        end
         try
             ProgressMeter.next!(progress2)
         finally
-            Base.unlock(lock)
+            if use_threading
+                Base.unlock(lock)
+            end
         end
     end
 
