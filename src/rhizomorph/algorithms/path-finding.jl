@@ -915,6 +915,9 @@ function _viterbi_decode_next_impl(
         diagnostics[:reason] = :target_not_found
         return ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
+    if target_vertex !== nothing && start_vertex == target_vertex
+        diagnostics[:reached_target] = true
+    end
 
     start_state = (start_vertex, _normalize_strand(start_strand))
     active_scores = Dict{Tuple{T, StrandOrientation}, Float64}(start_state => 0.0)
