@@ -88,9 +88,10 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
 ])
 
 # Helper function to include all test files in a directory
-function include_all_tests(dir)
+function include_all_tests(dir; required_files = String[])
     test_count = 0
     skipped_count = 0
+    included_files = Set{String}()
     for (root, dirs, files) in walkdir(dir)
         if occursin(".ipynb_checkpoints", root)
             continue
@@ -106,9 +107,17 @@ function include_all_tests(dir)
                     end
                 end
                 include(joinpath(root, file))
+                push!(included_files, relpath(joinpath(root, file), @__DIR__))
                 test_count += 1
             end
         end
+    end
+    missing_required_files = setdiff(required_files, included_files)
+    if !isempty(missing_required_files)
+        error(
+            "Required test file(s) not included: " *
+            join(sort(collect(missing_required_files)), ", ")
+        )
     end
     if skipped_count > 0 && !MYCELIA_RUN_EXTERNAL
         @info "Skipped $skipped_count test file(s) with external dependencies in $(basename(dir)). Set MYCELIA_RUN_EXTERNAL=true to include."
@@ -277,7 +286,10 @@ include_all_tests(joinpath(@__DIR__, "6_annotation"))
 # end
 
 # Stage 7 (comparative/pangenomics): lightweight, synthetic-only suites by default.
-include_all_tests(joinpath(@__DIR__, "7_comparative_pangenomics"))
+include_all_tests(
+    joinpath(@__DIR__, "7_comparative_pangenomics");
+    required_files = ["7_comparative_pangenomics/pangenome_kmer_fdr.jl"]
+)
 # for file in (
 #     "7_comparative_pangenomics/blastdb_integration.jl",
 #     "7_comparative_pangenomics/comparative_analyses.jl",
