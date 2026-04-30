@@ -304,7 +304,13 @@ function _per_genome_kmer_set(
         cache_path = Base.Filesystem.joinpath(
             cache_dir, "$(Base.basename(file)).k$K.kmerset.jld2")
         if Base.Filesystem.isfile(cache_path)
-            return JLD2.load(cache_path, "kmerset")::Set{kmer_type}
+            # JLD2 deserializes kmers with their concrete storage-tuple
+            # parameter (`Kmer{Alphabet,K,N}`), which is a strict subtype of
+            # the UnionAll `kmer_type` (`Kmer{Alphabet,K}`). `Set` is
+            # invariant, so an `::Set{kmer_type}` assertion would falsely
+            # reject the cached value. Return whatever JLD2 gives back —
+            # downstream only iterates / membership-tests it.
+            return JLD2.load(cache_path, "kmerset")
         end
         s = Set(keys(count_canonical_kmers(kmer_type, file)))
         JLD2.jldsave(cache_path; kmerset = s)
@@ -341,10 +347,14 @@ function _resolve_cache(cache, subject_files, reference_files, kmer_type)
     cache isa AbstractString && return String(cache)
     cache === :auto ||
         error("`cache` must be :auto, :memory, or a directory path; got $(cache)")
-    bytes_per_kmer = 8 + sizeof(kmer_type)  # rough Set entry overhead
-    # Estimate kmer count as 1.5 × FASTA bytes (canonical kmer ≈ unique within genome).
+    # `sizeof(kmer_type)` fails on UnionAlls like `Kmers.DNAKmer{K}` (the
+    # storage tuple parameter is left free), so derive from K instead:
+    # 2-bit alphabet packs 4 bases/byte; +16 for Set entry bookkeeping.
+    K = _kmer_length(kmer_type)
+    bytes_per_kmer = max(8, cld(K, 4) + 16)
+    # Estimate kmer count as ~1× FASTA bytes (canonical kmer ≈ unique within genome).
     total_bytes = sum(Base.Filesystem.filesize, vcat(subject_files, reference_files))
-    estimated_peak = bytes_per_kmer * (total_bytes ÷ 1)  # very rough upper bound
+    estimated_peak = bytes_per_kmer * total_bytes  # very rough upper bound
     free_mem = Sys.free_memory()
     if estimated_peak < (free_mem ÷ 2)
         return nothing
