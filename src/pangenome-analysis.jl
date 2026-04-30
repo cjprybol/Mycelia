@@ -326,6 +326,75 @@ function _per_genome_kmer_set(
     return Set(keys(count_canonical_kmers(kmer_type, file)))
 end
 
+"""
+    _build_reference_union(reference_files, kmer_type, cache_dir, progress) -> Set
+
+Build the union of canonical k-mer sets across `reference_files`. When
+`Threads.nthreads() > 1`, chunks files across threads, builds per-thread
+partial unions, then tree-reduces pairwise. Falls back to a serial loop when
+single-threaded. Both paths produce identical results — set union is
+commutative + associative — so test parity is preserved.
+"""
+function _build_reference_union(reference_files, kmer_type, cache_dir, progress)
+    n = length(reference_files)
+    nt = Threads.nthreads()
+    if nt == 1 || n < 4
+        # Serial fallback (also used for trivially small reference panels).
+        u = Set{kmer_type}()
+        for (i, ref) in enumerate(reference_files)
+            union!(u, _per_genome_kmer_set(ref, kmer_type, cache_dir))
+            progress && (i % 50 == 0 || i == n) &&
+                println("  ref $i/$n  |union| = $(length(u))")
+        end
+        return u
+    end
+    # Parallel path: each thread owns a strided slice of references and
+    # accumulates a local Set. Striding (i:nt:n) keeps load balanced when
+    # individual files have skewed processing cost.
+    nchunks = min(nt, n)
+    partials = Vector{Set{kmer_type}}(undef, nchunks)
+    counters = Threads.Atomic{Int}.(zeros(Int, nchunks))
+    progress_lock = ReentrantLock()
+    Threads.@threads for t in 1:nchunks
+        local_union = Set{kmer_type}()
+        my_indices = t:nchunks:n
+        for (j, idx) in enumerate(my_indices)
+            ref = reference_files[idx]
+            union!(local_union, _per_genome_kmer_set(ref, kmer_type, cache_dir))
+            Threads.atomic_add!(counters[t], 1)
+            if progress && j % 25 == 0
+                lock(progress_lock) do
+                    total_done = sum(c -> c[], counters)
+                    println("  ref ~$total_done/$n (thread $t local |union|=$(length(local_union)))")
+                end
+            end
+        end
+        partials[t] = local_union
+    end
+    progress &&
+        println("  parallel extraction complete; tree-reducing $nchunks partial unions...")
+    # Pairwise tree-reduce (in-place into the larger of each pair to minimize
+    # rehashing).
+    while length(partials) > 1
+        new_partials = Vector{Set{kmer_type}}()
+        for i in 1:2:length(partials)
+            if i + 1 > length(partials)
+                push!(new_partials, partials[i])
+            else
+                a, b = partials[i], partials[i + 1]
+                if length(b) > length(a)
+                    ;
+                    a, b = b, a;
+                end
+                union!(a, b)
+                push!(new_partials, a)
+            end
+        end
+        partials = new_partials
+    end
+    return partials[1]
+end
+
 # Extract K from `Kmers.DNAKmer{K}` (alias for `Kmers.Kmer{Alphabet,K,_}`).
 # Note: `Kmers.DNAKmer{5}` is a UnionAll because the third internal type
 # parameter (packed-storage tuple) is left free; unwrap to the inner body
@@ -464,16 +533,14 @@ function pangenome_kmer_fdr(
                                                     cache_dir)
 
     # 1) Build reference union (always exact during build; switch storage
-    #    type only after we know its capacity).
+    #    type only after we know its capacity). When Threads.nthreads() > 1,
+    #    chunk the references across threads, build per-thread partial unions
+    #    in parallel, then tree-reduce. Per-genome JLD2 cache reads + FASTA
+    #    extraction are CPU-bound and parallelize cleanly. Falls back to
+    #    serial accumulation when single-threaded.
     progress &&
-        println("Building reference union over $(length(reference_files)) genome(s)...")
-    ref_union_set = Set{kmer_type}()
-    for (i, ref) in enumerate(reference_files)
-        s = _per_genome_kmer_set(ref, kmer_type, cache_dir)
-        union!(ref_union_set, s)
-        progress && (i % 50 == 0 || i == length(reference_files)) &&
-            println("  ref $i/$(length(reference_files))  |union| = $(length(ref_union_set))")
-    end
+        println("Building reference union over $(length(reference_files)) genome(s) with $(Threads.nthreads()) thread(s)...")
+    ref_union_set = _build_reference_union(reference_files, kmer_type, cache_dir, progress)
     reference_union_size = length(ref_union_set)
 
     membership_kind,
