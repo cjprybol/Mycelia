@@ -241,8 +241,15 @@ function BloomKmerMembership{K}(;
     return BloomKmerMembership{K}(falses(m), k, 0, capacity, target_fpr)
 end
 function _bloom_indices(m::BloomKmerMembership, kmer)
-    h1 = hash(kmer, UInt(0x9E3779B97F4A7C15))
-    h2 = hash(kmer, UInt(0xBF58476D1CE4E5B9))
+    # Kirsch-Mitzenmacher 2006: derive h1, h2 from a SINGLE 64-bit hash by
+    # splitting hi / lo halves, then index_i = h1 + i*h2 mod n. Splitting
+    # one hash is provably independent in the asymptotic FPR sense and
+    # avoids the failure mode where two `hash(kmer, seed)` calls with
+    # different seeds produce correlated outputs (observed for
+    # BioSequences.Kmer keys: actual FPR was 2.5x-48x the target).
+    h = hash(kmer)
+    h1 = h & 0xFFFFFFFF              # low 32 bits
+    h2 = (h >> 32) & 0xFFFFFFFF      # high 32 bits
     n = length(m.bits)
     return ((mod(h1 + UInt(i) * h2, n) + 1) for i in 0:(m.n_hashes - 1))
 end

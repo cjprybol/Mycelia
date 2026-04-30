@@ -414,3 +414,53 @@ Test.@testset "pangenome_kmer_fdr — multi-reference union" begin
 end
 
 println("pangenome_kmer_fdr tests: all assertions passed")
+
+# ---------------------------------------------------------------------------
+# Bloom FPR characterization — empirical convergence to configured target
+# ---------------------------------------------------------------------------
+
+Test.@testset "BloomKmerMembership FPR convergence" begin
+    rng = StableRNGs.StableRNG(0xb100f)
+    kmer_type = Kmers.DNAKmer{21}
+    kmer_length = 21
+    n_inserted = 10_000
+    n_queries = 100_000
+    alphabet = ('A', 'C', 'G', 'T')
+
+    random_kmers = function (n; excluded = nothing)
+        kmers = Set{kmer_type}()
+        while length(kmers) < n
+            kmer = kmer_type(join(rand(rng, alphabet, kmer_length)))
+            if excluded === nothing || !(kmer in excluded)
+                push!(kmers, kmer)
+            end
+        end
+        return kmers
+    end
+
+    println("BloomKmerMembership empirical FPR:")
+    println("target_fpr\tobserved_fpr\tratio")
+
+    for target_fpr in (0.01, 0.001, 0.0001)
+        bloom = Mycelia.BloomKmerMembership{kmer_type}(
+            capacity = n_inserted,
+            target_fpr = target_fpr
+        )
+
+        inserted_kmers = random_kmers(n_inserted)
+        foreach(kmer -> push!(bloom, kmer), inserted_kmers)
+
+        query_kmers = random_kmers(n_queries; excluded = inserted_kmers)
+        Test.@test isempty(intersect(inserted_kmers, query_kmers))
+        Test.@test all(kmer -> kmer in bloom, inserted_kmers)
+
+        false_positives = count(kmer -> kmer in bloom, query_kmers)
+        observed_fpr = false_positives / n_queries
+        ratio = observed_fpr / target_fpr
+
+        println(
+            "$(target_fpr)\t$(observed_fpr)\t$(round(ratio; sigdigits = 4))")
+        Test.@test observed_fpr <= 1.5 * target_fpr
+        Test.@test observed_fpr >= 0.3 * target_fpr
+    end
+end
