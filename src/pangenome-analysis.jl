@@ -177,6 +177,371 @@ function analyze_pangenome_kmers(genome_files::Vector{String};
     )
 end
 
+# =============================================================================
+# Streaming pangenome k-mer FDR
+#
+# `analyze_pangenome_kmers` materializes a `BitMatrix(n_observed, n_genomes)`
+# to compute presence/absence after sparse counting. That step's RAM peak
+# scales with the observed-kmer set, which can balloon at high k where most
+# kmers are near-singleton across distinct strains. For the common
+# "what fraction of each subject genome's kmers also appear in this
+# reference panel?" question the full presence/absence matrix is unnecessary
+# — we only need set intersections against a single reference union.
+#
+# `pangenome_kmer_fdr` answers that narrower question with bounded memory:
+# peak ≈ |reference_union| + max(|single subject k-mer set|).
+# The dense path remains for callers that genuinely need the BitMatrix or
+# unique-per-genome enumeration.
+# =============================================================================
+
+"""
+    KmerMembership{K}
+
+Abstract membership-test container for canonical k-mers.
+Implementations must support:
+  Base.in(kmer, m)        -> Bool
+  Base.push!(m, kmer)     -> m
+  Base.union!(m, kmers)   -> m
+  Base.length(m)          -> Int   (cardinality; estimate for probabilistic impls)
+
+Two concrete implementations ship today:
+  - `ExactKmerMembership` (Set-backed; deterministic; default)
+  - `BloomKmerMembership`  (probabilistic; opt-in for very large pangenomes;
+    documented FPR adds a small upper-bound bias to reported FDRs)
+"""
+abstract type KmerMembership{K} end
+
+struct ExactKmerMembership{K} <: KmerMembership{K}
+    data::Set{K}
+end
+ExactKmerMembership{K}() where {K} = ExactKmerMembership{K}(Set{K}())
+Base.in(kmer, m::ExactKmerMembership) = kmer in m.data
+Base.push!(m::ExactKmerMembership, kmer) = (push!(m.data, kmer); m)
+Base.union!(m::ExactKmerMembership, kmers) = (union!(m.data, kmers); m)
+Base.length(m::ExactKmerMembership) = length(m.data)
+
+"""
+Probabilistic membership using k independent hash slices over a BitVector.
+False-positive rate is configurable; false negatives never occur. The
+caller is responsible for supplying a capacity estimate so we can size the
+bit array correctly.
+"""
+mutable struct BloomKmerMembership{K} <: KmerMembership{K}
+    bits::BitVector
+    n_hashes::Int
+    n_inserted::Int
+    capacity::Int
+    target_fpr::Float64
+end
+function BloomKmerMembership{K}(;
+        capacity::Int, target_fpr::Float64 = 0.01) where {K}
+    # Optimal Bloom sizing: m = -n*ln(p)/(ln 2)^2; k = (m/n)*ln 2.
+    m = max(64, ceil(Int, -capacity * log(target_fpr) / (log(2)^2)))
+    k = max(1, round(Int, (m / capacity) * log(2)))
+    return BloomKmerMembership{K}(falses(m), k, 0, capacity, target_fpr)
+end
+function _bloom_indices(m::BloomKmerMembership, kmer)
+    h1 = hash(kmer, UInt(0x9E3779B97F4A7C15))
+    h2 = hash(kmer, UInt(0xBF58476D1CE4E5B9))
+    n = length(m.bits)
+    return ((mod(h1 + UInt(i) * h2, n) + 1) for i in 0:(m.n_hashes - 1))
+end
+function Base.in(kmer, m::BloomKmerMembership)
+    @inbounds for idx in _bloom_indices(m, kmer)
+        m.bits[idx] || return false
+    end
+    return true
+end
+function Base.push!(m::BloomKmerMembership, kmer)
+    novel = false
+    @inbounds for idx in _bloom_indices(m, kmer)
+        if !m.bits[idx]
+            ;
+            m.bits[idx] = true;
+            novel = true;
+        end
+    end
+    novel && (m.n_inserted += 1)
+    return m
+end
+Base.union!(m::BloomKmerMembership, kmers) = (foreach(k -> push!(m, k), kmers); m)
+Base.length(m::BloomKmerMembership) = m.n_inserted
+
+"""
+    PangenomeKmerFDRResult
+
+Per-subject (or per-group, when the `groups` kwarg is set) k-mer FDR vs
+a reference union. `subject_names` is either genome basenames or group
+labels, depending on the call.
+"""
+struct PangenomeKmerFDRResult
+    subject_names::Vector{String}
+    n_kmers::Vector{Int}
+    n_shared::Vector{Int}
+    fdr::Vector{Float64}
+    reference_union_size::Int
+    kmer_type::Type
+    membership::Symbol      # :exact or :bloom (resolved value)
+    cache_dir::Union{Nothing, String}
+    elapsed_seconds::Float64
+end
+
+"""
+    _per_genome_kmer_set(file, kmer_type, cache_dir)
+
+Sparse per-genome canonical k-mer set extraction with optional JLD2 cache.
+Cache key includes `K`, so different k values do not collide.
+
+Shared by `analyze_pangenome_kmers` (dense path; refactor opportunity) and
+`pangenome_kmer_fdr` (streaming path).
+"""
+function _per_genome_kmer_set(
+        file::AbstractString, kmer_type::Type,
+        cache_dir::Union{Nothing, AbstractString})
+    K = _kmer_length(kmer_type)
+    if !isnothing(cache_dir)
+        Base.Filesystem.mkpath(cache_dir)
+        cache_path = Base.Filesystem.joinpath(
+            cache_dir, "$(Base.basename(file)).k$K.kmerset.jld2")
+        if Base.Filesystem.isfile(cache_path)
+            return JLD2.load(cache_path, "kmerset")::Set{kmer_type}
+        end
+        s = Set(keys(count_canonical_kmers(kmer_type, file)))
+        JLD2.jldsave(cache_path; kmerset = s)
+        return s
+    end
+    return Set(keys(count_canonical_kmers(kmer_type, file)))
+end
+
+# Extract K from `Kmers.DNAKmer{K}` (alias for `Kmers.Kmer{Alphabet,K,_}`).
+# Note: `Kmers.DNAKmer{5}` is a UnionAll because the third internal type
+# parameter (packed-storage tuple) is left free; unwrap to the inner body
+# before scanning parameters for the Integer K.
+function _kmer_length(::Type{T}) where {T}
+    cur = T
+    while cur isa UnionAll
+        cur = cur.body
+    end
+    for p in cur.parameters
+        p isa Integer && return Int(p)
+    end
+    error("cannot infer K from $T")
+end
+
+"""
+    _resolve_cache(cache, subject_files, reference_files, kmer_type)
+
+Resolve the `cache` kwarg to a concrete directory (or `nothing` for RAM).
+`:auto` heuristic: if estimated peak in-RAM kmer-set size is < 50% of free
+memory, use RAM; else create `mktempdir()`. A user-supplied path is used
+verbatim. `:memory` forces RAM.
+"""
+function _resolve_cache(cache, subject_files, reference_files, kmer_type)
+    cache === :memory && return nothing
+    cache isa AbstractString && return String(cache)
+    cache === :auto ||
+        error("`cache` must be :auto, :memory, or a directory path; got $(cache)")
+    bytes_per_kmer = 8 + sizeof(kmer_type)  # rough Set entry overhead
+    # Estimate kmer count as 1.5 × FASTA bytes (canonical kmer ≈ unique within genome).
+    total_bytes = sum(Base.Filesystem.filesize, vcat(subject_files, reference_files))
+    estimated_peak = bytes_per_kmer * (total_bytes ÷ 1)  # very rough upper bound
+    free_mem = Sys.free_memory()
+    if estimated_peak < (free_mem ÷ 2)
+        return nothing
+    end
+    return Base.Filesystem.mktempdir(prefix = "pangenome_kmer_fdr_")
+end
+
+"""
+    _resolve_membership(membership_type, capacity_estimate, kmer_type, bloom_fpr)
+
+Resolve `membership_type` to a concrete `KmerMembership` constructor.
+`:auto`: exact when reference union is < 4 GB; else bloom.
+`:exact`: forced exact.
+`:bloom`: forced bloom (requires `capacity_estimate`).
+"""
+function _resolve_membership(
+        membership_type, capacity_estimate, kmer_type, bloom_fpr)
+    # Approximate per-kmer Set entry size in bytes. 2-bit alphabets (DNA/RNA)
+    # pack 4 bases/byte; we add Set bookkeeping overhead. `sizeof(kmer_type)`
+    # cannot be called on a UnionAll like `Kmers.DNAKmer{K}` (the storage
+    # tuple parameter is left free), so derive from K instead.
+    K = _kmer_length(kmer_type)
+    bytes_per_kmer = max(8, cld(K, 4) + 16)
+    if membership_type === :exact ||
+       (membership_type === :auto &&
+        capacity_estimate * bytes_per_kmer < 4 * 2^30)
+        return (:exact, ExactKmerMembership{kmer_type}())
+    elseif membership_type === :bloom || membership_type === :auto
+        return (:bloom,
+            BloomKmerMembership{kmer_type}(
+                capacity = max(1, capacity_estimate), target_fpr = bloom_fpr))
+    else
+        error("`membership_type` must be :auto, :exact, or :bloom; got $(membership_type)")
+    end
+end
+
+"""
+    pangenome_kmer_fdr(subject_files, reference_files; kwargs...)
+
+Streaming per-subject (or per-group) FDR vs a reference union of k-mers.
+Memory bounded by `|reference union| + max(|single subject set|)` —
+does NOT build the dense `(n_kmers × n_genomes)` presence/absence matrix
+that `analyze_pangenome_kmers` uses.
+
+# Arguments
+- `subject_files`: vector of FASTA paths whose k-mers we are testing.
+- `reference_files`: vector of FASTA paths whose union forms the
+  reference set the subjects are compared against.
+
+# Keyword arguments
+- `kmer_type = Kmers.DNAKmer{21}`: canonical k-mer type.
+- `groups = nothing`: when a `Dict{filename, label}` is supplied, subjects
+  sharing a label are unioned and a single FDR row is emitted per label
+  (per-cluster pangenome FDR). When `nothing`, one row per subject.
+- `cache = :auto`: `:auto` picks RAM vs disk based on free memory;
+  `:memory` forces RAM; a path is used as a per-genome JLD2 cache dir
+  (cache keys include K so multiple K runs share extracted sets).
+- `membership_type = :auto`: `:auto` picks exact for < 4 GB unions, else
+  bloom; `:exact` forces deterministic Set-backed; `:bloom` opts into
+  probabilistic membership for very large pangenomes.
+- `bloom_fpr = 0.01`: Bloom target false-positive rate (only used when
+  bloom is selected). Reported FDR is then a slight upper bound by
+  approximately `bloom_fpr` for kmers genuinely absent from the reference.
+- `progress = true`: print per-genome progress lines.
+- `reproducibility_check = false`: when `true` and ≤ 10 subjects, runs
+  both this function and `analyze_pangenome_kmers` and asserts agreement
+  to 1e-12. Off by default to keep production runs fast.
+
+# Example
+```julia
+result = Mycelia.pangenome_kmer_fdr(
+    cstrain_fastas, public_ecoli_fastas;
+    kmer_type = Kmers.DNAKmer{31},
+    cache = mktempdir(),
+)
+println("Per-strain FDR median: ", Statistics.median(result.fdr))
+```
+"""
+function pangenome_kmer_fdr(
+        subject_files::AbstractVector{<:AbstractString},
+        reference_files::AbstractVector{<:AbstractString};
+        kmer_type::Type = Kmers.DNAKmer{21},
+        groups::Union{Nothing, AbstractDict} = nothing,
+        cache = :auto,
+        membership_type::Symbol = :auto,
+        bloom_fpr::Float64 = 0.01,
+        progress::Bool = true,
+        reproducibility_check::Bool = false
+)::PangenomeKmerFDRResult
+    isempty(subject_files) && error("no subject_files supplied")
+    isempty(reference_files) && error("no reference_files supplied")
+    for f in vcat(subject_files, reference_files)
+        Base.Filesystem.isfile(f) || error("file not found: $f")
+    end
+
+    t0 = time()
+    cache_dir = _resolve_cache(cache, subject_files, reference_files, kmer_type)
+    progress &&
+        println("pangenome_kmer_fdr: cache_dir = ", isnothing(cache_dir) ? ":memory" :
+                                                    cache_dir)
+
+    # 1) Build reference union (always exact during build; switch storage
+    #    type only after we know its capacity).
+    progress &&
+        println("Building reference union over $(length(reference_files)) genome(s)...")
+    ref_union_set = Set{kmer_type}()
+    for (i, ref) in enumerate(reference_files)
+        s = _per_genome_kmer_set(ref, kmer_type, cache_dir)
+        union!(ref_union_set, s)
+        progress && (i % 50 == 0 || i == length(reference_files)) &&
+            println("  ref $i/$(length(reference_files))  |union| = $(length(ref_union_set))")
+    end
+    reference_union_size = length(ref_union_set)
+
+    membership_kind,
+    membership = _resolve_membership(
+        membership_type, reference_union_size, kmer_type, bloom_fpr)
+    if membership_kind === :exact
+        # Reuse the set we already built; no extra allocation.
+        membership = ExactKmerMembership{kmer_type}(ref_union_set)
+    else
+        union!(membership, ref_union_set)
+        ref_union_set = Set{kmer_type}()  # release backing memory
+    end
+    progress &&
+        println("Reference membership: $(membership_kind), |U| = $(length(membership))")
+
+    # 2) Stream subjects (or grouped subjects) and tally intersections.
+    if groups === nothing
+        subject_names = [Base.basename(f) for f in subject_files]
+        n_kmers = Vector{Int}(undef, length(subject_files))
+        n_shared = Vector{Int}(undef, length(subject_files))
+        for (i, file) in enumerate(subject_files)
+            s = _per_genome_kmer_set(file, kmer_type, cache_dir)
+            n_kmers[i] = length(s)
+            n_shared[i] = count(in(membership), s)
+            progress && (i % 50 == 0 || i == length(subject_files)) &&
+                println("  subj $i/$(length(subject_files))  |s|=$(n_kmers[i])  shared=$(n_shared[i])")
+        end
+    else
+        # Group → union of member kmer sets → FDR vs reference union.
+        # Subjects keyed by basename so callers can build groups against
+        # full paths or basenames interchangeably.
+        labels = sort(unique(values(groups)))
+        subject_names = String.(labels)
+        n_kmers = zeros(Int, length(labels))
+        n_shared = zeros(Int, length(labels))
+        label_to_idx = Dict(lab => i for (i, lab) in enumerate(labels))
+        # Build per-label kmer unions one label at a time to bound memory.
+        for (li, lab) in enumerate(labels)
+            members = filter(
+                f -> get(groups, f, get(groups, Base.basename(f), nothing)) == lab,
+                subject_files)
+            grp_set = Set{kmer_type}()
+            for f in members
+                union!(grp_set, _per_genome_kmer_set(f, kmer_type, cache_dir))
+            end
+            n_kmers[li] = length(grp_set)
+            n_shared[li] = count(in(membership), grp_set)
+            progress &&
+                println("  group $li/$(length(labels)) ($(lab)): |U|=$(n_kmers[li])  shared=$(n_shared[li])")
+        end
+    end
+
+    fdr = [n_kmers[i] == 0 ? 0.0 : n_shared[i] / n_kmers[i]
+           for i in eachindex(n_kmers)]
+
+    elapsed = time() - t0
+    result = PangenomeKmerFDRResult(
+        subject_names, n_kmers, n_shared, fdr,
+        reference_union_size, kmer_type, membership_kind,
+        cache_dir, elapsed
+    )
+
+    if reproducibility_check && length(subject_files) <= 10 && groups === nothing
+        progress &&
+            println("reproducibility_check: comparing against analyze_pangenome_kmers...")
+        dense = analyze_pangenome_kmers(
+            vcat(subject_files, reference_files); kmer_type = kmer_type)
+        ref_set = Set{kmer_type}()
+        for ref in reference_files
+            union!(ref_set, keys(dense.kmer_counts_by_genome[Base.basename(ref)]))
+        end
+        for (i, file) in enumerate(subject_files)
+            kset = Set(keys(dense.kmer_counts_by_genome[Base.basename(file)]))
+            expected = isempty(kset) ? 0.0 :
+                       count(k -> k in ref_set, kset) / length(kset)
+            @assert isapprox(result.fdr[i], expected; atol = 1e-12) (
+                "reproducibility check failed for $(Base.basename(file)): " *
+                "streaming=$(result.fdr[i]) dense=$expected")
+        end
+        progress && println("reproducibility_check: PASS")
+    end
+
+    return result
+end
+
 """
     compare_genome_kmer_similarity(genome1_file::String, genome2_file::String; kmer_type=Kmers.DNAKmer{21}, metric=:js_divergence)
 
@@ -375,15 +740,17 @@ function construct_pangenome_pggb(genome_files::Vector{String}, output_dir::Stri
     if executor !== nothing
         add_bioconda_env("pggb")
         quoted_inputs = join(["\"$(file)\"" for file in genome_files], " ")
-        script = join([
-            "set -euo pipefail",
-            "mkdir -p \"$(output_dir)\"",
-            "cat $(quoted_inputs) > \"$(joint_fasta)\"",
-            "if [ ! -f \"$(joint_fasta).fai\" ]; then",
-            "  $(CONDA_RUNNER) run --live-stream -n pggb samtools faidx \"$(joint_fasta)\"",
-            "fi",
-            Mycelia.command_string(cmd)
-        ], "\n")
+        script = join(
+            [
+                "set -euo pipefail",
+                "mkdir -p \"$(output_dir)\"",
+                "cat $(quoted_inputs) > \"$(joint_fasta)\"",
+                "if [ ! -f \"$(joint_fasta).fai\" ]; then",
+                "  $(CONDA_RUNNER) run --live-stream -n pggb samtools faidx \"$(joint_fasta)\"",
+                "fi",
+                Mycelia.command_string(cmd)
+            ],
+            "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -615,11 +982,13 @@ function construct_pangenome_cactus(
     log_file = joinpath(output_dir, "cactus.log")
 
     if executor !== nothing
-        script = join([
-            "set -euo pipefail",
-            "mkdir -p \"$(output_dir)\"",
-            "$(Mycelia.command_string(cmd)) > \"$(log_file)\" 2>&1"
-        ], "\n")
+        script = join(
+            [
+                "set -euo pipefail",
+                "mkdir -p \"$(output_dir)\"",
+                "$(Mycelia.command_string(cmd)) > \"$(log_file)\" 2>&1"
+            ],
+            "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
