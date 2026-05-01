@@ -557,16 +557,27 @@ function pangenome_kmer_fdr(
         println("Reference membership: $(membership_kind), |U| = $(length(membership))")
 
     # 2) Stream subjects (or grouped subjects) and tally intersections.
+    # Per-subject FDR is embarrassingly parallel: each subject's `count(in(membership), s)`
+    # only reads `membership` (no mutation) and writes to its own pre-allocated
+    # index in `n_kmers` / `n_shared`. Threads.@threads gives ~Nthread speedup
+    # when Nthread > 1; falls back to serial when Nthread == 1.
     if groups === nothing
         subject_names = [Base.basename(f) for f in subject_files]
         n_kmers = Vector{Int}(undef, length(subject_files))
         n_shared = Vector{Int}(undef, length(subject_files))
-        for (i, file) in enumerate(subject_files)
+        progress_lock = ReentrantLock()
+        progress_counter = Threads.Atomic{Int}(0)
+        Threads.@threads for i in eachindex(subject_files)
+            file = subject_files[i]
             s = _per_genome_kmer_set(file, kmer_type, cache_dir)
             n_kmers[i] = length(s)
             n_shared[i] = count(in(membership), s)
-            progress && (i % 50 == 0 || i == length(subject_files)) &&
-                println("  subj $i/$(length(subject_files))  |s|=$(n_kmers[i])  shared=$(n_shared[i])")
+            done = Threads.atomic_add!(progress_counter, 1) + 1
+            if progress && (done % 50 == 0 || done == length(subject_files))
+                lock(progress_lock) do
+                    println("  subj $done/$(length(subject_files))  |s|=$(n_kmers[i])  shared=$(n_shared[i])")
+                end
+            end
         end
     else
         # Group → union of member kmer sets → FDR vs reference union.
@@ -576,9 +587,13 @@ function pangenome_kmer_fdr(
         subject_names = String.(labels)
         n_kmers = zeros(Int, length(labels))
         n_shared = zeros(Int, length(labels))
-        label_to_idx = Dict(lab => i for (i, lab) in enumerate(labels))
-        # Build per-label kmer unions one label at a time to bound memory.
-        for (li, lab) in enumerate(labels)
+        # Per-group FDR is independent across labels; parallelize across labels.
+        # Each thread builds its label's union (already memory-bounded by single
+        # label) and writes to its own pre-allocated index.
+        group_progress_lock = ReentrantLock()
+        group_progress_counter = Threads.Atomic{Int}(0)
+        Threads.@threads for li in eachindex(labels)
+            lab = labels[li]
             members = filter(
                 f -> get(groups, f, get(groups, Base.basename(f), nothing)) == lab,
                 subject_files)
@@ -588,8 +603,12 @@ function pangenome_kmer_fdr(
             end
             n_kmers[li] = length(grp_set)
             n_shared[li] = count(in(membership), grp_set)
-            progress &&
-                println("  group $li/$(length(labels)) ($(lab)): |U|=$(n_kmers[li])  shared=$(n_shared[li])")
+            done = Threads.atomic_add!(group_progress_counter, 1) + 1
+            if progress
+                lock(group_progress_lock) do
+                    println("  group $done/$(length(labels)) ($(lab)): |U|=$(n_kmers[li])  shared=$(n_shared[li])")
+                end
+            end
         end
     end
 
