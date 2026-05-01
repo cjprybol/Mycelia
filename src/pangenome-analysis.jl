@@ -572,12 +572,21 @@ function pangenome_kmer_fdr(
             s = _per_genome_kmer_set(file, kmer_type, cache_dir)
             n_kmers[i] = length(s)
             n_shared[i] = count(in(membership), s)
+            # Explicitly drop the local Set so the GC has a chance to reclaim
+            # ~5M-kmer buffers between iterations. Without this, parallel
+            # threads accumulate live Sets faster than Julia's generational GC
+            # can free them — observed 92% GC overhead on the Locus 895-cstrain
+            # / k=21 panel before this hint.
+            s = nothing
             done = Threads.atomic_add!(progress_counter, 1) + 1
             if progress && (done % 50 == 0 || done == length(subject_files))
                 lock(progress_lock) do
                     println("  subj $done/$(length(subject_files))  |s|=$(n_kmers[i])  shared=$(n_shared[i])")
                 end
             end
+            # Force a GC sweep every Nthread iterations so dead Sets actually
+            # get freed instead of piling up across the thread pool.
+            done % (4 * Threads.nthreads()) == 0 && GC.gc(false)
         end
     else
         # Group → union of member kmer sets → FDR vs reference union.
