@@ -593,7 +593,7 @@ function pangenome_kmer_fdr(
         # Subjects keyed by basename so callers can build groups against
         # full paths or basenames interchangeably.
         labels = sort(unique(values(groups)))
-        subject_names = String.(labels)
+        subject_names = string.(labels)
         n_kmers = zeros(Int, length(labels))
         n_shared = zeros(Int, length(labels))
         # Per-group FDR is independent across labels; parallelize across labels.
