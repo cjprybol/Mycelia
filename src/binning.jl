@@ -408,6 +408,266 @@ function run_drep_dereplicate(; genomes::Vector{String}, outdir::String,
     return (; outdir, winning_genomes)
 end
 
+"""
+    run_skder(; genomes, outdir, ani_threshold=99.5, af_threshold=50.0,
+              mode=:dynamic, filter_mge=false, determine_clusters=true,
+              symlink=true, threads::Int=get_default_threads(),
+              extra_args::Vector{String}=String[])
+
+Run skDER for ANI-based reference dereplication.
+
+skDER is purpose-built for reducing redundancy in reference panels used for
+metagenomic competitive mapping. `dynamic` mode approximates single-linkage
+clustering and minimizes the representative count (best for mapping panels);
+`greedy` mode strictly enforces the user ANI/AF cutoffs (best for comparative
+genomics). See Salamzade & Kalan, *Microbial Genomics* 2025
+(https://doi.org/10.1099/mgen.0.001438).
+
+The wrapper stages input genome paths into a temporary directory of symlinks
+before invoking skDER, which sidesteps the `ARG_MAX` command-line limit when
+dereplicating thousands of genomes. It also sanitizes `PYTHONPATH` and sets
+`PYTHONNOUSERSITE=1` in the subprocess env to prevent user-site shadowing of
+the conda env's numpy (which breaks skDER's Python 3.13 install on hosts
+where `~/.local/lib/python3.9/site-packages/numpy` exists).
+
+# Arguments
+- `genomes::Vector{String}`: Genome FASTA files to dereplicate. Must be
+  non-empty; every path must exist.
+- `outdir::String`: Output directory; created if missing. If it already
+  exists skDER may fail (it refuses to overwrite); callers are responsible
+  for removing stale directories on retry.
+- `ani_threshold::Float64=99.5`: ANI percentage cutoff (skDER `-i`).
+  Rodriguez-R et al. 2024 within-species knee for E. coli.
+- `af_threshold::Float64=50.0`: Aligned-fraction percentage cutoff (skDER
+  `-f`). skDER's default; use 95.0 for tighter strain-level dereplication
+  tied to gene-content similarity.
+- `mode::Symbol=:dynamic`: `:dynamic` (metagenomic mapping panel) or
+  `:greedy` (comparative genomics).
+- `filter_mge::Bool=false`: Pass `--filter-mge` (`-fm`) to mask mobile
+  genetic elements (plasmids, prophages) before ANI/AF computation using
+  PhiSpy. Useful for UPEC and other MGE-heavy taxa.
+- `determine_clusters::Bool=true`: Pass `--determine-clusters` (`-n`) to
+  produce the secondary cluster assignment TSV that `parse_skder_clusters`
+  expects. Keep enabled unless you only need the representative set.
+- `symlink::Bool=true`: Pass `--symlink` (`-l`) so the representative
+  directory contains symlinks to the input files rather than copies.
+- `threads::Int`: Thread count (skDER `-c`; default `get_default_threads()`).
+- `extra_args::Vector{String}`: Additional CLI arguments forwarded to skDER.
+
+# Returns
+Named tuple with:
+- `outdir`: The output directory.
+- `representatives_dir`: Path to the directory containing representative
+  FASTAs (or `nothing` if not produced).
+- `representatives`: `Vector{String}` of representative FASTA paths
+  (resolved to absolute paths when `symlink=true`).
+- `cluster_info`: Path to the skDER cluster-info TSV mapping redundant
+  genomes to their representative (`nothing` if not produced).
+"""
+function run_skder(; genomes::Vector{String}, outdir::String,
+        ani_threshold::Float64 = 99.5,
+        af_threshold::Float64 = 50.0,
+        mode::Symbol = :dynamic,
+        filter_mge::Bool = false,
+        determine_clusters::Bool = true,
+        symlink::Bool = true,
+        threads::Int = get_default_threads(),
+        extra_args::Vector{String} = String[])
+    isempty(genomes) && error("No genomes provided to skDER")
+    seen_basenames = Set{String}()
+    for genome in genomes
+        isfile(genome) || error("Genome file not found: $(genome)")
+        bn = basename(genome)
+        bn in seen_basenames &&
+            error("Duplicate input basename: $(bn); skDER staging requires unique basenames")
+        push!(seen_basenames, bn)
+    end
+    mode in (:dynamic, :greedy) ||
+        error("Invalid skDER mode: $(mode); expected :dynamic or :greedy")
+    0.0 <= ani_threshold <= 100.0 ||
+        error("Invalid skDER ani_threshold: $(ani_threshold); expected in [0, 100]")
+    0.0 <= af_threshold <= 100.0 ||
+        error("Invalid skDER af_threshold: $(af_threshold); expected in [0, 100]")
+    # skDER creates the output directory itself. If it already exists it prompts
+    # interactively (EOFError under `conda run`). Only create the parent dir —
+    # callers are responsible for clearing stale outdir on retry.
+    mkpath(dirname(outdir))
+
+    _ensure_skder_env()
+
+    # Stage input genomes as symlinks in a single directory to avoid ARG_MAX
+    # overflow when dereplicating thousands of genomes.
+    staging_dir = mktempdir(prefix = "skder_inputs_")
+    try
+        for genome in genomes
+            Base.Filesystem.symlink(abspath(genome),
+                joinpath(staging_dir, basename(genome)))
+        end
+
+        cmd_args = String["skder",
+        "-g", staging_dir,
+        "-o", outdir,
+        "-i", string(ani_threshold),
+        "-f", string(af_threshold),
+        "-d", string(mode),
+        "-c", string(threads)]
+        if filter_mge
+            push!(cmd_args, "--filter-mge")
+        end
+        if determine_clusters
+            push!(cmd_args, "--determine-clusters")
+        end
+        if symlink
+            push!(cmd_args, "--symlink")
+        end
+        append!(cmd_args, extra_args)
+
+        # Sanitize Python env: PYTHONNOUSERSITE=1 disables ~/.local/lib user
+        # site-packages which shadow the conda env's numpy; PYTHONPATH= drops
+        # any inherited PYTHONPATH that would poison `import numpy`.
+        cmd = addenv(`$(CONDA_RUNNER) run --live-stream -n skder $(cmd_args)`,
+            "PYTHONNOUSERSITE" => "1",
+            "PYTHONPATH" => "")
+        run(cmd)
+
+        # Resolve representatives BEFORE cleaning up staging_dir: with
+        # --symlink, skDER writes its representatives as symlinks pointing at
+        # the staging dir (which then points at the real source files).
+        # Cleaning up staging_dir leaves dangling links; re-target each
+        # representative symlink at the original source now so the output
+        # directory survives cleanup.
+        representatives_dir = _find_first_matching_dir(
+            outdir,
+            [
+                r"Dereplicated_Representative_Genomes$",
+                r"Representative_Genomes$",
+                r"representatives?$"i
+            ];
+            recursive = true
+        )
+        if !isnothing(representatives_dir) && isdir(representatives_dir) && symlink
+            source_by_basename = Dict(basename(g) => abspath(g) for g in genomes)
+            for f in readdir(representatives_dir; join = true)
+                islink(f) || continue
+                src = get(source_by_basename, basename(f), nothing)
+                isnothing(src) && continue
+                rm(f; force = true)
+                Base.Filesystem.symlink(src, f)
+            end
+        end
+    finally
+        rm(staging_dir; recursive = true, force = true)
+    end
+
+    representatives_dir = _find_first_matching_dir(
+        outdir,
+        [r"Dereplicated_Representative_Genomes$", r"Representative_Genomes$",
+            r"representatives?$"i];
+        recursive = true
+    )
+    representatives = String[]
+    if !isnothing(representatives_dir) && isdir(representatives_dir)
+        for f in readdir(representatives_dir; join = true)
+            # Accept plain files AND valid symlinks (islink + target exists).
+            is_valid = isfile(f) || (islink(f) && isfile(realpath(f)))
+            if is_valid && (endswith(f, ".fa") || endswith(f, ".fna") ||
+                endswith(f, ".fasta") || endswith(f, ".fa.gz") ||
+                endswith(f, ".fna.gz") || endswith(f, ".fasta.gz"))
+                push!(representatives, f)
+            end
+        end
+        sort!(representatives)
+    end
+    cluster_info = _find_first_matching_file(
+        outdir,
+        [r"skDER_Clustering\.txt$", r"skDER_Cluster_Info\.tsv$",
+            r"Cluster_Info\.tsv$"];
+        recursive = true
+    )
+
+    return (; outdir, representatives_dir, representatives, cluster_info)
+end
+
+"""
+    _ensure_skder_env()
+
+Ensure the `skder` conda env exists and is pinned to `numpy<2`. skDER 1.3.4
+crashes in its multiprocessing N50 step under numpy 2.x with
+`only 0-dimensional arrays can be converted to Python scalars`. Upstream fix
+is expected but unreleased as of April 2026; pin aggressively here and relax
+once skDER tags a numpy-2-compatible release.
+"""
+function _ensure_skder_env()
+    env_name = "skder"
+    if check_bioconda_env_is_installed(env_name)
+        # Sanitized env matters here: on hosts with a stale
+        # ~/.local/lib/*/numpy/ install, `import numpy` without
+        # PYTHONNOUSERSITE picks up the user-site version, not the conda
+        # env's. That would make the check always report numpy>=2 and
+        # trigger a rebuild on every run.
+        numpy_check_script = "import numpy as n; import sys; " *
+                             "sys.exit(0 if int(n.__version__.split('.')[0]) < 2 else 1)"
+        check_cmd = addenv(
+            `$(CONDA_RUNNER) run -n $(env_name) python -c $(numpy_check_script)`,
+            "PYTHONNOUSERSITE" => "1",
+            "PYTHONPATH" => ""
+        )
+        numpy_ok = try
+            success(check_cmd)
+        catch
+            false
+        end
+        numpy_ok && return env_name
+        @info "Existing skder env has incompatible numpy; rebuilding with numpy<2 pin."
+        run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
+    end
+    run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda --strict-channel-priority -y -n $(env_name) skder "numpy<2"`)
+    return env_name
+end
+
+"""
+    parse_skder_clusters(file::String)::DataFrames.DataFrame
+
+Parse a skDER cluster-info TSV into a DataFrame with columns
+`genome`, `representative`, and `cluster_id`. Column names in the input file
+may vary by skDER version; the parser accepts common aliases.
+"""
+function parse_skder_clusters(file::String)::DataFrames.DataFrame
+    isfile(file) || error("skDER cluster-info file not found: $(file)")
+    df = DataFrames.DataFrame(CSV.File(file; delim = '\t', ignorerepeated = true))
+    names_map = Dict(string(col) => col for col in DataFrames.names(df))
+
+    genome_key = findfirst(k -> haskey(names_map, k),
+        ("genome", "Genome", "query", "Query"))
+    rep_aliases = ("nearest_representative_genome",
+        "representative", "Representative",
+        "Representative_Genome", "representative_genome")
+    rep_key = findfirst(k -> haskey(names_map, k), rep_aliases)
+    cluster_key = findfirst(k -> haskey(names_map, k),
+        ("cluster_id", "Cluster_ID", "cluster", "Cluster"))
+
+    isnothing(genome_key) &&
+        error("No genome column (genome/Genome/query) found in $(file)")
+    isnothing(rep_key) &&
+        error("No representative column found in $(file)")
+
+    selection = [
+        names_map[("genome", "Genome", "query", "Query")[genome_key]] => :genome,
+        names_map[rep_aliases[rep_key]] => :representative
+    ]
+    if !isnothing(cluster_key)
+        push!(selection,
+            names_map[("cluster_id", "Cluster_ID", "cluster", "Cluster")[cluster_key]] => :cluster_id)
+    end
+    df_out = DataFrames.select(df, selection...)
+    df_out.genome = string.(df_out.genome)
+    df_out.representative = string.(df_out.representative)
+    if "cluster_id" in names(df_out)
+        df_out.cluster_id = string.(df_out.cluster_id)
+    end
+    return df_out
+end
+
 # -----------------------------------------------------------------------------
 # Parsers
 # -----------------------------------------------------------------------------

@@ -69,6 +69,25 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test counts[Kmers.DNAKmer{2}("CA")] == 1
         end
 
+
+        Test.@testset "Reference k-mer counting with ambiguous bases" begin
+            fasta_ambig = joinpath(temp_dir, "reference_ambig.fasta")
+            open(fasta_ambig, "w") do io
+                FASTX.write(io, FASTX.FASTA.Record("ref", "ATNGC"))
+            end
+
+            counts_ambig = Mycelia.fasta_to_reference_kmer_counts(
+                kmer_type = Kmers.DNAKmer{2},
+                fasta = fasta_ambig
+            )
+
+            # Unambiguous k-mers get counted (forward + reverse complement)
+            Test.@test counts_ambig[Kmers.DNAKmer{2}("AT")] == 2
+            Test.@test counts_ambig[Kmers.DNAKmer{2}("GC")] == 2
+            # K-mers containing N are skipped by UnambiguousDNAMers
+            Test.@test get(counts_ambig, Kmers.DNAKmer{2}("TG"), 0) == 0
+        end
+
         Test.@testset "Sequence count tables" begin
             dna_sequences = [
                 BioSequences.LongDNA{4}("ATGC"),

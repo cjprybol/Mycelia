@@ -13,7 +13,43 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check @eval monkeypatching in non-zz test files
+        run: |
+          violations=$(grep -rl '@eval\s*Mycelia' test/ --include='*.jl' | grep -v '/zz_' || true)
+          if [[ -n "${violations}" ]]; then
+            echo "::warning::@eval Mycelia found in test files without zz_ prefix:"
+            echo "${violations}"
+            echo "See .codex/skills/test-isolation/SKILL.md for alternatives."
+          fi
+
+      - name: Check for committed benchmark artifacts
+        run: |
+          artifacts=$(git diff --name-only origin/master...HEAD -- 'results/*.json' 'results/*.csv' 2>/dev/null || true)
+          if [[ -n "${artifacts}" ]]; then
+            echo "::error::Benchmark artifacts committed in results/:"
+            echo "${artifacts}"
+            echo "Remove generated outputs from the PR."
+            exit 1
+          fi
+
+      - name: Check for StatsPlots/Plots.jl usage in source
+        run: |
+          violations=$(grep -rl 'import StatsPlots\|import Plots$' src/ --include='*.jl' || true)
+          if [[ -n "${violations}" ]]; then
+            echo "::error::StatsPlots or Plots.jl used in source files (use CairoMakie):"
+            echo "${violations}"
+            exit 1
+          fi
+
   test:
+    needs: lint
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
