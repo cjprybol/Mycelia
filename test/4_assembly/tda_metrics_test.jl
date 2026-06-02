@@ -255,6 +255,42 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test repeated_stats.weight_mean == 3.0
     end
 
+    Test.@testset "TDA helper validation and edge filtrations" begin
+        graph = _tda_cycle_graph()
+        cfg = Mycelia.TDAConfig(thresholds = [0.0, 1.0])
+
+        Test.@test Mycelia._tda_vertex_weights(graph, nothing) == ones(Float64, 4)
+        Test.@test Mycelia._tda_vertex_weights(graph, [1, 2, 3, 4]) == [1.0, 2.0, 3.0, 4.0]
+        Test.@test Mycelia._tda_vertex_weights(
+            graph,
+            Dict(1 => 1, 2 => 2, 3 => 3, 4 => 4)
+        ) == [1.0, 2.0, 3.0, 4.0]
+        Test.@test_throws ArgumentError Mycelia._tda_vertex_weights(graph, [1.0, 2.0])
+        Test.@test_throws ArgumentError Mycelia._tda_vertex_weights(
+            graph,
+            Dict(1 => 1.0, 2 => 2.0, 4 => 4.0)
+        )
+
+        single_vertex_table = Mycelia.extract_tda_metrics(
+            Graphs.SimpleGraph(1),
+            Mycelia.TDAConfig(thresholds = [0.0])
+        )
+        Test.@test single_vertex_table.betti0 == [1]
+        Test.@test single_vertex_table.betti1 == [0]
+
+        zero_weight_table = Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = zeros(Float64, 4)
+        )
+        Test.@test zero_weight_table.threshold == [0.0, 1.0]
+        Test.@test zero_weight_table.betti0 == [1, 0]
+        Test.@test zero_weight_table.betti1 == [1, 0]
+        Test.@test zero_weight_table.weight_min == fill(0.0, 2)
+        Test.@test zero_weight_table.weight_max == fill(0.0, 2)
+        Test.@test zero_weight_table.weight_mean == fill(0.0, 2)
+    end
+
     Test.@testset "Rhizomorph bubble metric extraction table" begin
         graph = MetaGraphsNext.MetaGraph(
             Graphs.DiGraph();
