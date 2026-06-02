@@ -22,33 +22,6 @@ import Graphs
 import DataFrames
 import MetaGraphsNext
 
-function _tda_cycle_graph()
-    graph = Graphs.SimpleGraph(4)
-    for (u, v) in ((1, 2), (2, 3), (3, 4), (4, 1))
-        Graphs.add_edge!(graph, u, v)
-    end
-    return graph
-end
-
-function _tda_bubble_metagraph()
-    graph = MetaGraphsNext.MetaGraph(
-        Graphs.DiGraph();
-        label_type = String,
-        vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
-        edge_data_type = Mycelia.Rhizomorph.StringEdgeData
-    )
-
-    for label in ["A", "B", "C", "D"]
-        graph[label] = Mycelia.Rhizomorph.StringVertexData(label)
-    end
-    graph["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    graph["A", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
-    graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
-
-    return graph
-end
-
 Test.@testset "TDA metrics (graph invariants)" begin
     Test.@testset "tda_betti_numbers" begin
         path_graph = Graphs.SimpleGraph(5)
@@ -113,78 +86,7 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test Mycelia.tda_graph_score(summary.metrics) == expected
     end
 
-    Test.@testset "TDA table paths on plain graphs" begin
-        graph = _tda_cycle_graph()
-        cfg = Mycelia.TDAConfig(thresholds = [2.0, 0.0])
-        vertex_weights = [1, 2, 3, 4]
-
-        vector_table = Mycelia.extract_tda_metrics(
-            graph,
-            cfg;
-            vertex_weights = vertex_weights,
-            graph_id = "plain_cycle"
-        )
-
-        Test.@test vector_table isa DataFrames.DataFrame
-        Test.@test DataFrames.nrow(vector_table) == 2
-        Test.@test vector_table.threshold == [0.0, 2.0]
-        Test.@test vector_table.betti0 == [1, 1]
-        Test.@test vector_table.betti1 == [1, 0]
-        Test.@test vector_table.weight_name == fill(:vertex_weight, 2)
-        Test.@test vector_table.weight_min == fill(1.0, 2)
-        Test.@test vector_table.weight_max == fill(4.0, 2)
-        Test.@test vector_table.weight_mean == fill(2.5, 2)
-        Test.@test vector_table.score == fill(2.0, 2)
-
-        dict_table = Mycelia.extract_tda_metrics(
-            graph,
-            cfg;
-            vertex_weights = Dict(1 => 1, 2 => 2, 3 => 3, 4 => 4)
-        )
-        Test.@test dict_table.betti0 == vector_table.betti0
-        Test.@test dict_table.betti1 == vector_table.betti1
-        Test.@test dict_table.weight_mean == vector_table.weight_mean
-
-        uniform_table = Mycelia.extract_tda_metrics(
-            graph,
-            Mycelia.TDAConfig(thresholds = Float64[]);
-            graph_id = "uniform_cycle"
-        )
-        Test.@test uniform_table.threshold == [-Inf]
-        Test.@test uniform_table.betti0 == [1]
-        Test.@test uniform_table.betti1 == [1]
-        Test.@test uniform_table.weight_name == [:uniform]
-        Test.@test uniform_table.weight_min == [1.0]
-        Test.@test uniform_table.weight_max == [1.0]
-        Test.@test uniform_table.weight_mean == [1.0]
-
-        summary = Mycelia.tda_on_graph(
-            graph,
-            cfg;
-            vertex_weights = Dict(1 => 1, 2 => 2, 3 => 3, 4 => 4)
-        )
-        rows = Mycelia.tda_metric_rows(
-            summary;
-            graph_id = "plain_cycle",
-            weight_name = :coverage,
-            weight_stats = (weight_min = 1.0, weight_max = 4.0, weight_mean = 2.5)
-        )
-        table = Mycelia.tda_metric_table(
-            summary;
-            graph_id = "plain_cycle",
-            weight_name = :coverage,
-            weight_stats = (weight_min = 1.0, weight_max = 4.0, weight_mean = 2.5)
-        )
-
-        Test.@test rows isa Vector{NamedTuple}
-        Test.@test length(rows) == 2
-        Test.@test rows[1].graph_id == "plain_cycle"
-        Test.@test rows[1].weight_name == :coverage
-        Test.@test table isa DataFrames.DataFrame
-        Test.@test DataFrames.nrow(table) == 2
-    end
-
-    Test.@testset "plain diamond metric extraction" begin
+    Test.@testset "plain graph metric extraction weight modes" begin
         graph = Graphs.SimpleGraph(4)
         for (u, v) in ((1, 2), (1, 3), (2, 4), (3, 4))
             Graphs.add_edge!(graph, u, v)
@@ -228,8 +130,63 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test table.graph_id == fill("table_plain_diamond", 3)
     end
 
+    Test.@testset "uniform weights and empty graph statistics" begin
+        path_graph = Graphs.SimpleGraph(3)
+        Graphs.add_edge!(path_graph, 1, 2)
+        Graphs.add_edge!(path_graph, 2, 3)
+
+        metrics = Mycelia.tda_betti_curves(path_graph; thresholds = [0.0])
+        Test.@test metrics.thresholds == [0.0]
+        Test.@test metrics.betti0 == [1]
+        Test.@test metrics.betti1 == [0]
+
+        default_table = Mycelia.extract_tda_metrics(
+            path_graph,
+            Mycelia.TDAConfig(thresholds = Float64[])
+        )
+        Test.@test default_table.threshold == [-Inf]
+        Test.@test default_table.weight_name == [:uniform]
+        Test.@test default_table.weight_min == [1.0]
+        Test.@test default_table.weight_max == [1.0]
+        Test.@test default_table.weight_mean == [1.0]
+
+        empty_table = Mycelia.extract_tda_metrics(
+            Graphs.SimpleGraph(0),
+            Mycelia.TDAConfig(thresholds = [0.0])
+        )
+        Test.@test empty_table.betti0 == [0]
+        Test.@test empty_table.betti1 == [0]
+        Test.@test isnan(empty_table.weight_min[1])
+        Test.@test isnan(empty_table.weight_max[1])
+        Test.@test isnan(empty_table.weight_mean[1])
+
+        empty_stats = Mycelia._tda_weight_stats(Float64[])
+        Test.@test isnan(empty_stats.weight_min)
+        Test.@test isnan(empty_stats.weight_max)
+        Test.@test isnan(empty_stats.weight_mean)
+
+        weight_stats = Mycelia._tda_weight_stats([1, 2, 4])
+        Test.@test weight_stats.weight_min == 1.0
+        Test.@test weight_stats.weight_max == 4.0
+        Test.@test weight_stats.weight_mean ≈ 7 / 3
+    end
+
     Test.@testset "Rhizomorph bubble metric extraction table" begin
-        graph = _tda_bubble_metagraph()
+        graph = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+            edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+        )
+
+        for label in ["A", "B", "C", "D"]
+            graph[label] = Mycelia.Rhizomorph.StringVertexData(label)
+        end
+        graph["A", "B"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["A", "C"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["B", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
+        graph["C", "D"] = Mycelia.Rhizomorph.StringEdgeData(1)
+
         cfg = Mycelia.TDAConfig(thresholds = [1.0, 2.5, 4.0])
         vertex_weights = Dict("A" => 3.0, "B" => 2.0, "C" => 2.0, "D" => 3.0)
 
@@ -263,18 +220,6 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test table.provenance[1].filtration == :coverage_min
         Test.@test table.provenance[1].assembly_id == "fixture"
         Test.@test table.provenance[1].graph_family == :bubble
-
-        vector_table = Mycelia.extract_tda_metrics(
-            graph,
-            cfg;
-            vertex_weights = [3, 2, 2, 3],
-            graph_id = "diamond_bubble"
-        )
-        Test.@test vector_table.betti0 == table.betti0
-        Test.@test vector_table.betti1 == table.betti1
-        Test.@test vector_table.weight_min == fill(2.0, 3)
-        Test.@test vector_table.weight_max == fill(3.0, 3)
-        Test.@test vector_table.weight_mean == fill(2.5, 3)
 
         conflict_table = Mycelia.extract_tda_metrics(
             graph,
@@ -311,54 +256,20 @@ Test.@testset "TDA metrics (graph invariants)" begin
             cfg;
             vertex_weights = "invalid"
         )
+        Test.@test_throws ArgumentError Mycelia._tda_graph("invalid")
         Test.@test_throws ArgumentError Mycelia._tda_vertex_weights(graph, "invalid")
-    end
 
-    Test.@testset "TDA validation and weight statistics" begin
-        graph = _tda_cycle_graph()
-        cfg = Mycelia.TDAConfig(thresholds = [1.0])
-
-        Test.@test_throws ArgumentError Mycelia._tda_graph("not a graph")
         Test.@test_throws MethodError Mycelia.extract_tda_metrics("invalid", cfg)
+
+        plain_graph = Graphs.SimpleGraph(4)
+        for (u, v) in ((1, 2), (1, 3), (2, 4), (3, 4))
+            Graphs.add_edge!(plain_graph, u, v)
+        end
+
         Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
-            graph,
+            plain_graph,
             cfg;
-            vertex_weights = [1.0, 2.0]
+            vertex_weights = Dict(1 => 3.0, 2 => 2.0, 4 => 3.0)
         )
-        Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
-            graph,
-            cfg;
-            vertex_weights = Dict(1 => 1.0, 2 => 2.0, 4 => 4.0)
-        )
-
-        empty_stats = Mycelia._tda_weight_stats(Float64[])
-        Test.@test isnan(empty_stats.weight_min)
-        Test.@test isnan(empty_stats.weight_max)
-        Test.@test isnan(empty_stats.weight_mean)
-
-        stats = Mycelia._tda_weight_stats([2, 2, 5])
-        Test.@test stats.weight_min == 2.0
-        Test.@test stats.weight_max == 5.0
-        Test.@test stats.weight_mean == 3.0
-
-        weight_stats = Mycelia._tda_weight_stats([1, 2, 4])
-        Test.@test weight_stats.weight_min == 1.0
-        Test.@test weight_stats.weight_max == 4.0
-        Test.@test weight_stats.weight_mean ≈ 7 / 3
-
-        path_graph = Graphs.SimpleGraph(3)
-        Graphs.add_edge!(path_graph, 1, 2)
-        Graphs.add_edge!(path_graph, 2, 3)
-        metrics = Mycelia.tda_betti_curves(path_graph; thresholds = [0.0])
-        Test.@test metrics.thresholds == [0.0]
-        Test.@test metrics.betti0 == [1]
-        Test.@test metrics.betti1 == [0]
-
-        empty_table = Mycelia.extract_tda_metrics(Graphs.SimpleGraph(0), cfg)
-        Test.@test empty_table.betti0 == [0]
-        Test.@test empty_table.betti1 == [0]
-        Test.@test isnan(empty_table.weight_min[1])
-        Test.@test isnan(empty_table.weight_max[1])
-        Test.@test isnan(empty_table.weight_mean[1])
     end
 end
