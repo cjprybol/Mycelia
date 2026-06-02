@@ -101,7 +101,9 @@ Result bundle returned by Viterbi-style graph decoders.
 
 # Notes
 Scores are in log-probability space. The returned `GraphPath.total_probability`
-is the corresponding probability product.
+is the corresponding probability product. Diagnostics include algorithm identity,
+target status, beam parameters, completed step count, generated/expanded/pruned
+state counts, retained frontier size, and scoring metadata.
 
 # Example
 ```julia
@@ -439,7 +441,10 @@ function _get_valid_transitions(graph, vertex_label, strand)
 
             edge_src_strand = _normalize_strand(edge_data.src_strand)
             if edge_src_strand == strand
-                probability = edge_data.weight > 0 ? edge_data.weight : 1e-10
+                probability = _edge_transition_weight(edge_data)
+                if probability <= 0.0
+                    continue
+                end
 
                 push!(transitions,
                     Dict(
@@ -610,6 +615,14 @@ end
 # This is a numerical stability guard, not a real probability.
 const _KSP_MIN_WEIGHT = 1e-10
 
+function _edge_transition_weight(edge_data)
+    weight = Float64(edge_data_weight(edge_data))
+    if !isfinite(weight)
+        return 0.0
+    end
+    return max(weight, _KSP_MIN_WEIGHT)
+end
+
 """
     _total_outgoing_weight(graph, vertex)
 
@@ -631,7 +644,7 @@ function _total_outgoing_weight(graph::MetaGraphsNext.MetaGraph, vertex)
     total = 0.0
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         if src == vertex
-            total += max(edge_data_weight(graph[src, dst]), _KSP_MIN_WEIGHT)
+            total += _edge_transition_weight(graph[src, dst])
         end
     end
     return max(total, _KSP_MIN_WEIGHT)
@@ -652,7 +665,7 @@ function _total_outgoing_weight(
         if edge_src_strand != strand
             continue
         end
-        total += max(edge_data_weight(edge_data), _KSP_MIN_WEIGHT)
+        total += _edge_transition_weight(edge_data)
     end
     return max(total, _KSP_MIN_WEIGHT)
 end
@@ -685,8 +698,7 @@ function _total_outgoing_weight_excluding(
     total = 0.0
     for (src, dst) in MetaGraphsNext.edge_labels(graph)
         if src == vertex && !((src, dst) in excluded_edges)
-            w = edge_data_weight(graph[src, dst])
-            total += max(w, _KSP_MIN_WEIGHT)
+            total += _edge_transition_weight(graph[src, dst])
         end
     end
     return max(total, _KSP_MIN_WEIGHT)
@@ -748,7 +760,12 @@ function _build_graph_path_from_vertices(
                     "$(prev_strand) => $(strand)"))
             end
             total_out = _total_outgoing_weight(graph, prev_vertex, prev_strand)
-            edge_w = max(edge_data_weight(edge_data), _KSP_MIN_WEIGHT)
+            edge_w = _edge_transition_weight(edge_data)
+            if !isfinite(total_out) || total_out <= 0.0 || edge_w <= 0.0
+                throw(ArgumentError(
+                    "Cannot build path: invalid transition weight from " *
+                    "$(prev_vertex) to $(vertex)"))
+            end
             step_prob = edge_w / total_out
             cumulative_prob *= step_prob
             push!(steps, WalkStep(vertex, strand, step_prob, cumulative_prob))
@@ -795,9 +812,9 @@ function viterbi_decode_next(
         graph::MetaGraphsNext.MetaGraph,
         start_vertex::T,
         max_steps::Int;
-        target_vertex = nothing,
-        start_strand = Forward
-) where {T}
+        target_vertex::Union{Nothing, T} = nothing,
+        start_strand::StrandOrientation = Forward
+)::ViterbiDecodingResult where {T}
     return _viterbi_decode_next_impl(
         graph,
         start_vertex,
@@ -851,11 +868,11 @@ function beam_pruned_viterbi_decode_next(
         graph::MetaGraphsNext.MetaGraph,
         start_vertex::T,
         max_steps::Int;
-        target_vertex = nothing,
-        start_strand = Forward,
+        target_vertex::Union{Nothing, T} = nothing,
+        start_strand::StrandOrientation = Forward,
         beam_width::Int = 64,
-        beam_log_threshold = Inf
-) where {T}
+        beam_log_threshold::Float64 = Inf
+)::ViterbiDecodingResult where {T}
     return _viterbi_decode_next_impl(
         graph,
         start_vertex,
@@ -863,7 +880,7 @@ function beam_pruned_viterbi_decode_next(
         target_vertex = target_vertex,
         start_strand = start_strand,
         beam_width = beam_width,
-        beam_log_threshold = Float64(beam_log_threshold),
+        beam_log_threshold = beam_log_threshold,
         exact = false
     )
 end
@@ -872,12 +889,12 @@ function _viterbi_decode_next_impl(
         graph::MetaGraphsNext.MetaGraph,
         start_vertex::T,
         max_steps::Int;
-        target_vertex,
-        start_strand,
+        target_vertex::Union{Nothing, T},
+        start_strand::StrandOrientation,
         beam_width::Int,
         beam_log_threshold::Float64,
         exact::Bool
-) where {T}
+)::ViterbiDecodingResult where {T}
     if max_steps < 0
         throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
     end
@@ -906,7 +923,10 @@ function _viterbi_decode_next_impl(
         :expanded_states => 0,
         :generated_states => 0,
         :retained_states => 1,
+        :cumulative_retained_states => 1,
+        :max_retained_states => 1,
         :pruned_states => 0,
+        :skipped_transitions => 0,
         :completed_steps => 0,
         :reached_target => target_vertex === nothing ? nothing : false
     )
@@ -948,17 +968,30 @@ function _viterbi_decode_next_impl(
             end
 
             total_out = _total_outgoing_weight(graph, current_vertex, current_strand)
+            if !isfinite(total_out) || total_out <= 0.0
+                diagnostics[:skipped_transitions] += length(transitions)
+                continue
+            end
             for transition in transitions
                 next_vertex = convert(T, transition[:target_vertex])
                 next_strand = _normalize_strand(transition[:target_strand])
-                edge_w = max(edge_data_weight(transition[:edge_data]), _KSP_MIN_WEIGHT)
+                edge_w = _edge_transition_weight(transition[:edge_data])
+                if edge_w <= 0.0
+                    diagnostics[:skipped_transitions] += 1
+                    continue
+                end
                 transition_prob = edge_w / total_out
-                if transition_prob <= 0.0
+                if !isfinite(transition_prob) || transition_prob <= 0.0
+                    diagnostics[:skipped_transitions] += 1
                     continue
                 end
 
                 next_state = (next_vertex, next_strand)
                 next_score = state_score + log(transition_prob)
+                if !isfinite(next_score)
+                    diagnostics[:skipped_transitions] += 1
+                    continue
+                end
                 diagnostics[:generated_states] += 1
 
                 if !haskey(next_scores, next_state) ||
@@ -990,7 +1023,13 @@ function _viterbi_decode_next_impl(
 
         push!(predecessors_by_depth, next_predecessors)
         active_scores = next_scores
-        diagnostics[:retained_states] += length(active_scores)
+        retained_count = length(active_scores)
+        diagnostics[:retained_states] = retained_count
+        diagnostics[:cumulative_retained_states] += retained_count
+        diagnostics[:max_retained_states] = max(
+            diagnostics[:max_retained_states],
+            retained_count
+        )
         diagnostics[:completed_steps] = depth
 
         if target_vertex === nothing
@@ -1058,13 +1097,15 @@ function _is_better_viterbi_candidate(state, score, best_state, best_score)
     if score > best_score
         return true
     end
-    if score == best_score && _viterbi_state_sort_key(state) < _viterbi_state_sort_key(best_state)
+    if isapprox(score, best_score; atol = eps(Float64), rtol = eps(Float64)) &&
+       _viterbi_state_sort_key(state) < _viterbi_state_sort_key(best_state)
         return true
     end
     return false
 end
 
 function _viterbi_state_sort_key(state)
+    # StrandOrientation is an @enum backed by Int; include it for deterministic ties.
     return (string(state[1]), Int(state[2]))
 end
 
@@ -1106,12 +1147,27 @@ function _reconstruct_viterbi_path(
             Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}
         }
 ) where {T}
+    if depth < 0
+        throw(ArgumentError("Cannot reconstruct Viterbi path with negative depth $depth"))
+    end
+    if length(predecessors_by_depth) < depth
+        throw(ArgumentError(
+            "Cannot reconstruct Viterbi path at depth $depth with only " *
+            "$(length(predecessors_by_depth)) predecessor layers"))
+    end
+
     path_states = Vector{Tuple{T, StrandOrientation}}(undef, depth + 1)
     current_state = end_state
 
     for path_index in reverse(2:(depth + 1))
         path_states[path_index] = current_state
-        predecessor_entry = predecessors_by_depth[path_index - 1][current_state]
+        predecessors = predecessors_by_depth[path_index - 1]
+        if !haskey(predecessors, current_state)
+            throw(ArgumentError(
+                "Cannot reconstruct Viterbi path: missing predecessor for state " *
+                "$(current_state) at depth $(path_index - 1)"))
+        end
+        predecessor_entry = predecessors[current_state]
         current_state = predecessor_entry[1]
     end
     path_states[1] = current_state
@@ -1211,9 +1267,12 @@ function _shortest_path_excluding(
             end
 
             next_state = (dst, transition[:target_strand])
-            edge_w = max(edge_data_weight(transition[:edge_data]), _KSP_MIN_WEIGHT)
+            edge_w = _edge_transition_weight(transition[:edge_data])
+            if edge_w <= 0.0
+                continue
+            end
             transition_prob = edge_w / total_out
-            if transition_prob <= 0.0
+            if !isfinite(transition_prob) || transition_prob <= 0.0
                 continue
             end
             distance = -log(transition_prob)
