@@ -114,6 +114,11 @@ function _tda_vertex_weights(
             end
         else
             for vertex in Graphs.vertices(graph)
+                1 <= vertex <= vertex_count ||
+                    throw(ArgumentError(
+                        "integer-keyed vertex_weights require graph vertices in 1:nv(g); " *
+                        "got vertex $(vertex) for nv(g) = $(vertex_count)"
+                    ))
                 haskey(vertex_weights, vertex) ||
                     throw(ArgumentError("vertex_weights is missing vertex $(vertex)"))
                 weights[vertex] = Float64(vertex_weights[vertex])
@@ -240,8 +245,8 @@ This provides an initial “topology signal” without requiring persistent homo
 - `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to filter.
 - `thresholds`: Real-valued filtration thresholds.
 - `vertex_weights = nothing`: Uniform weights, vector aligned with graph vertex
-  codes, integer-keyed dictionary for plain graphs, or label-keyed dictionary for
-  `MetaGraphsNext.MetaGraph`.
+  codes, integer-keyed dictionary for plain graphs with vertices in `1:nv(g)`,
+  or label-keyed dictionary for `MetaGraphsNext.MetaGraph`.
 
 # Returns
 - `TDAMetrics` containing sorted thresholds and Betti curves.
@@ -294,9 +299,10 @@ Compute a standardized TDA summary for a graph.
 
 `vertex_weights` should typically be a coverage/quality/confidence proxy. For
 `Graphs.AbstractGraph`, pass either a vector aligned with vertex indices or a
-dictionary keyed by integer vertex id. For Rhizomorph `MetaGraphsNext.MetaGraph`,
-pass either a vector aligned with internal vertex codes or a dictionary keyed by
-vertex label. If omitted, all vertices are given weight 1.0.
+dictionary keyed by integer vertex id for graphs with vertices in `1:nv(g)`. For
+Rhizomorph `MetaGraphsNext.MetaGraph`, pass either a vector aligned with internal
+vertex codes or a dictionary keyed by vertex label. If omitted, all vertices are
+given weight 1.0.
 
 # Arguments
 - `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
@@ -443,7 +449,9 @@ correlation analyses.
 # Arguments
 - `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
 - `cfg = TDAConfig()`: TDA configuration.
-- `vertex_weights = nothing`: Uniform weights, a vector, or a graph-label dictionary.
+- `vertex_weights = nothing`: Uniform weights, a vector, an integer-keyed dictionary
+  for plain graphs with vertices in `1:nv(g)`, or a label-keyed dictionary for
+  `MetaGraphsNext.MetaGraph`.
 - `graph_id = "graph"`: Assembly graph identifier copied into every row.
 - `filtration = :vertex_weight_threshold`: Filtration recipe name recorded in provenance.
 - `weight_name`: Defaults to `:uniform` when `vertex_weights` is omitted, otherwise
