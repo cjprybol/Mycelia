@@ -22,6 +22,14 @@ import Graphs
 import DataFrames
 import MetaGraphsNext
 
+function _tda_cycle_graph()
+    graph = Graphs.SimpleGraph(4)
+    for (u, v) in ((1, 2), (2, 3), (3, 4), (4, 1))
+        Graphs.add_edge!(graph, u, v)
+    end
+    return graph
+end
+
 Test.@testset "TDA metrics (graph invariants)" begin
     Test.@testset "tda_betti_numbers" begin
         path_graph = Graphs.SimpleGraph(5)
@@ -84,6 +92,77 @@ Test.@testset "TDA metrics (graph invariants)" begin
         expected = Float64(maximum(summary.metrics.betti1) +
                            maximum(summary.metrics.betti0))
         Test.@test Mycelia.tda_graph_score(summary.metrics) == expected
+    end
+
+    Test.@testset "TDA table paths on plain graphs" begin
+        graph = _tda_cycle_graph()
+        cfg = Mycelia.TDAConfig(thresholds = [2.0, 0.0])
+        vertex_weights = [1, 2, 3, 4]
+
+        vector_table = Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = vertex_weights,
+            graph_id = "plain_cycle"
+        )
+
+        Test.@test vector_table isa DataFrames.DataFrame
+        Test.@test DataFrames.nrow(vector_table) == 2
+        Test.@test vector_table.threshold == [0.0, 2.0]
+        Test.@test vector_table.betti0 == [1, 1]
+        Test.@test vector_table.betti1 == [1, 0]
+        Test.@test vector_table.weight_name == fill(:vertex_weight, 2)
+        Test.@test vector_table.weight_min == fill(1.0, 2)
+        Test.@test vector_table.weight_max == fill(4.0, 2)
+        Test.@test vector_table.weight_mean == fill(2.5, 2)
+        Test.@test vector_table.score == fill(2.0, 2)
+
+        dict_table = Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = Dict(1 => 1, 2 => 2, 3 => 3, 4 => 4)
+        )
+        Test.@test dict_table.betti0 == vector_table.betti0
+        Test.@test dict_table.betti1 == vector_table.betti1
+        Test.@test dict_table.weight_mean == vector_table.weight_mean
+
+        uniform_table = Mycelia.extract_tda_metrics(
+            graph,
+            Mycelia.TDAConfig(thresholds = Float64[]);
+            graph_id = "uniform_cycle"
+        )
+        Test.@test uniform_table.threshold == [-Inf]
+        Test.@test uniform_table.betti0 == [1]
+        Test.@test uniform_table.betti1 == [1]
+        Test.@test uniform_table.weight_name == [:uniform]
+        Test.@test uniform_table.weight_min == [1.0]
+        Test.@test uniform_table.weight_max == [1.0]
+        Test.@test uniform_table.weight_mean == [1.0]
+
+        summary = Mycelia.tda_on_graph(
+            graph,
+            cfg;
+            vertex_weights = Dict(1 => 1, 2 => 2, 3 => 3, 4 => 4)
+        )
+        rows = Mycelia.tda_metric_rows(
+            summary;
+            graph_id = "plain_cycle",
+            weight_name = :coverage,
+            weight_stats = (weight_min = 1.0, weight_max = 4.0, weight_mean = 2.5)
+        )
+        table = Mycelia.tda_metric_table(
+            summary;
+            graph_id = "plain_cycle",
+            weight_name = :coverage,
+            weight_stats = (weight_min = 1.0, weight_max = 4.0, weight_mean = 2.5)
+        )
+
+        Test.@test rows isa Vector{NamedTuple}
+        Test.@test length(rows) == 2
+        Test.@test rows[1].graph_id == "plain_cycle"
+        Test.@test rows[1].weight_name == :coverage
+        Test.@test table isa DataFrames.DataFrame
+        Test.@test DataFrames.nrow(table) == 2
     end
 
     Test.@testset "plain graph metric extraction weight modes" begin
@@ -169,6 +248,11 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test weight_stats.weight_min == 1.0
         Test.@test weight_stats.weight_max == 4.0
         Test.@test weight_stats.weight_mean ≈ 7 / 3
+
+        repeated_stats = Mycelia._tda_weight_stats([2, 2, 5])
+        Test.@test repeated_stats.weight_min == 2.0
+        Test.@test repeated_stats.weight_max == 5.0
+        Test.@test repeated_stats.weight_mean == 3.0
     end
 
     Test.@testset "Rhizomorph bubble metric extraction table" begin
@@ -221,6 +305,18 @@ Test.@testset "TDA metrics (graph invariants)" begin
         Test.@test table.provenance[1].assembly_id == "fixture"
         Test.@test table.provenance[1].graph_family == :bubble
 
+        vector_table = Mycelia.extract_tda_metrics(
+            graph,
+            cfg;
+            vertex_weights = [3, 2, 2, 3],
+            graph_id = "diamond_bubble"
+        )
+        Test.@test vector_table.betti0 == table.betti0
+        Test.@test vector_table.betti1 == table.betti1
+        Test.@test vector_table.weight_min == fill(2.0, 3)
+        Test.@test vector_table.weight_max == fill(3.0, 3)
+        Test.@test vector_table.weight_mean == fill(2.5, 3)
+
         conflict_table = Mycelia.extract_tda_metrics(
             graph,
             cfg;
@@ -266,6 +362,11 @@ Test.@testset "TDA metrics (graph invariants)" begin
             Graphs.add_edge!(plain_graph, u, v)
         end
 
+        Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
+            plain_graph,
+            cfg;
+            vertex_weights = [1.0, 2.0]
+        )
         Test.@test_throws ArgumentError Mycelia.extract_tda_metrics(
             plain_graph,
             cfg;
