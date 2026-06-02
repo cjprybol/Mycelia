@@ -66,24 +66,20 @@ struct TDARunSummary
 end
 
 const TDAGraphInput = Union{Graphs.AbstractGraph, MetaGraphsNext.MetaGraph}
-const TDAVertexWeightsInput = Union{Nothing, AbstractVector, AbstractDict}
+const TDAVertexWeightsInput = Union{Nothing, AbstractVector{<:Real}, AbstractDict}
 
-function _tda_graph(g::Graphs.AbstractGraph)
-    return g
-end
-
-function _tda_graph(g::MetaGraphsNext.MetaGraph)
-    graph = g.graph
-    graph isa Graphs.AbstractGraph ||
-        throw(ArgumentError("MetaGraph backing graph must be a Graphs.AbstractGraph"))
+function _tda_graph(g::TDAGraphInput)::Graphs.AbstractGraph
+    graph = g isa MetaGraphsNext.MetaGraph ? g.graph : g
     return graph
 end
 
 function _tda_graph(g)
-    throw(ArgumentError("TDA metrics require a Graphs.AbstractGraph or MetaGraphsNext.MetaGraph"))
+    throw(ArgumentError(
+        "TDA metrics require a Graphs.AbstractGraph or MetaGraphsNext.MetaGraph"))
 end
 
-function _underlying_simple_graph(graph::Graphs.AbstractGraph)::Graphs.SimpleGraph
+function _underlying_simple_graph(g::TDAGraphInput)::Graphs.SimpleGraph
+    graph = _tda_graph(g)
     undirected = Graphs.SimpleGraph(Graphs.nv(graph))
     for edge in Graphs.edges(graph)
         Graphs.add_edge!(undirected, Graphs.src(edge), Graphs.dst(edge))
@@ -93,9 +89,9 @@ end
 
 function _tda_vertex_weights(
         g::TDAGraphInput,
-        graph::Graphs.AbstractGraph,
-        vertex_weights::TDAVertexWeightsInput
-)
+        vertex_weights::TDAVertexWeightsInput,
+        graph::Graphs.AbstractGraph = _tda_graph(g)
+)::Vector{Float64}
     vertex_count = Graphs.nv(graph)
 
     if isnothing(vertex_weights)
@@ -120,27 +116,15 @@ function _tda_vertex_weights(
             end
         end
         return weights
-    else
-        throw(ArgumentError("vertex_weights must be nothing, an AbstractVector, or an AbstractDict"))
     end
 end
 
 function _tda_vertex_weights(
         g::TDAGraphInput,
-        graph::Graphs.AbstractGraph,
-        vertex_weights
+        vertex_weights,
+        graph::Graphs.AbstractGraph = _tda_graph(g)
 )::Vector{Float64}
-    throw(ArgumentError("vertex_weights must be nothing, an AbstractVector, or an AbstractDict"))
-end
-
-function _tda_vertex_weights(g::TDAGraphInput, vertex_weights::TDAVertexWeightsInput)
-    graph = _tda_graph(g)
-    return _tda_vertex_weights(g, graph, vertex_weights)
-end
-
-function _tda_vertex_weights(g::TDAGraphInput, vertex_weights)
-    graph = _tda_graph(g)
-    return _tda_vertex_weights(g, graph, vertex_weights)
+    return throw(ArgumentError("vertex_weights must be nothing, an AbstractVector, or an AbstractDict"))
 end
 
 function _tda_weight_stats(weights::AbstractVector{<:Real})::NamedTuple
@@ -229,7 +213,9 @@ function tda_graph_stats(g::TDAGraphInput)::NamedTuple
 end
 
 """
-    tda_betti_curves(g::TDAGraphInput; thresholds, vertex_weights = nothing) -> TDAMetrics
+    tda_betti_curves(
+        g::TDAGraphInput; thresholds, vertex_weights = nothing
+    ) -> TDAMetrics
 
 Compute Betti₀ and Betti₁ across a vertex-weight filtration, where for each threshold `t`
 we take the induced subgraph on vertices with `vertex_weights[v] >= t`.
@@ -239,8 +225,8 @@ This provides an initial “topology signal” without requiring persistent homo
 # Arguments
 - `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to filter.
 - `thresholds`: Real-valued filtration thresholds.
-- `vertex_weights = nothing`: Uniform weights, vector aligned with graph vertex
-  codes, integer-keyed dictionary for plain graphs, or label-keyed dictionary for
+- `vertex_weights = nothing`: Uniform weights, a vector aligned with graph vertex codes,
+  an integer-keyed dictionary for plain graphs, or a label-keyed dictionary for
   `MetaGraphsNext.MetaGraph`.
 
 # Returns
@@ -262,7 +248,7 @@ function tda_betti_curves(
         vertex_weights::TDAVertexWeightsInput = nothing
 )::TDAMetrics
     graph = _tda_graph(g)
-    weights = _tda_vertex_weights(g, graph, vertex_weights)
+    weights = _tda_vertex_weights(g, vertex_weights, graph)
 
     threshold_vec = sort!(collect(Float64.(thresholds)))
     isempty(threshold_vec) && (threshold_vec = Float64[-Inf])
@@ -288,7 +274,9 @@ function tda_betti_curves(
 end
 
 """
-    tda_on_graph(g::TDAGraphInput, cfg::TDAConfig; vertex_weights = nothing) -> TDARunSummary
+    tda_on_graph(
+        g::TDAGraphInput, cfg::TDAConfig; vertex_weights = nothing
+    ) -> TDARunSummary
 
 Compute a standardized TDA summary for a graph.
 
@@ -324,7 +312,7 @@ function tda_on_graph(
         throw(ArgumentError("max_dim=$(cfg.max_dim) is not supported by backend :graph_betti (max_dim ≤ 1)"))
 
     graph = _tda_graph(g)
-    weights = _tda_vertex_weights(g, graph, vertex_weights)
+    weights = _tda_vertex_weights(g, vertex_weights, graph)
 
     metrics = tda_betti_curves(graph; thresholds = cfg.thresholds, vertex_weights = weights)
     return TDARunSummary(cfg, tda_graph_stats(graph), metrics)
@@ -434,7 +422,9 @@ function tda_metric_table(summary::TDARunSummary; kwargs...)::DataFrames.DataFra
 end
 
 """
-    extract_tda_metrics(g::TDAGraphInput, cfg::TDAConfig = TDAConfig(); kwargs...) -> DataFrames.DataFrame
+    extract_tda_metrics(
+        g::TDAGraphInput, cfg::TDAConfig = TDAConfig(); kwargs...
+    ) -> DataFrames.DataFrame
 
 Compute graph Betti/TDA metrics and return one table-ready row per filtration
 threshold. This is the convenience entry point for downstream assembly-quality
@@ -475,7 +465,7 @@ function extract_tda_metrics(
         provenance::NamedTuple = (; )
 )::DataFrames.DataFrame
     graph = _tda_graph(g)
-    weights = _tda_vertex_weights(g, graph, vertex_weights)
+    weights = _tda_vertex_weights(g, vertex_weights, graph)
     summary = tda_on_graph(graph, cfg; vertex_weights = weights)
     return tda_metric_table(
         summary;
@@ -499,7 +489,11 @@ Lower is better. This initial implementation uses only Betti curves:
 When a persistent homology backend is added, this can be extended to use true
 total persistence in H₁.
 """
-function tda_graph_score(metrics::TDAMetrics; α::Float64 = 1.0, β::Float64 = 1.0)
+function tda_graph_score(
+        metrics::TDAMetrics;
+        α::Float64 = 1.0,
+        β::Float64 = 1.0
+)::Float64
     cycle_penalty = α * (isempty(metrics.betti1) ? 0.0 : Float64(maximum(metrics.betti1)))
     fragmentation_penalty = β * (isempty(metrics.betti0) ? 0.0 :
                              Float64(maximum(metrics.betti0)))
