@@ -65,27 +65,126 @@ struct TDARunSummary
     metrics::TDAMetrics
 end
 
-function _underlying_simple_graph(g::Graphs.AbstractGraph)
-    undirected = Graphs.SimpleGraph(Graphs.nv(g))
-    for edge in Graphs.edges(g)
+const TDAGraphInput = Union{Graphs.AbstractGraph, MetaGraphsNext.MetaGraph}
+const TDAVertexWeightsInput = Union{Nothing, AbstractVector, AbstractDict}
+
+function _tda_graph(g::Graphs.AbstractGraph)
+    return g
+end
+
+function _tda_graph(g::MetaGraphsNext.MetaGraph)
+    graph = g.graph
+    graph isa Graphs.AbstractGraph ||
+        throw(ArgumentError("MetaGraph backing graph must be a Graphs.AbstractGraph"))
+    return graph
+end
+
+function _tda_graph(g)
+    throw(ArgumentError("TDA metrics require a Graphs.AbstractGraph or MetaGraphsNext.MetaGraph"))
+end
+
+function _underlying_simple_graph(graph::Graphs.AbstractGraph)::Graphs.SimpleGraph
+    undirected = Graphs.SimpleGraph(Graphs.nv(graph))
+    for edge in Graphs.edges(graph)
         Graphs.add_edge!(undirected, Graphs.src(edge), Graphs.dst(edge))
     end
     return undirected
 end
 
+function _tda_vertex_weights(
+        g::TDAGraphInput,
+        graph::Graphs.AbstractGraph,
+        vertex_weights::TDAVertexWeightsInput
+)
+    vertex_count = Graphs.nv(graph)
+
+    if isnothing(vertex_weights)
+        return ones(Float64, vertex_count)
+    elseif vertex_weights isa AbstractVector
+        length(vertex_weights) == vertex_count ||
+            throw(ArgumentError("vertex_weights must have length nv(g)"))
+        return collect(Float64.(vertex_weights))
+    elseif vertex_weights isa AbstractDict
+        weights = Vector{Float64}(undef, vertex_count)
+        if g isa MetaGraphsNext.MetaGraph
+            for label in MetaGraphsNext.labels(g)
+                haskey(vertex_weights, label) ||
+                    throw(ArgumentError("vertex_weights is missing label $(repr(label))"))
+                weights[MetaGraphsNext.code_for(g, label)] = Float64(vertex_weights[label])
+            end
+        else
+            for vertex in Graphs.vertices(graph)
+                haskey(vertex_weights, vertex) ||
+                    throw(ArgumentError("vertex_weights is missing vertex $(vertex)"))
+                weights[vertex] = Float64(vertex_weights[vertex])
+            end
+        end
+        return weights
+    else
+        throw(ArgumentError("vertex_weights must be nothing, an AbstractVector, or an AbstractDict"))
+    end
+end
+
+function _tda_vertex_weights(
+        g::TDAGraphInput,
+        graph::Graphs.AbstractGraph,
+        vertex_weights
+)::Vector{Float64}
+    throw(ArgumentError("vertex_weights must be nothing, an AbstractVector, or an AbstractDict"))
+end
+
+function _tda_vertex_weights(g::TDAGraphInput, vertex_weights::TDAVertexWeightsInput)
+    graph = _tda_graph(g)
+    return _tda_vertex_weights(g, graph, vertex_weights)
+end
+
+function _tda_vertex_weights(g::TDAGraphInput, vertex_weights)
+    graph = _tda_graph(g)
+    return _tda_vertex_weights(g, graph, vertex_weights)
+end
+
+function _tda_weight_stats(weights::AbstractVector{<:Real})::NamedTuple
+    if isempty(weights)
+        return (weight_min = NaN, weight_max = NaN, weight_mean = NaN)
+    end
+
+    float_weights = Float64.(weights)
+    return (
+        weight_min = minimum(float_weights),
+        weight_max = maximum(float_weights),
+        weight_mean = Statistics.mean(float_weights)
+    )
+end
+
 """
-    tda_betti_numbers(g::Graphs.AbstractGraph) -> (betti0::Int, betti1::Int)
+    tda_betti_numbers(g::TDAGraphInput) -> (betti0::Int, betti1::Int)
 
 Compute graph-theoretic Betti numbers on the underlying undirected simple graph:
 - Betti₀ = number of connected components
 - Betti₁ = cycle rank (|E| - |V| + Betti₀)
+
+Accepts `Graphs.AbstractGraph` and Rhizomorph `MetaGraphsNext.MetaGraph` inputs.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+
+# Returns
+- A tuple `(betti0, betti1)` with integer component and cycle-rank counts.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+Graphs.add_edge!(graph, 1, 2)
+betti0, betti1 = Mycelia.tda_betti_numbers(graph)
+```
 """
-function tda_betti_numbers(g::Graphs.AbstractGraph)
-    if Graphs.nv(g) == 0
+function tda_betti_numbers(g::TDAGraphInput)::Tuple{Int, Int}
+    graph = _tda_graph(g)
+    if Graphs.nv(graph) == 0
         return (0, 0)
     end
 
-    undirected = _underlying_simple_graph(g)
+    undirected = _underlying_simple_graph(graph)
     components = Graphs.connected_components(undirected)
     betti0 = length(components)
     betti1 = Graphs.ne(undirected) - Graphs.nv(undirected) + betti0
@@ -93,14 +192,26 @@ function tda_betti_numbers(g::Graphs.AbstractGraph)
 end
 
 """
-    tda_graph_stats(g::Graphs.AbstractGraph) -> NamedTuple
+    tda_graph_stats(g::TDAGraphInput) -> NamedTuple
 
 Return lightweight graph statistics useful for logging.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+
+# Returns
+- A named tuple with `nv`, `ne`, `directed`, and `density`.
+
+# Example
+```julia
+stats = Mycelia.tda_graph_stats(Graphs.SimpleGraph(4))
+```
 """
-function tda_graph_stats(g::Graphs.AbstractGraph)
-    vertex_count = Graphs.nv(g)
-    edge_count = Graphs.ne(g)
-    directed = Graphs.is_directed(g)
+function tda_graph_stats(g::TDAGraphInput)::NamedTuple
+    graph = _tda_graph(g)
+    vertex_count = Graphs.nv(graph)
+    edge_count = Graphs.ne(graph)
+    directed = Graphs.is_directed(graph)
     density = if vertex_count <= 1
         0.0
     elseif directed
@@ -118,20 +229,40 @@ function tda_graph_stats(g::Graphs.AbstractGraph)
 end
 
 """
-    tda_betti_curves(g::Graphs.AbstractGraph; thresholds, vertex_weights) -> TDAMetrics
+    tda_betti_curves(g::TDAGraphInput; thresholds, vertex_weights = nothing) -> TDAMetrics
 
 Compute Betti₀ and Betti₁ across a vertex-weight filtration, where for each threshold `t`
 we take the induced subgraph on vertices with `vertex_weights[v] >= t`.
 
 This provides an initial “topology signal” without requiring persistent homology.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to filter.
+- `thresholds`: Real-valued filtration thresholds.
+- `vertex_weights = nothing`: Uniform weights, vector aligned with graph vertex
+  codes, integer-keyed dictionary for plain graphs, or label-keyed dictionary for
+  `MetaGraphsNext.MetaGraph`.
+
+# Returns
+- `TDAMetrics` containing sorted thresholds and Betti curves.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+metrics = Mycelia.tda_betti_curves(
+    graph;
+    thresholds = [0.0, 1.0],
+    vertex_weights = ones(Float64, Graphs.nv(graph))
+)
+```
 """
 function tda_betti_curves(
-        g::Graphs.AbstractGraph;
+        g::TDAGraphInput;
         thresholds::AbstractVector{<:Real},
-        vertex_weights::AbstractVector{<:Real}
-)
-    Graphs.nv(g) == length(vertex_weights) ||
-        throw(ArgumentError("vertex_weights must have length nv(g)"))
+        vertex_weights::TDAVertexWeightsInput = nothing
+)::TDAMetrics
+    graph = _tda_graph(g)
+    weights = _tda_vertex_weights(g, graph, vertex_weights)
 
     threshold_vec = sort!(collect(Float64.(thresholds)))
     isempty(threshold_vec) && (threshold_vec = Float64[-Inf])
@@ -140,14 +271,14 @@ function tda_betti_curves(
     betti1 = Vector{Int}(undef, length(threshold_vec))
 
     for (i, thr) in enumerate(threshold_vec)
-        keep_vertices = findall(w -> Float64(w) >= thr, vertex_weights)
+        keep_vertices = findall(w -> Float64(w) >= thr, weights)
         if isempty(keep_vertices)
             betti0[i] = 0
             betti1[i] = 0
             continue
         end
 
-        subgraph, _ = Graphs.induced_subgraph(g, keep_vertices)
+        subgraph, _ = Graphs.induced_subgraph(graph, keep_vertices)
         b0, b1 = tda_betti_numbers(subgraph)
         betti0[i] = b0
         betti1[i] = b1
@@ -157,31 +288,203 @@ function tda_betti_curves(
 end
 
 """
-    tda_on_graph(g::Graphs.AbstractGraph, cfg::TDAConfig; vertex_weights) -> TDARunSummary
+    tda_on_graph(g::TDAGraphInput, cfg::TDAConfig; vertex_weights = nothing) -> TDARunSummary
 
 Compute a standardized TDA summary for a graph.
 
-`vertex_weights` should typically be a coverage/quality/confidence proxy aligned with
-vertex indices. If omitted, all vertices are given weight 1.0.
+`vertex_weights` should typically be a coverage/quality/confidence proxy. For
+`Graphs.AbstractGraph`, pass either a vector aligned with vertex indices or a
+dictionary keyed by integer vertex id. For Rhizomorph `MetaGraphsNext.MetaGraph`,
+pass either a vector aligned with internal vertex codes or a dictionary keyed by
+vertex label. If omitted, all vertices are given weight 1.0.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+- `cfg`: `TDAConfig` controlling backend, maximum dimension, and thresholds.
+- `vertex_weights = nothing`: Optional weights for the vertex filtration.
+
+# Returns
+- `TDARunSummary` with configuration, graph statistics, and `TDAMetrics`.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+cfg = Mycelia.TDAConfig(thresholds = [0.0])
+summary = Mycelia.tda_on_graph(graph, cfg)
+```
 """
 function tda_on_graph(
-        g::Graphs.AbstractGraph,
+        g::TDAGraphInput,
         cfg::TDAConfig;
-        vertex_weights::Union{Nothing, AbstractVector{<:Real}} = nothing
-)
+        vertex_weights::TDAVertexWeightsInput = nothing
+)::TDARunSummary
     cfg.backend == :graph_betti ||
         throw(ArgumentError("Unsupported TDA backend $(cfg.backend); currently supported: :graph_betti"))
     cfg.max_dim <= 1 ||
         throw(ArgumentError("max_dim=$(cfg.max_dim) is not supported by backend :graph_betti (max_dim ≤ 1)"))
 
-    weights = if isnothing(vertex_weights)
-        ones(Float64, Graphs.nv(g))
-    else
-        vertex_weights
+    graph = _tda_graph(g)
+    weights = _tda_vertex_weights(g, graph, vertex_weights)
+
+    metrics = tda_betti_curves(graph; thresholds = cfg.thresholds, vertex_weights = weights)
+    return TDARunSummary(cfg, tda_graph_stats(graph), metrics)
+end
+
+"""
+    tda_metric_rows(summary::TDARunSummary; kwargs...) -> Vector{NamedTuple}
+
+Convert a `TDARunSummary` into stable, table-ready rows. One row is emitted per
+filtration threshold, with graph statistics, Betti values, summary score, and a
+provenance tuple that records the TDA configuration and filtration choices.
+Generated provenance fields are merged after caller provenance so configuration
+fields such as `backend`, `thresholds`, `filtration`, and `weight_name` cannot be
+overwritten by user-supplied metadata.
+
+# Arguments
+- `summary`: `TDARunSummary` returned by `tda_on_graph`.
+- `graph_id = "graph"`: Identifier copied into every row.
+- `filtration = :vertex_weight_threshold`: Filtration recipe name.
+- `weight_name = :uniform`: Name of the vertex weight signal.
+- `weight_stats = (weight_min = NaN, weight_max = NaN, weight_mean = NaN)`: Weight summary;
+  empty weight vectors use `NaN` for all summary fields.
+- `provenance = (; )`: Extra user provenance merged into the generated provenance tuple;
+  generated configuration fields take precedence on key conflicts.
+
+# Returns
+- `Vector{NamedTuple}` with one table-ready row per threshold.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+summary = Mycelia.tda_on_graph(graph, Mycelia.TDAConfig(thresholds = [0.0]))
+rows = Mycelia.tda_metric_rows(summary; graph_id = "assembly_graph")
+```
+"""
+function tda_metric_rows(
+        summary::TDARunSummary;
+        graph_id = "graph",
+        filtration::Symbol = :vertex_weight_threshold,
+        weight_name::Symbol = :uniform,
+        weight_stats::NamedTuple = (weight_min = NaN, weight_max = NaN, weight_mean = NaN),
+        provenance::NamedTuple = (; )
+)::Vector{NamedTuple}
+    metrics = summary.metrics
+    config = summary.config
+    graph_stats = summary.graph_stats
+    score = tda_graph_score(metrics)
+    generated_provenance = (
+        backend = config.backend,
+        max_dim = config.max_dim,
+        max_points = config.max_points,
+        thresholds = copy(config.thresholds),
+        filtration = filtration,
+        weight_name = weight_name
+    )
+    row_provenance = merge(provenance, generated_provenance)
+
+    rows = Vector{NamedTuple}(undef, length(metrics.thresholds))
+    for i in eachindex(metrics.thresholds)
+        rows[i] = (
+            graph_id = graph_id,
+            threshold_index = i,
+            threshold = metrics.thresholds[i],
+            betti0 = metrics.betti0[i],
+            betti1 = metrics.betti1[i],
+            nv = graph_stats.nv,
+            ne = graph_stats.ne,
+            directed = graph_stats.directed,
+            density = graph_stats.density,
+            score = score,
+            backend = config.backend,
+            max_dim = config.max_dim,
+            max_points = config.max_points,
+            filtration = filtration,
+            weight_name = weight_name,
+            weight_min = weight_stats.weight_min,
+            weight_max = weight_stats.weight_max,
+            weight_mean = weight_stats.weight_mean,
+            provenance = row_provenance
+        )
     end
 
-    metrics = tda_betti_curves(g; thresholds = cfg.thresholds, vertex_weights = weights)
-    return TDARunSummary(cfg, tda_graph_stats(g), metrics)
+    return rows
+end
+
+"""
+    tda_metric_table(summary::TDARunSummary; kwargs...) -> DataFrames.DataFrame
+
+Return `tda_metric_rows(summary; kwargs...)` as a `DataFrames.DataFrame`.
+
+# Arguments
+- `summary`: `TDARunSummary` returned by `tda_on_graph`.
+- `kwargs...`: Keyword arguments forwarded to `tda_metric_rows`.
+
+# Returns
+- `DataFrames.DataFrame` with one row per filtration threshold.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+summary = Mycelia.tda_on_graph(graph, Mycelia.TDAConfig(thresholds = [0.0]))
+table = Mycelia.tda_metric_table(summary)
+```
+"""
+function tda_metric_table(summary::TDARunSummary; kwargs...)::DataFrames.DataFrame
+    return DataFrames.DataFrame(tda_metric_rows(summary; kwargs...))
+end
+
+"""
+    extract_tda_metrics(g::TDAGraphInput, cfg::TDAConfig = TDAConfig(); kwargs...) -> DataFrames.DataFrame
+
+Compute graph Betti/TDA metrics and return one table-ready row per filtration
+threshold. This is the convenience entry point for downstream assembly-quality
+correlation analyses.
+
+# Arguments
+- `g`: `Graphs.AbstractGraph` or `MetaGraphsNext.MetaGraph` to summarize.
+- `cfg = TDAConfig()`: TDA configuration.
+- `vertex_weights = nothing`: Uniform weights, a vector, or a graph-label dictionary.
+- `graph_id = "graph"`: Assembly graph identifier copied into every row.
+- `filtration = :vertex_weight_threshold`: Filtration recipe name recorded in provenance.
+- `weight_name`: Defaults to `:uniform` when `vertex_weights` is omitted, otherwise
+  `:vertex_weight`.
+- `provenance = (; )`: Extra run metadata merged into each row's provenance tuple;
+  generated configuration fields take precedence on key conflicts.
+
+# Returns
+- `DataFrames.DataFrame` with stable TDA metric rows and provenance. Empty graphs
+  produce `NaN` weight summary fields because there are no vertex weights to summarize.
+
+# Example
+```julia
+graph = Graphs.SimpleGraph(3)
+table = Mycelia.extract_tda_metrics(
+    graph,
+    Mycelia.TDAConfig(thresholds = [0.0]);
+    graph_id = "assembly_graph"
+)
+```
+"""
+function extract_tda_metrics(
+        g::TDAGraphInput,
+        cfg::TDAConfig = TDAConfig();
+        vertex_weights::TDAVertexWeightsInput = nothing,
+        graph_id = "graph",
+        filtration::Symbol = :vertex_weight_threshold,
+        weight_name::Symbol = isnothing(vertex_weights) ? :uniform : :vertex_weight,
+        provenance::NamedTuple = (; )
+)::DataFrames.DataFrame
+    graph = _tda_graph(g)
+    weights = _tda_vertex_weights(g, graph, vertex_weights)
+    summary = tda_on_graph(graph, cfg; vertex_weights = weights)
+    return tda_metric_table(
+        summary;
+        graph_id = graph_id,
+        filtration = filtration,
+        weight_name = weight_name,
+        weight_stats = _tda_weight_stats(weights),
+        provenance = provenance
+    )
 end
 
 """
