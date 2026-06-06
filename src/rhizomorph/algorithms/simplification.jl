@@ -428,6 +428,135 @@ function remove_duplicate_bubbles(bubbles::Vector{BubbleStructure{T}}) where {T}
     return unique_bubbles
 end
 
+"""
+    enumerate_superbubble_paths(graph, bubble; max_paths=10, max_depth=100, max_expansions=10000)
+
+Enumerate ranked alternatives across a detected superbubble-like local region.
+
+This wrapper uses `bubble.entry_vertex` and `bubble.exit_vertex` as local
+boundaries, then delegates to `enumerate_local_paths`. It can return more than
+the two branch paths stored in `BubbleStructure`, which makes it useful for
+multi-branch superbubbles and repeat-adjacent local regions.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Rhizomorph or weighted graph
+- `bubble::BubbleStructure`: Detected local bubble boundary
+
+# Keywords
+- `max_paths::Int=10`: Maximum number of alternatives to return
+- `max_depth::Int=100`: Maximum number of edges per path
+- `max_expansions::Int=10000`: Maximum partial paths to expand
+- `min_probability::Float64=0.0`: Prune paths below this cumulative probability
+- `default_weight::Float64=1e-10`: Fallback edge weight during conversion
+- `edge_weight::Function=count_evidence`: Edge scoring callback during conversion
+
+# Returns
+- `LocalPathEnumerationResult`: Ranked alternatives plus provenance metadata
+
+# Example
+```julia
+bubbles = Mycelia.Rhizomorph.detect_bubbles_next(graph)
+result = Mycelia.Rhizomorph.enumerate_superbubble_paths(graph, first(bubbles))
+```
+"""
+function enumerate_superbubble_paths(
+        graph::MetaGraphsNext.MetaGraph,
+        bubble::BubbleStructure{T};
+        max_paths::Int = 10,
+        max_depth::Int = 100,
+        max_expansions::Int = 10_000,
+        min_probability::Float64 = 0.0,
+        default_weight::Float64 = 1e-10,
+        edge_weight::Function = count_evidence
+) where {T}
+    return _enumerate_local_paths_impl(
+        graph,
+        bubble.entry_vertex,
+        bubble.exit_vertex,
+        :superbubble;
+        max_paths = max_paths,
+        max_depth = max_depth,
+        max_expansions = max_expansions,
+        min_probability = min_probability,
+        default_weight = default_weight,
+        edge_weight = edge_weight
+    )
+end
+
+"""
+    enumerate_superbubble_paths(graph; min_bubble_length=2, max_bubble_length=100, max_bubbles=typemax(Int), ...)
+
+Detect local bubble boundaries and enumerate ranked alternatives for each one.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Rhizomorph or weighted graph
+
+# Keywords
+- `min_bubble_length::Int=2`: Minimum branch length passed to bubble detection
+- `max_bubble_length::Int=100`: Maximum branch trace length passed to detection
+- `max_bubbles::Int=typemax(Int)`: Maximum detected regions to enumerate
+- `max_paths::Int=10`: Maximum alternatives per region
+- `max_depth::Int=100`: Maximum edge depth per local enumeration
+- `max_expansions::Int=10000`: Maximum partial-path expansions per region
+- `min_probability::Float64=0.0`: Prune paths below this cumulative probability
+- `default_weight::Float64=1e-10`: Fallback edge weight during conversion
+- `edge_weight::Function=count_evidence`: Edge scoring callback during conversion
+
+# Returns
+- `Vector{LocalPathEnumerationResult}`: One enumeration result per detected region
+
+# Notes
+Use `max_bubbles`, `max_paths`, `max_depth`, and `max_expansions` together on
+highly repetitive graphs. Each result records whether a guard truncated local
+search in its provenance.
+"""
+function enumerate_superbubble_paths(
+        graph::MetaGraphsNext.MetaGraph;
+        min_bubble_length::Int = 2,
+        max_bubble_length::Int = 100,
+        max_bubbles::Int = typemax(Int),
+        max_paths::Int = 10,
+        max_depth::Int = 100,
+        max_expansions::Int = 10_000,
+        min_probability::Float64 = 0.0,
+        default_weight::Float64 = 1e-10,
+        edge_weight::Function = count_evidence
+)
+    if max_bubbles < 0
+        throw(ArgumentError("max_bubbles must be non-negative, got $max_bubbles"))
+    end
+
+    labels = collect(MetaGraphsNext.labels(graph))
+    results = LocalPathEnumerationResult{eltype(labels)}[]
+    if max_bubbles == 0 || isempty(labels)
+        return results
+    end
+
+    bubbles = detect_bubbles_next(
+        graph; min_bubble_length = min_bubble_length, max_bubble_length = max_bubble_length)
+
+    for bubble in bubbles
+        if length(results) >= max_bubbles
+            break
+        end
+        push!(
+            results,
+            enumerate_superbubble_paths(
+                graph,
+                bubble;
+                max_paths = max_paths,
+                max_depth = max_depth,
+                max_expansions = max_expansions,
+                min_probability = min_probability,
+                default_weight = default_weight,
+                edge_weight = edge_weight
+            )
+        )
+    end
+
+    return results
+end
+
 # ============================================================================
 # Tip removal (dead-end pruning)
 # ============================================================================
