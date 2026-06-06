@@ -802,6 +802,12 @@ Transition scores are normalized outgoing edge weights:
 decoder returns the best path on the deepest non-empty dynamic-programming
 frontier, stopping early only when no frontier can be expanded.
 
+!!! warning "Without a target, this is not the global maximum-probability path"
+    In no-target mode the deepest-frontier path always wins: a shorter path with
+    a *higher* log-probability is intentionally discarded in favor of one that
+    reaches a deeper frontier. If you need the true maximum-probability path to a
+    specific vertex (the usual "Viterbi" semantics), pass `target_vertex`.
+
 # Example
 ```julia
 weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(raw_graph)
@@ -955,8 +961,8 @@ function _viterbi_decode_next_impl(
 
     for depth in 1:max_steps
         next_scores = Dict{Tuple{T, StrandOrientation}, Float64}()
-        next_predecessors =
-            Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
+        next_predecessors = Dict{
+            Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
 
         for (state, state_score) in active_scores
             current_vertex, current_strand = state
@@ -1008,7 +1014,8 @@ function _viterbi_decode_next_impl(
 
         if !exact
             pre_prune_count = length(next_scores)
-            next_scores, next_predecessors = _prune_viterbi_beam(
+            next_scores,
+            next_predecessors = _prune_viterbi_beam(
                 next_scores,
                 next_predecessors,
                 beam_width,
@@ -1036,8 +1043,8 @@ function _viterbi_decode_next_impl(
             best_state, best_score = _best_viterbi_state(active_scores)
             best_depth = depth
         else
-            target_state, target_score =
-                _best_viterbi_target_state(active_scores, target_vertex)
+            target_state,
+            target_score = _best_viterbi_target_state(active_scores, target_vertex)
             if target_state !== nothing && target_score > best_score
                 best_state = target_state
                 best_score = target_score
@@ -1111,7 +1118,8 @@ end
 
 function _prune_viterbi_beam(
         scores::Dict{Tuple{T, StrandOrientation}, Float64},
-        predecessors::Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}},
+        predecessors::Dict{
+            Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}},
         beam_width::Int,
         beam_log_threshold::Float64
 ) where {T}
@@ -1122,8 +1130,8 @@ function _prune_viterbi_beam(
     best_score = first(ordered)[2]
 
     retained_scores = Dict{Tuple{T, StrandOrientation}, Float64}()
-    retained_predecessors =
-        Dict{Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
+    retained_predecessors = Dict{
+        Tuple{T, StrandOrientation}, Tuple{Tuple{T, StrandOrientation}, Float64}}()
 
     for (state, score) in ordered
         if length(retained_scores) >= beam_width

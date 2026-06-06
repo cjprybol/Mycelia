@@ -153,6 +153,32 @@ Test.@testset "Viterbi Decoding" begin
         Test.@test threshold_only.diagnostics[:pruned_states] == 2
     end
 
+    Test.@testset "finite beam prunes states yet recovers the exact optimum" begin
+        # S branches to THREE successors; a width-2 beam keeps only the two
+        # best-scoring partial paths (A, B) and prunes the third (C). Because the
+        # pruned branch is not on the optimal path, beam must still return the
+        # exact optimum — the meaningful beam==exact equivalence the trivial
+        # no-pruning case (beam_width >= frontier) does not exercise.
+        graph = create_weighted_graph(["S", "A", "B", "C", "T"])
+        add_weighted_edge!(graph, "S", "A", 9.0)
+        add_weighted_edge!(graph, "S", "B", 4.0)
+        add_weighted_edge!(graph, "S", "C", 1.0)
+        add_weighted_edge!(graph, "A", "T", 1.0)
+        add_weighted_edge!(graph, "B", "T", 1.0)
+        add_weighted_edge!(graph, "C", "T", 1.0)
+
+        exact = Mycelia.Rhizomorph.viterbi_decode_next(graph, "S", 2; target_vertex = "T")
+        beam = Mycelia.Rhizomorph.beam_pruned_viterbi_decode_next(
+            graph, "S", 2; target_vertex = "T", beam_width = 2)
+
+        Test.@test beam.path !== nothing
+        Test.@test path_labels(something(beam.path)) == ["S", "A", "T"]
+        Test.@test path_labels(something(beam.path)) == path_labels(something(exact.path))
+        Test.@test beam.score ≈ exact.score
+        # Pruning genuinely occurred (3-state frontier, width 2) yet the optimum survived.
+        Test.@test beam.diagnostics[:pruned_states] >= 1
+    end
+
     Test.@testset "input validation and target boundary cases" begin
         graph = create_ambiguous_decoding_graph()
         empty_graph = create_weighted_graph(String[])
@@ -282,7 +308,7 @@ Test.@testset "Viterbi Decoding" begin
         Test.@test path_strands(decoded_path) == [
             Mycelia.Rhizomorph.Forward,
             Mycelia.Rhizomorph.Reverse,
-            Mycelia.Rhizomorph.Reverse,
+            Mycelia.Rhizomorph.Reverse
         ]
         Test.@test decoded.score ≈ log(2.0 / 3.0)
         Test.@test decoded_path.total_probability ≈ 2.0 / 3.0
@@ -331,9 +357,9 @@ Test.@testset "Viterbi Decoding" begin
             1,
             [
                 Dict(
-                    ("X", Mycelia.Rhizomorph.Forward) =>
-                        (("A", Mycelia.Rhizomorph.Forward), 0.5)
-                ),
+                ("X",
+                Mycelia.Rhizomorph.Forward) => (("A", Mycelia.Rhizomorph.Forward), 0.5)
+            ),
             ]
         )
     end
