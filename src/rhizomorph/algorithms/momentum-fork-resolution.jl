@@ -18,6 +18,11 @@ Decision thresholds for Wald's sequential probability ratio test.
 - `beta::Float64`: False-negative rate for accepting the reference branch
 - `accept_alternative::Float64`: Upper LLR threshold
 - `accept_reference::Float64`: Lower LLR threshold
+
+# Example
+```julia
+thresholds = Mycelia.Rhizomorph.MomentumForkResolver.SPRTThresholds(; alpha=0.05, beta=0.1)
+```
 """
 struct SPRTThresholds
     alpha::Float64
@@ -26,6 +31,24 @@ struct SPRTThresholds
     accept_reference::Float64
 end
 
+"""
+    SPRTThresholds(; alpha=0.05, beta=0.05)
+
+Construct sequential probability ratio test thresholds from false-positive and
+false-negative error budgets.
+
+# Arguments
+- `alpha::Real=0.05`: False-positive rate for accepting the alternative branch
+- `beta::Real=0.05`: False-negative rate for accepting the reference branch
+
+# Returns
+- `SPRTThresholds`: Threshold container with precomputed acceptance boundaries
+
+# Example
+```julia
+thresholds = Mycelia.Rhizomorph.MomentumForkResolver.SPRTThresholds(; alpha=0.05, beta=0.1)
+```
+"""
 function SPRTThresholds(; alpha::Real = 0.05, beta::Real = 0.05)
     0.0 < alpha < 1.0 || error("alpha must satisfy 0 < alpha < 1, got $(alpha)")
     0.0 < beta < 1.0 || error("beta must satisfy 0 < beta < 1, got $(beta)")
@@ -40,7 +63,7 @@ function SPRTThresholds(; alpha::Real = 0.05, beta::Real = 0.05)
 end
 
 """
-    ActiveReadState(read_id, branches; reference_branch=first(branches))
+    ActiveReadState(read_id, branches; reference_branch=nothing)
 
 Track sequential branch evidence for one read traversing a fork.
 
@@ -54,6 +77,15 @@ Track sequential branch evidence for one read traversing a fork.
 - `observations::Int`: Number of sequential updates applied
 - `resolved_branch`: Final resolved branch when a threshold is crossed
 - `decision::Symbol`: `:continue`, `:accept_reference`, or `:accept_alternative`
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+    "read-1",
+    [:major, :minor];
+    reference_branch=:major,
+)
+```
 """
 mutable struct ActiveReadState{B}
     read_id::String
@@ -67,6 +99,30 @@ mutable struct ActiveReadState{B}
     decision::Symbol
 end
 
+"""
+    ActiveReadState(read_id, branches; reference_branch=nothing)
+
+Initialize per-read fork-resolution state with zeroed evidence totals for each
+candidate branch.
+
+# Arguments
+- `read_id::AbstractString`: Read identifier used in diagnostics
+- `branches::AbstractVector{B}`: Candidate branch labels tracked for the read
+- `reference_branch::Union{Nothing, B}=nothing`: Branch treated as the null
+  hypothesis. Defaults to the first unique entry in `branches`
+
+# Returns
+- `ActiveReadState{B}`: Mutable state object ready for sequential evidence updates
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+    "read-2",
+    [:hap_a, :hap_b];
+    reference_branch=:hap_a,
+)
+```
+"""
 function ActiveReadState(
         read_id::AbstractString,
         branches::AbstractVector{B};
@@ -74,7 +130,8 @@ function ActiveReadState(
 ) where {B}
     isempty(branches) && error("ActiveReadState requires at least one branch label")
     unique_branches = unique(collect(branches))
-    chosen_reference = isnothing(reference_branch) ? first(unique_branches) : reference_branch
+    chosen_reference = isnothing(reference_branch) ? first(unique_branches) :
+                       reference_branch
     chosen_reference in unique_branches ||
         error("reference_branch must be one of the supplied branches")
 
@@ -97,6 +154,24 @@ end
     linear_weight(support; slope=1.0, intercept=0.0, cap=nothing)
 
 Convert raw support into an additive linear evidence weight.
+
+# Arguments
+- `support::Real`: Non-negative raw support for the observed branch
+- `slope::Real=1.0`: Multiplicative scaling applied to `support`
+- `intercept::Real=0.0`: Constant offset added before clamping
+- `cap::Union{Nothing, Real}=nothing`: Optional upper bound on the resulting weight
+
+# Returns
+- `Float64`: Non-negative additive evidence weight
+
+# Example
+```julia
+weight = Mycelia.Rhizomorph.MomentumForkResolver.linear_weight(
+    4;
+    slope=1.5,
+    intercept=0.5,
+)
+```
 """
 function linear_weight(
         support::Real;
@@ -118,6 +193,23 @@ end
 
 Convert raw support into an additive saturating evidence weight using a
 Michaelis-Menten style response curve.
+
+# Arguments
+- `support::Real`: Non-negative raw support for the observed branch
+- `max_weight::Real=1.0`: Asymptotic maximum additive evidence
+- `half_saturation::Real=1.0`: Support value that yields half of `max_weight`
+
+# Returns
+- `Float64`: Saturating evidence contribution bounded by `max_weight`
+
+# Example
+```julia
+weight = Mycelia.Rhizomorph.MomentumForkResolver.saturating_weight(
+    9;
+    max_weight=3.0,
+    half_saturation=3.0,
+)
+```
 """
 function saturating_weight(
         support::Real;
@@ -139,14 +231,29 @@ end
 
 Compute a direct log-likelihood-ratio contribution for two competing branches.
 Positive values favor the first branch, negative values favor the second.
+
+# Arguments
+- `favored_support::Real`: Non-negative support for the favored branch
+- `competing_support::Real`: Non-negative support for the competing branch
+- `pseudocount::Real=0.5`: Positive smoothing value added to both supports
+
+# Returns
+- `Float64`: Signed log-likelihood-ratio contribution
+
+# Example
+```julia
+llr = Mycelia.Rhizomorph.MomentumForkResolver.llr_weight(8, 2; pseudocount=0.5)
+```
 """
 function llr_weight(
         favored_support::Real,
         competing_support::Real;
         pseudocount::Real = 0.5
 )
-    favored_support >= 0 || error("favored_support must be non-negative, got $(favored_support)")
-    competing_support >= 0 || error("competing_support must be non-negative, got $(competing_support)")
+    favored_support >= 0 ||
+        error("favored_support must be non-negative, got $(favored_support)")
+    competing_support >= 0 ||
+        error("competing_support must be non-negative, got $(competing_support)")
     pseudocount > 0 || error("pseudocount must be positive, got $(pseudocount)")
     return log(
         (Float64(favored_support) + Float64(pseudocount)) /
@@ -158,6 +265,24 @@ end
     sprt_decision(log_likelihood_ratio; alpha=0.05, beta=0.05)
 
 Apply SPRT threshold logic to a signed log-likelihood ratio.
+
+# Arguments
+- `log_likelihood_ratio::Real`: Signed evidence balance between the strongest
+  alternative branch and the reference branch
+- `alpha::Real=0.05`: False-positive rate for accepting the alternative branch
+- `beta::Real=0.05`: False-negative rate for accepting the reference branch
+
+# Returns
+- `Symbol`: One of `:accept_alternative`, `:accept_reference`, or `:continue`
+
+# Example
+```julia
+decision = Mycelia.Rhizomorph.MomentumForkResolver.sprt_decision(
+    0.0;
+    alpha=0.05,
+    beta=0.1,
+)
+```
 """
 function sprt_decision(log_likelihood_ratio::Real; alpha::Real = 0.05, beta::Real = 0.05)
     thresholds = SPRTThresholds(; alpha, beta)
@@ -174,6 +299,18 @@ end
     best_branch(state)
 
 Return the branch with the highest cumulative weighted evidence.
+
+# Arguments
+- `state::ActiveReadState`: Sequential fork-resolution state to inspect
+
+# Returns
+- Branch label: Branch with the largest weighted evidence total after tie-breaking
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState("read-3", ["left", "right"])
+branch = Mycelia.Rhizomorph.MomentumForkResolver.best_branch(state)
+```
 """
 function best_branch(state::ActiveReadState)
     ranked = _ranked_branches(state)
@@ -184,6 +321,23 @@ end
     strongest_alternative(state)
 
 Return the strongest branch that is not the configured reference branch.
+
+# Arguments
+- `state::ActiveReadState`: Sequential fork-resolution state to inspect
+
+# Returns
+- Branch label: Highest-ranked non-reference branch, or the reference branch
+  itself when no alternative exists
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+    "read-4",
+    [:center, :left, :right];
+    reference_branch=:center,
+)
+branch = Mycelia.Rhizomorph.MomentumForkResolver.strongest_alternative(state)
+```
 """
 function strongest_alternative(state::ActiveReadState)
     for branch in _ranked_branches(state)
@@ -199,6 +353,33 @@ end
 
 Accumulate evidence for a single branch observation, then update the SPRT
 decision state.
+
+# Arguments
+- `state::ActiveReadState{B}`: Mutable fork-resolution state
+- `branch::B`: Observed branch to update
+- `support::Real=1`: Non-negative support contributed by this observation
+- `weight_fn=linear_weight`: Weighting callback applied to `support`
+- `alpha::Real=0.05`: False-positive rate for accepting the alternative branch
+- `beta::Real=0.05`: False-negative rate for accepting the reference branch
+- `weight_kwargs...`: Additional keyword arguments forwarded to `weight_fn`
+
+# Returns
+- `Symbol`: Updated SPRT decision after incorporating the observation
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+    "read-5",
+    [:major, :minor];
+    reference_branch=:major,
+)
+decision = Mycelia.Rhizomorph.MomentumForkResolver.observe_fork_event!(
+    state,
+    :minor,
+    2;
+    weight_fn=Mycelia.Rhizomorph.MomentumForkResolver.linear_weight,
+)
+```
 """
 function observe_fork_event!(
         state::ActiveReadState{B},
@@ -224,6 +405,35 @@ end
 
 Accumulate a competitive update between two branches using a direct
 log-likelihood-ratio contribution.
+
+# Arguments
+- `state::ActiveReadState{B}`: Mutable fork-resolution state
+- `branch_a::B`: Branch credited when the direct LLR is positive
+- `branch_b::B`: Competing branch credited when the direct LLR is negative
+- `support_a::Real`: Non-negative support for `branch_a`
+- `support_b::Real`: Non-negative support for `branch_b`
+- `alpha::Real=0.05`: False-positive rate for accepting the alternative branch
+- `beta::Real=0.05`: False-negative rate for accepting the reference branch
+- `pseudocount::Real=0.5`: Positive smoothing value for the direct LLR
+
+# Returns
+- `Symbol`: Updated SPRT decision after the competitive observation
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState(
+    "read-6",
+    [:path_a, :path_b];
+    reference_branch=:path_a,
+)
+decision = Mycelia.Rhizomorph.MomentumForkResolver.observe_fork_event!(
+    state,
+    :path_b,
+    :path_a,
+    40,
+    1,
+)
+```
 """
 function observe_fork_event!(
         state::ActiveReadState{B},
@@ -254,6 +464,21 @@ end
     fork_resolution(state; alpha=0.05, beta=0.05)
 
 Return the current resolution state as a named tuple.
+
+# Arguments
+- `state::ActiveReadState`: Sequential fork-resolution state to summarize
+- `alpha::Real=0.05`: False-positive rate used to reconstruct the thresholds
+- `beta::Real=0.05`: False-negative rate used to reconstruct the thresholds
+
+# Returns
+- Named tuple: Decision summary containing the resolved branch, current branch,
+  reference branch, signed log-likelihood ratio, and `SPRTThresholds`
+
+# Example
+```julia
+state = Mycelia.Rhizomorph.MomentumForkResolver.ActiveReadState("read-7", [:a, :b])
+resolution = Mycelia.Rhizomorph.MomentumForkResolver.fork_resolution(state)
+```
 """
 function fork_resolution(state::ActiveReadState; alpha::Real = 0.05, beta::Real = 0.05)
     thresholds = SPRTThresholds(; alpha, beta)
@@ -292,7 +517,8 @@ function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
                             state.branch_scores[alternative_branch]
         state.log_likelihood_ratio = alternative_score - reference_score
     else
-        state.log_likelihood_ratio = state.branch_scores[state.current_branch] - reference_score
+        state.log_likelihood_ratio = state.branch_scores[state.current_branch] -
+                                     reference_score
     end
 
     state.decision = sprt_decision(state.log_likelihood_ratio; alpha, beta)
@@ -308,7 +534,8 @@ function _refresh_state!(state::ActiveReadState; alpha::Real, beta::Real)
 end
 
 function _require_known_branch(state::ActiveReadState{B}, branch::B) where {B}
-    haskey(state.branch_scores, branch) || error("Unknown branch $(branch) for read $(state.read_id)")
+    haskey(state.branch_scores, branch) ||
+        error("Unknown branch $(branch) for read $(state.read_id)")
     return nothing
 end
 

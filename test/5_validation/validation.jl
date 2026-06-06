@@ -46,6 +46,31 @@ Test.@testset "Assembly Validation" begin
         Test.@test isapprox(qv, expected_QV; atol = 1e-6)
     end
 
+    Test.@testset "FASTQ Quality Validation" begin
+        mktempdir() do temp_dir
+            missing_fastq = joinpath(temp_dir, "missing.fastq")
+            missing_error = try
+                Mycelia.analyze_fastq_quality(missing_fastq)
+                nothing
+            catch e
+                e
+            end
+            Test.@test missing_error isa ErrorException
+            Test.@test occursin("FASTQ file does not exist", sprint(showerror, missing_error))
+
+            empty_fastq = joinpath(temp_dir, "empty.fastq")
+            touch(empty_fastq)
+            empty_error = try
+                Mycelia.analyze_fastq_quality(empty_fastq)
+                nothing
+            catch e
+                e
+            end
+            Test.@test empty_error isa ErrorException
+            Test.@test occursin("No reads found in FASTQ file", sprint(showerror, empty_error))
+        end
+    end
+
     Test.@testset "Reference-Based Validation" begin
         fastani_text = "query.fasta\treference.fasta\t99.0\t50\t50"
         fastani_file = tempname()

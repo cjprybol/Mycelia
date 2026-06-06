@@ -88,6 +88,26 @@ Test.@testset "Iterative Assembly Tests" begin
         end
     end
 
+    Test.@testset "Invalid quality argument validation" begin
+        test_records = [
+            FASTX.FASTQ.Record("read1", "ATCGATCGATCG", repeat("I", 12)),
+            FASTX.FASTQ.Record("read2", "TCGATCGATCGA", repeat("I", 12))
+        ]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            test_records, 5; dataset_id = "invalid_quality", mode = :canonical)
+
+        Test.@test_throws ArgumentError Mycelia.find_optimal_sequence_path(
+            "ATCGATCGATCG", :bad_quality, graph, 5)
+        Test.@test_throws ArgumentError Mycelia.calculate_sequence_likelihood(
+            "ATCGATCGATCG", nothing, graph, 5)
+        Test.@test_throws ArgumentError Mycelia.try_viterbi_path_improvement(
+            "ATCGATCGATCG", 1.5, graph, 5)
+        Test.@test_throws ArgumentError Mycelia.try_statistical_path_resampling(
+            "ATCGATCGATCG", Dict(:q => 1), graph, 5)
+        Test.@test_throws ArgumentError Mycelia.try_local_path_improvements(
+            "ATCGATCGATCG", missing, graph, 5, 0.0)
+    end
+
     Test.@testset "Decision Making Functions" begin
         # Test sufficient improvements function
         Test.@test Mycelia.sufficient_improvements(10, 100, 0.05) == true   # 10% > 5% threshold

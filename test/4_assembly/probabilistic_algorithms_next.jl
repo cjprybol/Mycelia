@@ -266,6 +266,72 @@ Test.@testset "Probabilistic Algorithms Next-Generation Tests" begin
         end
     end
 
+    Test.@testset "Weighted graph conversion coverage" begin
+        source_graph = MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph(),
+            label_type = String,
+            vertex_data_type = Nothing,
+            edge_data_type = Mycelia.Rhizomorph.LightweightEdgeData
+        )
+        source_graph["AAA"] = nothing
+        source_graph["AAT"] = nothing
+        source_graph["AAA", "AAT"] = Mycelia.Rhizomorph.LightweightEdgeData(2)
+
+        fallback_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            source_graph;
+            default_weight = 0.25,
+            edge_weight = _ -> 0.0
+        )
+        fallback_edge = fallback_weighted["AAA", "AAT"]
+        Test.@test fallback_edge.weight == 0.25
+        Test.@test fallback_edge.src_strand == Mycelia.Rhizomorph.Forward
+        Test.@test fallback_edge.dst_strand == Mycelia.Rhizomorph.Forward
+
+        custom_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+            source_graph;
+            edge_weight = _ -> 7.5
+        )
+        Test.@test custom_weighted["AAA", "AAT"].weight == 7.5
+
+        records = [
+            FASTX.FASTA.Record("canon1", "ATCGAT"),
+            FASTX.FASTA.Record("canon2", "ATCGTT")
+        ]
+        canonical_graph = Mycelia.Rhizomorph.build_kmer_graph(
+            records, 3; dataset_id = "canon_weighted", mode = :canonical)
+        Test.@test !Graphs.is_directed(canonical_graph.graph)
+
+        canonical_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(canonical_graph)
+        src, dst = first(MetaGraphsNext.edge_labels(canonical_graph))
+        Test.@test haskey(canonical_weighted, src, dst)
+        Test.@test haskey(canonical_weighted, dst, src)
+        Test.@test canonical_weighted[src, dst].weight == canonical_weighted[dst, src].weight
+    end
+
+    Test.@testset "Transition helper coverage" begin
+        Test.@test isempty(Mycelia.Rhizomorph._calculate_transition_probabilities(Any[]))
+
+        zero_transitions = [
+            Dict{Symbol, Any}(:probability => 0.0),
+            Dict{Symbol, Any}(:probability => 0.0)
+        ]
+        zero_probs = Mycelia.Rhizomorph._calculate_transition_probabilities(zero_transitions)
+        Test.@test zero_probs == [0.5, 0.5]
+
+        edge_data = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            1.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+        single_transition = Dict{Symbol, Any}(
+            :target_vertex => "AAT",
+            :target_strand => Mycelia.Rhizomorph.Forward,
+            :probability => 1.0,
+            :edge_data => edge_data
+        )
+
+        Test.@test Mycelia.Rhizomorph._sample_transition(Any[], Float64[]) === nothing
+        Test.@test Mycelia.Rhizomorph._sample_transition(
+            [single_transition], [1.0]) == single_transition
+    end
+
     Test.@testset "Strand Awareness in Algorithms" begin
         # Create a graph with mixed strand orientations
         graph = MetaGraphsNext.MetaGraph(

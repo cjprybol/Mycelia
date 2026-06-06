@@ -13,7 +13,6 @@ if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
     ENV["LD_LIBRARY_PATH"] = ""
 end
 
-import AlgebraOfGraphics
 import Arrow
 import Base58
 import Base64
@@ -44,6 +43,7 @@ import Downloads
 import EzXML
 import FASTX
 import FileIO
+import FileWatching
 import GenomicAnnotations
 import GFF3
 # import GeoMakie

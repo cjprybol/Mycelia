@@ -237,6 +237,38 @@ Test.@testset "Pangenome analysis - single genome summary statistics" begin
     end
 end
 
+Test.@testset "Pangenome analysis - identical genomes preserve zero pairwise distance" begin
+    temp_dir = mktempdir()
+    try
+        genome_files = String[]
+        for name in ["copy1.fasta", "copy2.fasta"]
+            genome_file = joinpath(temp_dir, name)
+            open(genome_file, "w") do io
+                FASTX.write(io, FASTX.FASTA.Record(name, BioSequences.LongDNA{4}("ATGCGATGCA")))
+            end
+            push!(genome_files, genome_file)
+        end
+
+        result = Mycelia.analyze_pangenome_kmers(
+            genome_files;
+            kmer_type = Kmers.DNAKmer{3},
+            distance_metric = :jaccard
+        )
+
+        Test.@test result.similarity_stats.n_genomes == 2
+        Test.@test result.similarity_stats.mean_pairwise_distance == 0.0
+        Test.@test result.similarity_stats.core_size == result.similarity_stats.pangenome_size
+        Test.@test result.similarity_stats.accessory_size == 0
+        Test.@test result.similarity_stats.unique_total == 0
+        Test.@test result.similarity_stats.core_percentage == 100.0
+        Test.@test isempty(result.accessory_kmers)
+        Test.@test all(isempty, values(result.unique_kmers_by_genome))
+        Test.@test all(result.distance_matrix .== 0.0)
+    finally
+        isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
+    end
+end
+
 Test.@testset "Pangenome analysis - construct_pangenome_pggb validation" begin
     temp_dir = mktempdir()
     try
@@ -409,4 +441,12 @@ Test.@testset "Pangenome analysis - build_genome_distance_matrix metrics" begin
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
+end
+
+Test.@testset "Pangenome analysis - build_genome_distance_matrix empty input" begin
+    result = Mycelia.build_genome_distance_matrix(String[]; metric = :jaccard)
+
+    Test.@test result.metric == :jaccard
+    Test.@test result.genome_names == String[]
+    Test.@test size(result.distance_matrix) == (0, 0)
 end

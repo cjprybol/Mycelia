@@ -1,4 +1,5 @@
 import Test
+import Arrow
 import Mycelia
 
 Test.@testset "FASTX Utilities" begin
@@ -535,6 +536,604 @@ Test.@testset "FASTX Utilities" begin
         table = Mycelia.fastx2normalized_table(
             fasta_path; human_readable_id = "this_is_way_too_long_id", force_truncate = true)
         Test.@test length(table[1, "human_readable_id"]) == 16
+    end
+
+    Test.@testset "prefix_fastq_reads arrow mapping and gzip resume" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "reads.fq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "TGCA", quality_scores = [
+                35, 35, 35, 35])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        plain_fastq = joinpath(temp_dir, "prefixed.fq")
+        plain_map = joinpath(temp_dir, "prefixed.arrow")
+        initial = Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "sample tag/1",
+            out_fastq = plain_fastq,
+            mapping_out = plain_map,
+            mapping_format = :arrow,
+            id_delimiter = "::",
+            compress_threads = 1
+        )
+        Test.@test initial.sample_tag == "sample_tag_1"
+        Test.@test initial.out_fastq == plain_fastq
+        Test.@test isfile(plain_fastq)
+        Test.@test isfile(plain_map)
+
+        gz_fastq = plain_fastq * ".gz"
+        resumed = Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "sample tag/1",
+            out_fastq = gz_fastq,
+            mapping_out = plain_map,
+            mapping_format = :arrow,
+            id_delimiter = "::",
+            compress_threads = 1
+        )
+        Test.@test resumed.sample_tag == "sample_tag_1"
+        Test.@test resumed.out_fastq == gz_fastq
+        Test.@test isfile(gz_fastq)
+        Test.@test !isfile(plain_fastq)
+
+        reader = Mycelia.open_fastx(gz_fastq)
+        prefixed_ids = String[]
+        for record in reader
+            push!(prefixed_ids, String(Mycelia.FASTX.identifier(record)))
+        end
+        close(reader)
+        Test.@test prefixed_ids == ["sample_tag_1::r1", "sample_tag_1::r2"]
+
+        mapping_table = Mycelia.DataFrames.DataFrame(Arrow.Table(plain_map))
+        Test.@test Mycelia.DataFrames.nrow(mapping_table) == 2
+        Test.@test all(mapping_table.sample_tag .== "sample_tag_1")
+        Test.@test collect(mapping_table.original_read_id) == ["r1", "r2"]
+        Test.@test collect(mapping_table.new_read_id) == prefixed_ids
+    end
+
+    Test.@testset "prefix_fastq_reads handles zero-byte gz input" begin
+        temp_dir = mktempdir()
+        empty_fastq = joinpath(temp_dir, "empty.fq.gz")
+        open(empty_fastq, "w") do io
+            write(io, "")
+        end
+
+        out_fastq = joinpath(temp_dir, "prefixed_empty.fq.gz")
+        mapping_out = joinpath(temp_dir, "prefixed_empty.tsv.gz")
+        result = Mycelia.prefix_fastq_reads(
+            empty_fastq;
+            sample_tag = "zero",
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+
+        Test.@test result.out_fastq == out_fastq
+        Test.@test result.mapping_out == mapping_out
+        Test.@test isfile(out_fastq)
+        Test.@test isfile(mapping_out)
+
+        mapping_io = Mycelia.CodecZlib.GzipDecompressorStream(open(mapping_out, "r"))
+        mapping_lines = readlines(mapping_io)
+        close(mapping_io)
+        Test.@test mapping_lines == ["sample_tag\toriginal_read_id\tnew_read_id"]
+    end
+
+    Test.@testset "uuid_fastq_reads arrow mapping and zero-byte gz input" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "reads.fq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "AAAA", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "CCCC", quality_scores = [
+                20, 20, 20, 20])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        out_fastq = joinpath(temp_dir, "uuid_reads.fq.gz")
+        mapping_out = joinpath(temp_dir, "uuid_reads.arrow")
+        result = Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :arrow,
+            source_fastq = "source_alias.fastq",
+            compress_threads = 1
+        )
+
+        Test.@test result.out_fastq == out_fastq
+        Test.@test result.mapping_out == mapping_out
+        Test.@test isfile(out_fastq)
+        Test.@test isfile(mapping_out)
+
+        reader = Mycelia.open_fastx(out_fastq)
+        uuid_ids = String[]
+        for record in reader
+            push!(uuid_ids, String(Mycelia.FASTX.identifier(record)))
+        end
+        close(reader)
+        Test.@test length(uuid_ids) == 2
+        Test.@test all(id -> occursin(r"^[0-9a-f\-]{36}$", id), uuid_ids)
+
+        mapping_table = Mycelia.DataFrames.DataFrame(Arrow.Table(mapping_out))
+        Test.@test Mycelia.DataFrames.nrow(mapping_table) == 2
+        Test.@test all(mapping_table.source_fastq .== "source_alias.fastq")
+        Test.@test collect(mapping_table.original_read_id) == ["r1", "r2"]
+        Test.@test collect(mapping_table.uuid) == uuid_ids
+
+        empty_fastq = joinpath(temp_dir, "empty_uuid.fq.gz")
+        open(empty_fastq, "w") do io
+            write(io, "")
+        end
+
+        empty_out = joinpath(temp_dir, "empty_uuid_out.fq.gz")
+        empty_map = joinpath(temp_dir, "empty_uuid.tsv.gz")
+        empty_result = Mycelia.uuid_fastq_reads(
+            empty_fastq;
+            out_fastq = empty_out,
+            mapping_out = empty_map,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+
+        Test.@test empty_result.out_fastq == empty_out
+        Test.@test empty_result.mapping_out == empty_map
+        Test.@test isfile(empty_out)
+        Test.@test isfile(empty_map)
+
+        mapping_io = Mycelia.CodecZlib.GzipDecompressorStream(open(empty_map, "r"))
+        mapping_lines = readlines(mapping_io)
+        close(mapping_io)
+        Test.@test mapping_lines == ["source_fastq\toriginal_read_id\tuuid"]
+    end
+
+    Test.@testset "concatenate_fastx handles mixed plain and gz FASTA inputs" begin
+        temp_dir = mktempdir()
+        fasta_a = joinpath(temp_dir, "a.fna")
+        fasta_b = joinpath(temp_dir, "b.fna.gz")
+        Mycelia.write_fasta(outfile = fasta_a,
+            records = [Mycelia.FASTX.FASTA.Record("a1", "ATGC")],
+            gzip = false, show_progress = false)
+        Mycelia.write_fasta(outfile = fasta_b,
+            records = [Mycelia.FASTX.FASTA.Record("b1", "GCTA")],
+            gzip = true, show_progress = false)
+
+        output_path = joinpath(temp_dir, "combined.fna.gz")
+        result = Mycelia.concatenate_fastx(
+            [fasta_a, fasta_b];
+            output_path = output_path,
+            threads = 1,
+            force = true
+        )
+
+        Test.@test result == output_path
+        Test.@test Mycelia.count_records(output_path) == 2
+
+        reader = Mycelia.open_fastx(output_path)
+        concatenated_ids = String[]
+        for record in reader
+            push!(concatenated_ids, String(Mycelia.FASTX.identifier(record)))
+        end
+        close(reader)
+        Test.@test concatenated_ids == ["a1", "b1"]
+    end
+
+    Test.@testset "FASTX guard rails" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "reads.fq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        Test.@test_throws AssertionError Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "sample",
+            out_fastq = joinpath(temp_dir, "bad_prefix.fastq"),
+            mapping_out = joinpath(temp_dir, "bad_prefix.tsv"),
+            mapping_format = :json,
+            compress_threads = 1
+        )
+
+        Test.@test_throws ErrorException Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "sample",
+            out_fastq = joinpath(temp_dir, "bad_prefix.fastq"),
+            mapping_out = joinpath(temp_dir, "bad_prefix.arrow.gz"),
+            mapping_format = :arrow,
+            compress_threads = 1
+        )
+
+        Test.@test_throws AssertionError Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = joinpath(temp_dir, "bad_uuid.fastq"),
+            mapping_out = joinpath(temp_dir, "bad_uuid.tsv"),
+            mapping_format = :json,
+            compress_threads = 1
+        )
+
+        Test.@test_throws ErrorException Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = joinpath(temp_dir, "bad_uuid.fastq"),
+            mapping_out = joinpath(temp_dir, "bad_uuid.arrow.gz"),
+            mapping_format = :arrow,
+            compress_threads = 1
+        )
+
+        Test.@test_throws ErrorException Mycelia.concatenate_fastx(
+            String[];
+            output_path = joinpath(temp_dir, "empty.fastq.gz"),
+            threads = 1,
+            force = true
+        )
+
+        Test.@test_throws ErrorException Mycelia.concatenate_fastx(
+            [joinpath(temp_dir, "missing.fastq")];
+            output_path = joinpath(temp_dir, "missing_out.fastq.gz"),
+            threads = 1,
+            force = true
+        )
+    end
+
+    Test.@testset "fastx2normalized_jsonl_stream progress and truncation" begin
+        temp_dir = mktempdir()
+        fasta_path = joinpath(temp_dir, "progress.fna")
+        records = [Mycelia.FASTX.FASTA.Record("s1", "ATGC")]
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
+
+        progress_output = IOBuffer()
+        out_path = joinpath(temp_dir, "progress.jsonl")
+        Test.@test_logs (:warn, r"exceeds 16 characters") begin
+            result = Mycelia.fastx2normalized_jsonl_stream(
+                fastx_path = fasta_path,
+                human_readable_id = "abcdefghijklmnopq",
+                output_path = out_path,
+                force_truncate = true,
+                show_progress = true,
+                progress_every = 1,
+                progress_output = progress_output
+            )
+            Test.@test result == out_path
+        end
+        Test.@test isfile(out_path)
+        Test.@test_throws ErrorException Mycelia.fastx2normalized_jsonl_stream(
+            fastx_path = fasta_path,
+            human_readable_id = "abcdefghijklmnopq",
+            output_path = joinpath(temp_dir, "too_long.jsonl"),
+            show_progress = false
+        )
+    end
+
+    Test.@testset "fastx2normalized_jsonl_stream derives identifiers and enforces helper limits" begin
+        temp_dir = mktempdir()
+        fasta_path = joinpath(temp_dir, "derived_sample_name_longer_than_limit.fna")
+        records = [Mycelia.FASTX.FASTA.Record("derived", "ATGC")]
+        Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
+
+        out_path = Mycelia.fastx2normalized_jsonl_stream(
+            fastx_path = fasta_path,
+            output_path = joinpath(temp_dir, "derived.jsonl"),
+            show_progress = false
+        )
+        Test.@test isfile(out_path)
+        lines = readlines(out_path)
+        Test.@test length(lines) == 1
+        parsed = Mycelia.JSON.parse(only(lines))
+        Test.@test parsed["human_readable_id"] ==
+                   Mycelia._extract_human_readable_id_from_fastx_path(fasta_path, false)
+
+        Test.@test_throws ErrorException Mycelia._write_ndjson_stream(
+            IOBuffer(),
+            fasta_path,
+            repeat("x", 40),
+            :fasta;
+            show_progress = false,
+            progress_every = 1,
+            progress_desc = "length guard",
+            progress_output = stderr
+        )
+    end
+
+    Test.@testset "normalized_table2fastx FASTQ and validation branches" begin
+        temp_dir = mktempdir()
+        table = Mycelia.DataFrames.DataFrame(
+            genome_identifier = ["genomeA", "genomeA"],
+            sequence_identifier = ["dup_read", "dup_read"],
+            record_sequence = ["ATGC", "ATGC"],
+            record_quality = [[30.2, 30.8, 31.1, 31.9], [30.2, 30.8, 31.1, 31.9]]
+        )
+
+        out_fastq = nothing
+        Test.@test_logs (:warn, r"duplicate records detected") begin
+            out_fastq = Mycelia.normalized_table2fastx(
+                table;
+                output_dir = temp_dir,
+                gzip = true,
+                verbose = true,
+                force = true
+            )
+            Test.@test endswith(out_fastq, ".fq.gz")
+        end
+        Test.@test isfile(out_fastq)
+        Test.@test Mycelia.count_records(out_fastq) == 1
+
+        invalid_table = Mycelia.DataFrames.DataFrame(
+            sequence_identifier = ["missing_id"],
+            record_sequence = ["ATGC"],
+            record_quality = [missing]
+        )
+        Test.@test_throws ErrorException Mycelia.normalized_table2fastx(
+            invalid_table;
+            output_dir = temp_dir,
+            force = true
+        )
+    end
+
+    Test.@testset "prefix_fastq_reads TSV, zero-byte Arrow, and truncated gz errors" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "reads.fq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "ATGC", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "TGCA", quality_scores = [
+                35, 35, 35, 35])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        out_fastq = joinpath(temp_dir, "prefix_tsv.fq.gz")
+        mapping_out = joinpath(temp_dir, "prefix_tsv.tsv.gz")
+        result = Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "tsv/sample",
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test result.out_fastq == out_fastq
+        Test.@test result.mapping_out == mapping_out
+        Test.@test isfile(out_fastq)
+        Test.@test isfile(mapping_out)
+
+        mapping_io = Mycelia.CodecZlib.GzipDecompressorStream(open(mapping_out, "r"))
+        mapping_lines = readlines(mapping_io)
+        close(mapping_io)
+        Test.@test mapping_lines == [
+            "sample_tag\toriginal_read_id\tnew_read_id",
+            "tsv_sample\tr1\ttsv_sample::r1",
+            "tsv_sample\tr2\ttsv_sample::r2"
+        ]
+
+        cached = Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "tsv/sample",
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test cached.out_fastq == out_fastq
+        Test.@test cached.mapping_out == mapping_out
+
+        resume_plain_fastq = joinpath(temp_dir, "resume_prefix.fq")
+        resume_plain_map = joinpath(temp_dir, "resume_prefix.tsv")
+        Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "resume",
+            out_fastq = resume_plain_fastq,
+            mapping_out = resume_plain_map,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        resumed = Mycelia.prefix_fastq_reads(
+            fastq_path;
+            sample_tag = "resume",
+            out_fastq = resume_plain_fastq * ".gz",
+            mapping_out = resume_plain_map * ".gz",
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test resumed.out_fastq == resume_plain_fastq * ".gz"
+        Test.@test resumed.mapping_out == resume_plain_map * ".gz"
+        Test.@test isfile(resume_plain_fastq * ".gz")
+        Test.@test isfile(resume_plain_map * ".gz")
+        Test.@test !isfile(resume_plain_fastq)
+        Test.@test !isfile(resume_plain_map)
+
+        empty_arrow = joinpath(temp_dir, "empty_prefix.fq.gz")
+        open(empty_arrow, "w") do io
+            write(io, "")
+        end
+        empty_arrow_map = joinpath(temp_dir, "empty_prefix.arrow")
+        empty_arrow_result = Mycelia.prefix_fastq_reads(
+            empty_arrow;
+            sample_tag = "arrow",
+            out_fastq = joinpath(temp_dir, "empty_prefix_out.fq.gz"),
+            mapping_out = empty_arrow_map,
+            mapping_format = :arrow,
+            compress_threads = 1
+        )
+        Test.@test isfile(empty_arrow_result.out_fastq)
+        Test.@test isfile(empty_arrow_result.mapping_out)
+        empty_arrow_table = Mycelia.DataFrames.DataFrame(Arrow.Table(empty_arrow_map))
+        Test.@test Mycelia.DataFrames.nrow(empty_arrow_table) == 0
+
+        broken_fastq = joinpath(temp_dir, "broken_prefix.fq.gz")
+        open(broken_fastq, "w") do io
+            write(io, "not a valid gzip stream")
+        end
+        try
+            Mycelia.prefix_fastq_reads(
+                broken_fastq;
+                sample_tag = "broken",
+                out_fastq = joinpath(temp_dir, "broken_prefix_out.fq.gz"),
+                mapping_out = joinpath(temp_dir, "broken_prefix.tsv.gz"),
+                mapping_format = :tsv,
+                compress_threads = 1
+            )
+            Test.@test false
+        catch err
+            Test.@test err isa ErrorException
+            Test.@test occursin("gzip stream appears truncated", sprint(showerror, err))
+        end
+    end
+
+    Test.@testset "uuid_fastq_reads TSV, zero-byte Arrow, resume, and truncated gz errors" begin
+        temp_dir = mktempdir()
+        fastq_path = joinpath(temp_dir, "reads.fq")
+        records = [
+            Mycelia.fastq_record(identifier = "r1", sequence = "AAAA", quality_scores = [
+                30, 30, 30, 30]),
+            Mycelia.fastq_record(identifier = "r2", sequence = "CCCC", quality_scores = [
+                20, 20, 20, 20])
+        ]
+        Mycelia.write_fastq(records = records, filename = fastq_path)
+
+        out_fastq = joinpath(temp_dir, "uuid_tsv.fq.gz")
+        mapping_out = joinpath(temp_dir, "uuid_tsv.tsv.gz")
+        result = Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test result.out_fastq == out_fastq
+        Test.@test result.mapping_out == mapping_out
+        Test.@test isfile(out_fastq)
+        Test.@test isfile(mapping_out)
+
+        mapping_io = Mycelia.CodecZlib.GzipDecompressorStream(open(mapping_out, "r"))
+        mapping_lines = readlines(mapping_io)
+        close(mapping_io)
+        Test.@test mapping_lines[1] == "source_fastq\toriginal_read_id\tuuid"
+        Test.@test length(mapping_lines) == 3
+        Test.@test occursin("reads.fq\tr1\t", mapping_lines[2])
+        Test.@test occursin("reads.fq\tr2\t", mapping_lines[3])
+
+        cached = Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = out_fastq,
+            mapping_out = mapping_out,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test cached.out_fastq == out_fastq
+        Test.@test cached.mapping_out == mapping_out
+
+        resume_plain_fastq = joinpath(temp_dir, "resume_uuid.fq")
+        resume_plain_map = joinpath(temp_dir, "resume_uuid.tsv")
+        Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = resume_plain_fastq,
+            mapping_out = resume_plain_map,
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        resumed = Mycelia.uuid_fastq_reads(
+            fastq_path;
+            out_fastq = resume_plain_fastq * ".gz",
+            mapping_out = resume_plain_map * ".gz",
+            mapping_format = :tsv,
+            compress_threads = 1
+        )
+        Test.@test resumed.out_fastq == resume_plain_fastq * ".gz"
+        Test.@test resumed.mapping_out == resume_plain_map * ".gz"
+        Test.@test isfile(resume_plain_fastq * ".gz")
+        Test.@test isfile(resume_plain_map * ".gz")
+        Test.@test !isfile(resume_plain_fastq)
+        Test.@test !isfile(resume_plain_map)
+
+        empty_arrow = joinpath(temp_dir, "empty_uuid.fq.gz")
+        open(empty_arrow, "w") do io
+            write(io, "")
+        end
+        empty_arrow_map = joinpath(temp_dir, "empty_uuid.arrow")
+        empty_arrow_result = Mycelia.uuid_fastq_reads(
+            empty_arrow;
+            out_fastq = joinpath(temp_dir, "empty_uuid_out.fq.gz"),
+            mapping_out = empty_arrow_map,
+            mapping_format = :arrow,
+            compress_threads = 1
+        )
+        Test.@test isfile(empty_arrow_result.out_fastq)
+        Test.@test isfile(empty_arrow_result.mapping_out)
+        empty_arrow_table = Mycelia.DataFrames.DataFrame(Arrow.Table(empty_arrow_map))
+        Test.@test Mycelia.DataFrames.nrow(empty_arrow_table) == 0
+
+        broken_fastq = joinpath(temp_dir, "broken_uuid.fq.gz")
+        open(broken_fastq, "w") do io
+            write(io, "not a valid gzip stream")
+        end
+        try
+            Mycelia.uuid_fastq_reads(
+                broken_fastq;
+                out_fastq = joinpath(temp_dir, "broken_uuid_out.fq.gz"),
+                mapping_out = joinpath(temp_dir, "broken_uuid.tsv.gz"),
+                mapping_format = :tsv,
+                compress_threads = 1
+            )
+            Test.@test false
+        catch err
+            Test.@test err isa ErrorException
+            Test.@test occursin("gzip stream appears truncated", sprint(showerror, err))
+        end
+    end
+
+    Test.@testset "concatenate_fastx fallback and open_fastx validation" begin
+        temp_dir = mktempdir()
+        fasta_a = joinpath(temp_dir, "fallback_a.fna")
+        fasta_b = joinpath(temp_dir, "fallback_b.fna.gz")
+        Mycelia.write_fasta(outfile = fasta_a,
+            records = [Mycelia.FASTX.FASTA.Record("a1", "ATGC")],
+            gzip = false, show_progress = false)
+        Mycelia.write_fasta(outfile = fasta_b,
+            records = [Mycelia.FASTX.FASTA.Record("b1", "GCTA")],
+            gzip = true, show_progress = false)
+
+        fallback_output = joinpath(temp_dir, "fallback_concat.fna")
+        withenv("PATH" => "") do
+            result = Mycelia.concatenate_fastx(
+                [fasta_a, fasta_b];
+                output_path = fallback_output,
+                threads = 1,
+                force = true
+            )
+            Test.@test result == fallback_output
+        end
+        Test.@test Mycelia.count_records(fallback_output) == 2
+
+        missing_path = joinpath(temp_dir, "missing.fna")
+        Test.@test_throws ErrorException Mycelia.open_fastx(missing_path)
+
+        invalid_path = joinpath(temp_dir, "not_fastx.txt")
+        open(invalid_path, "w") do io
+            write(io, "plain text")
+        end
+        Test.@test_throws ErrorException Mycelia.open_fastx(invalid_path)
+    end
+
+    Test.@testset "write_fasta progress and fallback extension handling" begin
+        temp_dir = mktempdir()
+        records = [Mycelia.FASTX.FASTA.Record("progress", "ATGC")]
+        out_path = Mycelia.write_fasta(
+            outfile = joinpath(temp_dir, "progress_output.fna"),
+            records = records,
+            gzip = true,
+            show_progress = true,
+            use_pigz = false
+        )
+        Test.@test endswith(out_path, ".gz")
+        Test.@test isfile(out_path)
+        Test.@test Mycelia.count_records(out_path) == 1
+
+        Test.@test_throws AssertionError Mycelia._detect_sequence_extension(:mystery)
     end
 
     Test.@testset "alphabet_hint_from_path extended" begin

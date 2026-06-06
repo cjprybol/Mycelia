@@ -46,11 +46,11 @@ The following tutorials aim to cover the common bioinformatics workflows from da
 18. [18 Advanced Assembly Theory and Practice](generated/tutorials/18_advanced_assembly_theory_and_practice.md) - Deep dive into assembly algorithms
 21. [21 Topological Assembly Optimization](generated/tutorials/21_tda_topological_assembly_optimization.md) - Betti numbers, filtrations, and topology-aware graph scoring
 22. [22 Momentum Fork Resolution](generated/tutorials/22_momentum_fork_resolution.md) - SPRT-based branch decisions for read-evidence forks
+23. [23 Variant Calling Workflow](generated/tutorials/23_variant_calling_workflow.md) - Synthetic truth sets, GATK calling, optional Clair3, and vcfeval benchmarking
 
 ## Tutorial Gaps (TODO)
 
 - TODO: Taxonomy and tree-building workflows (`taxonomy-and-trees.jl`) with end-to-end examples
-- TODO: Variant analysis workflows (VCF handling, variant calling) (`variant-analysis.jl`)
 - TODO: Reference database management (BLAST/MetaPhlAn/Metabuli) (`reference-databases.jl`)
 - TODO: QC outlier filtering and benchmarking workflows (`quality-control-and-benchmarking.jl`)
 - TODO: Rhizomorph graph inspection, traversal, and path-finding beyond assembly (`src/rhizomorph/`)

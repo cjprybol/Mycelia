@@ -75,7 +75,7 @@ function duplication_stats(records::AbstractVector{<:FASTX.FASTQ.Record};
         counts[seq] = get(counts, seq, 0) + 1
     end
     total_reads = length(records)
-    duplicate_reads = sum(v - 1 for v in values(counts))
+    duplicate_reads = sum((v - 1 for v in values(counts)); init = 0)
     duplicate_fraction = total_reads == 0 ? 0.0 : duplicate_reads / total_reads
     overrepresented = NamedTuple{
         (:sequence, :count, :fraction), Tuple{String, Int, Float64}}[]
