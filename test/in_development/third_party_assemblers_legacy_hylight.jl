@@ -168,70 +168,10 @@ end
 # #     end
 
 # Hybrid metagenomic assembly (HyLight) placeholder.
-# Previous block relied on a commented-out `mktempdir` context, leaving `dir` undefined.
-# NOTE: Marked broken while we refine fixture requirements.
+# Keep this inert until we have a lightweight fixture that does not pull in
+# unsupported tool installation paths during legacy smoke runs.
 Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
-    Test.@test_broken mktempdir() do dir
-        ref_fasta = joinpath(dir, "hylight_ref.fasta")
-        rng_hylight_1 = StableRNGs.StableRNG(910)
-        rng_hylight_2 = StableRNGs.StableRNG(911)
-        genome_1 = BioSequences.randdnaseq(rng_hylight_1, 6000)
-        genome_2 = BioSequences.randdnaseq(rng_hylight_2, 6000)
-        Mycelia.write_fasta(
-            outfile = ref_fasta,
-            records = [
-                FASTX.FASTA.Record("hylight_strain_1", genome_1),
-                FASTX.FASTA.Record("hylight_strain_2", genome_2)
-            ]
-        )
-
-        illumina = Mycelia.simulate_illumina_reads(
-            fasta = ref_fasta,
-            coverage = 20,
-            outbase = joinpath(dir, "hylight_short"),
-            read_length = 150,
-            mflen = 300,
-            seqSys = "HS25",
-            paired = true,
-            errfree = true,
-            rndSeed = 910,
-            quiet = true
-        )
-
-        long_reads_gz = Mycelia.simulate_nanopore_reads(
-            fasta = ref_fasta,
-            quantity = "10x",
-            quiet = true
-        )
-
-        short_1 = joinpath(dir, "hylight_short_1.fq")
-        short_2 = joinpath(dir, "hylight_short_2.fq")
-        long_reads = joinpath(dir, "hylight_long.fq")
-        run(pipeline(`gunzip -c $(illumina.forward_reads)`, short_1))
-        run(pipeline(`gunzip -c $(illumina.reverse_reads)`, short_2))
-        run(pipeline(`gunzip -c $(long_reads_gz)`, long_reads))
-
-        open(short_1, "a") do io
-            dummy_seq = repeat("A", 50)
-            dummy_qual = repeat("I", 50)
-            write(io, "@hylight_dummy/1\n", dummy_seq, "\n+\n", dummy_qual, "\n")
-        end
-
-        outdir = joinpath(dir, "hylight_out")
-        result = Mycelia.run_hylight(
-            short_1,
-            short_2,
-            long_reads;
-            outdir = outdir,
-            threads = threads,
-            nsplit = 5,
-            min_identity = 0.9,
-            min_ovlp_len = 500,
-            insert_size = 300,
-            average_read_len = 150
-        )
-        result.outdir == outdir && isdir(result.strain_assemblies)
-    end
+    Test.@test_broken false
 end
 #     Test.@testset "6. Probabilistic Assembly (Mycelia)" begin
 #         mktempdir() do dir
@@ -700,7 +640,7 @@ end
 
 Test.@testset "Protein Assembly - PLASS (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PLASS smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PLASS smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
@@ -736,7 +676,7 @@ end
 
 Test.@testset "Nucleotide Assembly - PenguiN guided_nuclassemble (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PenguiN smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
@@ -772,7 +712,7 @@ end
 
 Test.@testset "Nucleotide Assembly - PenguiN nuclassemble (simulated reads)" begin
     if !legacy_plass_smoke_tools_available()
-        Test.@test_skip "Legacy PenguiN smoke test requires working plass and penguin tooling"
+        Test.@test_skip "Legacy PenguiN smoke test requires working Conda environment queries plus plass/penguin tooling"
     else
         mktempdir() do dir
             ref_fasta = joinpath(dir, "ref.fasta")
