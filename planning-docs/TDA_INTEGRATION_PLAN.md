@@ -113,7 +113,7 @@ Implemented as a new core file: `src/tda.jl`.
 - **Estimated overall completion (2026-04-04): 30%**
 - **Phase 0: 5%** complete. `TDAConfig` already has a backend selector, but no
   optional persistent-homology backend or weakdep/extension wiring has landed.
-- **Phase 1: 65%** complete. `src/tda.jl` implements graph Betti summaries,
+- **Phase 1: 70%** complete. `src/tda.jl` implements graph Betti summaries,
   filtration curves, `TDARunSummary`, and scoring primitives; tests live in
   `test/4_assembly/tda_metrics_test.jl`; docs/tutorial entry points exist in
   `docs/src/topological-assembly-optimization.md` and

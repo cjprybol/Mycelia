@@ -146,10 +146,13 @@ function mmseqs_easy_cluster(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
+        mail_user::Union{Nothing, String} = nothing,
+        ensure_env::Bool = true)
     outfile = "$(output)_cluster.tsv"
     if executor !== nothing
-        Mycelia.add_bioconda_env("mmseqs2")
+        if ensure_env
+            Mycelia.add_bioconda_env("mmseqs2")
+        end
         cmd = Mycelia.command_string(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id $(min_seq_id) -c $(coverage) --cov-mode $(coverage_mode)`
         )
@@ -178,7 +181,9 @@ function mmseqs_easy_cluster(;
     end
 
     if !isfile(outfile)
-        Mycelia.add_bioconda_env("mmseqs2")
+        if ensure_env
+            Mycelia.add_bioconda_env("mmseqs2")
+        end
         run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n mmseqs2 mmseqs easy-cluster $(fasta) $(output) $(tmp) --min-seq-id $(min_seq_id) -c $(coverage) --cov-mode $(coverage_mode)`)
     end
     rm(tmp, recursive = true, force = true)

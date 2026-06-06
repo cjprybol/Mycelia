@@ -1,11 +1,14 @@
 import Test
 import Mycelia
 
-const LEGACY_FIXTURE_LOGDIR = "/Users/cameronprybol/workspace/slurmlogs"
 const FAKE_LAWRENCIUM_ASSOCIATIONS = "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
 
 function _has_message(messages::Vector{String}, needle::String)
     return any(msg -> occursin(needle, msg), messages)
+end
+
+function _fixture_with_local_home(text::String)
+    return replace(text, "/Users/cameronprybol" => homedir())
 end
 
 function _with_env(f::Function, overrides::AbstractDict)
@@ -34,10 +37,26 @@ function _with_env(f::Function, overrides::AbstractDict)
 end
 
 function _normalize_fixture_logdir(text::AbstractString)
-    return replace(String(text), LEGACY_FIXTURE_LOGDIR => Mycelia.DEFAULT_SLURM_LOGDIR)
+    output_path = joinpath(Mycelia.DEFAULT_SLURM_LOGDIR, "%j.%x.out")
+    error_path = joinpath(Mycelia.DEFAULT_SLURM_LOGDIR, "%j.%x.err")
+    normalized = replace(
+        String(text),
+        r"(?m)^#SBATCH --output=.*$" => "#SBATCH --output=$(output_path)"
+    )
+    return replace(
+        normalized,
+        r"(?m)^#SBATCH --error=.*$" => "#SBATCH --error=$(error_path)"
+    )
+end
+
+function _skip_missing_git()
+    Test.@test_skip Sys.which("git") !== nothing
+    return nothing
 end
 
 function _with_git_email(f::Function, email::AbstractString)
+    Sys.which("git") === nothing && return _skip_missing_git()
+
     mktempdir() do repo_dir
         _with_env(Dict(
             "GIT_AUTHOR_EMAIL" => nothing,
@@ -54,16 +73,24 @@ function _with_git_email(f::Function, email::AbstractString)
 end
 
 function _without_git_email(f::Function)
+    Sys.which("git") === nothing && return _skip_missing_git()
+
     mktempdir() do repo_dir
         run(`git -C $repo_dir init --quiet`)
         empty_config = joinpath(repo_dir, "empty.gitconfig")
+        empty_xdg_config = joinpath(repo_dir, "empty-xdg")
+        empty_home = joinpath(repo_dir, "empty-home")
         write(empty_config, "")
+        mkpath(empty_xdg_config)
+        mkpath(empty_home)
 
         _with_env(Dict(
             "GIT_CONFIG_GLOBAL" => empty_config,
             "GIT_CONFIG_NOSYSTEM" => "1",
             "GIT_AUTHOR_EMAIL" => nothing,
-            "GIT_COMMITTER_EMAIL" => nothing
+            "GIT_COMMITTER_EMAIL" => nothing,
+            "HOME" => empty_home,
+            "XDG_CONFIG_HOME" => empty_xdg_config
         )) do
             cd(repo_dir) do
                 return f()
@@ -287,10 +314,10 @@ Test.@testset "Template rendering and fixture checks" begin
 
     fixture_root = joinpath(dirname(@__DIR__), "fixtures", "job_templates")
 
-    expected_nersc = _normalize_fixture_logdir(
-        read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String))
-    expected_scg = _normalize_fixture_logdir(
-        read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String))
+    expected_nersc = _normalize_fixture_logdir(_fixture_with_local_home(
+        read(joinpath(fixture_root, "nersc_gpu_regular_1gpu_1task.sbatch"), String)))
+    expected_scg = _normalize_fixture_logdir(_fixture_with_local_home(
+        read(joinpath(fixture_root, "scg_nih_s10.sbatch"), String)))
     expected_docker = read(joinpath(fixture_root, "docker_run.sh"), String)
     expected_cloud = read(joinpath(fixture_root, "cloudbuild_prebuilt.yaml"), String)
 

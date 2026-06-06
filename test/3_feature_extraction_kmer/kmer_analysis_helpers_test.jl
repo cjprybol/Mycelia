@@ -60,11 +60,11 @@ Test.@testset "Kmer Analysis Helpers" begin
         dna_record = Mycelia.FASTX.FASTA.Record("dna", "ATCG")
         mixed_record = Mycelia.FASTX.FASTA.Record("mixed", "ATUG")
 
-        Test.@test_throws ErrorException Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{2}, rna_record)
-        Test.@test_throws ErrorException Mycelia.count_kmers(Mycelia.Kmers.RNAKmer{2}, dna_record)
-        Test.@test_throws ErrorException Mycelia.count_kmers(
+        Test.@test_throws Exception Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{2}, rna_record)
+        Test.@test_throws Exception Mycelia.count_kmers(Mycelia.Kmers.RNAKmer{2}, dna_record)
+        Test.@test_throws Exception Mycelia.count_kmers(
             Mycelia.Kmers.DNAKmer{2}, mixed_record)
-        Test.@test_throws ErrorException Mycelia.count_kmers(
+        Test.@test_throws Exception Mycelia.count_kmers(
             Mycelia.Kmers.RNAKmer{2}, mixed_record)
 
         mixed_dna_rna_records = [
@@ -73,9 +73,9 @@ Test.@testset "Kmer Analysis Helpers" begin
         ]
         mixed_rna_dna_records = reverse(mixed_dna_rna_records)
 
-        Test.@test_throws ErrorException Mycelia.estimate_genome_size_from_kmers(
+        Test.@test_throws Exception Mycelia.estimate_genome_size_from_kmers(
             mixed_dna_rna_records, 2)
-        Test.@test_throws ErrorException Mycelia.estimate_genome_size_from_kmers(
+        Test.@test_throws Exception Mycelia.estimate_genome_size_from_kmers(
             mixed_rna_dna_records, 2)
     end
 

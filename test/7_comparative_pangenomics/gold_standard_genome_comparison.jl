@@ -185,6 +185,22 @@ Indels  5  20
         Test.@test Mycelia.parse_pyorthoani_output("ANI: 99.95") ≈ 99.95
     end
 
+    Test.@testset "Sanitized Conda Run Command" begin
+        cmd = Mycelia.sanitized_conda_run_cmd("pyorthoani", ["pyorthoani", "--help"]; live_stream = true)
+
+        Test.@test cmd.exec == [
+            Mycelia.CONDA_RUNNER,
+            "run",
+            "--live-stream",
+            "-n",
+            "pyorthoani",
+            "pyorthoani",
+            "--help"
+        ]
+        Test.@test "PYTHONNOUSERSITE=1" in cmd.env
+        Test.@test "PYTHONPATH=" in cmd.env
+    end
+
     run_all = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
     run_external = run_all || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
     conda_available = haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
@@ -483,57 +499,178 @@ Indels  5  20
         end
     end
 
+    function build_pocp_test_helpers(rng)
+        aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
+            'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+
+        random_protein = len -> String(rand(rng, aa_alphabet, len))
+
+        function mutate_protein(seq::AbstractString, mutation_rate::Float64)
+            seq_chars = collect(seq)
+            for i in eachindex(seq_chars)
+                if rand(rng) < mutation_rate
+                    original = seq_chars[i]
+                    candidates = filter(residue -> residue != original, aa_alphabet)
+                    seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+                end
+            end
+            return String(seq_chars)
+        end
+
+        function mutate_to_target_identity(seq::AbstractString, target_identity::Float64)
+            @assert 0.0 <= target_identity <= 1.0 "target_identity must be in [0, 1]"
+            seq_chars = collect(seq)
+            kept_positions = 0
+            for i in eachindex(seq_chars)
+                if floor(Int, i * target_identity) > kept_positions
+                    kept_positions += 1
+                    continue
+                end
+                original = seq_chars[i]
+                candidates = filter(residue -> residue != original, aa_alphabet)
+                seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+            end
+            return String(seq_chars)
+        end
+
+        function write_protein_fasta(path::AbstractString, entries)
+            open(path, "w") do io
+                for (identifier, sequence) in entries
+                    println(io, ">", identifier)
+                    println(io, sequence)
+                end
+            end
+            return path
+        end
+
+        return random_protein, mutate_protein, mutate_to_target_identity, write_protein_fasta
+    end
+
     Test.@testset "POCP (external)" begin
         if !(run_external && conda_available)
             Test.@test_skip "POCP requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
         else
             rng = StableRNGs.StableRNG(19)
-            aa_alphabet = ['A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L',
-                'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W', 'Y']
+            random_protein, mutate_protein,
+            _, write_protein_fasta = build_pocp_test_helpers(rng)
 
-            random_protein = len -> String(rand(rng, aa_alphabet, len))
-            function mutate_protein(seq::AbstractString, mutation_rate::Float64)
-                seq_chars = collect(seq)
-                for i in eachindex(seq_chars)
-                    if rand(rng) < mutation_rate
-                        original = seq_chars[i]
-                        candidates = filter(residue -> residue != original, aa_alphabet)
-                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
-                    end
-                end
-                return String(seq_chars)
+            mktempdir() do temp_dir
+                query_fasta = joinpath(temp_dir, "query_proteins.fasta")
+                reference_fasta = joinpath(temp_dir, "reference_proteins.fasta")
+
+                ref_p1 = random_protein(220)
+                ref_p2 = random_protein(180)
+                query_p1 = mutate_protein(ref_p1, 0.02)
+                query_p2 = mutate_protein(ref_p2, 0.02)
+
+                write_protein_fasta(reference_fasta, ["ref_p1" => ref_p1, "ref_p2" => ref_p2])
+                write_protein_fasta(query_fasta, ["query_p1" => query_p1, "query_p2" => query_p2])
+
+                result = Mycelia.pocp(
+                    reference_fasta,
+                    query_fasta;
+                    proteins_a = reference_fasta,
+                    proteins_b = query_fasta,
+                    tool = :blastp,
+                    threads = 1,
+                    outdir = joinpath(temp_dir, "pocp"),
+                    force = true
+                )
+
+                Test.@test result.pocp isa Float64
+                Test.@test result.pocp >= 90.0
+                Test.@test result.pocpu_besthit >= 90.0
+                Test.@test result.pocpu_rbh >= 90.0
+                Test.@test result.n_rbh == 2
             end
+        end
+    end
 
-            temp_dir = mktempdir()
-            query_fasta = joinpath(temp_dir, "query_proteins.fasta")
-            reference_fasta = joinpath(temp_dir, "reference_proteins.fasta")
+    Test.@testset "POCP parameter regression (external)" begin
+        if !(run_external && conda_available)
+            Test.@test_skip "POCP regression requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
+        else
+            rng = StableRNGs.StableRNG(119)
+            random_protein, _, mutate_to_target_identity,
+            write_protein_fasta = build_pocp_test_helpers(rng)
+            mktempdir() do temp_dir
+                shared_segment = random_protein(120)
+                coverage_ref = random_protein(100) * shared_segment
+                coverage_query = shared_segment * random_protein(100)
 
-            ref_p1 = random_protein(220)
-            ref_p2 = random_protein(180)
-            query_p1 = mutate_protein(ref_p1, 0.02)
-            query_p2 = mutate_protein(ref_p2, 0.02)
+                identity_ref = random_protein(220)
+                identity_query = mutate_to_target_identity(identity_ref, 0.45)
 
-            write(reference_fasta, ">ref_p1\n$(ref_p1)\n>ref_p2\n$(ref_p2)\n")
-            write(query_fasta, ">query_p1\n$(query_p1)\n>query_p2\n$(query_p2)\n")
+                reference_fasta = joinpath(temp_dir, "reference_regression_proteins.fasta")
+                query_fasta = joinpath(temp_dir, "query_regression_proteins.fasta")
 
-            result = Mycelia.pocp(
-                reference_fasta,
-                query_fasta;
-                proteins_a = reference_fasta,
-                proteins_b = query_fasta,
-                tool = :blastp,
-                threads = 1,
-                outdir = joinpath(temp_dir, "pocp"),
-                force = true
-            )
+                write_protein_fasta(reference_fasta,
+                    [
+                        "id_ref" => identity_ref,
+                        "cov_ref" => coverage_ref,
+                        "decoy_ref_1" => random_protein(180),
+                        "decoy_ref_2" => random_protein(175)
+                    ])
+                write_protein_fasta(query_fasta,
+                    [
+                        "id_qry" => identity_query,
+                        "cov_qry" => coverage_query,
+                        "decoy_query_1" => random_protein(180),
+                        "decoy_query_2" => random_protein(175)
+                    ])
 
-            Test.@test result.pocp isa Float64
-            Test.@test result.pocp >= 90.0
-            Test.@test result.pocpu_besthit >= 90.0
-            Test.@test result.pocpu_rbh >= 90.0
-            Test.@test result.n_rbh == 2
+                permissive = Mycelia.pocp(
+                    reference_fasta,
+                    query_fasta;
+                    proteins_a = reference_fasta,
+                    proteins_b = query_fasta,
+                    tool = :blastp,
+                    min_id = 25.0,
+                    min_len_frac = 0.35,
+                    threads = 1,
+                    outdir = joinpath(temp_dir, "permissive"),
+                    force = true
+                )
+                stricter_identity = Mycelia.pocp(
+                    reference_fasta,
+                    query_fasta;
+                    proteins_a = reference_fasta,
+                    proteins_b = query_fasta,
+                    tool = :blastp,
+                    min_id = 65.0,
+                    min_len_frac = 0.35,
+                    threads = 1,
+                    outdir = joinpath(temp_dir, "stricter_identity"),
+                    force = true
+                )
+                stricter_coverage = Mycelia.pocp(
+                    reference_fasta,
+                    query_fasta;
+                    proteins_a = reference_fasta,
+                    proteins_b = query_fasta,
+                    tool = :blastp,
+                    min_id = 25.0,
+                    min_len_frac = 0.75,
+                    threads = 1,
+                    outdir = joinpath(temp_dir, "stricter_coverage"),
+                    force = true
+                )
 
-            rm(temp_dir; recursive = true, force = true)
+                Test.@test permissive.pocp > 0.0
+                Test.@test permissive.n_rbh == 2
+
+                Test.@test stricter_identity.pocp < permissive.pocp
+                Test.@test stricter_identity.pocpu_besthit < permissive.pocpu_besthit
+                Test.@test stricter_identity.n_rbh == 1
+                Test.@test sort(collect(skipmissing(stricter_identity.rbh_table.query_a))) ==
+                           ["cov_ref"]
+
+                Test.@test stricter_coverage.pocp < permissive.pocp
+                Test.@test stricter_coverage.pocpu_besthit < permissive.pocpu_besthit
+                Test.@test stricter_coverage.n_rbh == 1
+                Test.@test sort(collect(skipmissing(stricter_coverage.rbh_table.query_a))) ==
+                           ["id_ref"]
+            end
         end
     end
 
@@ -579,6 +716,77 @@ Indels  5  20
             Test.@test isfile(results.output_path)
             Test.@test results.ani >= 95.0
             Test.@test results.ani <= 100.0
+
+            rm(temp_dir; recursive = true, force = true)
+        end
+    end
+
+    Test.@testset "PyOrthoANI pairwise batched (external)" begin
+        if !(run_external && conda_available)
+            Test.@test_skip "PyOrthoANI pairwise batched requires MYCELIA_RUN_EXTERNAL=true and a working conda runner."
+        else
+            rng = StableRNGs.StableRNG(303)
+            dna_alphabet = ['A', 'C', 'G', 'T']
+            random_dna = len -> String(rand(rng, dna_alphabet, len))
+            function mutate_dna(seq::AbstractString, mutation_rate::Float64)
+                seq_chars = collect(seq)
+                for i in eachindex(seq_chars)
+                    if rand(rng) < mutation_rate
+                        original = seq_chars[i]
+                        candidates = filter(base -> base != original, dna_alphabet)
+                        seq_chars[i] = candidates[rand(rng, 1:length(candidates))]
+                    end
+                end
+                return String(seq_chars)
+            end
+
+            temp_dir = mktempdir()
+            # Three single-record FASTAs: one parent + two independently mutated
+            # copies. Expectation: every pair returns 95–100% ANI, self-vs-self
+            # rows equal 100.
+            parent_seq = random_dna(8000)
+            a_seq = mutate_dna(parent_seq, 0.01)
+            b_seq = mutate_dna(parent_seq, 0.02)
+
+            a_fasta = joinpath(temp_dir, "a.fasta")
+            b_fasta = joinpath(temp_dir, "b.fasta")
+            c_fasta = joinpath(temp_dir, "c.fasta")
+            write(a_fasta, ">a\n$(parent_seq)\n")
+            write(b_fasta, ">b\n$(a_seq)\n")
+            write(c_fasta, ">c\n$(b_seq)\n")
+
+            fastas = [a_fasta, b_fasta, c_fasta]
+            df = Mycelia.orthoani_pairwise(fastas)
+
+            Test.@test DataFrames.nrow(df) == 6
+            Test.@test all(>=(95.0), df.ani)
+            Test.@test all(<=(100.0), df.ani)
+
+            fasta_order = Dict(path => i for (i, path) in enumerate(fastas))
+            observed_pairs = Set(
+                fasta_order[row.query] <= fasta_order[row.reference] ?
+                (row.query, row.reference) : (row.reference, row.query)
+                for row in DataFrames.eachrow(df)
+            )
+            expected_pairs = Set([
+                (a_fasta, a_fasta),
+                (a_fasta, b_fasta),
+                (a_fasta, c_fasta),
+                (b_fasta, b_fasta),
+                (b_fasta, c_fasta),
+                (c_fasta, c_fasta),
+            ])
+            Test.@test observed_pairs == expected_pairs
+
+            # Diagonal rows (self-vs-self) should be exactly 100.
+            diag_rows = df[df.query .== df.reference, :]
+            Test.@test DataFrames.nrow(diag_rows) == 3
+            Test.@test all(isapprox.(diag_rows.ani, 100.0; atol = 1e-6))
+
+            # The batched output must reference the actual input paths so callers
+            # can round-trip from dataframe rows back to their source FASTAs.
+            Test.@test all(path -> path in fastas, df.query)
+            Test.@test all(path -> path in fastas, df.reference)
 
             rm(temp_dir; recursive = true, force = true)
         end

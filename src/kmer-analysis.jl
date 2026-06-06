@@ -93,7 +93,12 @@ function load_kmer_results(filename::AbstractString)
             if loaded_alphabet isa Symbol
                 metadata["alphabet"] = loaded_alphabet
             elseif loaded_alphabet isa AbstractString
-                metadata["alphabet"] = Symbol(loaded_alphabet)
+                try
+                    metadata["alphabet"] = Symbol(loaded_alphabet)
+                catch err
+                    @warn "Could not convert loaded alphabet '$loaded_alphabet' back to Symbol. Storing raw metadata value." exception=err
+                    metadata["alphabet"] = loaded_alphabet
+                end
             else
                 metadata["alphabet"] = loaded_alphabet
             end
@@ -2024,7 +2029,7 @@ function fasta_list_to_dense_kmer_counts(;
     progress1 = show_progress ?
                 ProgressMeter.Progress(num_files; desc = "Counting: ",
         barglyphs = ProgressMeter.BarGlyphs("[=> ]"), color = :cyan) : nothing
-    lock = use_threading ? Base.ReentrantLock() : nothing
+    lock = Base.ReentrantLock()
     error_log = Vector{Tuple{Int, String}}()
     successful_indices = Vector{Int}()
     max_observed_count_ref = Ref{Int}(0)
@@ -2138,7 +2143,8 @@ function fasta_list_to_dense_kmer_counts(;
     # Pass 2: fill matrix (multi-threaded, only for successful files)
     progress2 = ProgressMeter.Progress(num_successful_files; desc = "Filling matrix: ",
         barglyphs = ProgressMeter.BarGlyphs("[=> ]"), color = :green)
-    Threads.@threads for col in 1:num_successful_files
+
+    function fill_dense_column!(col)
         orig_idx = sorted_successful_indices[col]
         try
             kmer_counts = JLD2.load_object(temp_file_paths[orig_idx])
@@ -2146,14 +2152,38 @@ function fasta_list_to_dense_kmer_counts(;
                 row = kmer_index[kmer]
                 kmer_counts_matrix[row, col] = ValType(count)
             end
-        catch
-            # Optionally log error
+        catch e
+            @views fill!(kmer_counts_matrix[:, col], zero(ValType))
+            if use_threading
+                Base.lock(lock)
+            end
+            try
+                push!(error_log, (orig_idx, sprint(showerror, e)))
+            finally
+                if use_threading
+                    Base.unlock(lock)
+                end
+            end
         end
-        Base.lock(lock)
+        if use_threading
+            Base.lock(lock)
+        end
         try
             ProgressMeter.next!(progress2)
         finally
-            Base.unlock(lock)
+            if use_threading
+                Base.unlock(lock)
+            end
+        end
+    end
+
+    if use_threading
+        Threads.@threads for col in 1:num_successful_files
+            fill_dense_column!(col)
+        end
+    else
+        for col in 1:num_successful_files
+            fill_dense_column!(col)
         end
     end
     ProgressMeter.finish!(progress2)
@@ -2695,7 +2725,8 @@ function multi_scale_kmer_analysis(sequences::Vector{BioSequences.LongDNA{4}};
         # Select consensus k-mers (high-frequency, high-quality)
         sorted_kmers = sort(collect(kmer_counts), by = x->x[2], rev = true)
         consensus_threshold = max(3, Int(ceil(0.1 * length(sorted_kmers))))
-        consensus_kmers[k] = [kmer for (kmer, count) in sorted_kmers[1:consensus_threshold]]
+        consensus_limit = min(consensus_threshold, length(sorted_kmers))
+        consensus_kmers[k] = [kmer for (kmer, count) in sorted_kmers[1:consensus_limit]]
 
         # Estimate coverage
         if !isempty(kmer_counts)

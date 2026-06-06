@@ -39,8 +39,11 @@ function run_megahit(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
-    Mycelia.add_bioconda_env("megahit")
+        mail_user::Union{Nothing, String} = nothing,
+        ensure_env::Bool = true)
+    if ensure_env
+        Mycelia.add_bioconda_env("megahit")
+    end
     # Default output directory derived from FASTQ prefix
     if isnothing(outdir)
         cleaned1 = replace(fastq1, Mycelia.FASTQ_REGEX => "")
@@ -135,7 +138,9 @@ function run_megahit(;
     gfa_path = fastg_path * ".gfa"
     if !isfile(gfa_path)
         # if isfile(fastg_path) && (filesize(fastg_path) > 0)
-        Mycelia.add_bioconda_env("gfatools")
+        if ensure_env
+            Mycelia.add_bioconda_env("gfatools")
+        end
         run(pipeline(
             `$(Mycelia.CONDA_RUNNER) run --live-stream -n gfatools gfatools view $(fastg_path)`,
             gfa_path))

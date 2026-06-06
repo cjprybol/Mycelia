@@ -61,6 +61,56 @@ already delegates to this repo hook automatically.
 
 ---
 
+## Dispatch Quality Gates
+
+Rules for automated agents (Gas Town polecats, Codex, etc.) generating PRs.
+Derived from a 34-PR audit (2026-04-04). **Violations will result in PR
+closure.**
+
+### Test Isolation
+
+- **No `@eval Mycelia` without `zz_` prefix** — monkeypatching leaks across test
+  files in the same process. See `.codex/skills/test-isolation/SKILL.md`.
+- **Prefer fake CONDA_RUNNER scripts** over method replacement for stubbing
+  external tools.
+- **No destructive test fixtures** — never `mv` real conda environments, never
+  redefine `Base.sleep` or core APIs (`simulate_*`, `add_bioconda_env`).
+- **Save/restore if `@eval` is unavoidable** — store the original method and
+  restore in a `finally` block.
+
+### Test Coverage
+
+- **Tests must run in default CI** — do not place pure-Julia tests behind
+  `MYCELIA_RUN_EXTERNAL`. Only tests requiring real conda tools, network access,
+  or HPC belong there.
+- **All `@test_throws` must validate message content** — use try/catch with
+  `occursin` on the error message, not bare `@test_throws ErrorException`.
+- **No hardcoded developer paths** — use `mktempdir()`, `@__DIR__`, or
+  `Mycelia.DEFAULT_*` constants instead of `/Users/cameronprybol/...`.
+
+### Code Quality
+
+- **CairoMakie for new code** — do not add new `StatsPlots` or `Plots.jl`
+  usage. Existing `Plots.jl` usage in `plotting-and-visualization.jl` is being
+  migrated to CairoMakie. See global CLAUDE.md plotting preference.
+- **No committed artifacts** — `results/*.json`, `results/*.csv`, benchmark
+  outputs, and generated data must not be committed. Add to `.gitignore`.
+- **No undefined variables** — all references must be defined. Run
+  `julia --project=. -e "import Pkg; Pkg.precompile()"` to verify.
+- **Correct constructor calls** — verify struct constructors match field
+  definitions (positional vs keyword).
+
+### PR Hygiene
+
+- **CI must pass before requesting review** — do not submit PRs with failing CI.
+- **Commit type must match content** — `fix:` for bug fixes, `add:` for new
+  features, `docs:` for documentation-only changes, `test:` for test-only
+  changes.
+- **No duplicate PRs** — check for existing PRs touching the same files before
+  creating a new one.
+
+---
+
 ## Codebase Map
 
 ### Source Files (`src/`) - 53 modules

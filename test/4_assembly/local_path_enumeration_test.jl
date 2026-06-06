@@ -98,10 +98,11 @@ Test.@testset "Local Path Enumeration" begin
         Test.@test result.alternatives[3].score ≈ 1.0 / 13.0
         Test.@test all(
             alternative.score == alternative.path.total_probability
-            for alternative in result.alternatives
+        for alternative in result.alternatives
         )
         Test.@test all(
-            alternative.provenance == result.provenance for alternative in result.alternatives)
+            alternative.provenance == result.provenance
+        for alternative in result.alternatives)
         Test.@test result.provenance.method == :bounded_best_first
         Test.@test result.provenance.entry_vertex == "A"
         Test.@test result.provenance.exit_vertex == "D"
@@ -186,5 +187,61 @@ Test.@testset "Local Path Enumeration" begin
 
         Test.@test length(detected_results) == 1
         Test.@test length(first(detected_results).alternatives) == 3
+    end
+
+    Test.@testset "source == target returns a trivial single-vertex path" begin
+        graph = _local_path_enumeration_graph()
+
+        result = Mycelia.Rhizomorph.enumerate_local_paths(
+            graph, "A", "A"; max_paths = 5, max_depth = 3)
+
+        Test.@test length(result.alternatives) == 1
+        Test.@test _alternative_labels(result.alternatives[1]) == ["A"]
+        Test.@test !result.provenance.truncated
+        Test.@test result.provenance.reason == :complete
+        Test.@test result.provenance.expansions == 0
+    end
+
+    Test.@testset "max_paths == 0 returns no alternatives, bounded" begin
+        graph = _local_path_enumeration_graph()
+
+        result = Mycelia.Rhizomorph.enumerate_local_paths(
+            graph, "A", "D"; max_paths = 0, max_depth = 3)
+
+        Test.@test isempty(result.alternatives)
+        Test.@test result.provenance.truncated
+        Test.@test result.provenance.reason == :max_paths
+        Test.@test result.provenance.expansions == 0
+    end
+
+    Test.@testset "enumerated paths are vertex-simple on a cyclic graph" begin
+        # A→B→C→A is a cycle; the only acyclic route to the target D is A→D.
+        # The vertex-simple guard must block the cycle (no revisits, terminates).
+        graph = MetaGraphsNext.MetaGraph(
+            MetaGraphsNext.DiGraph();
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0
+        )
+        for vertex in ["A", "B", "C", "D"]
+            graph[vertex] = nothing
+        end
+        for (src, dst) in [("A", "B"), ("B", "C"), ("C", "A"), ("A", "D")]
+            graph[src, dst] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+                1.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+        end
+
+        result = Mycelia.Rhizomorph.enumerate_local_paths(
+            graph, "A", "D"; max_paths = 10, max_depth = 8)
+
+        # Every returned path visits each vertex at most once (no cycle revisits).
+        for alternative in result.alternatives
+            labels = _alternative_labels(alternative)
+            Test.@test length(labels) == length(unique(labels))
+        end
+        # The acyclic A→D route is found.
+        Test.@test ["A", "D"] in _alternative_labels.(result.alternatives)
     end
 end

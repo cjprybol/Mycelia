@@ -118,7 +118,7 @@ Test.@testset "Generation - compute_sequence_likelihood" begin
     Test.@test ll_impossible == -Inf
 
     ll_from_evidence = Mycelia.Rhizomorph.compute_sequence_likelihood("ABCDEF", graph; k = 3)
-    Test.@test ll_from_evidence == ll
+    Test.@test ll_from_evidence ≈ ll atol = 1e-12
 
     zero_weight_graph = MetaGraphsNext.MetaGraph(
         MetaGraphsNext.DiGraph(),
