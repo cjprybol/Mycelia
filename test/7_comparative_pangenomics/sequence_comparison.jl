@@ -161,6 +161,48 @@ Test.@testset "Sequence Comparison Tests" begin
         rm(query_fasta, force = true)
     end
 
+    Test.@testset "Pairwise Minimap Empty Result Schema" begin
+        empty_result = Mycelia.pairwise_minimap_fasta_comparison_empty_result(
+            query_length = 56,
+            target_length = 80
+        )
+
+        Test.@test eltype(empty_result.alignment_percent_identity) == Union{Missing, Float64}
+        Test.@test eltype(empty_result.total_equivalent_bases) == Union{Missing, Int}
+        Test.@test eltype(empty_result.total_alignment_length) == Union{Missing, Int}
+        Test.@test eltype(empty_result.total_variants) == Union{Missing, Int}
+        Test.@test eltype(empty_result.total_snps) == Union{Missing, Int}
+        Test.@test eltype(empty_result.total_indels) == Union{Missing, Int}
+        Test.@test eltype(empty_result.alignment_coverage_query) == Float64
+        Test.@test eltype(empty_result.alignment_coverage_reference) == Float64
+        Test.@test empty_result.query_length == [56]
+        Test.@test empty_result.size_equivalence_to_reference == [70.0]
+
+        happy_path = Mycelia.pairwise_minimap_fasta_comparison_result(
+            alignment_percent_identity = 99.5,
+            total_equivalent_bases = 55,
+            total_alignment_length = 56,
+            query_length = 56,
+            total_variants = 1,
+            total_snps = 1,
+            total_indels = 0,
+            alignment_coverage_query = 100.0,
+            alignment_coverage_reference = 70.0,
+            size_equivalence_to_reference = 70.0
+        )
+
+        Test.@test_nowarn DataFrames.append!(happy_path, empty_result)
+        Test.@test size(happy_path) == (2, 10)
+        Test.@test ismissing(happy_path[2, :alignment_percent_identity])
+        Test.@test ismissing(happy_path[2, :total_equivalent_bases])
+        Test.@test ismissing(happy_path[2, :total_alignment_length])
+        Test.@test ismissing(happy_path[2, :total_variants])
+        Test.@test ismissing(happy_path[2, :total_snps])
+        Test.@test ismissing(happy_path[2, :total_indels])
+        Test.@test happy_path[2, :alignment_coverage_query] == 0.0
+        Test.@test happy_path[2, :alignment_coverage_reference] == 0.0
+    end
+
     Test.@testset "FastANI Mock Tests" begin
         # Test query/reference list file creation
         temp_query_list = tempname() * ".txt"

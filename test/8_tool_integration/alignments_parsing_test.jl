@@ -22,6 +22,29 @@ Test.@testset "Alignment Parsing Helpers" begin
             Test.@test parsed.distance ≈ 0.015
             Test.@test parsed.distance_aligned ≈ 0.01
         end
+
+        mktempdir() do dir
+            report_path = joinpath(dir, "global-section.report")
+            open(report_path, "w") do io
+                println(io, "TotalBases 1000 900")
+                println(io, "AlignedBases 800 700 80.0 77.8")
+                println(io, "UnalignedBases 200 200 20.0 22.2")
+                println(io, "1-to-1")
+                println(io, "AvgIdentity 98.5")
+                println(io, "AvgIdentity(Aligned) 99.0")
+                println(io, "SNPs 5")
+                println(io, "Indels 2 3")
+            end
+
+            parsed = Mycelia.parse_dnadiff_report(report_path)
+            Test.@test parsed.summary.total_bases_ref == 1000
+            Test.@test parsed.summary.total_bases_query == 900
+            Test.@test parsed.summary.aligned_pct_ref ≈ 80.0
+            Test.@test parsed.summary.aligned_pct_query ≈ 77.8
+            Test.@test parsed.summary.avg_identity == 98.5
+            Test.@test !haskey(parsed.raw_sections[Symbol("1_to_1")], :total_bases_ref)
+            Test.@test parsed.raw_sections[Symbol("global")][:total_bases_ref] == 1000
+        end
     end
 
     Test.@testset "MUMmer coords parsing and summary" begin

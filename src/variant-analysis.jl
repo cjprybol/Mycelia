@@ -71,16 +71,28 @@ function update_fasta_with_vcf(;
     add_bioconda_env("htslib")
     add_bioconda_env("tabix")
     add_bioconda_env("bcftools")
-    isfile("$(vcf_file).gz") && rm("$(vcf_file).gz")
-    isfile("$(vcf_file).gz.tbi") && rm("$(vcf_file).gz.tbi")
+    # Work on a copy to preserve the original VCF
+    work_vcf = vcf_file * ".work.vcf"
     normalized_vcf_file = replace(vcf_file, ".vcf" => ".normalized.vcf")
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(vcf_file)`)
-    run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(vcf_file).gz`)
-    run(pipeline(
-        `$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(vcf_file).gz`,
-        normalized_vcf_file))
-    rm("$(vcf_file).gz")
-    rm("$(vcf_file).gz.tbi")
+    normalization_complete = false
+    try
+        cp(vcf_file, work_vcf; force = true)
+        isfile("$(work_vcf).gz") && rm("$(work_vcf).gz")
+        isfile("$(work_vcf).gz.tbi") && rm("$(work_vcf).gz.tbi")
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n htslib bgzip $(work_vcf)`)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n tabix tabix -f -p vcf $(work_vcf).gz`)
+        run(pipeline(
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n bcftools bcftools norm -cs --fasta-ref $(in_fasta) $(work_vcf).gz`,
+            normalized_vcf_file))
+        normalization_complete = true
+    finally
+        isfile(work_vcf) && rm(work_vcf)
+        isfile("$(work_vcf).gz") && rm("$(work_vcf).gz")
+        isfile("$(work_vcf).gz.tbi") && rm("$(work_vcf).gz.tbi")
+        if !normalization_complete
+            isfile(normalized_vcf_file) && rm(normalized_vcf_file)
+        end
+    end
     isfile("$(normalized_vcf_file).gz") && rm("$(normalized_vcf_file).gz")
     isfile("$(normalized_vcf_file).gz.tbi") && rm("$(normalized_vcf_file).gz.tbi")
     isfile("$(normalized_vcf_file).fna") && rm("$(normalized_vcf_file).fna")

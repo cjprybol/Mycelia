@@ -69,9 +69,13 @@ function lawrencium_sbatch(;
         return execute(job, resolved_executor)
     end
 
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
     result = submit(job; dry_run = dry_run)
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
 
     if !result.ok
         @error "Lawrencium submission failed" errors=result.errors warnings=result.warnings
@@ -149,9 +153,13 @@ function scg_sbatch(;
         return execute(job, resolved_executor)
     end
 
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
     result = submit(job; dry_run = dry_run)
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
 
     if !result.ok
         @error "SCG submission failed" errors=result.errors warnings=result.warnings
@@ -284,9 +292,13 @@ function nersc_sbatch(;
         return execute(job, resolved_executor)
     end
 
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
     result = submit(job; dry_run = dry_run, path = script_path)
-    sleep(5)
+    if !dry_run
+        sleep(5)
+    end
 
     if !result.ok
         @error "NERSC submission failed" errors=result.errors warnings=result.warnings

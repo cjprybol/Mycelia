@@ -103,4 +103,23 @@ Test.@testset "AA Qualmer SingleStrand Graph" begin
     end
 
     Test.@test reconstruction_success
+
+    Test.@testset "first record without k-mers" begin
+        records = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("short", "MK", "II"),
+            FASTX.FASTQ.Record("valid", "MKTV", "IIII")
+        ]
+
+        graph_with_short_first = Mycelia.Rhizomorph.build_qualmer_graph(
+            records,
+            3;
+            dataset_id = "test",
+            mode = :singlestrand,
+            type_hint = :AA
+        )
+
+        labels = collect(MetaGraphsNext.labels(graph_with_short_first))
+        Test.@test length(labels) == 2
+        Test.@test all(label -> label isa Kmers.AAKmer, labels)
+    end
 end

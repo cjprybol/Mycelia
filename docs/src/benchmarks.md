@@ -45,6 +45,39 @@ This benchmark compares `Mycelia.Rhizomorph.assemble_genome`, `run_megahit`, and
 `run_metaspades` on the same generated FASTQ inputs and writes the run plan plus
 results as CSV files.
 
+## Rhizomorph H1-H7 Benchmark Harness
+
+The Rhizomorph public-record benchmark surface is defined by
+`benchmarking/rhizomorph_benchmark_manifest.toml` and inspected through
+`benchmarking/rhizomorph_benchmark_harness.jl`. The manifest inventories the
+current reusable benchmark assets:
+
+- deterministic toy controls from `benchmarking/standard_assembler_fixtures.jl`
+- repeat-fork calibration from `benchmarking/08_momentum_fork_resolution_benchmark.jl`
+- small Rhizomorph graph fixtures in `test/4_assembly/rhizomorph_*_test.jl`
+- public isolate references already used by `benchmarking/real_genome_benchmark.jl`
+- heterogeneous community candidates such as CAMI, Zymo, and ATCC mock communities
+
+Each manifest dataset records provenance, expected inputs, expected outputs, and
+whether it is suitable for CI dry-runs, full public-reference benchmark runs, or
+candidate follow-on work. H1-H7 slices route graph construction, k/strand sweeps,
+repeat resolution, qualmer robustness, heterogeneous community recovery,
+generative sequence fidelity, and external assembler comparisons to their
+expected datasets and output tables.
+
+Inspect the harness without running heavy work:
+
+```bash
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-datasets
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-slices
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slice H7 --scale full
+```
+
+The harness is intentionally a dry-run contract today; follow-on implementation
+issues should promote each H1-H7 slice from `status = "stub"` to a concrete
+runner while preserving the manifest output schema.
+
 ## Standardized Test Datasets
 
 To ensure rigorous validation across platforms, Mycelia uses the following

@@ -950,10 +950,51 @@ DataFrame with the following columns:
 
 # Notes
 - Uses minimap2 with progressively relaxed settings (asm5→asm10→asm20)
-- Returns empty string values for alignment statistics if no alignment is found
+- Returns typed `missing` values for alignment statistics if no alignment is found
 - Requires minimap2 to be installed and accessible in PATH
 """
 # uses minimap
+function pairwise_minimap_fasta_comparison_result(;
+        alignment_percent_identity,
+        total_equivalent_bases,
+        total_alignment_length,
+        query_length,
+        total_variants,
+        total_snps,
+        total_indels,
+        alignment_coverage_query,
+        alignment_coverage_reference,
+        size_equivalence_to_reference)
+    return DataFrames.DataFrame(
+        alignment_percent_identity = Union{Missing, Float64}[alignment_percent_identity],
+        total_equivalent_bases = Union{Missing, Int}[total_equivalent_bases],
+        total_alignment_length = Union{Missing, Int}[total_alignment_length],
+        query_length = Int[query_length],
+        total_variants = Union{Missing, Int}[total_variants],
+        total_snps = Union{Missing, Int}[total_snps],
+        total_indels = Union{Missing, Int}[total_indels],
+        alignment_coverage_query = Float64[alignment_coverage_query],
+        alignment_coverage_reference = Float64[alignment_coverage_reference],
+        size_equivalence_to_reference = Float64[size_equivalence_to_reference]
+    )
+end
+
+function pairwise_minimap_fasta_comparison_empty_result(; query_length, target_length)
+    size_equivalence_to_reference = round(query_length / target_length * 100, digits = 2)
+    return pairwise_minimap_fasta_comparison_result(
+        alignment_percent_identity = missing,
+        total_equivalent_bases = missing,
+        total_alignment_length = missing,
+        query_length = query_length,
+        total_variants = missing,
+        total_snps = missing,
+        total_indels = missing,
+        alignment_coverage_query = 0.0,
+        alignment_coverage_reference = 0.0,
+        size_equivalence_to_reference = size_equivalence_to_reference
+    )
+end
+
 function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     header = [
         "Query",
@@ -974,19 +1015,15 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     Mycelia.add_bioconda_env("minimap2")
     #     asm5/asm10/asm20: asm-to-ref mapping, for ~0.1/1/5% sequence divergence
     results5 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm5 --cs -cL $reference_fasta $query_fasta`)
-    if !isempty(results5)
-        results = results5
-    else
+    results = results5
+    if isempty(results)
         @warn "no hit with asm5, trying asm10"
         results10 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm10 --cs -cL $reference_fasta $query_fasta`)
-        if !isempty(results10)
-            results = results10
-        else
+        results = results10
+        if isempty(results)
             @warn "no hits with asm5 or asm10, trying asm20"
             results20 = read(`$(Mycelia.CONDA_RUNNER) run --live-stream -n minimap2 minimap2 -x asm20 --cs -cL $reference_fasta $query_fasta`)
-            if !isempty(results20)
-                results = results20
-            end
+            results = results20
         end
     end
     if !isempty(results)
@@ -1028,7 +1065,7 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
         alignment_coverage_reference = round(
             total_alignment_length / minimap_results[1, "Target length"] * 100, digits = 2)
 
-        results = DataFrames.DataFrame(
+        results = pairwise_minimap_fasta_comparison_result(
             alignment_percent_identity = alignment_percent_identity,
             total_equivalent_bases = total_equivalent_bases,
             total_alignment_length = total_alignment_length,
@@ -1043,21 +1080,8 @@ function pairwise_minimap_fasta_comparison(; reference_fasta, query_fasta)
     else
         query_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(query_fasta)))))
         target_length = length(FASTX.sequence(first(FASTX.FASTA.Reader(open(reference_fasta)))))
-        size_equivalence_to_reference = round(query_length/target_length * 100, digits = 2)
-
-        # unable to find any matches
-        results = DataFrames.DataFrame(
-            alignment_percent_identity = "",
-            total_equivalent_bases = "",
-            total_alignment_length = "",
-            query_length = query_length,
-            total_variants = "",
-            total_snps = "",
-            total_indels = "",
-            alignment_coverage_query = 0,
-            alignment_coverage_reference = 0,
-            size_equivalence_to_reference = size_equivalence_to_reference
-        )
+        results = pairwise_minimap_fasta_comparison_empty_result(
+            query_length = query_length, target_length = target_length)
     end
     return results
 end
@@ -2678,6 +2702,17 @@ function _conda_env_exec_ok(env_name::String, exec_parts::Vector{String})
     return Base.success(pipeline(cmd, stdout = Base.devnull, stderr = Base.devnull))
 end
 
+function sanitized_conda_run_cmd(
+        env_name::AbstractString,
+        exec_parts::Vector{String};
+        live_stream::Bool = false)
+    cmd_parts = live_stream ?
+                vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", env_name], exec_parts) :
+                vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], exec_parts)
+    cmd = Cmd(cmd_parts)
+    return addenv(cmd, "PYTHONNOUSERSITE" => "1", "PYTHONPATH" => "")
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -2820,7 +2855,10 @@ function run_pyorthoani(;
     if force || !isfile(output_path) || filesize(output_path) == 0
         cmd_parts = ["pyorthoani", "-q", query, "-r", reference]
         append!(cmd_parts, additional_args)
-        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani"], cmd_parts))
+        # Prevent the user-site (~/.local/...) from shadowing the conda env's
+        # site-packages. Without this, a stray py3.9 numpy in ~/.local/ breaks
+        # Biopython's numpy import inside a py3.11 conda env.
+        cmd = sanitized_conda_run_cmd("pyorthoani", cmd_parts; live_stream = true)
         output = read(cmd, String)
         write(output_path, output)
     end
@@ -2828,4 +2866,139 @@ function run_pyorthoani(;
     output = read(output_path, String)
     ani = parse_pyorthoani_output(output)
     return (; ani, output_path, raw_output = output)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run PyOrthoANI's native batched all-vs-all API (`orthoani_pairwise`) over a set
+of FASTA files in a single `conda run` invocation.
+
+Batch mode amortizes the two big per-pair costs of `run_pyorthoani`:
+  - Conda-env activation (~2–3 s per call)
+  - BLAST database construction (one DB per genome, built once then reused)
+
+For an N-genome sweep this is typically 10–50× faster than calling
+`run_pyorthoani` in an N² loop. PyOrthoANI exploits symmetry internally and
+runs N·(N-1)/2 alignments, so the returned table has one row per unordered
+pair plus the diagonal entries.
+
+# Arguments
+- `fasta_files::Vector{String}`: Paths to genome FASTA files. At least two
+  are required. Each file is treated as one genome; if a file contains
+  multiple records, only the first record is used.
+- `blocksize::Int=1020`: Block size passed to PyOrthoANI. Matches the
+  OrthoANI paper's default and PyOrthoANI's internal default.
+- `threads::Union{Int,Nothing}=nothing`: Number of threads for the internal
+  BLAST calls. `nothing` defers to `os.cpu_count()` inside the Python
+  driver (PyOrthoANI's default).
+- `force_env::Bool=false`: Recreate the pyorthoani conda env before running.
+- `quiet::Bool=false`: Reduce conda output during environment setup.
+
+# Returns
+`DataFrames.DataFrame` with columns `query::String`, `reference::String`,
+`ani::Float64`. `query` and `reference` carry the FASTA file paths supplied
+in `fasta_files`. PyOrthoANI emits symmetric keys plus diagonal (self-vs-self
+at 100.0).
+
+# Example
+```julia
+fastas = ["phage_a.fasta", "phage_b.fasta", "phage_c.fasta"]
+df = Mycelia.orthoani_pairwise(fastas)
+# df has rows like (phage_a, phage_b, 99.4), (phage_a, phage_a, 100.0), …
+```
+
+See also: [`run_pyorthoani`](@ref) for a single-pair invocation, and
+[`skani_triangle`](@ref)/[`skani_dist`](@ref) for a substantially faster
+non-BLAST alternative based on hashing.
+"""
+function orthoani_pairwise(fasta_files::Vector{String};
+        blocksize::Int = 1020,
+        threads::Union{Int, Nothing} = nothing,
+        force_env::Bool = false,
+        quiet::Bool = false)
+    @assert length(fasta_files) >= 2 "orthoani_pairwise needs at least 2 FASTA files (got $(length(fasta_files)))"
+    for f in fasta_files
+        @assert isfile(f) "FASTA not found: $(f)"
+    end
+
+    ensure_pyorthoani_env(force = force_env, quiet = quiet)
+
+    # Drive PyOrthoANI's Python API directly so all pairs run in one process:
+    # one conda activation, one set of BLAST DB builds, one upper-triangle sweep.
+    # Output is delimited with markers so the Julia side can extract the JSON
+    # body even if conda-run prepends banner text to stdout.
+    threads_kwarg = isnothing(threads) ? "" : ",\n    threads=$(Int(threads))"
+    driver_code = """
+import json, sys
+from Bio import SeqIO
+from pyorthoani import orthoani_pairwise
+
+paths = sys.argv[1:]
+path_order = {p: i for i, p in enumerate(paths)}
+genomes = []
+for p in paths:
+    records = list(SeqIO.parse(p, "fasta"))
+    if not records:
+        sys.stderr.write("skipping empty FASTA: %s\\n" % p)
+        continue
+    rec = records[0]
+    # Identify each genome by its FASTA path so Julia can round-trip them.
+    rec.id = p
+    rec.description = p
+    genomes.append(rec)
+
+result = orthoani_pairwise(
+    genomes,
+    blocksize=$(Int(blocksize))$threads_kwarg,
+)
+seen = set()
+out = []
+for (a, b), v in result.items():
+    if a not in path_order or b not in path_order:
+        raise KeyError("unexpected PyOrthoANI result key: %r vs %r" % (a, b))
+    pair = (a, b) if path_order[a] <= path_order[b] else (b, a)
+    if pair in seen:
+        continue
+    seen.add(pair)
+    out.append({"query": pair[0], "reference": pair[1], "ani": float(v) * 100.0})
+
+expected_pairs = len(paths) * (len(paths) + 1) // 2
+if len(out) != expected_pairs:
+    raise RuntimeError(
+        "expected %d unordered ANI rows, got %d" % (expected_pairs, len(out))
+    )
+sys.stdout.write("===BEGIN_JSON===\\n")
+json.dump(out, sys.stdout)
+sys.stdout.write("\\n===END_JSON===\\n")
+"""
+    temp_dir = mktempdir()
+    raw = try
+        driver_path = joinpath(temp_dir, "mycelia_orthoani_pairwise.py")
+        write(driver_path, driver_code)
+
+        cmd = Cmd(vcat(
+            [Mycelia.CONDA_RUNNER, "run", "--live-stream", "-n", "pyorthoani",
+                "python", driver_path],
+            fasta_files
+        ))
+        read(cmd, String)
+    finally
+        rm(temp_dir; recursive = true, force = true)
+    end
+
+    # Extract the JSON body between our sentinels.
+    m_begin = findfirst("===BEGIN_JSON===", raw)
+    m_end = findfirst("===END_JSON===", raw)
+    (m_begin === nothing || m_end === nothing) && error(
+        "orthoani_pairwise: could not locate JSON markers in driver output. " *
+        "Full output:\n" * raw,
+    )
+    json_body = strip(raw[(last(m_begin) + 1):(first(m_end) - 1)])
+    parsed = JSON.parse(json_body)
+
+    queries = String[row["query"] for row in parsed]
+    refs = String[row["reference"] for row in parsed]
+    anis = Float64[row["ani"] for row in parsed]
+    return DataFrames.DataFrame(; query = queries, reference = refs, ani = anis)
 end
