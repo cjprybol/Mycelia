@@ -5,7 +5,17 @@ on:
     branches:
       - master
     tags: '*'
+  # Only build docs for PRs targeting master (matches ci.yml / codeql.yml);
+  # a full Julia doc build on PRs against other branches has little value.
   pull_request:
+    branches:
+      - master
+
+# Cancel superseded PR-branch doc builds; never cancel a master run so the
+# docs deploy always completes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   build:
