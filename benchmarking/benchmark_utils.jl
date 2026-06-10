@@ -8,6 +8,7 @@ import Statistics
 import Dates
 import JSON
 import JLD2
+import Profile
 
 """
     BenchmarkSuite
@@ -36,15 +37,26 @@ end
 Run a function with BenchmarkTools while tracking memory allocation.
 Returns both benchmark results and memory statistics.
 """
-function run_benchmark_with_memory(func, args...; samples=5, seconds=30, kwargs...)
+function run_benchmark_with_memory(func, args...; samples=5, seconds=30, evals=1, kwargs...)
     # Get initial memory state
     GC.gc()
     initial_memory = Base.gc_num()
-    
+
     # Run benchmark
-    benchmark_target = () -> func(args...; kwargs...)
-    benchmark_result = BenchmarkTools.@benchmark $benchmark_target() samples=samples seconds=seconds
-    
+    benchmark_target = let benchmark_func = func,
+        benchmark_args = args,
+        benchmark_kwargs = (; kwargs...)
+        () -> benchmark_func(benchmark_args...; benchmark_kwargs...)
+    end
+
+    benchmark = BenchmarkTools.@benchmarkable $benchmark_target()
+    benchmark.params.samples = samples
+    benchmark.params.seconds = seconds
+    benchmark.params.evals = evals
+    benchmark.params.evals_set = true
+    BenchmarkTools.tune!(benchmark)
+    benchmark_result = BenchmarkTools.run(benchmark; warmup=false)
+
     # Get final memory state
     GC.gc()
     final_memory = Base.gc_num()
@@ -213,6 +225,23 @@ function add_benchmark_result!(suite::BenchmarkSuite, name::String, benchmark_re
     end
     
     suite.results[name] = result_data
+end
+
+function add_benchmark_result!(
+        suite::BenchmarkSuite,
+        name::String,
+        result_data::AbstractDict,
+        memory_stats=nothing)
+    normalized_result = Dict{String, Any}()
+    for (key, value) in result_data
+        normalized_result[string(key)] = value
+    end
+
+    if memory_stats !== nothing
+        normalized_result["memory_stats"] = memory_stats
+    end
+
+    suite.results[name] = normalized_result
 end
 
 """

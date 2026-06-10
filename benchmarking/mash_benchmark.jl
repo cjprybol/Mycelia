@@ -12,6 +12,7 @@ import Mycelia
 import BenchmarkTools
 import FASTX
 import Random
+import Dates
 
 include("benchmark_utils.jl")
 

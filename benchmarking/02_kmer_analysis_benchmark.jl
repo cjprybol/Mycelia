@@ -25,12 +25,13 @@ import Random
 import Statistics
 import Dates
 import BioSequences
+import JSON
 
 # Include benchmark utilities
 include("benchmark_utils.jl")
 
 println("=== K-mer Analysis Benchmark ===")
-println("Start time: $(now())")
+println("Start time: $(Dates.now())")
 
 # ## Benchmark Configuration
 #
@@ -115,7 +116,7 @@ for k in config["k_values"]
     
     # Benchmark k-mer counting
     benchmark_result, memory_stats = run_benchmark_with_memory(
-        Mycelia.count_kmers, test_seq, k;
+        Mycelia.count_kmers, Mycelia.Kmers.DNAKmer{k}, test_seq;
         samples=3, seconds=15
     )
     
@@ -145,7 +146,7 @@ for k in config["k_values"]
     
     # Benchmark canonical k-mer counting
     benchmark_result, memory_stats = run_benchmark_with_memory(
-        Mycelia.count_canonical_kmers, test_seq, k;
+        Mycelia.count_canonical_kmers, Mycelia.Kmers.DNAKmer{k}, test_seq;
         samples=3, seconds=15
     )
     
@@ -175,7 +176,7 @@ for k in [15, 21]  # Test with smaller k values for spectrum analysis
     
     # Function to generate k-mer frequency histogram
     function generate_kmer_histogram(sequence, k)
-        kmer_counts = Mycelia.count_kmers(sequence, k)
+        kmer_counts = Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{k}, sequence)
         frequencies = collect(values(kmer_counts))
         return Dict(freq => count(==(freq), frequencies) for freq in unique(frequencies))
     end
@@ -205,7 +206,7 @@ test_seq = test_sequences[medium_genome_size][1]
 
 # Function to estimate genome size from k-mer spectrum
 function estimate_genome_size_from_kmers(sequence, k)
-    kmer_counts = Mycelia.count_kmers(sequence, k)
+    kmer_counts = Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{k}, sequence)
     unique_kmers = length(kmer_counts)
     total_kmers = sum(values(kmer_counts))
     
@@ -253,7 +254,7 @@ println("\n--- Scaling Benchmarks (k=$k_test) ---")
 
 # Function to generate test arguments for scaling
 args_generator = function(genome_size)
-    return (test_sequences[genome_size][1], k_test)
+    return (Mycelia.Kmers.DNAKmer{k_test}, test_sequences[genome_size][1])
 end
 
 # Run scaling benchmark
@@ -292,14 +293,15 @@ println("\n--- Accuracy Benchmarks ---")
 println("\n--- Memory Efficiency Analysis ---")
 
 for k in [15, 21, 31]  # Test key k values
-    medium_genome_size = config["genome_sizes"][2]
+    benchmark_genome_size = config["genome_sizes"][2]
     
     # Estimate theoretical memory requirement
-    theoretical_kmers = 4^k  # Maximum possible k-mers
-    actual_genome_size = medium_genome_size
+    theoretical_kmers = big(4)^k  # Maximum possible k-mers
+    actual_genome_size = benchmark_genome_size
+    dense_estimate = Mycelia.estimate_dense_matrix_memory(Float64, theoretical_kmers, 1)
     
     # Check if matrix would fit in memory
-    memory_check = Mycelia.check_matrix_fits_in_memory(theoretical_kmers, 1, Float64)
+    memory_check = Mycelia.check_matrix_fits_in_memory(dense_estimate)
     
     println("k=$k:")
     println("  Theoretical k-mer space: $(theoretical_kmers)")
@@ -307,8 +309,9 @@ for k in [15, 21, 31]  # Test key k values
     println("  Dense matrix fits in memory: $memory_check")
     
     # Estimate sparse vs dense memory usage
-    sparse_estimate = Mycelia.estimate_sparse_matrix_memory(actual_genome_size, 1, Float64)
-    dense_estimate = Mycelia.estimate_dense_matrix_memory(theoretical_kmers, 1, Float64)
+    sparse_estimate = Mycelia.estimate_sparse_matrix_memory(
+        Float64, actual_genome_size, 1; nnz=actual_genome_size
+    )
     
     println("  Sparse estimate: $(round(sparse_estimate / 1e6, digits=2)) MB")
     println("  Dense estimate: $(round(dense_estimate / 1e6, digits=2)) MB")
@@ -349,7 +352,7 @@ if haskey(test_sequences, large_genome_size)
         GC.gc()  # Start with clean memory
         initial_memory = Base.gc_num()
         
-        result = Mycelia.count_kmers(sequence, k)
+        result = Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{k}, sequence)
         
         GC.gc()
         final_memory = Base.gc_num()
@@ -384,7 +387,7 @@ test_seq = test_sequences[medium_genome_size][1]
 function repeated_kmer_operations(sequence, k, iterations=3)
     results = []
     for i in 1:iterations
-        result = Mycelia.count_canonical_kmers(sequence, k)
+        result = Mycelia.count_canonical_kmers(Mycelia.Kmers.DNAKmer{k}, sequence)
         push!(results, length(result))
     end
     return results
@@ -414,7 +417,7 @@ function memory_fragmentation_test(sequence, k_values)
     results = Dict()
     for k in k_values
         GC.gc()  # Force garbage collection
-        result = Mycelia.count_kmers(sequence, k)
+        result = Mycelia.count_kmers(Mycelia.Kmers.DNAKmer{k}, sequence)
         results[k] = length(result)
         # Allow dictionary to be garbage collected
         result = nothing

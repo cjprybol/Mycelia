@@ -27,12 +27,14 @@ import Dates
 import BioSequences
 import CSV
 import DataFrames
+import JSON
+import Logging
 
 # Include benchmark utilities
 include("benchmark_utils.jl")
 
 println("=== Data Processing Benchmark ===")
-println("Start time: $(now())")
+println("Start time: $(Dates.now())")
 
 # ## Benchmark Configuration
 #
@@ -86,6 +88,9 @@ println("\n--- Generating Test Data ---")
 
 # Generate test datasets using proper read simulation from reference genomes
 test_data_dir = "test_data"
+if isdir(test_data_dir)
+    rm(test_data_dir, force=true, recursive=true)
+end
 mkpath(test_data_dir)
 
 # Create a temporary reference genome for read simulation
@@ -98,15 +103,18 @@ test_files = []
 for i in 1:min(5, config["n_files"])  # Limit to 5 files for testing
     # Use simulate_illumina_reads for realistic FASTQ generation
     result = Mycelia.simulate_illumina_reads(
-        fasta=ref_fasta_path, 
+        fasta=ref_fasta_path,
         read_count=config["reads_per_file"],
-        len=config["read_length"],
+        outbase=joinpath(test_data_dir, "sim_reads_$(i)"),
+        read_length=config["read_length"],
+        paired=false,
+        rndSeed=42 + i,
         quiet=true
     )
     # Rename to our expected pattern
-    filename = joinpath(test_data_dir, "test_reads_$(i).fastq")
-    if isfile(result.fastq1)
-        cp(result.fastq1, filename, force=true)
+    filename = joinpath(test_data_dir, "test_reads_$(i).fastq.gz")
+    if isfile(result.forward_reads)
+        cp(result.forward_reads, filename, force=true)
         push!(test_files, filename)
     end
 end
@@ -174,8 +182,15 @@ if length(test_files) > 0
     println("\nBenchmarking read length determination")
     
     test_file = test_files[1]
+
+    function determine_read_lengths_silent(fastq_file::AbstractString)
+        return Logging.with_logger(Logging.NullLogger()) do
+            Mycelia.determine_read_lengths(fastq_file)
+        end
+    end
+
     benchmark_result, memory_stats = run_benchmark_with_memory(
-        Mycelia.determine_read_lengths, test_file;
+        determine_read_lengths_silent, test_file;
         samples=3, seconds=10
     )
     
@@ -195,10 +210,20 @@ if length(test_files) > 0
     println("\nBenchmarking duplication rate assessment")
     
     test_file = test_files[1]
+
+    function assess_duplication_rates_silent(fastq_file::AbstractString)
+        return Logging.with_logger(Logging.NullLogger()) do
+            redirect_stdout(devnull) do
+                redirect_stderr(devnull) do
+                    Mycelia.assess_duplication_rates(fastq_file)
+                end
+            end
+        end
+    end
     
     # This function processes the file twice, so it's more intensive
     benchmark_result, memory_stats = run_benchmark_with_memory(
-        Mycelia.assess_duplication_rates, test_file;
+        assess_duplication_rates_silent, test_file;
         samples=2, seconds=20
     )
     
@@ -256,12 +281,10 @@ if length(test_files) > 0
     println("Testing sequential FASTQ reading performance")
     
     # Benchmark raw file reading
-    function read_fastq_sequential(filename)
+    function read_fastq_sequential(filename::AbstractString)
         record_count = 0
-        open(FASTX.FASTQ.Reader, filename) do reader
-            for record in reader
-                record_count += 1
-            end
+        for record in Mycelia.open_fastx(filename)
+            record_count += 1
         end
         return record_count
     end
@@ -282,24 +305,10 @@ if length(test_files) > 0
     println("  Memory: $(round(BenchmarkTools.median(benchmark_result).memory / 1e6, digits=2)) MB")
 end
 
-# Save benchmark results
+# Prepare benchmark output directory. Results are saved after all benchmark
+# sections complete.
 results_dir = "results"
 mkpath(results_dir)
-results_file = joinpath(results_dir, "data_processing_benchmark_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).json")
-save_benchmark_results(benchmark_suite, results_file)
-
-# Display summary
-format_benchmark_summary(benchmark_suite)
-
-# Cleanup test data
-for test_file in test_files
-    rm(test_file, force=true)
-end
-rm(test_data_dir, force=true, recursive=true)
-
-println("\n=== Data Processing Benchmark Complete ===")
-println("Results saved to: $results_file")
-println("End time: $(Dates.now())")
 # - Network vs local storage
 # - Concurrent I/O operations
 
@@ -333,7 +342,7 @@ if length(test_files) >= 3
             # Set thread limit (approximation - Julia doesn't allow runtime thread changes)
             ENV["JULIA_NUM_THREADS"] = string(thread_count)
             
-            benchmark_result, memory_stats = run_benchmark_with_memory(
+            thread_benchmark_result, thread_memory_stats = run_benchmark_with_memory(
                 process_files_parallel, test_files_subset;
                 samples=2, seconds=15
             )
@@ -341,12 +350,12 @@ if length(test_files) >= 3
             add_benchmark_result!(
                 benchmark_suite, 
                 "parallel_processing_$(thread_count)_threads", 
-                benchmark_result, 
-                memory_stats
+                thread_benchmark_result, 
+                thread_memory_stats
             )
             
-            println("  Median time: $(round(BenchmarkTools.median(benchmark_result).time / 1e6, digits=2)) ms")
-            println("  Memory: $(round(BenchmarkTools.median(benchmark_result).memory / 1e6, digits=2)) MB")
+            println("  Median time: $(round(BenchmarkTools.median(thread_benchmark_result).time / 1e6, digits=2)) ms")
+            println("  Memory: $(round(BenchmarkTools.median(thread_benchmark_result).memory / 1e6, digits=2)) MB")
         end
     end
 end
@@ -357,17 +366,20 @@ if length(test_files) >= 2
     
     # Create files of different sizes for load balancing test
     small_file = test_files[1]
-    large_file_path = joinpath(test_data_dir, "large_test.fastq")
+    large_file_path = joinpath(test_data_dir, "large_test.fastq.gz")
     
     # Generate a larger test file using simulate_illumina_reads
     large_result = Mycelia.simulate_illumina_reads(
         fasta=ref_fasta_path,
         read_count=config["reads_per_file"] * 3,
-        len=config["read_length"],
+        outbase=joinpath(test_data_dir, "large_sim_reads"),
+        read_length=config["read_length"],
+        paired=false,
+        rndSeed=777,
         quiet=true
     )
-    if isfile(large_result.fastq1)
-        cp(large_result.fastq1, large_file_path, force=true)
+    if isfile(large_result.forward_reads)
+        cp(large_result.forward_reads, large_file_path, force=true)
     end
     
     mixed_files = [small_file, large_file_path]
@@ -434,12 +446,19 @@ enhanced_results = Dict(
     )
 )
 
-# Save enhanced results (this replaces the duplicate save at the end)
-enhanced_results_file = joinpath(results_dir, "data_processing_enhanced_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")).json")
+# Save benchmark results
+timestamp = Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS")
+results_file = joinpath(results_dir, "data_processing_benchmark_$(timestamp).json")
+enhanced_results_file = joinpath(results_dir, "data_processing_enhanced_$(timestamp).json")
+
+save_benchmark_results(benchmark_suite, results_file)
 
 open(enhanced_results_file, "w") do f
     JSON.print(f, enhanced_results, 2)
 end
+
+# Display summary
+format_benchmark_summary(benchmark_suite)
 
 println("\n--- Performance Summary ---")
 println("Files processed: $total_files_processed")
@@ -447,7 +466,15 @@ println("Total data size: $(round(total_data_size / 1e6, digits=2)) MB")
 println("Estimated throughput: $(round(throughput_mbps, digits=2)) MB/s")
 println("Peak memory usage: $(round(maximum([get(result, "memory", 0) for result in values(benchmark_suite.results)]) / 1e6, digits=2)) MB")
 
-println("\nDetailed results saved to: $enhanced_results_file")
+# Cleanup test data
+for test_file in test_files
+    rm(test_file, force=true)
+end
+rm(test_data_dir, force=true, recursive=true)
+
+println("\n=== Data Processing Benchmark Complete ===")
+println("Results saved to: $results_file")
+println("Detailed results saved to: $enhanced_results_file")
 println("End time: $(Dates.now())")
 
 nothing

@@ -27,6 +27,7 @@ import Statistics
 import Dates
 import DataFrames
 import CSV
+import JSON
 import Plots
 
 println("=== Genome Assembly Benchmark ===")

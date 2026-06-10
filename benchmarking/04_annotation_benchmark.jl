@@ -24,9 +24,10 @@ import BenchmarkTools
 import Random
 import Statistics
 import Dates
+import JSON
 
 println("=== Gene Annotation Benchmark ===")
-println("Start time: $(now())")
+println("Start time: $(Dates.now())")
 
 # ## Benchmark Configuration
 #
