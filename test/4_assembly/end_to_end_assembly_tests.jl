@@ -30,8 +30,21 @@ import Kmers
 const TEST_LENGTHS = [10, 50]
 const ERROR_RATES = [0.0, 0.01]  # 0%, 1%
 const COVERAGE_DEPTHS = [5, 20]
+const END_TO_END_ASSEMBLY_TEST_SEED = 0xE2E4A55E
 
-Test.@testset "End-to-End Assembly Tests" begin
+macro with_end_to_end_assembly_test_seed(ex)
+    return quote
+        local saved_rng = copy(Random.default_rng())
+        Random.seed!(END_TO_END_ASSEMBLY_TEST_SEED)
+        try
+            $(esc(ex))
+        finally
+            copy!(Random.default_rng(), saved_rng)
+        end
+    end
+end
+
+@with_end_to_end_assembly_test_seed Test.@testset "End-to-End Assembly Tests" begin
     Test.@testset "Base Case: Reference Sequence Graph Round-trip" begin
         Test.@testset "String Graph Base Case" begin
             # Test with simple strings
