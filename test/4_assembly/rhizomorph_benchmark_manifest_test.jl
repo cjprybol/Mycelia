@@ -135,6 +135,41 @@ Test.@testset "Rhizomorph executable benchmark slices" begin
             dry_run = false,
             output_dir = output_dir,
             scale = "ci",
+            hypothesis_ids = ["H2"],
+            dataset_ids = ["synthetic_isolate_5386"],
+            run_id = "h2_smoke",
+            command_args = ["--execute", "--slice", "H2", "--scale", "ci"],
+            generated_at = "2026-06-02T00:00:00Z"
+        )
+
+        assembly_csv = joinpath(output_dir, "tables", "assembly_accuracy_metrics.csv")
+        summary_csv = joinpath(output_dir, "tables", "benchmark_suite_summary.csv")
+        Test.@test isfile(assembly_csv)
+        Test.@test isfile(summary_csv)
+
+        assembly_table = DataFrames.DataFrame(CSV.File(assembly_csv))
+        Test.@test DataFrames.nrow(assembly_table) == 4
+        Test.@test all(assembly_table.hypothesis_id .== "H2")
+        Test.@test all(assembly_table.dataset_id .== "synthetic_isolate_5386")
+        Test.@test Set(assembly_table.k) == Set([15, 21])
+        Test.@test Set(assembly_table.graph_mode) == Set(["singlestrand", "doublestrand"])
+        Test.@test all(assembly_table.status .== "ok")
+        Test.@test all(assembly_table.runtime_seconds .>= 0)
+        Test.@test all(assembly_table.allocated_bytes .>= 0)
+        Test.@test length(unique(assembly_table.contigs_path)) == 4
+        Test.@test all(isfile.(assembly_table.contigs_path))
+
+        summary_table = DataFrames.DataFrame(CSV.File(summary_csv))
+        h2_summary = summary_table[summary_table.hypothesis_id .== "H2", :]
+        Test.@test h2_summary.result_rows[1] == 4
+        Test.@test h2_summary.ok_rows[1] == 4
+    end
+
+    mktempdir() do output_dir
+        run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            output_dir = output_dir,
+            scale = "ci",
             hypothesis_ids = ["H7"],
             dataset_ids = ["synthetic_isolate_5386"],
             assemblers = ["MEGAHIT"],

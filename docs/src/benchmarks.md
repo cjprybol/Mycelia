@@ -86,9 +86,12 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
 
 The executable harness writes `graph_construction_metrics.csv`,
 `assembly_accuracy_metrics.csv`, `assembler_comparison_metrics.csv`, and
-`benchmark_suite_summary.csv` under the public-record artifact layout. H7
-records MEGAHIT and metaSPAdes as skipped unless external-tool execution is
-explicitly enabled:
+`benchmark_suite_summary.csv` under the public-record artifact layout. H1
+records graph construction time, memory, and graph size across k values and
+graph modes; H2 records Rhizomorph assembly contiguity and k-mer accuracy
+across the CI/full k grid and SingleStrand/DoubleStrand modes. H7 records
+MEGAHIT and metaSPAdes as skipped unless external-tool execution is explicitly
+enabled:
 
 ```bash
 MYCELIA_RUN_EXTERNAL=true julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \

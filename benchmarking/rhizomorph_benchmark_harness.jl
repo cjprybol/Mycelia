@@ -257,7 +257,7 @@ function execute_rhizomorph_benchmark_plan(
     mkpath(work_dir)
 
     graph_metrics = _run_graph_construction_slice(plan, work_dir, scale)
-    assembly_metrics = _run_assembly_accuracy_slice(plan, work_dir)
+    assembly_metrics = _run_assembly_accuracy_slice(plan, work_dir, scale)
     assembler_metrics = _run_assembler_comparison_slice(
         plan,
         work_dir;
@@ -474,47 +474,71 @@ function _run_graph_construction_slice(plan::DataFrames.DataFrame, work_dir::Abs
     return DataFrames.DataFrame(rows)
 end
 
-function _run_assembly_accuracy_slice(plan::DataFrames.DataFrame, work_dir::AbstractString)
+function _run_assembly_accuracy_slice(
+        plan::DataFrames.DataFrame,
+        work_dir::AbstractString,
+        scale::AbstractString)
     rows = NamedTuple[]
     slice_rows = DataFrames.filter(row -> row.hypothesis_id == "H2", plan)
+    k_values = _benchmark_k_values(scale)
+    graph_modes = _benchmark_assembly_graph_modes(scale)
 
     for row in DataFrames.eachrow(slice_rows)
         dataset_id = string(row.dataset_id)
         if !_is_standard_assembler_fixture(dataset_id)
-            push!(rows, _assembly_accuracy_row(
-                dataset_id = dataset_id,
-                fixture_kind = string(row.dataset_category),
-                assembler = "Rhizomorph",
-                status = "skipped",
-                runtime_seconds = missing,
-                allocated_bytes = missing,
-                n_contigs = missing,
-                total_length = missing,
-                n50 = missing,
-                l50 = missing,
-                longest_contig = missing,
-                length_recovery = missing,
-                kmer_precision = missing,
-                kmer_recall = missing,
-                contigs_path = missing,
-                error = "No CI-safe read materializer is registered for $(dataset_id)."
-            ))
+            for k in k_values
+                for graph_mode in graph_modes
+                    push!(rows, _assembly_accuracy_row(
+                        dataset_id = dataset_id,
+                        fixture_kind = string(row.dataset_category),
+                        assembler = "Rhizomorph",
+                        k = k,
+                        graph_mode = _assembly_graph_mode_label(graph_mode),
+                        status = "skipped",
+                        runtime_seconds = missing,
+                        allocated_bytes = missing,
+                        n_contigs = missing,
+                        total_length = missing,
+                        n50 = missing,
+                        l50 = missing,
+                        longest_contig = missing,
+                        length_recovery = missing,
+                        kmer_precision = missing,
+                        kmer_recall = missing,
+                        contigs_path = missing,
+                        error = "No CI-safe read materializer is registered for $(dataset_id)."
+                    ))
+                end
+            end
             continue
         end
 
         fixture_dir = joinpath(work_dir, "H2", dataset_id, "fixture")
         fixture = materialize_standard_assembler_fixture(dataset_id; outdir = fixture_dir, emit_reads = true)
-        run_result = _run_rhizomorph_fixture_assembly(
-            fixture,
-            joinpath(work_dir, "H2", dataset_id, "rhizomorph")
-        )
-        push!(rows, _assembly_accuracy_row_from_result(
-            dataset_id,
-            string(row.dataset_category),
-            "Rhizomorph",
-            fixture,
-            run_result
-        ))
+        for k in k_values
+            for graph_mode in graph_modes
+                run_result = _run_rhizomorph_fixture_assembly(
+                    fixture,
+                    joinpath(
+                        work_dir,
+                        "H2",
+                        dataset_id,
+                        "rhizomorph_k$(k)_$(_assembly_graph_mode_label(graph_mode))"
+                    );
+                    k = k,
+                    graph_mode = graph_mode
+                )
+                push!(rows, _assembly_accuracy_row_from_result(
+                    dataset_id,
+                    string(row.dataset_category),
+                    "Rhizomorph",
+                    fixture,
+                    run_result;
+                    k = k,
+                    graph_mode = graph_mode
+                ))
+            end
+        end
     end
 
     return DataFrames.DataFrame(rows)
@@ -613,6 +637,8 @@ function _assembly_accuracy_row(; kwargs...)
         dataset_id = values[:dataset_id],
         fixture_kind = values[:fixture_kind],
         assembler = values[:assembler],
+        k = values[:k],
+        graph_mode = values[:graph_mode],
         status = values[:status],
         runtime_seconds = values[:runtime_seconds],
         allocated_bytes = values[:allocated_bytes],
@@ -659,12 +685,17 @@ function _assembly_accuracy_row_from_result(
         fixture_kind::AbstractString,
         assembler::AbstractString,
         fixture,
-        run_result)
+        run_result;
+        k::Int = 21,
+        graph_mode = Mycelia.Rhizomorph.DoubleStrand)
+    graph_mode_label = _assembly_graph_mode_label(graph_mode)
     if run_result.status != "ok"
         return _assembly_accuracy_row(
             dataset_id = dataset_id,
             fixture_kind = fixture_kind,
             assembler = assembler,
+            k = k,
+            graph_mode = graph_mode_label,
             status = run_result.status,
             runtime_seconds = getproperty(run_result, :runtime_seconds),
             allocated_bytes = getproperty(run_result, :allocated_bytes),
@@ -682,11 +713,13 @@ function _assembly_accuracy_row_from_result(
     end
 
     metrics = _contig_metrics(run_result.contigs, fixture.total_reference_bases)
-    accuracy = _kmer_accuracy_metrics(fixture.reference_fasta, run_result.contigs)
+    accuracy = _kmer_accuracy_metrics(fixture.reference_fasta, run_result.contigs, k)
     return _assembly_accuracy_row(
         dataset_id = dataset_id,
         fixture_kind = fixture_kind,
         assembler = assembler,
+        k = k,
+        graph_mode = graph_mode_label,
         status = "ok",
         runtime_seconds = run_result.runtime_seconds,
         allocated_bytes = run_result.allocated_bytes,
@@ -804,7 +837,11 @@ function _run_benchmark_assembler(
     end
 end
 
-function _run_rhizomorph_fixture_assembly(fixture, outdir::AbstractString)
+function _run_rhizomorph_fixture_assembly(
+        fixture,
+        outdir::AbstractString;
+        k::Int = 21,
+        graph_mode = Mycelia.Rhizomorph.DoubleStrand)
     mkpath(outdir)
     contigs_fasta = joinpath(outdir, "rhizomorph.contigs.fasta")
     try
@@ -814,7 +851,7 @@ function _run_rhizomorph_fixture_assembly(fixture, outdir::AbstractString)
 
         result = nothing
         timed = @timed begin
-            result = Mycelia.Rhizomorph.assemble_genome(records; k = 21)
+            result = Mycelia.Rhizomorph.assemble_genome(records; k = k, graph_mode = graph_mode)
             _write_rhizomorph_contigs(result, contigs_fasta)
         end
         return (
@@ -958,6 +995,22 @@ function _benchmark_graph_modes(scale::AbstractString)
         return [:singlestrand, :canonical]
     end
     return [:singlestrand, :canonical, :doublestrand]
+end
+
+function _benchmark_assembly_graph_modes(scale::AbstractString)
+    return [
+        Mycelia.Rhizomorph.SingleStrand,
+        Mycelia.Rhizomorph.DoubleStrand
+    ]
+end
+
+function _assembly_graph_mode_label(graph_mode)
+    if graph_mode == Mycelia.Rhizomorph.SingleStrand
+        return "singlestrand"
+    elseif graph_mode == Mycelia.Rhizomorph.DoubleStrand
+        return "doublestrand"
+    end
+    return string(graph_mode)
 end
 
 function _benchmark_threads()
