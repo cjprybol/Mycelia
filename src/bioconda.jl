@@ -1,9 +1,5 @@
-function _conda_runner()
-    return get(ENV, "MYCELIA_CONDA_RUNNER", CONDA_RUNNER)
-end
-
 function _ensure_conda_env_vars!()
-    conda_exe = _conda_runner()
+    conda_exe = CONDA_RUNNER
     if isfile(conda_exe)
         # Prefer Conda.jl's conda to avoid stale module paths.
         if !isfile(get(ENV, "CONDA_EXE", "")) || get(ENV, "CONDA_EXE", "") != conda_exe
@@ -20,7 +16,7 @@ function _ensure_conda_env_vars!()
 end
 
 function _conda_root_prefix()
-    return normpath(joinpath(dirname(_conda_runner()), ".."))
+    return normpath(joinpath(dirname(CONDA_RUNNER), ".."))
 end
 
 function _conda_envs_dir()
@@ -80,7 +76,7 @@ end
 
 function _conda_environment_names()
     _ensure_conda_env_vars!()
-    return _conda_environment_names(_conda_runner(), _conda_envs_dir())
+    return _conda_environment_names(CONDA_RUNNER, _conda_envs_dir())
 end
 
 function _conda_env_prefix_from_envs_dir(env_name::AbstractString, envs_dir::AbstractString)
@@ -91,14 +87,6 @@ function _conda_env_prefix_from_envs_dir(env_name::AbstractString, envs_dir::Abs
 
     env_prefix = joinpath(envs_dir, env_name)
     return isdir(joinpath(env_prefix, "conda-meta")) ? env_prefix : nothing
-end
-
-function _read_conda_env_list_output()
-    _ensure_conda_env_vars!()
-    return Base.read(
-        pipeline(`$(_conda_runner()) env list`, stderr = devnull),
-        String
-    )
 end
 
 """
@@ -173,7 +161,7 @@ function _conda_env_prefix(env_name::AbstractString)
     if !isnothing(env_prefix)
         return env_prefix
     end
-    return _conda_env_prefix_from_runner(env_name, _conda_runner())
+    return _conda_env_prefix_from_runner(env_name, Mycelia.CONDA_RUNNER)
 end
 
 """
@@ -291,9 +279,9 @@ candidates = Mycelia._collect_vibrant_data_path_candidates("/tmp/db", nothing, S
 ```
 """
 function _collect_vibrant_data_path_candidates(
-        conda_env_data_path::Union{Nothing, AbstractString},
-        process_data_path::Union{Nothing, AbstractString},
-        prefix_candidates::AbstractVector{<:AbstractString}
+    conda_env_data_path::Union{Nothing, AbstractString},
+    process_data_path::Union{Nothing, AbstractString},
+    prefix_candidates::AbstractVector{<:AbstractString}
 )
     candidates = String[]
     if !isnothing(conda_env_data_path) && !isempty(strip(conda_env_data_path))
@@ -556,12 +544,11 @@ missing when the tool or environment is unavailable.
 """
 function conda_tool_version(env_name::AbstractString, cmd_parts::Vector{String})
     _ensure_conda_env_vars!()
-    conda_runner = _conda_runner()
-    if !isfile(conda_runner)
+    if !isfile(Mycelia.CONDA_RUNNER)
         return missing
     end
     try
-        cmd = Cmd(vcat([conda_runner, "run", "-n", env_name], cmd_parts))
+        cmd = Cmd(vcat([Mycelia.CONDA_RUNNER, "run", "-n", env_name], cmd_parts))
         output = read(cmd, String)
         line = strip(first(split(output, '\n')))
         return isempty(line) ? missing : line
@@ -695,12 +682,12 @@ Check whether a named Bioconda environment already exists.
 `Bool` indicating if the environment is present.
 """
 function check_bioconda_env_is_installed(pkg)
-    conda_runner = _conda_runner()
+    _ensure_conda_env_vars!()
     # ensure conda environment is available
-    if !isfile(conda_runner)
-        if (basename(conda_runner) == "mamba")
+    if !isfile(CONDA_RUNNER)
+        if (basename(CONDA_RUNNER) == "mamba")
             Conda.add("mamba")
-        elseif (basename(conda_runner) == "conda")
+        elseif (basename(CONDA_RUNNER) == "conda")
             Conda.update()
         end
     end
@@ -721,7 +708,6 @@ Create a Conda environment from a YAML file.
 """
 function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::AbstractString; force::Bool = false)
     _ensure_conda_env_vars!()
-    conda_runner = _conda_runner()
     if !isfile(yaml_file)
         throw(ArgumentError("YAML file does not exist: $(yaml_file)"))
     end
@@ -729,7 +715,7 @@ function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::Abstrac
     if check_bioconda_env_is_installed(env_name)
         if force
             @info "Removing existing environment '$env_name'..."
-            run(`$(conda_runner) env remove -n $(env_name) -y`)
+            run(`$(CONDA_RUNNER) env remove -n $(env_name) -y`)
         else
             @info "Environment '$env_name' already exists. Use force=true to recreate."
             return env_name
@@ -737,8 +723,8 @@ function create_conda_env_from_yaml(yaml_file::AbstractString, env_name::Abstrac
     end
 
     @info "Creating environment '$env_name' from $(yaml_file)..."
-    run(`$(conda_runner) env create -f $(yaml_file) -n $(env_name)`)
-    run(`$(conda_runner) clean --all -y`)
+    run(`$(CONDA_RUNNER) env create -f $(yaml_file) -n $(env_name)`)
+    run(`$(CONDA_RUNNER) clean --all -y`)
 
     return env_name
 end
@@ -779,7 +765,6 @@ add_bioconda_env("blast", force=true)
 """
 function add_bioconda_env(pkg; force = false, quiet = false)
     _ensure_conda_env_vars!()
-    conda_runner = _conda_runner()
     channel = nothing
     if occursin("::", pkg)
         if !quiet
@@ -797,21 +782,21 @@ function add_bioconda_env(pkg; force = false, quiet = false)
         end
         if isnothing(channel)
             if quiet
-                run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y --quiet`)
             else
-                run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(pkg) -y`)
             end
         else
             if quiet
-                run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y --quiet`)
             else
-                run(`$(conda_runner) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
+                run(`$(CONDA_RUNNER) create -c conda-forge -c bioconda -c defaults --strict-channel-priority -n $(pkg) $(channel)::$(pkg) -y`)
             end
         end
         if quiet
-            run(`$(conda_runner) clean --all -y --quiet`)
+            run(`$(CONDA_RUNNER) clean --all -y --quiet`)
         else
-            run(`$(conda_runner) clean --all -y`)
+            run(`$(CONDA_RUNNER) clean --all -y`)
         end
     end
 end
@@ -826,7 +811,7 @@ Update a package and its dependencies in its dedicated Conda environment.
 """
 function update_bioconda_env(pkg)
     _ensure_conda_env_vars!()
-    run(`$(_conda_runner()) update -n $(pkg) $(pkg) -y`)
+    run(`$(CONDA_RUNNER) update -n $(pkg) $(pkg) -y`)
     # conda update --all -n <env_name>
 end
 

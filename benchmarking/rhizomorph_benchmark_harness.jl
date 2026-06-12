@@ -3,8 +3,6 @@
 import DataFrames
 import TOML
 
-include("benchmark_artifacts.jl")
-
 const RHIZOMORPH_BENCHMARK_MANIFEST =
     joinpath(@__DIR__, "rhizomorph_benchmark_manifest.toml")
 
@@ -207,72 +205,6 @@ function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
     error("Rhizomorph benchmark slice execution is not implemented yet; use dry_run=true to inspect the plan.")
 end
 
-"""
-    write_rhizomorph_benchmark_plan_artifacts(; output_dir, scale="ci", kwargs...)
-
-Write smoke-testable public-record artifacts for the Rhizomorph benchmark plan.
-
-The emitted layout is stable for CI, full, and candidate scales:
-`tables/`, `plots/`, `logs/`, and `provenance/`. The table schemas do not
-change with scale; only row membership changes.
-"""
-function write_rhizomorph_benchmark_plan_artifacts(;
-        output_dir::AbstractString,
-        scale::AbstractString = "ci",
-        hypothesis_ids = nothing,
-        dataset_ids = nothing,
-        manifest_path::AbstractString = RHIZOMORPH_BENCHMARK_MANIFEST,
-        run_id::AbstractString = "rhizomorph_benchmark_plan",
-        command_args = String[],
-        tool_versions = Dict{String, Any}(),
-        generated_at = nothing)
-    plan = build_rhizomorph_benchmark_plan(
-        scale = scale,
-        hypothesis_ids = hypothesis_ids,
-        dataset_ids = dataset_ids,
-        manifest_path = manifest_path
-    )
-    datasets = list_rhizomorph_benchmark_datasets(manifest_path = manifest_path)
-    slices = list_rhizomorph_benchmark_slices(manifest_path = manifest_path)
-    selected_dataset_ids = unique(string.(plan.dataset_id))
-    selected_hypothesis_ids = unique(string.(plan.hypothesis_id))
-
-    tables = [
-        "rhizomorph_benchmark_plan" => plan,
-        "rhizomorph_benchmark_datasets" => datasets,
-        "rhizomorph_benchmark_slices" => slices
-    ]
-    table_context_columns = Dict{String, Dict{String, String}}(
-        "rhizomorph_benchmark_plan" => Dict(
-            "benchmark_dataset_id" => "dataset_id",
-            "benchmark_hypothesis_id" => "hypothesis_id"
-        ),
-        "rhizomorph_benchmark_datasets" => Dict(
-            "benchmark_dataset_id" => "id"
-        ),
-        "rhizomorph_benchmark_slices" => Dict(
-            "benchmark_hypothesis_id" => "id"
-        )
-    )
-
-    return write_benchmark_artifacts(
-        tables,
-        output_dir = output_dir,
-        run_id = run_id,
-        scale = scale,
-        dataset_ids = selected_dataset_ids,
-        command_args = command_args,
-        tool_versions = tool_versions,
-        generated_at = generated_at,
-        metadata = Dict{String, Any}(
-            "manifest_path" => abspath(manifest_path),
-            "selected_hypothesis_ids" => selected_hypothesis_ids,
-            "artifact_kind" => "rhizomorph_benchmark_plan"
-        ),
-        table_context_columns = table_context_columns
-    )
-end
-
 function _require_keys(table::AbstractDict, keys, context::AbstractString)
     missing_keys = String[]
     for key in keys
@@ -352,10 +284,9 @@ function print_rhizomorph_benchmark_usage()
     println("  julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-slices")
     println("  julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci")
     println("  julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --slice H7 --scale full")
-    println("  julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci --write-artifacts --output-dir results/public-record")
     println()
     println("Scales: ci, full, candidate")
-    println("Execution is currently stubbed; the script emits dry-run plans and optional public-record artifacts.")
+    println("Execution is currently stubbed; the script emits dry-run plans for follow-on runners.")
     return nothing
 end
 
@@ -370,10 +301,7 @@ function main(args = ARGS)
         "--slice",
         "--dataset",
         "--manifest",
-        "--execute",
-        "--write-artifacts",
-        "--output-dir",
-        "--run-id"
+        "--execute"
     ])
     for arg in args
         if startswith(arg, "-") && !(arg in known_flags)
@@ -411,22 +339,6 @@ function main(args = ARGS)
     )
     show(plan; allrows = true, allcols = true)
     println()
-    if "--write-artifacts" in args
-        output_dir = _flag_value(args, "--output-dir", joinpath("results", "public-record"))
-        run_id = _flag_value(args, "--run-id", "rhizomorph_benchmark_plan")
-        artifacts = write_rhizomorph_benchmark_plan_artifacts(
-            output_dir = output_dir,
-            scale = scale,
-            hypothesis_ids = isempty(hypothesis_ids) ? nothing : hypothesis_ids,
-            dataset_ids = isempty(dataset_ids) ? nothing : dataset_ids,
-            manifest_path = manifest_path,
-            run_id = run_id,
-            command_args = args
-        )
-        println("Artifacts written to: $(artifacts.root)")
-        println("Artifact index: $(artifacts.index)")
-        println("Run provenance: $(artifacts.provenance)")
-    end
     return nothing
 end
 
