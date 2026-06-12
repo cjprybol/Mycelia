@@ -3,6 +3,10 @@ import DataFrames
 import JSON
 import Test
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "rhizomorph_benchmark_harness.jl"))
 
 Test.@testset "Rhizomorph benchmark manifest" begin
@@ -56,17 +60,31 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test Set(candidate_plan.dataset_id) == Set(["zymo_d6300", "atcc_msa_1003"])
     Test.@test all(candidate_plan.hypothesis_id .== "H5")
 
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(scale = "tiny")
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(hypothesis_ids = ["H9"])
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
-    Test.@test_throws ErrorException run_rhizomorph_benchmark_harness(dry_run = false)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        build_rhizomorph_benchmark_plan(scale = "tiny")
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        build_rhizomorph_benchmark_plan(hypothesis_ids = ["H9"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        run_rhizomorph_benchmark_harness(dry_run = false)
+    end
 
     invalid_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
     invalid_manifest["schema"]["ci_suitability_values"] = ["ci", "full", "tiny"]
-    Test.@test_throws ErrorException validate_rhizomorph_benchmark_manifest(invalid_manifest)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        validate_rhizomorph_benchmark_manifest(invalid_manifest)
+    end
 
-    Test.@test_throws ErrorException _flag_values(["--scale", "--slice"], "--scale")
-    Test.@test_throws ErrorException main(["--unknown"])
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        _flag_values(["--scale", "--slice"], "--scale")
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        main(["--unknown"])
+    end
 end
 
 Test.@testset "Rhizomorph benchmark public-record artifacts" begin

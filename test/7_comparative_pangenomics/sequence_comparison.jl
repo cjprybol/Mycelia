@@ -27,6 +27,10 @@ import SHA
 import DelimitedFiles
 import StableRNGs
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Sequence Comparison Tests" begin
     Test.@testset "Mash Distance Calculation" begin
         # Test basic mash distance formula
@@ -36,10 +40,18 @@ Test.@testset "Sequence Comparison Tests" begin
         Test.@test Mycelia.mash_distance_from_jaccard(0.5, 21) < 1.0
 
         # Test parameter validation
-        Test.@test_throws ErrorException Mycelia.mash_distance_from_jaccard(-0.1, 21)
-        Test.@test_throws ErrorException Mycelia.mash_distance_from_jaccard(1.1, 21)
-        Test.@test_throws ErrorException Mycelia.mash_distance_from_jaccard(0.5, 0)
-        Test.@test_throws ErrorException Mycelia.mash_distance_from_jaccard(0.5, -1)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.mash_distance_from_jaccard(-0.1, 21)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.mash_distance_from_jaccard(1.1, 21)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.mash_distance_from_jaccard(0.5, 0)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.mash_distance_from_jaccard(0.5, -1)
+        end
 
         # Test k-mer size effects
         dist_k15 = Mycelia.mash_distance_from_jaccard(0.8, 15)
@@ -73,10 +85,16 @@ Test.@testset "Sequence Comparison Tests" begin
         )
         Test.@test selected_distance == ["ref_b" => 0.01, "ref_a" => 0.1]
 
-        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(scores; prefer = :unknown)
-        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(
-            scores; min_score = 0.2, max_score = 0.1)
-        Test.@test_throws ErrorException Mycelia.select_sketch_supported_references(scores; max_refs = -1)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.select_sketch_supported_references(scores; prefer = :unknown)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.select_sketch_supported_references(
+                scores; min_score = 0.2, max_score = 0.1)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.select_sketch_supported_references(scores; max_refs = -1)
+        end
     end
 
     Test.@testset "SHA256 Sequence Hashing" begin
@@ -114,8 +132,12 @@ Test.@testset "Sequence Comparison Tests" begin
         write(temp_fasta2, ">seq2\nGCTAGCTAGCTAGCTA\n")
 
         # Test file existence validation
-        Test.@test_throws ErrorException Mycelia.run_mash_comparison("nonexistent1.fasta", "nonexistent2.fasta")
-        Test.@test_throws ErrorException Mycelia.run_mash_comparison(temp_fasta1, "nonexistent2.fasta")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_mash_comparison("nonexistent1.fasta", "nonexistent2.fasta")
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_mash_comparison(temp_fasta1, "nonexistent2.fasta")
+        end
 
         # Note: Actual mash execution would require mash to be installed
         # In a real test environment, this would test the full pipeline

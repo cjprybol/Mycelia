@@ -2,6 +2,10 @@ import Test
 import Mycelia
 import FASTX
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Assembly Result Utilities" begin
     contigs = ["ATCG", "GG"]
     contig_names = ["contig_1", "contig_2"]
@@ -63,7 +67,9 @@ Test.@testset "Assembly Result Utilities" begin
         end
 
         bad_result = Mycelia.Rhizomorph.AssemblyResult(["A"], ["contig_1", "contig_2"]; gfa_compatible = true)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.write_gfa(bad_result, "unused.gfa")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.write_gfa(bad_result, "unused.gfa")
+        end
 
         report = Mycelia.Rhizomorph.validate_assembly_structure(bad_result)
         Test.@test report["valid"] == false

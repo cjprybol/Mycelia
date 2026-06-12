@@ -26,6 +26,10 @@ import BioSequences
 import FASTX
 import MetaGraphsNext
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Rhizomorph Traversal and Polishing Tests" begin
     Test.@testset "Traversal Variants Across Graph Types" begin
         dna_records = [FASTX.FASTA.Record("dna1", "ATCGATCGATCG")]
@@ -279,25 +283,31 @@ IIIIIIIIIIII
     end
 
     Test.@testset "Polish FASTQ Error Handling" begin
-        Test.@test_throws ErrorException Mycelia.polish_fastq(
-            fastq = "does_not_exist.fastq",
-            k = 3
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.polish_fastq(
+                fastq = "does_not_exist.fastq",
+                k = 3
+            )
+        end
 
         empty_fastq = tempname() * ".fastq"
         write(empty_fastq, "")
-        Test.@test_throws ErrorException Mycelia.polish_fastq(
-            fastq = empty_fastq,
-            k = 3
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.polish_fastq(
+                fastq = empty_fastq,
+                k = 3
+            )
+        end
 
         temp_fasta = tempname() * ".fasta"
         write(temp_fasta, ">read1\nATCG\n")
-        Test.@test_throws ErrorException Mycelia.polish_fastq(
-            fastq = temp_fasta,
-            k = 3,
-            weighting = :quality
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.polish_fastq(
+                fastq = temp_fasta,
+                k = 3,
+                weighting = :quality
+            )
+        end
 
         rm(empty_fastq, force = true)
         rm(temp_fasta, force = true)

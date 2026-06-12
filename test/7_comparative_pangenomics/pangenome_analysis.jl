@@ -23,6 +23,10 @@ import Kmers
 import BioSequences
 import Statistics
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Pangenome analysis - k-mer workflows" begin
     temp_dir = mktempdir()
     try
@@ -187,29 +191,37 @@ Test.@testset "Pangenome analysis - k-mer workflows" begin
 end
 
 Test.@testset "Pangenome analysis - input validation" begin
-    Test.@test_throws ErrorException Mycelia.analyze_pangenome_kmers(String[])
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.analyze_pangenome_kmers(String[])
+    end
 
     temp_dir = mktempdir()
     try
         missing_file = joinpath(temp_dir, "missing.fasta")
-        Test.@test_throws ErrorException Mycelia.analyze_pangenome_kmers([missing_file])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.analyze_pangenome_kmers([missing_file])
+        end
 
         valid_file = joinpath(temp_dir, "valid.fasta")
         open(valid_file, "w") do io
             FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
         end
-        Test.@test_throws ErrorException Mycelia.analyze_pangenome_kmers(
-            [valid_file]; distance_metric = :cosine)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.analyze_pangenome_kmers(
+                [valid_file]; distance_metric = :cosine)
+        end
 
         other_file = joinpath(temp_dir, "other.fasta")
         open(other_file, "w") do io
             FASTX.write(io, FASTX.FASTA.Record("seq2", BioSequences.LongDNA{4}("ATGCAT")))
         end
-        Test.@test_throws ErrorException Mycelia.compare_genome_kmer_similarity(
-            valid_file,
-            other_file;
-            metric = :euclidean
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.compare_genome_kmer_similarity(
+                valid_file,
+                other_file;
+                metric = :euclidean
+            )
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -273,15 +285,19 @@ Test.@testset "Pangenome analysis - construct_pangenome_pggb validation" begin
     temp_dir = mktempdir()
     try
         missing_file = joinpath(temp_dir, "nonexistent.fasta")
-        Test.@test_throws ErrorException Mycelia.construct_pangenome_pggb(
-            [missing_file], joinpath(temp_dir, "output"))
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.construct_pangenome_pggb(
+                [missing_file], joinpath(temp_dir, "output"))
+        end
 
         valid_file = joinpath(temp_dir, "valid.fasta")
         open(valid_file, "w") do io
             FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
         end
-        Test.@test_throws ErrorException Mycelia.construct_pangenome_pggb(
-            [valid_file, missing_file], joinpath(temp_dir, "output"))
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.construct_pangenome_pggb(
+                [valid_file, missing_file], joinpath(temp_dir, "output"))
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -291,8 +307,10 @@ Test.@testset "Pangenome analysis - call_variants_from_pggb_graph validation" be
     temp_dir = mktempdir()
     try
         missing_gfa = joinpath(temp_dir, "nonexistent.gfa")
-        Test.@test_throws ErrorException Mycelia.call_variants_from_pggb_graph(
-            missing_gfa, "reference")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.call_variants_from_pggb_graph(
+                missing_gfa, "reference")
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -306,18 +324,24 @@ Test.@testset "Pangenome analysis - construct_pangenome_cactus validation" begin
             FASTX.write(io, FASTX.FASTA.Record("seq1", BioSequences.LongDNA{4}("ATGCGT")))
         end
 
-        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
-            [valid_file], ["name1", "name2"],
-            joinpath(temp_dir, "output"), "name1")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.construct_pangenome_cactus(
+                [valid_file], ["name1", "name2"],
+                joinpath(temp_dir, "output"), "name1")
+        end
 
         missing_file = joinpath(temp_dir, "missing.fasta")
-        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
-            [missing_file], ["name1"],
-            joinpath(temp_dir, "output"), "name1")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.construct_pangenome_cactus(
+                [missing_file], ["name1"],
+                joinpath(temp_dir, "output"), "name1")
+        end
 
-        Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
-            [valid_file], ["name1"],
-            joinpath(temp_dir, "output"), "WRONG_REF")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.construct_pangenome_cactus(
+                [valid_file], ["name1"],
+                joinpath(temp_dir, "output"), "WRONG_REF")
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -327,10 +351,14 @@ Test.@testset "Pangenome analysis - convert_gfa_to_vg_format validation" begin
     temp_dir = mktempdir()
     try
         missing_gfa = joinpath(temp_dir, "nonexistent.gfa")
-        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(missing_gfa)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.convert_gfa_to_vg_format(missing_gfa)
+        end
 
-        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(
-            missing_gfa; output_file = joinpath(temp_dir, "out.vg"))
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.convert_gfa_to_vg_format(
+                missing_gfa; output_file = joinpath(temp_dir, "out.vg"))
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -340,7 +368,9 @@ Test.@testset "Pangenome analysis - index_pangenome_graph validation" begin
     temp_dir = mktempdir()
     try
         missing_graph = joinpath(temp_dir, "nonexistent.vg")
-        Test.@test_throws ErrorException Mycelia.index_pangenome_graph(missing_graph)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.index_pangenome_graph(missing_graph)
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end

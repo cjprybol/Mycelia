@@ -3,6 +3,10 @@ import Mycelia
 import MetaGraphsNext
 import Graphs
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "String Graph Utilities" begin
     Test.@testset "Token graph construction" begin
         tokens = [
@@ -19,7 +23,9 @@ Test.@testset "String Graph Utilities" begin
     end
 
     Test.@testset "Token graph errors" begin
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_token_graph(Vector{Vector{String}}())
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_token_graph(Vector{Vector{String}}())
+        end
     end
 
     Test.@testset "String graph from file(s)" begin
@@ -76,9 +82,13 @@ Test.@testset "String Graph Utilities" begin
             open(empty_path, "w") do io
                 println(io, "")
             end
-            Test.@test_throws ErrorException Mycelia.Rhizomorph.build_string_graph_from_file(empty_path)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.Rhizomorph.build_string_graph_from_file(empty_path)
+            end
         end
 
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_string_graph_from_files(String[])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_string_graph_from_files(String[])
+        end
     end
 end

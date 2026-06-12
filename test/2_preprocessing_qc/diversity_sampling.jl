@@ -22,7 +22,7 @@ import LinearAlgebra
 import Clustering
 import Distances
 import CairoMakie
-import Random
+import StableRNGs
 
 Test.@testset "Diversity-Based Sampling" begin
 
@@ -137,11 +137,11 @@ Test.@testset "Radial Dendrogram Visualization" begin
 
     # 1. Create Synthetic Data
     # Generate 50 points in 2D space forming 3 distinct clusters
-    Random.seed!(42)
+    rng = StableRNGs.StableRNG(42)
     # Cluster 1: centered at (0,0)
     # Cluster 2: centered at (5,5)
     # Cluster 3: centered at (10,10)
-    points = hcat(randn(2, 20), randn(2, 20) .+ 5, randn(2, 10) .+ 10)
+    points = hcat(randn(rng, 2, 20), randn(rng, 2, 20) .+ 5, randn(rng, 2, 10) .+ 10)
 
     # Compute Euclidean distance matrix
     dist_matrix = Distances.pairwise(Distances.Euclidean(), points; dims = 2)

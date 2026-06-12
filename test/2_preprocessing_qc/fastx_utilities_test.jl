@@ -2,6 +2,10 @@ import Test
 import Arrow
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "FASTX Utilities" begin
     Test.@testset "Identifier extraction" begin
         path = "Sample_001_extra_long.fasta"
@@ -166,7 +170,9 @@ Test.@testset "FASTX Utilities" begin
         Test.@test Mycelia._default_out_path("reads.fna.gz") == "reads.normalized.jsonl.gz"
         Test.@test Mycelia._default_out_path("reads.fastq") == "reads.normalized.jsonl.gz"
         Test.@test Mycelia._default_out_path("reads.fq.gz") == "reads.normalized.jsonl.gz"
-        Test.@test_throws ErrorException Mycelia._default_out_path("reads.txt")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._default_out_path("reads.txt")
+        end
     end
 
     Test.@testset "_extract_human_readable_id edge cases" begin
@@ -195,12 +201,16 @@ Test.@testset "FASTX Utilities" begin
                    16
 
         # Error without force_truncate on very long name with no delimiters
-        Test.@test_throws ErrorException Mycelia._extract_human_readable_id_from_fastx_path(
-            long_name, false)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._extract_human_readable_id_from_fastx_path(
+                long_name, false)
+        end
 
         # Non-FASTX extension errors
-        Test.@test_throws ErrorException Mycelia._extract_human_readable_id_from_fastx_path(
-            "file.txt")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._extract_human_readable_id_from_fastx_path(
+                "file.txt")
+        end
     end
 
     Test.@testset "normalized_table2fastx round-trip" begin
@@ -270,9 +280,11 @@ Test.@testset "FASTX Utilities" begin
         Test.@test Mycelia.count_records(result) == 2
 
         # require_all=true should error on missing ids
-        Test.@test_throws ErrorException Mycelia.subset_fasta_by_ids(
-            fasta_in = fasta_path, ids = ["s1", "missing"], fasta_out = joinpath(temp_dir, "fail.fna"),
-            force = true)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.subset_fasta_by_ids(
+                fasta_in = fasta_path, ids = ["s1", "missing"], fasta_out = joinpath(temp_dir, "fail.fna"),
+                force = true)
+        end
 
         # require_all=false should not error
         out2 = joinpath(temp_dir, "partial.fna")
@@ -334,11 +346,15 @@ Test.@testset "FASTX Utilities" begin
         Test.@test length(h_crc) == 6
 
         # Unsupported hash function
-        Test.@test_throws ErrorException Mycelia.create_sequence_hash(
-            "ATGC"; hash_function = :bogus)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sequence_hash(
+                "ATGC"; hash_function = :bogus)
+        end
 
         # Empty sequence
-        Test.@test_throws ErrorException Mycelia.create_sequence_hash("")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sequence_hash("")
+        end
     end
 
     Test.@testset "create_base58_hash" begin
@@ -350,7 +366,9 @@ Test.@testset "FASTX Utilities" begin
 
     Test.@testset "generate_joint_sequence_hash edge cases" begin
         # Empty vector should error
-        Test.@test_throws ErrorException Mycelia.generate_joint_sequence_hash(String[])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.generate_joint_sequence_hash(String[])
+        end
 
         # Order independence
         h1 = Mycelia.generate_joint_sequence_hash(["AAAA", "CCCC"]; encoded_length = 16)
@@ -365,10 +383,14 @@ Test.@testset "FASTX Utilities" begin
         open(txt_file, "w") do io
             write(io, "not fasta")
         end
-        Test.@test_throws ErrorException Mycelia.find_fasta_files(txt_file)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.find_fasta_files(txt_file)
+        end
 
         # Non-existent path
-        Test.@test_throws ErrorException Mycelia.find_fasta_files("/nonexistent/path/xyz")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.find_fasta_files("/nonexistent/path/xyz")
+        end
 
         # Single FASTA file input
         fasta_file = joinpath(temp_dir, "single.fna")
@@ -381,21 +403,27 @@ Test.@testset "FASTX Utilities" begin
 
     Test.@testset "write_fastq validation" begin
         # No filename provided
-        Test.@test_throws ErrorException Mycelia.write_fastq(
-            records = [Mycelia.fastq_record(
-            identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.write_fastq(
+                records = [Mycelia.fastq_record(
+                identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])])
+        end
 
         # Invalid extension
-        Test.@test_throws ErrorException Mycelia.write_fastq(
-            records = [Mycelia.fastq_record(
-                identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
-            filename = "/tmp/bad.txt")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.write_fastq(
+                records = [Mycelia.fastq_record(
+                    identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
+                filename = "/tmp/bad.txt")
+        end
 
         # Conflicting filename and outfile
-        Test.@test_throws ErrorException Mycelia.write_fastq(
-            records = [Mycelia.fastq_record(
-                identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
-            filename = "/tmp/a.fastq", outfile = "/tmp/b.fastq")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.write_fastq(
+                records = [Mycelia.fastq_record(
+                    identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
+                filename = "/tmp/a.fastq", outfile = "/tmp/b.fastq")
+        end
     end
 
     Test.@testset "FASTQ gzipped IO" begin
@@ -529,8 +557,10 @@ Test.@testset "FASTX Utilities" begin
         Mycelia.write_fasta(outfile = fasta_path, records = records, gzip = false, show_progress = false)
 
         # Too-long explicit ID without force_truncate should error
-        Test.@test_throws ErrorException Mycelia.fastx2normalized_table(
-            fasta_path; human_readable_id = "this_is_way_too_long_id")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.fastx2normalized_table(
+                fasta_path; human_readable_id = "this_is_way_too_long_id")
+        end
 
         # With force_truncate it should work
         table = Mycelia.fastx2normalized_table(
@@ -741,14 +771,16 @@ Test.@testset "FASTX Utilities" begin
             compress_threads = 1
         )
 
-        Test.@test_throws ErrorException Mycelia.prefix_fastq_reads(
-            fastq_path;
-            sample_tag = "sample",
-            out_fastq = joinpath(temp_dir, "bad_prefix.fastq"),
-            mapping_out = joinpath(temp_dir, "bad_prefix.arrow.gz"),
-            mapping_format = :arrow,
-            compress_threads = 1
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.prefix_fastq_reads(
+                fastq_path;
+                sample_tag = "sample",
+                out_fastq = joinpath(temp_dir, "bad_prefix.fastq"),
+                mapping_out = joinpath(temp_dir, "bad_prefix.arrow.gz"),
+                mapping_format = :arrow,
+                compress_threads = 1
+            )
+        end
 
         Test.@test_throws AssertionError Mycelia.uuid_fastq_reads(
             fastq_path;
@@ -758,27 +790,33 @@ Test.@testset "FASTX Utilities" begin
             compress_threads = 1
         )
 
-        Test.@test_throws ErrorException Mycelia.uuid_fastq_reads(
-            fastq_path;
-            out_fastq = joinpath(temp_dir, "bad_uuid.fastq"),
-            mapping_out = joinpath(temp_dir, "bad_uuid.arrow.gz"),
-            mapping_format = :arrow,
-            compress_threads = 1
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.uuid_fastq_reads(
+                fastq_path;
+                out_fastq = joinpath(temp_dir, "bad_uuid.fastq"),
+                mapping_out = joinpath(temp_dir, "bad_uuid.arrow.gz"),
+                mapping_format = :arrow,
+                compress_threads = 1
+            )
+        end
 
-        Test.@test_throws ErrorException Mycelia.concatenate_fastx(
-            String[];
-            output_path = joinpath(temp_dir, "empty.fastq.gz"),
-            threads = 1,
-            force = true
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.concatenate_fastx(
+                String[];
+                output_path = joinpath(temp_dir, "empty.fastq.gz"),
+                threads = 1,
+                force = true
+            )
+        end
 
-        Test.@test_throws ErrorException Mycelia.concatenate_fastx(
-            [joinpath(temp_dir, "missing.fastq")];
-            output_path = joinpath(temp_dir, "missing_out.fastq.gz"),
-            threads = 1,
-            force = true
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.concatenate_fastx(
+                [joinpath(temp_dir, "missing.fastq")];
+                output_path = joinpath(temp_dir, "missing_out.fastq.gz"),
+                threads = 1,
+                force = true
+            )
+        end
     end
 
     Test.@testset "fastx2normalized_jsonl_stream progress and truncation" begin
@@ -802,12 +840,14 @@ Test.@testset "FASTX Utilities" begin
             Test.@test result == out_path
         end
         Test.@test isfile(out_path)
-        Test.@test_throws ErrorException Mycelia.fastx2normalized_jsonl_stream(
-            fastx_path = fasta_path,
-            human_readable_id = "abcdefghijklmnopq",
-            output_path = joinpath(temp_dir, "too_long.jsonl"),
-            show_progress = false
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.fastx2normalized_jsonl_stream(
+                fastx_path = fasta_path,
+                human_readable_id = "abcdefghijklmnopq",
+                output_path = joinpath(temp_dir, "too_long.jsonl"),
+                show_progress = false
+            )
+        end
     end
 
     Test.@testset "fastx2normalized_jsonl_stream derives identifiers and enforces helper limits" begin
@@ -828,16 +868,18 @@ Test.@testset "FASTX Utilities" begin
         Test.@test parsed["human_readable_id"] ==
                    Mycelia._extract_human_readable_id_from_fastx_path(fasta_path, false)
 
-        Test.@test_throws ErrorException Mycelia._write_ndjson_stream(
-            IOBuffer(),
-            fasta_path,
-            repeat("x", 40),
-            :fasta;
-            show_progress = false,
-            progress_every = 1,
-            progress_desc = "length guard",
-            progress_output = stderr
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._write_ndjson_stream(
+                IOBuffer(),
+                fasta_path,
+                repeat("x", 40),
+                :fasta;
+                show_progress = false,
+                progress_every = 1,
+                progress_desc = "length guard",
+                progress_output = stderr
+            )
+        end
     end
 
     Test.@testset "normalized_table2fastx FASTQ and validation branches" begin
@@ -868,11 +910,13 @@ Test.@testset "FASTX Utilities" begin
             record_sequence = ["ATGC"],
             record_quality = [missing]
         )
-        Test.@test_throws ErrorException Mycelia.normalized_table2fastx(
-            invalid_table;
-            output_dir = temp_dir,
-            force = true
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.normalized_table2fastx(
+                invalid_table;
+                output_dir = temp_dir,
+                force = true
+            )
+        end
     end
 
     Test.@testset "prefix_fastq_reads TSV, zero-byte Arrow, and truncated gz errors" begin
@@ -1110,13 +1154,17 @@ Test.@testset "FASTX Utilities" begin
         Test.@test Mycelia.count_records(fallback_output) == 2
 
         missing_path = joinpath(temp_dir, "missing.fna")
-        Test.@test_throws ErrorException Mycelia.open_fastx(missing_path)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.open_fastx(missing_path)
+        end
 
         invalid_path = joinpath(temp_dir, "not_fastx.txt")
         open(invalid_path, "w") do io
             write(io, "plain text")
         end
-        Test.@test_throws ErrorException Mycelia.open_fastx(invalid_path)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.open_fastx(invalid_path)
+        end
     end
 
     Test.@testset "write_fasta progress and fallback extension handling" begin

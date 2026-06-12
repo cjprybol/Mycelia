@@ -22,53 +22,71 @@ import StableRNGs
 import BioSequences
 import FASTX
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Hybrid Assembly Tools" begin
     Test.@testset "Input validation" begin
         outdir = mktempdir()
-        Test.@test_throws ErrorException Mycelia.run_hybracter_hybrid_single(
-            "missing_long.fq",
-            "missing_r1.fq",
-            "missing_r2.fq",
-            5_000_000;
-            sample_name = "sample",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
-            "missing_long.fq",
-            5_000_000;
-            sample_name = "sample",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_hybracter_hybrid_single(
-            "missing_long.fq",
-            "missing_r1.fq",
-            "missing_r2.fq",
-            5_000_000;
-            sample_name = "",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_hybracter_long_single(
-            "missing_long.fq",
-            5_000_000;
-            sample_name = "",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_plassembler(
-            "missing_long.fq",
-            "missing_r1.fq",
-            "missing_r2.fq",
-            5_000_000;
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_plassembler_long(
-            "missing_long.fq",
-            5_000_000;
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_dnaapler_all(
-            "missing_input.fasta";
-            outdir = outdir
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_hybracter_hybrid_single(
+                "missing_long.fq",
+                "missing_r1.fq",
+                "missing_r2.fq",
+                5_000_000;
+                sample_name = "sample",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_hybracter_long_single(
+                "missing_long.fq",
+                5_000_000;
+                sample_name = "sample",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_hybracter_hybrid_single(
+                "missing_long.fq",
+                "missing_r1.fq",
+                "missing_r2.fq",
+                5_000_000;
+                sample_name = "",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_hybracter_long_single(
+                "missing_long.fq",
+                5_000_000;
+                sample_name = "",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_plassembler(
+                "missing_long.fq",
+                "missing_r1.fq",
+                "missing_r2.fq",
+                5_000_000;
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_plassembler_long(
+                "missing_long.fq",
+                5_000_000;
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_dnaapler_all(
+                "missing_input.fasta";
+                outdir = outdir
+            )
+        end
     end
 
     run_external = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true" ||
@@ -178,11 +196,13 @@ end
 
 Test.@testset "Hybrid Metagenomic Assembly - HyLight" begin
     mktempdir() do outdir
-        Test.@test_throws ErrorException Mycelia.run_hylight(
-            "missing_r1.fq",
-            "missing_r2.fq",
-            "missing_long.fq";
-            outdir = outdir
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_hylight(
+                "missing_r1.fq",
+                "missing_r2.fq",
+                "missing_long.fq";
+                outdir = outdir
+            )
+        end
     end
 end

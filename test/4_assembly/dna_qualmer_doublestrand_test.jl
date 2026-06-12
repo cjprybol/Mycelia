@@ -26,6 +26,10 @@ import BioSequences
 import FASTX
 import Kmers
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "DNA Qualmer Doublestrand Graph" begin
     Test.@testset "Canonical Qualmer Merging - Basic" begin
         # DNA sequence with quality scores
@@ -105,7 +109,9 @@ Test.@testset "DNA Qualmer Doublestrand Graph" begin
         record = FASTX.FASTQ.Record("protein_001", "MKVLW", "IIIII")
 
         # AA sequences don't have reverse complement
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_qualmer_graph_doublestrand([record], 3)
+        end
     end
 end
 

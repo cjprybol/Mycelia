@@ -8,6 +8,10 @@ import JLD2
 import DelimitedFiles
 import Logging
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 struct ThrowOnWarnLogger <: Logging.AbstractLogger end
 
 Logging.min_enabled_level(::ThrowOnWarnLogger) = Logging.Warn
@@ -83,10 +87,12 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                        length(Mycelia.generate_all_possible_canonical_kmers(2, Mycelia.DNA_ALPHABET))
             Test.@test sum(dense.kmer_counts_matrix[:, 1]) == 3
             Test.@test sum(dense.kmer_counts_matrix[:, 2]) == 3
-            Test.@test_throws ErrorException Mycelia.biosequences_to_dense_counts_table(
-                biosequences = dna_sequences,
-                k = 11
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.biosequences_to_dense_counts_table(
+                    biosequences = dna_sequences,
+                    k = 11
+                )
+            end
 
             rna_sequences = [
                 BioSequences.LongRNA{4}("ACGU"),
@@ -114,10 +120,12 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test sum(sparse_aa.kmer_counts_matrix[:, 2]) == 3
             Test.@test all(kmer -> kmer isa Kmers.AAKmer{2}, sparse_aa.sorted_kmers)
 
-            Test.@test_throws ErrorException Mycelia.biosequences_to_counts_table(
-                biosequences = ["ATGC"],
-                k = 2
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.biosequences_to_counts_table(
+                    biosequences = ["ATGC"],
+                    k = 2
+                )
+            end
         end
 
         Test.@testset "Result loading edge cases" begin
@@ -185,7 +193,9 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test length(Mycelia._collect_kmers(dna_kmer, 2)) == 3
             Test.@test length(Mycelia._collect_kmers(rna_kmer, 2)) == 3
             Test.@test length(Mycelia._collect_kmers(aa_kmer, 2)) == 2
-            Test.@test_throws ErrorException Mycelia._collect_kmers("ATGC", 2)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._collect_kmers("ATGC", 2)
+            end
 
             rna_result = Mycelia.estimate_genome_size_from_kmers(
                 BioSequences.LongRNA{4}("ACGUAC"),
@@ -220,7 +230,9 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test issorted(top3)
             Test.@test all(k -> k in (3, 5, 7, 11), top3)
 
-            Test.@test_throws ErrorException Mycelia.generate_all_possible_kmers(2, [1, 2])
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.generate_all_possible_kmers(2, [1, 2])
+            end
         end
 
         Test.@testset "Dense in-memory counts helper" begin
@@ -406,13 +418,15 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 filename = "generated_aa.jld2"
             )
             Test.@test isfile(aa_generated)
-            Test.@test_throws ErrorException Mycelia.generate_and_save_kmer_counts(
-                alphabet = :INVALID,
-                fastas = [fasta],
-                k = 3,
-                output_dir = temp_dir,
-                filename = "bad.jld2"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.generate_and_save_kmer_counts(
+                    alphabet = :INVALID,
+                    fastas = [fasta],
+                    k = 3,
+                    output_dir = temp_dir,
+                    filename = "bad.jld2"
+                )
+            end
         end
 
         Test.@testset "Save/load normalization and spectrum edge cases" begin
@@ -476,10 +490,14 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
         Test.@testset "Sketching helper edge cases" begin
             dna_sequence = BioSequences.LongDNA{4}("ATGCAT")
 
-            Test.@test_throws ErrorException Mycelia.canonical_minimizers(
-                dna_sequence, 0, 2)
-            Test.@test_throws ErrorException Mycelia.canonical_minimizers(
-                dna_sequence, 3, 0)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.canonical_minimizers(
+                    dna_sequence, 0, 2)
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.canonical_minimizers(
+                    dna_sequence, 3, 0)
+            end
             Test.@test isempty(Mycelia.canonical_minimizers(dna_sequence, 3, 10))
             minimizers = Mycelia.canonical_minimizers(dna_sequence, 3, 2)
             Test.@test minimizers == [
@@ -493,10 +511,14 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test all(kmer -> kmer isa Kmers.DNAKmer{3}, canonical_syncmers)
             Test.@test length(canonical_syncmers) <=
                        length(Mycelia._collect_kmers(dna_sequence, 3))
-            Test.@test_throws ErrorException Mycelia.open_syncmers(
-                dna_sequence, 3, 0, 1)
-            Test.@test_throws ErrorException Mycelia.open_syncmers(
-                dna_sequence, 3, 2, 3)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.open_syncmers(
+                    dna_sequence, 3, 0, 1)
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.open_syncmers(
+                    dna_sequence, 3, 2, 3)
+            end
 
             canonical_strobes = Mycelia.strobemers(
                 dna_sequence, 3, 1, 2; canonical = true)
@@ -504,7 +526,9 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test all(strobe ->
                                strobe isa Tuple{Kmers.DNAKmer{3}, Kmers.DNAKmer{3}},
                            canonical_strobes)
-            Test.@test_throws ErrorException Mycelia.strobemers(dna_sequence, 3, 0, 1)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.strobemers(dna_sequence, 3, 0, 1)
+            end
         end
 
         Test.@testset "K-mer math and ladder helpers" begin
@@ -743,43 +767,57 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             )
             Test.@test all(kmer -> kmer isa Kmers.AAKmer{2}, sparse_aa_result.kmers)
 
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = String[],
-                k = 3,
-                alphabet = :DNA
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = [joinpath(temp_dir, "missing.fasta")],
-                k = 3,
-                alphabet = :DNA
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = [fasta],
-                k = 3,
-                alphabet = :INVALID
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = [aa_fasta],
-                k = 6,
-                alphabet = :AA
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_dense_kmer_counts(
-                fasta_list = [rna_fasta],
-                k = 12,
-                alphabet = :RNA
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_sparse_kmer_counts(
-                fasta_list = String[],
-                k = 3,
-                alphabet = :DNA
-            )
-            Test.@test_throws ErrorException Mycelia.fasta_list_to_sparse_kmer_counts(
-                fasta_list = [fasta],
-                k = 3,
-                alphabet = :INVALID,
-                skip_rarefaction_plot = true,
-                skip_rarefaction_data = true
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list = String[],
+                    k = 3,
+                    alphabet = :DNA
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list = [joinpath(temp_dir, "missing.fasta")],
+                    k = 3,
+                    alphabet = :DNA
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list = [fasta],
+                    k = 3,
+                    alphabet = :INVALID
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list = [aa_fasta],
+                    k = 6,
+                    alphabet = :AA
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_dense_kmer_counts(
+                    fasta_list = [rna_fasta],
+                    k = 12,
+                    alphabet = :RNA
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_sparse_kmer_counts(
+                    fasta_list = String[],
+                    k = 3,
+                    alphabet = :DNA
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.fasta_list_to_sparse_kmer_counts(
+                    fasta_list = [fasta],
+                    k = 3,
+                    alphabet = :INVALID,
+                    skip_rarefaction_plot = true,
+                    skip_rarefaction_data = true
+                )
+            end
         end
 
         Test.@testset "Count dispatch and empty sparse results" begin
@@ -868,10 +906,12 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test isempty(empty_sparse.kmers)
             Test.@test size(empty_sparse.counts) == (0, 1)
             Test.@test isfile(empty_sparse_cache)
-            Test.@test_throws ErrorException Mycelia.biosequences_to_dense_counts_table(
-                biosequences = ["ATGC"],
-                k = 2
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.biosequences_to_dense_counts_table(
+                    biosequences = ["ATGC"],
+                    k = 2
+                )
+            end
         end
 
         Test.@testset "Sparse generation and fallback branches" begin
@@ -1007,7 +1047,9 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test aa_record_estimate["num_records"] == 1
             Test.@test aa_record_estimate["actual_size"] == 6
 
-            Test.@test_throws ErrorException Mycelia.generate_all_possible_canonical_kmers(2, [1, 2])
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.generate_all_possible_canonical_kmers(2, [1, 2])
+            end
         end
 
         Test.@testset "Count element type and serial fallback branches" begin

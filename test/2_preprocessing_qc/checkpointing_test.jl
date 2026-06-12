@@ -2,6 +2,10 @@ import Test
 import Mycelia
 import JLD2
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Checkpointing Tests" begin
     # Use a temporary directory for all checkpoint tests
     mktempdir() do checkpoint_dir
@@ -201,7 +205,9 @@ Test.@testset "Checkpointing Tests" begin
         end
 
         Test.@testset "_input_hash errors on missing file" begin
-            Test.@test_throws ErrorException Mycelia._input_hash(["/nonexistent/file.txt"])
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._input_hash(["/nonexistent/file.txt"])
+            end
         end
 
         Test.@testset "alternative signature passes input_files through" begin

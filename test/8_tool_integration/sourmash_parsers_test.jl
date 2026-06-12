@@ -9,6 +9,10 @@ import Mycelia
 import CSV
 import DataFrames
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Sourmash Output Parsers" begin
     Test.@testset "parse_sourmash_gather_output" begin
         # Create a temporary test file with sourmash gather CSV format
@@ -36,7 +40,9 @@ Test.@testset "Sourmash Output Parsers" begin
         Test.@test df.intersect_bp[1] == 1000000
 
         # Test error on missing file
-        Test.@test_throws ErrorException Mycelia.parse_sourmash_gather_output("nonexistent.csv")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.parse_sourmash_gather_output("nonexistent.csv")
+        end
 
         rm(test_dir, recursive = true)
     end
@@ -67,7 +73,9 @@ Test.@testset "Sourmash Output Parsers" begin
         Test.@test df.name[2] == "genome2"
 
         # Test error on missing file
-        Test.@test_throws ErrorException Mycelia.parse_sourmash_search_output("nonexistent.csv")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.parse_sourmash_search_output("nonexistent.csv")
+        end
 
         rm(test_dir, recursive = true)
     end

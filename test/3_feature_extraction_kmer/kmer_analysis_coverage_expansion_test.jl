@@ -9,6 +9,10 @@ import JLD2
 import Kmers
 import SparseArrays
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "K-mer Analysis Coverage Expansion" begin
     Test.@testset "k-mer results persistence edge cases" begin
         mktempdir() do temp_dir
@@ -169,10 +173,12 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
             Test.@test size(sparse_counts.kmer_counts_matrix, 2) == 2
             Test.@test sum(sparse_counts.kmer_counts_matrix) == 4
 
-            Test.@test_throws ErrorException Mycelia.biosequences_to_dense_counts_table(
-                biosequences = dna_sequences,
-                k = 11
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.biosequences_to_dense_counts_table(
+                    biosequences = dna_sequences,
+                    k = 11
+                )
+            end
         end
     end
 

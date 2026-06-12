@@ -3,6 +3,10 @@ import CSV
 import DataFrames
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 const PLOTTING_FIXTURE_DIR = normpath(joinpath(@__DIR__, "..", "metadata", "plotting_utilities"))
 
 load_batch_qc_fixture(filename) = CSV.read(
@@ -93,16 +97,20 @@ Test.@testset "Plotting Utilities" begin
 
     Test.@testset "Taxa abundance plotting" begin
         missing_sample_id_df = DataFrames.DataFrame(genus = ["Alpha"])
-        Test.@test_throws ErrorException Mycelia.plot_taxa_abundances(
-            missing_sample_id_df,
-            "genus"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.plot_taxa_abundances(
+                missing_sample_id_df,
+                "genus"
+            )
+        end
 
         missing_taxa_level_df = DataFrames.DataFrame(sample_id = ["sample-a"])
-        Test.@test_throws ErrorException Mycelia.plot_taxa_abundances(
-            missing_taxa_level_df,
-            "genus"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.plot_taxa_abundances(
+                missing_taxa_level_df,
+                "genus"
+            )
+        end
 
         taxa_df = DataFrames.DataFrame(
             sample_id = [

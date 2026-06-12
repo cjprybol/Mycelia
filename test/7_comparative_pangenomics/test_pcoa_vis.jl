@@ -19,6 +19,7 @@
 import Test
 import Mycelia
 import CairoMakie
+import StableRNGs
 
 Test.@testset "PCoA Visualization Utils" begin
 
@@ -89,17 +90,18 @@ n_control = 50
 n_total = n_group_a + n_group_b + n_control
 
 # Generate synthetic PCoA coordinates
+rng = StableRNGs.StableRNG(42)
 # Group A: Clustered at (5, 5)
-x_a = 5.0 .+ randn(n_group_a)
-y_a = 5.0 .+ randn(n_group_a)
+x_a = 5.0 .+ randn(rng, n_group_a)
+y_a = 5.0 .+ randn(rng, n_group_a)
 
 # Group B: Clustered at (-2, 8)
-x_b = -2.0 .+ randn(n_group_b)
-y_b = 8.0 .+ randn(n_group_b)
+x_b = -2.0 .+ randn(rng, n_group_b)
+y_b = 8.0 .+ randn(rng, n_group_b)
 
 # Control: Scattered widely around (0, 0)
-x_control = randn(n_control) .* 4
-y_control = randn(n_control) .* 4
+x_control = randn(rng, n_control) .* 4
+y_control = randn(rng, n_control) .* 4
 
 # Combine coordinates
 x_all = vcat(x_a, x_b, x_control)

@@ -3,6 +3,10 @@ import Mycelia
 import DataFrames
 import CodecZlib
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 @eval Mycelia begin
     function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
         return nothing
@@ -372,17 +376,21 @@ Test.@testset "classification wrapper unit tests" begin
             Test.@test DataFrames.nrow(screen_table) == 1
             Test.@test screen_table.reference[1] == "reference.msh"
 
-            Test.@test_throws ErrorException Mycelia.run_mash_sketch(
-                input_files = [ref_fasta],
-                outdir = joinpath(workspace, "invalid_sketch"),
-                min_copies = 2
-            )
-            Test.@test_throws ErrorException Mycelia.run_mash_screen(
-                reference = sketch_result.sketches[1],
-                query = reads_fastq,
-                outdir = joinpath(workspace, "invalid_screen"),
-                min_identity = 1.5
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_sketch(
+                    input_files = [ref_fasta],
+                    outdir = joinpath(workspace, "invalid_sketch"),
+                    min_copies = 2
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_screen(
+                    reference = sketch_result.sketches[1],
+                    query = reads_fastq,
+                    outdir = joinpath(workspace, "invalid_screen"),
+                    min_identity = 1.5
+                )
+            end
         end
 
         Test.@testset "metaphlan and metabuli helpers" begin
@@ -563,10 +571,12 @@ Test.@testset "classification wrapper unit tests" begin
             Test.@test isfile(joinpath(kleborate_outdir, "mock_output.txt"))
             Test.@test Mycelia.run_kleborate(genome_fasta; outdir = kleborate_outdir) ==
                         kleborate_outdir
-            Test.@test_throws ErrorException Mycelia.run_kleborate(
-                String[];
-                outdir = joinpath(workspace, "kleborate_empty")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_kleborate(
+                    String[];
+                    outdir = joinpath(workspace, "kleborate_empty")
+                )
+            end
         end
 
         Test.@testset "kraken2 helpers and wrapper" begin

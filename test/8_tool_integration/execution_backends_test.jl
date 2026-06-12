@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 function _executor_test_write_file(path::String, content::String)
     mkpath(dirname(path))
     open(path, "w") do io
@@ -20,8 +24,12 @@ Test.@testset "Execution backend helpers" begin
     Test.@test Mycelia.resolve_executor(:collect) isa Mycelia.CollectExecutor
     Test.@test Mycelia.resolve_executor(:dry_run) isa Mycelia.DryRunExecutor
     Test.@test Mycelia.resolve_executor(:dryrun) isa Mycelia.DryRunExecutor
-    Test.@test_throws ErrorException Mycelia.resolve_executor(:unknown_backend)
-    Test.@test_throws ErrorException Mycelia.resolve_executor(1)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.resolve_executor(:unknown_backend)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.resolve_executor(1)
+    end
 
     Test.@test Mycelia.command_string(`echo hello`) == "echo hello"
     Test.@test Mycelia.command_string("echo hello") == "echo hello"
@@ -262,12 +270,14 @@ Test.@testset "SLURM wrapper executor support and environment fallbacks" begin
     end
     Test.@test nersc_outcome == 1
     Test.@test vector_cmd_collector.jobs[1].cmd == "echo first\necho second"
-    Test.@test_throws ErrorException Mycelia.nersc_sbatch_shared(
-        job_name = "missing-account",
-        mail_user = "user@example.org",
-        cmd = "echo fail",
-        executor = Mycelia.CollectExecutor()
-    )
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.nersc_sbatch_shared(
+            job_name = "missing-account",
+            mail_user = "user@example.org",
+            cmd = "echo fail",
+            executor = Mycelia.CollectExecutor()
+        )
+    end
 end
 
 Test.@testset "Dispatch helpers and local run wrappers" begin
@@ -307,7 +317,9 @@ Test.@testset "Dispatch helpers and local run wrappers" begin
             logdir = tmpdir,
             job_name = "submit-job-lovelace"
         )
-        Test.@test_throws ErrorException Mycelia.submit_job(site = "unknown", cmd = "echo no")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.submit_job(site = "unknown", cmd = "echo no")
+        end
     end
 end
 
@@ -422,7 +434,9 @@ pc_gpu|es1||
     Test.@test isa(summary, Dict{String, String})
     Test.@test all(key -> haskey(summary, key), ["scontrol", "sacct", "sstat", "seff"])
     Test.@test occursin("=== Job Summary: 123 ===", summary_output)
-    Test.@test_throws ErrorException Mycelia.summarize_job("invalid-job-id")
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.summarize_job("invalid-job-id")
+    end
 
     warning_buffer = IOBuffer()
     Test.@test isnothing(Mycelia.nersc_login_node_limits_warning(io = warning_buffer))

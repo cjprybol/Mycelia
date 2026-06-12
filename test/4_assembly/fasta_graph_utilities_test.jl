@@ -3,6 +3,10 @@ import Mycelia
 import FASTX
 import MetaGraphsNext
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "FASTA Graph Utilities" begin
     mktempdir() do dir
         fasta_path = joinpath(dir, "reads.fna")
@@ -44,7 +48,9 @@ Test.@testset "FASTA Graph Utilities" begin
         empty_fasta = joinpath(dir, "empty.fasta")
         open(empty_fasta, "w") do _
         end
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_fasta_graph_from_file(empty_fasta)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_fasta_graph_from_file(empty_fasta)
+        end
 
         fastq_path = joinpath(dir, "reads.fastq")
         open(fastq_path, "w") do io
@@ -53,6 +59,8 @@ Test.@testset "FASTA Graph Utilities" begin
             write(io, "+\n")
             write(io, "IIII\n")
         end
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_fasta_graph_from_file(fastq_path)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_fasta_graph_from_file(fastq_path)
+        end
     end
 end

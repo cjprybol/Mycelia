@@ -26,6 +26,10 @@ import BioSequences
 import FASTX
 import Kmers
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "RNA K-mer Doublestrand Graph" begin
     Test.@testset "Canonical K-mer Merging - Basic" begin
         # RNA sequence
@@ -90,7 +94,9 @@ Test.@testset "RNA K-mer Doublestrand Graph" begin
         record = FASTX.FASTA.Record("protein_001", "MKVLW")
 
         # AA sequences don't have reverse complement
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_kmer_graph_doublestrand([record], 3)
+        end
     end
 end
 

@@ -6,6 +6,10 @@ import Sockets
 import Tar
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 const RUN_ALL = lowercase(get(ENV, "MYCELIA_RUN_ALL", "false")) == "true"
 const RUN_EXTERNAL = RUN_ALL || lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 
@@ -653,12 +657,16 @@ Test.@testset "Reference Database Parsing" begin
     end
 
     Test.@testset "parse_ncbi_metadata_file error paths" begin
-        Test.@test_throws ErrorException Mycelia.parse_ncbi_metadata_file("/nonexistent/path/file.txt")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.parse_ncbi_metadata_file("/nonexistent/path/file.txt")
+        end
 
         mktempdir() do dir
             empty_file = joinpath(dir, "empty.txt")
             touch(empty_file)
-            Test.@test_throws ErrorException Mycelia.parse_ncbi_metadata_file(empty_file)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_ncbi_metadata_file(empty_file)
+            end
         end
     end
 
@@ -714,10 +722,12 @@ Test.@testset "Reference Database Parsing" begin
             Test.@test genbank_wrapper[1, "assembly_accession"] == "GCA_REQUESTED_GENBANK"
             Test.@test requested_genbank_cache == joinpath(cache_dir, "$(date_prefix).assembly_summary_genbank.txt")
 
-            Test.@test_throws ErrorException Mycelia.load_ncbi_metadata(
-                "refseq";
-                date = Dates.Date(2024, 2, 4)
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.load_ncbi_metadata(
+                    "refseq";
+                    date = Dates.Date(2024, 2, 4)
+                )
+            end
         end
 
         with_temp_home() do home
@@ -917,34 +927,54 @@ Test.@testset "Reference Database Parsing" begin
         Test.@test length(archives) > 15  # bitext + 6way + TEI
 
         # Error: empty subsets
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(String[], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(String[], ["txt"])
+        end
 
         # Error: empty formats
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], String[])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["bitext"], String[])
+        end
 
         # Error: effectively empty formats after stripping
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], [" ", "\t"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["bitext"], [" ", "\t"])
+        end
 
         # Error: effectively empty subsets after stripping
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives([" ", "\t"], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives([" ", "\t"], ["txt"])
+        end
 
         # Error: unsupported format
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["pdf"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["bitext"], ["pdf"])
+        end
 
         # Error: unsupported subset
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["invalid"], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["invalid"], ["txt"])
+        end
 
         # Error: unsupported language
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["en-de"], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["en-de"], ["txt"])
+        end
 
         # Error: language codes are valid but pair itself is unsupported
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["en-en"], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["en-en"], ["txt"])
+        end
 
         # Error: bitext without txt format
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["xml"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["bitext"], ["xml"])
+        end
 
         # Error: tei without xml format
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["tei"], ["txt"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["tei"], ["txt"])
+        end
     end
 
     Test.@testset "_merge_un_archive_parts" begin
@@ -1037,7 +1067,9 @@ Test.@testset "Reference Database Parsing" begin
     end
 
     Test.@testset "download_sra_data error paths" begin
-        Test.@test_throws ErrorException Mycelia.download_sra_data("")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.download_sra_data("")
+        end
     end
 
     Test.@testset "download_sra_data path resolution" begin
@@ -1071,14 +1103,16 @@ Test.@testset "Reference Database Parsing" begin
         Test.@test single_result.files == [joinpath(requested_outdir, "SRR7654321", "SRR7654321.fastq.gz")]
         Test.@test !single_result.is_paired
 
-        Test.@test_throws ErrorException Mycelia._download_sra_data_result(
-            "SRR000001",
-            (
-                forward_reads = joinpath(resolved_outdir, "SRR000001_1.fastq.gz"),
-                reverse_reads = missing,
-                unpaired_reads = missing
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._download_sra_data_result(
+                "SRR000001",
+                (
+                    forward_reads = joinpath(resolved_outdir, "SRR000001_1.fastq.gz"),
+                    reverse_reads = missing,
+                    unpaired_reads = missing
+                )
             )
-        )
+        end
     end
 
     Test.@testset "Bioconda runner override helpers" begin
@@ -1185,12 +1219,16 @@ Test.@testset "Reference Database Parsing" begin
                     Test.@test length(single.files) == 1
                     Test.@test isfile(only(single.files))
 
-                    Test.@test_throws ErrorException Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+                    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                        Mycelia.download_sra_data("SRR_MISSING_WRAPPER"; outdir = dir)
+                    end
                 end
             end
 
             Test.@testset "prefetch_sra_runs error path" begin
-                Test.@test_throws ErrorException Mycelia.prefetch_sra_runs(String[])
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.prefetch_sra_runs(String[])
+                end
             end
 
             Test.@testset "prefetch_sra_runs collects success and failure results" begin
@@ -1210,7 +1248,9 @@ Test.@testset "Reference Database Parsing" begin
             end
 
             Test.@testset "fasterq_dump_parallel error path" begin
-                Test.@test_throws ErrorException Mycelia.fasterq_dump_parallel(String[])
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.fasterq_dump_parallel(String[])
+                end
             end
 
             Test.@testset "fasterq_dump_parallel collects success and failure results" begin
@@ -1278,11 +1318,13 @@ Test.@testset "Reference Database Parsing" begin
                 )
                 Test.@test Mycelia.DataFrames.nrow(tax_info_from_taxids) == 1
 
-                Test.@test_throws ErrorException Mycelia.get_blastdb_tax_info(
-                    blastdb = nucleotide_db,
-                    entries = ["seq1"],
-                    taxids = [0]
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.get_blastdb_tax_info(
+                        blastdb = nucleotide_db,
+                        entries = ["seq1"],
+                        taxids = [0]
+                    )
+                end
 
                 nucleotide_date = Dates.format(
                     Dates.DateTime(nucleotide_metadata["last-updated"]),
@@ -1355,11 +1397,13 @@ Test.@testset "Reference Database Parsing" begin
                 taxid_subset_contents = read(`gzip -dc $(taxid_subset_path)`, String)
                 Test.@test occursin(">seq1", taxid_subset_contents)
 
-                Test.@test_throws ErrorException Mycelia.blastdb_to_fasta(
-                    blastdb = nucleotide_db,
-                    entries = ["seq1"],
-                    taxids = [0]
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.blastdb_to_fasta(
+                        blastdb = nucleotide_db,
+                        entries = ["seq1"],
+                        taxids = [0]
+                    )
+                end
             end
         end
     end
@@ -1390,18 +1434,22 @@ Test.@testset "Reference Database Parsing" begin
                 "$(server.base_url)/redirect-no-location",
                 "GET"
             )
-            Test.@test_throws ErrorException Mycelia._un_request(
-                "$(server.base_url)/redirect-loop",
-                "GET";
-                max_redirects = 1
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._un_request(
+                    "$(server.base_url)/redirect-loop",
+                    "GET";
+                    max_redirects = 1
+                )
+            end
 
             Test.@test Mycelia._un_part_exists("$(server.base_url)/download.txt")
             Test.@test !Mycelia._un_part_exists("$(server.base_url)/missing.txt")
             Test.@test Mycelia._un_part_exists("$(server.base_url)/range-fallback")
             Test.@test !Mycelia._un_part_exists("$(server.base_url)/range-missing-fallback")
             Test.@test Mycelia._un_part_exists("$(server.base_url)/forbidden-fallback")
-            Test.@test_throws ErrorException Mycelia._un_part_exists("$(server.base_url)/unexpected-status")
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._un_part_exists("$(server.base_url)/unexpected-status")
+            end
 
             mktempdir() do dir
                 downloaded_path = joinpath(dir, "download.txt")
@@ -1468,11 +1516,13 @@ Test.@testset "Reference Database Parsing" begin
                     "direct archive contents"
                 Test.@test !isfile(joinpath(direct_outdir, "direct.tar.gz"))
 
-                Test.@test_throws ErrorException Mycelia._download_and_extract_split_archive(
-                    "missing.tar.gz",
-                    server.base_url,
-                    joinpath(dir, "missing")
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia._download_and_extract_split_archive(
+                        "missing.tar.gz",
+                        server.base_url,
+                        joinpath(dir, "missing")
+                    )
+                end
 
                 corpus_dir = Mycelia.download_un_parallel_corpus(
                     outdir = dir,
@@ -1497,6 +1547,8 @@ Test.@testset "Reference Database Parsing" begin
     end
 
     Test.@testset "_resolve_un_archives empty-selection error path" begin
-        Test.@test_throws ErrorException Mycelia._resolve_un_archives(["6way"], ["xml"])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia._resolve_un_archives(["6way"], ["xml"])
+        end
     end
 end

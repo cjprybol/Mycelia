@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Sequence Comparison Helpers" begin
     Test.@testset "Entropy and richness" begin
         seq = "ATAT"
@@ -73,12 +77,20 @@ Test.@testset "Sequence Comparison Helpers" begin
             Test.@test Mycelia.skani_triangle([reference];
                 output_file = existing_output, force = false) == existing_output
 
-            Test.@test_throws ErrorException Mycelia.skani_triangle([joinpath(dir, "missing.fasta")])
-            Test.@test_throws ErrorException Mycelia.skani_dist([joinpath(dir, "missing.fasta")])
-            Test.@test_throws ErrorException Mycelia.run_sylph_profile(
-                [reference]; first_pairs = [reference], second_pairs = String[])
-            Test.@test_throws ErrorException Mycelia.run_sylph_profile(
-                [reference]; sample_reads = [joinpath(dir, "missing.fastq")])
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.skani_triangle([joinpath(dir, "missing.fasta")])
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.skani_dist([joinpath(dir, "missing.fasta")])
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_sylph_profile(
+                    [reference]; first_pairs = [reference], second_pairs = String[])
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_sylph_profile(
+                    [reference]; sample_reads = [joinpath(dir, "missing.fastq")])
+            end
         end
     end
 end

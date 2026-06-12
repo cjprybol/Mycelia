@@ -20,6 +20,10 @@ import Test
 import Mycelia
 import DataFrames
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Taxonomy helpers - column utilities" begin
     df = DataFrames.DataFrame("subject tax id" => [1, 2], "other" => [missing, 3])
 
@@ -32,7 +36,9 @@ Test.@testset "Taxonomy helpers - column utilities" begin
 
     Test.@test Mycelia.actual_name(df, "subject tax id") == "subject tax id"
     Test.@test Mycelia.actual_name(df, Symbol("subject tax id")) == "subject tax id"
-    Test.@test_throws ErrorException Mycelia.actual_name(df, "does_not_exist")
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.actual_name(df, "does_not_exist")
+    end
 
     returned = Mycelia.ensure_as_string!(df, "subject tax id")
     Test.@test returned === df
@@ -75,7 +81,9 @@ Test.@testset "Taxonomy helpers - top call summary" begin
     Test.@test missing_summary[1, "n_taxa_considered"] == 0
 
     bad_df = DataFrames.DataFrame("query id" => ["q1"], "rank" => ["species"])
-    Test.@test_throws ErrorException Mycelia.summarize_top_calls(bad_df)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.summarize_top_calls(bad_df)
+    end
 end
 
 Test.@testset "Taxonomy helpers - top2 indices" begin

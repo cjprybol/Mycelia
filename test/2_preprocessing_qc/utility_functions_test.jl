@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Utility Functions" begin
     Test.@testset "File helpers" begin
         Test.@test Mycelia.strip_gz_extension("sample.tsv.gz") == "sample.tsv"
@@ -45,9 +49,11 @@ Test.@testset "Utility Functions" begin
         Test.@test result == "ok"
         Test.@test attempts[] == 2
 
-        Test.@test_throws ErrorException Mycelia.with_retry(
-            max_attempts = 2, initial_delay = 0.0,
-            log_on_retry = false, log_on_failure = false) do
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.with_retry(
+                max_attempts = 2, initial_delay = 0.0,
+                log_on_retry = false, log_on_failure = false) do
+        end
             error("always")
         end
     end

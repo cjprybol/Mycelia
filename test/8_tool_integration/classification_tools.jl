@@ -25,7 +25,11 @@ import DataFrames
 import BioSequences
 import FASTX
 import CodecZlib
-import Random
+import StableRNGs
+
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
 
 # Check if external tool tests should run
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
@@ -208,10 +212,10 @@ Test.@testset "Classification Tools Integration Tests" begin
 
                         # Create synthetic reads with random sequences to verify
                         # tool doesn't misclassify fake data (using randdnaseq for valid DNA)
-                        Random.seed!(42)  # For reproducibility
+                        rng = StableRNGs.StableRNG(42)
                         synthetic_records = [FASTX.FASTQ.Record(
                                                  "synthetic_read$(i)",
-                                                 BioSequences.randdnaseq(Random.default_rng(), 100),
+                                                 BioSequences.randdnaseq(rng, 100),
                                                  fill(Int8(40), 100)  # Quality score 40 ('I')
                                              )
                                              for i in 1:50]
@@ -405,10 +409,10 @@ Test.@testset "Classification Tools Integration Tests" begin
                         reverse_reads = sim_result.reverse_reads
 
                         # Create synthetic reads with random sequences
-                        Random.seed!(42)
+                        rng = StableRNGs.StableRNG(42)
                         synthetic_records = [FASTX.FASTQ.Record(
                                                  "synthetic_read$(i)",
-                                                 BioSequences.randdnaseq(Random.default_rng(), 100),
+                                                 BioSequences.randdnaseq(rng, 100),
                                                  fill(Int8(40), 100)
                                              )
                                              for i in 1:50]
@@ -462,22 +466,27 @@ Test.@testset "Classification Tools Integration Tests" begin
     # Input Validation Tests (no external tools needed)
     # ========================================================================
     Test.@testset "Input Validation" begin
+        rng = StableRNGs.StableRNG(777)
         Test.@testset "Sourmash input validation" begin
             # Test nonexistent file
-            Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                input_files = ["nonexistent_$(rand(1000:9999)).fq"],
-                outdir = tempdir()
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_sourmash_sketch(
+                    input_files = ["nonexistent_$(rand(rng, 1000:9999)).fq"],
+                    outdir = tempdir()
+                )
+            end
 
             # Test invalid molecule type
             temp_file = tempname()
             touch(temp_file)
             try
-                Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                    input_files = [temp_file],
-                    outdir = tempdir(),
-                    molecule = "invalid"
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.run_sourmash_sketch(
+                        input_files = [temp_file],
+                        outdir = tempdir(),
+                        molecule = "invalid"
+                    )
+                end
             finally
                 rm(temp_file, force = true)
             end
@@ -485,20 +494,24 @@ Test.@testset "Classification Tools Integration Tests" begin
 
         Test.@testset "MetaPhlAn input validation" begin
             # Test nonexistent file
-            Test.@test_throws ErrorException Mycelia.run_metaphlan(
-                input_file = "nonexistent_$(rand(1000:9999)).fq",
-                outdir = tempdir()
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metaphlan(
+                    input_file = "nonexistent_$(rand(rng, 1000:9999)).fq",
+                    outdir = tempdir()
+                )
+            end
 
             # Test invalid input type
             temp_file = tempname()
             touch(temp_file)
             try
-                Test.@test_throws ErrorException Mycelia.run_metaphlan(
-                    input_file = temp_file,
-                    outdir = tempdir(),
-                    input_type = "invalid_type"
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.run_metaphlan(
+                        input_file = temp_file,
+                        outdir = tempdir(),
+                        input_type = "invalid_type"
+                    )
+                end
             finally
                 rm(temp_file, force = true)
             end
@@ -506,21 +519,25 @@ Test.@testset "Classification Tools Integration Tests" begin
 
         Test.@testset "Metabuli input validation" begin
             # Test nonexistent input file
-            Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                input_files = ["nonexistent_$(rand(1000:9999)).fq"],
-                database_path = tempdir(),
-                outdir = tempdir()
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metabuli_classify(
+                    input_files = ["nonexistent_$(rand(rng, 1000:9999)).fq"],
+                    database_path = tempdir(),
+                    outdir = tempdir()
+                )
+            end
 
             # Test nonexistent database
             temp_file = tempname()
             touch(temp_file)
             try
-                Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                    input_files = [temp_file],
-                    database_path = "nonexistent_db_$(rand(1000:9999))",
-                    outdir = tempdir()
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.run_metabuli_classify(
+                        input_files = [temp_file],
+                        database_path = "nonexistent_db_$(rand(rng, 1000:9999))",
+                        outdir = tempdir()
+                    )
+                end
             finally
                 rm(temp_file, force = true)
             end
@@ -529,12 +546,14 @@ Test.@testset "Classification Tools Integration Tests" begin
             temp_file = tempname()
             touch(temp_file)
             try
-                Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                    input_files = [temp_file],
-                    database_path = tempdir(),
-                    outdir = tempdir(),
-                    seq_mode = "invalid"
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.run_metabuli_classify(
+                        input_files = [temp_file],
+                        database_path = tempdir(),
+                        outdir = tempdir(),
+                        seq_mode = "invalid"
+                    )
+                end
             finally
                 rm(temp_file, force = true)
             end
@@ -542,15 +561,21 @@ Test.@testset "Classification Tools Integration Tests" begin
 
         Test.@testset "Parser file validation" begin
             # Test parsing nonexistent files
-            Test.@test_throws ErrorException Mycelia.parse_metaphlan_profile(
-                "nonexistent_$(rand(1000:9999)).txt"
-            )
-            Test.@test_throws ErrorException Mycelia.parse_metabuli_report(
-                "nonexistent_$(rand(1000:9999)).tsv"
-            )
-            Test.@test_throws ErrorException Mycelia.parse_metabuli_classifications(
-                "nonexistent_$(rand(1000:9999)).tsv"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_metaphlan_profile(
+                    "nonexistent_$(rand(rng, 1000:9999)).txt"
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_metabuli_report(
+                    "nonexistent_$(rand(rng, 1000:9999)).tsv"
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_metabuli_classifications(
+                    "nonexistent_$(rand(rng, 1000:9999)).tsv"
+                )
+            end
         end
     end
 end

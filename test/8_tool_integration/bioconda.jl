@@ -18,15 +18,17 @@
 
 import Test
 import Mycelia
+import StableRNGs
 
 Test.@testset "Bioconda Environment Management Tests" begin
+    rng = StableRNGs.StableRNG(42)
     # Note: These tests are designed to be safe and not actually modify the conda environment
     # They test the logic without triggering expensive conda operations
 
     Test.@testset "check_bioconda_env_is_installed function" begin
         # Test with a non-existent package name
         # This should return false without creating anything
-        fake_pkg = "nonexistent_package_$(rand(1000:9999))"
+        fake_pkg = "nonexistent_package_$(rand(rng, 1000:9999))"
 
         # This test will work as long as conda/mamba is available
         if haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
@@ -291,7 +293,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
 
             Test.@test Mycelia._vibrant_databases_exist(data_dir) == false
             Test.@test Mycelia._first_vibrant_database_path([data_dir]) === nothing
-            missing_vibrant_env = "vibrant-missing-$(rand(1000:9999))"
+            missing_vibrant_env = "vibrant-missing-$(rand(rng, 1000:9999))"
             Base.withenv("VIBRANT_DATA_PATH" => nothing) do
                 Test.@test Mycelia._vibrant_database_path(missing_vibrant_env) === nothing
             end
@@ -312,7 +314,7 @@ Test.@testset "Bioconda Environment Management Tests" begin
                        data_dir
             Test.@test Mycelia._vibrant_data_path_candidates_from_prefix(env_prefix) == [data_dir]
             Base.withenv("VIBRANT_DATA_PATH" => data_dir) do
-                Test.@test Mycelia._vibrant_database_path("vibrant-missing-$(rand(1000:9999))") ==
+                Test.@test Mycelia._vibrant_database_path("vibrant-missing-$(rand(rng, 1000:9999))") ==
                            data_dir
             end
         end

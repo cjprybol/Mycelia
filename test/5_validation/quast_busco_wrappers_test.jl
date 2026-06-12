@@ -19,6 +19,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 """
 QUAST and BUSCO wrapper tests.
 Execution is opt-in for extended runs:
@@ -28,9 +32,13 @@ Wrappers auto-install required Bioconda envs.
 
 Test.@testset "QUAST wrapper" begin
     # Input validation (no external tool execution)
-    Test.@test_throws ErrorException Mycelia.run_quast(["/nonexistent.fasta"])
-    Test.@test_throws ErrorException Mycelia.run_quast(
-        [tempname() * ".fasta"], reference = "/nonexistent_ref.fasta")
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.run_quast(["/nonexistent.fasta"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.run_quast(
+            [tempname() * ".fasta"], reference = "/nonexistent_ref.fasta")
+    end
 
     run_all = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
     run_external = run_all || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
@@ -73,7 +81,9 @@ end
 
 Test.@testset "BUSCO wrapper" begin
     # Input validation (no external tool execution)
-    Test.@test_throws ErrorException Mycelia.run_busco(["/nonexistent.fasta"])
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.run_busco(["/nonexistent.fasta"])
+    end
 
     sample_list_output = """
     Available lineage datasets:

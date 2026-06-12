@@ -19,10 +19,14 @@
 import Test
 import Mycelia
 import FASTX
-import Random
+import StableRNGs
 import BioSequences
 import Kmers
 import OrderedCollections
+
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
 
 Test.@testset "fasta_list_to_*_kmer_counts" begin
     sequences = ["ACGTACGT", "AAAACCCC", "GGGGAAAA"]
@@ -227,11 +231,12 @@ Test.@testset "K-mer Analysis Tests" begin
         ## Test 6: File I/O Operations
         Test.@testset "K-mer File I/O" begin
             k = 3
+            rng = StableRNGs.StableRNG(42)
 
             # Create some k-mer results to save
             test_results = (
                 kmers = Mycelia.generate_all_possible_canonical_kmers(k, Mycelia.DNA_ALPHABET),
-                counts = rand(UInt16, 32, 2),  ## 32 canonical k-mers, 2 files
+                counts = rand(rng, UInt16, 32, 2),  ## 32 canonical k-mers, 2 files
                 metadata = Dict("k" => k, "alphabet" => "DNA")
             )
 
@@ -404,9 +409,13 @@ Test.@testset "canonical_minimizers" begin
     Test.@test isempty(empty_min)
 
     # Error on invalid k
-    Test.@test_throws ErrorException Mycelia.canonical_minimizers(seq, 0, 3)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.canonical_minimizers(seq, 0, 3)
+    end
     # Error on invalid window
-    Test.@test_throws ErrorException Mycelia.canonical_minimizers(seq, 3, 0)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.canonical_minimizers(seq, 3, 0)
+    end
 
     # RNA minimizers (non-canonical path for nucleotides still works)
     rna_seq = BioSequences.LongRNA{4}("ACGUACGUACGU")
@@ -432,12 +441,20 @@ Test.@testset "open_syncmers" begin
     Test.@test isa(syncmers_canon, Vector)
 
     # Error on invalid s
-    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 0, 1)
-    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 6, 1)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.open_syncmers(seq, 5, 0, 1)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.open_syncmers(seq, 5, 6, 1)
+    end
 
     # Error on invalid t
-    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 3, 0)
-    Test.@test_throws ErrorException Mycelia.open_syncmers(seq, 5, 3, 4)  # max_position = 5-3+1 = 3
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.open_syncmers(seq, 5, 3, 0)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.open_syncmers(seq, 5, 3, 4)  # max_position = 5-3+1 = 3
+    end
 
     # AA syncmers (SingleStrand, no canonical)
     aa_seq = BioSequences.LongAA("ACDEFGHIKLMNPQRSTVWY")
@@ -465,8 +482,12 @@ Test.@testset "strobemers" begin
     Test.@test length(strobes_canon) > 0
 
     # Error on invalid w_min/w_max
-    Test.@test_throws ErrorException Mycelia.strobemers(seq, 3, 0, 4)
-    Test.@test_throws ErrorException Mycelia.strobemers(seq, 3, 5, 3)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.strobemers(seq, 3, 0, 4)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.strobemers(seq, 3, 5, 3)
+    end
 end
 
 Test.@testset "determine_max_possible_kmers and determine_max_canonical_kmers" begin
@@ -533,7 +554,9 @@ Test.@testset "_sequence_kmer_iterator and _collect_kmers" begin
     Test.@test length(aa_kmers) == length(aa) - 3 + 1
 
     # Unsupported type should error
-    Test.@test_throws ErrorException Mycelia._sequence_kmer_iterator("ACGT", 3)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia._sequence_kmer_iterator("ACGT", 3)
+    end
 end
 
 Test.@testset "calculate_window_quality" begin
