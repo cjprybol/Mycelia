@@ -27,7 +27,29 @@ import Dates
 println("\nStarting benchmarks at $(Dates.now())")
 start_time = time()
 
+function rhizomorph_harness_scale_from_env()
+    scale = get(ENV, "BENCHMARK_SCALE", "small")
+    if scale == "small"
+        return "ci"
+    elseif scale == "medium"
+        return "full"
+    end
+    return "candidate"
+end
+
 try
+    println("\n=== Rhizomorph H1-H7 Public-Record Harness ===")
+    include("rhizomorph_benchmark_harness.jl")
+    harness_scale = rhizomorph_harness_scale_from_env()
+    run_rhizomorph_benchmark_harness(
+        dry_run = false,
+        output_dir = joinpath(@__DIR__, "results", "rhizomorph_harness_$(harness_scale)"),
+        scale = harness_scale,
+        hypothesis_ids = ["H1", "H2", "H7"],
+        command_args = ["run_all_benchmarks.jl"],
+        run_external = lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+    )
+
     # Run benchmarks in order
     println("\n=== Data Processing Benchmark ===")
     include("01_data_processing_benchmark.jl")

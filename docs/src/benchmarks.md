@@ -63,7 +63,8 @@ whether it is suitable for CI dry-runs, full public-reference benchmark runs, or
 candidate follow-on work. H1-H7 slices route graph construction, k/strand sweeps,
 repeat resolution, qualmer robustness, heterogeneous community recovery,
 generative sequence fidelity, and external assembler comparisons to their
-expected datasets and output tables.
+expected datasets and output tables. H1, H2, and H7 now have executable CI-safe
+runners over deterministic standard fixtures.
 
 Inspect the harness without running heavy work:
 
@@ -74,9 +75,28 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slice H7 --scale full
 ```
 
-The harness is intentionally a dry-run contract today; follow-on implementation
-issues should promote each H1-H7 slice from `status = "stub"` to a concrete
-runner while preserving the manifest output schema.
+Execute the CI-safe accuracy, scalability, efficiency, and assembler-comparison
+slices with:
+
+```bash
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
+  --execute --slice H1 --slice H2 --slice H7 --scale ci \
+  --output-dir results/rhizomorph-ci
+```
+
+The executable harness writes `graph_construction_metrics.csv`,
+`assembly_accuracy_metrics.csv`, `assembler_comparison_metrics.csv`, and
+`benchmark_suite_summary.csv` under the public-record artifact layout. H7
+records MEGAHIT and metaSPAdes as skipped unless external-tool execution is
+explicitly enabled:
+
+```bash
+MYCELIA_RUN_EXTERNAL=true julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
+  --execute --slice H7 --scale ci --output-dir results/rhizomorph-assemblers
+```
+
+H3-H6 remain manifest-backed follow-on runners and should preserve the same
+artifact schema when implemented.
 
 ## Standardized Test Datasets
 

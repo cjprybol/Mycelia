@@ -82,10 +82,11 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 ### Rhizomorph Public-Record Harness (`rhizomorph_benchmark_harness.jl`)
 
 - Dataset manifest for toy controls, public isolate references, and heterogeneous-sample candidates
-- H1-H7 dry-run benchmark slices with expected inputs, outputs, and follow-on runner entry points
+- H1-H7 benchmark slices with executable CI-safe runners for H1, H2, and H7
 - CI/full/candidate scale filtering so benchmark plans can be inspected without downloading data
 - Manifest validation for dataset identifiers, provenance, expected outputs, and slice references
 - Optional public-record artifact writing with stable `tables/`, `plots/`, `logs/`, and `provenance/` directories
+- Accuracy, scalability, efficiency, and assembler-comparison tables from deterministic standard fixtures
 
 ## Usage
 
@@ -148,6 +149,15 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-datasets
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-slices
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slice H7 --scale full
+
+# Execute CI-safe benchmark slices and write public-record artifacts
+julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
+  --execute --slice H1 --slice H2 --slice H7 --scale ci \
+  --output-dir results/rhizomorph-ci
+
+# Include external assemblers when MEGAHIT/metaSPAdes environments are available
+MYCELIA_RUN_EXTERNAL=true julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
+  --execute --slice H7 --scale ci --output-dir results/rhizomorph-assemblers
 ```
 
 ### Running Complete Benchmark Suite
@@ -201,6 +211,13 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
 
 The same table schema is used for `ci`, `full`, and `candidate` scales; larger
 scales add rows rather than changing columns.
+
+Executable Rhizomorph harness runs add these tables:
+
+- `graph_construction_metrics.csv`: H1 construction scalability and efficiency by fixture, k, strand mode, memory profile, time, allocations, vertices, and edges
+- `assembly_accuracy_metrics.csv`: H2 Rhizomorph assembly contiguity and reference k-mer precision/recall
+- `assembler_comparison_metrics.csv`: H7 Rhizomorph, MEGAHIT, and metaSPAdes comparison rows; external tools are recorded as `skipped` unless `MYCELIA_RUN_EXTERNAL=true`
+- `benchmark_suite_summary.csv`: planned/result/ok/skipped/failed row counts by hypothesis slice
 
 ### Result Files
 - **Individual Results**: `results/[benchmark]_[timestamp].json` - Detailed benchmark data

@@ -269,10 +269,10 @@ title = "Graph construction scaling"
 summary = "Measure fixed-length and variable-length Rhizomorph graph construction time, memory, and graph-size growth."
 dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "rhizomorph_graph_unit_fixtures", "phix174", "lambda_phage", "t4_phage"]
 entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H1"
-status = "stub"
+status = "implemented"
 expected_inputs = ["sequence_records", "k_values", "strand_modes", "graph_type"]
 expected_outputs = ["graph_construction_metrics_csv", "memory_profile_json", "graph_summary_json"]
-follow_on_work = "Implement construction runners for k-mer, qualmer, FASTA, FASTQ, and string graph builders."
+follow_on_work = "Extend the implemented k-mer runner to qualmer, FASTA, FASTQ, and string graph builders."
 
 [[hypothesis_slices]]
 id = "H2"
@@ -280,10 +280,10 @@ title = "Assembly contiguity across k and strand modes"
 summary = "Compare Rhizomorph contig recovery as k and strand mode change across toy and public isolate inputs."
 dataset_ids = ["synthetic_isolate_5386", "pstv_viroid", "cccv_viroid", "hsvd_viroid", "phix174", "lambda_phage", "t4_phage"]
 entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H2"
-status = "stub"
+status = "implemented"
 expected_inputs = ["reference_fasta", "optional_reads", "k_values", "strand_modes"]
 expected_outputs = ["contigs_fasta", "assembly_metrics_csv", "k_sweep_summary_csv"]
-follow_on_work = "Normalize existing real_genome_benchmark outputs into the harness result schema."
+follow_on_work = "Normalize existing real_genome_benchmark public-reference outputs into the harness result schema."
 
 [[hypothesis_slices]]
 id = "H3"
@@ -335,7 +335,7 @@ title = "External assembler comparison"
 summary = "Compare Rhizomorph outputs against accepted assemblers on the same fixture materializations."
 dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "phix174", "lambda_phage", "cami_toy_low_complexity"]
 entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H7"
-status = "stub"
+status = "implemented"
 expected_inputs = ["paired_fastq", "reference_fasta", "assembler_list"]
 expected_outputs = ["benchmark_plan_csv", "assembler_comparison_csv", "contigs_fasta", "tool_versions_json"]
-follow_on_work = "Wrap assembler_comparison_standard_fixtures.jl and external-tool checks in a scale-aware runner."
+follow_on_work = "Add full-scale public-reference materializers and more assembler backends to the scale-aware runner."

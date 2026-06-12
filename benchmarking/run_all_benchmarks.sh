@@ -88,7 +88,7 @@ echo "=== Running Benchmark Suite ==="
 echo "Using benchmark_runner.jl for coordinated execution"
 
 # Run the benchmark runner with performance regression checking
-timeout 20h julia --project=. --track-allocation=user benchmarking/benchmark_runner.jl 2>&1 | tee "results/benchmark_suite_output.log"
+timeout 20h julia --project=. --track-allocation=user benchmarking/benchmark_runner.jl "$BENCHMARK_SCALE" 2>&1 | tee "results/benchmark_suite_output.log"
 
 runner_exit_code=${PIPESTATUS[0]}
 

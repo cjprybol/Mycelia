@@ -5,6 +5,15 @@ import Test
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "rhizomorph_benchmark_harness.jl"))
 
+function test_error_message(callable, expected_message::AbstractString)
+    try
+        callable()
+        Test.@test false
+    catch error_value
+        Test.@test occursin(expected_message, sprint(showerror, error_value))
+    end
+end
+
 Test.@testset "Rhizomorph benchmark manifest" begin
     manifest = load_rhizomorph_benchmark_manifest()
     Test.@test manifest["schema_version"] == 1
@@ -24,6 +33,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
     slices = list_rhizomorph_benchmark_slices()
     Test.@test DataFrames.nrow(slices) == 7
     Test.@test Set(slices.id) == Set(["H1", "H2", "H3", "H4", "H5", "H6", "H7"])
+    Test.@test Set(slices.id[slices.status .== "implemented"]) == Set(["H1", "H2", "H7"])
     Test.@test all(occursin("benchmarking/rhizomorph_benchmark_harness.jl", entrypoint)
         for entrypoint in slices.entrypoint)
 
@@ -41,7 +51,7 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test all(ci_plan.ci_suitability .== "ci")
     Test.@test "synthetic_isolate_5386" in ci_plan.dataset_id
     Test.@test !("phix174" in ci_plan.dataset_id)
-    Test.@test all(.!ci_plan.implemented)
+    Test.@test Set(ci_plan.hypothesis_id[ci_plan.implemented]) == Set(["H1", "H2", "H7"])
 
     full_plan = build_rhizomorph_benchmark_plan(scale = "full", hypothesis_ids = ["H2", "H7"])
     Test.@test Set(full_plan.hypothesis_id) == Set(["H2", "H7"])
@@ -56,17 +66,93 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test Set(candidate_plan.dataset_id) == Set(["zymo_d6300", "atcc_msa_1003"])
     Test.@test all(candidate_plan.hypothesis_id .== "H5")
 
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(scale = "tiny")
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(hypothesis_ids = ["H9"])
-    Test.@test_throws ErrorException build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
-    Test.@test_throws ErrorException run_rhizomorph_benchmark_harness(dry_run = false)
+    test_error_message(
+        () -> build_rhizomorph_benchmark_plan(scale = "tiny"),
+        "Unknown Rhizomorph benchmark scale"
+    )
+    test_error_message(
+        () -> build_rhizomorph_benchmark_plan(hypothesis_ids = ["H9"]),
+        "Unknown Rhizomorph benchmark hypothesis id"
+    )
+    test_error_message(
+        () -> build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"]),
+        "Unknown Rhizomorph benchmark dataset id"
+    )
 
     invalid_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
     invalid_manifest["schema"]["ci_suitability_values"] = ["ci", "full", "tiny"]
-    Test.@test_throws ErrorException validate_rhizomorph_benchmark_manifest(invalid_manifest)
+    test_error_message(
+        () -> validate_rhizomorph_benchmark_manifest(invalid_manifest),
+        "Unsupported ci_suitability_values"
+    )
 
-    Test.@test_throws ErrorException _flag_values(["--scale", "--slice"], "--scale")
-    Test.@test_throws ErrorException main(["--unknown"])
+    test_error_message(
+        () -> _flag_values(["--scale", "--slice"], "--scale"),
+        "Missing value after --scale"
+    )
+    test_error_message(
+        () -> main(["--unknown"]),
+        "Unknown flag"
+    )
+end
+
+Test.@testset "Rhizomorph executable benchmark slices" begin
+    mktempdir() do output_dir
+        artifacts = run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            output_dir = output_dir,
+            scale = "ci",
+            hypothesis_ids = ["H1"],
+            dataset_ids = ["synthetic_isolate_5386"],
+            run_id = "h1_smoke",
+            command_args = ["--execute", "--slice", "H1", "--scale", "ci"],
+            generated_at = "2026-06-02T00:00:00Z"
+        )
+
+        graph_csv = joinpath(output_dir, "tables", "graph_construction_metrics.csv")
+        summary_csv = joinpath(output_dir, "tables", "benchmark_suite_summary.csv")
+        Test.@test isfile(artifacts.index)
+        Test.@test isfile(graph_csv)
+        Test.@test isfile(summary_csv)
+
+        graph_table = DataFrames.DataFrame(CSV.File(graph_csv))
+        Test.@test DataFrames.nrow(graph_table) == 4
+        Test.@test all(graph_table.hypothesis_id .== "H1")
+        Test.@test all(graph_table.dataset_id .== "synthetic_isolate_5386")
+        Test.@test all(graph_table.status .== "ok")
+        Test.@test all(graph_table.runtime_seconds .>= 0)
+        Test.@test all(graph_table.allocated_bytes .>= 0)
+        Test.@test all(graph_table.vertices .> 0)
+
+        summary_table = DataFrames.DataFrame(CSV.File(summary_csv))
+        h1_summary = summary_table[summary_table.hypothesis_id .== "H1", :]
+        Test.@test h1_summary.result_rows[1] == 4
+        Test.@test h1_summary.ok_rows[1] == 4
+    end
+
+    mktempdir() do output_dir
+        run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            output_dir = output_dir,
+            scale = "ci",
+            hypothesis_ids = ["H7"],
+            dataset_ids = ["synthetic_isolate_5386"],
+            assemblers = ["MEGAHIT"],
+            run_external = false,
+            run_id = "h7_skip_smoke",
+            command_args = ["--execute", "--slice", "H7", "--assembler", "MEGAHIT"],
+            generated_at = "2026-06-02T00:00:00Z"
+        )
+
+        comparison_csv = joinpath(output_dir, "tables", "assembler_comparison_metrics.csv")
+        comparison_table = DataFrames.DataFrame(CSV.File(comparison_csv))
+        Test.@test DataFrames.nrow(comparison_table) == 1
+        Test.@test comparison_table.hypothesis_id[1] == "H7"
+        Test.@test comparison_table.assembler[1] == "MEGAHIT"
+        Test.@test comparison_table.status[1] == "skipped"
+        Test.@test comparison_table.run_external[1] == false
+        Test.@test occursin("MYCELIA_RUN_EXTERNAL", comparison_table.error[1])
+    end
 end
 
 Test.@testset "Rhizomorph benchmark public-record artifacts" begin

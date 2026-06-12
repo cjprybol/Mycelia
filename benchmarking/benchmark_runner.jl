@@ -26,6 +26,15 @@ function preflight_benchmark_environment(scale)
     return nothing
 end
 
+function rhizomorph_harness_scale(scale)
+    if scale == "small"
+        return "ci"
+    elseif scale == "medium"
+        return "full"
+    end
+    return "candidate"
+end
+
 """
     run_benchmark_suite(scale="small"; check_regression=true, baseline_dir="baselines")
 
@@ -52,6 +61,33 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
     results_dir = "results"
     mkpath(results_dir)
     mkpath(baseline_dir)
+
+    benchmark_results = Dict{String, Any}()
+
+    println("\\n" * "-"^40)
+    println("Running: Rhizomorph H1-H7 Harness")
+    println("-"^40)
+    try
+        include("rhizomorph_benchmark_harness.jl")
+        harness_scale = rhizomorph_harness_scale(scale)
+        harness_output = joinpath(
+            results_dir,
+            "rhizomorph_harness_$(harness_scale)_$(Dates.format(Dates.now(), "yyyy-mm-dd_HH-MM-SS"))"
+        )
+        harness_artifacts = run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            output_dir = harness_output,
+            scale = harness_scale,
+            hypothesis_ids = ["H1", "H2", "H7"],
+            command_args = ["benchmark_runner.jl", scale],
+            run_external = lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
+        )
+        println("✅ Rhizomorph H1-H7 harness completed successfully")
+        println("   Artifact index: $(harness_artifacts.index)")
+    catch e
+        println("❌ Error running Rhizomorph H1-H7 harness:")
+        println("   $(typeof(e)): $e")
+    end
     
     # Benchmark scripts to run
     benchmark_scripts = [
@@ -65,7 +101,6 @@ function run_benchmark_suite(scale="small"; check_regression=true, baseline_dir=
     ]
     
     # Run each benchmark
-    benchmark_results = Dict{String, Any}()\n    
     for (script, description) in benchmark_scripts
         println("\\n" * "-"^40)
         println("Running: $description")
