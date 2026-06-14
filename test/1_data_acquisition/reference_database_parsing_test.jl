@@ -967,12 +967,12 @@ Test.@testset "Reference Database Parsing" begin
         end
 
         # Error: bitext without txt format
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Bitext/6-way downloads require formats to include \"txt\"") do
             Mycelia._resolve_un_archives(["bitext"], ["xml"])
         end
 
         # Error: tei without xml format
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "TEI downloads require formats to include \"xml\"") do
             Mycelia._resolve_un_archives(["tei"], ["txt"])
         end
     end
@@ -1103,7 +1103,7 @@ Test.@testset "Reference Database Parsing" begin
         Test.@test single_result.files == [joinpath(requested_outdir, "SRR7654321", "SRR7654321.fastq.gz")]
         Test.@test !single_result.is_paired
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Incomplete paired FASTQ output") do
             Mycelia._download_sra_data_result(
                 "SRR000001",
                 (
@@ -1434,7 +1434,7 @@ Test.@testset "Reference Database Parsing" begin
                 "$(server.base_url)/redirect-no-location",
                 "GET"
             )
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "Too many redirects") do
                 Mycelia._un_request(
                     "$(server.base_url)/redirect-loop",
                     "GET";
@@ -1447,7 +1447,7 @@ Test.@testset "Reference Database Parsing" begin
             Test.@test Mycelia._un_part_exists("$(server.base_url)/range-fallback")
             Test.@test !Mycelia._un_part_exists("$(server.base_url)/range-missing-fallback")
             Test.@test Mycelia._un_part_exists("$(server.base_url)/forbidden-fallback")
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "Unexpected HTTP status") do
                 Mycelia._un_part_exists("$(server.base_url)/unexpected-status")
             end
 
@@ -1547,7 +1547,7 @@ Test.@testset "Reference Database Parsing" begin
     end
 
     Test.@testset "_resolve_un_archives empty-selection error path" begin
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Bitext/6-way downloads require formats to include \"txt\"") do
             Mycelia._resolve_un_archives(["6way"], ["xml"])
         end
     end
