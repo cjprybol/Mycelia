@@ -173,7 +173,7 @@ Test.@testset "K-mer Analysis Coverage Expansion" begin
             Test.@test size(sparse_counts.kmer_counts_matrix, 2) == 2
             Test.@test sum(sparse_counts.kmer_counts_matrix) == 4
 
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "use sparse counts to count k >= 11") do
                 Mycelia.biosequences_to_dense_counts_table(
                     biosequences = dna_sequences,
                     k = 11
