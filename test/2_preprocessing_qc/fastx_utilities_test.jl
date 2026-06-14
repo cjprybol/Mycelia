@@ -170,7 +170,7 @@ Test.@testset "FASTX Utilities" begin
         Test.@test Mycelia._default_out_path("reads.fna.gz") == "reads.normalized.jsonl.gz"
         Test.@test Mycelia._default_out_path("reads.fastq") == "reads.normalized.jsonl.gz"
         Test.@test Mycelia._default_out_path("reads.fq.gz") == "reads.normalized.jsonl.gz"
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Input path does not match expected regex pattern") do
             Mycelia._default_out_path("reads.txt")
         end
     end
@@ -201,13 +201,13 @@ Test.@testset "FASTX Utilities" begin
                    16
 
         # Error without force_truncate on very long name with no delimiters
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Could not extract a viable identifier") do
             Mycelia._extract_human_readable_id_from_fastx_path(
                 long_name, false)
         end
 
         # Non-FASTX extension errors
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "does not match FASTA or FASTQ naming patterns") do
             Mycelia._extract_human_readable_id_from_fastx_path(
                 "file.txt")
         end
@@ -383,7 +383,7 @@ Test.@testset "FASTX Utilities" begin
         open(txt_file, "w") do io
             write(io, "not fasta")
         end
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Input file does not match FASTA format") do
             Mycelia.find_fasta_files(txt_file)
         end
 
@@ -403,14 +403,14 @@ Test.@testset "FASTX Utilities" begin
 
     Test.@testset "write_fastq validation" begin
         # No filename provided
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Provide either filename or outfile") do
             Mycelia.write_fastq(
                 records = [Mycelia.fastq_record(
                 identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])])
         end
 
         # Invalid extension
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Provide only one of filename or outfile") do
             Mycelia.write_fastq(
                 records = [Mycelia.fastq_record(
                     identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
@@ -771,7 +771,7 @@ Test.@testset "FASTX Utilities" begin
             compress_threads = 1
         )
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Arrow mapping_out should not be gzipped") do
             Mycelia.prefix_fastq_reads(
                 fastq_path;
                 sample_tag = "sample",
@@ -790,7 +790,7 @@ Test.@testset "FASTX Utilities" begin
             compress_threads = 1
         )
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Arrow mapping_out should not be gzipped") do
             Mycelia.uuid_fastq_reads(
                 fastq_path;
                 out_fastq = joinpath(temp_dir, "bad_uuid.fastq"),
@@ -868,7 +868,7 @@ Test.@testset "FASTX Utilities" begin
         Test.@test parsed["human_readable_id"] ==
                    Mycelia._extract_human_readable_id_from_fastx_path(fasta_path, false)
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "NCBI identifier length limit of 50 characters exceeded") do
             Mycelia._write_ndjson_stream(
                 IOBuffer(),
                 fasta_path,
@@ -910,7 +910,7 @@ Test.@testset "FASTX Utilities" begin
             record_sequence = ["ATGC"],
             record_quality = [missing]
         )
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Neither 'fastx_identifier' nor 'genome_identifier' columns found") do
             Mycelia.normalized_table2fastx(
                 invalid_table;
                 output_dir = temp_dir,
