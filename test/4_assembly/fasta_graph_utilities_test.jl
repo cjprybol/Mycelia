@@ -59,7 +59,7 @@ Test.@testset "FASTA Graph Utilities" begin
             write(io, "+\n")
             write(io, "IIII\n")
         end
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "FASTA graphs require FASTA input") do
             Mycelia.Rhizomorph.build_fasta_graph_from_file(fastq_path)
         end
     end
