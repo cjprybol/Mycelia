@@ -45,7 +45,7 @@ Test.@testset "FASTQ Graph Utilities" begin
             write(io, ">read1\n")
             write(io, "ATCG\n")
         end
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "FASTQ graphs require FASTQ input") do
             Mycelia.Rhizomorph.build_fastq_graph_from_file(fasta_path)
         end
     end
