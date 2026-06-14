@@ -410,7 +410,7 @@ Test.@testset "FASTX Utilities" begin
         end
 
         # Invalid extension
-        test_throws_message(ErrorException, "Provide only one of filename or outfile") do
+        test_throws_message(ErrorException, "File extension must be") do
             Mycelia.write_fastq(
                 records = [Mycelia.fastq_record(
                     identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
@@ -418,7 +418,7 @@ Test.@testset "FASTX Utilities" begin
         end
 
         # Conflicting filename and outfile
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "Provide only one of filename or outfile") do
             Mycelia.write_fastq(
                 records = [Mycelia.fastq_record(
                     identifier = "r1", sequence = "ATGC", quality_scores = [30, 30, 30, 30])],
