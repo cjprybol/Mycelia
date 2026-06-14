@@ -364,11 +364,17 @@ Test.@testset "Ultralight Graph Mode" begin
         records = [
             Mycelia.FASTX.FASTA.Record("seq1", "ATGATGATG")
         ]
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Memory profile :ultralight_quality requires FASTQ input"
+        ) do
             Mycelia.Rhizomorph.build_kmer_graph(
                 records, 3; memory_profile = :ultralight_quality)
         end
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Memory profile :lightweight_quality requires FASTQ input"
+        ) do
             Mycelia.Rhizomorph.build_kmer_graph(
                 records, 3; memory_profile = :lightweight_quality)
         end

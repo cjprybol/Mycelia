@@ -192,7 +192,10 @@ Test.@testset "Classification wrapper executor force-update and validation" begi
             println(io, "ATGCATGC")
         end
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Provide only one of db_path or db_dir for run_clamlst()"
+        ) do
             Mycelia.run_clamlst(
                 mismatch_genome;
                 db_path = joinpath(temp_dir, "path_a"),

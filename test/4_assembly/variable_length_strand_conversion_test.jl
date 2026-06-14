@@ -319,11 +319,17 @@ Test.@testset "Variable-length strand conversions" begin
         string_records = ["hello world"]
         string_graph = Mycelia.Rhizomorph.build_string_graph(
             string_records; dataset_id = "str", min_overlap = 3)
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Doublestrand conversion only supported for DNA/RNA variable-length graphs"
+        ) do
             Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(
                 string_graph)
         end
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Canonical conversion only supported for DNA/RNA variable-length graphs"
+        ) do
             Mycelia.Rhizomorph.convert_variable_length_to_canonical(
                 string_graph)
         end

@@ -81,7 +81,7 @@ Test.@testset "Taxonomy helpers - top call summary" begin
     Test.@test missing_summary[1, "n_taxa_considered"] == 0
 
     bad_df = DataFrames.DataFrame("query id" => ["q1"], "rank" => ["species"])
-    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+    test_throws_message(ErrorException, "summarize_top_calls requires column: taxid") do
         Mycelia.summarize_top_calls(bad_df)
     end
 end

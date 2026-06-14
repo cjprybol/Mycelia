@@ -69,7 +69,10 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
         build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
     end
-    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+    test_throws_message(
+        ErrorException,
+        "Rhizomorph benchmark slice execution is not implemented yet"
+    ) do
         run_rhizomorph_benchmark_harness(dry_run = false)
     end
 

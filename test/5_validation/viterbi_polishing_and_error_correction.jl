@@ -301,7 +301,10 @@ IIIIIIIIIIII
 
         temp_fasta = tempname() * ".fasta"
         write(temp_fasta, ">read1\nATCG\n")
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(
+            ErrorException,
+            "Quality-weighted polishing requires FASTQ input"
+        ) do
             Mycelia.polish_fastq(
                 fastq = temp_fasta,
                 k = 3,
@@ -353,21 +356,27 @@ IIIIIIII
 """
         write(temp_fastq, fastq_content)
 
-        Test.@test_throws ArgumentError Mycelia.polish_fastq(
-            fastq = temp_fastq,
-            k = 3,
-            traversal = :unknown
-        )
-        Test.@test_throws ArgumentError Mycelia.polish_fastq(
-            fastq = temp_fastq,
-            k = 3,
-            weighting = :unknown
-        )
-        Test.@test_throws ArgumentError Mycelia.polish_fastq(
-            fastq = temp_fastq,
-            k = 3,
-            graph_mode = :unknown
-        )
+        test_throws_message(ArgumentError, "Unsupported traversal: unknown") do
+            Mycelia.polish_fastq(
+                fastq = temp_fastq,
+                k = 3,
+                traversal = :unknown
+            )
+        end
+        test_throws_message(ArgumentError, "Unsupported weighting: unknown") do
+            Mycelia.polish_fastq(
+                fastq = temp_fastq,
+                k = 3,
+                weighting = :unknown
+            )
+        end
+        test_throws_message(ArgumentError, "Invalid graph_mode: unknown") do
+            Mycelia.polish_fastq(
+                fastq = temp_fastq,
+                k = 3,
+                graph_mode = :unknown
+            )
+        end
 
         rm(temp_fastq, force = true)
     end
