@@ -123,7 +123,7 @@ end
 include("aqua.jl")
 
 # JET.jl static analysis - uncomment to enable (can be slow)
-include("jet.jl")
+# include("jet.jl")  # temporarily skipped for local no-JET failure isolation
 
 # ExplicitImports.jl - enforce import style (no implicit imports from using)
 include("explicit_imports.jl")

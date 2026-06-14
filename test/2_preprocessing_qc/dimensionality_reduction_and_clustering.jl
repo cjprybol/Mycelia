@@ -3187,7 +3187,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         test_display(plt)
         evaluation_result = Mycelia.evaluate_classification(
             shuffled_gauss_labels, pcoa_gauss_umap_fit_labels, verbose = false)
-        # UMAP + k-medoids is a weaker exploratory baseline for this Gaussian
+        # UMAP + k-means is a weaker exploratory baseline for this Gaussian
         # fixture; require a chance-beating floor while stronger non-UMAP
         # baselines above retain the 1/2 threshold.
         Test.@test evaluation_result.macro_f1 >= 1/3
