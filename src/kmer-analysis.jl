@@ -2369,7 +2369,7 @@ function generate_all_possible_kmers(k, alphabet)
     elseif eltype(alphabet) == BioSymbols.RNA
         kmers = [Kmers.RNAKmer{k}(BioSequences.LongRNA{2}(kv)) for kv in kmer_vectors]
     else
-        error()
+        error("Invalid alphabet for k-mer generation: $(eltype(alphabet))")
     end
     return sort!(kmers)
 end

@@ -87,7 +87,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                        length(Mycelia.generate_all_possible_canonical_kmers(2, Mycelia.DNA_ALPHABET))
             Test.@test sum(dense.kmer_counts_matrix[:, 1]) == 3
             Test.@test sum(dense.kmer_counts_matrix[:, 2]) == 3
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "use sparse counts to count k >= 11") do
                 Mycelia.biosequences_to_dense_counts_table(
                     biosequences = dna_sequences,
                     k = 11
@@ -230,7 +230,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test issorted(top3)
             Test.@test all(k -> k in (3, 5, 7, 11), top3)
 
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "Invalid alphabet for k-mer generation") do
                 Mycelia.generate_all_possible_kmers(2, [1, 2])
             end
         end
@@ -418,7 +418,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
                 filename = "generated_aa.jld2"
             )
             Test.@test isfile(aa_generated)
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "unrecognized alphabet") do
                 Mycelia.generate_and_save_kmer_counts(
                     alphabet = :INVALID,
                     fastas = [fasta],
@@ -1047,7 +1047,7 @@ Test.@testset "K-mer Analysis Additional Coverage" begin
             Test.@test aa_record_estimate["num_records"] == 1
             Test.@test aa_record_estimate["actual_size"] == 6
 
-            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            test_throws_message(ErrorException, "Invalid alphabet for k-mer generation") do
                 Mycelia.generate_all_possible_canonical_kmers(2, [1, 2])
             end
         end
