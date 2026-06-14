@@ -49,7 +49,7 @@ Test.@testset "Utility Functions" begin
         Test.@test result == "ok"
         Test.@test attempts[] == 2
 
-        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        test_throws_message(ErrorException, "always") do
             Mycelia.with_retry(
                 max_attempts = 2, initial_delay = 0.0,
                 log_on_retry = false, log_on_failure = false) do
