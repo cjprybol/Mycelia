@@ -47,6 +47,18 @@ function test_display(args...)
     end
 end
 
+function deterministic_kmedoids(
+        distance_matrix::AbstractMatrix{<:Real},
+        n_clusters::Integer,
+        seed::Integer)::Clustering.KmedoidsResult
+    ## `Clustering.kmedoids` uses randomized `:kmpp` medoid initialization by
+    ## default but does not expose an `rng` keyword directly. Seed the
+    ## initialization explicitly so CI-sensitive KMedoids benchmarks are stable.
+    initial_medoids = Clustering.initseeds_by_costs(
+        :kmpp, distance_matrix, n_clusters; rng = StableRNGs.StableRNG(seed))
+    return Clustering.kmedoids(distance_matrix, n_clusters; init = initial_medoids)
+end
+
 # Confusion Matrix and Metrics - Animal Dataset
 
 Test.@testset "Confusion Matrix and Metrics - Animal Dataset" begin
@@ -1592,7 +1604,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + KMedoids" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + KMedoids")
         binom_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix)
-        kmedoids_result = Clustering.kmedoids(binom_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(binom_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmedoids_labels)
@@ -2623,7 +2635,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + KMedoids" begin
         test_println("[Gamma] Testing: Cosine Distance + KMedoids")
         gamma_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix)
-        kmedoids_result = Clustering.kmedoids(gamma_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(gamma_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmedoids_labels)
