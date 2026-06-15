@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Ultralight Graph Mode" begin
     Test.@testset "Ultralight N-gram Graph - basic construction" begin
         texts = ["ABCDE", "BCDEF", "CDEFG"]
@@ -346,27 +350,43 @@ Test.@testset "Ultralight Graph Mode" begin
 
     Test.@testset "Quality profiles error on n-gram graphs" begin
         texts = ["ABCDE"]
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_ngram_graph(
-            texts, 3; memory_profile = :ultralight_quality)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_ngram_graph(
-            texts, 3; memory_profile = :lightweight_quality)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_ngram_graph(
+                texts, 3; memory_profile = :ultralight_quality)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_ngram_graph(
+                texts, 3; memory_profile = :lightweight_quality)
+        end
     end
 
     Test.@testset "Quality profiles error on FASTA input" begin
         records = [
             Mycelia.FASTX.FASTA.Record("seq1", "ATGATGATG")
         ]
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph(
-            records, 3; memory_profile = :ultralight_quality)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph(
-            records, 3; memory_profile = :lightweight_quality)
+        test_throws_message(
+            ErrorException,
+            "Memory profile :ultralight_quality requires FASTQ input"
+        ) do
+            Mycelia.Rhizomorph.build_kmer_graph(
+                records, 3; memory_profile = :ultralight_quality)
+        end
+        test_throws_message(
+            ErrorException,
+            "Memory profile :lightweight_quality requires FASTQ input"
+        ) do
+            Mycelia.Rhizomorph.build_kmer_graph(
+                records, 3; memory_profile = :lightweight_quality)
+        end
     end
 
     Test.@testset "Invalid memory_profile errors" begin
         records = [
             Mycelia.FASTX.FASTA.Record("seq1", "ATGATGATG")
         ]
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph(
-            records, 3; memory_profile = :invalid)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_kmer_graph(
+                records, 3; memory_profile = :invalid)
+        end
     end
 end

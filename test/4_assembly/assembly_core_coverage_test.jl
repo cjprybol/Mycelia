@@ -3,6 +3,10 @@ import Mycelia
 import FASTX
 import BioSequences
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 @eval Mycelia begin
     function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
         return nothing
@@ -71,7 +75,9 @@ Test.@testset "Assembly Core Coverage" begin
         aa_reads = [FASTX.FASTA.Record("aa1", "MKWV")]
         Test.@test Mycelia.Rhizomorph._detect_sequence_type(rna_reads) <: BioSequences.LongRNA
         Test.@test Mycelia.Rhizomorph._detect_sequence_type(aa_reads) <: BioSequences.LongAA
-        Test.@test_throws ErrorException Mycelia.Rhizomorph._detect_sequence_type([1, 2, 3])
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph._detect_sequence_type([1, 2, 3])
+        end
 
         Test.@test Mycelia.Rhizomorph._determine_kmer_type(FASTX.FASTA.Record[], 4) ===
                    Mycelia.Kmers.DNAKmer{4}
@@ -79,25 +85,41 @@ Test.@testset "Assembly Core Coverage" begin
                    Mycelia.Kmers.RNAKmer{3}
         Test.@test Mycelia.Rhizomorph._determine_kmer_type(aa_reads, 2) ===
                    Mycelia.Kmers.AAKmer{2}
-        Test.@test_throws ErrorException Mycelia.Rhizomorph._determine_kmer_type(["ATGC"], 3)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph._determine_kmer_type(["ATGC"], 3)
+        end
 
         default_config = Mycelia.Rhizomorph.AssemblyConfig()
         Test.@test default_config.k == 31
         Test.@test default_config.min_overlap === nothing
 
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(k = 21, min_overlap = 10)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(
-            sequence_type = BioSequences.LongAA,
-            graph_mode = Mycelia.Rhizomorph.DoubleStrand
-        )
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(
-            sequence_type = String,
-            graph_mode = Mycelia.Rhizomorph.DoubleStrand
-        )
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(k = 0)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(min_overlap = 0)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(error_rate = 1.5)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(min_coverage = 0)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(k = 21, min_overlap = 10)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(
+                sequence_type = BioSequences.LongAA,
+                graph_mode = Mycelia.Rhizomorph.DoubleStrand
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(
+                sequence_type = String,
+                graph_mode = Mycelia.Rhizomorph.DoubleStrand
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(k = 0)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(min_overlap = 0)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(error_rate = 1.5)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.AssemblyConfig(min_coverage = 0)
+        end
 
         mktempdir() do dir
             fastq_path = joinpath(dir, "reads.fastq")
@@ -137,10 +159,12 @@ Test.@testset "Assembly Core Coverage" begin
         fastq_record = FASTX.FASTQ.Record("contig_1", "ATCG", "IIII")
 
         qualityless_result = Mycelia.Rhizomorph.AssemblyResult(["ATCG"], ["contig_1"])
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.write_fastq_contigs(
-            qualityless_result,
-            "unused.fastq"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.write_fastq_contigs(
+                qualityless_result,
+                "unused.fastq"
+            )
+        end
 
         warning_result = Mycelia.Rhizomorph.AssemblyResult(
             ["ATCG"],

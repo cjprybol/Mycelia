@@ -2,6 +2,10 @@ import Test
 import DataFrames
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 @eval Mycelia begin
     function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
         return nothing
@@ -112,15 +116,19 @@ Test.@testset "classification.jl wrapper coverage" begin
             Test.@test existing_result.signatures == [preexisting_sig]
             Test.@test length(existing_collector.jobs) == 1
             Test.@test occursin("if [ ! -f", existing_collector.jobs[1].cmd)
-            Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                input_files = [joinpath(tmpdir, "missing.fasta")],
-                outdir = joinpath(tmpdir, "missing")
-            )
-            Test.@test_throws ErrorException Mycelia.run_sourmash_sketch(
-                input_files = [fasta],
-                outdir = joinpath(tmpdir, "invalid_molecule"),
-                molecule = "rna"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_sourmash_sketch(
+                    input_files = [joinpath(tmpdir, "missing.fasta")],
+                    outdir = joinpath(tmpdir, "missing")
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_sourmash_sketch(
+                    input_files = [fasta],
+                    outdir = joinpath(tmpdir, "invalid_molecule"),
+                    molecule = "rna"
+                )
+            end
 
             search_collector = Mycelia.CollectExecutor()
             search_result = Mycelia.run_sourmash_search(
@@ -181,8 +189,12 @@ Test.@testset "classification.jl wrapper coverage" begin
             search_df = Mycelia.parse_sourmash_search_output(search_csv)
             Test.@test DataFrames.nrow(search_df) == 1
             Test.@test search_df.similarity[1] == 0.95
-            Test.@test_throws ErrorException Mycelia.parse_sourmash_gather_output(joinpath(tmpdir, "missing.csv"))
-            Test.@test_throws ErrorException Mycelia.parse_sourmash_search_output(joinpath(tmpdir, "missing_search.csv"))
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_sourmash_gather_output(joinpath(tmpdir, "missing.csv"))
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_sourmash_search_output(joinpath(tmpdir, "missing_search.csv"))
+            end
         end
     end
 
@@ -211,23 +223,29 @@ Test.@testset "classification.jl wrapper coverage" begin
                 output_prefix = "combo"
             )
             Test.@test multi_result.sketches == [first_multi, second_multi]
-            Test.@test_throws ErrorException Mycelia.run_mash_sketch(
-                input_files = [fasta],
-                outdir = joinpath(tmpdir, "bad_k"),
-                k = 0
-            )
-            Test.@test_throws ErrorException Mycelia.run_mash_sketch(
-                input_files = [fastq],
-                outdir = joinpath(tmpdir, "bad_min_copies"),
-                min_copies = 2
-            )
-            Test.@test_throws ErrorException Mycelia.run_mash_sketch(
-                input_files = [fastq],
-                outdir = joinpath(tmpdir, "bad_threads"),
-                r = true,
-                min_copies = 1,
-                threads = 0
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_sketch(
+                    input_files = [fasta],
+                    outdir = joinpath(tmpdir, "bad_k"),
+                    k = 0
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_sketch(
+                    input_files = [fastq],
+                    outdir = joinpath(tmpdir, "bad_min_copies"),
+                    min_copies = 2
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_sketch(
+                    input_files = [fastq],
+                    outdir = joinpath(tmpdir, "bad_threads"),
+                    r = true,
+                    min_copies = 1,
+                    threads = 0
+                )
+            end
 
             pasted = _write_file(joinpath(tmpdir, "db", "combined.msh"), "msh\n")
             paste_result = Mycelia.run_mash_paste(
@@ -235,10 +253,12 @@ Test.@testset "classification.jl wrapper coverage" begin
                 in_files = [ref_sketch, query_sketch]
             )
             Test.@test paste_result == pasted
-            Test.@test_throws ErrorException Mycelia.run_mash_paste(
-                out_file = joinpath(tmpdir, "db", "missing"),
-                in_files = [joinpath(tmpdir, "absent.msh")]
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_paste(
+                    out_file = joinpath(tmpdir, "db", "missing"),
+                    in_files = [joinpath(tmpdir, "absent.msh")]
+                )
+            end
 
             dist_path = _write_file(
                 joinpath(tmpdir, "dist", "custom.tsv"),
@@ -254,12 +274,14 @@ Test.@testset "classification.jl wrapper coverage" begin
             dist_df = Mycelia.parse_mash_dist_output(dist_path)
             Test.@test DataFrames.nrow(dist_df) == 1
             Test.@test dist_df.distance[1] == 0.01
-            Test.@test_throws ErrorException Mycelia.run_mash_dist(
-                reference = ref_sketch,
-                query = query_sketch,
-                outdir = joinpath(tmpdir, "bad_dist"),
-                threads = 0
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_dist(
+                    reference = ref_sketch,
+                    query = query_sketch,
+                    outdir = joinpath(tmpdir, "bad_dist"),
+                    threads = 0
+                )
+            end
 
             screen_path = _write_file(
                 joinpath(tmpdir, "screen", "custom.tsv"),
@@ -276,12 +298,14 @@ Test.@testset "classification.jl wrapper coverage" begin
             screen_df = Mycelia.parse_mash_screen_output(screen_path)
             Test.@test DataFrames.nrow(screen_df) == 1
             Test.@test screen_df.identity[1] == 0.99
-            Test.@test_throws ErrorException Mycelia.run_mash_screen(
-                reference = ref_sketch,
-                query = fastq,
-                outdir = joinpath(tmpdir, "bad_screen"),
-                min_identity = 1.5
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_mash_screen(
+                    reference = ref_sketch,
+                    query = fastq,
+                    outdir = joinpath(tmpdir, "bad_screen"),
+                    min_identity = 1.5
+                )
+            end
         end
     end
 
@@ -359,12 +383,14 @@ Test.@testset "classification.jl wrapper coverage" begin
             )
             Test.@test skip_result.profile_txt == existing_profile
             Test.@test isempty(skip_collector.jobs)
-            Test.@test_throws ErrorException Mycelia.run_metaphlan(
-                input_file = input_fastq,
-                outdir = joinpath(tmpdir, "bad_type"),
-                db_dir = db_dir,
-                input_type = "bamish"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metaphlan(
+                    input_file = input_fastq,
+                    outdir = joinpath(tmpdir, "bad_type"),
+                    db_dir = db_dir,
+                    input_type = "bamish"
+                )
+            end
 
             profile_file = _write_file(
                 joinpath(tmpdir, "profile.txt"),
@@ -406,7 +432,9 @@ Test.@testset "classification.jl wrapper coverage" begin
             lone_db = mkpath(joinpath(singleton_root, "only_db"))
             _write_file(joinpath(lone_db, "info"), "db\n")
             Test.@test Mycelia._resolve_metabuli_db_dir(singleton_root, "missing_name") == lone_db
-            Test.@test_throws ErrorException Mycelia._resolve_metabuli_db_dir(mkpath(joinpath(tmpdir, "empty_root")), "nothing")
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._resolve_metabuli_db_dir(mkpath(joinpath(tmpdir, "empty_root")), "nothing")
+            end
 
             _with_env([
                 "METABULI_DB" => direct_db,
@@ -436,12 +464,14 @@ Test.@testset "classification.jl wrapper coverage" begin
             ]) do
                 Test.@test isnothing(Mycelia.get_metabuli_db_path(require = false, download = false))
             end
-            Test.@test_throws ErrorException Mycelia.get_metabuli_db_path(
-                require = true,
-                db_root = joinpath(tmpdir, "absent_root"),
-                db_name = "missing",
-                download = false
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.get_metabuli_db_path(
+                    require = true,
+                    db_root = joinpath(tmpdir, "absent_root"),
+                    db_name = "missing",
+                    download = false
+                )
+            end
 
             staged_metabuli = mkpath(joinpath(tmpdir, "metabuli_archive_src", "refseq_release"))
             _write_file(joinpath(staged_metabuli, "db.info"), "db\n")
@@ -463,10 +493,12 @@ Test.@testset "classification.jl wrapper coverage" begin
                 Test.@test isfile(joinpath(downloaded_db, "db.info"))
                 Test.@test !isfile(joinpath(tmpdir, "downloaded_metabuli", basename(metabuli_archive)))
             end
-            Test.@test_throws ErrorException Mycelia.download_metabuli_db(
-                db_name = "not_a_real_metabuli_db",
-                db_root = joinpath(tmpdir, "bad_metabuli_download")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.download_metabuli_db(
+                    db_name = "not_a_real_metabuli_db",
+                    db_root = joinpath(tmpdir, "bad_metabuli_download")
+                )
+            end
 
             staged_metabuli_get = mkpath(joinpath(tmpdir, "metabuli_get_src", "refseq_release"))
             _write_file(joinpath(staged_metabuli_get, "db.info"), "db\n")
@@ -529,18 +561,22 @@ Test.@testset "classification.jl wrapper coverage" begin
             )
             Test.@test skip_classify.report_file == existing_report
             Test.@test isempty(skip_collect.jobs)
-            Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                input_files = [input_fastq],
-                outdir = joinpath(tmpdir, "bad_seq_mode"),
-                database_path = direct_db,
-                seq_mode = "9"
-            )
-            Test.@test_throws ErrorException Mycelia.run_metabuli_classify(
-                input_files = [input_fastq],
-                outdir = joinpath(tmpdir, "bad_ram"),
-                database_path = direct_db,
-                max_ram_gb = 0
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metabuli_classify(
+                    input_files = [input_fastq],
+                    outdir = joinpath(tmpdir, "bad_seq_mode"),
+                    database_path = direct_db,
+                    seq_mode = "9"
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metabuli_classify(
+                    input_files = [input_fastq],
+                    outdir = joinpath(tmpdir, "bad_ram"),
+                    database_path = direct_db,
+                    max_ram_gb = 0
+                )
+            end
 
             taxonomy_dir = mkpath(joinpath(tmpdir, "taxonomy"))
             _write_file(joinpath(taxonomy_dir, "names.dmp"), "1\t|\troot\t|\n")
@@ -596,7 +632,9 @@ Test.@testset "classification.jl wrapper coverage" begin
             _write_file(joinpath(kleborate_outdir, "sample_output.txt"), "done\n")
             Test.@test Mycelia.run_kleborate(String[]; outdir = kleborate_outdir) == kleborate_outdir
             Test.@test Mycelia.run_kleborate(assembly; outdir = kleborate_outdir) == kleborate_outdir
-            Test.@test_throws ErrorException Mycelia.run_kleborate(String[]; outdir = joinpath(tmpdir, "empty_kleborate"))
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_kleborate(String[]; outdir = joinpath(tmpdir, "empty_kleborate"))
+            end
             redirect_stdout(devnull) do
                 Test.@test length(Mycelia.list_kraken2_databases()) > 0
             end
@@ -645,12 +683,14 @@ Test.@testset "classification.jl wrapper coverage" begin
             ]) do
                 Test.@test isnothing(Mycelia.get_kraken2_db_path(require = false, download = false))
             end
-            Test.@test_throws ErrorException Mycelia.get_kraken2_db_path(
-                require = true,
-                db_root = joinpath(tmpdir, "absent_root"),
-                db_name = "missing",
-                download = false
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.get_kraken2_db_path(
+                    require = true,
+                    db_root = joinpath(tmpdir, "absent_root"),
+                    db_name = "missing",
+                    download = false
+                )
+            end
 
             staged_kraken = mkpath(joinpath(tmpdir, "kraken_archive_src"))
             _make_kraken_db(staged_kraken)
@@ -672,10 +712,12 @@ Test.@testset "classification.jl wrapper coverage" begin
                 Test.@test Mycelia._kraken2_db_present(downloaded_kraken)
                 Test.@test !isfile(joinpath(tmpdir, "downloaded_kraken", basename(kraken_archive)))
             end
-            Test.@test_throws ErrorException Mycelia.download_kraken2_db(
-                db_name = "not_a_real_kraken_db",
-                db_root = joinpath(tmpdir, "bad_kraken_download")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.download_kraken2_db(
+                    db_name = "not_a_real_kraken_db",
+                    db_root = joinpath(tmpdir, "bad_kraken_download")
+                )
+            end
 
             staged_kraken_get = mkpath(joinpath(tmpdir, "kraken_get_src"))
             _make_kraken_db(staged_kraken_get)
@@ -711,16 +753,20 @@ Test.@testset "classification.jl wrapper coverage" begin
             )
             Test.@test kraken_result.output_file == output_file
             Test.@test kraken_result.report_file == report_file
-            Test.@test_throws ErrorException Mycelia.run_kraken2_classify(
-                input_files = String[],
-                outdir = joinpath(tmpdir, "kraken_empty"),
-                database_path = kraken_db
-            )
-            Test.@test_throws ErrorException Mycelia.run_kraken2_classify(
-                input_files = [reads_fastq],
-                outdir = joinpath(tmpdir, "kraken_bad_db"),
-                database_path = joinpath(tmpdir, "bad_db")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_kraken2_classify(
+                    input_files = String[],
+                    outdir = joinpath(tmpdir, "kraken_empty"),
+                    database_path = kraken_db
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_kraken2_classify(
+                    input_files = [reads_fastq],
+                    outdir = joinpath(tmpdir, "kraken_bad_db"),
+                    database_path = joinpath(tmpdir, "bad_db")
+                )
+            end
 
             kraken_df = Mycelia.parse_kraken2_report(report_file)
             Test.@test DataFrames.nrow(kraken_df) == 1

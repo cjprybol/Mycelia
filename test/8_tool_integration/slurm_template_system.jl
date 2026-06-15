@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 const FAKE_LAWRENCIUM_ASSOCIATIONS = "Account|User|Partition|QOS|\npc_test|user|lr6|lr_normal|\n"
 
 function _has_message(messages::Vector{String}, needle::String)
@@ -572,16 +576,20 @@ Test.@testset "SLURM wrapper entrypoints" begin
 
     Test.@testset "nersc wrappers validate account and join command vectors" begin
         _with_env(Dict("NERSC_ACCOUNT" => nothing)) do
-            Test.@test_throws ErrorException Mycelia.nersc_sbatch_shared(
-                job_name = "missing-account",
-                mail_user = "user@example.org",
-                cmd = "echo fail"
-            )
-            Test.@test_throws ErrorException Mycelia.nersc_sbatch(
-                job_name = "missing-direct-account",
-                mail_user = "user@example.org",
-                cmd = "echo fail"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.nersc_sbatch_shared(
+                    job_name = "missing-account",
+                    mail_user = "user@example.org",
+                    cmd = "echo fail"
+                )
+            end
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.nersc_sbatch(
+                    job_name = "missing-direct-account",
+                    mail_user = "user@example.org",
+                    cmd = "echo fail"
+                )
+            end
         end
 
         mktempdir() do logdir
@@ -682,11 +690,13 @@ Test.@testset "SLURM wrapper entrypoints" begin
         end
 
         _with_env(Dict("NERSC_ACCOUNT" => nothing)) do
-            Test.@test_throws ErrorException Mycelia.nersc_sbatch(
-                job_name = "nersc-direct-missing-account",
-                mail_user = "user@example.org",
-                cmd = "echo fail"
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.nersc_sbatch(
+                    job_name = "nersc-direct-missing-account",
+                    mail_user = "user@example.org",
+                    cmd = "echo fail"
+                )
+            end
         end
     end
 
@@ -781,11 +791,13 @@ Test.@testset "SLURM wrapper entrypoints" begin
             )
         end
 
-        Test.@test_throws ErrorException Mycelia.submit_job(
-            site = "unknown-site",
-            job_name = "bad-route",
-            cmd = "echo nope"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.submit_job(
+                site = "unknown-site",
+                job_name = "bad-route",
+                cmd = "echo nope"
+            )
+        end
     end
 end
 

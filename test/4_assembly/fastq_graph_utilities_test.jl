@@ -3,6 +3,10 @@ import Mycelia
 import FASTX
 import MetaGraphsNext
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "FASTQ Graph Utilities" begin
     mktempdir() do dir
         fastq_path = joinpath(dir, "reads.fastq")
@@ -41,6 +45,8 @@ Test.@testset "FASTQ Graph Utilities" begin
             write(io, ">read1\n")
             write(io, "ATCG\n")
         end
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_fastq_graph_from_file(fasta_path)
+        test_throws_message(ErrorException, "FASTQ graphs require FASTQ input") do
+            Mycelia.Rhizomorph.build_fastq_graph_from_file(fasta_path)
+        end
     end
 end

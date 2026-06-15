@@ -23,6 +23,7 @@ import Graphs
 import BioSequences
 import FASTX
 import Random
+import StableRNGs
 import StatsBase
 import Kmers
 
@@ -45,11 +46,12 @@ macro with_end_to_end_assembly_test_seed(ex)
 end
 
 @with_end_to_end_assembly_test_seed Test.@testset "End-to-End Assembly Tests" begin
+    rng = StableRNGs.StableRNG(42)
     Test.@testset "Base Case: Reference Sequence Graph Round-trip" begin
         Test.@testset "String Graph Base Case" begin
             # Test with simple strings
             for seq_length in TEST_LENGTHS
-                reference_string = Random.randstring(seq_length)
+                reference_string = Random.randstring(rng, seq_length)
 
                 # Create graph from reference
                 graph = Mycelia.Rhizomorph.build_ngram_graph([reference_string], 3; dataset_id = "test")
@@ -68,7 +70,7 @@ end
 
         Test.@testset "Sequence Graph Next Base Case - DNA" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = BioSequences.randdnaseq(seq_length)
+                reference_seq = BioSequences.randdnaseq(rng, seq_length)
                 reference_record = FASTX.FASTA.Record("reference", reference_seq)
 
                 # Test DoubleStrand mode
@@ -94,7 +96,7 @@ end
 
         Test.@testset "Sequence Graph Next Base Case - RNA" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = string(BioSequences.randrnaseq(seq_length))
+                reference_seq = string(BioSequences.randrnaseq(rng, seq_length))
                 if !occursin('U', reference_seq)
                     reference_seq = "U" * reference_seq[2:end]
                 end
@@ -121,7 +123,7 @@ end
 
         Test.@testset "Sequence Graph Next Base Case - Amino Acids" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = BioSequences.randaaseq(seq_length)
+                reference_seq = BioSequences.randaaseq(rng, seq_length)
                 reference_record = FASTX.FASTA.Record("reference", reference_seq)
 
                 # Test SingleStrand mode for amino acids
@@ -251,7 +253,7 @@ end
     Test.@testset "String Graph Assembly with Error Rates and Coverage" begin
         Test.@testset "Basic String Assembly" begin
             for seq_length in TEST_LENGTHS
-                reference_string = Random.randstring(seq_length)
+                reference_string = Random.randstring(rng, seq_length)
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -301,7 +303,7 @@ end
     Test.@testset "Strand-Specific Sequence Graph Next Assembly" begin
         Test.@testset "DNA SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = BioSequences.randdnaseq(seq_length)
+                reference_seq = BioSequences.randdnaseq(rng, seq_length)
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -381,7 +383,7 @@ end
 
         Test.@testset "RNA SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = string(BioSequences.randrnaseq(seq_length))
+                reference_seq = string(BioSequences.randrnaseq(rng, seq_length))
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -473,7 +475,7 @@ end
 
         Test.@testset "Amino Acid SingleStrand Mode" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = BioSequences.randaaseq(seq_length)
+                reference_seq = BioSequences.randaaseq(rng, seq_length)
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -564,7 +566,7 @@ end
     Test.@testset "Canonical/Double-Stranded Sequence Graph Next Assembly" begin
         Test.@testset "DNA DoubleStrand Mode" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = BioSequences.randdnaseq(seq_length)
+                reference_seq = BioSequences.randdnaseq(rng, seq_length)
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -656,7 +658,7 @@ end
 
         Test.@testset "RNA DoubleStrand Mode" begin
             for seq_length in TEST_LENGTHS
-                reference_seq = string(BioSequences.randrnaseq(seq_length))
+                reference_seq = string(BioSequences.randrnaseq(rng, seq_length))
 
                 for error_rate in ERROR_RATES
                     for coverage in COVERAGE_DEPTHS
@@ -758,7 +760,7 @@ end
         end
 
         Test.@testset "Sequence Graph Next GFA I/O" begin
-            reference_seq = string(BioSequences.randdnaseq(100))
+            reference_seq = string(BioSequences.randdnaseq(rng, 100))
             reference_record = FASTX.FASTA.Record("reference", reference_seq)
 
             kmer_type = Kmers.DNAKmer{5}
@@ -779,7 +781,7 @@ end
         Test.@testset "Memory Usage Scaling" begin
             # Test with small toy sequences (unit-test scale)
             for seq_length in [50, 100]
-                reference_seq = string(BioSequences.randdnaseq(seq_length))
+                reference_seq = string(BioSequences.randdnaseq(rng, seq_length))
                 reads = Mycelia.create_test_reads(reference_seq, 20, 0.01)
 
                 # Build graphs and verify they don't crash
@@ -803,7 +805,7 @@ end
         end
 
         Test.@testset "Coverage Impact on Assembly Quality" begin
-            reference_seq = string(BioSequences.randdnaseq(50))
+            reference_seq = string(BioSequences.randdnaseq(rng, 50))
             error_rate = 0.01
 
             for coverage in [5, 20]

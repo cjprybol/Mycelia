@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "N-gram Graph Utilities" begin
     Test.@testset "Build from file and stats" begin
         mktempdir() do dir
@@ -49,6 +53,8 @@ Test.@testset "N-gram Graph Utilities" begin
     end
 
     Test.@testset "N-gram graph error cases" begin
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_ngram_graph_from_files(String[], 2)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_ngram_graph_from_files(String[], 2)
+        end
     end
 end

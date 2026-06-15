@@ -25,6 +25,10 @@ import DataFrames
 import Statistics
 import JSON
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 const phiX174_accession_id = "NC_001422.1"
 
 Test.@testset "Preprocessing" begin
@@ -599,8 +603,10 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 Test.@test length(table.human_readable_id[1]) <= 16
 
                 ## Should error without force_truncate (test this by catching the error)
-                Test.@test_throws ErrorException Mycelia.fastx2normalized_table(
-                    filepath; force_truncate = false)
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.fastx2normalized_table(
+                        filepath; force_truncate = false)
+                end
             end
 
             ## Test length validation
@@ -612,10 +618,12 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
                 end
 
                 ## Should error for ID > 16 chars without force_truncate
-                Test.@test_throws ErrorException Mycelia.fastx2normalized_table(
-                    filepath;
-                    human_readable_id = "this_id_is_way_too_long_and_exceeds_sixteen_chars"
-                )
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.fastx2normalized_table(
+                        filepath;
+                        human_readable_id = "this_id_is_way_too_long_and_exceeds_sixteen_chars"
+                    )
+                end
 
                 ## Should work with force_truncate
                 table = Mycelia.fastx2normalized_table(
@@ -1000,7 +1008,9 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
 
         Test.@testset "hash function edge cases and validation" begin
             # Test empty sequence handling
-            Test.@test_throws ErrorException Mycelia.create_sequence_hash("")  # Should handle empty sequences gracefully
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.create_sequence_hash("")  # Should handle empty sequences gracefully
+            end
 
             # Test very short sequences
             short_hash = Mycelia.create_sequence_hash("A", encoded_length = 16)
@@ -1019,7 +1029,9 @@ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
             Test.@test length(Set([hash_a, hash_t, hash_g, hash_c])) == 4  # All unique
 
             # Test joint hashing with edge cases
-            Test.@test_throws ErrorException Mycelia.generate_joint_sequence_hash(String[])  # Empty vector
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.generate_joint_sequence_hash(String[])  # Empty vector
+            end
 
             single_seq_joint = Mycelia.generate_joint_sequence_hash(["ATCG"], encoded_length = 16)
             Test.@test length(single_seq_joint) == 16

@@ -25,6 +25,7 @@ import DataFrames
 import SHA
 import LinearAlgebra
 import BioSequences
+import StableRNGs
 
 Test.@testset "Distance Metrics Tests" begin
     Test.@testset "Jaccard Distance Matrix Functions" begin
@@ -280,7 +281,8 @@ Test.@testset "Distance Metrics Tests" begin
 
     Test.@testset "Performance and Memory Tests" begin
         # Test with moderately large matrices to ensure reasonable performance
-        large_matrix = rand(100, 50)  # 100 features, 50 samples
+        rng = StableRNGs.StableRNG(42)
+        large_matrix = rand(rng, 100, 50)  # 100 features, 50 samples
 
         Test.@test_nowarn Mycelia.frequency_matrix_to_euclidean_distance_matrix(large_matrix)
         Test.@test_nowarn Mycelia.frequency_matrix_to_cosine_distance_matrix(large_matrix)

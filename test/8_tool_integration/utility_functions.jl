@@ -18,9 +18,13 @@
 
 import Test
 import Mycelia
-import Random
+import StableRNGs
 import BioSequences
 import Kmers
+
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
 
 Test.@testset "default thread detection" begin
     cpu_threads = Sys.CPU_THREADS
@@ -198,7 +202,9 @@ Test.@testset "scientific notation" begin
     Test.@test Mycelia.scientific_notation(100) == "1.00e+02"
     Test.@test Mycelia.scientific_notation(1000, precision = 3) == "1.000e+03"
     Test.@test Mycelia.scientific_notation(0) == "0.00e+00"
-    Test.@test_throws ErrorException Mycelia.scientific_notation(1; precision = -1)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.scientific_notation(1; precision = -1)
+    end
 end
 
 Test.@testset "byte formatting" begin
@@ -260,7 +266,9 @@ Test.@testset "check matrix fits in memory" begin
                (assessed_memory_needs.bytes_needed <= assessed_memory_needs.total_memory)
 
     too_big = Sys.total_memory() * 2
-    Test.@test_throws ErrorException Mycelia.check_matrix_fits_in_memory(too_big; severity = :error)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.check_matrix_fits_in_memory(too_big; severity = :error)
+    end
 end
 
 Test.@testset "base hash functions" begin
@@ -349,8 +357,10 @@ Test.@testset "base hash functions" begin
         test_seq = "ATCGATCGATCG"
 
         # Test that truncation is required for shorter lengths
-        Test.@test_throws ErrorException Mycelia.create_sha256_hash(
-            test_seq, encoded_length = 16, allow_truncation = false)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sha256_hash(
+                test_seq, encoded_length = 16, allow_truncation = false)
+        end
 
         # Test that truncation works when allowed
         sha256_truncated = Mycelia.create_sha256_hash(test_seq, encoded_length = 16, allow_truncation = true)
@@ -489,22 +499,34 @@ Test.@testset "create_sequence_hash comprehensive testing" begin
 
     Test.@testset "error conditions and edge cases" begin
         # Test empty sequence validation
-        Test.@test_throws ErrorException Mycelia.create_sequence_hash("")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sequence_hash("")
+        end
 
         # Test invalid hash function
-        Test.@test_throws ErrorException Mycelia.create_sequence_hash("ATCG", hash_function = :invalid)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sequence_hash("ATCG", hash_function = :invalid)
+        end
 
         # Test invalid encoding
-        Test.@test_throws ErrorException Mycelia.create_sequence_hash("ATCG", encoding = :invalid)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_sequence_hash("ATCG", encoding = :invalid)
+        end
 
         # Test "too short" scenarios where requested length exceeds what can be produced from available bytes
         # This should trigger the error: "Cannot generate encoded hash of length X from Y bytes"
-        Test.@test_throws ErrorException Mycelia.create_blake3_hash(
-            "ATCG", encoding = :hex, encoded_length = 200, hash_bytes = 1)
-        Test.@test_throws ErrorException Mycelia.create_blake3_hash(
-            "ATCG", encoding = :base58, encoded_length = 100, hash_bytes = 1)
-        Test.@test_throws ErrorException Mycelia.create_blake3_hash(
-            "ATCG", encoding = :base64, encoded_length = 100, hash_bytes = 1)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_blake3_hash(
+                "ATCG", encoding = :hex, encoded_length = 200, hash_bytes = 1)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_blake3_hash(
+                "ATCG", encoding = :base58, encoded_length = 100, hash_bytes = 1)
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.create_blake3_hash(
+                "ATCG", encoding = :base64, encoded_length = 100, hash_bytes = 1)
+        end
 
         # Note: The "too short" condition mainly occurs with specific hash_bytes parameters,
         # not in typical create_sequence_hash usage with default parameters
@@ -560,7 +582,7 @@ Test.@testset "stable random sequence hash value assertions" begin
     Test.@testset "deterministic hash values with stable random generation" begin
         # Test with stable random DNA sequences
         Test.@testset "random DNA sequences with known hash values" begin
-            Random.seed!(12345)
+            rng = StableRNGs.StableRNG(12345)
 
             # Generate a few sequences and record their expected hashes
             # These values are computed once and then used for regression testing
@@ -570,8 +592,8 @@ Test.@testset "stable random sequence hash value assertions" begin
             expected_hashes_32 = []
 
             for i in 1:3
-                seq_len = rand(10:30)
-                seq = string(BioSequences.randdnaseq(seq_len))
+                seq_len = rand(rng, 10:30)
+                seq = string(BioSequences.randdnaseq(rng, seq_len))
                 push!(test_sequences, seq)
 
                 # Compute expected hashes
@@ -585,10 +607,10 @@ Test.@testset "stable random sequence hash value assertions" begin
             end
 
             # Now test that we get the same results
-            Random.seed!(12345)  # Reset seed
+            rng = StableRNGs.StableRNG(12345)
             for i in 1:3
-                seq_len = rand(10:30)
-                seq = string(BioSequences.randdnaseq(seq_len))
+                seq_len = rand(rng, 10:30)
+                seq = string(BioSequences.randdnaseq(rng, seq_len))
 
                 Test.@test seq == test_sequences[i]
 
@@ -603,25 +625,25 @@ Test.@testset "stable random sequence hash value assertions" begin
         end
 
         Test.@testset "random RNA sequences reproducibility" begin
-            Random.seed!(54321)
+            rng = StableRNGs.StableRNG(54321)
 
             # Test RNA sequence reproducibility
             rna_sequences = []
             rna_hashes = []
 
             for i in 1:3
-                seq_len = rand(8:25)
-                seq = string(BioSequences.randrnaseq(seq_len))
+                seq_len = rand(rng, 8:25)
+                seq = string(BioSequences.randrnaseq(rng, seq_len))
                 hash_val = Mycelia.create_sequence_hash(seq, encoded_length = 24)
                 push!(rna_sequences, seq)
                 push!(rna_hashes, hash_val)
             end
 
             # Verify reproducibility
-            Random.seed!(54321)
+            rng = StableRNGs.StableRNG(54321)
             for i in 1:3
-                seq_len = rand(8:25)
-                seq = string(BioSequences.randrnaseq(seq_len))
+                seq_len = rand(rng, 8:25)
+                seq = string(BioSequences.randrnaseq(rng, seq_len))
                 hash_val = Mycelia.create_sequence_hash(seq, encoded_length = 24)
 
                 Test.@test seq == rna_sequences[i]
@@ -630,14 +652,14 @@ Test.@testset "stable random sequence hash value assertions" begin
         end
 
         Test.@testset "random amino acid sequences reproducibility" begin
-            Random.seed!(67890)
+            rng = StableRNGs.StableRNG(67890)
 
             aa_sequences = []
             aa_hashes = []
 
             for i in 1:3
-                seq_len = rand(5:20)
-                seq = string(BioSequences.randaaseq(seq_len))
+                seq_len = rand(rng, 5:20)
+                seq = string(BioSequences.randaaseq(rng, seq_len))
                 hash_val = Mycelia.create_sequence_hash(seq, hash_function = :sha256,
                     encoded_length = 28, allow_truncation = true)
                 push!(aa_sequences, seq)
@@ -645,10 +667,10 @@ Test.@testset "stable random sequence hash value assertions" begin
             end
 
             # Verify reproducibility
-            Random.seed!(67890)
+            rng = StableRNGs.StableRNG(67890)
             for i in 1:3
-                seq_len = rand(5:20)
-                seq = string(BioSequences.randaaseq(seq_len))
+                seq_len = rand(rng, 5:20)
+                seq = string(BioSequences.randaaseq(rng, seq_len))
                 hash_val = Mycelia.create_sequence_hash(seq, hash_function = :sha256,
                     encoded_length = 28, allow_truncation = true)
 

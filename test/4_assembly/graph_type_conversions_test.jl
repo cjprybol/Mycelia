@@ -5,6 +5,10 @@ import MetaGraphsNext
 import BioSequences
 import Kmers
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Graph Type Conversions" begin
     Test.@testset "Fixed to variable conversion" begin
         records = [FASTX.FASTA.Record("read1", "ATCG")]
@@ -39,8 +43,10 @@ Test.@testset "Graph Type Conversions" begin
 
         bad_records = [FASTX.FASTA.Record("read3", "ATCG")]
         bad_graph = Mycelia.Rhizomorph.build_fasta_graph(bad_records; min_overlap = 2)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_variable_to_fixed(
-            bad_graph, Kmers.DNAKmer{3})
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.convert_variable_to_fixed(
+                bad_graph, Kmers.DNAKmer{3})
+        end
     end
 
     Test.@testset "Drop quality scores" begin

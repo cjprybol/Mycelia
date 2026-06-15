@@ -34,6 +34,10 @@ import DataFrames
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 const RUN_ALL = get(ENV, "MYCELIA_RUN_ALL", "false") == "true"
 const RUN_EXTERNAL = RUN_ALL || get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
 # const RUN_EXTERNAL = get(ENV, "MYCELIA_RUN_EXTERNAL", "false") == "true"
@@ -530,7 +534,9 @@ Test.@testset "Binning Tools Integration" begin
                 joinpath(dir, "no_sample_depth.tsv"),
                 "contigName\tcontigLen\ttotalAvgDepth\tsampleA-var\ncontig1\t12\t8.0\t0.2\n"
             )
-            Test.@test_throws ErrorException Mycelia._vamb_abundance_tsv(no_sample_depth)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia._vamb_abundance_tsv(no_sample_depth)
+            end
         end
 
         mktempdir() do dir
@@ -627,52 +633,68 @@ Test.@testset "Binning Tools Integration" begin
 
     Test.@testset "Input validation" begin
         outdir = mktempdir()
-        Test.@test_throws ErrorException Mycelia.run_vamb(
-            contigs_fasta = "missing_contigs.fna",
-            depth_file = "missing_depth.tsv",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_metabat2(
-            contigs_fasta = "missing_contigs.fna",
-            depth_file = "missing_depth.tsv",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_metacoag(
-            contigs_fasta = "missing_contigs.fna",
-            assembly_graph = "missing.gfa",
-            mapping_file = "missing.tsv",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_comebin(
-            contigs_fasta = "missing_contigs.fna",
-            bam_path = "missing_bams",
-            outdir = outdir
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_vamb(
+                contigs_fasta = "missing_contigs.fna",
+                depth_file = "missing_depth.tsv",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_metabat2(
+                contigs_fasta = "missing_contigs.fna",
+                depth_file = "missing_depth.tsv",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_metacoag(
+                contigs_fasta = "missing_contigs.fna",
+                assembly_graph = "missing.gfa",
+                mapping_file = "missing.tsv",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_comebin(
+                contigs_fasta = "missing_contigs.fna",
+                bam_path = "missing_bams",
+                outdir = outdir
+            )
+        end
         tmp_contigs = tempname() * ".fna"
         open(tmp_contigs, "w") do io
             write(io, ">contig1\nACGTACGTACGT\n")
         end
-        Test.@test_throws ErrorException Mycelia.run_comebin(
-            contigs_fasta = tmp_contigs,
-            bam_path = "missing_bams",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_drep_dereplicate(
-            genomes = String[],
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_taxometer(
-            contigs_fasta = "missing_contigs.fna",
-            depth_file = "missing_depth.tsv",
-            taxonomy_file = "missing_taxonomy.tsv",
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_taxvamb(
-            contigs_fasta = "missing_contigs.fna",
-            depth_file = "missing_depth.tsv",
-            taxonomy_file = "missing_taxonomy.tsv",
-            outdir = outdir
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_comebin(
+                contigs_fasta = tmp_contigs,
+                bam_path = "missing_bams",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_drep_dereplicate(
+                genomes = String[],
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_taxometer(
+                contigs_fasta = "missing_contigs.fna",
+                depth_file = "missing_depth.tsv",
+                taxonomy_file = "missing_taxonomy.tsv",
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_taxvamb(
+                contigs_fasta = "missing_contigs.fna",
+                depth_file = "missing_depth.tsv",
+                taxonomy_file = "missing_taxonomy.tsv",
+                outdir = outdir
+            )
+        end
         genomeface_error = nothing
         try
             Mycelia.run_genomeface(
@@ -687,21 +709,31 @@ Test.@testset "Binning Tools Integration" begin
         if genomeface_error isa ErrorException
             Test.@test occursin("GenomeFace wrapper disabled", sprint(showerror, genomeface_error))
         end
-        Test.@test_throws ErrorException Mycelia.run_magmax_merge(
-            bins_dirs = String[],
-            outdir = outdir
-        )
-        Test.@test_throws ErrorException Mycelia.run_magmax_merge(
-            bins_dirs = ["missing_bins_dir"],
-            outdir = outdir
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_magmax_merge(
+                bins_dirs = String[],
+                outdir = outdir
+            )
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_magmax_merge(
+                bins_dirs = ["missing_bins_dir"],
+                outdir = outdir
+            )
+        end
 
-        Test.@test_throws ErrorException Mycelia.parse_bin_assignments("missing_assignments.tsv")
-        Test.@test_throws ErrorException Mycelia.parse_drep_clusters("missing_drep.csv")
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.parse_bin_assignments("missing_assignments.tsv")
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.parse_drep_clusters("missing_drep.csv")
+        end
 
         mktempdir() do dir
             assignments = write_text_file(joinpath(dir, "assignments.tsv"), "bin\tcount\nbin1\t1\n")
-            Test.@test_throws ErrorException Mycelia.parse_bin_assignments(assignments)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_bin_assignments(assignments)
+            end
         end
 
         mktempdir() do dir
@@ -709,57 +741,71 @@ Test.@testset "Binning Tools Integration" begin
                 joinpath(dir, "drep.csv"),
                 "genome,secondary_cluster\nsample,1\n"
             )
-            Test.@test_throws ErrorException Mycelia.parse_drep_clusters(drep_clusters)
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.parse_drep_clusters(drep_clusters)
+            end
         end
 
         mktempdir() do dir
             inputs = create_binning_stub_inputs(dir)
             existing_outdir = joinpath(dir, "existing_vamb_out")
             mkpath(existing_outdir)
-            Test.@test_throws ErrorException Mycelia.run_vamb(
-                contigs_fasta = inputs.contigs_fasta,
-                depth_file = inputs.depth_file,
-                outdir = existing_outdir
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_vamb(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    outdir = existing_outdir
+                )
+            end
 
             existing_taxometer_outdir = joinpath(dir, "existing_taxometer_out")
             mkpath(existing_taxometer_outdir)
-            Test.@test_throws ErrorException Mycelia.run_taxometer(
-                contigs_fasta = inputs.contigs_fasta,
-                depth_file = inputs.depth_file,
-                taxonomy_file = inputs.taxonomy_file,
-                outdir = existing_taxometer_outdir
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_taxometer(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = existing_taxometer_outdir
+                )
+            end
 
             existing_taxvamb_outdir = joinpath(dir, "existing_taxvamb_out")
             mkpath(existing_taxvamb_outdir)
-            Test.@test_throws ErrorException Mycelia.run_taxvamb(
-                contigs_fasta = inputs.contigs_fasta,
-                depth_file = inputs.depth_file,
-                taxonomy_file = inputs.taxonomy_file,
-                outdir = existing_taxvamb_outdir
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_taxvamb(
+                    contigs_fasta = inputs.contigs_fasta,
+                    depth_file = inputs.depth_file,
+                    taxonomy_file = inputs.taxonomy_file,
+                    outdir = existing_taxvamb_outdir
+                )
+            end
 
-            Test.@test_throws ErrorException Mycelia.run_metacoag(
-                contigs_fasta = inputs.contigs_fasta,
-                assembly_graph = inputs.assembly_graph,
-                mapping_file = "missing_mapping.tsv",
-                outdir = joinpath(dir, "metacoag_out")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_metacoag(
+                    contigs_fasta = inputs.contigs_fasta,
+                    assembly_graph = inputs.assembly_graph,
+                    mapping_file = "missing_mapping.tsv",
+                    outdir = joinpath(dir, "metacoag_out")
+                )
+            end
 
             empty_bam_dir = joinpath(dir, "empty_bams")
             mkpath(empty_bam_dir)
             write_text_file(joinpath(empty_bam_dir, "notes.txt"), "not a bam\n")
-            Test.@test_throws ErrorException Mycelia.run_comebin(
-                contigs_fasta = inputs.contigs_fasta,
-                bam_path = empty_bam_dir,
-                outdir = joinpath(dir, "comebin_out")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_comebin(
+                    contigs_fasta = inputs.contigs_fasta,
+                    bam_path = empty_bam_dir,
+                    outdir = joinpath(dir, "comebin_out")
+                )
+            end
 
-            Test.@test_throws ErrorException Mycelia.run_drep_dereplicate(
-                genomes = [joinpath(dir, "missing_genome.fa")],
-                outdir = joinpath(dir, "drep_out")
-            )
+            test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                Mycelia.run_drep_dereplicate(
+                    genomes = [joinpath(dir, "missing_genome.fa")],
+                    outdir = joinpath(dir, "drep_out")
+                )
+            end
         end
     end
 

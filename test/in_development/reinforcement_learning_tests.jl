@@ -35,6 +35,10 @@ import Random
 import Dates
 import JSON
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Reinforcement Learning Framework Tests" begin
     Test.@testset "Core Data Structures" begin
         Test.@testset "AssemblyState Construction" begin
@@ -492,7 +496,9 @@ Test.@testset "Reinforcement Learning Framework Tests" begin
                 invalid_action = Mycelia.AssemblyAction(
                     :invalid_decision, Dict(), 0.95, 100, 5)
 
-                Test.@test_throws ErrorException Mycelia.step_environment!(env, invalid_action)
+                test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+                    Mycelia.step_environment!(env, invalid_action)
+                end
 
             finally
                 rm(test_file, force = true)

@@ -6,7 +6,7 @@
 
 import Test
 import Mycelia
-import Random
+import StableRNGs
 import Statistics
 
 ## Suppress verbose output during CI/automated testing
@@ -146,10 +146,11 @@ Test.@testset "Adjusted Rand Index (ARI)" begin
 
     Test.@testset "ARI range" begin
         ## ARI should be in [-1, 1] range
+        rng = StableRNGs.StableRNG(101)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             ari = Mycelia.adjusted_rand_index(labels1, labels2)
             Test.@test -1.0 <= ari <= 1.0
         end
@@ -197,10 +198,11 @@ Test.@testset "Normalized Mutual Information (NMI)" begin
 
     Test.@testset "NMI range" begin
         ## NMI should be in [0, 1] range
+        rng = StableRNGs.StableRNG(102)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             nmi = Mycelia.normalized_mutual_information(labels1, labels2)
             Test.@test 0.0 <= nmi <= 1.0
         end
@@ -281,10 +283,11 @@ Test.@testset "V-Measure" begin
     end
 
     Test.@testset "V-measure range" begin
+        rng = StableRNGs.StableRNG(103)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             result = Mycelia.v_measure(labels1, labels2)
 
             Test.@test 0.0 <= result.homogeneity <= 1.0
@@ -325,10 +328,11 @@ Test.@testset "Fowlkes-Mallows Index (FMI)" begin
 
     Test.@testset "FMI range" begin
         ## FMI should be in [0, 1] range
+        rng = StableRNGs.StableRNG(104)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             fmi = Mycelia.fowlkes_mallows_index(labels1, labels2)
             Test.@test 0.0 <= fmi <= 1.0
         end
@@ -376,10 +380,11 @@ Test.@testset "Cluster Purity" begin
     end
 
     Test.@testset "Purity range" begin
+        rng = StableRNGs.StableRNG(105)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             result = Mycelia.cluster_purity(labels1, labels2)
             Test.@test 0.0 <= result.overall_purity <= 1.0
         end
@@ -416,10 +421,11 @@ Test.@testset "Jaccard Index" begin
     end
 
     Test.@testset "Jaccard range" begin
+        rng = StableRNGs.StableRNG(106)
         for _ in 1:10
             n = 20
-            labels1 = rand(1:3, n)
-            labels2 = rand(1:3, n)
+            labels1 = rand(rng, 1:3, n)
+            labels2 = rand(rng, 1:3, n)
             ji = Mycelia.jaccard_index(labels1, labels2)
             Test.@test 0.0 <= ji <= 1.0
         end

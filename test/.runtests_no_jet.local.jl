@@ -123,7 +123,6 @@ end
 include("aqua.jl")
 
 # JET.jl static analysis - uncomment to enable (can be slow)
-# include("jet.jl")  # temporarily skipped for local no-JET failure isolation
 
 # ExplicitImports.jl - enforce import style (no implicit imports from using)
 include("explicit_imports.jl")
@@ -192,7 +191,7 @@ include_all_tests(joinpath(@__DIR__, "4_assembly"))
 #         "test/4_assembly/dna_qualmer_graph_test.jl",
 #         "test/4_assembly/dna_qualmer_singlestrand_test.jl",
 #         "test/4_assembly/doublestrand_canonicalization_test.jl",
-#         "test/4_assembly/end_to_end_assembly_tests.jl",
+#         "test/4_assembly/end_to_end_assembly_tests.jl", # broken with infinite loop somewhere?
 #         "test/4_assembly/end_to_end_graph_tests.jl",
 #         "test/4_assembly/evidence_functions_test.jl",
 #         "test/4_assembly/evidence_structures_test.jl",

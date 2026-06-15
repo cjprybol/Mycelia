@@ -20,6 +20,7 @@ import Test
 import Mycelia
 import BioSequences
 import DataFrames
+import StableRNGs
 
 Test.@testset "SentencePiece Integration Tests" begin
     Test.@testset "Sequence Conversion Functions" begin
@@ -131,7 +132,8 @@ Test.@testset "SentencePiece Integration Tests" begin
 
         # Test with a non-existent environment
         if haskey(ENV, "CONDA_PREFIX") || isfile(Mycelia.CONDA_RUNNER)
-            fake_env = "nonexistent_sentencepiece_$(rand(1000:9999))"
+            rng = StableRNGs.StableRNG(42)
+            fake_env = "nonexistent_sentencepiece_$(rand(rng, 1000:9999))"
             result = Mycelia._check_conda_env_exists(fake_env)
             Test.@test result isa Bool
             Test.@test result == false

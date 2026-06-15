@@ -19,6 +19,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "UN Parallel Corpus archive resolution" begin
     archives = Mycelia._resolve_un_archives(["all"], ["txt"])
     expected_count = length(Mycelia.UN_PAIRS) + length(Mycelia.UN_LANGUAGES) + 1
@@ -32,8 +36,16 @@ Test.@testset "UN Parallel Corpus archive resolution" begin
 end
 
 Test.@testset "UN Parallel Corpus validation" begin
-    Test.@test_throws ErrorException Mycelia._resolve_un_archives(String[], ["txt"])
-    Test.@test_throws ErrorException Mycelia._resolve_un_archives(["bitext"], ["xml"])
-    Test.@test_throws ErrorException Mycelia._resolve_un_archives(["tei"], ["txt"])
-    Test.@test_throws ErrorException Mycelia._resolve_un_archives(["zz-yy"], ["txt"])
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia._resolve_un_archives(String[], ["txt"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia._resolve_un_archives(["bitext"], ["xml"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia._resolve_un_archives(["tei"], ["txt"])
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia._resolve_un_archives(["zz-yy"], ["txt"])
+    end
 end

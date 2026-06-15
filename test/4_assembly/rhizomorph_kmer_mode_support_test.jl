@@ -24,6 +24,10 @@ import Kmers
 import Graphs
 import MetaGraphsNext
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Rhizomorph k-mer graph modes" begin
     mktempdir() do dir
         file1 = joinpath(dir, "forward.fasta")
@@ -91,6 +95,8 @@ Test.@testset "Rhizomorph k-mer graph modes" begin
 
     Test.@testset "Canonical mode not allowed for amino acids" begin
         aa_rec = FASTX.FASTA.Record("aa1", BioSequences.LongAA("ACDEFG"))
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.build_kmer_graph([aa_rec], 3; mode = :canonical)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.Rhizomorph.build_kmer_graph([aa_rec], 3; mode = :canonical)
+        end
     end
 end

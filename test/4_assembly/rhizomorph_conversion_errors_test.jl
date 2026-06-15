@@ -23,18 +23,30 @@ import Mycelia
 import FASTX
 import Kmers
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Rhizomorph conversion errors" begin
     # AA k-mer graph should not support doublestrand/canonical
     aa_records = [FASTX.FASTA.Record("aa1", "MKVLW")]
     aa_graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(aa_records, 3; dataset_id = "aa")
-    Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_to_doublestrand(aa_graph)
-    Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_to_canonical(aa_graph)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.Rhizomorph.convert_to_doublestrand(aa_graph)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.Rhizomorph.convert_to_canonical(aa_graph)
+    end
 
     # N-gram (String) graph should not support doublestrand/canonical
     strings = ["hello world"]
     ngram_graph = Mycelia.Rhizomorph.build_ngram_graph(strings, 3; dataset_id = "txt")
-    Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_to_doublestrand(ngram_graph)
-    Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_to_canonical(ngram_graph)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.Rhizomorph.convert_to_doublestrand(ngram_graph)
+    end
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.Rhizomorph.convert_to_canonical(ngram_graph)
+    end
 end
 
 println("✓ Rhizomorph conversion error tests completed")

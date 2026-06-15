@@ -1,6 +1,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 @eval Mycelia begin
     function add_bioconda_env(pkg; force = false, quiet = false)
         return nothing
@@ -188,13 +192,18 @@ Test.@testset "Classification wrapper executor force-update and validation" begi
             println(io, "ATGCATGC")
         end
 
-        Test.@test_throws ErrorException Mycelia.run_clamlst(
-            mismatch_genome;
-            db_path = joinpath(temp_dir, "path_a"),
-            db_dir = joinpath(temp_dir, "path_b"),
-            outdir = joinpath(temp_dir, "mismatch_out"),
-            executor = mismatch_executor
-        )
+        test_throws_message(
+            ErrorException,
+            "Provide only one of db_path or db_dir for run_clamlst()"
+        ) do
+            Mycelia.run_clamlst(
+                mismatch_genome;
+                db_path = joinpath(temp_dir, "path_a"),
+                db_dir = joinpath(temp_dir, "path_b"),
+                outdir = joinpath(temp_dir, "mismatch_out"),
+                executor = mismatch_executor
+            )
+        end
     finally
         rm(temp_dir; recursive = true, force = true)
     end

@@ -19,8 +19,8 @@
 import Test
 import Mycelia
 import FASTX
-import Random
 import BioSequences
+import StableRNGs
 
 const phiX174_assembly_id = "GCF_000819615.1"
 
@@ -348,8 +348,9 @@ Test.@testset "FASTQ simulation" begin
     # Tests that don't require downloaded genomes - use simulated sequences directly
     # These always run regardless of download success
     Test.@testset "Observe Functions" begin
+        rng = StableRNGs.StableRNG(42)
         ## Test observe() with FASTA record
-        test_seq = BioSequences.randdnaseq(100)
+        test_seq = BioSequences.randdnaseq(rng, 100)
         test_record = FASTX.FASTA.Record("test_seq", test_seq)
 
         ## Test with no errors
@@ -364,7 +365,7 @@ Test.@testset "FASTQ simulation" begin
         Test.@test length(FASTX.quality(observed_with_errors)) > 0
 
         ## Test observe() with BioSequence directly
-        dna_seq = BioSequences.randdnaseq(50)
+        dna_seq = BioSequences.randdnaseq(rng, 50)
         observed_seq,
         quality_scores = Mycelia.observe(dna_seq, error_rate = 0.0, tech = :illumina)
         Test.@test isa(observed_seq, BioSequences.LongDNA{4})
@@ -379,13 +380,13 @@ Test.@testset "FASTQ simulation" begin
         end
 
         ## Test RNA sequence
-        rna_seq = BioSequences.randrnaseq(30)
+        rna_seq = BioSequences.randrnaseq(rng, 30)
         observed_rna,
         rna_quals = Mycelia.observe(rna_seq, error_rate = 0.01, tech = :illumina)
         Test.@test isa(observed_rna, BioSequences.LongRNA{4})
 
         ## Test amino acid sequence
-        aa_seq = BioSequences.randaaseq(20)
+        aa_seq = BioSequences.randaaseq(rng, 20)
         observed_aa, aa_quals = Mycelia.observe(aa_seq, error_rate = 0.01, tech = :illumina)
         Test.@test isa(observed_aa, BioSequences.LongAA)
     end
@@ -408,8 +409,9 @@ Test.@testset "FASTQ simulation" begin
     end
 
     Test.@testset "Paired-End Read Generation Functions" begin
+        rng = StableRNGs.StableRNG(43)
         ## Test generate_paired_end_reads (kept - not a thin wrapper)
-        ref_seq = BioSequences.randdnaseq(1000)
+        ref_seq = BioSequences.randdnaseq(rng, 1000)
         reads_1,
         reads_2 = Mycelia.generate_paired_end_reads(ref_seq, 5, 100, 300, error_rate = 0.01)
         Test.@test length(reads_1) == length(reads_2)
@@ -418,7 +420,7 @@ Test.@testset "FASTQ simulation" begin
         Test.@test all(r -> isa(r, BioSequences.LongDNA{4}), reads_2)
 
         ## Test introduce_sequencing_errors (kept - unique error simulation logic)
-        test_seq = BioSequences.randdnaseq(100)
+        test_seq = BioSequences.randdnaseq(rng, 100)
         error_seq = Mycelia.introduce_sequencing_errors(test_seq, 0.1)
         Test.@test isa(error_seq, BioSequences.LongDNA{4})
         ## With 10% error rate, sequences should likely be different

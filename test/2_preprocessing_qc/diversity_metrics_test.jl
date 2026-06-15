@@ -8,6 +8,10 @@ import Test
 import Mycelia
 import Statistics
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "Alpha Diversity Metrics" begin
     Test.@testset "shannon_diversity" begin
         # Test with uniform distribution (max entropy)
@@ -198,7 +202,9 @@ Test.@testset "Beta Diversity Metrics" begin
         Test.@test size(result_jaccard.distance_matrix) == (3, 3)
 
         # Invalid metric should error
-        Test.@test_throws ErrorException Mycelia.calculate_beta_diversity(abundance, samples; metric = :invalid)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.calculate_beta_diversity(abundance, samples; metric = :invalid)
+        end
     end
 
     Test.@testset "frequency_matrix_to_bray_curtis_distance_matrix" begin

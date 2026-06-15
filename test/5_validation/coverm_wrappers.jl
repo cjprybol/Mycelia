@@ -20,6 +20,10 @@ import Test
 import Mycelia
 import DataFrames
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 Test.@testset "CoverM argument validation and parsing" begin
     Test.@testset "Builder helpers" begin
         contig_args = Mycelia._build_coverm_contig_args(
@@ -90,12 +94,16 @@ Test.@testset "CoverM argument validation and parsing" begin
             write(io, "bam")
         end
 
-        Test.@test_throws ErrorException Mycelia.run_coverm_genome(bam_files = [bam_path])
-        Test.@test_throws ErrorException Mycelia.run_coverm_genome(
-            bam_files = [bam_path],
-            genome_fasta_files = ["a.fa"],
-            genome_directory = "genomes"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_coverm_genome(bam_files = [bam_path])
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.run_coverm_genome(
+                bam_files = [bam_path],
+                genome_fasta_files = ["a.fa"],
+                genome_directory = "genomes"
+            )
+        end
     end
 
     Test.@testset "Parsing cached outputs without invoking CoverM" begin

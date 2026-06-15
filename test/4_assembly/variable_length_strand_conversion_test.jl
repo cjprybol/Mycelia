@@ -25,6 +25,10 @@ import BioSequences
 import MetaGraphsNext
 import Graphs
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 function make_dna_variable_graph(vertex_data_type, edge_data_type)
     return MetaGraphsNext.MetaGraph(
         Graphs.DiGraph();
@@ -315,10 +319,20 @@ Test.@testset "Variable-length strand conversions" begin
         string_records = ["hello world"]
         string_graph = Mycelia.Rhizomorph.build_string_graph(
             string_records; dataset_id = "str", min_overlap = 3)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(
-            string_graph)
-        Test.@test_throws ErrorException Mycelia.Rhizomorph.convert_variable_length_to_canonical(
-            string_graph)
+        test_throws_message(
+            ErrorException,
+            "Doublestrand conversion only supported for DNA/RNA variable-length graphs"
+        ) do
+            Mycelia.Rhizomorph.convert_variable_length_to_doublestrand(
+                string_graph)
+        end
+        test_throws_message(
+            ErrorException,
+            "Canonical conversion only supported for DNA/RNA variable-length graphs"
+        ) do
+            Mycelia.Rhizomorph.convert_variable_length_to_canonical(
+                string_graph)
+        end
     end
 end
 

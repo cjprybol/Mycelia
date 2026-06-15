@@ -12,6 +12,7 @@
 import Test
 import Mycelia
 import DataFrames
+import StableRNGs
 
 Test.@testset "Coverage-Weighted Taxonomy Integration" begin
     ## Setup: Create mock data for testing
@@ -340,6 +341,7 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
         ## Create a realistic mock dataset
         n_samples = 5
         n_contigs_per_sample = 20
+        rng = StableRNGs.StableRNG(42)
 
         all_abundances = DataFrames.DataFrame()
 
@@ -349,11 +351,11 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
             ## Create mock coverage data
             coverage_df = DataFrames.DataFrame(
                 chrom = ["contig_$(lpad(i, 3, '0'))" for i in 1:n_contigs_per_sample],
-                length = rand(1000:10000, n_contigs_per_sample),
-                bases = rand(1000:10000, n_contigs_per_sample),
-                mean = rand(1.0:50.0, n_contigs_per_sample),
+                length = rand(rng, 1000:10000, n_contigs_per_sample),
+                bases = rand(rng, 1000:10000, n_contigs_per_sample),
+                mean = rand(rng, 1.0:50.0, n_contigs_per_sample),
                 min = zeros(Int, n_contigs_per_sample),
-                max = rand(10:100, n_contigs_per_sample)
+                max = rand(rng, 10:100, n_contigs_per_sample)
             )
 
             ## Create mock taxonomy data (some contigs unclassified)
@@ -363,8 +365,8 @@ Test.@testset "Coverage-Weighted Taxonomy Integration" begin
 
             taxonomy_df = DataFrames.DataFrame(
                 contig_id = coverage_df.chrom,
-                domain = rand(taxa, n_contigs_per_sample),
-                genus = rand(genera, n_contigs_per_sample)
+                domain = rand(rng, taxa, n_contigs_per_sample),
+                genus = rand(rng, genera, n_contigs_per_sample)
             )
 
             ## Merge and compute abundance

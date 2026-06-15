@@ -19,6 +19,10 @@
 import Test
 import Mycelia
 
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
+
 @eval Mycelia begin
     function add_bioconda_env(pkg::AbstractString; force = false, quiet = false)
         return nothing
@@ -29,16 +33,22 @@ Test.@testset "Pangenome wrapper validation" begin
     # PGGB should fail fast on missing genome files
     genomes = ["missing1.fasta", "missing2.fasta"]
     outdir = mktempdir()
-    Test.@test_throws ErrorException Mycelia.construct_pangenome_pggb(genomes, outdir)
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.construct_pangenome_pggb(genomes, outdir)
+    end
 
     # Cactus should catch mismatched names before touching the filesystem
     genome_files = ["g1.fasta", "g2.fasta"]
     genome_names = ["sample1"]
-    Test.@test_throws ErrorException Mycelia.construct_pangenome_cactus(
-        genome_files, genome_names, outdir, "sample1")
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.construct_pangenome_cactus(
+            genome_files, genome_names, outdir, "sample1")
+    end
 
     # vg deconstruct validation
-    Test.@test_throws ErrorException Mycelia.call_variants_from_pggb_graph("missing.gfa", "ref")
+    test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+        Mycelia.call_variants_from_pggb_graph("missing.gfa", "ref")
+    end
 end
 
 Test.@testset "Pangenome wrapper executor collection" begin
@@ -180,8 +190,12 @@ Test.@testset "Pangenome wrapper index validation" begin
         end
 
         Test.@test isempty(Mycelia.index_pangenome_graph(graph_file; index_types = ["mystery"]))
-        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(joinpath(temp_dir, "missing.gfa"))
-        Test.@test_throws ErrorException Mycelia.index_pangenome_graph(joinpath(temp_dir, "missing.vg"))
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.convert_gfa_to_vg_format(joinpath(temp_dir, "missing.gfa"))
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.index_pangenome_graph(joinpath(temp_dir, "missing.vg"))
+        end
     finally
         isdir(temp_dir) && rm(temp_dir, recursive = true, force = true)
     end
@@ -195,8 +209,12 @@ Test.@testset "Pangenome wrapper command failures are surfaced for existing grap
             println(io, "H\tVN:Z:1.0")
         end
 
-        Test.@test_throws ErrorException Mycelia.call_variants_from_pggb_graph(graph_file, "ref")
-        Test.@test_throws ErrorException Mycelia.convert_gfa_to_vg_format(graph_file)
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.call_variants_from_pggb_graph(graph_file, "ref")
+        end
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            Mycelia.convert_gfa_to_vg_format(graph_file)
+        end
 
         xg_indexes = Mycelia.index_pangenome_graph(graph_file; index_types = ["xg"])
         Test.@test isempty(xg_indexes)
