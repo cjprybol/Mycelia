@@ -26,19 +26,31 @@ echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK
 source /opt/cray/pe/cpe/25.09/restore_lmod_system_defaults.sh 2>/dev/null || true
 module load julia/1.10.10
 
-# Resolve the julia binary explicitly so the job fails loudly if the module is broken.
+# Resolve the julia binary explicitly, with a fallback if the module is broken.
 JULIA="$(command -v julia || true)"
 if [[ -z "${JULIA}" ]]; then
   JULIA=/global/common/software/nersc9/julia/1.10.10/bin/julia
 fi
-echo "JULIA: ${JULIA}  ($(${JULIA} --version 2>&1 | head -1))"
+# Validate it actually runs — a broken `module load` (NERSC's juliaup modulefile
+# can error) or a relocated fallback path must fail the job LOUDLY here, not
+# silently produce a green job with no results downstream.
+if ! "${JULIA}" --version >/dev/null 2>&1; then
+  echo "ERROR: julia not runnable at '${JULIA}' — module load failed or path stale." >&2
+  exit 1
+fi
+echo "JULIA: ${JULIA}  ($("${JULIA}" --version 2>&1 | head -1))"
 
 export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK}
+# Pin the depot so the batch job reuses what hpc-setup.sh precompiled on the login
+# node (SLURM does not reliably inherit interactive-shell exports). `:-` keeps any
+# value already exported by the environment/.bashrc.
+export JULIA_DEPOT_PATH="${JULIA_DEPOT_PATH:-${HOME}/.julia}"
 # HPC Julia rule: clear LD_LIBRARY_PATH to avoid system libstdc++ conflicts.
 export LD_LIBRARY_PATH=""
 
 cd "${HOME}/workspace/Mycelia/benchmarking" || exit 1
 
+fail_count=0
 run_one () {
   local f="$1"
   echo ""
@@ -47,6 +59,7 @@ run_one () {
     echo ">>> OK  ${f}"
   else
     echo ">>> FAIL ${f} (continuing)"
+    fail_count=$((fail_count + 1))
   fi
 }
 
@@ -60,6 +73,11 @@ echo "--- result JSONs ---"
 # would otherwise propagate as the job's exit code (false FAILED in sacct).
 ls -t results/*.json 2>/dev/null | head || true
 
-# Per-benchmark status is reported via the >>> OK/FAIL markers above; exit clean
-# so SLURM's job state reflects the wrapper running to completion.
+# Exit non-zero if any benchmark failed so SLURM's job state is truthful — a
+# partial run dropping a result must NOT read as COMPLETED. (The empty-glob above
+# is neutralized separately by `|| true`, so it cannot flip the job red.)
+if [[ "${fail_count}" -gt 0 ]]; then
+  echo "=== ${fail_count} benchmark(s) FAILED ==="
+  exit 1
+fi
 exit 0

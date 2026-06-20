@@ -25,7 +25,8 @@
 set -euo pipefail
 
 usage() {
-    grep '^#' "$0" | sed 's/^# \{0,1\}//'
+    # Print the header comment block as help, skipping the shebang line.
+    grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'
 }
 
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
