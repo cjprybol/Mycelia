@@ -87,3 +87,6 @@ trees/
 .codex/state_*.sqlite*
 
 .worktrees/
+
+# Agent tool symlinks / worktrees / backups (td-vu6g4, 2026-06-22)
+.claude/skills/
