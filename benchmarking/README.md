@@ -104,6 +104,27 @@ mamba env create -f deps/autocycler/environment.yml
 julia --project=. -e "import Pkg; Pkg.add(\"BenchmarkTools\")"
 ```
 
+### HPC environment preflight
+
+Before submitting a benchmark job on a cluster, run the one-shot preflight on a
+login node. It runs `Pkg.resolve()` → `Pkg.instantiate()` → `Pkg.precompile()`,
+which repairs the common failure where a cluster checkout has a stale, untracked
+`Manifest.toml` missing a dependency (e.g. HDF5 added to `Project.toml` after the
+manifest was last built) — `Pkg.instantiate()` alone refuses to proceed in that
+case. First-time precompilation can take 10-30 min, so do this outside the
+time-limited batch window.
+
+```bash
+# Load the cluster's julia module first, then run the preflight:
+module load julia/1.10.10            # NERSC (Lawrencium: julia/1.10.2-11.4)
+benchmarking/hpc-setup.sh
+```
+
+The SLURM wrappers (`run_talk_subset_benchmark.sbatch` for NERSC,
+`run_talk_subset_benchmark_lrc.sbatch` for Lawrencium) assume this preflight has
+already been run. On a cluster with an unreliable login node, run the preflight
+steps inside the batch job instead (so only `sbatch` needs the connection).
+
 ### Benchmark Configuration
 
 The benchmarking suite supports three scales via environment variables:
