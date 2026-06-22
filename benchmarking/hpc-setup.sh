@@ -81,11 +81,17 @@ if ! command -v julia >/dev/null 2>&1; then
     exit 1
 fi
 
+if [[ -n "${submit_only}" ]]; then
+    mode_desc="submit-only (${submit_only})"
+else
+    mode_desc="full preflight"
+fi
+
 echo "=== Mycelia HPC env preflight ==="
 echo "julia:       $(command -v julia) ($(LD_LIBRARY_PATH="" julia --version))"
 echo "project:     ${project_dir}"
 echo "depot:       ${JULIA_DEPOT_PATH:-<julia default>}"
-echo "mode:        ${submit_only:+submit-only ($submit_only)}${submit_only:-full preflight}"
+echo "mode:        ${mode_desc}"
 echo "start:       $(date)"
 
 # resolve (repair stale/missing manifest) -> instantiate. Cheap and
