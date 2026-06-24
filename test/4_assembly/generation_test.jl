@@ -138,6 +138,20 @@ Test.@testset "Generation - _get_valid_transitions adjacency == full-scan" begin
     end
 end
 
+Test.@testset "Generation - evaluate_generation_quality multibyte-safe" begin
+    graph = _build_test_ngram_graph()
+    # SentencePiece-style sequences contain the U+2581 word-boundary marker (a
+    # 3-byte UTF-8 char). K-mer extraction must slice by character, not byte, or
+    # it throws StringIndexError mid-codepoint.
+    multibyte = ["▁ABC▁DEF", "AB▁CDE▁F"]
+    result = Mycelia.Rhizomorph.evaluate_generation_quality(
+        multibyte, graph; metrics = [:kmer_divergence, :diversity])
+    Test.@test haskey(result, :kmer_divergence)
+    Test.@test haskey(result, :diversity)
+    Test.@test isfinite(result[:kmer_divergence])
+    Test.@test isfinite(result[:diversity])
+end
+
 Test.@testset "Generation - compute_sequence_likelihood" begin
     graph = _build_test_ngram_graph()
     weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)

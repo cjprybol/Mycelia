@@ -126,9 +126,12 @@ function evaluate_generation_quality(
         gen_counts = Dict{String, Int}()
         gen_total = 0
         for seq in generated
-            s = string(seq)
-            for i in 1:(length(s) - k + 1)
-                kmer = s[i:(i + k - 1)]
+            # Slice over a Char vector, not the raw String: byte-indexing
+            # (s[i:i+k-1]) on a multibyte sequence (e.g. SentencePiece tokens
+            # containing the U+2581 word-boundary marker) throws StringIndexError.
+            chars = collect(string(seq))
+            for i in 1:(length(chars) - k + 1)
+                kmer = String(chars[i:(i + k - 1)])
                 gen_counts[kmer] = get(gen_counts, kmer, 0) + 1
                 gen_total += 1
             end
@@ -179,9 +182,10 @@ function evaluate_generation_quality(
         # Unique k-mers in generated sequences vs training graph vertices
         gen_kmers = Set{String}()
         for seq in generated
-            s = string(seq)
-            for i in 1:(length(s) - k + 1)
-                push!(gen_kmers, s[i:(i + k - 1)])
+            # Char-vector slicing (multibyte-safe); see kmer_divergence above.
+            chars = collect(string(seq))
+            for i in 1:(length(chars) - k + 1)
+                push!(gen_kmers, String(chars[i:(i + k - 1)]))
             end
         end
         n_training = length(labels)
