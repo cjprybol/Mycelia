@@ -562,6 +562,27 @@ function validate(job::JobSpec; check_lawrencium_associations::Bool = true)::Job
         push!(report.errors, "Unsupported container_engine $(normalized_job.container_engine)")
     end
 
+    # td-2rfi: warn if the caller's env shadows a durable-pattern key. For
+    # NERSC/Lawrencium Julia jobs _durable_julia_prelude injects these, and a
+    # caller override (emitted AFTER the durable block, so it wins) silently
+    # reopens the concurrent-depot race or thread oversubscription the pattern
+    # exists to prevent.
+    if normalized_job.site in (:nersc, :lawrencium) &&
+       occursin(r"(?:^|[\s/])julia\b", normalized_job.cmd)
+        for key in (
+            "JULIA_DEPOT_PATH", "JULIA_PKG_OFFLINE", "JULIA_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS", "JULIA_NUM_PRECOMPILE_TASKS"
+        )
+            if haskey(normalized_job.env, key)
+                push!(
+                    report.warnings,
+                    "env['$key'] overrides the td-2rfi durable HPC default; the " *
+                    "concurrent-depot race or thread oversubscription it guards " *
+                    "against may reappear")
+            end
+        end
+    end
+
     return report
 end
 
@@ -1081,7 +1102,9 @@ end
 #   1. concurrent shared-depot writes corrupt the manifest (exit 1) -> per-job
 #      WRITABLE scratch depot layered in FRONT of the shared READ depot;
 #   2. ~50min cold precompile tax + offline safety -> JULIA_PKG_OFFLINE reuses
-#      the cached .ji from the shared layer;
+#      the cached .ji from the shared layer; JULIA_NUM_PRECOMPILE_TASKS caps the
+#      precompile workers (Julia otherwise sizes them to the whole node and
+#      deadlocks thrashing the shared depot);
 #   3. JULIA_NUM_THREADS=auto oversubscribes a shared node and segfaults (exit
 #      139) -> pin threads (and OPENBLAS) to the allocation.
 # Generic on purpose: the shared-depot fallback is the caller's own
@@ -1107,7 +1130,11 @@ function _durable_julia_prelude(job::JobSpec)::Union{Nothing, String}
             "export JULIA_NUM_THREADS=\"$(threads)\"",
             "export OPENBLAS_NUM_THREADS=\"$(threads)\"",
             "export JULIA_DEPOT_PATH=\"$(depot)\"",
-            "export JULIA_PKG_OFFLINE=true"
+            "export JULIA_PKG_OFFLINE=true",
+            "# Cap precompile workers: Julia sizes precompilation to the node's full",
+            "# Sys.CPU_THREADS regardless of our allocation; too many thrash the shared",
+            "# depot and deadlock (no output). Harmless when the allocation is small.",
+            "export JULIA_NUM_PRECOMPILE_TASKS=8"
         ],
         "\n")
 end
