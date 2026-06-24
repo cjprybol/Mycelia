@@ -557,14 +557,37 @@ function validate(job::JobSpec; check_lawrencium_associations::Bool = true)::Job
         end
     end
 
-    if normalized_job.container_engine !== nothing && !(normalized_job.container_engine in VALID_CONTAINER_ENGINES)
+    if normalized_job.container_engine !== nothing &&
+       !(normalized_job.container_engine in VALID_CONTAINER_ENGINES)
         push!(report.errors, "Unsupported container_engine $(normalized_job.container_engine)")
+    end
+
+    # td-2rfi: warn if the caller's env shadows a durable-pattern key. For
+    # NERSC/Lawrencium Julia jobs _durable_julia_prelude injects these, and a
+    # caller override (emitted AFTER the durable block, so it wins) silently
+    # reopens the concurrent-depot race or thread oversubscription the pattern
+    # exists to prevent.
+    if normalized_job.site in (:nersc, :lawrencium) &&
+       occursin(r"(?:^|[\s/])julia\b", normalized_job.cmd)
+        for key in (
+            "JULIA_DEPOT_PATH", "JULIA_PKG_OFFLINE", "JULIA_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS", "JULIA_NUM_PRECOMPILE_TASKS"
+        )
+            if haskey(normalized_job.env, key)
+                push!(
+                    report.warnings,
+                    "env['$key'] overrides the td-2rfi durable HPC default; the " *
+                    "concurrent-depot race or thread oversubscription it guards " *
+                    "against may reappear")
+            end
+        end
     end
 
     return report
 end
 
-function _validate_nersc!(report::JobSpecValidation, job::JobSpec, parsed_time::Union{Nothing, Int})
+function _validate_nersc!(report::JobSpecValidation, job::JobSpec, parsed_time::Union{
+        Nothing, Int})
     if job.account === nothing
         push!(report.errors, "NERSC jobs require account (-A)")
     end
@@ -581,7 +604,8 @@ function _validate_nersc!(report::JobSpecValidation, job::JobSpec, parsed_time::
             push!(report.errors, "NERSC debug QoS max walltime is 00:30:00")
         elseif qos == "interactive" && parsed_time > 4 * 60 * 60
             push!(report.errors, "NERSC interactive QoS max walltime is 04:00:00")
-        elseif qos in Set(["regular", "shared", "preempt", "premium", "overrun", "shared_overrun"])
+        elseif qos in Set([
+            "regular", "shared", "preempt", "premium", "overrun", "shared_overrun"])
             if parsed_time > 48 * 60 * 60
                 push!(report.errors, "NERSC $qos QoS max walltime is 48:00:00")
             end
@@ -639,7 +663,8 @@ function _validate_lawrencium!(
         push!(report.errors, "Lawrencium jobs require account")
     end
 
-    if job.partition !== nothing && startswith(lowercase(job.partition), "lr") && job.qos === nothing
+    if job.partition !== nothing && startswith(lowercase(job.partition), "lr") &&
+       job.qos === nothing
         push!(report.warnings,
             "Lawrencium qos not set; defaulting to lr_normal for lr* partitions")
     end
@@ -688,7 +713,8 @@ function _association_permits(job::JobSpec, parsed::Vector{Dict{String, Any}})::
         end
 
         partition = lowercase(something(get(row, "partition", nothing), ""))
-        if !isempty(target_partition) && !isempty(partition) && partition != target_partition
+        if !isempty(target_partition) && !isempty(partition) &&
+           partition != target_partition
             continue
         end
 
@@ -1069,6 +1095,50 @@ function _build_sbatch_directives(job::JobSpec)::String
     return join(lines, "\n")
 end
 
+# Durable HPC Julia pattern (td-2rfi). Emitted only for Julia commands on the
+# HPC sites that have a per-job scratch + shared read depot (NERSC, Lawrencium).
+# Returns `nothing` elsewhere so non-Julia steps and local/scg/cloud jobs render
+# unchanged. The three failure modes this fixes, all root-caused on Perlmutter:
+#   1. concurrent shared-depot writes corrupt the manifest (exit 1) -> per-job
+#      WRITABLE scratch depot layered in FRONT of the shared READ depot;
+#   2. ~50min cold precompile tax + offline safety -> JULIA_PKG_OFFLINE reuses
+#      the cached .ji from the shared layer; JULIA_NUM_PRECOMPILE_TASKS caps the
+#      precompile workers (Julia otherwise sizes them to the whole node and
+#      deadlocks thrashing the shared depot);
+#   3. JULIA_NUM_THREADS=auto oversubscribes a shared node and segfaults (exit
+#      139) -> pin threads (and OPENBLAS) to the allocation.
+# Generic on purpose: the shared-depot fallback is the caller's own
+# JULIA_DEPOT_PATH (else $HOME/.julia) — no project/user paths baked into the
+# shared package. For live progress, callers should run julia under a pseudo-TTY
+# (e.g. `script -e -q -c "julia ..." /dev/null`) so output line-buffers — Julia
+# has no unbuffered-output flag (`julia -u` errors at startup).
+function _durable_julia_prelude(job::JobSpec)::Union{Nothing, String}
+    job.site in (:nersc, :lawrencium) || return nothing
+    occursin(r"(?:^|[\s/])julia\b", job.cmd) || return nothing
+    threads = "\${SLURM_CPUS_PER_TASK:-\${SLURM_CPUS_ON_NODE:-8}}"
+    scratch_expr = job.site == :nersc ? "\${SCRATCH:?}" :
+                   "\${SCRATCH:-/global/scratch/users/\$USER}"
+    depot = scratch_expr *
+            "/jldepot_\${SLURM_JOB_ID}:\${JULIA_DEPOT_PATH:-\$HOME/.julia}"
+    return join(
+        [
+            "# --- Durable HPC Julia pattern (td-2rfi) -----------------------------------",
+            "# Per-job WRITABLE scratch depot in front of the shared READ depot, run",
+            "# OFFLINE: avoids the concurrent-depot race (manifest corruption) and the",
+            "# ~50min precompile tax. Threads pinned to the allocation (auto",
+            "# oversubscribes shared nodes -> exit-139 segfault). Inert for non-Julia steps.",
+            "export JULIA_NUM_THREADS=\"$(threads)\"",
+            "export OPENBLAS_NUM_THREADS=\"$(threads)\"",
+            "export JULIA_DEPOT_PATH=\"$(depot)\"",
+            "export JULIA_PKG_OFFLINE=true",
+            "# Cap precompile workers: Julia sizes precompilation to the node's full",
+            "# Sys.CPU_THREADS regardless of our allocation; too many thrash the shared",
+            "# depot and deadlock (no output). Harmless when the allocation is small.",
+            "export JULIA_NUM_PRECOMPILE_TASKS=8"
+        ],
+        "\n")
+end
+
 function _build_prelude_block(job::JobSpec)::String
     lines = String[]
 
@@ -1081,6 +1151,11 @@ function _build_prelude_block(job::JobSpec)::String
         for module_name in job.modules
             push!(lines, "module load " * _shell_quote(module_name))
         end
+    end
+
+    durable = _durable_julia_prelude(job)
+    if durable !== nothing
+        push!(lines, durable)
     end
 
     if !isempty(job.env)
@@ -1476,14 +1551,15 @@ function _cloudbuild_content(job::JobSpec)::String
     push!(lines, "steps:")
 
     if has_dockerfile
-        append!(lines, [
-            "- id: build-image",
-            "  name: gcr.io/cloud-builders/docker",
-            "  args: ['build', '-t', '\${_IMAGE_URI}', '.']",
-            "- id: push-image",
-            "  name: gcr.io/cloud-builders/docker",
-            "  args: ['push', '\${_IMAGE_URI}']"
-        ])
+        append!(lines,
+            [
+                "- id: build-image",
+                "  name: gcr.io/cloud-builders/docker",
+                "  args: ['build', '-t', '\${_IMAGE_URI}', '.']",
+                "- id: push-image",
+                "  name: gcr.io/cloud-builders/docker",
+                "  args: ['push', '\${_IMAGE_URI}']"
+            ])
     elseif job.container_image === nothing
         error("cloudbuild backend requires container_image or Dockerfile")
     end
@@ -1675,9 +1751,10 @@ function submit(
                 artifact_path = artifact_path,
                 artifact_text = artifact_text,
                 submit_command = submit_command,
-                warnings = vcat(report.warnings, [
-                    "Cloud Build config written; set execute_cloudbuild=true to run gcloud submit"
-                ]),
+                warnings = vcat(report.warnings,
+                    [
+                        "Cloud Build config written; set execute_cloudbuild=true to run gcloud submit"
+                    ]),
                 errors = report.errors
             )
         end
@@ -1751,9 +1828,10 @@ function submit(
                 backend = :salloc,
                 artifact_text = artifact_text,
                 submit_command = submit_command,
-                warnings = vcat(report.warnings, [
-                    "Interactive command generated; set execute_interactive=true to run it"
-                ]),
+                warnings = vcat(report.warnings,
+                    [
+                        "Interactive command generated; set execute_interactive=true to run it"
+                    ]),
                 errors = report.errors
             )
         end
@@ -1975,11 +2053,12 @@ function parse_lawrencium_associations(raw::AbstractString)::Vector{Dict{String,
             [strip(value) for value in split(qos_raw, ',') if !isempty(strip(value))]
         end
 
-        push!(parsed, Dict(
-            "account" => something(account, ""),
-            "partition" => partition,
-            "qos" => qos_values
-        ))
+        push!(parsed,
+            Dict(
+                "account" => something(account, ""),
+                "partition" => partition,
+                "qos" => qos_values
+            ))
     end
 
     return parsed
@@ -2010,7 +2089,9 @@ function summarize_job(jobid::Union{Int, AbstractString}; io::IO = stdout)
 
     if Sys.which("sacct") !== nothing
         try
-            outputs["sacct"] = read(`sacct -j $jobid_string --format=JobID,JobName,AllocCPUS,Elapsed,State,ExitCode,MaxRSS`, String)
+            outputs["sacct"] = read(
+                `sacct -j $jobid_string --format=JobID,JobName,AllocCPUS,Elapsed,State,ExitCode,MaxRSS`,
+                String)
         catch e
             outputs["sacct"] = "ERROR: $(e)"
         end
@@ -2020,7 +2101,8 @@ function summarize_job(jobid::Union{Int, AbstractString}; io::IO = stdout)
 
     if Sys.which("sstat") !== nothing
         try
-            outputs["sstat"] = read(`sstat -j $(jobid_string).batch --format=JobID,MaxRSS,MaxVMSize,AvgCPU`, String)
+            outputs["sstat"] = read(
+                `sstat -j $(jobid_string).batch --format=JobID,MaxRSS,MaxVMSize,AvgCPU`, String)
         catch e
             outputs["sstat"] = "ERROR: $(e)"
         end

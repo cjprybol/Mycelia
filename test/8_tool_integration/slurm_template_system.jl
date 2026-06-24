@@ -331,6 +331,115 @@ Test.@testset "Template rendering and fixture checks" begin
     Test.@test rendered_cloud == expected_cloud
 end
 
+Test.@testset "Durable HPC Julia prelude (td-2rfi)" begin
+    # A NERSC Julia job inherits the durable pattern: per-job scratch depot
+    # layered over the shared read depot, offline, threads pinned to the alloc.
+    nersc_julia = Mycelia.JobSpec(
+        job_name = "durable-nersc-julia",
+        cmd = "julia --project=. experiments/run.jl",
+        site = :nersc,
+        account = "m1234",
+        qos = "shared",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 16,
+        mem_gb = 64,
+        time_limit = "06:00:00"
+    )
+    rendered = Mycelia.render_sbatch(nersc_julia)
+    Test.@test occursin("export JULIA_PKG_OFFLINE=true", rendered)
+    Test.@test occursin("\${SCRATCH:?}/jldepot_\${SLURM_JOB_ID}", rendered)
+    Test.@test occursin(
+        "export JULIA_NUM_THREADS=\"\${SLURM_CPUS_PER_TASK:-\${SLURM_CPUS_ON_NODE:-8}}\"",
+        rendered)
+    # OpenBLAS pin is part of the exit-139 segfault fix — assert it too.
+    Test.@test occursin(
+        "export OPENBLAS_NUM_THREADS=\"\${SLURM_CPUS_PER_TASK:-\${SLURM_CPUS_ON_NODE:-8}}\"",
+        rendered)
+    # Precompile-worker cap (matches the hand-validated wrappers).
+    Test.@test occursin("export JULIA_NUM_PRECOMPILE_TASKS=8", rendered)
+    # Generic shared-depot fallback — no project/user paths baked into the package.
+    Test.@test occursin("\${JULIA_DEPOT_PATH:-\$HOME/.julia}", rendered)
+    # NERSC must NOT leak the Lawrencium-specific scratch path (site branches must
+    # not be swapped/collapsed).
+    Test.@test !occursin("/global/scratch/users", rendered)
+
+    # A Lawrencium Julia job uses the lrc scratch fallback (NERSC's CFS path
+    # does not exist there).
+    lrc_julia = Mycelia.JobSpec(
+        job_name = "durable-lrc-julia",
+        cmd = "julia run.jl",
+        site = :lawrencium,
+        partition = "lr6",
+        qos = "lr_normal",
+        account = "pc_example",
+        ntasks = 1,
+        cpus_per_task = 8,
+        mem_gb = 16,
+        time_limit = "04:00:00"
+    )
+    Test.@test occursin(
+        "\${SCRATCH:-/global/scratch/users/\$USER}/jldepot",
+        Mycelia.render_sbatch(lrc_julia))
+
+    # Guards: a non-Julia NERSC job and an HPC-site mismatch render WITHOUT the
+    # block (this is what keeps the golden fixtures above unchanged).
+    nersc_python = Mycelia.JobSpec(
+        job_name = "durable-nersc-python",
+        cmd = "python train.py",
+        site = :nersc,
+        account = "m1234",
+        qos = "regular",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 4,
+        mem_gb = 8,
+        time_limit = "04:00:00"
+    )
+    Test.@test !occursin("JULIA_PKG_OFFLINE", Mycelia.render_sbatch(nersc_python))
+
+    # The word-boundary guard must reject `julia` as a substring of another token
+    # (e.g. a `myjulia` wrapper) so it can't silently emit a non-durable block.
+    nersc_notjulia = Mycelia.JobSpec(
+        job_name = "durable-nersc-notjulia",
+        cmd = "./myjulia-wrapper run",
+        site = :nersc,
+        account = "m1234",
+        qos = "shared",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 4,
+        mem_gb = 8,
+        time_limit = "04:00:00"
+    )
+    Test.@test !occursin("JULIA_PKG_OFFLINE", Mycelia.render_sbatch(nersc_notjulia))
+
+    # Durable block precedes the user-env block, so a caller's explicit override
+    # wins (emitted after). Lock that ordering, and assert validate() warns that
+    # the override reopens the race the pattern guards against.
+    nersc_julia_env = Mycelia.JobSpec(
+        job_name = "durable-nersc-julia-env",
+        cmd = "julia run.jl",
+        site = :nersc,
+        account = "m1234",
+        qos = "shared",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 16,
+        mem_gb = 64,
+        time_limit = "06:00:00",
+        env = Dict("JULIA_DEPOT_PATH" => "/my/override")
+    )
+    rendered_env = Mycelia.render_sbatch(nersc_julia_env)
+    durable_idx = findfirst("export JULIA_PKG_OFFLINE=true", rendered_env)
+    override_idx = findlast("/my/override", rendered_env)
+    Test.@test durable_idx !== nothing
+    Test.@test override_idx !== nothing
+    Test.@test first(durable_idx) < first(override_idx)
+    warnings = Mycelia.validate(nersc_julia_env; check_lawrencium_associations = false).warnings
+    Test.@test any(w -> occursin("td-2rfi durable", w) && occursin("JULIA_DEPOT_PATH", w), warnings)
+end
+
 Test.@testset "SLURM wrapper entrypoints" begin
     Test.@testset "lawrencium_sbatch uses env fallbacks with collect executor" begin
         mktempdir() do logdir
