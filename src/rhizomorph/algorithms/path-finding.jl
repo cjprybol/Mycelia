@@ -513,26 +513,36 @@ end
 function _get_valid_transitions(graph, vertex_label, strand)
     transitions = []
 
-    for edge_labels in MetaGraphsNext.edge_labels(graph)
-        if length(edge_labels) == 2 && edge_labels[1] == vertex_label
-            target_vertex = edge_labels[2]
-            edge_data = graph[edge_labels...]
+    # Enumerate only this vertex's out-edges via the underlying graph adjacency
+    # (O(out-degree)) instead of scanning every edge label in the graph (O(E)).
+    # The previous full-scan made each call O(E); since this is invoked once per
+    # vertex during start-vertex selection and once per step during every walk,
+    # the old behavior was O(V*E) for selection and O(steps*E) for generation —
+    # the dominant cost in large-graph generative modeling (notebook 15). The
+    # returned set of transitions and their probabilities are identical; only the
+    # within-vertex iteration order may differ (distribution-preserving under a
+    # fixed seed).
+    haskey(graph, vertex_label) || return transitions
 
-            edge_src_strand = _normalize_strand(edge_data.src_strand)
-            if edge_src_strand == strand
-                probability = _edge_transition_weight(edge_data)
-                if probability <= 0.0
-                    continue
-                end
+    src_code = MetaGraphsNext.code_for(graph, vertex_label)
+    for dst_code in Graphs.outneighbors(graph.graph, src_code)
+        target_vertex = MetaGraphsNext.label_for(graph, dst_code)
+        edge_data = graph[vertex_label, target_vertex]
 
-                push!(transitions,
-                    Dict(
-                        :target_vertex => target_vertex,
-                        :target_strand => _normalize_strand(edge_data.dst_strand),
-                        :probability => probability,
-                        :edge_data => edge_data
-                    ))
+        edge_src_strand = _normalize_strand(edge_data.src_strand)
+        if edge_src_strand == strand
+            probability = _edge_transition_weight(edge_data)
+            if probability <= 0.0
+                continue
             end
+
+            push!(transitions,
+                Dict(
+                    :target_vertex => target_vertex,
+                    :target_strand => _normalize_strand(edge_data.dst_strand),
+                    :probability => probability,
+                    :edge_data => edge_data
+                ))
         end
     end
 

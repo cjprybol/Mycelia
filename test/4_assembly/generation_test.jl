@@ -100,6 +100,44 @@ Test.@testset "Generation - select_start_vertices" begin
         weighted, 1; strategy = :unknown)
 end
 
+Test.@testset "Generation - _get_valid_transitions adjacency == full-scan" begin
+    # Branching graph: "ABC" fans out to both "BCD" and "BCX".
+    # "ABCDEF" → ABC,BCD,CDE,DEF ; "ABCXYZ" → ABC,BCX,CXY,XYZ
+    graph = Mycelia.Rhizomorph.build_ngram_graph(
+        ["ABCDEF", "ABCXYZ"], 3; dataset_id = "branch_test")
+    weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
+    # Reference: the old O(E) full edge-label scan, recomputed inline.
+    function _reference_transitions(g, vertex_label, strand)
+        out = Set{Tuple{String, Float64}}()
+        for edge_labels in MetaGraphsNext.edge_labels(g)
+            if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+                edge_data = g[edge_labels...]
+                if Mycelia.Rhizomorph._normalize_strand(edge_data.src_strand) == strand
+                    prob = Mycelia.Rhizomorph._edge_transition_weight(edge_data)
+                    prob <= 0.0 && continue
+                    push!(out, (string(edge_labels[2]), prob))
+                end
+            end
+        end
+        return out
+    end
+
+    # The fan-out vertex must report >1 transition (guards against a trivial pass).
+    fanout = Mycelia.Rhizomorph._get_valid_transitions(
+        weighted, "ABC", Mycelia.Rhizomorph.Forward)
+    Test.@test length(fanout) >= 2
+
+    for vertex_label in MetaGraphsNext.labels(weighted)
+        new_set = Set(
+            (string(t[:target_vertex]), t[:probability])
+        for t in Mycelia.Rhizomorph._get_valid_transitions(
+            weighted, vertex_label, Mycelia.Rhizomorph.Forward))
+        ref_set = _reference_transitions(weighted, vertex_label, Mycelia.Rhizomorph.Forward)
+        Test.@test new_set == ref_set
+    end
+end
+
 Test.@testset "Generation - compute_sequence_likelihood" begin
     graph = _build_test_ngram_graph()
     weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
