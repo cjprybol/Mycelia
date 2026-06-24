@@ -1086,7 +1086,9 @@ end
 #      139) -> pin threads (and OPENBLAS) to the allocation.
 # Generic on purpose: the shared-depot fallback is the caller's own
 # JULIA_DEPOT_PATH (else $HOME/.julia) — no project/user paths baked into the
-# shared package. For live progress, callers should invoke julia with -u.
+# shared package. For live progress, callers should run julia under a pseudo-TTY
+# (e.g. `script -e -q -c "julia ..." /dev/null`) so output line-buffers — Julia
+# has no unbuffered-output flag (`julia -u` errors at startup).
 function _durable_julia_prelude(job::JobSpec)::Union{Nothing, String}
     job.site in (:nersc, :lawrencium) || return nothing
     occursin(r"(?:^|[\s/])julia\b", job.cmd) || return nothing
