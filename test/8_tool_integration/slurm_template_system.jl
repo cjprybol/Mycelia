@@ -331,6 +331,65 @@ Test.@testset "Template rendering and fixture checks" begin
     Test.@test rendered_cloud == expected_cloud
 end
 
+Test.@testset "Durable HPC Julia prelude (td-2rfi)" begin
+    # A NERSC Julia job inherits the durable pattern: per-job scratch depot
+    # layered over the shared read depot, offline, threads pinned to the alloc.
+    nersc_julia = Mycelia.JobSpec(
+        job_name = "durable-nersc-julia",
+        cmd = "julia --project=. experiments/run.jl",
+        site = :nersc,
+        account = "m1234",
+        qos = "shared",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 16,
+        mem_gb = 64,
+        time_limit = "06:00:00"
+    )
+    rendered = Mycelia.render_sbatch(nersc_julia)
+    Test.@test occursin("export JULIA_PKG_OFFLINE=true", rendered)
+    Test.@test occursin("\${SCRATCH:?}/jldepot_\${SLURM_JOB_ID}", rendered)
+    Test.@test occursin(
+        "export JULIA_NUM_THREADS=\"\${SLURM_CPUS_PER_TASK:-\${SLURM_CPUS_ON_NODE:-8}}\"",
+        rendered)
+    # Generic shared-depot fallback — no project/user paths baked into the package.
+    Test.@test occursin("\${JULIA_DEPOT_PATH:-\$HOME/.julia}", rendered)
+
+    # A Lawrencium Julia job uses the lrc scratch fallback (NERSC's CFS path
+    # does not exist there).
+    lrc_julia = Mycelia.JobSpec(
+        job_name = "durable-lrc-julia",
+        cmd = "julia run.jl",
+        site = :lawrencium,
+        partition = "lr6",
+        qos = "lr_normal",
+        account = "pc_example",
+        ntasks = 1,
+        cpus_per_task = 8,
+        mem_gb = 16,
+        time_limit = "04:00:00"
+    )
+    Test.@test occursin(
+        "\${SCRATCH:-/global/scratch/users/\$USER}/jldepot",
+        Mycelia.render_sbatch(lrc_julia))
+
+    # Guards: a non-Julia NERSC job and an HPC-site mismatch render WITHOUT the
+    # block (this is what keeps the golden fixtures above unchanged).
+    nersc_python = Mycelia.JobSpec(
+        job_name = "durable-nersc-python",
+        cmd = "python train.py",
+        site = :nersc,
+        account = "m1234",
+        qos = "regular",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 4,
+        mem_gb = 8,
+        time_limit = "04:00:00"
+    )
+    Test.@test !occursin("JULIA_PKG_OFFLINE", Mycelia.render_sbatch(nersc_python))
+end
+
 Test.@testset "SLURM wrapper entrypoints" begin
     Test.@testset "lawrencium_sbatch uses env fallbacks with collect executor" begin
         mktempdir() do logdir
