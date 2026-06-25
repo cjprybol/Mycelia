@@ -45,12 +45,17 @@ Configuration for `correct_observations`.
 `emission_logp` is the extension seam for B2-B4: it receives
 `(observed_unit, node, alphabet; quality)` and returns a log-probability. B1
 keeps the default simple so the legacy B0 oracle remains the behavioral anchor.
+`strand_mode` controls RC-aware nucleotide correction (`:singlestrand`,
+`:doublestrand`, `:canonical`, or `:auto`). BioSequences empirically preserves
+RNA type and U-aware complements (`AUGC` reverse-complements to `GCAU`), while
+AA/text alphabets remain reverse-complement naive singlestrand paths.
 """
 struct ViterbiCorrectionConfig{F <: Function}
     error_rate::Float64
     verbosity::String
     emission_logp::F
     alphabet::Symbol
+    strand_mode::Symbol
     max_steps::Union{Nothing, Int}
     target_vertex::Any
     start_strand::Rhizomorph.StrandOrientation
@@ -61,6 +66,7 @@ struct ViterbiCorrectionConfig{F <: Function}
             verbosity::String = "dataset",
             emission_logp::F,
             alphabet::Symbol = :auto,
+            strand_mode::Symbol = :auto,
             max_steps::Union{Nothing, Int} = nothing,
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
@@ -80,6 +86,7 @@ struct ViterbiCorrectionConfig{F <: Function}
             verbosity,
             emission_logp,
             alphabet,
+            strand_mode,
             max_steps,
             target_vertex,
             start_strand,
@@ -93,6 +100,7 @@ function ViterbiCorrectionConfig(;
         verbosity::String = "dataset",
         emission_logp::F = default_viterbi_emission_logp,
         alphabet::Symbol = :auto,
+        strand_mode::Symbol = :auto,
         max_steps::Union{Nothing, Int} = nothing,
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
@@ -103,6 +111,7 @@ function ViterbiCorrectionConfig(;
         verbosity = verbosity,
         emission_logp = emission_logp,
         alphabet = alphabet,
+        strand_mode = strand_mode,
         max_steps = max_steps,
         target_vertex = target_vertex,
         start_strand = start_strand,
@@ -216,17 +225,24 @@ function _correct_metagraphs_next_observations(
         observations;
         config::ViterbiCorrectionConfig
 )::ViterbiCorrectionResult
+    alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
+    strand_mode = _resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
     weighted = if _correction_edge_data_type(graph) <: Rhizomorph.StrandWeightedEdgeData
         graph
     else
         Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight = config.edge_weight)
     end
-    alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
     paths = Vector{Rhizomorph.ViterbiDecodingResult}()
 
     for observation in observations
         result = if _uses_emission_scored_observation(observation)
-            _viterbi_correct_observation(weighted, observation, alphabet; config = config)
+            _viterbi_correct_observation(
+                weighted,
+                observation,
+                alphabet;
+                config = config,
+                strand_mode = strand_mode
+            )
         else
             start_vertex, target_vertex, max_steps = _decode_observation_bounds(
                 observation,
@@ -251,7 +267,9 @@ function _correct_metagraphs_next_observations(
         :observation_count => length(observations),
         :emission_callback => nameof(config.emission_logp),
         :alphabet => alphabet,
-        :emission_model => :alphabet_parameterized
+        :emission_model => :alphabet_parameterized,
+        :strand_mode => strand_mode,
+        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet)
     )
     return ViterbiCorrectionResult(corrected, paths, diagnostics)
 end
@@ -326,10 +344,77 @@ end
 
 function _normalize_viterbi_alphabet(alphabet::Symbol)::Symbol
     normalized = Symbol(uppercase(String(alphabet)))
-    if !(normalized in (:DNA, :RNA, :AA))
+    if !(normalized in (:DNA, :RNA, :AA, :TEXT))
         throw(ArgumentError("unsupported Viterbi correction alphabet: $alphabet"))
     end
     return normalized
+end
+
+
+function _normalize_viterbi_strand_mode(strand_mode::Symbol)::Symbol
+    normalized = Symbol(lowercase(String(strand_mode)))
+    if normalized in (:auto, :singlestrand, :single)
+        return normalized == :auto ? :auto : :singlestrand
+    elseif normalized in (:doublestrand, :double)
+        return :doublestrand
+    elseif normalized == :canonical
+        return :canonical
+    end
+    throw(ArgumentError("unsupported Viterbi correction strand_mode: $strand_mode"))
+end
+
+function _viterbi_supports_reverse_complement(alphabet::Symbol)::Bool
+    normalized = _normalize_viterbi_alphabet(alphabet)
+    return normalized in (:DNA, :RNA)
+end
+
+function _resolve_viterbi_strand_mode(
+        graph::MetaGraphsNext.MetaGraph,
+        alphabet::Symbol,
+        configured_mode::Symbol
+)::Symbol
+    requested = _normalize_viterbi_strand_mode(configured_mode)
+    if !_viterbi_supports_reverse_complement(alphabet)
+        if requested in (:auto, :singlestrand)
+            return :singlestrand
+        end
+        throw(ArgumentError(
+            "strand_mode $configured_mode requires a DNA/RNA alphabet; " *
+            "alphabet $alphabet is reverse-complement naive"
+        ))
+    end
+
+    if requested != :auto
+        return requested
+    end
+    if !Graphs.is_directed(graph.graph)
+        return :canonical
+    end
+    if _viterbi_graph_has_reverse_strand_evidence(graph)
+        return :doublestrand
+    end
+    return :singlestrand
+end
+
+function _viterbi_graph_has_reverse_strand_evidence(graph::MetaGraphsNext.MetaGraph)::Bool
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        edge_data = graph[edge_label...]
+        if edge_data isa Rhizomorph.StrandWeightedEdgeData
+            if Rhizomorph._normalize_strand(edge_data.src_strand) == Rhizomorph.Reverse ||
+               Rhizomorph._normalize_strand(edge_data.dst_strand) == Rhizomorph.Reverse
+                return true
+            end
+        elseif hasproperty(edge_data, :evidence)
+            strand = Rhizomorph.first_evidence_strand(
+                getproperty(edge_data, :evidence);
+                default = Rhizomorph.Forward
+            )
+            if Rhizomorph._normalize_strand(strand) == Rhizomorph.Reverse
+                return true
+            end
+        end
+    end
+    return false
 end
 
 function _viterbi_alphabet_size(alphabet::Symbol)::Int
@@ -338,6 +423,8 @@ function _viterbi_alphabet_size(alphabet::Symbol)::Int
         return 4
     elseif normalized == :AA
         return 20
+    elseif normalized == :TEXT
+        return 256
     end
     throw(ArgumentError("unsupported Viterbi correction alphabet: $alphabet"))
 end
@@ -356,6 +443,9 @@ function _assert_viterbi_unit_matches_alphabet(
         alphabet::Symbol,
         role::Symbol
 )::Nothing
+    if _normalize_viterbi_alphabet(alphabet) == :TEXT
+        return nothing
+    end
     if !validate_alphabet(unit, alphabet)
         throw(ArgumentError("$role unit $unit is not valid for alphabet $alphabet"))
     end
@@ -410,7 +500,14 @@ function _infer_viterbi_alphabet(unit::Any)::Union{Nothing, Symbol}
         return _infer_viterbi_alphabet(getproperty(unit, :sequence))
     end
 
-    return detect_alphabet(uppercase(_viterbi_unit_string(unit)))
+    try
+        return detect_alphabet(uppercase(_viterbi_unit_string(unit)))
+    catch error
+        if error isa ArgumentError
+            return :TEXT
+        end
+        rethrow()
+    end
 end
 
 function _uses_emission_scored_observation(observation::Any)::Bool
@@ -443,7 +540,8 @@ function _viterbi_correct_observation(
         graph::MetaGraphsNext.MetaGraph,
         observation::AbstractVector,
         alphabet::Symbol;
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        strand_mode::Symbol
 )::Rhizomorph.ViterbiDecodingResult
     if isempty(observation)
         throw(ArgumentError("empty observation path"))
@@ -456,17 +554,15 @@ function _viterbi_correct_observation(
 
     label_type = eltype(labels)
     start_observed = first(observation)
-    target_vertex = _emission_target_vertex(graph, observation, config)
-    start_candidates = if start_observed in labels
-        label_type[convert(label_type, start_observed)]
-    else
-        labels
-    end
+    target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
+    start_candidates = _viterbi_start_candidates(labels, start_observed, alphabet, strand_mode)
 
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
         :exact => true,
         :alphabet => alphabet,
+        :strand_mode => strand_mode,
+        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
         :max_steps => length(observation) - 1,
         :target_vertex => target_vertex,
         :start_strand => Rhizomorph._normalize_strand(config.start_strand),
@@ -485,10 +581,18 @@ function _viterbi_correct_observation(
 
     active_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
     for vertex in start_candidates
-        state = (vertex, Rhizomorph._normalize_strand(config.start_strand))
-        score = _call_viterbi_emission_logp(config, start_observed, vertex, alphabet)
-        if isfinite(score)
-            active_scores[state] = score
+        for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
+            state = (vertex, strand)
+            score = _call_viterbi_state_emission_logp(
+                config,
+                start_observed,
+                vertex,
+                alphabet,
+                strand_mode
+            )
+            if isfinite(score) && (!haskey(active_scores, state) || score > active_scores[state])
+                active_scores[state] = score
+            end
         end
     end
     if isempty(active_scores)
@@ -551,11 +655,12 @@ function _viterbi_correct_observation(
                     continue
                 end
                 transition_prob = edge_w / total_out
-                emission_score = _call_viterbi_emission_logp(
+                emission_score = _call_viterbi_state_emission_logp(
                     config,
                     observed_unit,
                     next_vertex,
-                    alphabet
+                    alphabet,
+                    strand_mode
                 )
                 next_score = state_score + log(transition_prob) + emission_score
                 if !isfinite(next_score)
@@ -611,13 +716,154 @@ end
 function _emission_target_vertex(
         graph::MetaGraphsNext.MetaGraph,
         observation::AbstractVector,
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        alphabet::Symbol,
+        strand_mode::Symbol
 )
     if config.target_vertex !== nothing
         return config.target_vertex
     end
     candidate = last(observation)
-    return candidate in MetaGraphsNext.labels(graph) ? candidate : nothing
+    labels = collect(MetaGraphsNext.labels(graph))
+    if candidate in labels
+        return candidate
+    end
+    if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
+        canonical = _viterbi_canonical_unit(candidate, alphabet)
+        if canonical in labels
+            return canonical
+        end
+    end
+    return nothing
+end
+
+function _viterbi_start_candidates(
+        labels::Vector{T},
+        observed_unit::Any,
+        alphabet::Symbol,
+        strand_mode::Symbol
+)::Vector{T} where {T}
+    if observed_unit in labels
+        return T[convert(T, observed_unit)]
+    end
+    if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
+        canonical = _viterbi_canonical_unit(observed_unit, alphabet)
+        if canonical in labels
+            return T[convert(T, canonical)]
+        end
+    end
+    return labels
+end
+
+function _viterbi_start_strands(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex,
+        strand_mode::Symbol,
+        configured_start_strand
+)::Vector{Rhizomorph.StrandOrientation}
+    configured = Rhizomorph._normalize_strand(configured_start_strand)
+    if strand_mode == :singlestrand
+        return Rhizomorph.StrandOrientation[configured]
+    end
+
+    outgoing = _viterbi_outgoing_strands(graph, vertex)
+    if strand_mode == :canonical
+        if configured in outgoing || isempty(outgoing)
+            return Rhizomorph.StrandOrientation[configured]
+        end
+        return Rhizomorph.StrandOrientation[first(outgoing)]
+    end
+
+    if isempty(outgoing)
+        other = configured == Rhizomorph.Forward ? Rhizomorph.Reverse : Rhizomorph.Forward
+        return Rhizomorph.StrandOrientation[configured, other]
+    end
+    return collect(outgoing)
+end
+
+function _viterbi_outgoing_strands(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex
+)::Set{Rhizomorph.StrandOrientation}
+    strands = Set{Rhizomorph.StrandOrientation}()
+    haskey(graph, vertex) || return strands
+    if Graphs.is_directed(graph.graph)
+        src_code = MetaGraphsNext.code_for(graph, vertex)
+        for dst_code in Graphs.outneighbors(graph.graph, src_code)
+            target_vertex = MetaGraphsNext.label_for(graph, dst_code)
+            edge_data = graph[vertex, target_vertex]
+            push!(strands, Rhizomorph._normalize_strand(edge_data.src_strand))
+        end
+    else
+        for edge_label in MetaGraphsNext.edge_labels(graph)
+            if length(edge_label) == 2 && edge_label[1] == vertex
+                edge_data = graph[edge_label...]
+                push!(strands, Rhizomorph._normalize_strand(edge_data.src_strand))
+            end
+        end
+    end
+    return strands
+end
+
+function _call_viterbi_state_emission_logp(
+        config::ViterbiCorrectionConfig,
+        observed_unit::Any,
+        node::Any,
+        alphabet::Symbol,
+        strand_mode::Symbol
+)::Float64
+    direct = _call_viterbi_emission_logp(config, observed_unit, node, alphabet)
+    if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
+        rc_node = _viterbi_reverse_complement_unit(node, alphabet)
+        rc = _call_viterbi_emission_logp(config, observed_unit, rc_node, alphabet)
+        return max(direct, rc)
+    end
+    return direct
+end
+
+function _viterbi_canonical_unit(unit::Any, alphabet::Symbol)
+    if !_viterbi_supports_reverse_complement(alphabet)
+        return unit
+    end
+    try
+        return BioSequences.canonical(unit)
+    catch error
+        if !(error isa MethodError)
+            rethrow()
+        end
+    end
+    unit_string = _viterbi_unit_string(unit)
+    rc_string = _viterbi_reverse_complement_string(unit_string, alphabet)
+    return unit_string <= rc_string ? unit_string : rc_string
+end
+
+function _viterbi_reverse_complement_unit(unit::Any, alphabet::Symbol)
+    if !_viterbi_supports_reverse_complement(alphabet)
+        return unit
+    end
+    try
+        return BioSequences.reverse_complement(unit)
+    catch error
+        if !(error isa MethodError)
+            rethrow()
+        end
+    end
+    return _viterbi_reverse_complement_string(_viterbi_unit_string(unit), alphabet)
+end
+
+function _viterbi_reverse_complement_string(
+        sequence::AbstractString,
+        alphabet::Symbol
+)::String
+    normalized = _normalize_viterbi_alphabet(alphabet)
+    complement = if normalized == :DNA
+        Dict('A' => 'T', 'C' => 'G', 'G' => 'C', 'T' => 'A', 'N' => 'N')
+    elseif normalized == :RNA
+        Dict('A' => 'U', 'C' => 'G', 'G' => 'C', 'U' => 'A', 'N' => 'N')
+    else
+        throw(ArgumentError("alphabet $alphabet has no reverse complement"))
+    end
+    return join((complement[base] for base in reverse(uppercase(sequence))))
 end
 
 function _best_correction_state(
