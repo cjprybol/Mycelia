@@ -921,11 +921,15 @@ function _viterbi_correct_observation(
     best_state, best_score = _best_correction_state(active_scores)
     best_depth = 0
     if target_vertex !== nothing
-        target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
-        if target_state !== nothing
-            best_state = target_state
-            best_score = target_score
-            diagnostics[:reached_target] = true
+        if length(observation) == 1
+            target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
+            if target_state !== nothing
+                best_state = target_state
+                best_score = target_score
+                diagnostics[:reached_target] = true
+            else
+                best_score = -Inf
+            end
         else
             best_score = -Inf
         end
@@ -1009,7 +1013,7 @@ function _viterbi_correct_observation(
             best_depth = depth
         else
             target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
-            if target_state !== nothing && target_score > best_score
+            if target_state !== nothing
                 best_state = target_state
                 best_score = target_score
                 best_depth = depth

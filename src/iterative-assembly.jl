@@ -607,10 +607,10 @@ function calculate_read_likelihood(
         read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol = :canonical)::Float64
     # Detect sequence type dynamically using existing alphabets.jl functions
     sequence_string = FASTX.sequence(String, read)
-    alphabet = detect_alphabet(sequence_string)
-    sequence_type = alphabet_to_biosequence_type(alphabet)
+    alphabet = Mycelia.detect_alphabet(sequence_string)
+    sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
 
-    sequence = extract_typed_sequence(read, sequence_type)
+    sequence = Mycelia.extract_typed_sequence(read, sequence_type)
     quality_scores = collect(FASTX.quality_scores(read))
     return calculate_sequence_likelihood(
         sequence, quality_scores, graph, k; graph_mode = graph_mode)
@@ -1222,61 +1222,43 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         k::Int;
         graph_mode::Symbol = :canonical)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
-        # Detect sequence type dynamically
         sequence_string = FASTX.sequence(String, read)
-        alphabet = detect_alphabet(sequence_string)
-        sequence_type = alphabet_to_biosequence_type(alphabet)
+        alphabet = Mycelia.detect_alphabet(sequence_string)
+        sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
+        sequence = Mycelia.extract_typed_sequence(read, sequence_type)
+        observations = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
+        if isempty(observations)
+            return nothing
+        end
 
-        sequence = extract_typed_sequence(read, sequence_type)
         quality_scores = collect(FASTX.quality_scores(read))
-
-        # Create ViterbiConfig for this sequence
-        config = ViterbiConfig(
-            match_prob = 0.95,
-            mismatch_prob = 0.04,
-            insertion_prob = 0.005,
-            deletion_prob = 0.005,
-            use_log_space = true,
-            consider_reverse_complement = (alphabet != :AA)  # No reverse complement for amino acids
+        config = Mycelia.ViterbiCorrectionConfig(
+            alphabet = alphabet,
+            strand_mode = graph_mode,
+            max_steps = length(observations) - 1
         )
-
-        # Convert sequence to k-mer observations for Viterbi
-        observations = String[]
-        if length(sequence_string) >= k
-            for i in 1:(length(sequence_string) - k + 1)
-                push!(observations, sequence_string[i:(i + k - 1)])
-            end
+        correction = Mycelia.correct_observations(graph, [observations]; config = config)
+        corrected_path = only(correction.corrected_observations)
+        if corrected_path === nothing || isempty(corrected_path)
+            return nothing
         end
 
-        if !isempty(observations)
-            # Use Viterbi algorithm to find optimal path
-            viterbi_result = viterbi_decode_next(graph, observations, config)
-
-            if viterbi_result !== nothing && !isempty(viterbi_result.polished_sequence)
-                # Convert improved sequence back to proper BioSequence type
-                improved_sequence = detect_and_extract_sequence(viterbi_result.polished_sequence, alphabet)
-
-                # Calculate likelihood of improved sequence
-                improved_likelihood = calculate_sequence_likelihood(
-                    improved_sequence, quality_scores, graph, k; graph_mode = graph_mode)
-
-                # Create improved FASTQ record
-                improved_quality = adjust_quality_scores(
-                    FASTX.quality(read), viterbi_result.polished_sequence,
-                    improved_likelihood)
-                improved_record = FASTX.FASTQ.Record(FASTX.identifier(read),
-                    viterbi_result.polished_sequence, improved_quality)
-
-                return (improved_record, improved_likelihood)
-            end
+        corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
+        corrected_sequence_string = corrected_sequence isa AbstractString ? corrected_sequence :
+                                    string(corrected_sequence)
+        improved_likelihood = Mycelia.calculate_sequence_likelihood(
+            corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)
+        improved_quality = Mycelia.adjust_quality_scores(
+            FASTX.quality(read), corrected_sequence_string, improved_likelihood)
+        improved_record = FASTX.FASTQ.Record(
+            FASTX.identifier(read), corrected_sequence_string, improved_quality)
+        return (improved_record, improved_likelihood)
+    catch error
+        if error isa ArgumentError
+            return nothing
         end
-
-    catch e
-        # If Viterbi fails, return nothing to fall back to other methods
-        return nothing
+        rethrow()
     end
-
-    return nothing
 end
 
 function try_viterbi_path_improvement(

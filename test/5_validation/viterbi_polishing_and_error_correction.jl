@@ -199,6 +199,17 @@ Test.@testset "Rhizomorph Traversal and Polishing Tests" begin
 
         Test.@test result isa NamedTuple
         Test.@test haskey(result, :polished_record)
+
+        noisy_record = FASTX.FASTQ.Record("viterbi_read", "ATCGTTCGATCG", "IIIIIIIIIIII")
+        viterbi_result = Mycelia.process_fastq_record(
+            record = noisy_record,
+            graph = graph,
+            weighted_graph = weighted,
+            graph_mode = :singlestrand
+        )
+        Test.@test viterbi_result.traversal == :viterbi
+        Test.@test viterbi_result.status == :ok
+        Test.@test FASTX.sequence(String, viterbi_result.polished_record) == "ATCGATCGATCG"
     end
 
     Test.@testset "FASTQ Record Edge Cases" begin
@@ -270,13 +281,13 @@ IIIIIIIIIIII
         result = Mycelia.polish_fastq(
             fastq = temp_fastq,
             k = 4,
-            traversal = :probabilistic,
             weighting = :quality
         )
 
         Test.@test result isa NamedTuple
         Test.@test haskey(result, :fastq)
         Test.@test isfile(result.fastq)
+        Test.@test result.traversal == :viterbi
 
         rm(temp_fastq, force = true)
         rm(result.fastq, force = true)
