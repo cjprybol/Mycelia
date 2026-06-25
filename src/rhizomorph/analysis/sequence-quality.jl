@@ -143,18 +143,30 @@ function evaluate_generation_quality(
             end
         end
 
-        # Build training profile from graph vertices
+        # Build training profile from graph vertices. Vertices whose payload has
+        # no evidence count (e.g. reduced types) legitimately fall back to 1, but
+        # only swallow the expected lookup/dispatch errors — rethrow anything else
+        # so a systematic failure can't silently collapse the training profile to
+        # a uniform distribution and produce a meaningless divergence.
         train_counts = Dict{String, Int}()
         train_total = 0
+        n_fallback = 0
         for label in labels
             key = string(label)
             count = try
                 count_evidence(training_graph[label])
-            catch
+            catch err
+                (err isa MethodError || err isa KeyError) || rethrow()
+                n_fallback += 1
                 1
             end
             train_counts[key] = count
             train_total += count
+        end
+        if n_fallback > 0 && n_fallback == length(labels)
+            @warn "evaluate_generation_quality: count_evidence fell back to 1 for ALL " *
+                  "$(length(labels)) vertices — training k-mer profile is uniform and the " *
+                  "resulting divergence is not meaningful."
         end
         train_profile = Dict{String, Float64}()
         if train_total > 0

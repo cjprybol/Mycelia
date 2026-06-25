@@ -138,6 +138,53 @@ Test.@testset "Generation - _get_valid_transitions adjacency == full-scan" begin
     end
 end
 
+Test.@testset "Generation - _get_valid_transitions undirected stored-source semantics" begin
+    # On an undirected graph, adjacency is symmetric, but _get_valid_transitions
+    # must keep the original edge-label-scan semantics (only edges whose STORED
+    # source is the query vertex), NOT the symmetric-adjacency superset that
+    # outneighbors would return. Build an undirected weighted graph and assert the
+    # result matches a full edge-label scan for every vertex.
+    g = MetaGraphsNext.MetaGraph(
+        Mycelia.Graphs.Graph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0)
+    g["A"] = nothing
+    g["B"] = nothing
+    g["C"] = nothing
+    g["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+    g["B", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+    function _ref_undirected(vertex_label)
+        out = Set{Tuple{String, Float64}}()
+        for el in MetaGraphsNext.edge_labels(g)
+            if length(el) == 2 && el[1] == vertex_label
+                ed = g[el...]
+                Mycelia.Rhizomorph._normalize_strand(ed.src_strand) ==
+                Mycelia.Rhizomorph.Forward || continue
+                p = Mycelia.Rhizomorph._edge_transition_weight(ed)
+                p <= 0.0 && continue
+                push!(out, (string(el[2]), p))
+            end
+        end
+        return out
+    end
+
+    for v in MetaGraphsNext.labels(g)
+        got = Set((string(t[:target_vertex]), t[:probability])
+        for t in Mycelia.Rhizomorph._get_valid_transitions(
+            g, v, Mycelia.Rhizomorph.Forward))
+        Test.@test got == _ref_undirected(v)
+    end
+    # The undirected branch executed and found the stored-source edge from "A".
+    Test.@test !isempty(Mycelia.Rhizomorph._get_valid_transitions(
+        g, "A", Mycelia.Rhizomorph.Forward))
+end
+
 Test.@testset "Generation - evaluate_generation_quality multibyte-safe" begin
     graph = _build_test_ngram_graph()
     # SentencePiece-style sequences contain the U+2581 word-boundary marker (a
