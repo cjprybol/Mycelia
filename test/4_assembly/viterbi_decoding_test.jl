@@ -58,6 +58,22 @@ Test.@testset "Viterbi Decoding" begin
     path_strands(path) = [step.strand for step in path.steps]
     path_step_probabilities(path) = [step.probability for step in path.steps]
 
+
+    Test.@testset "correction interface delegates to graph-agnostic decoder" begin
+        graph = create_weighted_graph(["S", "T"])
+        add_weighted_edge!(graph, "S", "T", 1.0)
+
+        result = Mycelia.correct_observations(graph, [["S", "T"]])
+
+        Test.@test result isa Mycelia.ViterbiCorrectionResult
+        Test.@test result.diagnostics[:interface] == :metagraphs_next
+        Test.@test result.diagnostics[:algorithm] == :rhizomorph_viterbi_decode_next
+        Test.@test length(result.paths) == 1
+        Test.@test result.paths[1] isa Mycelia.Rhizomorph.ViterbiDecodingResult
+        Test.@test result.paths[1].path !== nothing
+        Test.@test path_labels(something(result.paths[1].path)) == ["S", "T"]
+    end
+
     Test.@testset "exact decoding beats local greedy choice" begin
         graph = create_ambiguous_decoding_graph()
 

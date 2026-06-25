@@ -19,11 +19,17 @@ Test.@testset "Legacy Viterbi maximum-likelihood corrector" begin
     graph = Mycelia.build_stranded_kmer_graph(Kmers.DNAKmer{4}, records)
 
     Random.seed!(1)
-    corrected_records = Mycelia.viterbi_maximum_likelihood_traversals(
+    correction = Mycelia.correct_observations(
         graph;
-        error_rate = 0.05,
-        verbosity = "dataset"
+        config = Mycelia.ViterbiCorrectionConfig(
+            error_rate = 0.05,
+            verbosity = "dataset"
+        )
     )
+    corrected_records = correction.corrected_observations
+
+    Test.@test correction.diagnostics[:interface] == :legacy_stranded_kmer
+    Test.@test correction.diagnostics[:algorithm] == :viterbi_maximum_likelihood_traversals
 
     observed = Dict(
         String(FASTX.identifier(record)) => string(FASTX.sequence(record))
