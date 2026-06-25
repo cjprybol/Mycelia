@@ -1,0 +1,69 @@
+{
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "dataset_id",
+    "dataset_name",
+    "domain",
+    "source",
+    "target_error_rate",
+    "actual_error_rate",
+    "observation_count",
+    "editable_positions",
+    "injected_error_count",
+    "baseline_method",
+    "corrected_method",
+    "baseline_edit_distance",
+    "corrected_edit_distance",
+    "edit_distance_reduction",
+    "injected_error_recall",
+    "corrected_all_injected_positions",
+    "diagnostics_alphabet",
+    "diagnostics_strand_mode",
+    "diagnostics_emission_model",
+    "diagnostics_transition_model"
+  ],
+  "command_args": [
+    "julia",
+    "--project=.",
+    "benchmarking/viterbi_accuracy_benchmark.jl"
+  ],
+  "dataset_ids": [
+    "austen_pride_prejudice_excerpt",
+    "phix174_nc001422",
+    "pstvd_nc002030"
+  ],
+  "generated_at": "2026-06-25T22:41:39.230Z",
+  "git": {
+    "branch": "master",
+    "commit": "bc2f1fe2a15a755b26abaf8df256d1bc0be09ba0",
+    "is_dirty": true,
+    "remote_url": "git@github.com:cjprybol/Mycelia.git"
+  },
+  "metadata": {
+    "baseline": "uncorrected injected-error observations",
+    "bead": "td-he0z.9",
+    "benchmark": "generalized_viterbi_accuracy_vs_error_rate",
+    "error_rates": [
+      0.01,
+      0.05,
+      0.1
+    ],
+    "fixture_dir": "fixtures/viterbi_accuracy",
+    "unit": "fixed-length 9-mers/ngrams"
+  },
+  "row_count": 9,
+  "run_id": "b8_viterbi_accuracy_local_20260625",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "table_name": "viterbi_accuracy_summary",
+  "table_path": "tables/viterbi_accuracy_summary.csv",
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}
