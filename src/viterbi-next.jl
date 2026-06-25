@@ -177,6 +177,13 @@ const _VITERBI_CORRECTION_VERTEX_DATA = Union{
     Rhizomorph.LightweightQualityBioSequenceVertexData
 }
 
+const _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA = Union{
+    Rhizomorph.StringVertexData,
+    Rhizomorph.QualityStringVertexData,
+    Rhizomorph.LightweightStringVertexData,
+    Rhizomorph.UltralightStringVertexData
+}
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -678,6 +685,9 @@ function _resolve_viterbi_alphabet(
         return _normalize_viterbi_alphabet(configured_alphabet)
     end
 
+    graph_alphabet = _infer_viterbi_graph_alphabet(graph)
+    graph_alphabet === nothing || return graph_alphabet
+
     for label in MetaGraphsNext.labels(graph)
         inferred = _infer_viterbi_alphabet(label)
         inferred === nothing || return inferred
@@ -687,6 +697,39 @@ function _resolve_viterbi_alphabet(
         inferred === nothing || return inferred
     end
     throw(ArgumentError("could not infer Viterbi correction alphabet; pass config.alphabet"))
+end
+
+function _infer_viterbi_graph_alphabet(
+        graph::MetaGraphsNext.MetaGraph
+)::Union{Nothing, Symbol}
+    vertex_type = _correction_vertex_data_type(graph)
+    if vertex_type <: _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA &&
+       _is_fixed_length_text_graph(graph)
+        return :TEXT
+    end
+    return nothing
+end
+
+function _is_fixed_length_text_graph(graph::MetaGraphsNext.MetaGraph)::Bool
+    labels = collect(MetaGraphsNext.labels(graph))
+    if isempty(labels) || !all(label -> label isa AbstractString, labels)
+        return false
+    end
+
+    label_lengths = unique(length.(labels))
+    if length(label_lengths) != 1
+        return false
+    end
+
+    expected_overlap = only(label_lengths) - 1
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        edge_data = graph[edge_label...]
+        if !hasproperty(edge_data, :overlap_length) ||
+           getproperty(edge_data, :overlap_length) != expected_overlap
+            return false
+        end
+    end
+    return true
 end
 
 function _infer_viterbi_alphabet(unit::Any)::Union{Nothing, Symbol}
