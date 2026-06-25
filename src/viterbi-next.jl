@@ -184,6 +184,13 @@ const _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA = Union{
     Rhizomorph.UltralightStringVertexData
 }
 
+const _VITERBI_VARIABLE_LENGTH_EDGE_DATA = Union{
+    Rhizomorph.BioSequenceEdgeData,
+    Rhizomorph.QualityBioSequenceEdgeData,
+    Rhizomorph.StringEdgeData,
+    Rhizomorph.QualityStringEdgeData
+}
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -250,10 +257,11 @@ function _correct_metagraphs_next_observations(
 )::ViterbiCorrectionResult
     alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
     strand_mode = _resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
+    transition_edge_weight = _viterbi_transition_edge_weight(graph, config.edge_weight)
     weighted = if _correction_edge_data_type(graph) <: Rhizomorph.StrandWeightedEdgeData
         graph
     else
-        Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight = config.edge_weight)
+        Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight = transition_edge_weight)
     end
     paths = Vector{Rhizomorph.ViterbiDecodingResult}()
 
@@ -265,7 +273,8 @@ function _correct_metagraphs_next_observations(
                 alphabet;
                 config = config,
                 strand_mode = strand_mode,
-                quality_graph = graph
+                quality_graph = graph,
+                transition_scoring = _viterbi_transition_scoring(graph, transition_edge_weight)
             )
         else
             start_vertex, target_vertex, max_steps = _decode_observation_bounds(
@@ -293,6 +302,7 @@ function _correct_metagraphs_next_observations(
         :alphabet => alphabet,
         :emission_model => _viterbi_graph_has_quality(graph) ?
                            :quality_aware : :alphabet_parameterized,
+        :transition_model => _viterbi_transition_scoring(graph, transition_edge_weight),
         :strand_mode => strand_mode,
         :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet)
     )
@@ -313,6 +323,46 @@ end
 
 function _correction_vertex_data_type(graph)::Type
     return typeof(graph)
+end
+
+function _viterbi_has_variable_length_edges(graph::MetaGraphsNext.MetaGraph)::Bool
+    if _correction_vertex_data_type(graph) <: _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA &&
+       _is_fixed_length_text_graph(graph)
+        return false
+    end
+    return _correction_edge_data_type(graph) <: _VITERBI_VARIABLE_LENGTH_EDGE_DATA
+end
+
+function _viterbi_overlap_edge_weight(edge_data)::Float64
+    if hasproperty(edge_data, :overlap_length)
+        overlap_length = getproperty(edge_data, :overlap_length)
+        if overlap_length > 0
+            return Float64(overlap_length)
+        end
+    end
+    return Float64(Rhizomorph.edge_data_weight(edge_data))
+end
+
+function _viterbi_transition_edge_weight(
+        graph::MetaGraphsNext.MetaGraph,
+        configured_edge_weight::Function
+)::Function
+    if _viterbi_has_variable_length_edges(graph) &&
+       configured_edge_weight === Rhizomorph.edge_data_weight
+        return _viterbi_overlap_edge_weight
+    end
+    return configured_edge_weight
+end
+
+function _viterbi_transition_scoring(
+        graph::MetaGraphsNext.MetaGraph,
+        edge_weight::Function
+)::Symbol
+    if _viterbi_has_variable_length_edges(graph) &&
+       edge_weight === _viterbi_overlap_edge_weight
+        return :normalized_overlap_length
+    end
+    return :normalized_edge_weight
 end
 
 function _default_correction_observations(graph::MetaGraphs.MetaDiGraph)
@@ -703,8 +753,7 @@ function _infer_viterbi_graph_alphabet(
         graph::MetaGraphsNext.MetaGraph
 )::Union{Nothing, Symbol}
     vertex_type = _correction_vertex_data_type(graph)
-    if vertex_type <: _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA &&
-       _is_fixed_length_text_graph(graph)
+    if vertex_type <: _VITERBI_FIXED_LENGTH_TEXT_VERTEX_DATA
         return :TEXT
     end
     return nothing
@@ -803,7 +852,8 @@ function _viterbi_correct_observation(
         alphabet::Symbol;
         config::ViterbiCorrectionConfig,
         strand_mode::Symbol,
-        quality_graph::MetaGraphsNext.MetaGraph = graph
+        quality_graph::MetaGraphsNext.MetaGraph = graph,
+        transition_scoring::Symbol = :normalized_edge_weight
 )::Rhizomorph.ViterbiDecodingResult
     if isempty(observation)
         throw(ArgumentError("empty observation path"))
@@ -829,7 +879,7 @@ function _viterbi_correct_observation(
         :target_vertex => target_vertex,
         :start_strand => Rhizomorph._normalize_strand(config.start_strand),
         :score_domain => :log_probability,
-        :transition_scoring => :normalized_edge_weight,
+        :transition_scoring => transition_scoring,
         :emission_scoring => _viterbi_graph_has_quality(quality_graph) ?
                              :quality_aware : :alphabet_parameterized,
         :expanded_states => 0,
