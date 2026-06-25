@@ -24,16 +24,32 @@ function default_viterbi_emission_logp(
     _assert_viterbi_unit_matches_alphabet(observed, resolved_alphabet, :observed)
     _assert_viterbi_unit_matches_alphabet(expected, resolved_alphabet, :expected)
 
+    quality_scores = _normalize_viterbi_quality_scores(quality)
+    alphabet_size = _viterbi_alphabet_size(resolved_alphabet)
     shared = min(length(observed), length(expected))
-    substitution_logp = log(error_rate / (_viterbi_alphabet_size(resolved_alphabet) - 1))
-    indel_logp = log(error_rate / _viterbi_alphabet_size(resolved_alphabet))
-    match_logp = log1p(-error_rate)
 
     logp = 0.0
     for index in 1:shared
-        logp += observed[index] == expected[index] ? match_logp : substitution_logp
+        position_error_rate = _viterbi_position_error_rate(
+            quality_scores,
+            index,
+            error_rate
+        )
+        if observed[index] == expected[index]
+            logp += log1p(-position_error_rate)
+        else
+            logp += log(position_error_rate / (alphabet_size - 1))
+        end
     end
-    logp += abs(length(observed) - length(expected)) * indel_logp
+
+    for index in (shared + 1):max(length(observed), length(expected))
+        position_error_rate = _viterbi_position_error_rate(
+            quality_scores,
+            index,
+            error_rate
+        )
+        logp += log(position_error_rate / alphabet_size)
+    end
     return logp
 end
 
@@ -241,7 +257,8 @@ function _correct_metagraphs_next_observations(
                 observation,
                 alphabet;
                 config = config,
-                strand_mode = strand_mode
+                strand_mode = strand_mode,
+                quality_graph = graph
             )
         else
             start_vertex, target_vertex, max_steps = _decode_observation_bounds(
@@ -267,7 +284,8 @@ function _correct_metagraphs_next_observations(
         :observation_count => length(observations),
         :emission_callback => nameof(config.emission_logp),
         :alphabet => alphabet,
-        :emission_model => :alphabet_parameterized,
+        :emission_model => _viterbi_graph_has_quality(graph) ?
+                           :quality_aware : :alphabet_parameterized,
         :strand_mode => strand_mode,
         :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet)
     )
@@ -429,6 +447,205 @@ function _viterbi_alphabet_size(alphabet::Symbol)::Int
     throw(ArgumentError("unsupported Viterbi correction alphabet: $alphabet"))
 end
 
+function _normalize_viterbi_quality_scores(
+        quality
+)::Union{Nothing, Vector{Float64}}
+    if quality === nothing
+        return nothing
+    elseif quality isa Number
+        return Float64[Float64(quality)]
+    elseif quality isa AbstractVector
+        return Float64.(quality)
+    elseif hasproperty(quality, :quality_scores)
+        return _normalize_viterbi_quality_scores(
+            getproperty(quality, :quality_scores)
+        )
+    end
+    return nothing
+end
+
+function _viterbi_position_error_rate(
+        quality_scores::Union{Nothing, Vector{Float64}},
+        index::Int,
+        fallback_error_rate::Float64
+)::Float64
+    if quality_scores === nothing || isempty(quality_scores)
+        return fallback_error_rate
+    end
+    quality_index = min(index, length(quality_scores))
+    phred = max(0.0, quality_scores[quality_index])
+    return clamp(10.0^(-phred / 10.0), eps(Float64), 1.0 - eps(Float64))
+end
+
+function _viterbi_graph_has_quality(graph::MetaGraphsNext.MetaGraph)::Bool
+    vertex_type = _correction_vertex_data_type(graph)
+    return vertex_type <: Union{
+        Rhizomorph.QualmerVertexData,
+        Rhizomorph.QualityBioSequenceVertexData,
+        Rhizomorph.QualityStringVertexData,
+        Rhizomorph.UltralightQualityKmerVertexData,
+        Rhizomorph.UltralightQualityBioSequenceVertexData,
+        Rhizomorph.LightweightQualityKmerVertexData,
+        Rhizomorph.LightweightQualityBioSequenceVertexData
+    }
+end
+
+function _viterbi_emission_quality(
+        graph::MetaGraphsNext.MetaGraph,
+        observed_unit::Any
+)::Union{Nothing, Vector{Float64}}
+    direct_quality = _viterbi_direct_quality_scores(observed_unit)
+    if direct_quality !== nothing
+        return direct_quality
+    end
+
+    if !_viterbi_graph_has_quality(graph)
+        return nothing
+    end
+
+    if haskey(graph, observed_unit)
+        return _viterbi_vertex_quality_scores(graph[observed_unit])
+    end
+    return nothing
+end
+
+function _viterbi_direct_quality_scores(unit::Any)::Union{Nothing, Vector{Float64}}
+    if hasproperty(unit, :quality_scores)
+        return _viterbi_decode_quality_scores(getproperty(unit, :quality_scores))
+    end
+    return nothing
+end
+
+function _viterbi_vertex_quality_scores(
+        vertex_data::Any
+)::Union{Nothing, Vector{Float64}}
+    evidence_quality = _viterbi_evidence_joint_quality_scores(vertex_data)
+    if evidence_quality !== nothing
+        return evidence_quality
+    end
+
+    if hasproperty(vertex_data, :joint_quality)
+        joint_quality = getproperty(vertex_data, :joint_quality)
+        if !isempty(joint_quality)
+            return Float64.(joint_quality)
+        end
+    end
+
+    if hasproperty(vertex_data, :quality_scores)
+        return _viterbi_decode_quality_scores(getproperty(vertex_data, :quality_scores))
+    end
+    return nothing
+end
+
+function _viterbi_evidence_joint_quality_scores(
+        vertex_data::Any
+)::Union{Nothing, Vector{Float64}}
+    quality_vectors = Vector{Vector{Float64}}()
+    dataset_ids = _viterbi_dataset_ids(vertex_data)
+    for dataset_id in dataset_ids
+        observations = _viterbi_observation_ids(vertex_data, dataset_id)
+        if observations === nothing
+            dataset_quality = _viterbi_dataset_joint_quality(vertex_data, dataset_id)
+            dataset_quality === nothing || push!(quality_vectors, dataset_quality)
+            continue
+        end
+
+        for observation_id in observations
+            evidence = Rhizomorph.get_observation_evidence(
+                vertex_data,
+                dataset_id,
+                observation_id
+            )
+            evidence === nothing && continue
+            for entry in evidence
+                if entry isa Rhizomorph.QualityEvidenceEntry
+                    push!(
+                        quality_vectors,
+                        _viterbi_decode_quality_scores(entry.quality_scores)
+                    )
+                end
+            end
+        end
+    end
+
+    if isempty(quality_vectors)
+        return nothing
+    end
+    return _viterbi_combine_quality_vectors(quality_vectors)
+end
+
+function _viterbi_dataset_joint_quality(
+        vertex_data::Any,
+        dataset_id::AbstractString
+)::Union{Nothing, Vector{Float64}}
+    try
+        joint_quality = Rhizomorph.get_vertex_joint_quality(
+            vertex_data,
+            String(dataset_id)
+        )
+        return joint_quality === nothing ? nothing : Float64.(joint_quality)
+    catch error
+        if error isa MethodError
+            return nothing
+        end
+        rethrow()
+    end
+end
+
+function _viterbi_dataset_ids(vertex_data::Any)::Vector{String}
+    try
+        return String.(Rhizomorph.get_all_dataset_ids(vertex_data))
+    catch error
+        if error isa MethodError
+            return String[]
+        end
+        rethrow()
+    end
+end
+
+function _viterbi_observation_ids(
+        vertex_data::Any,
+        dataset_id::AbstractString
+)::Union{Nothing, Vector{String}}
+    try
+        observations = Rhizomorph.get_all_observation_ids(
+            vertex_data,
+            String(dataset_id)
+        )
+        return observations === nothing ? nothing : String.(observations)
+    catch error
+        if error isa MethodError
+            return nothing
+        end
+        rethrow()
+    end
+end
+
+function _viterbi_decode_quality_scores(scores::AbstractVector)::Vector{Float64}
+    if isempty(scores)
+        return Float64[]
+    end
+    numeric_scores = Float64.(scores)
+    if minimum(numeric_scores) >= 33.0 && maximum(numeric_scores) <= 126.0
+        return numeric_scores .- 33.0
+    end
+    return numeric_scores
+end
+
+function _viterbi_combine_quality_vectors(
+        quality_vectors::Vector{Vector{Float64}}
+)::Vector{Float64}
+    max_length = maximum(length.(quality_vectors))
+    joint_quality = Vector{Float64}(undef, max_length)
+    for index in 1:max_length
+        joint_quality[index] = min(
+            sum(vector[index] for vector in quality_vectors if index <= length(vector)),
+            255.0
+        )
+    end
+    return joint_quality
+end
+
 function _viterbi_unit_string(unit::Any)::String
     if hasproperty(unit, :Kmer)
         return string(getproperty(unit, :Kmer))
@@ -518,19 +735,20 @@ function _call_viterbi_emission_logp(
         config::ViterbiCorrectionConfig,
         observed_unit::Any,
         node::Any,
-        alphabet::Symbol
+        alphabet::Symbol;
+        quality = nothing
 )::Float64
     try
         return config.emission_logp(
             observed_unit,
             node,
             alphabet;
-            quality = nothing,
+            quality = quality,
             error_rate = config.error_rate
         )
     catch error
         if error isa MethodError
-            return config.emission_logp(observed_unit, node, alphabet; quality = nothing)
+            return config.emission_logp(observed_unit, node, alphabet; quality = quality)
         end
         rethrow()
     end
@@ -541,7 +759,8 @@ function _viterbi_correct_observation(
         observation::AbstractVector,
         alphabet::Symbol;
         config::ViterbiCorrectionConfig,
-        strand_mode::Symbol
+        strand_mode::Symbol,
+        quality_graph::MetaGraphsNext.MetaGraph = graph
 )::Rhizomorph.ViterbiDecodingResult
     if isempty(observation)
         throw(ArgumentError("empty observation path"))
@@ -568,7 +787,8 @@ function _viterbi_correct_observation(
         :start_strand => Rhizomorph._normalize_strand(config.start_strand),
         :score_domain => :log_probability,
         :transition_scoring => :normalized_edge_weight,
-        :emission_scoring => :alphabet_parameterized,
+        :emission_scoring => _viterbi_graph_has_quality(quality_graph) ?
+                             :quality_aware : :alphabet_parameterized,
         :expanded_states => 0,
         :generated_states => 0,
         :retained_states => 0,
@@ -584,6 +804,7 @@ function _viterbi_correct_observation(
         for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
             state = (vertex, strand)
             score = _call_viterbi_state_emission_logp(
+                quality_graph,
                 config,
                 start_observed,
                 vertex,
@@ -656,6 +877,7 @@ function _viterbi_correct_observation(
                 end
                 transition_prob = edge_w / total_out
                 emission_score = _call_viterbi_state_emission_logp(
+                    quality_graph,
                     config,
                     observed_unit,
                     next_vertex,
@@ -806,16 +1028,30 @@ function _viterbi_outgoing_strands(
 end
 
 function _call_viterbi_state_emission_logp(
+        graph::MetaGraphsNext.MetaGraph,
         config::ViterbiCorrectionConfig,
         observed_unit::Any,
         node::Any,
         alphabet::Symbol,
         strand_mode::Symbol
 )::Float64
-    direct = _call_viterbi_emission_logp(config, observed_unit, node, alphabet)
+    quality = _viterbi_emission_quality(graph, observed_unit)
+    direct = _call_viterbi_emission_logp(
+        config,
+        observed_unit,
+        node,
+        alphabet;
+        quality = quality
+    )
     if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
         rc_node = _viterbi_reverse_complement_unit(node, alphabet)
-        rc = _call_viterbi_emission_logp(config, observed_unit, rc_node, alphabet)
+        rc = _call_viterbi_emission_logp(
+            config,
+            observed_unit,
+            rc_node,
+            alphabet;
+            quality = quality
+        )
         return max(direct, rc)
     end
     return direct
