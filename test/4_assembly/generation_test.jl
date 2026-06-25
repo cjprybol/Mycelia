@@ -100,6 +100,105 @@ Test.@testset "Generation - select_start_vertices" begin
         weighted, 1; strategy = :unknown)
 end
 
+Test.@testset "Generation - _get_valid_transitions adjacency == full-scan" begin
+    # Branching graph: "ABC" fans out to both "BCD" and "BCX".
+    # "ABCDEF" → ABC,BCD,CDE,DEF ; "ABCXYZ" → ABC,BCX,CXY,XYZ
+    graph = Mycelia.Rhizomorph.build_ngram_graph(
+        ["ABCDEF", "ABCXYZ"], 3; dataset_id = "branch_test")
+    weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+
+    # Reference: the old O(E) full edge-label scan, recomputed inline.
+    function _reference_transitions(g, vertex_label, strand)
+        out = Set{Tuple{String, Float64}}()
+        for edge_labels in MetaGraphsNext.edge_labels(g)
+            if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+                edge_data = g[edge_labels...]
+                if Mycelia.Rhizomorph._normalize_strand(edge_data.src_strand) == strand
+                    prob = Mycelia.Rhizomorph._edge_transition_weight(edge_data)
+                    prob <= 0.0 && continue
+                    push!(out, (string(edge_labels[2]), prob))
+                end
+            end
+        end
+        return out
+    end
+
+    # The fan-out vertex must report >1 transition (guards against a trivial pass).
+    fanout = Mycelia.Rhizomorph._get_valid_transitions(
+        weighted, "ABC", Mycelia.Rhizomorph.Forward)
+    Test.@test length(fanout) >= 2
+
+    for vertex_label in MetaGraphsNext.labels(weighted)
+        new_set = Set(
+            (string(t[:target_vertex]), t[:probability])
+        for t in Mycelia.Rhizomorph._get_valid_transitions(
+            weighted, vertex_label, Mycelia.Rhizomorph.Forward))
+        ref_set = _reference_transitions(weighted, vertex_label, Mycelia.Rhizomorph.Forward)
+        Test.@test new_set == ref_set
+    end
+end
+
+Test.@testset "Generation - _get_valid_transitions undirected stored-source semantics" begin
+    # On an undirected graph, adjacency is symmetric, but _get_valid_transitions
+    # must keep the original edge-label-scan semantics (only edges whose STORED
+    # source is the query vertex), NOT the symmetric-adjacency superset that
+    # outneighbors would return. Build an undirected weighted graph and assert the
+    # result matches a full edge-label scan for every vertex.
+    g = MetaGraphsNext.MetaGraph(
+        Mycelia.Graphs.Graph(),
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0)
+    g["A"] = nothing
+    g["B"] = nothing
+    g["C"] = nothing
+    g["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        2.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+    g["B", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        3.0, Mycelia.Rhizomorph.Forward, Mycelia.Rhizomorph.Forward)
+
+    function _ref_undirected(vertex_label)
+        out = Set{Tuple{String, Float64}}()
+        for el in MetaGraphsNext.edge_labels(g)
+            if length(el) == 2 && el[1] == vertex_label
+                ed = g[el...]
+                Mycelia.Rhizomorph._normalize_strand(ed.src_strand) ==
+                Mycelia.Rhizomorph.Forward || continue
+                p = Mycelia.Rhizomorph._edge_transition_weight(ed)
+                p <= 0.0 && continue
+                push!(out, (string(el[2]), p))
+            end
+        end
+        return out
+    end
+
+    for v in MetaGraphsNext.labels(g)
+        got = Set((string(t[:target_vertex]), t[:probability])
+        for t in Mycelia.Rhizomorph._get_valid_transitions(
+            g, v, Mycelia.Rhizomorph.Forward))
+        Test.@test got == _ref_undirected(v)
+    end
+    # The undirected branch executed and found the stored-source edge from "A".
+    Test.@test !isempty(Mycelia.Rhizomorph._get_valid_transitions(
+        g, "A", Mycelia.Rhizomorph.Forward))
+end
+
+Test.@testset "Generation - evaluate_generation_quality multibyte-safe" begin
+    graph = _build_test_ngram_graph()
+    # SentencePiece-style sequences contain the U+2581 word-boundary marker (a
+    # 3-byte UTF-8 char). K-mer extraction must slice by character, not byte, or
+    # it throws StringIndexError mid-codepoint.
+    multibyte = ["▁ABC▁DEF", "AB▁CDE▁F"]
+    result = Mycelia.Rhizomorph.evaluate_generation_quality(
+        multibyte, graph; metrics = [:kmer_divergence, :diversity])
+    Test.@test haskey(result, :kmer_divergence)
+    Test.@test haskey(result, :diversity)
+    Test.@test isfinite(result[:kmer_divergence])
+    Test.@test isfinite(result[:diversity])
+end
+
 Test.@testset "Generation - compute_sequence_likelihood" begin
     graph = _build_test_ngram_graph()
     weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)

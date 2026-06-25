@@ -126,9 +126,12 @@ function evaluate_generation_quality(
         gen_counts = Dict{String, Int}()
         gen_total = 0
         for seq in generated
-            s = string(seq)
-            for i in 1:(length(s) - k + 1)
-                kmer = s[i:(i + k - 1)]
+            # Slice over a Char vector, not the raw String: byte-indexing
+            # (s[i:i+k-1]) on a multibyte sequence (e.g. SentencePiece tokens
+            # containing the U+2581 word-boundary marker) throws StringIndexError.
+            chars = collect(string(seq))
+            for i in 1:(length(chars) - k + 1)
+                kmer = String(chars[i:(i + k - 1)])
                 gen_counts[kmer] = get(gen_counts, kmer, 0) + 1
                 gen_total += 1
             end
@@ -140,18 +143,30 @@ function evaluate_generation_quality(
             end
         end
 
-        # Build training profile from graph vertices
+        # Build training profile from graph vertices. Vertices whose payload has
+        # no evidence count (e.g. reduced types) legitimately fall back to 1, but
+        # only swallow the expected lookup/dispatch errors — rethrow anything else
+        # so a systematic failure can't silently collapse the training profile to
+        # a uniform distribution and produce a meaningless divergence.
         train_counts = Dict{String, Int}()
         train_total = 0
+        n_fallback = 0
         for label in labels
             key = string(label)
             count = try
                 count_evidence(training_graph[label])
-            catch
+            catch err
+                (err isa MethodError || err isa KeyError) || rethrow()
+                n_fallback += 1
                 1
             end
             train_counts[key] = count
             train_total += count
+        end
+        if n_fallback > 0 && n_fallback == length(labels)
+            @warn "evaluate_generation_quality: count_evidence fell back to 1 for ALL " *
+                  "$(length(labels)) vertices — training k-mer profile is uniform and the " *
+                  "resulting divergence is not meaningful."
         end
         train_profile = Dict{String, Float64}()
         if train_total > 0
@@ -179,9 +194,10 @@ function evaluate_generation_quality(
         # Unique k-mers in generated sequences vs training graph vertices
         gen_kmers = Set{String}()
         for seq in generated
-            s = string(seq)
-            for i in 1:(length(s) - k + 1)
-                push!(gen_kmers, s[i:(i + k - 1)])
+            # Char-vector slicing (multibyte-safe); see kmer_divergence above.
+            chars = collect(string(seq))
+            for i in 1:(length(chars) - k + 1)
+                push!(gen_kmers, String(chars[i:(i + k - 1)]))
             end
         end
         n_training = length(labels)

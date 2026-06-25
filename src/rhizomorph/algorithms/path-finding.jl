@@ -510,28 +510,56 @@ function _normalize_strand(strand)
     return Forward
 end
 
+# Apply the strand filter + positive-weight filter to one candidate out-edge and,
+# if it passes, append the transition Dict. Shared by both enumeration paths below.
+function _maybe_push_transition!(transitions, graph, vertex_label, target_vertex, strand)
+    edge_data = graph[vertex_label, target_vertex]
+    if _normalize_strand(edge_data.src_strand) == strand
+        probability = _edge_transition_weight(edge_data)
+        probability <= 0.0 && return
+        push!(transitions,
+            Dict(
+                :target_vertex => target_vertex,
+                :target_strand => _normalize_strand(edge_data.dst_strand),
+                :probability => probability,
+                :edge_data => edge_data
+            ))
+    end
+    return
+end
+
 function _get_valid_transitions(graph, vertex_label, strand)
     transitions = []
+    haskey(graph, vertex_label) || return transitions
 
-    for edge_labels in MetaGraphsNext.edge_labels(graph)
-        if length(edge_labels) == 2 && edge_labels[1] == vertex_label
-            target_vertex = edge_labels[2]
-            edge_data = graph[edge_labels...]
-
-            edge_src_strand = _normalize_strand(edge_data.src_strand)
-            if edge_src_strand == strand
-                probability = _edge_transition_weight(edge_data)
-                if probability <= 0.0
-                    continue
-                end
-
-                push!(transitions,
-                    Dict(
-                        :target_vertex => target_vertex,
-                        :target_strand => _normalize_strand(edge_data.dst_strand),
-                        :probability => probability,
-                        :edge_data => edge_data
-                    ))
+    if Graphs.is_directed(graph.graph)
+        # Directed graphs (the production walk path: every walk caller routes
+        # through weighted_graph_from_rhizomorph, which builds a DiGraph) — read
+        # out-edges from the adjacency in O(out-degree) instead of scanning every
+        # edge label in the graph (O(E)). The previous full-scan made each call
+        # O(E); since this runs once per vertex during start-vertex selection and
+        # once per step during every walk, the old cost was O(V*E)/O(steps*E) and
+        # dominated large-graph generative modeling (notebook 15). For a DiGraph,
+        # outneighbors enumerates exactly the edges whose stored source is
+        # vertex_label, so the returned transition set and probabilities are
+        # identical; only within-vertex order may differ (distribution-preserving
+        # under a fixed seed).
+        src_code = MetaGraphsNext.code_for(graph, vertex_label)
+        for dst_code in Graphs.outneighbors(graph.graph, src_code)
+            target_vertex = MetaGraphsNext.label_for(graph, dst_code)
+            _maybe_push_transition!(transitions, graph, vertex_label, target_vertex, strand)
+        end
+    else
+        # Undirected graphs store each edge once with a fixed src/dst orientation,
+        # but their adjacency is symmetric — outneighbors would return both
+        # endpoints (a superset) with strand fields oriented backwards for the
+        # reverse-stored direction. Preserve the exact original semantics by
+        # scanning edge labels and keeping only edges whose stored source is
+        # vertex_label.
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            if length(edge_labels) == 2 && edge_labels[1] == vertex_label
+                _maybe_push_transition!(
+                    transitions, graph, vertex_label, edge_labels[2], strand)
             end
         end
     end
