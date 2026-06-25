@@ -64,6 +64,7 @@ import LsqFit
 import Luxor
 import Makie
 import MD5
+import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats
@@ -180,6 +181,7 @@ include("reference-databases.jl")
 include("relational-matrices.jl")
 include("sentencepiece.jl")
 include("sequence-comparison.jl")
+include("sequence-graphs.jl")
 include("simulation.jl")
 include("slurm-templates.jl")
 include("execution.jl")
