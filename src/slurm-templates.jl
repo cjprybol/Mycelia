@@ -568,7 +568,7 @@ function validate(job::JobSpec; check_lawrencium_associations::Bool = true)::Job
     # reopens the concurrent-depot race or thread oversubscription the pattern
     # exists to prevent.
     if normalized_job.site in (:nersc, :lawrencium) &&
-       occursin(r"(?:^|[\s/])julia\b", normalized_job.cmd)
+       occursin(_JULIA_CMD_RE, normalized_job.cmd)
         for key in (
             "JULIA_DEPOT_PATH", "JULIA_PKG_OFFLINE", "JULIA_NUM_THREADS",
             "OPENBLAS_NUM_THREADS", "JULIA_NUM_PRECOMPILE_TASKS"
@@ -1095,6 +1095,12 @@ function _build_sbatch_directives(job::JobSpec)::String
     return join(lines, "\n")
 end
 
+# Matches a command that invokes the `julia` binary. The leading char class
+# accepts start-of-string, whitespace, a path separator, OR a quote/paren prefix
+# (`'julia ...'`, `(julia ...)`) so a quoted/subshelled invocation is not silently
+# treated as non-Julia; `\b` still rejects `myjulia` / `julia_helper`. (td-b05w)
+const _JULIA_CMD_RE = r"(?:^|[\s/'\"(])julia\b"
+
 # Durable HPC Julia pattern (td-2rfi). Emitted only for Julia commands on the
 # HPC sites that have a per-job scratch + shared read depot (NERSC, Lawrencium).
 # Returns `nothing` elsewhere so non-Julia steps and local/scg/cloud jobs render
@@ -1114,7 +1120,7 @@ end
 # has no unbuffered-output flag (`julia -u` errors at startup).
 function _durable_julia_prelude(job::JobSpec)::Union{Nothing, String}
     job.site in (:nersc, :lawrencium) || return nothing
-    occursin(r"(?:^|[\s/])julia\b", job.cmd) || return nothing
+    occursin(_JULIA_CMD_RE, job.cmd) || return nothing
     threads = "\${SLURM_CPUS_PER_TASK:-\${SLURM_CPUS_ON_NODE:-8}}"
     scratch_expr = job.site == :nersc ? "\${SCRATCH:?}" :
                    "\${SCRATCH:-/global/scratch/users/\$USER}"
@@ -1363,6 +1369,14 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Render an interactive allocation command (`salloc ... srun --pty`) where supported.
 """
+# Note (td-b05w): render_salloc emits an interactive-shell launcher
+# (`salloc ... srun --pty bash -l`), NOT a batch script with a prelude, so the
+# td-2rfi durable Julia pattern (_durable_julia_prelude / _build_prelude_block)
+# is intentionally NOT injected here — it applies to render_sbatch only. The
+# durable depot pattern guards against concurrent BATCH jobs racing on the shared
+# depot; an interactive session is a single shell where the user sets their own
+# env. A user wanting the durable depot interactively should export it by hand
+# (or `source` a snippet) inside the allocated shell.
 function render_salloc(job::JobSpec)::String
     normalized_job = normalize_job_spec(job)
     report = validate(normalized_job)
