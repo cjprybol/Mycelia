@@ -414,6 +414,22 @@ Test.@testset "Durable HPC Julia prelude (td-2rfi)" begin
     )
     Test.@test !occursin("JULIA_PKG_OFFLINE", Mycelia.render_sbatch(nersc_notjulia))
 
+    # ...but a quote-/paren-prefixed real julia invocation MUST still get the
+    # block (td-b05w broadened the cmd regex to accept those prefixes).
+    nersc_quoted_julia = Mycelia.JobSpec(
+        job_name = "durable-nersc-quoted-julia",
+        cmd = "bash -c '(julia run.jl)'",
+        site = :nersc,
+        account = "m1234",
+        qos = "shared",
+        constraint = "cpu",
+        ntasks = 1,
+        cpus_per_task = 4,
+        mem_gb = 8,
+        time_limit = "04:00:00"
+    )
+    Test.@test occursin("JULIA_PKG_OFFLINE", Mycelia.render_sbatch(nersc_quoted_julia))
+
     # Durable block precedes the user-env block, so a caller's explicit override
     # wins (emitted after). Lock that ordering, and assert validate() warns that
     # the override reopens the race the pattern guards against.
