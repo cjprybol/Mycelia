@@ -253,11 +253,13 @@ end
 """
     run_h1_viterbi_dp_greedy_smoke()
 
-Run the clean H1-G0/H1-G1 DP-vs-greedy smoke benchmark. The harness-level
-`ViterbiDP` baseline enumerates all source-to-sink paths and selects the maximum
-shared log-likelihood. The harness-level `GreedyViterbi` baseline selects the
-locally best outgoing transition at each step with the same edge probabilities
-and deterministic tie-breaking.
+Run the clean H1-G0/H1-G1 Viterbi-objective-vs-greedy smoke benchmark. The
+harness-level exhaustive oracle enumerates all source-to-sink paths and selects
+the maximum shared log-likelihood. It is a tiny-fixture oracle for the Viterbi DP
+objective, not a call into the production Rhizomorph ViterbiDP strategy. The
+harness-level `GreedyViterbi` baseline selects the locally best outgoing
+transition at each step with the same edge probabilities and deterministic
+tie-breaking.
 """
 function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
     rows = NamedTuple[]
@@ -269,19 +271,21 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
 
         for result in (dp_result, greedy_result)
             exact_match = result.path == fixture.truth_path
-            expected_path = result.strategy_name == "GreedyViterbi" ?
+            expected_path = result.algorithm == "greedy" ?
                             fixture.expected_greedy_path : fixture.truth_path
             expected_match = result.path == expected_path
             push!(rows, (
+                hypothesis_id = "H1",
                 fixture_id = fixture.id,
                 fixture_name = fixture.name,
                 organism = "synthetic",
                 data_type = "clean",
                 coverage = "fixture",
                 seed = 0,
-                ambiguity_margin = 0.0,
+                ambiguity_margin = missing,
                 algorithm = result.algorithm,
                 strategy_name = result.strategy_name,
+                implementation_scope = result.implementation_scope,
                 path_vertices = join(result.path, ","),
                 truth_vertices = join(fixture.truth_path, ","),
                 expected_strategy_vertices = join(expected_path, ","),
@@ -290,6 +294,7 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 path_accuracy = exact_match ? 1.0 : 0.0,
                 sequence_identity = exact_match ? 1.0 : 0.0,
                 normalized_edit_distance = exact_match ? 0.0 : 1.0,
+                sequence_metric_note = "path_match_proxy_no_sequence",
                 log_probability = result.log_probability,
                 oracle_log_probability = oracle_log_probability,
                 oracle_log_probability_gap = oracle_log_probability - result.log_probability,
@@ -298,8 +303,9 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 delta_log_probability = log_likelihood_gap,
                 log_likelihood_gap_dp_minus_greedy = log_likelihood_gap,
                 tie_breaking = "deterministic_lexicographic_vertex_strand_edge",
+                tie_breaking_exercised = false,
                 emission_model = "neutral",
-                runtime_s = 0.0,
+                runtime_s = result.runtime_s,
                 peak_rss_mib = missing,
                 failure_code = result.failure_code
             ))
@@ -324,7 +330,7 @@ function write_h1_viterbi_dp_greedy_artifacts(;
     table_context_columns = Dict{String, Dict{String, String}}(
         "h1_viterbi_dp_greedy_path_metrics" => Dict(
             "benchmark_dataset_id" => "fixture_id",
-            "benchmark_hypothesis_id" => "algorithm"
+            "benchmark_hypothesis_id" => "hypothesis_id"
         )
     )
 
@@ -360,7 +366,8 @@ function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
 
     selected_hypothesis_ids = _selected_id_set(get(kwargs, :hypothesis_ids, nothing))
     selected_dataset_ids = _selected_id_set(get(kwargs, :dataset_ids, nothing))
-    if selected_dataset_ids !== nothing && !("rhizomorph_graph_unit_fixtures" in selected_dataset_ids)
+    if selected_dataset_ids !== nothing &&
+       selected_dataset_ids != Set(["rhizomorph_graph_unit_fixtures"])
         error("H1 Viterbi DP vs greedy smoke only supports dataset rhizomorph_graph_unit_fixtures.")
     end
     if selected_hypothesis_ids === nothing || selected_hypothesis_ids == Set(["H1"])
@@ -375,11 +382,12 @@ function _h1_select_viterbi_dp_path(fixture::H1SyntheticFixture)
     paths = _h1_enumerate_paths(fixture)
     if isempty(paths)
         return (
-            algorithm = "dp",
-            strategy_name = "ViterbiDP",
+            algorithm = "viterbi_objective_oracle",
+            strategy_name = "ExhaustiveViterbiObjectiveOracle",
+            implementation_scope = "tiny_fixture_exhaustive_oracle_not_production_strategy",
             path = String[],
             log_probability = -Inf,
-            runtime_s = 0.0,
+            runtime_s = time() - start_time,
             failure_code = "no_path"
         )
     end
@@ -390,8 +398,9 @@ function _h1_select_viterbi_dp_path(fixture::H1SyntheticFixture)
     )
     best_path, best_log_probability, _ = first(ranked)
     return (
-        algorithm = "dp",
-        strategy_name = "ViterbiDP",
+        algorithm = "viterbi_objective_oracle",
+        strategy_name = "ExhaustiveViterbiObjectiveOracle",
+        implementation_scope = "tiny_fixture_exhaustive_oracle_not_production_strategy",
         path = best_path,
         log_probability = best_log_probability,
         runtime_s = time() - start_time,
@@ -412,9 +421,10 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
             return (
                 algorithm = "greedy",
                 strategy_name = "GreedyViterbi",
+                implementation_scope = "harness_local_greedy_baseline",
                 path = path,
                 log_probability = log_probability,
-                runtime_s = 0.0,
+                runtime_s = time() - start_time,
                 failure_code = "none"
             )
         end
@@ -424,9 +434,10 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
             return (
                 algorithm = "greedy",
                 strategy_name = "GreedyViterbi",
+                implementation_scope = "harness_local_greedy_baseline",
                 path = path,
                 log_probability = -Inf,
-                runtime_s = 0.0,
+                runtime_s = time() - start_time,
                 failure_code = "no_path"
             )
         end
@@ -440,6 +451,7 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
     return (
         algorithm = "greedy",
         strategy_name = "GreedyViterbi",
+        implementation_scope = "harness_local_greedy_baseline",
         path = path,
         log_probability = -Inf,
         runtime_s = time() - start_time,
