@@ -45,7 +45,11 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test all(ci_plan.ci_suitability .== "ci")
     Test.@test "synthetic_isolate_5386" in ci_plan.dataset_id
     Test.@test !("phix174" in ci_plan.dataset_id)
-    Test.@test all(.!ci_plan.implemented)
+    h1_ci_plan = ci_plan[ci_plan.hypothesis_id .== "H1", :]
+    Test.@test DataFrames.nrow(h1_ci_plan) == 1
+    Test.@test only(h1_ci_plan.dataset_id) == "rhizomorph_graph_unit_fixtures"
+    Test.@test only(h1_ci_plan.implemented)
+    Test.@test all(ci_plan[ci_plan.hypothesis_id .!= "H1", :].implemented .== false)
 
     full_plan = build_rhizomorph_benchmark_plan(scale = "full", hypothesis_ids = ["H2", "H7"])
     Test.@test Set(full_plan.hypothesis_id) == Set(["H2", "H7"])
@@ -69,11 +73,33 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
         build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
     end
+    h1_smoke = run_rhizomorph_benchmark_harness(dry_run = false, hypothesis_ids = ["H1"])
+    Test.@test DataFrames.nrow(h1_smoke) == 4
+    Test.@test Set(h1_smoke.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
+    Test.@test Set(h1_smoke.hypothesis_id) == Set(["H1"])
+    h1_g1_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G1") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g1_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G1") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g1_oracle.path_vertices == "S,B1,B2,T"
+    Test.@test h1_g1_greedy.path_vertices == "S,A1,A2,T"
+    Test.@test h1_g1_greedy.expected_strategy_path_match
+    Test.@test !h1_g1_greedy.exact_path_match
+    Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
     test_throws_message(
         ErrorException,
-        "Rhizomorph benchmark slice execution is not implemented yet"
+        "only supports dataset rhizomorph_graph_unit_fixtures"
     ) do
-        run_rhizomorph_benchmark_harness(dry_run = false)
+        run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            hypothesis_ids = ["H1"],
+            dataset_ids = ["rhizomorph_graph_unit_fixtures", "phix174"]
+        )
     end
 
     invalid_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
@@ -158,5 +184,45 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
             Test.@test read(plan_csv, String) ==
                        read(joinpath(second_output_dir, "tables", "rhizomorph_benchmark_plan.csv"), String)
         end
+    end
+end
+
+Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
+    mktempdir() do output_dir
+        artifacts = write_h1_viterbi_dp_greedy_artifacts(
+            output_dir = output_dir,
+            run_id = "h1_smoke_test",
+            command_args = ["--slice", "H1", "--execute", "--write-artifacts"],
+            generated_at = "2026-06-27T00:00:00Z"
+        )
+        metrics_csv = joinpath(output_dir, "tables", "h1_viterbi_dp_greedy_path_metrics.csv")
+        Test.@test isfile(metrics_csv)
+        metrics = DataFrames.DataFrame(CSV.File(metrics_csv))
+        Test.@test DataFrames.nrow(metrics) == 4
+        Test.@test all(metrics.benchmark_hypothesis_id .== "H1")
+        Test.@test all(metrics.benchmark_dataset_id .== "rhizomorph_graph_unit_fixtures")
+        Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1"])
+        Test.@test Set(metrics.hypothesis_id) == Set(["H1"])
+        Test.@test Set(metrics.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
+
+        h1_g1_oracle = only(metrics[
+            (metrics.fixture_id .== "H1-G1") .&
+            (metrics.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+            :
+        ])
+        h1_g1_greedy = only(metrics[
+            (metrics.fixture_id .== "H1-G1") .&
+            (metrics.strategy_name .== "GreedyViterbi"),
+            :
+        ])
+        Test.@test h1_g1_oracle.path_vertices == "S,B1,B2,T"
+        Test.@test h1_g1_greedy.path_vertices == "S,A1,A2,T"
+        Test.@test h1_g1_greedy.expected_strategy_path_match
+        Test.@test !h1_g1_greedy.exact_path_match
+        Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
+
+        run_provenance = JSON.parsefile(artifacts.provenance)
+        Test.@test run_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
+        Test.@test run_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
     end
 end

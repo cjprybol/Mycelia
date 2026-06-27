@@ -276,6 +276,7 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
             expected_match = result.path == expected_path
             push!(rows, (
                 hypothesis_id = "H1",
+                dataset_id = "rhizomorph_graph_unit_fixtures",
                 fixture_id = fixture.id,
                 fixture_name = fixture.name,
                 organism = "synthetic",
@@ -329,7 +330,7 @@ function write_h1_viterbi_dp_greedy_artifacts(;
     tables = ["h1_viterbi_dp_greedy_path_metrics" => path_metrics]
     table_context_columns = Dict{String, Dict{String, String}}(
         "h1_viterbi_dp_greedy_path_metrics" => Dict(
-            "benchmark_dataset_id" => "fixture_id",
+            "benchmark_dataset_id" => "dataset_id",
             "benchmark_hypothesis_id" => "hypothesis_id"
         )
     )
@@ -339,7 +340,7 @@ function write_h1_viterbi_dp_greedy_artifacts(;
         output_dir = output_dir,
         run_id = run_id,
         scale = "local-smoke",
-        dataset_ids = unique(string.(path_metrics.fixture_id)),
+        dataset_ids = unique(string.(path_metrics.dataset_id)),
         command_args = command_args,
         generated_at = generated_at,
         metadata = Dict{String, Any}(
