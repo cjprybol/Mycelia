@@ -3,6 +3,7 @@
 # Usage:
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --output-dir /tmp/b8 --skip-plots
+#   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --beam-widths exact,1,4,16 --window-scale 4 --repetitions 3 --skip-plots
 
 import BioSequences
 if !("--skip-plots" in ARGS)
@@ -36,6 +37,9 @@ const VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "viterbi_accuracy_b8"
 )
 const VITERBI_ACCURACY_K = 9
+const VITERBI_ACCURACY_BASE_VIROID_LENGTH = 360
+const VITERBI_ACCURACY_BASE_PHAGE_LENGTH = 432
+const VITERBI_ACCURACY_BASE_TEXT_LENGTH = 432
 
 struct ViterbiAccuracyFixture
     dataset_id::String
@@ -52,6 +56,9 @@ function main(args::Vector{String} = ARGS)::Nothing
     run_id = _viterbi_accuracy_arg_value(args, "--run-id", _default_viterbi_accuracy_run_id())
     scale = _viterbi_accuracy_arg_value(args, "--scale", "local-smoke")
     beam_widths = _viterbi_accuracy_beam_widths(args)
+    error_rates = _viterbi_accuracy_error_rates(args)
+    window_scale = _viterbi_accuracy_positive_float(args, "--window-scale", 1.0)
+    repetitions = _viterbi_accuracy_positive_int(args, "--repetitions", 1)
     write_plots = !("--skip-plots" in args)
     artifacts = run_viterbi_accuracy_benchmark(
         output_dir;
@@ -64,6 +71,9 @@ function main(args::Vector{String} = ARGS)::Nothing
             args...
         ],
         beam_widths = beam_widths,
+        error_rates = error_rates,
+        window_scale = window_scale,
+        repetitions = repetitions,
         write_plots = write_plots
     )
     println("Wrote B8 Viterbi accuracy benchmark artifacts:")
@@ -84,15 +94,29 @@ function run_viterbi_accuracy_benchmark(
             "benchmarking/viterbi_accuracy_benchmark.jl"
         ],
         beam_widths::Vector{Union{Nothing, Int}} = Union{Nothing, Int}[nothing],
+        error_rates::Vector{Float64} = collect(VITERBI_ACCURACY_ERROR_RATES),
+        window_scale::Float64 = 1.0,
+        repetitions::Int = 1,
         write_plots::Bool = true
 )::NamedTuple
-    fixtures = viterbi_accuracy_fixtures()
+    fixtures = viterbi_accuracy_fixtures(window_scale = window_scale)
     rows = NamedTuple[]
 
     for fixture in fixtures
-        for target_error_rate in VITERBI_ACCURACY_ERROR_RATES
+        for target_error_rate in error_rates
             for beam_width in beam_widths
-                push!(rows, _viterbi_accuracy_row(fixture, target_error_rate, beam_width))
+                for replicate in 1:repetitions
+                    push!(
+                        rows,
+                        _viterbi_accuracy_row(
+                            fixture,
+                            target_error_rate,
+                            beam_width,
+                            replicate,
+                            window_scale
+                        )
+                    )
+                end
             end
         end
     end
@@ -109,9 +133,11 @@ function run_viterbi_accuracy_benchmark(
             "bead" => "td-he0z.9",
             "benchmark" => "generalized_viterbi_accuracy_vs_error_rate",
             "baseline" => "uncorrected injected-error observations",
-            "error_rates" => collect(VITERBI_ACCURACY_ERROR_RATES),
+            "error_rates" => error_rates,
             "beam_widths" => [_beam_width_label(beam_width) for beam_width in beam_widths],
             "fixture_dir" => relpath(VITERBI_ACCURACY_FIXTURE_DIR, @__DIR__),
+            "repetitions" => repetitions,
+            "window_scale" => window_scale,
             "unit" => "fixed-length $(VITERBI_ACCURACY_K)-mers/ngrams"
         ),
         table_context_columns = Dict(
@@ -138,7 +164,7 @@ function run_viterbi_accuracy_benchmark(
     )
 end
 
-function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
+function viterbi_accuracy_fixtures(; window_scale::Float64 = 1.0)::Vector{ViterbiAccuracyFixture}
     pstvd = replace(
         _read_fasta_sequence(joinpath(VITERBI_ACCURACY_FIXTURE_DIR, "pstvd_nc002030.fasta")),
         'T' => 'U'
@@ -146,9 +172,25 @@ function viterbi_accuracy_fixtures()::Vector{ViterbiAccuracyFixture}
     phix = _read_fasta_sequence(joinpath(VITERBI_ACCURACY_FIXTURE_DIR, "phix174_nc001422.fasta"))
     text = read(joinpath(VITERBI_ACCURACY_FIXTURE_DIR, "pride_and_prejudice_excerpt.txt"), String)
 
-    viroid_window = first(pstvd, min(length(pstvd), 360))
-    phage_window = first(phix, min(length(phix), 432))
-    text_window = _normalized_text_window(text, 432)
+    viroid_length = _scaled_fixture_length(
+        length(pstvd),
+        VITERBI_ACCURACY_BASE_VIROID_LENGTH,
+        window_scale
+    )
+    phage_length = _scaled_fixture_length(
+        length(phix),
+        VITERBI_ACCURACY_BASE_PHAGE_LENGTH,
+        window_scale
+    )
+    text_length = _scaled_fixture_length(
+        length(text),
+        VITERBI_ACCURACY_BASE_TEXT_LENGTH,
+        window_scale
+    )
+
+    viroid_window = first(pstvd, viroid_length)
+    phage_window = first(phix, phage_length)
+    text_window = _normalized_text_window(text, text_length)
 
     viroid_record = FASTX.FASTA.Record(
         "pstvd_nc002030", BioSequences.LongRNA{4}(viroid_window)
@@ -202,10 +244,12 @@ end
 function _viterbi_accuracy_row(
         fixture::ViterbiAccuracyFixture,
         target_error_rate::Float64,
-        beam_width::Union{Nothing, Int}
+        beam_width::Union{Nothing, Int},
+        replicate::Int,
+        window_scale::Float64
 )::NamedTuple
     observed, injected_positions = _inject_fixture_errors(
-        fixture.truth, fixture.alphabet, target_error_rate
+        fixture.truth, fixture.alphabet, target_error_rate, replicate
     )
     converted_observed = _convert_observations(observed, fixture.domain)
     config = Mycelia.ViterbiCorrectionConfig(
@@ -215,7 +259,13 @@ function _viterbi_accuracy_row(
     correction_start_ns = time_ns()
     result = Mycelia.correct_observations(fixture.graph, [converted_observed]; config = config)
     correction_wall_seconds = (time_ns() - correction_start_ns) / 1.0e9
-    corrected = [string(observation) for observation in only(result.corrected_observations)]
+    corrected_observation = only(result.corrected_observations)
+    correction_succeeded = !isnothing(corrected_observation)
+    corrected = if correction_succeeded
+        [string(observation) for observation in corrected_observation]
+    else
+        copy(observed)
+    end
 
     baseline_edit_distance = _sum_edit_distance(observed, fixture.truth)
     corrected_edit_distance = _sum_edit_distance(corrected, fixture.truth)
@@ -234,13 +284,17 @@ function _viterbi_accuracy_row(
         recovered_errors / injected_error_count
     end
 
-    Test.@test length(corrected) == length(fixture.truth)
+    if correction_succeeded
+        Test.@test length(corrected) == length(fixture.truth)
+    end
 
     return (
         dataset_id = fixture.dataset_id,
         dataset_name = fixture.dataset_name,
         domain = string(fixture.domain),
         source = fixture.source,
+        replicate = replicate,
+        window_scale = window_scale,
         target_error_rate = target_error_rate,
         actual_error_rate = actual_error_rate,
         beam_width = _beam_width_label(beam_width),
@@ -250,6 +304,7 @@ function _viterbi_accuracy_row(
         injected_error_count = injected_error_count,
         baseline_method = "uncorrected_observations",
         corrected_method = "generalized_viterbi_correct_observations",
+        correction_succeeded = correction_succeeded,
         baseline_edit_distance = baseline_edit_distance,
         corrected_edit_distance = corrected_edit_distance,
         edit_distance_reduction = edit_distance_reduction,
@@ -266,7 +321,8 @@ function _viterbi_accuracy_row(
         diagnostics_alphabet = string(result.diagnostics[:alphabet]),
         diagnostics_strand_mode = string(result.diagnostics[:strand_mode]),
         diagnostics_emission_model = string(result.diagnostics[:emission_model]),
-        diagnostics_transition_model = string(result.diagnostics[:transition_model])
+        diagnostics_transition_model = string(result.diagnostics[:transition_model]),
+        diagnostics_reason = string(get(result.diagnostics, :reason, ""))
     )
 end
 
@@ -274,6 +330,14 @@ function _read_fasta_sequence(path::AbstractString)::String
     lines = readlines(path)
     sequence_lines = [strip(line) for line in lines if !isempty(line) && !startswith(line, ">")]
     return uppercase(join(sequence_lines))
+end
+
+function _scaled_fixture_length(total_length::Int, base_length::Int, window_scale::Float64)::Int
+    if window_scale <= 0.0
+        throw(ArgumentError("window_scale must be positive, got $window_scale"))
+    end
+    scaled_length = max(VITERBI_ACCURACY_K, round(Int, base_length * window_scale))
+    return min(total_length, scaled_length)
 end
 
 function _sequence_kmers(sequence::AbstractString, k::Int)::Vector{String}
@@ -290,7 +354,8 @@ end
 function _inject_fixture_errors(
         truth::Vector{String},
         alphabet::Vector{Char},
-        target_error_rate::Float64
+        target_error_rate::Float64,
+        replicate::Int = 1
 )::Tuple{Vector{String}, Vector{Tuple{Int, Int}}}
     candidates = Tuple{Int, Int}[]
     for item_index in 2:(length(truth) - 1)
@@ -301,7 +366,7 @@ function _inject_fixture_errors(
 
     target_errors = max(1, round(Int, target_error_rate * length(candidates)))
     target_errors = min(target_errors, length(candidates))
-    selected_offsets = round.(Int, range(1, length(candidates); length = target_errors))
+    selected_offsets = _deterministic_error_offsets(length(candidates), target_errors, replicate)
     selected_positions = unique(candidates[selected_offsets])
 
     observed = copy(truth)
@@ -314,6 +379,31 @@ function _inject_fixture_errors(
     end
 
     return observed, selected_positions
+end
+
+function _deterministic_error_offsets(candidate_count::Int, target_errors::Int, replicate::Int)::Vector{Int}
+    if replicate <= 0
+        throw(ArgumentError("replicate must be positive, got $replicate"))
+    end
+    if target_errors <= 0 || candidate_count <= 0
+        return Int[]
+    end
+
+    offsets = Int[]
+    seen = Set{Int}()
+    stride = max(1, floor(Int, candidate_count / target_errors))
+    cursor = mod1(replicate, candidate_count)
+    while length(offsets) < target_errors
+        if !(cursor in seen)
+            push!(offsets, cursor)
+            push!(seen, cursor)
+        end
+        cursor = mod1(cursor + stride, candidate_count)
+        if cursor in seen
+            cursor = mod1(cursor + 1, candidate_count)
+        end
+    end
+    return offsets
 end
 
 function _replacement_character(character::Char, alphabet::Vector{Char}, offset::Int)::Char
@@ -451,6 +541,54 @@ function _viterbi_accuracy_beam_widths(args::Vector{String})::Vector{Union{Nothi
         end
     end
     return unique(beam_widths)
+end
+
+function _viterbi_accuracy_error_rates(args::Vector{String})::Vector{Float64}
+    raw = _viterbi_accuracy_arg_value(
+        args,
+        "--error-rates",
+        join(string.(VITERBI_ACCURACY_ERROR_RATES), ",")
+    )
+    error_rates = Float64[]
+    for item in split(raw, ",")
+        normalized = strip(item)
+        if isempty(normalized)
+            continue
+        end
+        error_rate = parse(Float64, normalized)
+        if error_rate <= 0.0 || error_rate >= 0.5
+            throw(ArgumentError("error rates must be in (0, 0.5), got $error_rate"))
+        end
+        push!(error_rates, error_rate)
+    end
+    if isempty(error_rates)
+        throw(ArgumentError("at least one error rate is required"))
+    end
+    return unique(error_rates)
+end
+
+function _viterbi_accuracy_positive_float(
+        args::Vector{String},
+        flag::AbstractString,
+        default::Float64
+)::Float64
+    value = parse(Float64, _viterbi_accuracy_arg_value(args, flag, string(default)))
+    if value <= 0.0
+        throw(ArgumentError("$flag must be positive, got $value"))
+    end
+    return value
+end
+
+function _viterbi_accuracy_positive_int(
+        args::Vector{String},
+        flag::AbstractString,
+        default::Int
+)::Int
+    value = parse(Int, _viterbi_accuracy_arg_value(args, flag, string(default)))
+    if value <= 0
+        throw(ArgumentError("$flag must be positive, got $value"))
+    end
+    return value
 end
 
 function _viterbi_accuracy_arg_value(
