@@ -243,10 +243,12 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         Test.@test metrics_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
         Test.@test metrics_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
 
-        Test.@test_throws ErrorException run_rhizomorph_benchmark_harness(
-            dry_run = false,
-            hypothesis_ids = ["H1"],
-            scale = "tiny"
-        )
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            run_rhizomorph_benchmark_harness(
+                dry_run = false,
+                hypothesis_ids = ["H1"],
+                scale = "tiny"
+            )
+        end
     end
 end
