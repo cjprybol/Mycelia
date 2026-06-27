@@ -361,6 +361,9 @@ implemented H1-G0/H1-G1 Viterbi-DP-vs-greedy synthetic smoke when `H1` is the
 requested slice.
 """
 function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
+    if haskey(kwargs, :scale)
+        _validate_scale(string(kwargs[:scale]))
+    end
     if dry_run
         return build_rhizomorph_benchmark_plan(; kwargs...)
     end

@@ -195,8 +195,16 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
             command_args = ["--slice", "H1", "--execute", "--write-artifacts"],
             generated_at = "2026-06-27T00:00:00Z"
         )
+        index_json = joinpath(output_dir, "artifact-index.json")
         metrics_csv = joinpath(output_dir, "tables", "h1_viterbi_dp_greedy_path_metrics.csv")
+        metrics_provenance_json = joinpath(
+            output_dir,
+            "provenance",
+            "h1_viterbi_dp_greedy_path_metrics.provenance.json"
+        )
+        Test.@test isfile(index_json)
         Test.@test isfile(metrics_csv)
+        Test.@test isfile(metrics_provenance_json)
         metrics = DataFrames.DataFrame(CSV.File(metrics_csv))
         Test.@test DataFrames.nrow(metrics) == 4
         Test.@test all(metrics.benchmark_hypothesis_id .== "H1")
@@ -221,8 +229,24 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         Test.@test !h1_g1_greedy.exact_path_match
         Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
 
+        index = JSON.parsefile(index_json)
+        Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["table"] ==
+                   joinpath("tables", "h1_viterbi_dp_greedy_path_metrics.csv")
+        Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["provenance"] ==
+                   joinpath("provenance", "h1_viterbi_dp_greedy_path_metrics.provenance.json")
+
         run_provenance = JSON.parsefile(artifacts.provenance)
         Test.@test run_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
         Test.@test run_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
+
+        metrics_provenance = JSON.parsefile(metrics_provenance_json)
+        Test.@test metrics_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
+        Test.@test metrics_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
+
+        Test.@test_throws ErrorException run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            hypothesis_ids = ["H1"],
+            scale = "tiny"
+        )
     end
 end
