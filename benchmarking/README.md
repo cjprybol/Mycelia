@@ -173,7 +173,8 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slic
 # Run the lightweight H1-G0/H1-G1 Viterbi-objective-vs-greedy smoke
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --execute
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --execute \
-  --write-artifacts --output-dir benchmarking/results/h1_viterbi_dp_greedy_smoke
+  --write-artifacts --output-dir /tmp/mycelia-h1-viterbi-smoke
+# Reference output is committed under benchmarking/results/h1_viterbi_dp_greedy_smoke/.
 ```
 
 ### Running Complete Benchmark Suite

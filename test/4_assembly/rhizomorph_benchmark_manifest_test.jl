@@ -84,6 +84,12 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test DataFrames.nrow(h1_smoke) == 4
     Test.@test Set(h1_smoke.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
     Test.@test Set(h1_smoke.hypothesis_id) == Set(["H1"])
+    Test.@test Set(zip(h1_smoke.fixture_id, h1_smoke.strategy_name)) == Set([
+        ("H1-G0", "ExhaustiveViterbiObjectiveOracle"),
+        ("H1-G0", "GreedyViterbi"),
+        ("H1-G1", "ExhaustiveViterbiObjectiveOracle"),
+        ("H1-G1", "GreedyViterbi")
+    ])
     h1_g1_oracle = only(h1_smoke[
         (h1_smoke.fixture_id .== "H1-G1") .&
         (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
@@ -219,6 +225,12 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1"])
         Test.@test Set(metrics.hypothesis_id) == Set(["H1"])
         Test.@test Set(metrics.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
+        Test.@test Set(zip(metrics.fixture_id, metrics.strategy_name)) == Set([
+            ("H1-G0", "ExhaustiveViterbiObjectiveOracle"),
+            ("H1-G0", "GreedyViterbi"),
+            ("H1-G1", "ExhaustiveViterbiObjectiveOracle"),
+            ("H1-G1", "GreedyViterbi")
+        ])
 
         h1_g1_oracle = only(metrics[
             (metrics.fixture_id .== "H1-G1") .&
