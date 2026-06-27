@@ -43,11 +43,25 @@ Test.@testset "Fixed-length graph Viterbi correction" begin
         ]
 
         result = Mycelia.correct_observations(graph, [observed])
+        beam_result = Mycelia.correct_observations(
+            graph,
+            [observed];
+            config = Mycelia.ViterbiCorrectionConfig(beam_width = 1)
+        )
 
         Test.@test result.diagnostics[:alphabet] == :DNA
         Test.@test result.diagnostics[:emission_model] == :alphabet_parameterized
         Test.@test fixed_length_decoded_label_strings(result) ==
             ["ATG", "TGC", "GCG", "CGT"]
+        Test.@test beam_result.diagnostics[:beam_width] == 1
+        Test.@test only(beam_result.paths).diagnostics[:max_retained_states] <= 1
+        Test.@test fixed_length_decoded_label_strings(beam_result) ==
+            fixed_length_decoded_label_strings(result)
+    end
+
+    Test.@testset "beam width validation rejects non-positive beams" begin
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width = 0)
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width = -1)
     end
 
     Test.@testset "qualmer graph correction reuses quality-aware emissions" begin

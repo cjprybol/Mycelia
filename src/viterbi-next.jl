@@ -73,6 +73,7 @@ struct ViterbiCorrectionConfig{F <: Function}
     alphabet::Symbol
     strand_mode::Symbol
     max_steps::Union{Nothing, Int}
+    beam_width::Union{Nothing, Int}
     target_vertex::Any
     start_strand::Rhizomorph.StrandOrientation
     edge_weight::Function
@@ -84,6 +85,7 @@ struct ViterbiCorrectionConfig{F <: Function}
             alphabet::Symbol = :auto,
             strand_mode::Symbol = :auto,
             max_steps::Union{Nothing, Int} = nothing,
+            beam_width::Union{Nothing, Int} = nothing,
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
             edge_weight::Function = Rhizomorph.edge_data_weight
@@ -97,6 +99,9 @@ struct ViterbiCorrectionConfig{F <: Function}
         if max_steps !== nothing && max_steps < 0
             throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
         end
+        if beam_width !== nothing && beam_width <= 0
+            throw(ArgumentError("beam_width must be positive when set, got $beam_width"))
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -104,6 +109,7 @@ struct ViterbiCorrectionConfig{F <: Function}
             alphabet,
             strand_mode,
             max_steps,
+            beam_width,
             target_vertex,
             start_strand,
             edge_weight
@@ -118,6 +124,7 @@ function ViterbiCorrectionConfig(;
         alphabet::Symbol = :auto,
         strand_mode::Symbol = :auto,
         max_steps::Union{Nothing, Int} = nothing,
+        beam_width::Union{Nothing, Int} = nothing,
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
         edge_weight::Function = Rhizomorph.edge_data_weight
@@ -129,6 +136,7 @@ function ViterbiCorrectionConfig(;
         alphabet = alphabet,
         strand_mode = strand_mode,
         max_steps = max_steps,
+        beam_width = beam_width,
         target_vertex = target_vertex,
         start_strand = start_strand,
         edge_weight = edge_weight
@@ -281,13 +289,24 @@ function _correct_metagraphs_next_observations(
                 observation,
                 config
             )
-            Rhizomorph.viterbi_decode_next(
-                weighted,
-                start_vertex,
-                max_steps;
-                target_vertex = target_vertex,
-                start_strand = config.start_strand
-            )
+            if config.beam_width === nothing
+                Rhizomorph.viterbi_decode_next(
+                    weighted,
+                    start_vertex,
+                    max_steps;
+                    target_vertex = target_vertex,
+                    start_strand = config.start_strand
+                )
+            else
+                Rhizomorph.beam_pruned_viterbi_decode_next(
+                    weighted,
+                    start_vertex,
+                    max_steps;
+                    target_vertex = target_vertex,
+                    start_strand = config.start_strand,
+                    beam_width = config.beam_width
+                )
+            end
         end
         push!(paths, result)
     end
@@ -304,9 +323,35 @@ function _correct_metagraphs_next_observations(
                            :quality_aware : :alphabet_parameterized,
         :transition_model => _viterbi_transition_scoring(graph, transition_edge_weight),
         :strand_mode => strand_mode,
-        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet)
+        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
+        :beam_width => config.beam_width,
+        :expanded_states => _sum_path_diagnostic(paths, :expanded_states),
+        :generated_states => _sum_path_diagnostic(paths, :generated_states),
+        :max_retained_states => _max_path_diagnostic(paths, :max_retained_states),
+        :cumulative_retained_states => _sum_path_diagnostic(
+            paths,
+            :cumulative_retained_states
+        )
     )
     return ViterbiCorrectionResult(corrected, paths, diagnostics)
+end
+
+
+function _sum_path_diagnostic(
+        paths::AbstractVector{Rhizomorph.ViterbiDecodingResult},
+        key::Symbol
+)::Int
+    return sum(Int(get(path.diagnostics, key, 0)) for path in paths)
+end
+
+function _max_path_diagnostic(
+        paths::AbstractVector{Rhizomorph.ViterbiDecodingResult},
+        key::Symbol
+)::Int
+    if isempty(paths)
+        return 0
+    end
+    return maximum(Int(get(path.diagnostics, key, 0)) for path in paths)
 end
 
 function _correction_vertex_data_type(
@@ -876,6 +921,7 @@ function _viterbi_correct_observation(
         :strand_mode => strand_mode,
         :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
         :max_steps => length(observation) - 1,
+        :beam_width => config.beam_width,
         :target_vertex => target_vertex,
         :start_strand => Rhizomorph._normalize_strand(config.start_strand),
         :score_domain => :log_probability,
@@ -998,6 +1044,14 @@ function _viterbi_correct_observation(
 
         if isempty(next_scores)
             break
+        end
+
+        if config.beam_width !== nothing
+            next_scores, next_predecessors = _prune_correction_beam(
+                next_scores,
+                next_predecessors,
+                config.beam_width
+            )
         end
 
         push!(predecessors_by_depth, next_predecessors)
@@ -1197,6 +1251,42 @@ function _viterbi_reverse_complement_string(
         throw(ArgumentError("alphabet $alphabet has no reverse complement"))
     end
     return join((complement[base] for base in reverse(uppercase(sequence))))
+end
+
+function _prune_correction_beam(
+        scores::Dict{Tuple{T, Rhizomorph.StrandOrientation}, Float64},
+        predecessors::Dict{
+            Tuple{T, Rhizomorph.StrandOrientation},
+            Tuple{T, Rhizomorph.StrandOrientation}
+        },
+        beam_width::Int
+)::Tuple{
+        Dict{Tuple{T, Rhizomorph.StrandOrientation}, Float64},
+        Dict{Tuple{T, Rhizomorph.StrandOrientation}, Tuple{T, Rhizomorph.StrandOrientation}}
+} where {T}
+    if length(scores) <= beam_width
+        return scores, predecessors
+    end
+
+    retained = first(
+        sort(
+            collect(scores);
+            by = item -> (-item[2], string(item[1][1]), Int(item[1][2]))
+        ),
+        beam_width
+    )
+    retained_scores = Dict{Tuple{T, Rhizomorph.StrandOrientation}, Float64}(retained)
+    retained_predecessors = Dict{
+        Tuple{T, Rhizomorph.StrandOrientation},
+        Tuple{T, Rhizomorph.StrandOrientation}
+    }()
+    for (state, _) in retained
+        if haskey(predecessors, state)
+            retained_predecessors[state] = predecessors[state]
+        end
+    end
+
+    return retained_scores, retained_predecessors
 end
 
 function _best_correction_state(

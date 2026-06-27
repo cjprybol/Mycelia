@@ -5,14 +5,30 @@
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --output-dir /tmp/b8 --skip-plots
 
 import BioSequences
-import CairoMakie
+if !("--skip-plots" in ARGS)
+    @eval import CairoMakie
+end
 import DataFrames
+import Dates
 import FASTX
 import Kmers
+
+# This benchmark exercises Rhizomorph graph builders plus generalized Viterbi
+# correction only. Loading Mycelia in core-benchmark mode avoids unrelated
+# plotting/ML imports during HPC smoke runs.
+if get(ENV, "MYCELIA_CORE_BENCHMARK", "") == ""
+    ENV["MYCELIA_CORE_BENCHMARK"] = "true"
+end
+
 import Mycelia
 import Test
 
 include(joinpath(@__DIR__, "benchmark_artifacts.jl"))
+
+function _default_viterbi_accuracy_run_id()::String
+    timestamp = Dates.format(Dates.now(Dates.UTC), Dates.DateFormat("yyyymmddTHHMMSS"))
+    return "b8_viterbi_accuracy_$(timestamp)Z"
+end
 
 const VITERBI_ACCURACY_ERROR_RATES = (0.01, 0.05, 0.10)
 const VITERBI_ACCURACY_FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "viterbi_accuracy")
@@ -33,8 +49,23 @@ end
 
 function main(args::Vector{String} = ARGS)::Nothing
     output_dir = _viterbi_accuracy_arg_value(args, "--output-dir", VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR)
+    run_id = _viterbi_accuracy_arg_value(args, "--run-id", _default_viterbi_accuracy_run_id())
+    scale = _viterbi_accuracy_arg_value(args, "--scale", "local-smoke")
+    beam_widths = _viterbi_accuracy_beam_widths(args)
     write_plots = !("--skip-plots" in args)
-    artifacts = run_viterbi_accuracy_benchmark(output_dir; write_plots = write_plots)
+    artifacts = run_viterbi_accuracy_benchmark(
+        output_dir;
+        run_id = run_id,
+        scale = scale,
+        command_args = [
+            "julia",
+            "--project=.",
+            "benchmarking/viterbi_accuracy_benchmark.jl",
+            args...
+        ],
+        beam_widths = beam_widths,
+        write_plots = write_plots
+    )
     println("Wrote B8 Viterbi accuracy benchmark artifacts:")
     println("  root: $(artifacts.root)")
     println("  summary: $(artifacts.summary_csv)")
@@ -45,6 +76,14 @@ end
 
 function run_viterbi_accuracy_benchmark(
         output_dir::AbstractString = VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR;
+        run_id::AbstractString = _default_viterbi_accuracy_run_id(),
+        scale::AbstractString = "local-smoke",
+        command_args::Vector{String} = [
+            "julia",
+            "--project=.",
+            "benchmarking/viterbi_accuracy_benchmark.jl"
+        ],
+        beam_widths::Vector{Union{Nothing, Int}} = Union{Nothing, Int}[nothing],
         write_plots::Bool = true
 )::NamedTuple
     fixtures = viterbi_accuracy_fixtures()
@@ -52,7 +91,9 @@ function run_viterbi_accuracy_benchmark(
 
     for fixture in fixtures
         for target_error_rate in VITERBI_ACCURACY_ERROR_RATES
-            push!(rows, _viterbi_accuracy_row(fixture, target_error_rate))
+            for beam_width in beam_widths
+                push!(rows, _viterbi_accuracy_row(fixture, target_error_rate, beam_width))
+            end
         end
     end
 
@@ -60,15 +101,16 @@ function run_viterbi_accuracy_benchmark(
     artifacts = write_benchmark_artifacts(
         ["viterbi_accuracy_summary" => summary];
         output_dir = output_dir,
-        run_id = "b8_viterbi_accuracy_local_20260625",
-        scale = "local-smoke",
+        run_id = run_id,
+        scale = scale,
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
-        command_args = ["julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl"],
+        command_args = command_args,
         metadata = Dict(
             "bead" => "td-he0z.9",
             "benchmark" => "generalized_viterbi_accuracy_vs_error_rate",
             "baseline" => "uncorrected injected-error observations",
             "error_rates" => collect(VITERBI_ACCURACY_ERROR_RATES),
+            "beam_widths" => [_beam_width_label(beam_width) for beam_width in beam_widths],
             "fixture_dir" => relpath(VITERBI_ACCURACY_FIXTURE_DIR, @__DIR__),
             "unit" => "fixed-length $(VITERBI_ACCURACY_K)-mers/ngrams"
         ),
@@ -159,14 +201,20 @@ end
 
 function _viterbi_accuracy_row(
         fixture::ViterbiAccuracyFixture,
-        target_error_rate::Float64
+        target_error_rate::Float64,
+        beam_width::Union{Nothing, Int}
 )::NamedTuple
     observed, injected_positions = _inject_fixture_errors(
         fixture.truth, fixture.alphabet, target_error_rate
     )
     converted_observed = _convert_observations(observed, fixture.domain)
-    config = Mycelia.ViterbiCorrectionConfig(error_rate = target_error_rate)
+    config = Mycelia.ViterbiCorrectionConfig(
+        error_rate = target_error_rate,
+        beam_width = beam_width
+    )
+    correction_start_ns = time_ns()
     result = Mycelia.correct_observations(fixture.graph, [converted_observed]; config = config)
+    correction_wall_seconds = (time_ns() - correction_start_ns) / 1.0e9
     corrected = [string(observation) for observation in only(result.corrected_observations)]
 
     baseline_edit_distance = _sum_edit_distance(observed, fixture.truth)
@@ -195,6 +243,8 @@ function _viterbi_accuracy_row(
         source = fixture.source,
         target_error_rate = target_error_rate,
         actual_error_rate = actual_error_rate,
+        beam_width = _beam_width_label(beam_width),
+        beam_width_limit = isnothing(beam_width) ? 0 : beam_width,
         observation_count = length(fixture.truth),
         editable_positions = editable_positions,
         injected_error_count = injected_error_count,
@@ -205,6 +255,14 @@ function _viterbi_accuracy_row(
         edit_distance_reduction = edit_distance_reduction,
         injected_error_recall = recall,
         corrected_all_injected_positions = recovered_errors == injected_error_count,
+        correction_wall_seconds = correction_wall_seconds,
+        diagnostics_expanded_states = _diagnostic_int(result.diagnostics, :expanded_states),
+        diagnostics_generated_states = _diagnostic_int(result.diagnostics, :generated_states),
+        diagnostics_max_retained_states = _diagnostic_int(result.diagnostics, :max_retained_states),
+        diagnostics_cumulative_retained_states = _diagnostic_int(
+            result.diagnostics,
+            :cumulative_retained_states
+        ),
         diagnostics_alphabet = string(result.diagnostics[:alphabet]),
         diagnostics_strand_mode = string(result.diagnostics[:strand_mode]),
         diagnostics_emission_model = string(result.diagnostics[:emission_model]),
@@ -326,6 +384,15 @@ function _write_viterbi_accuracy_figure(
         summary::DataFrames.DataFrame,
         plots_dir::AbstractString
 )::NamedTuple
+    if !isdefined(@__MODULE__, :CairoMakie)
+        throw(
+            ArgumentError(
+                "CairoMakie was not loaded; rerun without --skip-plots or " *
+                "import CairoMakie before calling this function"
+            )
+        )
+    end
+
     mkpath(plots_dir)
     fig = CairoMakie.Figure(size = (900, 600), fontsize = 16)
     axis = CairoMakie.Axis(
@@ -358,6 +425,32 @@ function _write_viterbi_accuracy_figure(
     CairoMakie.save(png_path, fig)
     CairoMakie.save(svg_path, fig)
     return (png = png_path, svg = svg_path)
+end
+
+function _diagnostic_int(diagnostics::AbstractDict, key::Symbol)::Int
+    return Int(get(diagnostics, key, 0))
+end
+
+function _beam_width_label(beam_width::Union{Nothing, Int})::String
+    return isnothing(beam_width) ? "exact" : string(beam_width)
+end
+
+function _viterbi_accuracy_beam_widths(args::Vector{String})::Vector{Union{Nothing, Int}}
+    raw = _viterbi_accuracy_arg_value(args, "--beam-widths", "exact")
+    beam_widths = Union{Nothing, Int}[]
+    for item in split(raw, ",")
+        normalized = lowercase(strip(item))
+        if normalized in ("", "exact", "none", "nothing", "unbounded")
+            push!(beam_widths, nothing)
+        else
+            beam_width = parse(Int, normalized)
+            if beam_width <= 0
+                throw(ArgumentError("beam widths must be positive, got $beam_width"))
+            end
+            push!(beam_widths, beam_width)
+        end
+    end
+    return unique(beam_widths)
 end
 
 function _viterbi_accuracy_arg_value(
