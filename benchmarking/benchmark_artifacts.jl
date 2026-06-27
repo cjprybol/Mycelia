@@ -251,8 +251,6 @@ end
 function _benchmark_git_metadata(repo_root::AbstractString)
     return OrderedCollections.OrderedDict{String, Any}(
         "commit" => _git_output(repo_root, ["rev-parse", "HEAD"]),
-        "branch" => _git_output(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"]),
-        "remote_url" => _git_output(repo_root, ["config", "--get", "remote.origin.url"]),
         "is_dirty" => _git_dirty(repo_root)
     )
 end

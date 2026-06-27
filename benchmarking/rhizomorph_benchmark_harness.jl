@@ -268,6 +268,12 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
         greedy_result = _h1_select_greedy_viterbi_path(fixture)
         oracle_log_probability = _h1_path_log_probability(fixture, fixture.truth_path)
         log_likelihood_gap = dp_result.log_probability - greedy_result.log_probability
+        if dp_result.failure_code != "none" || dp_result.path != fixture.truth_path
+            error("H1 smoke DP path expectation failed for $(fixture.id).")
+        end
+        if greedy_result.failure_code != "none" || greedy_result.path != fixture.expected_greedy_path
+            error("H1 smoke greedy path expectation failed for $(fixture.id).")
+        end
 
         for result in (dp_result, greedy_result)
             exact_match = result.path == fixture.truth_path
@@ -374,11 +380,11 @@ function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
        selected_dataset_ids != Set(["rhizomorph_graph_unit_fixtures"])
         error("H1 Viterbi DP vs greedy smoke only supports dataset rhizomorph_graph_unit_fixtures.")
     end
-    if selected_hypothesis_ids === nothing || selected_hypothesis_ids == Set(["H1"])
+    if selected_hypothesis_ids == Set(["H1"])
         return run_h1_viterbi_dp_greedy_smoke()
     end
 
-    error("Only the H1 Viterbi DP vs greedy smoke runner is implemented for --execute.")
+    error("Only the H1 Viterbi DP vs greedy smoke runner is implemented for --execute; pass --slice H1.")
 end
 
 function _h1_select_viterbi_dp_path(fixture::H1SyntheticFixture)

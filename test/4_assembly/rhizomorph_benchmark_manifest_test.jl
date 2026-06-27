@@ -73,6 +73,13 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
         build_rhizomorph_benchmark_plan(dataset_ids = ["unknown_dataset"])
     end
+    test_throws_message(
+        ErrorException,
+        "pass --slice H1"
+    ) do
+        run_rhizomorph_benchmark_harness(dry_run = false)
+    end
+
     h1_smoke = run_rhizomorph_benchmark_harness(dry_run = false, hypothesis_ids = ["H1"])
     Test.@test DataFrames.nrow(h1_smoke) == 4
     Test.@test Set(h1_smoke.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
