@@ -29,6 +29,16 @@ function fixed_length_decoded_label_strings(
     return [string(label) for label in decoded]
 end
 
+function fixed_length_beam_width_error_message(beam_width::Int)::String
+    try
+        Mycelia.ViterbiCorrectionConfig(beam_width = beam_width)
+        return ""
+    catch error
+        Test.@test error isa ArgumentError
+        return sprint(showerror, error)
+    end
+end
+
 Test.@testset "Fixed-length graph Viterbi correction" begin
     Test.@testset "k-mer graph correction recovers injected substitution" begin
         records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGT")]
@@ -60,8 +70,14 @@ Test.@testset "Fixed-length graph Viterbi correction" begin
     end
 
     Test.@testset "beam width validation rejects non-positive beams" begin
-        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width = 0)
-        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width = -1)
+        Test.@test occursin(
+            "beam_width must be positive when set",
+            fixed_length_beam_width_error_message(0)
+        )
+        Test.@test occursin(
+            "beam_width must be positive when set",
+            fixed_length_beam_width_error_message(-1)
+        )
     end
 
     Test.@testset "qualmer graph correction reuses quality-aware emissions" begin

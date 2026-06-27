@@ -13,15 +13,24 @@ import DataFrames
 import Dates
 import FASTX
 import Kmers
+import Statistics
 
 # This benchmark exercises Rhizomorph graph builders plus generalized Viterbi
-# correction only. Loading Mycelia in core-benchmark mode avoids unrelated
-# plotting/ML imports during HPC smoke runs.
+# correction only. The benchmark-local core loader avoids unrelated plotting/ML
+# imports during HPC smoke runs without changing the package module layout.
 if get(ENV, "MYCELIA_CORE_BENCHMARK", "") == ""
     ENV["MYCELIA_CORE_BENCHMARK"] = "true"
 end
 
-import Mycelia
+const _VITERBI_ACCURACY_CORE_BENCHMARK = lowercase(
+    get(ENV, "MYCELIA_CORE_BENCHMARK", "")
+) in ("1", "true", "yes")
+
+if _VITERBI_ACCURACY_CORE_BENCHMARK
+    include(joinpath(@__DIR__, "viterbi_accuracy_core_loader.jl"))
+else
+    @eval import Mycelia
+end
 import Test
 
 include(joinpath(@__DIR__, "benchmark_artifacts.jl"))
@@ -323,6 +332,7 @@ function _viterbi_accuracy_row(
         injected_error_recall = recall,
         corrected_all_injected_positions = recovered_errors == injected_error_count,
         correction_wall_seconds = correction_wall_seconds,
+        diagnostics_exact = Bool(get(result.diagnostics, :exact, false)),
         diagnostics_expanded_states = _diagnostic_int(result.diagnostics, :expanded_states),
         diagnostics_generated_states = _diagnostic_int(result.diagnostics, :generated_states),
         diagnostics_max_retained_states = _diagnostic_int(result.diagnostics, :max_retained_states),
@@ -348,7 +358,11 @@ function _scaled_fixture_length(total_length::Int, base_length::Int, window_scal
     if window_scale <= 0.0
         throw(ArgumentError("window_scale must be positive, got $window_scale"))
     end
-    scaled_length = max(VITERBI_ACCURACY_K, round(Int, base_length * window_scale))
+    minimum_length = VITERBI_ACCURACY_K + 2
+    if total_length < minimum_length
+        throw(ArgumentError("fixture length must be at least $minimum_length, got $total_length"))
+    end
+    scaled_length = max(minimum_length, round(Int, base_length * window_scale))
     return min(total_length, scaled_length)
 end
 
@@ -505,8 +519,25 @@ function _write_viterbi_accuracy_figure(
         yticks = 0.0:0.25:1.0
     )
 
-    palette = [:seagreen4, :dodgerblue3, :darkorange3]
-    grouped = collect(DataFrames.groupby(summary, :dataset_id))
+    plot_summary = DataFrames.combine(
+        DataFrames.groupby(
+            summary,
+            [:dataset_id, :dataset_name, :beam_width, :target_error_rate]
+        ),
+        :edit_distance_reduction => Statistics.mean => :edit_distance_reduction
+    )
+
+    palette = [
+        :seagreen4,
+        :dodgerblue3,
+        :darkorange3,
+        :purple4,
+        :firebrick3,
+        :goldenrod3,
+        :deepskyblue4,
+        :gray35
+    ]
+    grouped = collect(DataFrames.groupby(plot_summary, [:dataset_id, :beam_width]))
     elements = CairoMakie.LineElement[]
     labels = String[]
     for (index, group) in enumerate(grouped)
@@ -517,7 +548,10 @@ function _write_viterbi_accuracy_figure(
         CairoMakie.lines!(axis, x_values, y_values; color = color, linewidth = 3)
         CairoMakie.scatter!(axis, x_values, y_values; color = color, markersize = 12)
         push!(elements, CairoMakie.LineElement(color = color, linewidth = 3))
-        push!(labels, first(sorted_group.dataset_name))
+        push!(
+            labels,
+            "$(first(sorted_group.dataset_name)) ($(first(sorted_group.beam_width)))"
+        )
     end
 
     CairoMakie.ylims!(axis, -0.05, 1.05)

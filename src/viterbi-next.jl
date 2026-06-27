@@ -316,6 +316,7 @@ function _correct_metagraphs_next_observations(
         :interface => :metagraphs_next,
         :vertex_data_type => _correction_vertex_data_type(graph),
         :algorithm => :rhizomorph_viterbi_decode_next,
+        :exact => config.beam_width === nothing,
         :observation_count => length(observations),
         :emission_callback => nameof(config.emission_logp),
         :alphabet => alphabet,
@@ -916,7 +917,7 @@ function _viterbi_correct_observation(
 
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
-        :exact => true,
+        :exact => config.beam_width === nothing,
         :alphabet => alphabet,
         :strand_mode => strand_mode,
         :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
@@ -958,6 +959,17 @@ function _viterbi_correct_observation(
     if isempty(active_scores)
         diagnostics[:reason] = :no_finite_start_emission
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+
+    if config.beam_width !== nothing
+        active_scores, _ = _prune_correction_beam(
+            active_scores,
+            Dict{
+                Tuple{label_type, Rhizomorph.StrandOrientation},
+                Tuple{label_type, Rhizomorph.StrandOrientation}
+            }(),
+            config.beam_width
+        )
     end
 
     diagnostics[:retained_states] = length(active_scores)
@@ -1268,12 +1280,10 @@ function _prune_correction_beam(
         return scores, predecessors
     end
 
-    retained = first(
-        sort(
-            collect(scores);
-            by = item -> (-item[2], string(item[1][1]), Int(item[1][2]))
-        ),
-        beam_width
+    retained = partialsort(
+        collect(scores),
+        1:beam_width;
+        by = item -> (-item[2], string(item[1][1]), Int(item[1][2]))
     )
     retained_scores = Dict{Tuple{T, Rhizomorph.StrandOrientation}, Float64}(retained)
     retained_predecessors = Dict{

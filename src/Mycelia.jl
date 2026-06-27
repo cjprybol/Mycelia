@@ -13,9 +13,6 @@ if Sys.islinux() && get(ENV, "LD_LIBRARY_PATH", "") != ""
     ENV["LD_LIBRARY_PATH"] = ""
 end
 
-const _MYCELIA_CORE_BENCHMARK = lowercase(
-    get(ENV, "MYCELIA_CORE_BENCHMARK", "")
-) in ("1", "true", "yes")
 
 import Arrow
 import Base58
@@ -24,9 +21,7 @@ import BioAlignments
 import BioSequences
 import BioSymbols
 import Blake3Hash
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import CairoMakie
-end
+import CairoMakie
 import Clustering
 # import CodecBase
 # import CodecBzip2
@@ -54,31 +49,21 @@ import GenomicAnnotations
 import GFF3
 # import GeoMakie
 import GLM
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import GraphMakie
-end
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import GraphPlot
-end
+import GraphMakie
+import GraphPlot
 import Graphs
 import HDF5
 import Hungarian
 import HTTP
 import JLD2
 import JSON
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import Karnak
-end
+import Karnak
 import Kmers
 import LinearAlgebra
 import Logging
 import LsqFit
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import Luxor
-end
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import Makie
-end
+import Luxor
+import Makie
 import MD5
 import MetaGraphs
 import MetaGraphsNext
@@ -86,44 +71,30 @@ import Mmap
 import MultivariateStats
 import OrderedCollections
 import Pkg
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import Plots
-end
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import POMDPs
-end
+import Plots
+import POMDPs
 import PooledArrays
 import PrecompileTools
 import Primes
 import Printf
 import ProgressMeter
 import Random
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import ReinforcementLearning
-end
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import SankeyPlots
-end
+import ReinforcementLearning
+import SankeyPlots
 import SHA
 import SparseArrays
 import StableRNGs
 import Statistics
 import StatsBase
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import StatsPlots
-end
+import StatsPlots
 import Tar
 # import TopoPlots
 # import TranscodingStreams
 import uCSV
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import UMAP
-end
+import UMAP
 import UUIDs
 import XAM
-if !_MYCELIA_CORE_BENCHMARK
-    @eval import XLSX
-end
+import XLSX
 import XMLDict
 
 # preserve definitions between code jldoctest code blocks
@@ -147,19 +118,17 @@ include("tda.jl")
 # Rhizomorph graph ecosystem (primary implementation)
 include("rhizomorph/rhizomorph.jl")
 
-if !_MYCELIA_CORE_BENCHMARK
-    # Legacy qualmer utilities (still used by iterative-assembly.jl)
-    include("qualmer-analysis.jl")
+# Legacy qualmer utilities (still used by iterative-assembly.jl)
+include("qualmer-analysis.jl")
 
-    # Assembly pipeline (depends on Rhizomorph graph ecosystem)
-    include("assembly.jl")
+# Assembly pipeline (depends on Rhizomorph graph ecosystem)
+include("assembly.jl")
 
-    # Intelligent assembly algorithms (depends on assembly.jl and core graph types)
-    # include("intelligent-assembly.jl")
+# Intelligent assembly algorithms (depends on assembly.jl and core graph types)
+# include("intelligent-assembly.jl")
 
-    # Iterative assembly algorithms (depends on intelligent-assembly.jl)
-    include("iterative-assembly.jl")
-end
+# Iterative assembly algorithms (depends on intelligent-assembly.jl)
+include("iterative-assembly.jl")
 
 # Advanced algorithms (depend on core graph types)
 include("viterbi-next.jl")
@@ -177,58 +146,56 @@ include("viterbi-next.jl")
 
 # Load remaining files in alphabetical order (no critical dependencies)
 # Using explicit include() statements enables full static analysis by ExplicitImports.jl
-if !_MYCELIA_CORE_BENCHMARK
-    include("alignments-and-mapping.jl")
-    include("amino-acid-analysis.jl")
-    include("annotation.jl")
-    include("autocycler.jl")
-    include("bcalm.jl")
-    include("binning.jl")
-    include("bioconda.jl")
-    include("busco-datasets.jl")
-    include("checkpointing.jl")
-    include("classification.jl")
-    include("clustering.jl")
-    include("codon-optimization.jl")
-    include("coverage-clustering.jl")
-    include("dimensionality-reduction.jl")
-    include("distance-metrics.jl")
-    include("foldseek.jl")
-    include("genome-features.jl")
-    include("ggcat.jl")
-    include("graph-cleanup.jl")
-    include("kmer-analysis.jl")
-    include("kmer-saturation-analysis.jl")
-    include("metagraph.jl")
-    include("metagenomic-classification.jl")
-    include("ncbi-datasets-cli.jl")
-    include("pangenome-analysis.jl")
-    include("pantools.jl")
-    include("plotting-and-visualization.jl")
-    include("protein-databases.jl")
-    include("prokrustean.jl")
-    include("quality-control-and-benchmarking.jl")
-    include("rclone.jl")
-    include("read-quality-control.jl")
-    include("reference-databases.jl")
-    include("relational-matrices.jl")
-    include("sentencepiece.jl")
-    include("sequence-comparison.jl")
-    include("sequence-graphs.jl")
-    include("simulation.jl")
-    include("slurm-templates.jl")
-    include("execution.jl")
-    include("slurm-sbatch.jl")
-    include("taxonomy-and-trees.jl")
-    include("testing-utilities.jl")
-    include("variant-analysis.jl")
-    include("viterbi-polishing-and-error-correction.jl")
-    include("xam.jl")
+include("alignments-and-mapping.jl")
+include("amino-acid-analysis.jl")
+include("annotation.jl")
+include("autocycler.jl")
+include("bcalm.jl")
+include("binning.jl")
+include("bioconda.jl")
+include("busco-datasets.jl")
+include("checkpointing.jl")
+include("classification.jl")
+include("clustering.jl")
+include("codon-optimization.jl")
+include("coverage-clustering.jl")
+include("dimensionality-reduction.jl")
+include("distance-metrics.jl")
+include("foldseek.jl")
+include("genome-features.jl")
+include("ggcat.jl")
+include("graph-cleanup.jl")
+include("kmer-analysis.jl")
+include("kmer-saturation-analysis.jl")
+include("metagraph.jl")
+include("metagenomic-classification.jl")
+include("ncbi-datasets-cli.jl")
+include("pangenome-analysis.jl")
+include("pantools.jl")
+include("plotting-and-visualization.jl")
+include("protein-databases.jl")
+include("prokrustean.jl")
+include("quality-control-and-benchmarking.jl")
+include("rclone.jl")
+include("read-quality-control.jl")
+include("reference-databases.jl")
+include("relational-matrices.jl")
+include("sentencepiece.jl")
+include("sequence-comparison.jl")
+include("sequence-graphs.jl")
+include("simulation.jl")
+include("slurm-templates.jl")
+include("execution.jl")
+include("slurm-sbatch.jl")
+include("taxonomy-and-trees.jl")
+include("testing-utilities.jl")
+include("variant-analysis.jl")
+include("viterbi-polishing-and-error-correction.jl")
+include("xam.jl")
 
-    # PrecompileTools workload for faster startup
-    # This must be included last, after all other definitions are loaded
-    include("precompile_workload.jl")
-end
+# PrecompileTools workload for faster startup
+# This must be included last, after all other definitions are loaded
+include("precompile_workload.jl")
 
 """
     _clear_ld_library_path!()
