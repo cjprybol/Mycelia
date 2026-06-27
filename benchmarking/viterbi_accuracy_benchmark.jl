@@ -18,12 +18,14 @@ import Statistics
 # This benchmark exercises Rhizomorph graph builders plus generalized Viterbi
 # correction only. The benchmark-local core loader avoids unrelated plotting/ML
 # imports during HPC smoke runs without changing the package module layout.
-if get(ENV, "MYCELIA_CORE_BENCHMARK", "") == ""
-    ENV["MYCELIA_CORE_BENCHMARK"] = "true"
-end
-
+const _VITERBI_ACCURACY_EXECUTED_AS_SCRIPT =
+    abspath(PROGRAM_FILE) == abspath(@__FILE__)
 const _VITERBI_ACCURACY_CORE_BENCHMARK = lowercase(
-    get(ENV, "MYCELIA_CORE_BENCHMARK", "")
+    get(
+        ENV,
+        "MYCELIA_CORE_BENCHMARK",
+        _VITERBI_ACCURACY_EXECUTED_AS_SCRIPT ? "true" : "false"
+    )
 ) in ("1", "true", "yes")
 
 if _VITERBI_ACCURACY_CORE_BENCHMARK
