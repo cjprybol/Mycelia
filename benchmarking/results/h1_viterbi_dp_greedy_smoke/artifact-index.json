@@ -18,6 +18,8 @@
         "benchmark_git_commit",
         "benchmark_dataset_id",
         "benchmark_hypothesis_id",
+        "hypothesis_id",
+        "dataset_id",
         "fixture_id",
         "fixture_name",
         "organism",
@@ -27,6 +29,7 @@
         "ambiguity_margin",
         "algorithm",
         "strategy_name",
+        "implementation_scope",
         "path_vertices",
         "truth_vertices",
         "expected_strategy_vertices",
@@ -35,6 +38,7 @@
         "path_accuracy",
         "sequence_identity",
         "normalized_edit_distance",
+        "sequence_metric_note",
         "log_probability",
         "oracle_log_probability",
         "oracle_log_probability_gap",
@@ -43,6 +47,7 @@
         "delta_log_probability",
         "log_likelihood_gap_dp_minus_greedy",
         "tie_breaking",
+        "tie_breaking_exercised",
         "emission_model",
         "runtime_s",
         "peak_rss_mib",
@@ -54,4 +59,3 @@
     }
   }
 }
-

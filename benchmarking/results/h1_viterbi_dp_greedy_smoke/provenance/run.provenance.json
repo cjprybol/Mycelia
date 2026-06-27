@@ -8,14 +8,13 @@
     "benchmarking/results/h1_viterbi_dp_greedy_smoke"
   ],
   "dataset_ids": [
-    "H1-G0",
-    "H1-G1"
+    "rhizomorph_graph_unit_fixtures"
   ],
-  "generated_at": "2026-06-27T21:51:29.935Z",
+  "generated_at": "2026-06-27T21:59:46.944Z",
   "git": {
     "branch": "td-xte2",
-    "commit": "4697a6859cd790e741eb3d1f3ca063f443ff00fe",
-    "is_dirty": false,
+    "commit": "b1f74696e1ee9e0ade5d04d9aec70944cccecf0b",
+    "is_dirty": true,
     "remote_url": "git@github.com:cjprybol/Mycelia.git"
   },
   "metadata": {
@@ -32,4 +31,3 @@
     "julia": "1.10.10"
   }
 }
-
