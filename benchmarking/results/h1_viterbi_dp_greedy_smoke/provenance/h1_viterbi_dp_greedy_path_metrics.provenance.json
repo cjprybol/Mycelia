@@ -55,12 +55,10 @@
   "dataset_ids": [
     "rhizomorph_graph_unit_fixtures"
   ],
-  "generated_at": "2026-06-27T22:11:28.354Z",
+  "generated_at": "2026-06-27T22:21:13.145Z",
   "git": {
-    "branch": "td-xte2",
-    "commit": "f83571bf517324a80f02b419e52717dc66bfda70",
-    "is_dirty": false,
-    "remote_url": "git@github.com:cjprybol/Mycelia.git"
+    "commit": "7ff139fea142f010a0d717f8f104034e4d3b09de",
+    "is_dirty": false
   },
   "metadata": {
     "artifact_kind": "h1_viterbi_dp_greedy_path_metrics",
