@@ -5,16 +5,18 @@
     "--execute",
     "--write-artifacts",
     "--output-dir",
-    "benchmarking/results/h1_viterbi_dp_greedy_smoke"
+    "benchmarking/results/h1_viterbi_dp_greedy_smoke",
+    "--run-id",
+    "h1_viterbi_dp_greedy_smoke"
   ],
   "dataset_ids": [
     "rhizomorph_graph_unit_fixtures"
   ],
-  "generated_at": "2026-06-27T21:59:46.944Z",
+  "generated_at": "2026-06-27T22:02:50.684Z",
   "git": {
     "branch": "td-xte2",
-    "commit": "b1f74696e1ee9e0ade5d04d9aec70944cccecf0b",
-    "is_dirty": true,
+    "commit": "594926b79ea0a5a08de1093a872b3f9edc6ca0a8",
+    "is_dirty": false,
     "remote_url": "git@github.com:cjprybol/Mycelia.git"
   },
   "metadata": {
@@ -23,7 +25,7 @@
     "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
     "scope": "clean synthetic smoke"
   },
-  "run_id": "h1_viterbi_dp_greedy_smoke_20260627",
+  "run_id": "h1_viterbi_dp_greedy_smoke",
   "scale": "local-smoke",
   "schema_version": 1,
   "tool_versions": {

@@ -5,7 +5,7 @@
     "provenance": "provenance",
     "tables": "tables"
   },
-  "run_id": "h1_viterbi_dp_greedy_smoke_20260627",
+  "run_id": "h1_viterbi_dp_greedy_smoke",
   "scale": "local-smoke",
   "schema_version": 1,
   "tables": {
