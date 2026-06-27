@@ -1218,7 +1218,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + KMedoids" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + KMedoids")
         nb_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix)
-        kmedoids_result = Clustering.kmedoids(nb_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(nb_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmedoids_labels)
