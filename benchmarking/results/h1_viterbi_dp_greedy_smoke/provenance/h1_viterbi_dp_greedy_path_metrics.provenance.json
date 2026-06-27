@@ -55,10 +55,10 @@
   "dataset_ids": [
     "rhizomorph_graph_unit_fixtures"
   ],
-  "generated_at": "2026-06-27T22:02:50.684Z",
+  "generated_at": "2026-06-27T22:11:28.354Z",
   "git": {
     "branch": "td-xte2",
-    "commit": "594926b79ea0a5a08de1093a872b3f9edc6ca0a8",
+    "commit": "f83571bf517324a80f02b419e52717dc66bfda70",
     "is_dirty": false,
     "remote_url": "git@github.com:cjprybol/Mycelia.git"
   },
