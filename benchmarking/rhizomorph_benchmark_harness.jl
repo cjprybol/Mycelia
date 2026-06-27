@@ -323,7 +323,7 @@ Write the H1-G0/H1-G1 smoke path-metrics CSV and provenance artifacts.
 """
 function write_h1_viterbi_dp_greedy_artifacts(;
         output_dir::AbstractString,
-        run_id::AbstractString = "h1_viterbi_dp_greedy_smoke_20260627",
+        run_id::AbstractString = "h1_viterbi_dp_greedy_smoke",
         command_args = String[],
         generated_at = nothing)
     path_metrics = run_h1_viterbi_dp_greedy_smoke()
@@ -747,7 +747,7 @@ function main(args = ARGS)
         run_id = _flag_value(
             args,
             "--run-id",
-            dry_run ? "rhizomorph_benchmark_plan" : "h1_viterbi_dp_greedy_smoke_20260627"
+            dry_run ? "rhizomorph_benchmark_plan" : "h1_viterbi_dp_greedy_smoke"
         )
         artifacts = if dry_run
             write_rhizomorph_benchmark_plan_artifacts(
