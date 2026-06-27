@@ -260,11 +260,21 @@ function _viterbi_accuracy_row(
     result = Mycelia.correct_observations(fixture.graph, [converted_observed]; config = config)
     correction_wall_seconds = (time_ns() - correction_start_ns) / 1.0e9
     corrected_observation = only(result.corrected_observations)
-    correction_succeeded = !isnothing(corrected_observation)
-    corrected = if correction_succeeded
+    correction_returned_path = !isnothing(corrected_observation)
+    raw_corrected_count = correction_returned_path ? length(corrected_observation) : 0
+    raw_corrected = if correction_returned_path
         [string(observation) for observation in corrected_observation]
     else
-        copy(observed)
+        String[]
+    end
+    correction_succeeded = correction_returned_path && length(raw_corrected) == length(fixture.truth)
+    corrected = correction_succeeded ? raw_corrected : copy(observed)
+    benchmark_reason = if !correction_returned_path
+        "no_path"
+    elseif !correction_succeeded
+        "length_mismatch"
+    else
+        string(get(result.diagnostics, :reason, ""))
     end
 
     baseline_edit_distance = _sum_edit_distance(observed, fixture.truth)
@@ -304,7 +314,9 @@ function _viterbi_accuracy_row(
         injected_error_count = injected_error_count,
         baseline_method = "uncorrected_observations",
         corrected_method = "generalized_viterbi_correct_observations",
+        correction_returned_path = correction_returned_path,
         correction_succeeded = correction_succeeded,
+        raw_corrected_observation_count = raw_corrected_count,
         baseline_edit_distance = baseline_edit_distance,
         corrected_edit_distance = corrected_edit_distance,
         edit_distance_reduction = edit_distance_reduction,
@@ -322,7 +334,7 @@ function _viterbi_accuracy_row(
         diagnostics_strand_mode = string(result.diagnostics[:strand_mode]),
         diagnostics_emission_model = string(result.diagnostics[:emission_model]),
         diagnostics_transition_model = string(result.diagnostics[:transition_model]),
-        diagnostics_reason = string(get(result.diagnostics, :reason, ""))
+        diagnostics_reason = benchmark_reason
     )
 end
 
