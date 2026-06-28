@@ -349,7 +349,7 @@ end
 """
     run_h1_viterbi_dp_greedy_smoke()
 
-Run the clean H1-G0/H1-G1 Viterbi-objective-vs-greedy smoke benchmark. The
+Run the clean H1-G0 through H1-G4 Viterbi-objective-vs-greedy smoke benchmark. The
 harness-level exhaustive oracle enumerates all source-to-sink paths and selects
 the maximum shared log-likelihood. It is a tiny-fixture oracle for the Viterbi DP
 objective, not a call into the production Rhizomorph ViterbiDP strategy. The
@@ -424,7 +424,7 @@ end
 """
     write_h1_viterbi_dp_greedy_artifacts(; output_dir, kwargs...)
 
-Write the H1-G0/H1-G1 smoke path-metrics CSV and provenance artifacts.
+Write the H1-G0 through H1-G4 smoke path-metrics CSV and provenance artifacts.
 """
 function write_h1_viterbi_dp_greedy_artifacts(;
         output_dir::AbstractString,
@@ -452,7 +452,10 @@ function write_h1_viterbi_dp_greedy_artifacts(;
             "artifact_kind" => "h1_viterbi_dp_greedy_path_metrics",
             "plan_path" => "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
             "fixtures" => "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
-            "scope" => "clean synthetic local-expanded smoke; no real-data H1 decision rule"
+            "scope" => "clean synthetic local-expanded smoke; no real-data H1 decision rule",
+            "non_finite_metric_semantics" => "Inf/-Inf are permitted only in likelihood-gap columns when failure_code documents an invalid or length-incompatible greedy path; they are diagnostic sentinel values, not finite effect sizes.",
+            "peak_rss_mib_semantics" => "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
+            "empty_layout_directory_semantics" => "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact."
         ),
         table_context_columns = table_context_columns
     )
@@ -462,7 +465,7 @@ end
     run_rhizomorph_benchmark_harness(; dry_run=true, kwargs...)
 
 Return the dry-run benchmark plan by default. With `dry_run=false`, execute the
-implemented H1-G0/H1-G1 Viterbi-DP-vs-greedy synthetic smoke when `H1` is the
+implemented H1-G0 through H1-G4 Viterbi-DP-vs-greedy synthetic smoke when `H1` is the
 requested slice.
 """
 function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)

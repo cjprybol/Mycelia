@@ -230,7 +230,12 @@ The same table schema is used for `ci`, `full`, and `candidate` scales; larger
 scales add rows rather than changing columns. The H1 smoke execution path writes
 `h1_viterbi_dp_greedy_path_metrics.csv` with clean H1-G0 through H1-G4 path accuracy,
 log-likelihood-gap, repeat-copy, runtime, and peak-RSS rows; it is a lightweight
-synthetic smoke, not the full H1 noise/real-data decision rule.
+synthetic smoke, not the full H1 noise/real-data decision rule. `Inf`/`-Inf`
+likelihood sentinels are allowed only when `failure_code` explains an invalid or
+length-incompatible greedy path. `peak_rss_mib` is process-level `Sys.maxrss()`
+run provenance repeated on each row, not per-algorithm incremental memory. The
+standard `plots/` and `logs/` directories are layout placeholders and may be
+empty for table-only smoke artifacts.
 
 ### Result Files
 - **Individual Results**: `results/[benchmark]_[timestamp].json` - Detailed benchmark data

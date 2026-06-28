@@ -287,6 +287,7 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         ])
         Test.@test h1_g3_greedy.failure_code == "length_mismatch"
         Test.@test h1_g3_greedy.repeat_copy_number_error == 1
+        Test.@test isinf(h1_g3_greedy.log_likelihood_gap_dp_minus_greedy)
         Test.@test all(.!ismissing.(metrics.peak_rss_mib))
 
         index = JSON.parsefile(index_json)
@@ -298,10 +299,15 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         run_provenance = JSON.parsefile(artifacts.provenance)
         Test.@test run_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
         Test.@test run_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
+        Test.@test occursin("likelihood-gap", run_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("process-level", run_provenance["metadata"]["peak_rss_mib_semantics"])
+        Test.@test occursin("may be empty", run_provenance["metadata"]["empty_layout_directory_semantics"])
 
         metrics_provenance = JSON.parsefile(metrics_provenance_json)
         Test.@test metrics_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
         Test.@test metrics_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
+        Test.@test occursin("likelihood-gap", metrics_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("process-level", metrics_provenance["metadata"]["peak_rss_mib_semantics"])
 
         test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
             run_rhizomorph_benchmark_harness(
