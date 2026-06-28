@@ -1,0 +1,33 @@
+{
+  "command_args": [
+    "--slice",
+    "H1",
+    "--execute",
+    "--write-artifacts",
+    "--output-dir",
+    "benchmarking/results/h1_viterbi_dp_greedy_expanded_20260628",
+    "--run-id",
+    "h1_viterbi_dp_greedy_expanded_20260628"
+  ],
+  "dataset_ids": [
+    "rhizomorph_graph_unit_fixtures"
+  ],
+  "generated_at": "2026-06-28T18:55:17.758Z",
+  "git": {
+    "commit": "8b38494ebbbb740066e70e31549f5fee32eb9b14",
+    "is_dirty": false
+  },
+  "metadata": {
+    "artifact_kind": "h1_viterbi_dp_greedy_path_metrics",
+    "fixtures": "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+    "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
+    "scope": "clean synthetic local-expanded smoke; no real-data H1 decision rule"
+  },
+  "run_id": "h1_viterbi_dp_greedy_expanded_20260628",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}

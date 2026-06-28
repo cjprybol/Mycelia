@@ -1,0 +1,81 @@
+{
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "benchmark_hypothesis_id",
+    "hypothesis_id",
+    "dataset_id",
+    "fixture_id",
+    "fixture_name",
+    "organism",
+    "data_type",
+    "coverage",
+    "seed",
+    "ambiguity_margin",
+    "algorithm",
+    "strategy_name",
+    "implementation_scope",
+    "path_vertices",
+    "truth_vertices",
+    "expected_strategy_vertices",
+    "exact_path_match",
+    "expected_strategy_path_match",
+    "path_accuracy",
+    "sequence_identity",
+    "normalized_edit_distance",
+    "repeat_copy_number_error",
+    "path_confidence",
+    "sequence_metric_note",
+    "log_probability",
+    "oracle_log_probability",
+    "oracle_log_probability_gap",
+    "dp_log_probability",
+    "greedy_log_probability",
+    "delta_log_probability",
+    "log_likelihood_gap_dp_minus_greedy",
+    "tie_breaking",
+    "tie_breaking_exercised",
+    "emission_model",
+    "runtime_s",
+    "peak_rss_mib",
+    "failure_code"
+  ],
+  "command_args": [
+    "--slice",
+    "H1",
+    "--execute",
+    "--write-artifacts",
+    "--output-dir",
+    "benchmarking/results/h1_viterbi_dp_greedy_expanded_20260628",
+    "--run-id",
+    "h1_viterbi_dp_greedy_expanded_20260628"
+  ],
+  "dataset_ids": [
+    "rhizomorph_graph_unit_fixtures"
+  ],
+  "generated_at": "2026-06-28T18:55:17.758Z",
+  "git": {
+    "commit": "8b38494ebbbb740066e70e31549f5fee32eb9b14",
+    "is_dirty": false
+  },
+  "metadata": {
+    "artifact_kind": "h1_viterbi_dp_greedy_path_metrics",
+    "fixtures": "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+    "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
+    "scope": "clean synthetic local-expanded smoke; no real-data H1 decision rule"
+  },
+  "row_count": 10,
+  "run_id": "h1_viterbi_dp_greedy_expanded_20260628",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "table_name": "h1_viterbi_dp_greedy_path_metrics",
+  "table_path": "tables/h1_viterbi_dp_greedy_path_metrics.csv",
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}

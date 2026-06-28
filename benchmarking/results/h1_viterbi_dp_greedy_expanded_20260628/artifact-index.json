@@ -1,0 +1,63 @@
+{
+  "directories": {
+    "logs": "logs",
+    "plots": "plots",
+    "provenance": "provenance",
+    "tables": "tables"
+  },
+  "run_id": "h1_viterbi_dp_greedy_expanded_20260628",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tables": {
+    "h1_viterbi_dp_greedy_path_metrics": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_dataset_id",
+        "benchmark_hypothesis_id",
+        "hypothesis_id",
+        "dataset_id",
+        "fixture_id",
+        "fixture_name",
+        "organism",
+        "data_type",
+        "coverage",
+        "seed",
+        "ambiguity_margin",
+        "algorithm",
+        "strategy_name",
+        "implementation_scope",
+        "path_vertices",
+        "truth_vertices",
+        "expected_strategy_vertices",
+        "exact_path_match",
+        "expected_strategy_path_match",
+        "path_accuracy",
+        "sequence_identity",
+        "normalized_edit_distance",
+        "repeat_copy_number_error",
+        "path_confidence",
+        "sequence_metric_note",
+        "log_probability",
+        "oracle_log_probability",
+        "oracle_log_probability_gap",
+        "dp_log_probability",
+        "greedy_log_probability",
+        "delta_log_probability",
+        "log_likelihood_gap_dp_minus_greedy",
+        "tie_breaking",
+        "tie_breaking_exercised",
+        "emission_model",
+        "runtime_s",
+        "peak_rss_mib",
+        "failure_code"
+      ],
+      "provenance": "provenance/h1_viterbi_dp_greedy_path_metrics.provenance.json",
+      "rows": 10,
+      "table": "tables/h1_viterbi_dp_greedy_path_metrics.csv"
+    }
+  }
+}
