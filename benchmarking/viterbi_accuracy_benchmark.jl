@@ -4,6 +4,7 @@
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --output-dir /tmp/b8 --skip-plots
 #   julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --beam-widths exact,1,4,16 --window-scale 4 --repetitions 3 --skip-plots
+#   MYCELIA_CORE_BENCHMARK=true julia --project=. benchmarking/viterbi_accuracy_benchmark.jl --skip-plots
 
 import BioSequences
 if !("--skip-plots" in ARGS)
@@ -18,13 +19,11 @@ import Statistics
 # This benchmark exercises Rhizomorph graph builders plus generalized Viterbi
 # correction only. The benchmark-local core loader avoids unrelated plotting/ML
 # imports during HPC smoke runs without changing the package module layout.
-const _VITERBI_ACCURACY_EXECUTED_AS_SCRIPT =
-    abspath(PROGRAM_FILE) == abspath(@__FILE__)
 const _VITERBI_ACCURACY_CORE_BENCHMARK = lowercase(
     get(
         ENV,
         "MYCELIA_CORE_BENCHMARK",
-        _VITERBI_ACCURACY_EXECUTED_AS_SCRIPT ? "true" : "false"
+        "false"
     )
 ) in ("1", "true", "yes")
 
