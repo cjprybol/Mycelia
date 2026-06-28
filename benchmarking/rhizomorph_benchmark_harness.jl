@@ -207,21 +207,28 @@ struct H1SyntheticFixture
     edges::Vector{H1SyntheticEdge}
     truth_path::Vector{String}
     expected_greedy_path::Vector{String}
+    data_type::String
+    coverage::String
+    seed::Int
+    ambiguity_margin::Union{Missing, Float64}
+    observation_classes::Union{Nothing, Vector{String}}
+    vertex_classes::Dict{String, String}
+    expected_greedy_failure_code::String
 end
 
 """
     h1_viterbi_dp_greedy_fixtures()
 
-Return the pre-registered clean H1-G0 and H1-G1 synthetic fixtures from
+Return the pre-registered clean H1-G0 through H1-G4 synthetic fixtures from
 `rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md`.
+This is still a local synthetic path-metric gate, not the real-data H1 assembly
+quality decision rule.
 """
 function h1_viterbi_dp_greedy_fixtures()::Vector{H1SyntheticFixture}
     return H1SyntheticFixture[
-        H1SyntheticFixture(
+        _h1_fixture(
             "H1-G0",
             "linear control",
-            "S",
-            "T",
             H1SyntheticEdge[
                 H1SyntheticEdge("S", "A1", 0.99),
                 H1SyntheticEdge("A1", "A2", 0.99),
@@ -231,11 +238,9 @@ function h1_viterbi_dp_greedy_fixtures()::Vector{H1SyntheticFixture}
             ["S", "A1", "A2", "A3", "T"],
             ["S", "A1", "A2", "A3", "T"]
         ),
-        H1SyntheticFixture(
+        _h1_fixture(
             "H1-G1",
             "local-trap bubble",
-            "S",
-            "T",
             H1SyntheticEdge[
                 H1SyntheticEdge("S", "A1", 0.99),
                 H1SyntheticEdge("A1", "A2", 0.50),
@@ -246,8 +251,99 @@ function h1_viterbi_dp_greedy_fixtures()::Vector{H1SyntheticFixture}
             ],
             ["S", "B1", "B2", "T"],
             ["S", "A1", "A2", "T"]
+        ),
+        _h1_fixture(
+            "H1-G2",
+            "delayed-exit bubble",
+            H1SyntheticEdge[
+                H1SyntheticEdge("S", "A1", 0.98),
+                H1SyntheticEdge("A1", "A2", 0.98),
+                H1SyntheticEdge("A2", "A3", 0.98),
+                H1SyntheticEdge("A3", "T", 0.20),
+                H1SyntheticEdge("S", "B1", 0.80),
+                H1SyntheticEdge("B1", "B2", 0.80),
+                H1SyntheticEdge("B2", "B3", 0.80),
+                H1SyntheticEdge("B3", "T", 0.80)
+            ],
+            ["S", "B1", "B2", "B3", "T"],
+            ["S", "A1", "A2", "A3", "T"]
+        ),
+        _h1_fixture(
+            "H1-G3",
+            "repeat-copy ambiguity",
+            H1SyntheticEdge[
+                H1SyntheticEdge("S", "L1", 0.93),
+                H1SyntheticEdge("L1", "R1", 0.96),
+                H1SyntheticEdge("R1", "L2", 0.60),
+                H1SyntheticEdge("L2", "R2", 0.96),
+                H1SyntheticEdge("R2", "T", 0.93),
+                H1SyntheticEdge("R1", "T", 0.88),
+                H1SyntheticEdge("S", "C1", 0.89),
+                H1SyntheticEdge("C1", "C2", 0.89),
+                H1SyntheticEdge("C2", "C3", 0.89),
+                H1SyntheticEdge("C3", "T", 0.89)
+            ],
+            ["S", "L1", "R1", "L2", "R2", "T"],
+            ["S", "L1", "R1", "T"];
+            observation_classes = ["L", "R", "L", "R"],
+            vertex_classes = Dict(
+                "L1" => "L",
+                "L2" => "L",
+                "R1" => "R",
+                "R2" => "R",
+                "C1" => "C",
+                "C2" => "C",
+                "C3" => "C"
+            ),
+            expected_greedy_failure_code = "length_mismatch"
+        ),
+        _h1_fixture(
+            "H1-G4",
+            "near-tie bubble",
+            H1SyntheticEdge[
+                H1SyntheticEdge("S", "A1", 0.900),
+                H1SyntheticEdge("A1", "A2", 0.900),
+                H1SyntheticEdge("A2", "T", 0.900),
+                H1SyntheticEdge("S", "B1", 0.899),
+                H1SyntheticEdge("B1", "B2", 0.899),
+                H1SyntheticEdge("B2", "T", 0.899)
+            ],
+            ["S", "A1", "A2", "T"],
+            ["S", "A1", "A2", "T"];
+            ambiguity_margin = abs(3 * (log(0.900) - log(0.899))) / 3
         )
     ]
+end
+
+function _h1_fixture(
+        id::AbstractString,
+        name::AbstractString,
+        edges::Vector{H1SyntheticEdge},
+        truth_path::Vector{String},
+        expected_greedy_path::Vector{String};
+        data_type::AbstractString = "clean",
+        coverage::AbstractString = "fixture",
+        seed::Int = 0,
+        ambiguity_margin::Union{Missing, Float64} = missing,
+        observation_classes::Union{Nothing, Vector{String}} = nothing,
+        vertex_classes::Dict{String, String} = Dict{String, String}(),
+        expected_greedy_failure_code::AbstractString = "none")::H1SyntheticFixture
+    return H1SyntheticFixture(
+        string(id),
+        string(name),
+        "S",
+        "T",
+        edges,
+        truth_path,
+        expected_greedy_path,
+        string(data_type),
+        string(coverage),
+        seed,
+        ambiguity_margin,
+        observation_classes,
+        vertex_classes,
+        string(expected_greedy_failure_code)
+    )
 end
 
 """
@@ -271,7 +367,8 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
         if dp_result.failure_code != "none" || dp_result.path != fixture.truth_path
             error("H1 smoke DP path expectation failed for $(fixture.id).")
         end
-        if greedy_result.failure_code != "none" || greedy_result.path != fixture.expected_greedy_path
+        if greedy_result.failure_code != fixture.expected_greedy_failure_code ||
+           greedy_result.path != fixture.expected_greedy_path
             error("H1 smoke greedy path expectation failed for $(fixture.id).")
         end
 
@@ -286,10 +383,10 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 fixture_id = fixture.id,
                 fixture_name = fixture.name,
                 organism = "synthetic",
-                data_type = "clean",
-                coverage = "fixture",
-                seed = 0,
-                ambiguity_margin = missing,
+                data_type = fixture.data_type,
+                coverage = fixture.coverage,
+                seed = fixture.seed,
+                ambiguity_margin = fixture.ambiguity_margin,
                 algorithm = result.algorithm,
                 strategy_name = result.strategy_name,
                 implementation_scope = result.implementation_scope,
@@ -301,6 +398,8 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 path_accuracy = exact_match ? 1.0 : 0.0,
                 sequence_identity = exact_match ? 1.0 : 0.0,
                 normalized_edit_distance = exact_match ? 0.0 : 1.0,
+                repeat_copy_number_error = _h1_repeat_copy_number_error(fixture, result.path),
+                path_confidence = _h1_path_confidence(result.log_probability, oracle_log_probability),
                 sequence_metric_note = "path_match_proxy_no_sequence",
                 log_probability = result.log_probability,
                 oracle_log_probability = oracle_log_probability,
@@ -313,7 +412,7 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 tie_breaking_exercised = false,
                 emission_model = "neutral",
                 runtime_s = result.runtime_s,
-                peak_rss_mib = missing,
+                peak_rss_mib = _current_peak_rss_mib(),
                 failure_code = result.failure_code
             ))
         end
@@ -352,8 +451,8 @@ function write_h1_viterbi_dp_greedy_artifacts(;
         metadata = Dict{String, Any}(
             "artifact_kind" => "h1_viterbi_dp_greedy_path_metrics",
             "plan_path" => "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
-            "fixtures" => "H1-G0,H1-G1",
-            "scope" => "clean synthetic smoke"
+            "fixtures" => "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+            "scope" => "clean synthetic local-expanded smoke; no real-data H1 decision rule"
         ),
         table_context_columns = table_context_columns
     )
@@ -385,6 +484,26 @@ function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
     end
 
     error("Only the H1 Viterbi DP vs greedy smoke runner is implemented for --execute; pass --slice H1.")
+end
+
+function _current_peak_rss_mib()::Float64
+    return Sys.maxrss() / 1024^2
+end
+
+function _h1_path_confidence(log_probability::Float64, oracle_log_probability::Float64)::Float64
+    if !isfinite(log_probability) || !isfinite(oracle_log_probability)
+        return 0.0
+    end
+    return exp(log_probability - oracle_log_probability)
+end
+
+function _h1_repeat_copy_number_error(fixture::H1SyntheticFixture, path::Vector{String})::Int
+    if fixture.id != "H1-G3"
+        return 0
+    end
+    expected_copies = count(vertex -> startswith(vertex, "L"), fixture.truth_path)
+    observed_copies = count(vertex -> startswith(vertex, "L"), path)
+    return abs(expected_copies - observed_copies)
 end
 
 function _h1_select_viterbi_dp_path(fixture::H1SyntheticFixture)
@@ -423,7 +542,6 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
     outgoing = _h1_outgoing_edges(fixture)
     path = [fixture.source]
     current = fixture.source
-    log_probability = 0.0
     max_steps = length(fixture.edges) + 1
 
     for _ in 1:max_steps
@@ -433,9 +551,9 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
                 strategy_name = "GreedyViterbi",
                 implementation_scope = "harness_local_greedy_baseline",
                 path = path,
-                log_probability = log_probability,
+                log_probability = _h1_path_log_probability(fixture, path),
                 runtime_s = time() - start_time,
-                failure_code = "none"
+                failure_code = _h1_path_failure_code(fixture, path)
             )
         end
 
@@ -454,7 +572,6 @@ function _h1_select_greedy_viterbi_path(fixture::H1SyntheticFixture)
 
         best_edge = first(sort(candidates; by = edge -> (-log(edge.probability), _h1_edge_tie_key(edge))))
         push!(path, best_edge.target)
-        log_probability += log(best_edge.probability)
         current = best_edge.target
     end
 
@@ -507,7 +624,43 @@ function _h1_path_log_probability(fixture::H1SyntheticFixture, path::Vector{Stri
         end
         total += log(probability)
     end
+    emission_log_probability = _h1_path_emission_log_probability(fixture, path)
+    if !isfinite(emission_log_probability)
+        return -Inf
+    end
+    return total + emission_log_probability
+end
+
+function _h1_path_emission_log_probability(fixture::H1SyntheticFixture, path::Vector{String})::Float64
+    if fixture.observation_classes === nothing
+        return 0.0
+    end
+    nonterminal_path = path[2:(length(path) - 1)]
+    if length(nonterminal_path) != length(fixture.observation_classes)
+        return -Inf
+    end
+    total = 0.0
+    for (vertex, observation_class) in zip(nonterminal_path, fixture.observation_classes)
+        vertex_class = get(fixture.vertex_classes, vertex, nothing)
+        if vertex_class === nothing
+            return -Inf
+        end
+        total += vertex_class == observation_class ? 0.0 : -20.0
+    end
     return total
+end
+
+function _h1_path_failure_code(fixture::H1SyntheticFixture, path::Vector{String})::String
+    if fixture.observation_classes !== nothing
+        nonterminal_path = path[2:(length(path) - 1)]
+        if length(nonterminal_path) != length(fixture.observation_classes)
+            return "length_mismatch"
+        end
+    end
+    if !isfinite(_h1_path_log_probability(fixture, path))
+        return "length_mismatch"
+    end
+    return "none"
 end
 
 function _h1_outgoing_edges(fixture::H1SyntheticFixture)::Dict{String, Vector{H1SyntheticEdge}}
@@ -692,7 +845,7 @@ function print_rhizomorph_benchmark_usage()
     println("  julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci --write-artifacts --output-dir results/public-record")
     println()
     println("Scales: ci, full, candidate")
-    println("Execution currently supports the H1-G0/H1-G1 Viterbi-DP-vs-greedy synthetic smoke.")
+    println("Execution currently supports the H1-G0 through H1-G4 Viterbi-DP-vs-greedy synthetic smoke.")
     return nothing
 end
 

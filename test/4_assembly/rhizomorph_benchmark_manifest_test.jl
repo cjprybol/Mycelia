@@ -81,15 +81,15 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     end
 
     h1_smoke = run_rhizomorph_benchmark_harness(dry_run = false, hypothesis_ids = ["H1"])
-    Test.@test DataFrames.nrow(h1_smoke) == 4
+    Test.@test DataFrames.nrow(h1_smoke) == 10
     Test.@test Set(h1_smoke.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
     Test.@test Set(h1_smoke.hypothesis_id) == Set(["H1"])
-    Test.@test Set(zip(h1_smoke.fixture_id, h1_smoke.strategy_name)) == Set([
-        ("H1-G0", "ExhaustiveViterbiObjectiveOracle"),
-        ("H1-G0", "GreedyViterbi"),
-        ("H1-G1", "ExhaustiveViterbiObjectiveOracle"),
-        ("H1-G1", "GreedyViterbi")
-    ])
+    Test.@test Set(h1_smoke.fixture_id) == Set(["H1-G0", "H1-G1", "H1-G2", "H1-G3", "H1-G4"])
+    Test.@test all(
+        fixture_id -> Set(h1_smoke.strategy_name[h1_smoke.fixture_id .== fixture_id]) ==
+                      Set(["ExhaustiveViterbiObjectiveOracle", "GreedyViterbi"]),
+        unique(h1_smoke.fixture_id)
+    )
     h1_g1_oracle = only(h1_smoke[
         (h1_smoke.fixture_id .== "H1-G1") .&
         (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
@@ -104,6 +104,40 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test h1_g1_greedy.expected_strategy_path_match
     Test.@test !h1_g1_greedy.exact_path_match
     Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
+
+    h1_g2_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G2") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g2_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G2") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g2_oracle.path_vertices == "S,B1,B2,B3,T"
+    Test.@test h1_g2_greedy.path_vertices == "S,A1,A2,A3,T"
+    Test.@test !h1_g2_greedy.exact_path_match
+
+    h1_g3_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G3") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g3_greedy.path_vertices == "S,L1,R1,T"
+    Test.@test h1_g3_greedy.failure_code == "length_mismatch"
+    Test.@test h1_g3_greedy.repeat_copy_number_error == 1
+
+    h1_g4_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G4") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g4_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G4") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g4_oracle.exact_path_match
+    Test.@test h1_g4_greedy.exact_path_match
+    Test.@test h1_g4_oracle.ambiguity_margin < 0.002
     test_throws_message(
         ErrorException,
         "only supports dataset rhizomorph_graph_unit_fixtures"
@@ -219,18 +253,17 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         Test.@test isfile(metrics_csv)
         Test.@test isfile(metrics_provenance_json)
         metrics = DataFrames.DataFrame(CSV.File(metrics_csv))
-        Test.@test DataFrames.nrow(metrics) == 4
+        Test.@test DataFrames.nrow(metrics) == 10
         Test.@test all(metrics.benchmark_hypothesis_id .== "H1")
         Test.@test all(metrics.benchmark_dataset_id .== "rhizomorph_graph_unit_fixtures")
-        Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1"])
+        Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1", "H1-G2", "H1-G3", "H1-G4"])
         Test.@test Set(metrics.hypothesis_id) == Set(["H1"])
         Test.@test Set(metrics.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
-        Test.@test Set(zip(metrics.fixture_id, metrics.strategy_name)) == Set([
-            ("H1-G0", "ExhaustiveViterbiObjectiveOracle"),
-            ("H1-G0", "GreedyViterbi"),
-            ("H1-G1", "ExhaustiveViterbiObjectiveOracle"),
-            ("H1-G1", "GreedyViterbi")
-        ])
+        Test.@test all(
+            fixture_id -> Set(metrics.strategy_name[metrics.fixture_id .== fixture_id]) ==
+                          Set(["ExhaustiveViterbiObjectiveOracle", "GreedyViterbi"]),
+            unique(metrics.fixture_id)
+        )
 
         h1_g1_oracle = only(metrics[
             (metrics.fixture_id .== "H1-G1") .&
@@ -247,6 +280,14 @@ Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
         Test.@test h1_g1_greedy.expected_strategy_path_match
         Test.@test !h1_g1_greedy.exact_path_match
         Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
+
+        h1_g3_greedy = only(metrics[
+            (metrics.fixture_id .== "H1-G3") .& (metrics.strategy_name .== "GreedyViterbi"),
+            :
+        ])
+        Test.@test h1_g3_greedy.failure_code == "length_mismatch"
+        Test.@test h1_g3_greedy.repeat_copy_number_error == 1
+        Test.@test all(.!ismissing.(metrics.peak_rss_mib))
 
         index = JSON.parsefile(index_json)
         Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["table"] ==
