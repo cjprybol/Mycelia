@@ -170,7 +170,7 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --list-slices
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --plan --scale ci
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H2 --slice H7 --scale full
 
-# Run the lightweight H1-G0/H1-G1 Viterbi-objective-vs-greedy smoke
+# Run the lightweight H1-G0 through H1-G4 Viterbi-objective-vs-greedy smoke
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --execute
 julia --project=. benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --execute \
   --write-artifacts --output-dir /tmp/mycelia-h1-viterbi-smoke
@@ -228,9 +228,14 @@ julia --project=. benchmarking/rhizomorph_benchmark_harness.jl \
 
 The same table schema is used for `ci`, `full`, and `candidate` scales; larger
 scales add rows rather than changing columns. The H1 smoke execution path writes
-`h1_viterbi_dp_greedy_path_metrics.csv` with clean H1-G0/H1-G1 path accuracy and
-log-likelihood-gap rows; it is a lightweight synthetic smoke, not the full H1
-G0-G4/noise/real-data decision rule.
+`h1_viterbi_dp_greedy_path_metrics.csv` with clean H1-G0 through H1-G4 path accuracy,
+log-likelihood-gap, repeat-copy, runtime, and peak-RSS rows; it is a lightweight
+synthetic smoke, not the full H1 noise/real-data decision rule. `Inf`/`-Inf`
+likelihood sentinels are allowed only when `failure_code` explains an invalid or
+length-incompatible greedy path. `peak_rss_mib` is process-level `Sys.maxrss()`
+run provenance repeated on each row, not per-algorithm incremental memory. The
+standard `plots/` and `logs/` directories are layout placeholders and may be
+empty for table-only smoke artifacts.
 
 ### Result Files
 - **Individual Results**: `results/[benchmark]_[timestamp].json` - Detailed benchmark data
