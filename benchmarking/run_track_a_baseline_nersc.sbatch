@@ -5,15 +5,16 @@
 #SBATCH --qos=shared
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=240G
 #SBATCH --time=12:00:00
-# Shared QOS with an explicit large memory request. The default shared -c16
-# allocation (~16-32 GB) OOM-killed on the higher-coverage cells: measured peak
-# RSS reached ~19 GB on Lambda alone, and T4 (3.5x the genome) at 100x needs
-# more. 256 GB covers any single viral cell with margin while still backfilling
-# far faster in the queue than a full exclusive node. The runner is serial (one
-# assembly at a time), so the extra cores mainly speed QUAST.
+# Shared QOS with near-max memory. The default shared -c16 allocation (~16-32 GB)
+# OOM-killed on the higher-coverage cells: measured peak RSS reached ~19 GB on
+# Lambda, and T4 (3.5x the genome) at 100x needs more (~100 GB est.). Perlmutter
+# `shared` caps a job at 0.5 node (~256 GB), so request 240 GB with few cores
+# (240/512 + 4/256 ~= 0.48 < 0.5) — covers any single viral cell with margin and
+# backfills far faster than a full exclusive node. The runner is serial (one
+# assembly at a time), so few cores suffice (QUAST is fast on tiny viral inputs).
 #SBATCH --output=track_a_baseline_nersc_%j.out
 #SBATCH --error=track_a_baseline_nersc_%j.err
 
