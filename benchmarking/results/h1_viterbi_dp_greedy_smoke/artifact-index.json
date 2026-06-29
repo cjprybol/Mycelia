@@ -38,6 +38,8 @@
         "path_accuracy",
         "sequence_identity",
         "normalized_edit_distance",
+        "repeat_copy_number_error",
+        "path_confidence",
         "sequence_metric_note",
         "log_probability",
         "oracle_log_probability",
@@ -46,6 +48,9 @@
         "greedy_log_probability",
         "delta_log_probability",
         "log_likelihood_gap_dp_minus_greedy",
+        "dp_failure_code",
+        "greedy_failure_code",
+        "pair_failure_code",
         "tie_breaking",
         "tie_breaking_exercised",
         "emission_model",
@@ -54,7 +59,7 @@
         "failure_code"
       ],
       "provenance": "provenance/h1_viterbi_dp_greedy_path_metrics.provenance.json",
-      "rows": 4,
+      "rows": 10,
       "table": "tables/h1_viterbi_dp_greedy_path_metrics.csv"
     }
   }
