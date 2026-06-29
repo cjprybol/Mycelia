@@ -715,18 +715,25 @@ function _assemble_kmer_graph(observations, config)
     mode = _graph_mode_symbol(config.graph_mode)
     graph = Rhizomorph.build_kmer_graph(observations, config.k; mode = mode)
 
-    # Apply Phase 2 graph algorithms
-    if config.bubble_resolution
-        bubbles = Rhizomorph.detect_bubbles_next(graph)
-        _log_info(config, "Detected $(length(bubbles)) bubble structures")
+    # NOTE: detect_bubbles_next / resolve_repeats_next are intentionally NOT run
+    # here. They return analysis structures that this function only logged and
+    # never used (they do not simplify the graph), while scaling ~O(V^2) — on a
+    # real read graph (errors create thousands of branch vertices) they took tens
+    # of minutes on a single phage genome. They remain available as standalone
+    # analysis functions; wire them in only once they actually mutate the graph.
+    # Until then the config flags below have no effect on the k-mer arm; surface
+    # that so a caller setting them does not silently get unmodified behavior.
+    if config.bubble_resolution || config.repeat_resolution
+        _log_info(config,
+            "bubble/repeat resolution not yet implemented for k-mer graphs; flags ignored")
     end
 
-    if config.repeat_resolution
-        repeats = Rhizomorph.resolve_repeats_next(graph)
-        _log_info(config, "Identified $(length(repeats)) repeat regions")
-    end
-
-    # Find contigs using Eulerian path finding
+    # Find contigs. find_eulerian_paths_next is a fast path that only succeeds on
+    # (near-)balanced graphs — i.e. toy or error-free inputs; it returns no paths
+    # the moment any vertex is unbalanced, which is guaranteed on real read graphs
+    # (errors create tips/bubbles). On such inputs the unitig fallback below
+    # (find_contigs_next via _generate_contigs_probabilistic) is the real contig
+    # generator.
     paths = Rhizomorph.find_eulerian_paths_next(graph)
 
     # Convert paths to sequences
@@ -757,6 +764,12 @@ function _assemble_kmer_graph(observations, config)
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
         "num_input_sequences" => length(observations),
+        # Record that the requested bubble/repeat resolution was NOT applied, so
+        # callers can detect the ignored flags regardless of the `verbose` setting
+        # (the _log_info above is silent when verbose=false).
+        "bubble_resolution_requested" => config.bubble_resolution,
+        "repeat_resolution_requested" => config.repeat_resolution,
+        "graph_cleaning_applied" => false,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
@@ -787,8 +800,16 @@ function _assemble_qualmer_graph(observations, config)
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
-    # Find contigs using quality-aware path finding
-    paths = _find_qualmer_paths(graph, config)
+    # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
+    # the k-mer arm. The prior heaviest-path / iterative-Viterbi heuristics found
+    # no substantial paths on branchy read graphs and fell to a placeholder walk
+    # that emitted ~one short fragment per vertex, collapsing the largest contig
+    # far below the genome length. find_contigs_next returns the vertex path
+    # (ContigPath.vertices); per-base quality is then propagated by
+    # _qualmer_path_to_consensus_fastq below.
+    paths = [contig_path.vertices
+             for contig_path in
+                 Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
 
     # Convert paths to FASTQ records with quality propagation
     contig_records = FASTX.FASTQ.Record[]
@@ -838,222 +859,6 @@ function _assemble_qualmer_graph(observations, config)
 
     return AssemblyResult(contigs, contig_names; graph = graph,
         assembly_stats = stats, fastq_contigs = contig_records)
-end
-
-"""
-Find quality-weighted paths through a qualmer graph using iterative algorithms.
-Implements heaviest path (highest confidence), iterative Viterbi, and probabilistic walks.
-"""
-function _find_qualmer_paths(graph, config)
-    paths = Vector{Vector}()
-
-    # Get all vertices sorted by evidence score (highest confidence first)
-    vertices = collect(MetaGraphsNext.labels(graph))
-    if isempty(vertices)
-        return paths
-    end
-
-    sorted_vertices = sort(vertices, by = v -> _qualmer_vertex_score(graph[v]), rev = true)
-
-    visited = Set()
-
-    # Method 1: Heaviest Path Algorithm (highest evidence paths)
-    _log_info(config, "Searching for high-confidence Eulerian paths")
-    for start_vertex in sorted_vertices
-        if start_vertex in visited
-            continue
-        end
-
-        # Try to find Eulerian path starting from high-confidence vertex
-        path = _find_heaviest_eulerian_path(graph, start_vertex, visited)
-        if length(path) > 1
-            union!(visited, path)
-            push!(paths, path)
-        end
-    end
-
-    # Method 2: Iterative Viterbi Algorithm for remaining vertices
-    if length(paths) < 3  # If we haven't found many paths, try iterative Viterbi
-        _log_info(config, "Applying iterative Viterbi algorithm")
-        remaining_vertices = filter(v -> !(v in visited), vertices)
-        if !isempty(remaining_vertices)
-            viterbi_paths = _iterative_viterbi_paths(graph, remaining_vertices, config)
-            for path in viterbi_paths
-                if length(path) > 1
-                    union!(visited, path)
-                    push!(paths, path)
-                end
-            end
-        end
-    end
-
-    # Method 3: Evidence-weighted walks for any remaining vertices
-    remaining_vertices = filter(
-        v -> !(v in visited) &&
-             _qualmer_vertex_score(graph[v]) > 0.0, vertices)
-    if !isempty(remaining_vertices) && length(paths) < 5
-        _log_info(config, "Using probabilistic walks for remaining high-quality vertices")
-        for start_vertex in remaining_vertices[1:min(3, end)]  # Limit to avoid too many small contigs
-            if !(start_vertex in visited)
-                path = _quality_weighted_walk(graph, start_vertex, config.k * 5)
-                if length(path) > 1
-                    union!(visited, path)
-                    push!(paths, path)
-                end
-            end
-        end
-    end
-
-    return paths
-end
-
-"""
-Find the heaviest (highest confidence) Eulerian path starting from a given vertex.
-"""
-function _find_heaviest_eulerian_path(graph, start_vertex, visited::Set)
-    path = [start_vertex]
-    current = start_vertex
-
-    max_steps = 1000  # Prevent infinite loops
-    steps = 0
-
-    while steps < max_steps
-        # Get unvisited neighbors
-        neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, current))
-        unvisited_neighbors = filter(n -> !(n in visited), neighbors)
-
-        if isempty(unvisited_neighbors)
-            break
-        end
-
-        # Choose neighbor with highest combined score (vertex evidence * edge evidence)
-        best_neighbor = nothing
-        best_score = -1.0
-
-        for neighbor in unvisited_neighbors
-            # Vertex evidence score
-            vertex_score = _qualmer_vertex_score(graph[neighbor])
-
-            # Edge evidence score
-            edge_score = 1.0
-            if haskey(graph, current, neighbor)
-                edge_data = graph[current, neighbor]
-                edge_score = _qualmer_edge_score(edge_data)
-            end
-
-            # Combined score
-            total_score = vertex_score * edge_score
-
-            if total_score > best_score
-                best_score = total_score
-                best_neighbor = neighbor
-            end
-        end
-
-        if best_neighbor === nothing || best_score < 1.0  # Evidence threshold
-            break
-        end
-
-        push!(path, best_neighbor)
-        current = best_neighbor
-        steps += 1
-    end
-
-    return path
-end
-
-"""
-Iterative Viterbi algorithm for finding optimal paths through qualmer graph.
-Uses dynamic programming with quality scores as emission/transition probabilities.
-"""
-function _iterative_viterbi_paths(graph, candidate_vertices, config)
-    paths = Vector{Vector}()
-
-    # Group vertices into potential start points (high in-degree or isolated)
-    start_candidates = Vector()
-    for vertex in candidate_vertices
-        in_degree = length(collect(MetaGraphsNext.inneighbor_labels(graph, vertex)))
-        out_degree = length(collect(MetaGraphsNext.outneighbor_labels(graph, vertex)))
-
-        # Prefer vertices that could be sequence starts
-        if in_degree <= out_degree || _qualmer_vertex_score(graph[vertex]) >= 1.0
-            push!(start_candidates, vertex)
-        end
-    end
-
-    # If no clear starts, use highest quality vertices
-    if isempty(start_candidates)
-        start_candidates = candidate_vertices[1:min(3, end)]
-    end
-
-    visited = Set()
-    for start_vertex in start_candidates
-        if start_vertex in visited
-            continue
-        end
-
-        # Apply Viterbi-like algorithm
-        path = _viterbi_optimal_path(graph, start_vertex, visited, 500)  # Reasonable max length
-        if length(path) > 1
-            union!(visited, path)
-            push!(paths, path)
-        end
-    end
-
-    return paths
-end
-
-"""
-Find optimal path using Viterbi-like dynamic programming on quality scores.
-"""
-function _viterbi_optimal_path(graph, start_vertex, visited::Set, max_length::Int)
-    # Initialize with start vertex
-    path = [start_vertex]
-    current = start_vertex
-    local_visited = Set([start_vertex])
-
-    for step in 1:max_length
-        neighbors = collect(MetaGraphsNext.outneighbor_labels(graph, current))
-        unvisited_neighbors = filter(n -> !(n in visited) && !(n in local_visited), neighbors)
-
-        if isempty(unvisited_neighbors)
-            break
-        end
-
-        # Calculate Viterbi scores for each neighbor
-        best_neighbor = nothing
-        best_viterbi_score = -Inf
-
-        for neighbor in unvisited_neighbors
-            # Emission probability (vertex quality)
-            emission_prob = log(max(1e-10, _qualmer_vertex_score(graph[neighbor])))
-
-            # Transition probability (edge quality)
-            transition_prob = 0.0
-            if haskey(graph, current, neighbor)
-                edge_data = graph[current, neighbor]
-                transition_prob = log(max(1e-10, _qualmer_edge_score(edge_data)))
-            end
-
-            # Viterbi score
-            viterbi_score = emission_prob + transition_prob
-
-            if viterbi_score > best_viterbi_score
-                best_viterbi_score = viterbi_score
-                best_neighbor = neighbor
-            end
-        end
-
-        if best_neighbor === nothing || best_viterbi_score < -10.0  # Quality threshold in log space
-            break
-        end
-
-        push!(path, best_neighbor)
-        push!(local_visited, best_neighbor)
-        current = best_neighbor
-    end
-
-    return path
 end
 
 """
@@ -1235,8 +1040,6 @@ function _prepare_fastq_observations(observations)
 
     return fastq_records
 end
-
-# Duplicate _find_qualmer_paths function removed - keeping the more complete implementation at line 870
 
 """
 Convert qualmer path to DNA sequence.
