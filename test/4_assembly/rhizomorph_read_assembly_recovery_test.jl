@@ -25,18 +25,22 @@ import Mycelia
 import FASTX
 import BioSequences
 import Random
+import StableRNGs
 
 function _synthetic_reads(genome_len, coverage, error_rate; seed = 42)
-    rng = Random.MersenneTwister(seed)
-    genome = BioSequences.LongDNA{4}(join(rand(rng, ['A', 'C', 'G', 'T'], genome_len)))
+    # StableRNGs gives a version-stable genome (the stage-4 suite convention).
+    genome = BioSequences.LongDNA{4}(join(
+        rand(StableRNGs.StableRNG(seed), ['A', 'C', 'G', 'T'], genome_len)))
     # create_test_reads -> observe injects substitution errors using the GLOBAL
-    # RNG (no rng argument), so seed it here to make the error topology — and thus
-    # the branch/bubble structure both defects depend on — reproducible. Without
-    # this, only the genome is deterministic and the assertions become flaky.
+    # RNG (it takes no rng argument), so seed it for a reproducible error topology
+    # — the branch/bubble structure both defects depend on. Snapshot and restore
+    # the global RNG around the call so this does not leak state into sibling
+    # tests sharing the process.
+    saved_rng = copy(Random.default_rng())
     Random.seed!(seed)
-    # create_test_reads applies substitution errors to `coverage` copies of the
-    # genome -> high-coverage backbone with low-coverage error tips/bubbles.
-    return genome, Mycelia.create_test_reads(genome, coverage, error_rate)
+    reads = Mycelia.create_test_reads(genome, coverage, error_rate)
+    copy!(Random.default_rng(), saved_rng)
+    return genome, reads
 end
 
 Test.@testset "Rhizomorph read assembly recovery" begin

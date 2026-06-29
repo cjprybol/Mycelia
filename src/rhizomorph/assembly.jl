@@ -764,6 +764,12 @@ function _assemble_kmer_graph(observations, config)
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
         "num_input_sequences" => length(observations),
+        # Record that the requested bubble/repeat resolution was NOT applied, so
+        # callers can detect the ignored flags regardless of the `verbose` setting
+        # (the _log_info above is silent when verbose=false).
+        "bubble_resolution_requested" => config.bubble_resolution,
+        "repeat_resolution_requested" => config.repeat_resolution,
+        "graph_cleaning_applied" => false,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
