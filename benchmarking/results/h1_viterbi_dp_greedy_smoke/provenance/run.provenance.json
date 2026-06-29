@@ -1,0 +1,32 @@
+{
+  "command_args": [
+    "--slice",
+    "H1",
+    "--execute",
+    "--write-artifacts"
+  ],
+  "dataset_ids": [
+    "rhizomorph_graph_unit_fixtures"
+  ],
+  "generated_at": "2026-06-29T00:46:06.560Z",
+  "git": {
+    "commit": "955f32f97fee54dd9a46e1e818c0d6ed819b9076",
+    "is_dirty": false
+  },
+  "metadata": {
+    "artifact_kind": "h1_viterbi_dp_greedy_path_metrics",
+    "empty_layout_directory_semantics": "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact.",
+    "fixtures": "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+    "non_finite_metric_semantics": "Inf/-Inf are permitted only in paired likelihood diagnostic columns when dp_failure_code, greedy_failure_code, or pair_failure_code documents an invalid or length-incompatible path; they are diagnostic sentinel values, not finite effect sizes.",
+    "peak_rss_mib_semantics": "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
+    "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
+    "scope": "clean synthetic local-expanded smoke; no real-data H1 decision rule"
+  },
+  "run_id": "h1_viterbi_dp_greedy_smoke",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}
