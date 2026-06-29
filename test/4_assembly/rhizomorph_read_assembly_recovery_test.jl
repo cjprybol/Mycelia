@@ -43,11 +43,28 @@ function _synthetic_reads(genome_len, coverage, error_rate; seed = 42)
     return genome, reads
 end
 
+# Genome sizes for the two arms. Kept >= MIN_REALISTIC_GENOME_BP so this corpus
+# always exercises a graph large enough to branch — the prior suite's 16-28 bp
+# references could not, which is exactly what hid the read-assembly degeneracy
+# and the O(n^2) slowdown. The guard testset below trips if these shrink back
+# toward toy sizes.
+const MIN_REALISTIC_GENOME_BP = 1000
+const QUALMER_GENOME_LEN = 2000
+const KMER_GENOME_LEN = 3000
+
 Test.@testset "Rhizomorph read assembly recovery" begin
     k = 31
 
+    Test.@testset "corpus guard: assembly regimes exercise >=1kb genomes" begin
+        # Regression guard for the blind spot fixed in this change: keep at least
+        # one realistic (branchy) genome size in the corpus so the regime that
+        # hid both defects stays covered.
+        Test.@test QUALMER_GENOME_LEN >= MIN_REALISTIC_GENOME_BP
+        Test.@test KMER_GENOME_LEN >= MIN_REALISTIC_GENOME_BP
+    end
+
     Test.@testset "qualmer arm recovers genome (quality-on / FASTQ input)" begin
-        genome_len = 2000
+        genome_len = QUALMER_GENOME_LEN
         _, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
         result = Mycelia.Rhizomorph.assemble_genome(fastq_reads; k = k, verbose = false)
 
@@ -58,7 +75,7 @@ Test.@testset "Rhizomorph read assembly recovery" begin
     end
 
     Test.@testset "k-mer arm recovers genome without pathological slowdown" begin
-        genome_len = 3000
+        genome_len = KMER_GENOME_LEN
         _, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
         fasta_reads = [FASTX.FASTA.Record(FASTX.identifier(r), FASTX.sequence(r))
                        for r in fastq_reads]
