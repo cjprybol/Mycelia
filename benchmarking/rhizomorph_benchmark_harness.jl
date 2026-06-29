@@ -408,6 +408,9 @@ function run_h1_viterbi_dp_greedy_smoke()::DataFrames.DataFrame
                 greedy_log_probability = greedy_result.log_probability,
                 delta_log_probability = log_likelihood_gap,
                 log_likelihood_gap_dp_minus_greedy = log_likelihood_gap,
+                dp_failure_code = dp_result.failure_code,
+                greedy_failure_code = greedy_result.failure_code,
+                pair_failure_code = _h1_pair_failure_code(dp_result.failure_code, greedy_result.failure_code),
                 tie_breaking = "deterministic_lexicographic_vertex_strand_edge",
                 tie_breaking_exercised = false,
                 emission_model = "neutral",
@@ -453,7 +456,7 @@ function write_h1_viterbi_dp_greedy_artifacts(;
             "plan_path" => "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
             "fixtures" => "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
             "scope" => "clean synthetic local-expanded smoke; no real-data H1 decision rule",
-            "non_finite_metric_semantics" => "Inf/-Inf are permitted only in likelihood-gap columns when failure_code documents an invalid or length-incompatible greedy path; they are diagnostic sentinel values, not finite effect sizes.",
+            "non_finite_metric_semantics" => "Inf/-Inf are permitted only in paired likelihood diagnostic columns when dp_failure_code, greedy_failure_code, or pair_failure_code documents an invalid or length-incompatible path; they are diagnostic sentinel values, not finite effect sizes.",
             "peak_rss_mib_semantics" => "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
             "empty_layout_directory_semantics" => "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact."
         ),
@@ -478,15 +481,30 @@ function run_rhizomorph_benchmark_harness(; dry_run::Bool = true, kwargs...)
 
     selected_hypothesis_ids = _selected_id_set(get(kwargs, :hypothesis_ids, nothing))
     selected_dataset_ids = _selected_id_set(get(kwargs, :dataset_ids, nothing))
+    if selected_hypothesis_ids != Set(["H1"])
+        error("Only the H1 Viterbi DP vs greedy smoke runner is implemented for --execute; pass --slice H1.")
+    end
     if selected_dataset_ids !== nothing &&
        selected_dataset_ids != Set(["rhizomorph_graph_unit_fixtures"])
         error("H1 Viterbi DP vs greedy smoke only supports dataset rhizomorph_graph_unit_fixtures.")
     end
-    if selected_hypothesis_ids == Set(["H1"])
-        return run_h1_viterbi_dp_greedy_smoke()
+
+    execute_plan = build_rhizomorph_benchmark_plan(; kwargs...)
+    if DataFrames.nrow(execute_plan) != 1 ||
+       only(execute_plan.hypothesis_id) != "H1" ||
+       only(execute_plan.dataset_id) != "rhizomorph_graph_unit_fixtures" ||
+       !only(execute_plan.implemented)
+        error("H1 execute mode requires the manifest-backed implemented H1 rhizomorph_graph_unit_fixtures row.")
     end
 
-    error("Only the H1 Viterbi DP vs greedy smoke runner is implemented for --execute; pass --slice H1.")
+    return run_h1_viterbi_dp_greedy_smoke()
+end
+
+function _h1_pair_failure_code(dp_failure_code::AbstractString, greedy_failure_code::AbstractString)::String
+    if dp_failure_code == "none" && greedy_failure_code == "none"
+        return "none"
+    end
+    return "dp=$(dp_failure_code);greedy=$(greedy_failure_code)"
 end
 
 function _current_peak_rss_mib()::Float64
