@@ -103,21 +103,20 @@ if SMOKE
     seeds = [42]
     arms = ["qualmer"]
 else
-    let f = arg_list("--organisms")
-        f !== nothing && (organisms = filter(o -> o[1] in f, ORGANISMS))
-    end
-    let f = arg_list("--technologies")
-        f !== nothing && (technologies = f)
-    end
-    let f = arg_list("--coverages")
-        f !== nothing && (coverages = parse.(Int, f))
-    end
-    let f = arg_list("--seeds")
-        f !== nothing && (seeds = parse.(Int, f))
-    end
-    let f = arg_list("--arms")
-        f !== nothing && (arms = f)
-    end
+    # NOTE: assign directly (no `let`). A `let` block introduces a new scope, so
+    # `coverages = ...` inside it would create a local shadow and silently leave
+    # the global matrix at its default — i.e. the shard/filter flags would be
+    # ignored. `if/else` bodies do not introduce scope, so these reach the globals.
+    _f = arg_list("--organisms")
+    _f !== nothing && (organisms = filter(o -> o[1] in _f, ORGANISMS))
+    _f = arg_list("--technologies")
+    _f !== nothing && (technologies = _f)
+    _f = arg_list("--coverages")
+    _f !== nothing && (coverages = parse.(Int, _f))
+    _f = arg_list("--seeds")
+    _f !== nothing && (seeds = parse.(Int, _f))
+    _f = arg_list("--arms")
+    _f !== nothing && (arms = _f)
 end
 
 const OUTPUT_DIR = let v = arg_value("--output-dir")
