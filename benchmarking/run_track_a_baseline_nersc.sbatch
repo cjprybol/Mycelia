@@ -2,11 +2,16 @@
 #SBATCH --job-name=track_a_baseline
 #SBATCH --account=m4269
 #SBATCH --constraint=cpu
-#SBATCH --qos=shared
+#SBATCH --qos=regular
 #SBATCH --nodes=1
+#SBATCH --exclusive
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=128
 #SBATCH --time=12:00:00
+# Full exclusive node (512 GB). A shared -c16 allocation OOM-killed on the
+# higher-coverage cells (Lambda 30x already peaks ~5 GB; T4/100x need far more);
+# an exclusive node gives a no-OOM margin for any single viral cell. The runner
+# is serial (one assembly at a time), so the extra cores mainly speed QUAST.
 #SBATCH --output=track_a_baseline_nersc_%j.out
 #SBATCH --error=track_a_baseline_nersc_%j.err
 
