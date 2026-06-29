@@ -37,6 +37,9 @@
     "greedy_log_probability",
     "delta_log_probability",
     "log_likelihood_gap_dp_minus_greedy",
+    "dp_failure_code",
+    "greedy_failure_code",
+    "pair_failure_code",
     "tie_breaking",
     "tie_breaking_exercised",
     "emission_model",
@@ -57,16 +60,16 @@
   "dataset_ids": [
     "rhizomorph_graph_unit_fixtures"
   ],
-  "generated_at": "2026-06-28T23:39:02.030Z",
+  "generated_at": "2026-06-29T00:48:34.563Z",
   "git": {
-    "commit": "9307e8f12c93bef81f13a580db9d8fd0cfc3da01",
-    "is_dirty": true
+    "commit": "f54e26b5c909d49e4f2159df52656d6b6c36bd27",
+    "is_dirty": false
   },
   "metadata": {
     "artifact_kind": "h1_viterbi_dp_greedy_path_metrics",
     "empty_layout_directory_semantics": "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact.",
     "fixtures": "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
-    "non_finite_metric_semantics": "Inf/-Inf are permitted only in likelihood-gap columns when failure_code documents an invalid or length-incompatible greedy path; they are diagnostic sentinel values, not finite effect sizes.",
+    "non_finite_metric_semantics": "Inf/-Inf are permitted only in paired likelihood diagnostic columns when dp_failure_code, greedy_failure_code, or pair_failure_code documents an invalid or length-incompatible path; they are diagnostic sentinel values, not finite effect sizes.",
     "peak_rss_mib_semantics": "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
     "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
     "scope": "clean synthetic local-expanded smoke; no real-data H1 decision rule"
