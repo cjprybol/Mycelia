@@ -45,7 +45,11 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     Test.@test all(ci_plan.ci_suitability .== "ci")
     Test.@test "synthetic_isolate_5386" in ci_plan.dataset_id
     Test.@test !("phix174" in ci_plan.dataset_id)
-    Test.@test all(.!ci_plan.implemented)
+    h1_ci_plan = ci_plan[ci_plan.hypothesis_id .== "H1", :]
+    Test.@test DataFrames.nrow(h1_ci_plan) == 1
+    Test.@test only(h1_ci_plan.dataset_id) == "rhizomorph_graph_unit_fixtures"
+    Test.@test only(h1_ci_plan.implemented)
+    Test.@test all(ci_plan[ci_plan.hypothesis_id .!= "H1", :].implemented .== false)
 
     full_plan = build_rhizomorph_benchmark_plan(scale = "full", hypothesis_ids = ["H2", "H7"])
     Test.@test Set(full_plan.hypothesis_id) == Set(["H2", "H7"])
@@ -71,9 +75,121 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     end
     test_throws_message(
         ErrorException,
-        "Rhizomorph benchmark slice execution is not implemented yet"
+        "pass --slice H1"
     ) do
         run_rhizomorph_benchmark_harness(dry_run = false)
+    end
+
+    h1_smoke = run_rhizomorph_benchmark_harness(dry_run = false, hypothesis_ids = ["H1"])
+    Test.@test DataFrames.nrow(h1_smoke) == 10
+    Test.@test Set(h1_smoke.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
+    Test.@test Set(h1_smoke.hypothesis_id) == Set(["H1"])
+    Test.@test Set(h1_smoke.fixture_id) == Set(["H1-G0", "H1-G1", "H1-G2", "H1-G3", "H1-G4"])
+    Test.@test all(
+        fixture_id -> Set(h1_smoke.strategy_name[h1_smoke.fixture_id .== fixture_id]) ==
+                      Set(["ExhaustiveViterbiObjectiveOracle", "GreedyViterbi"]),
+        unique(h1_smoke.fixture_id)
+    )
+    h1_g1_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G1") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g1_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G1") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g1_oracle.path_vertices == "S,B1,B2,T"
+    Test.@test h1_g1_greedy.path_vertices == "S,A1,A2,T"
+    Test.@test h1_g1_greedy.expected_strategy_path_match
+    Test.@test !h1_g1_greedy.exact_path_match
+    Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
+
+    h1_g2_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G2") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g2_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G2") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g2_oracle.path_vertices == "S,B1,B2,B3,T"
+    Test.@test h1_g2_greedy.path_vertices == "S,A1,A2,A3,T"
+    Test.@test !h1_g2_greedy.exact_path_match
+
+    h1_g3_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G3") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g3_greedy.path_vertices == "S,L1,R1,T"
+    Test.@test h1_g3_greedy.failure_code == "length_mismatch"
+    Test.@test h1_g3_greedy.greedy_failure_code == "length_mismatch"
+    Test.@test h1_g3_greedy.pair_failure_code == "dp=none;greedy=length_mismatch"
+    Test.@test h1_g3_greedy.repeat_copy_number_error == 1
+    Test.@test all(h1_smoke.runtime_s .> 0.0)
+
+    no_path_fixture = H1SyntheticFixture(
+        "H1-NO-PATH",
+        "no path fixture",
+        "S",
+        "T",
+        H1SyntheticEdge[],
+        ["S", "T"],
+        ["S", "T"],
+        "clean",
+        "fixture",
+        0,
+        missing,
+        String[],
+        Dict{String, String}(),
+        "no_path"
+    )
+    no_path_result = _h1_select_greedy_viterbi_path(no_path_fixture)
+    Test.@test no_path_result.failure_code == "no_path"
+    Test.@test no_path_result.runtime_s > 0.0
+
+    h1_g4_oracle = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G4") .&
+        (h1_smoke.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+        :
+    ])
+    h1_g4_greedy = only(h1_smoke[
+        (h1_smoke.fixture_id .== "H1-G4") .& (h1_smoke.strategy_name .== "GreedyViterbi"),
+        :
+    ])
+    Test.@test h1_g4_oracle.exact_path_match
+    Test.@test h1_g4_greedy.exact_path_match
+    Test.@test h1_g4_oracle.ambiguity_margin < 0.002
+    test_throws_message(
+        ErrorException,
+        "only supports dataset rhizomorph_graph_unit_fixtures"
+    ) do
+        run_rhizomorph_benchmark_harness(
+            dry_run = false,
+            hypothesis_ids = ["H1"],
+            dataset_ids = ["rhizomorph_graph_unit_fixtures", "phix174"]
+        )
+    end
+
+    mktempdir() do manifest_dir
+        stale_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
+        h1_index = findfirst(slice -> slice["id"] == "H1", stale_manifest["hypothesis_slices"])
+        stale_manifest["hypothesis_slices"][h1_index]["status"] = "stub"
+        stale_manifest_path = joinpath(manifest_dir, "stale-rhizomorph-benchmark-manifest.toml")
+        open(stale_manifest_path, "w") do io
+            TOML.print(io, stale_manifest)
+        end
+        test_throws_message(
+            ErrorException,
+            "manifest-backed implemented H1 rhizomorph_graph_unit_fixtures row"
+        ) do
+            run_rhizomorph_benchmark_harness(
+                dry_run = false,
+                hypothesis_ids = ["H1"],
+                manifest_path = stale_manifest_path
+            )
+        end
     end
 
     invalid_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
@@ -158,5 +274,126 @@ Test.@testset "Rhizomorph benchmark public-record artifacts" begin
             Test.@test read(plan_csv, String) ==
                        read(joinpath(second_output_dir, "tables", "rhizomorph_benchmark_plan.csv"), String)
         end
+    end
+end
+
+Test.@testset "Rhizomorph H1 Viterbi smoke artifacts" begin
+    mktempdir() do output_dir
+        artifacts = write_h1_viterbi_dp_greedy_artifacts(
+            output_dir = output_dir,
+            run_id = "h1_smoke_test",
+            command_args = ["--slice", "H1", "--execute", "--write-artifacts"],
+            generated_at = "2026-06-27T00:00:00Z"
+        )
+        index_json = joinpath(output_dir, "artifact-index.json")
+        metrics_csv = joinpath(output_dir, "tables", "h1_viterbi_dp_greedy_path_metrics.csv")
+        metrics_provenance_json = joinpath(
+            output_dir,
+            "provenance",
+            "h1_viterbi_dp_greedy_path_metrics.provenance.json"
+        )
+        Test.@test isfile(index_json)
+        Test.@test isfile(metrics_csv)
+        Test.@test isfile(metrics_provenance_json)
+        metrics = DataFrames.DataFrame(CSV.File(metrics_csv))
+        Test.@test DataFrames.nrow(metrics) == 10
+        Test.@test all(metrics.benchmark_hypothesis_id .== "H1")
+        Test.@test all(metrics.benchmark_dataset_id .== "rhizomorph_graph_unit_fixtures")
+        Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1", "H1-G2", "H1-G3", "H1-G4"])
+        Test.@test Set(metrics.hypothesis_id) == Set(["H1"])
+        Test.@test Set(metrics.dataset_id) == Set(["rhizomorph_graph_unit_fixtures"])
+        Test.@test all(
+            fixture_id -> Set(metrics.strategy_name[metrics.fixture_id .== fixture_id]) ==
+                          Set(["ExhaustiveViterbiObjectiveOracle", "GreedyViterbi"]),
+            unique(metrics.fixture_id)
+        )
+
+        h1_g1_oracle = only(metrics[
+            (metrics.fixture_id .== "H1-G1") .&
+            (metrics.strategy_name .== "ExhaustiveViterbiObjectiveOracle"),
+            :
+        ])
+        h1_g1_greedy = only(metrics[
+            (metrics.fixture_id .== "H1-G1") .&
+            (metrics.strategy_name .== "GreedyViterbi"),
+            :
+        ])
+        Test.@test h1_g1_oracle.path_vertices == "S,B1,B2,T"
+        Test.@test h1_g1_greedy.path_vertices == "S,A1,A2,T"
+        Test.@test h1_g1_greedy.expected_strategy_path_match
+        Test.@test !h1_g1_greedy.exact_path_match
+        Test.@test h1_g1_oracle.log_likelihood_gap_dp_minus_greedy > 1.0
+
+        h1_g3_greedy = only(metrics[
+            (metrics.fixture_id .== "H1-G3") .& (metrics.strategy_name .== "GreedyViterbi"),
+            :
+        ])
+        Test.@test h1_g3_greedy.failure_code == "length_mismatch"
+        Test.@test h1_g3_greedy.repeat_copy_number_error == 1
+        Test.@test isinf(h1_g3_greedy.log_likelihood_gap_dp_minus_greedy)
+        Test.@test h1_g3_greedy.greedy_failure_code == "length_mismatch"
+        Test.@test h1_g3_greedy.pair_failure_code == "dp=none;greedy=length_mismatch"
+        Test.@test all(.!ismissing.(metrics.peak_rss_mib))
+        Test.@test all(metrics.runtime_s .> 0.0)
+
+        index = JSON.parsefile(index_json)
+        Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["table"] ==
+                   joinpath("tables", "h1_viterbi_dp_greedy_path_metrics.csv")
+        Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["provenance"] ==
+                   joinpath("provenance", "h1_viterbi_dp_greedy_path_metrics.provenance.json")
+
+        run_provenance = JSON.parsefile(artifacts.provenance)
+        Test.@test run_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
+        Test.@test run_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
+        Test.@test occursin("paired likelihood diagnostic", run_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("pair_failure_code", run_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("process-level", run_provenance["metadata"]["peak_rss_mib_semantics"])
+        Test.@test occursin("may be empty", run_provenance["metadata"]["empty_layout_directory_semantics"])
+        Test.@test !haskey(run_provenance["git"], "branch")
+        Test.@test !haskey(run_provenance["git"], "remote_url")
+
+        metrics_provenance = JSON.parsefile(metrics_provenance_json)
+        Test.@test metrics_provenance["metadata"]["artifact_kind"] == "h1_viterbi_dp_greedy_path_metrics"
+        Test.@test metrics_provenance["dataset_ids"] == ["rhizomorph_graph_unit_fixtures"]
+        Test.@test occursin("paired likelihood diagnostic", metrics_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("pair_failure_code", metrics_provenance["metadata"]["non_finite_metric_semantics"])
+        Test.@test occursin("process-level", metrics_provenance["metadata"]["peak_rss_mib_semantics"])
+        Test.@test !haskey(metrics_provenance["git"], "branch")
+        Test.@test !haskey(metrics_provenance["git"], "remote_url")
+
+        test_throws_message(ErrorException, COMMON_ERROR_MESSAGE_FRAGMENTS) do
+            run_rhizomorph_benchmark_harness(
+                dry_run = false,
+                hypothesis_ids = ["H1"],
+                scale = "tiny"
+            )
+        end
+    end
+end
+
+
+Test.@testset "Committed H1 Viterbi reference artifacts" begin
+    for artifact_dir in (
+        joinpath(@__DIR__, "..", "..", "benchmarking", "results", "h1_viterbi_dp_greedy_smoke"),
+        joinpath(@__DIR__, "..", "..", "benchmarking", "results", "h1_viterbi_dp_greedy_expanded_20260628")
+    )
+        index = JSON.parsefile(joinpath(artifact_dir, "artifact-index.json"))
+        metrics = DataFrames.DataFrame(CSV.File(joinpath(artifact_dir, "tables", "h1_viterbi_dp_greedy_path_metrics.csv")))
+        run_provenance = JSON.parsefile(joinpath(artifact_dir, "provenance", "run.provenance.json"))
+        metrics_provenance = JSON.parsefile(
+            joinpath(artifact_dir, "provenance", "h1_viterbi_dp_greedy_path_metrics.provenance.json")
+        )
+
+        Test.@test index["tables"]["h1_viterbi_dp_greedy_path_metrics"]["rows"] == 10
+        Test.@test DataFrames.nrow(metrics) == 10
+        Test.@test Set(metrics.fixture_id) == Set(["H1-G0", "H1-G1", "H1-G2", "H1-G3", "H1-G4"])
+        Test.@test all(metrics.runtime_s .> 0.0)
+        Test.@test all(.!ismissing.(metrics.peak_rss_mib))
+        Test.@test run_provenance["metadata"]["fixtures"] == "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4"
+        Test.@test !run_provenance["git"]["is_dirty"]
+        Test.@test !metrics_provenance["git"]["is_dirty"]
+        Test.@test !haskey(run_provenance["git"], "branch")
+        Test.@test !haskey(run_provenance["git"], "remote_url")
+        Test.@test occursin("pair_failure_code", run_provenance["metadata"]["non_finite_metric_semantics"])
     end
 end
