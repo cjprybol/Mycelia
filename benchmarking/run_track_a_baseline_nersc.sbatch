@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=240G
+#SBATCH --mem=200G
 #SBATCH --time=12:00:00
 # Shared QOS with near-max memory. The default shared -c16 allocation (~16-32 GB)
 # OOM-killed on the higher-coverage cells: measured peak RSS reached ~19 GB on
