@@ -1,5 +1,8 @@
-# Regression tests: Rhizomorph must recover a genome from realistic (branchy)
-# read coverage efficiently, on BOTH decoder arms.
+# Regression tests: Rhizomorph must recover a genome from a branchy read graph
+# efficiently, on BOTH decoder arms. Reads here are error-laden full-length
+# copies of the genome (via create_test_reads/observe) — not fragmented shotgun
+# reads — which is enough to produce the error-induced branch vertices both
+# defects depend on, without modeling fragment length or indels.
 #
 # Two distinct defects motivated these tests, neither caught by the prior suite
 # (which only assembled 16-28 bp references — graphs too small to exhibit either):
@@ -26,6 +29,11 @@ import Random
 function _synthetic_reads(genome_len, coverage, error_rate; seed = 42)
     rng = Random.MersenneTwister(seed)
     genome = BioSequences.LongDNA{4}(join(rand(rng, ['A', 'C', 'G', 'T'], genome_len)))
+    # create_test_reads -> observe injects substitution errors using the GLOBAL
+    # RNG (no rng argument), so seed it here to make the error topology — and thus
+    # the branch/bubble structure both defects depend on — reproducible. Without
+    # this, only the genome is deterministic and the assertions become flaky.
+    Random.seed!(seed)
     # create_test_reads applies substitution errors to `coverage` copies of the
     # genome -> high-coverage backbone with low-coverage error tips/bubbles.
     return genome, Mycelia.create_test_reads(genome, coverage, error_rate)
@@ -36,7 +44,7 @@ Test.@testset "Rhizomorph read assembly recovery" begin
 
     Test.@testset "qualmer arm recovers genome (quality-on / FASTQ input)" begin
         genome_len = 2000
-        genome, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
+        _, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
         result = Mycelia.Rhizomorph.assemble_genome(fastq_reads; k = k, verbose = false)
 
         Test.@test !isempty(result.contigs)
@@ -47,7 +55,7 @@ Test.@testset "Rhizomorph read assembly recovery" begin
 
     Test.@testset "k-mer arm recovers genome without pathological slowdown" begin
         genome_len = 3000
-        genome, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
+        _, fastq_reads = _synthetic_reads(genome_len, 20, 0.01)
         fasta_reads = [FASTX.FASTA.Record(FASTX.identifier(r), FASTX.sequence(r))
                        for r in fastq_reads]
 
