@@ -175,7 +175,7 @@ Test.@testset "Rhizomorph benchmark dry-run plans" begin
     mktempdir() do manifest_dir
         stale_manifest = deepcopy(load_rhizomorph_benchmark_manifest(validate = false))
         h1_index = findfirst(slice -> slice["id"] == "H1", stale_manifest["hypothesis_slices"])
-        stale_manifest["hypothesis_slices"][h1_index]["implemented"] = false
+        stale_manifest["hypothesis_slices"][h1_index]["status"] = "stub"
         stale_manifest_path = joinpath(manifest_dir, "stale-rhizomorph-benchmark-manifest.toml")
         open(stale_manifest_path, "w") do io
             TOML.print(io, stale_manifest)
