@@ -265,14 +265,14 @@ accessions = []
 
 [[hypothesis_slices]]
 id = "H1"
-title = "Graph construction scaling"
-summary = "Measure fixed-length and variable-length Rhizomorph graph construction time, memory, and graph-size growth."
-dataset_ids = ["synthetic_isolate_5386", "synthetic_metagenome_pair", "rhizomorph_graph_unit_fixtures", "phix174", "lambda_phage", "t4_phage"]
-entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H1"
-status = "stub"
-expected_inputs = ["sequence_records", "k_values", "strand_modes", "graph_type"]
-expected_outputs = ["graph_construction_metrics_csv", "memory_profile_json", "graph_summary_json"]
-follow_on_work = "Implement construction runners for k-mer, qualmer, FASTA, FASTQ, and string graph builders."
+title = "Viterbi objective vs greedy synthetic fixture smoke"
+summary = "Compare an exhaustive Viterbi-objective oracle against a local GreedyViterbi baseline on clean H1-G0 through H1-G4 synthetic graph fixtures."
+dataset_ids = ["rhizomorph_graph_unit_fixtures"]
+entrypoint = "benchmarking/rhizomorph_benchmark_harness.jl --slice H1 --execute"
+status = "implemented"
+expected_inputs = ["H1-G0_linear_control", "H1-G1_local_trap_bubble", "H1-G2_delayed_exit_bubble", "H1-G3_repeat_copy_ambiguity", "H1-G4_near_tie_bubble"]
+expected_outputs = ["h1_viterbi_dp_greedy_path_metrics_csv", "h1_viterbi_dp_greedy_path_metrics_provenance_json", "run_provenance_json", "artifact_index_json"]
+follow_on_work = "Extend beyond clean G0-G4 local-expanded smoke to stochastic noise regimes and real-data assembly-quality decision rules."
 
 [[hypothesis_slices]]
 id = "H2"
