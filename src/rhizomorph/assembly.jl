@@ -715,16 +715,12 @@ function _assemble_kmer_graph(observations, config)
     mode = _graph_mode_symbol(config.graph_mode)
     graph = Rhizomorph.build_kmer_graph(observations, config.k; mode = mode)
 
-    # Apply Phase 2 graph algorithms
-    if config.bubble_resolution
-        bubbles = Rhizomorph.detect_bubbles_next(graph)
-        _log_info(config, "Detected $(length(bubbles)) bubble structures")
-    end
-
-    if config.repeat_resolution
-        repeats = Rhizomorph.resolve_repeats_next(graph)
-        _log_info(config, "Identified $(length(repeats)) repeat regions")
-    end
+    # NOTE: detect_bubbles_next / resolve_repeats_next are intentionally NOT run
+    # here. They return analysis structures that this function only logged and
+    # never used (they do not simplify the graph), while scaling ~O(V^2) — on a
+    # real read graph (errors create thousands of branch vertices) they took tens
+    # of minutes on a single phage genome. They remain available as standalone
+    # analysis functions; wire them in only once they actually mutate the graph.
 
     # Find contigs using Eulerian path finding
     paths = Rhizomorph.find_eulerian_paths_next(graph)
@@ -787,8 +783,16 @@ function _assemble_qualmer_graph(observations, config)
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
-    # Find contigs using quality-aware path finding
-    paths = _find_qualmer_paths(graph, config)
+    # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
+    # the k-mer arm. The prior heaviest-path / iterative-Viterbi heuristics found
+    # no substantial paths on branchy read graphs and fell to a placeholder walk
+    # that emitted ~one short fragment per vertex, collapsing the largest contig
+    # far below the genome length. find_contigs_next returns the vertex path
+    # (ContigPath.vertices); per-base quality is then propagated by
+    # _qualmer_path_to_consensus_fastq below.
+    paths = [contig_path.vertices
+             for contig_path in
+                 Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
 
     # Convert paths to FASTQ records with quality propagation
     contig_records = FASTX.FASTQ.Record[]
