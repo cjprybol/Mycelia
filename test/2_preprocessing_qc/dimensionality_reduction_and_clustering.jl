@@ -345,6 +345,9 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + KMeans" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + KMeans")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -375,6 +378,9 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + KMedoids")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -410,6 +416,9 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + Hierarchical Clustering (fixed k)" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + Hierarchical Clustering (fixed k)")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -845,6 +854,9 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[Poisson] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -878,6 +890,9 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         ## Compute Bray-Curtis distance matrix and perform PCoA
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
         ## UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -919,6 +934,9 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         ## Compute Bray-Curtis distance matrix and perform PCoA
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
         ## UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -1365,6 +1383,9 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_nb_umap_fit_labels = Clustering.kmeans(pcoa_nb_umap_model.embedding, n_distributions).assignments
@@ -1395,6 +1416,9 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMedoids" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + KMedoids")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
@@ -1429,6 +1453,9 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_nb_umap_model.embedding
@@ -1752,6 +1779,9 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_binom_umap_fit_labels = Clustering.kmeans(pcoa_binom_umap_model.embedding, n_distributions).assignments
@@ -1782,6 +1812,9 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + KMedoids")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
@@ -1816,6 +1849,9 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_binom_umap_model.embedding
@@ -2266,6 +2302,9 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMeans" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + KMeans")
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_contb_umap_fit_labels = Clustering.kmeans(pcoa_contb_umap_model.embedding, n_distributions).assignments
@@ -2296,6 +2335,9 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMedoids" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + KMedoids")
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
@@ -2331,6 +2373,9 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         ## Data generation and preprocessing as in original test
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_contb_umap_model.embedding
@@ -2779,6 +2824,9 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMeans" begin
         test_println("[Gamma] Testing: Cosine Distance + PCoA + UMAP + KMeans")
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
         pcoa_gamma_umap_fit_labels = Clustering.kmeans(pcoa_gamma_umap_model.embedding, n_distributions).assignments
@@ -2809,6 +2857,9 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Gamma] Testing: Cosine Distance + PCoA + UMAP + KMedoids")
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
@@ -2845,6 +2896,9 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         ## Step 1: Compute Cosine distance matrix and perform PCoA
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
         ## Step 2: UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_gamma_umap_model.embedding
