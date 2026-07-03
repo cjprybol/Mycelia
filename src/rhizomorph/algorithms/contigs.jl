@@ -164,6 +164,18 @@ function _edge_support(graph, src, dst)
     if hasfield(typeof(edge_data), :evidence)
         return Rhizomorph.count_evidence(edge_data)
     end
+    # Reduced edge types (Lightweight/Ultralight/*Quality) drop the evidence dict
+    # and store aggregated coverage as `total_count`. Without this branch every
+    # reduced edge falls through to the constant `1` below, so at any branch
+    # vertex `_dominant_neighbor` sees all-tied support (1 >= 2*1 is false),
+    # never resolves the branch, and `find_linear_path` breaks. On real reads
+    # (ubiquitous error tips) this fragments the assembly and collapses genome
+    # fraction, while clean/linear fixtures — which never hit a branch — stay
+    # identical to :full. `count_evidence` is defined for the reduced types and
+    # returns `total_count`, matching full-mode edge coverage.
+    if hasfield(typeof(edge_data), :total_count)
+        return Rhizomorph.count_evidence(edge_data)
+    end
     if hasfield(typeof(edge_data), :coverage)
         return length(edge_data.coverage)
     end

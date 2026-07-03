@@ -192,6 +192,47 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test Set(res_ultra.contigs) == Set(res_full.contigs)
     end
 
+    Test.@testset "Mode 3a: reduced profiles resolve branches (regression)" begin
+        # The clean-tiling fixtures above never hit a branch vertex, so they cannot
+        # detect the reduced-profile fragmentation bug (contigs.jl `_edge_support`
+        # returned a constant 1 for Lightweight/Ultralight edges, which lack an
+        # `evidence` field — collapsing the dominance test so `find_linear_path`
+        # broke at every branch). Inject low-coverage "error" tips into a
+        # high-depth tiling to create interior branches with UNEQUAL edge support,
+        # then require the reduced profiles to reconstruct as well as :full.
+        ref = EFF_REF
+        k = 7
+        reads = FASTX.FASTA.Record[]
+        idx = 0
+        for _ in 1:8, i in 1:(length(ref) - 15 + 1)
+            idx += 1
+            push!(reads, FASTX.FASTA.Record("r$(idx)", ref[i:(i + 15 - 1)]))
+        end
+        for i in (8, 15, 22)
+            sub = collect(ref[i:(i + 15 - 1)])
+            sub[8] = sub[8] == 'A' ? 'C' : 'A'
+            idx += 1
+            push!(reads, FASTX.FASTA.Record("e$(idx)", String(sub)))
+        end
+
+        cfg_full = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand,
+            use_quality_scores = false, memory_profile = :full)
+        res_full = Mycelia.Rhizomorph.assemble_genome(reads, cfg_full)
+        full_longest = maximum(length.(res_full.contigs))
+
+        for profile in (:lightweight, :ultralight)
+            cfg_r = Mycelia.Rhizomorph.AssemblyConfig(;
+                k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand,
+                use_quality_scores = false, memory_profile = profile)
+            res_r = Mycelia.Rhizomorph.assemble_genome(reads, cfg_r)
+            r_longest = maximum(length.(res_r.contigs))
+            # Reduced profiles must resolve branches, not shatter into k-mer-sized
+            # fragments. Pre-fix the longest reduced contig was ~1/3 of :full.
+            Test.@test r_longest >= 0.6 * full_longest
+        end
+    end
+
     Test.@testset "Mode 3b: unitig compaction (partial — k-mer graph caveat)" begin
         reads = eff_tiling_reads(EFF_REF)
         k = 7
