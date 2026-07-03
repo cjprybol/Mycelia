@@ -134,6 +134,8 @@ struct AssemblyConfig
 
     # Additive efficiency modes (all default to today's behavior, so existing
     # assemblies are byte-for-byte unchanged unless a caller opts in).
+    # NOTE: with dedup_revcomp on, a reported contig may be the reverse-complement
+    # (canonical) orientation of the sequence that was actually assembled.
     dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep (post-assembly)
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
@@ -191,6 +193,21 @@ struct AssemblyConfig
         end
         if min_coverage < 1
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+
+        # The additive efficiency modes (dedup_revcomp / compact_unitigs /
+        # memory_profile) are only implemented on the non-quality k-mer path
+        # (_assemble_kmer_graph). FASTQ input auto-sets use_quality_scores=true,
+        # which dispatches to the qualmer arm and silently ignores these flags.
+        # Warn unconditionally so a caller opting in on quality data is not left
+        # believing the flag took effect. (Default config sets no flags, so this
+        # never fires for existing assemblies.)
+        if use_quality_scores &&
+           (dedup_revcomp || compact_unitigs || memory_profile != :full)
+            @warn "Efficiency modes (dedup_revcomp / compact_unitigs / " *
+                  "memory_profile) are only implemented on the non-quality " *
+                  "k-mer path and are ignored on the quality/qualmer path. " *
+                  "Set use_quality_scores=false to use them."
         end
 
         new(
@@ -735,6 +752,21 @@ K-mer graph assembly implementation (fixed-length k-mer foundation).
 function _assemble_kmer_graph(observations, config)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
+    # Canonical graph_mode does not yet support correct contig reconstruction:
+    # undirected canonical traversal is not orientation-aware, so adjacent
+    # canonical labels do not carry which strand their (k-1)-overlap is on and
+    # the reconstructed contigs are INVALID (see the Canonical @test_broken in
+    # test/4_assembly/rhizomorph_efficiency_modes_test.jl). Warn UNCONDITIONALLY
+    # (matching the codebase's warn-on-incomplete-path convention) and flag the
+    # result; do NOT hard-error, so the mode stays runnable for the benchmark and
+    # to track the keystone fix.
+    reconstruction_valid = config.graph_mode != Canonical
+    if config.graph_mode == Canonical
+        @warn "Canonical graph_mode does not yet support correct contig " *
+              "reconstruction (undirected canonical traversal is not " *
+              "orientation-aware); emitted contigs are INVALID. Use " *
+              "graph_mode=DoubleStrand for correct assembly."
+    end
     # Mode 3a (opt-in): memory_profile selects the k-mer graph's evidence footprint
     # (:full default, or :lightweight / :ultralight / *_quality). This is an internal
     # representation change; the assembled contigs are expected to be identical.
@@ -797,13 +829,23 @@ function _assemble_kmer_graph(observations, config)
     # on a copy so the field is populated and the contract (contigs unchanged) holds;
     # for k-mer graphs the simplified graph is structurally identical to `graph`.
     simplified = nothing
+    unitig_compaction_effective = false
     if config.compact_unitigs
         simplified = Rhizomorph.collapse_linear_chains!(deepcopy(graph))
         n_full = length(MetaGraphsNext.labels(graph))
         n_simpl = length(MetaGraphsNext.labels(simplified))
+        # Record effectiveness, not just intent: for fixed-length k-mer graphs
+        # collapse_linear_chains! cannot reduce the vertex count, so this is false.
+        unitig_compaction_effective = n_simpl < n_full
         _log_info(config,
             "Unitig compaction: $(n_full) -> $(n_simpl) vertices " *
             "(no-op for fixed-length k-mer graphs; needs variable-length conversion)")
+        if !unitig_compaction_effective
+            @warn "compact_unitigs requested but had no effect: linear-chain " *
+                  "compaction is a no-op on fixed-length k-mer graphs " *
+                  "(collapsing would change vertex labels from Kmer to " *
+                  "BioSequence). simplified_graph is structurally identical to graph."
+        end
     end
 
     # Assembly statistics
@@ -824,6 +866,10 @@ function _assemble_kmer_graph(observations, config)
         "repeat_resolution_requested" => config.repeat_resolution,
         "graph_cleaning_applied" => false,
         "unitig_compaction_requested" => config.compact_unitigs,
+        "unitig_compaction_effective" => unitig_compaction_effective,
+        # false for Canonical graph_mode: undirected canonical traversal is not
+        # orientation-aware, so the emitted contigs are not a valid reconstruction.
+        "reconstruction_valid" => reconstruction_valid,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
@@ -842,6 +888,16 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
+    # See _assemble_kmer_graph: Canonical graph_mode does not yet support correct
+    # contig reconstruction (undirected canonical traversal is not orientation-
+    # aware). Warn UNCONDITIONALLY and flag the result; do NOT hard-error.
+    reconstruction_valid = config.graph_mode != Canonical
+    if config.graph_mode == Canonical
+        @warn "Canonical graph_mode does not yet support correct contig " *
+              "reconstruction (undirected canonical traversal is not " *
+              "orientation-aware); emitted contigs are INVALID. Use " *
+              "graph_mode=DoubleStrand for correct assembly."
+    end
     graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
 
     # Apply Phase 2 graph algorithms if enabled
@@ -898,6 +954,8 @@ function _assemble_qualmer_graph(observations, config)
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "quality_preserved" => true,  # Mark that quality information is preserved
+        # false for Canonical graph_mode (undirected traversal is not orientation-aware).
+        "reconstruction_valid" => reconstruction_valid,
         "num_fastq_contigs" => length(contig_records),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
         "num_input_sequences" => length(observations),
@@ -978,7 +1036,13 @@ function _canonical_string(seq::AbstractString)::String
     fwd = String(seq)
     rc = try
         String(BioSequences.reverse_complement(BioSequences.LongDNA{4}(fwd)))
-    catch
+    catch e
+        # Only a genuine invalid-DNA conversion failure means "not DNA — pass the
+        # sequence through unchanged". BioSequences.LongDNA{4} throws an
+        # ErrorException on unencodable characters (verified). Let anything else
+        # (InterruptException, OutOfMemoryError, MethodError, ...) propagate rather
+        # than silently masking a real fault.
+        e isa ErrorException || rethrow()
         return fwd
     end
     return min(fwd, rc)

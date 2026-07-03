@@ -19,8 +19,7 @@ import FASTX
 import BioSequences
 import MetaGraphsNext
 import Graphs
-
-const R = Mycelia.Rhizomorph
+import Logging
 
 # ---------------------------------------------------------------------------
 # Shared fixtures / helpers
@@ -34,6 +33,17 @@ function eff_tiling_reads(ref::AbstractString; read_len::Int = 15)
     reads = FASTX.FASTA.Record[]
     for i in 1:(length(ref) - read_len + 1)
         push!(reads, FASTX.FASTA.Record("r$(i)", ref[i:(i + read_len - 1)]))
+    end
+    return reads
+end
+
+"Tile the reference into overlapping FASTQ reads (quality => qualmer graph arm)."
+function eff_tiling_fastq_reads(ref::AbstractString; read_len::Int = 15)
+    reads = FASTX.FASTQ.Record[]
+    for i in 1:(length(ref) - read_len + 1)
+        sub = ref[i:(i + read_len - 1)]
+        qual = repeat("I", length(sub))  # Phred+33 'I' == Q40
+        push!(reads, FASTX.FASTQ.Record("r$(i)", sub, qual))
     end
     return reads
 end
@@ -74,17 +84,17 @@ Test.@testset "Rhizomorph efficiency modes" begin
         k = 7
 
         # (a) Default (dedup off) still emits RC pairs from the DoubleStrand arm.
-        cfg_default = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false)
-        res_default = R.assemble_genome(reads, cfg_default)
+        cfg_default = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false)
+        res_default = Mycelia.Rhizomorph.assemble_genome(reads, cfg_default)
         Test.@test !isempty(res_default.contigs)
         Test.@test eff_has_rc_pair(res_default.contigs)
 
         # (b) With dedup on, contig count drops and no two remaining contigs are RCs.
-        cfg_dedup = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+        cfg_dedup = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             dedup_revcomp = true)
-        res_dedup = R.assemble_genome(reads, cfg_dedup)
+        res_dedup = Mycelia.Rhizomorph.assemble_genome(reads, cfg_dedup)
         Test.@test !isempty(res_dedup.contigs)
         Test.@test length(res_dedup.contigs) < length(res_default.contigs)
         Test.@test !eff_has_rc_pair(res_dedup.contigs)
@@ -108,22 +118,30 @@ Test.@testset "Rhizomorph efficiency modes" begin
         ref_kmers = eff_canonical_kmers([EFF_REF], k)
 
         # DoubleStrand baseline: correct reconstruction (full canonical coverage).
-        cfg_ds = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false)
-        res_ds = R.assemble_genome(reads, cfg_ds)
+        cfg_ds = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false)
+        res_ds = Mycelia.Rhizomorph.assemble_genome(reads, cfg_ds)
         ds_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_ds.contigs, k))) /
                   length(ref_kmers)
         Test.@test ds_frac == 1.0
 
-        cfg_canon = R.AssemblyConfig(;
-            k = k, graph_mode = R.Canonical, use_quality_scores = false)
-        res_canon = R.assemble_genome(reads, cfg_canon)
+        # DoubleStrand reconstruction is flagged valid.
+        Test.@test res_ds.assembly_stats["reconstruction_valid"] == true
+
+        cfg_canon = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.Canonical, use_quality_scores = false)
+        # FIX 1: Canonical assembly must warn UNCONDITIONALLY (not verbose-gated)
+        # that contig reconstruction is not yet correct.
+        res_canon = Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.assemble_genome(reads, cfg_canon)
+
+        # FIX 1: and it must flag the result as an invalid reconstruction.
+        Test.@test res_canon.assembly_stats["reconstruction_valid"] == false
 
         # WHAT WORKS: the canonical graph is the compact (~1x) representation the
         # mode is meant to produce — undirected, with roughly half the vertices of
         # the DoubleStrand graph (RC pairs merged onto one canonical vertex).
-        canon_graph = R.build_kmer_graph(reads, k; mode = :canonical)
-        ds_graph = R.build_kmer_graph(reads, k; mode = :doublestrand)
+        canon_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :canonical)
+        ds_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :doublestrand)
         Test.@test !Graphs.is_directed(canon_graph)
         Test.@test length(collect(MetaGraphsNext.labels(canon_graph))) <=
                    0.6 * length(collect(MetaGraphsNext.labels(ds_graph)))
@@ -151,15 +169,15 @@ Test.@testset "Rhizomorph efficiency modes" begin
         reads = eff_tiling_reads(EFF_REF)
         k = 7
 
-        cfg_full = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+        cfg_full = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             memory_profile = :full)
-        res_full = R.assemble_genome(reads, cfg_full)
+        res_full = Mycelia.Rhizomorph.assemble_genome(reads, cfg_full)
 
-        cfg_light = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+        cfg_light = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             memory_profile = :lightweight)
-        res_light = R.assemble_genome(reads, cfg_light)
+        res_light = Mycelia.Rhizomorph.assemble_genome(reads, cfg_light)
 
         # memory_profile is an internal footprint change, not an output change:
         # the assembled contigs must be identical (order-independent).
@@ -167,10 +185,10 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test length(res_light.contigs) == length(res_full.contigs)
 
         # Same expectation for the most compact profile.
-        cfg_ultra = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+        cfg_ultra = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             memory_profile = :ultralight)
-        res_ultra = R.assemble_genome(reads, cfg_ultra)
+        res_ultra = Mycelia.Rhizomorph.assemble_genome(reads, cfg_ultra)
         Test.@test Set(res_ultra.contigs) == Set(res_full.contigs)
     end
 
@@ -178,14 +196,15 @@ Test.@testset "Rhizomorph efficiency modes" begin
         reads = eff_tiling_reads(EFF_REF)
         k = 7
 
-        cfg_plain = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false)
-        res_plain = R.assemble_genome(reads, cfg_plain)
+        cfg_plain = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false)
+        res_plain = Mycelia.Rhizomorph.assemble_genome(reads, cfg_plain)
 
-        cfg_compact = R.AssemblyConfig(;
-            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+        cfg_compact = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             compact_unitigs = true)
-        res_compact = R.assemble_genome(reads, cfg_compact)
+        # FIX 4: compaction on a fixed-length k-mer graph is a no-op and must warn.
+        res_compact = Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.assemble_genome(reads, cfg_compact)
 
         # Contract: compaction must not change the assembled contig sequences.
         Test.@test Set(res_compact.contigs) == Set(res_plain.contigs)
@@ -202,10 +221,47 @@ Test.@testset "Rhizomorph efficiency modes" begin
         n_simpl = length(collect(MetaGraphsNext.labels(res_compact.simplified_graph)))
         Test.@test n_simpl == n_full
 
+        # FIX 4: the stats disclose that compaction was requested but ineffective.
+        Test.@test res_compact.assembly_stats["unitig_compaction_requested"] == true
+        Test.@test res_compact.assembly_stats["unitig_compaction_effective"] == false
+
         # The invariant that SHOULD hold once fixed->variable conversion is wired in
         # (a linear tiling should compact to strictly fewer vertices). Left as
         # @test_broken to flag the known gap without red-failing the suite.
         Test.@test_broken n_simpl < n_full
+    end
+
+    Test.@testset "Config validation guards" begin
+        # (a) An unrecognized memory_profile is rejected at construction.
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = false, memory_profile = :bogus)
+
+        # (b) Canonical (like DoubleStrand) requires a defined reverse complement,
+        # so it is rejected for amino-acid and general-string sequence types.
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, sequence_type = BioSequences.LongAA,
+            graph_mode = Mycelia.Rhizomorph.Canonical)
+        Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, sequence_type = String,
+            graph_mode = Mycelia.Rhizomorph.Canonical)
+    end
+
+    Test.@testset "FIX 2: efficiency flags on the quality/qualmer path warn" begin
+        # The efficiency modes are only honored on the non-quality k-mer path.
+        # When use_quality_scores=true (the default, and what FASTQ input auto-sets)
+        # AND an efficiency flag is requested, construction must warn UNCONDITIONALLY
+        # that the flag is a no-op on the quality path.
+        Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = true, dedup_revcomp = true)
+        Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = true, compact_unitigs = true)
+        Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = true, memory_profile = :lightweight)
+
+        # And it must NOT warn for the default (no efficiency flag) quality config —
+        # existing quality assemblies stay byte-for-byte unchanged with no noise.
+        Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = true)
     end
 
 end
