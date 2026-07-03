@@ -33,6 +33,17 @@ struct ContigPath{T, S}
     end
 end
 
+# Reverse-complement partner of a vertex label, or `nothing` when the label has
+# no defined RC (string / BioSequence / amino-acid graphs). Only nucleotide
+# k-mer labels are RC-dedupable; the typed methods below give a zero-overhead,
+# type-stable dispatch (the generic fallback returns `nothing`). Defined above
+# the docstring so the docstring binds to `find_contigs_next`, not this helper.
+_rc_partner_label(::Any) = nothing
+function _rc_partner_label(
+        label::Kmers.Kmer{A}) where {A <: BioSequences.NucleicAcidAlphabet}
+    return BioSequences.reverse_complement(label)
+end
+
 """
     find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int=500)
 
@@ -51,16 +62,6 @@ sequence length is at least `min_contig_length`.
 contigs = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1000)
 ```
 """
-# Reverse-complement partner of a vertex label, or `nothing` when the label has
-# no defined RC (string / BioSequence / amino-acid graphs). Only nucleotide
-# k-mer labels are RC-dedupable; the typed methods below give a zero-overhead,
-# type-stable dispatch (the generic fallback returns `nothing`).
-_rc_partner_label(::Any) = nothing
-function _rc_partner_label(
-        label::Kmers.Kmer{A}) where {A <: BioSequences.NucleicAcidAlphabet}
-    return BioSequences.reverse_complement(label)
-end
-
 function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int = 500,
         rc_aware::Bool = false)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -96,8 +97,13 @@ function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::I
                 # contig (the source of QUAST duplication ~2.0). This is a
                 # structural fix: unlike post-hoc whole-contig string dedup, it also
                 # removes RC twins whose fragment breakpoints are OFFSET between the
-                # two strands (which string dedup silently misses). No-op on
-                # single-strand, canonical, string, or BioSequence graphs.
+                # two strands (which string dedup silently misses). Dispatch is
+                # type-based (nucleotide k-mer labels only), so it is inert on
+                # string / BioSequence / amino-acid graphs; on a nucleotide graph it
+                # is a true no-op only when no RC vertex is present. Caveat: like all
+                # RC-collapsing (canonical) de Bruijn assembly, a genuine inverted-
+                # repeat locus shares vertices with another locus's RC and collapses
+                # too — the standard de Bruijn RC ambiguity, not a regression.
                 if rc_aware
                     rc = _rc_partner_label(vertex)
                     if rc !== nothing
