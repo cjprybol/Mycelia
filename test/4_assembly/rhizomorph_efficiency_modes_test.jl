@@ -244,32 +244,29 @@ Test.@testset "Rhizomorph efficiency modes" begin
         cfg_compact = Mycelia.Rhizomorph.AssemblyConfig(;
             k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false,
             compact_unitigs = true)
-        # FIX 4: compaction on a fixed-length k-mer graph is a no-op and must warn.
-        res_compact = Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.assemble_genome(reads, cfg_compact)
+        # Compaction is now effective (convert_fixed_to_variable +
+        # collapse_linear_chains!), so no ineffective-compaction warning is emitted.
+        res_compact = Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.assemble_genome(reads, cfg_compact)
 
-        # Contract: compaction must not change the assembled contig sequences.
+        # Contract: compaction must not change the assembled contig sequences (the
+        # contigs come from the k-mer traversal, not from simplified_graph).
         Test.@test Set(res_compact.contigs) == Set(res_plain.contigs)
 
         # When requested, simplified_graph is populated; default leaves it nothing.
         Test.@test res_compact.simplified_graph !== nothing
         Test.@test res_plain.simplified_graph === nothing
 
-        # Documented caveat: collapse_linear_chains! is a no-op on fixed-length
-        # k-mer graphs (collapsing would change the label type from Kmer to
-        # BioSequence). So the simplified graph currently has the SAME vertex count
-        # as the full graph — no real compaction happens yet.
+        # Keystone: convert_fixed_to_variable() relabels each k-mer vertex as a
+        # variable-length BioSequence vertex, so collapse_linear_chains! can now
+        # merge non-branching runs into unitigs. A linear tiling collapses to
+        # strictly fewer vertices than the full k-mer graph.
         n_full = length(collect(MetaGraphsNext.labels(res_compact.graph)))
         n_simpl = length(collect(MetaGraphsNext.labels(res_compact.simplified_graph)))
-        Test.@test n_simpl == n_full
+        Test.@test n_simpl < n_full
 
-        # FIX 4: the stats disclose that compaction was requested but ineffective.
+        # The stats disclose that compaction was requested AND effective.
         Test.@test res_compact.assembly_stats["unitig_compaction_requested"] == true
-        Test.@test res_compact.assembly_stats["unitig_compaction_effective"] == false
-
-        # The invariant that SHOULD hold once fixed->variable conversion is wired in
-        # (a linear tiling should compact to strictly fewer vertices). Left as
-        # @test_broken to flag the known gap without red-failing the suite.
-        Test.@test_broken n_simpl < n_full
+        Test.@test res_compact.assembly_stats["unitig_compaction_effective"] == true
     end
 
     Test.@testset "Config validation guards" begin
@@ -285,6 +282,39 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test_throws ErrorException Mycelia.Rhizomorph.AssemblyConfig(;
             k = 7, sequence_type = String,
             graph_mode = Mycelia.Rhizomorph.Canonical)
+    end
+
+    Test.@testset "Mode 1b: structural RC-dedup in find_contigs_next" begin
+        # find_contigs_next(; rc_aware=true) marks each walked vertex's
+        # reverse-complement partner visited, so the DoubleStrand graph's reverse
+        # strand is never independently traversed. This is a STRUCTURAL fix for the
+        # QUAST-duplication-~2.0 pathology: unlike post-hoc whole-contig string
+        # dedup, it removes RC twins even when their fragment breakpoints are
+        # OFFSET between strands (the empirically-observed case where contig-level
+        # string dedup halves the count yet leaves duplication at 2.0).
+        reads = eff_tiling_reads(EFF_REF)
+        k = 7
+        g = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :doublestrand)
+
+        c_off = [string(c.sequence)
+                 for c in Mycelia.Rhizomorph.find_contigs_next(g; min_contig_length = 1)]
+        c_on = [string(c.sequence)
+                for c in Mycelia.Rhizomorph.find_contigs_next(
+                    g; min_contig_length = 1, rc_aware = true)]
+
+        # (a) Default (rc_aware=false) is unchanged and still emits RC pairs.
+        Test.@test eff_has_rc_pair(c_off)
+        # (b) rc_aware strictly reduces the contig count (removes the RC strand).
+        Test.@test length(c_on) < length(c_off)
+        # (c) No RC twins remain after structural dedup.
+        Test.@test !eff_has_rc_pair(c_on)
+        # (d) Genome content is PRESERVED: canonical k-mer coverage is unchanged
+        #     (accuracy is not traded for the contig-count reduction).
+        Test.@test eff_canonical_kmers(c_on, k) == eff_canonical_kmers(c_off, k)
+        Test.@test issubset(eff_canonical_kmers([EFF_REF], k), eff_canonical_kmers(c_on, k))
+
+        # (e) The helper is a no-op on labels with no defined reverse complement.
+        Test.@test Mycelia.Rhizomorph._rc_partner_label("ACGT") === nothing
     end
 
     Test.@testset "FIX 2: efficiency flags on the quality/qualmer path warn" begin
