@@ -1052,7 +1052,15 @@ end
 Generate contigs using probabilistic walks when Eulerian paths are not available.
 """
 function _generate_contigs_probabilistic(graph, config)
-    contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
+    # dedup_revcomp: prefer STRUCTURAL reverse-complement dedup during traversal
+    # over the post-hoc whole-contig string dedup applied later. The structural
+    # form marks each walked vertex's RC partner visited, so the reverse strand is
+    # never independently traversed. This removes RC twins with OFFSET fragment
+    # breakpoints that the string-level _dedup_reverse_complements misses (the
+    # empirically-observed case where contig-level dedup halves the count but
+    # leaves QUAST duplication at ~2.0).
+    contig_paths = Rhizomorph.find_contigs_next(
+        graph; min_contig_length = 1, rc_aware = config.dedup_revcomp)
     contigs = String[]
 
     for contig in contig_paths
