@@ -47,6 +47,14 @@ probabilistic graph-based genome assembler.
 5. **Test-first development** - All features require tests before claiming
    completion
 
+### External Tool Wrapping
+
+Mycelia wraps external bioinformatics tools through `Conda.jl`-managed
+environments rather than assuming system installs. Tools such as `pggb`, `odgi`,
+`samtools`, `minimap2`, `bgzip`, and `bcftools` are provisioned into Conda
+environments and invoked from Julia, so the host only needs Julia plus Conda.
+This keeps tool versions reproducible and isolated from the host system.
+
 ### Developer Setup
 
 After cloning, install the repo-local pre-commit hook:
