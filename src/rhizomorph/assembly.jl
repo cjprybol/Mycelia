@@ -26,6 +26,8 @@ function _graph_mode_symbol(graph_mode::GraphMode)
         return :singlestrand
     elseif graph_mode == DoubleStrand
         return :doublestrand
+    elseif graph_mode == Canonical
+        return :canonical
     end
     return :singlestrand
 end
@@ -130,6 +132,12 @@ struct AssemblyConfig
     verbose::Bool                           # Whether to emit info logs during assembly
     tda::Union{Nothing, Mycelia.TDAConfig}  # Optional TDA configuration for topology-aware metrics/cleaning
 
+    # Additive efficiency modes (all default to today's behavior, so existing
+    # assemblies are byte-for-byte unchanged unless a caller opts in).
+    dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep (post-assembly)
+    compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
+    memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -143,7 +151,10 @@ struct AssemblyConfig
             bubble_resolution::Bool = true,
             repeat_resolution::Bool = true,
             verbose::Bool = false,
-            tda::Union{Nothing, Mycelia.TDAConfig} = nothing
+            tda::Union{Nothing, Mycelia.TDAConfig} = nothing,
+            dedup_revcomp::Bool = false,
+            compact_unitigs::Bool = false,
+            memory_profile::Symbol = :full
     )
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
@@ -152,12 +163,20 @@ struct AssemblyConfig
             error("Cannot specify both k ($(k)) and min_overlap ($(min_overlap)). Choose one approach.")
         end
 
-        # Validation: Check strand compatibility with sequence types
-        if sequence_type <: BioSequences.LongAA && graph_mode == DoubleStrand
+        # Validation: Check strand compatibility with sequence types.
+        # DoubleStrand and Canonical both require a defined reverse complement,
+        # so both are rejected for amino acids and general strings.
+        if sequence_type <: BioSequences.LongAA && (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
         end
-        if sequence_type == String && graph_mode == DoubleStrand
+        if sequence_type == String && (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
+        end
+
+        # Validation: memory_profile must be one recognized by build_kmer_graph
+        _valid_memory_profiles = (:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
+        if !(memory_profile in _valid_memory_profiles)
+            error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
         end
 
         # Validation: Parameter ranges
@@ -186,7 +205,10 @@ struct AssemblyConfig
             bubble_resolution,
             repeat_resolution,
             verbose,
-            tda
+            tda,
+            dedup_revcomp,
+            compact_unitigs,
+            memory_profile
         )
     end
 end
