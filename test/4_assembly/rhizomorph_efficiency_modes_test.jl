@@ -174,6 +174,40 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test Set(res_ultra.contigs) == Set(res_full.contigs)
     end
 
+    Test.@testset "Mode 3b: unitig compaction (partial — k-mer graph caveat)" begin
+        reads = eff_tiling_reads(EFF_REF)
+        k = 7
+
+        cfg_plain = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false)
+        res_plain = R.assemble_genome(reads, cfg_plain)
+
+        cfg_compact = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+            compact_unitigs = true)
+        res_compact = R.assemble_genome(reads, cfg_compact)
+
+        # Contract: compaction must not change the assembled contig sequences.
+        Test.@test Set(res_compact.contigs) == Set(res_plain.contigs)
+
+        # When requested, simplified_graph is populated; default leaves it nothing.
+        Test.@test res_compact.simplified_graph !== nothing
+        Test.@test res_plain.simplified_graph === nothing
+
+        # Documented caveat: collapse_linear_chains! is a no-op on fixed-length
+        # k-mer graphs (collapsing would change the label type from Kmer to
+        # BioSequence). So the simplified graph currently has the SAME vertex count
+        # as the full graph — no real compaction happens yet.
+        n_full = length(collect(MetaGraphsNext.labels(res_compact.graph)))
+        n_simpl = length(collect(MetaGraphsNext.labels(res_compact.simplified_graph)))
+        Test.@test n_simpl == n_full
+
+        # The invariant that SHOULD hold once fixed->variable conversion is wired in
+        # (a linear tiling should compact to strictly fewer vertices). Left as
+        # @test_broken to flag the known gap without red-failing the suite.
+        Test.@test_broken n_simpl < n_full
+    end
+
 end
 
 println("✓ Rhizomorph efficiency mode tests completed")

@@ -788,6 +788,24 @@ function _assemble_kmer_graph(observations, config)
 
     contig_names = ["kmer_contig_$i" for i in 1:length(contigs)]
 
+    # Mode 3b (opt-in): populate simplified_graph via linear-chain (unitig)
+    # compaction. NOTE the documented caveat: collapse_linear_chains! is a no-op on
+    # fixed-length k-mer graphs — collapsing a linear chain would produce a sequence
+    # longer than k, changing the vertex label type from Kmer to BioSequence and
+    # violating MetaGraphsNext's parametric label_type. Real compaction therefore
+    # requires convert_fixed_to_variable() first (out of scope here). We still run it
+    # on a copy so the field is populated and the contract (contigs unchanged) holds;
+    # for k-mer graphs the simplified graph is structurally identical to `graph`.
+    simplified = nothing
+    if config.compact_unitigs
+        simplified = Rhizomorph.collapse_linear_chains!(deepcopy(graph))
+        n_full = length(MetaGraphsNext.labels(graph))
+        n_simpl = length(MetaGraphsNext.labels(simplified))
+        _log_info(config,
+            "Unitig compaction: $(n_full) -> $(n_simpl) vertices " *
+            "(no-op for fixed-length k-mer graphs; needs variable-length conversion)")
+    end
+
     # Assembly statistics
     stats = Dict{String, Any}(
         "method" => "KmerGraph",
@@ -805,10 +823,12 @@ function _assemble_kmer_graph(observations, config)
         "bubble_resolution_requested" => config.bubble_resolution,
         "repeat_resolution_requested" => config.repeat_resolution,
         "graph_cleaning_applied" => false,
+        "unitig_compaction_requested" => config.compact_unitigs,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
-    return AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
+    return AssemblyResult(contigs, contig_names;
+        graph = graph, simplified_graph = simplified, assembly_stats = stats)
 end
 
 """
