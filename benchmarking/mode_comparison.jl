@@ -520,16 +520,27 @@ function print_verdict(results::DataFrames.DataFrame)
         row.mode_label == "baseline" && continue
         notes = String[]
 
-        # Canonical brokenness flag: collapsed GF, no contigs, or failed worker.
-        broken = row.mode_label == "canonical" &&
-                 (!row.worker_ok ||
-                  ismissing(row.genome_fraction_quast) ||
-                  (!ismissing(row.genome_fraction_quast) && !ismissing(b_gf) && row.genome_fraction_quast < 0.5 * b_gf) ||
-                  (!ismissing(row.n_contigs) && row.n_contigs == 0))
+        # Mode-AGNOSTIC brokenness detection, evaluated BEFORE the accuracy
+        # comparison: a crashed worker, zero contigs, or a collapsed genome
+        # fraction is a FAILED/BROKEN result for ANY mode — not merely an
+        # "accuracy CHANGED" result. (Previously this was scoped only to the
+        # canonical mode, so a crashed/degenerate non-canonical worker was
+        # mislabeled as an accuracy change.)
+        gf_collapsed = ismissing(row.genome_fraction_quast) ||
+                       (!ismissing(b_gf) && row.genome_fraction_quast < 0.5 * b_gf)
+        no_contigs = !ismissing(row.n_contigs) && row.n_contigs == 0
+        broken = !row.worker_ok || gf_collapsed || no_contigs
         if broken
             gf_str = ismissing(row.genome_fraction_quast) ? "NA (nothing aligned)" : "$(fmt(row.genome_fraction_quast))%"
-            println("  [$(row.mode_label)] BROKEN — genome fraction $(gf_str) vs baseline $(fmt(b_gf))% " *
-                    "(empirical proof the canonical assembly is incorrect).")
+            reason = !row.worker_ok ? "worker crashed" :
+                     no_contigs ? "no contigs produced" :
+                     "genome fraction collapsed"
+            # The canonical mode is a KNOWN break (undirected reconstruction);
+            # any other mode failing this gate is an unexpected regression.
+            suffix = row.mode_label == "canonical" ?
+                     " (expected: undirected canonical reconstruction is incorrect)." : "."
+            println("  [$(row.mode_label)] FAILED/BROKEN ($(reason)) — genome fraction " *
+                    "$(gf_str) vs baseline $(fmt(b_gf))%$(suffix)")
             continue
         end
 
