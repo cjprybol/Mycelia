@@ -18,6 +18,7 @@ import Mycelia
 import FASTX
 import BioSequences
 import MetaGraphsNext
+import Graphs
 
 const R = Mycelia.Rhizomorph
 
@@ -99,6 +100,51 @@ Test.@testset "Rhizomorph efficiency modes" begin
         # And dedup preserves canonical coverage relative to the full set (no loss).
         default_kmers = eff_canonical_kmers(res_default.contigs, k)
         Test.@test contig_kmers == default_kmers
+    end
+
+    Test.@testset "Mode 2: canonical graph (BLOCKED — undirected path reconstruction)" begin
+        reads = eff_tiling_reads(EFF_REF)
+        k = 7
+        ref_kmers = eff_canonical_kmers([EFF_REF], k)
+
+        # DoubleStrand baseline: correct reconstruction (full canonical coverage).
+        cfg_ds = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false)
+        res_ds = R.assemble_genome(reads, cfg_ds)
+        ds_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_ds.contigs, k))) /
+                  length(ref_kmers)
+        Test.@test ds_frac == 1.0
+
+        cfg_canon = R.AssemblyConfig(;
+            k = k, graph_mode = R.Canonical, use_quality_scores = false)
+        res_canon = R.assemble_genome(reads, cfg_canon)
+
+        # WHAT WORKS: the canonical graph is the compact (~1x) representation the
+        # mode is meant to produce — undirected, with roughly half the vertices of
+        # the DoubleStrand graph (RC pairs merged onto one canonical vertex).
+        canon_graph = R.build_kmer_graph(reads, k; mode = :canonical)
+        ds_graph = R.build_kmer_graph(reads, k; mode = :doublestrand)
+        Test.@test !Graphs.is_directed(canon_graph)
+        Test.@test length(collect(MetaGraphsNext.labels(canon_graph))) <=
+                   0.6 * length(collect(MetaGraphsNext.labels(ds_graph)))
+
+        # WHAT IS BROKEN: path reconstruction over the UNDIRECTED canonical graph is
+        # incorrect. find_eulerian_paths_next + path_to_sequence assume a single
+        # fixed forward orientation and concatenate the trailing base of each
+        # successive canonical k-mer. On an undirected/canonical graph, adjacent
+        # canonical labels do not carry which strand their (k-1)-overlap is on, so
+        # the reconstructed sequence corresponds to no real read path. Empirically
+        # the emitted contig is genome-length but shares almost none of the
+        # reference's canonical k-mers (~1/32 on this fixture).
+        canon_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_canon.contigs, k))) /
+                     length(ref_kmers)
+        # Documents the break: canonical coverage is far below the correct 1.0.
+        Test.@test canon_frac < 0.5
+
+        # The invariant that SHOULD hold once orientation-aware traversal exists for
+        # the canonical graph. Left as @test_broken so a future fix flips it to a
+        # visible pass (and any accidental "fix" that regresses is surfaced).
+        Test.@test_broken canon_frac == ds_frac
     end
 
 end
