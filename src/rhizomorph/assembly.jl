@@ -773,6 +773,15 @@ function _assemble_kmer_graph(observations, config)
         contigs = _generate_contigs_probabilistic(graph, config)
     end
 
+    # Mode 1 (opt-in): collapse contigs that are reverse complements of each other
+    # to a single canonical representative. Default (dedup_revcomp=false) leaves the
+    # RC pairs a DoubleStrand assembly naturally emits, preserving today's behavior.
+    if config.dedup_revcomp
+        n_before = length(contigs)
+        contigs = _dedup_reverse_complements(contigs)
+        _log_info(config, "Reverse-complement dedup: $(n_before) -> $(length(contigs)) contigs")
+    end
+
     contig_names = ["kmer_contig_$i" for i in 1:length(contigs)]
 
     # Assembly statistics
@@ -905,6 +914,50 @@ function _assemble_multi_k(observations, config)
     # Future implementation would use multiple k-mer sizes and merge results
     @warn "Multi-k assembly not fully implemented, using single-k assembly"
     return _assemble_kmer_graph(observations, config)
+end
+
+"""
+    _dedup_reverse_complements(contigs::Vector{String}) -> Vector{String}
+
+Collapse contigs that are reverse complements of one another onto a single
+canonical representative (the lexicographically-smaller of a sequence and its
+reverse complement), preserving first-seen order.
+
+A DoubleStrand assembly emits both orientations of each traversal, so the
+contig set contains RC pairs. This is a lossless deduplication for downstream
+consumers that treat a sequence and its reverse complement as equivalent: the
+genome content is fully retained (every input contig maps to a canonical rep
+that is either itself or its RC), while the redundant second orientation is
+removed. Sequences that cannot be reverse-complemented as DNA (e.g. amino-acid
+or general-string contigs) are passed through unchanged.
+"""
+function _dedup_reverse_complements(contigs::Vector{String})::Vector{String}
+    canonical_reps = String[]
+    seen = Set{String}()
+    for contig in contigs
+        canonical = _canonical_string(contig)
+        if !(canonical in seen)
+            push!(seen, canonical)
+            push!(canonical_reps, canonical)
+        end
+    end
+    return canonical_reps
+end
+
+"""
+    _canonical_string(seq::AbstractString) -> String
+
+Return `min(seq, reverse_complement(seq))` as an uppercase DNA string. If `seq`
+is not valid DNA it is returned unchanged (no reverse complement is defined).
+"""
+function _canonical_string(seq::AbstractString)::String
+    fwd = String(seq)
+    rc = try
+        String(BioSequences.reverse_complement(BioSequences.LongDNA{4}(fwd)))
+    catch
+        return fwd
+    end
+    return min(fwd, rc)
 end
 
 """
