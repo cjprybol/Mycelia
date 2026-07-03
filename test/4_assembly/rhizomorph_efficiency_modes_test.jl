@@ -147,6 +147,33 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test_broken canon_frac == ds_frac
     end
 
+    Test.@testset "Mode 3a: memory_profile threading" begin
+        reads = eff_tiling_reads(EFF_REF)
+        k = 7
+
+        cfg_full = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+            memory_profile = :full)
+        res_full = R.assemble_genome(reads, cfg_full)
+
+        cfg_light = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+            memory_profile = :lightweight)
+        res_light = R.assemble_genome(reads, cfg_light)
+
+        # memory_profile is an internal footprint change, not an output change:
+        # the assembled contigs must be identical (order-independent).
+        Test.@test Set(res_light.contigs) == Set(res_full.contigs)
+        Test.@test length(res_light.contigs) == length(res_full.contigs)
+
+        # Same expectation for the most compact profile.
+        cfg_ultra = R.AssemblyConfig(;
+            k = k, graph_mode = R.DoubleStrand, use_quality_scores = false,
+            memory_profile = :ultralight)
+        res_ultra = R.assemble_genome(reads, cfg_ultra)
+        Test.@test Set(res_ultra.contigs) == Set(res_full.contigs)
+    end
+
 end
 
 println("✓ Rhizomorph efficiency mode tests completed")

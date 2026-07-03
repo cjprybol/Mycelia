@@ -735,7 +735,11 @@ K-mer graph assembly implementation (fixed-length k-mer foundation).
 function _assemble_kmer_graph(observations, config)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_kmer_graph(observations, config.k; mode = mode)
+    # Mode 3a (opt-in): memory_profile selects the k-mer graph's evidence footprint
+    # (:full default, or :lightweight / :ultralight / *_quality). This is an internal
+    # representation change; the assembled contigs are expected to be identical.
+    graph = Rhizomorph.build_kmer_graph(
+        observations, config.k; mode = mode, memory_profile = config.memory_profile)
 
     # NOTE: detect_bubbles_next / resolve_repeats_next are intentionally NOT run
     # here. They return analysis structures that this function only logged and
