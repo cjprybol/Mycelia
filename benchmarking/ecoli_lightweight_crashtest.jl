@@ -202,9 +202,9 @@ GC.gc(true)
 t0 = time()
 try
     result = Mycelia.Rhizomorph.assemble_genome(records, config)
-    elapsed_s = round(time() - t0; digits = 3)
-    n_contigs = length(result.contigs)
-    completed = true
+    global elapsed_s = round(time() - t0; digits = 3)
+    global n_contigs = length(result.contigs)
+    global completed = true
     open(contigs_path, "w") do io
         for (i, contig) in enumerate(result.contigs)
             println(io, ">contig_$(i) length=$(length(contig))")
@@ -213,8 +213,8 @@ try
     end
     println("  Assembly COMPLETED: $(n_contigs) contigs in $(elapsed_s)s")
 catch e
-    elapsed_s = round(time() - t0; digits = 3)
-    completed = false
+    global elapsed_s = round(time() - t0; digits = 3)
+    global completed = false
     @warn "Assembly FAILED/crashed for E. coli $(COVERAGE)x seed=$(SEED) after $(elapsed_s)s " *
           "(memory_profile=:$(MEMORY_PROFILE)) — recording as a crash, not aborting" exception = (e, catch_backtrace())
 end
@@ -242,10 +242,10 @@ if completed && RUN_QUAST && !ismissing(n_contigs) && n_contigs > 0 && filesize(
             min_contig = QUAST_MIN_CONTIG
         )
         report_tsv = joinpath(quast_dir, "report.tsv")
-        nga50 = parse_quast_metric(report_tsv, "NGA50")
-        num_misassemblies = parse_quast_metric(report_tsv, "# misassemblies")
-        dup_ratio = parse_quast_metric(report_tsv, "Duplication ratio")
-        genome_fraction = parse_quast_metric(report_tsv, "Genome fraction (%)")
+        global nga50 = parse_quast_metric(report_tsv, "NGA50")
+        global num_misassemblies = parse_quast_metric(report_tsv, "# misassemblies")
+        global dup_ratio = parse_quast_metric(report_tsv, "Duplication ratio")
+        global genome_fraction = parse_quast_metric(report_tsv, "Genome fraction (%)")
         println("  NGA50=$(nga50), misasm=$(num_misassemblies), dup_ratio=$(dup_ratio), GF=$(genome_fraction)%")
     catch e
         @warn "QUAST failed — leaving accuracy metrics missing" exception = (e,)
