@@ -280,7 +280,10 @@ println("\nCompleted $(DataFrames.nrow(results))/$(length(COVERAGES) * length(SE
 
 # === Phase 3: write results CSV ===
 
-timestamp = Dates.format(Dates.now(Dates.UTC), "yyyymmddTHHMMSSZ")
+# NOTE: format with no 'Z' directive — 'Z' is a TimeZones timezone token that
+# errors on a plain Dates.DateTime ("type DateTime has no field zone"). The
+# timestamp is UTC (Dates.now(Dates.UTC)); matches the repo's yyyymmdd_HHMMSS convention.
+timestamp = Dates.format(Dates.now(Dates.UTC), "yyyymmdd_HHMMSS")
 csv_path = joinpath(results_dir, "track_a_lambda_pilot_$(timestamp).csv")
 CSV.write(csv_path, results)
 println("\nResults written to: $csv_path")
