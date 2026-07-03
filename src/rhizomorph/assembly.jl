@@ -821,30 +821,36 @@ function _assemble_kmer_graph(observations, config)
     contig_names = ["kmer_contig_$i" for i in 1:length(contigs)]
 
     # Mode 3b (opt-in): populate simplified_graph via linear-chain (unitig)
-    # compaction. NOTE the documented caveat: collapse_linear_chains! is a no-op on
-    # fixed-length k-mer graphs — collapsing a linear chain would produce a sequence
-    # longer than k, changing the vertex label type from Kmer to BioSequence and
-    # violating MetaGraphsNext's parametric label_type. Real compaction therefore
-    # requires convert_fixed_to_variable() first (out of scope here). We still run it
-    # on a copy so the field is populated and the contract (contigs unchanged) holds;
-    # for k-mer graphs the simplified graph is structurally identical to `graph`.
+    # compaction. collapse_linear_chains! is a no-op on fixed-length k-mer graphs
+    # (collapsing a linear chain produces a sequence longer than k, which would
+    # change the vertex label type from Kmer to BioSequence and violate
+    # MetaGraphsNext's parametric label_type). The keystone fix is to first run
+    # convert_fixed_to_variable(), which relabels each k-mer vertex as a
+    # variable-length BioSequence vertex (overlap = k-1) while preserving evidence
+    # and edge topology; collapse_linear_chains! can then merge non-branching runs
+    # into single unitig vertices, reducing the vertex count. The k-mer `graph`
+    # returned in the result is unchanged (n_full is measured against it), and the
+    # emitted contigs are untouched (they come from the k-mer traversal above), so
+    # the "contigs unchanged" contract still holds.
     simplified = nothing
     unitig_compaction_effective = false
     if config.compact_unitigs
-        simplified = Rhizomorph.collapse_linear_chains!(deepcopy(graph))
+        variable_graph = Rhizomorph.convert_fixed_to_variable(graph)
+        simplified = Rhizomorph.collapse_linear_chains!(variable_graph)
         n_full = length(MetaGraphsNext.labels(graph))
         n_simpl = length(MetaGraphsNext.labels(simplified))
-        # Record effectiveness, not just intent: for fixed-length k-mer graphs
-        # collapse_linear_chains! cannot reduce the vertex count, so this is false.
+        # Effective when the collapsed variable-length graph has strictly fewer
+        # vertices than the fixed-length k-mer graph (a linear tiling collapses to
+        # a handful of unitigs). Remains false only when the graph is already
+        # maximally branchy (no non-branching runs to merge).
         unitig_compaction_effective = n_simpl < n_full
         _log_info(config,
-            "Unitig compaction: $(n_full) -> $(n_simpl) vertices " *
-            "(no-op for fixed-length k-mer graphs; needs variable-length conversion)")
+            "Unitig compaction: $(n_full) k-mer vertices -> $(n_simpl) unitig " *
+            "vertices (via convert_fixed_to_variable + collapse_linear_chains!)")
         if !unitig_compaction_effective
-            @warn "compact_unitigs requested but had no effect: linear-chain " *
-                  "compaction is a no-op on fixed-length k-mer graphs " *
-                  "(collapsing would change vertex labels from Kmer to " *
-                  "BioSequence). simplified_graph is structurally identical to graph."
+            @warn "compact_unitigs requested but the graph had no non-branching " *
+                  "runs to collapse: simplified_graph has the same vertex count " *
+                  "as the k-mer graph."
         end
     end
 
