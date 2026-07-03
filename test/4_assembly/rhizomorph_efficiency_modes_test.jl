@@ -246,6 +246,39 @@ Test.@testset "Rhizomorph efficiency modes" begin
             graph_mode = Mycelia.Rhizomorph.Canonical)
     end
 
+    Test.@testset "Mode 1b: structural RC-dedup in find_contigs_next" begin
+        # find_contigs_next(; rc_aware=true) marks each walked vertex's
+        # reverse-complement partner visited, so the DoubleStrand graph's reverse
+        # strand is never independently traversed. This is a STRUCTURAL fix for the
+        # QUAST-duplication-~2.0 pathology: unlike post-hoc whole-contig string
+        # dedup, it removes RC twins even when their fragment breakpoints are
+        # OFFSET between strands (the empirically-observed case where contig-level
+        # string dedup halves the count yet leaves duplication at 2.0).
+        reads = eff_tiling_reads(EFF_REF)
+        k = 7
+        g = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :doublestrand)
+
+        c_off = [string(c.sequence)
+                 for c in Mycelia.Rhizomorph.find_contigs_next(g; min_contig_length = 1)]
+        c_on = [string(c.sequence)
+                for c in Mycelia.Rhizomorph.find_contigs_next(
+                    g; min_contig_length = 1, rc_aware = true)]
+
+        # (a) Default (rc_aware=false) is unchanged and still emits RC pairs.
+        Test.@test eff_has_rc_pair(c_off)
+        # (b) rc_aware strictly reduces the contig count (removes the RC strand).
+        Test.@test length(c_on) < length(c_off)
+        # (c) No RC twins remain after structural dedup.
+        Test.@test !eff_has_rc_pair(c_on)
+        # (d) Genome content is PRESERVED: canonical k-mer coverage is unchanged
+        #     (accuracy is not traded for the contig-count reduction).
+        Test.@test eff_canonical_kmers(c_on, k) == eff_canonical_kmers(c_off, k)
+        Test.@test issubset(eff_canonical_kmers([EFF_REF], k), eff_canonical_kmers(c_on, k))
+
+        # (e) The helper is a no-op on labels with no defined reverse complement.
+        Test.@test Mycelia.Rhizomorph._rc_partner_label("ACGT") === nothing
+    end
+
     Test.@testset "FIX 2: efficiency flags on the quality/qualmer path warn" begin
         # The efficiency modes are only honored on the non-quality k-mer path.
         # When use_quality_scores=true (the default, and what FASTQ input auto-sets)
