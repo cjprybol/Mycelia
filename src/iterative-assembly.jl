@@ -1244,11 +1244,19 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # local_radius must contain the read's true path; observation-count + 2k
         # is generous (path spans <= observation-count vertices from any anchor),
         # so the localized decode is provably lossless (td-ve02).
+        # Tier 1C: exact admissible-bound A* decoder (gap heuristic). Unlike the
+        # beam it stops expanding once no state's g+h can beat the incumbent, so it
+        # attacks the steady-state decode volume localization couldn't. Provably
+        # optimal (== unbounded beam). max_astar_pops = beam x depth is the tangle
+        # safety floor; on a hit the read is left uncorrected (graceful) rather than
+        # exploding. Composes with the Tier 1A local subgraph (td-4jdi).
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
             max_steps = length(observations) - 1,
-            beam_width = 256,
+            decoder = :astar,
+            heuristic = :gap,
+            max_astar_pops = 256 * length(observations),
             local_radius = length(observations) + 2 * k
         )
         correction = Mycelia.correct_observations(graph, [observations]; config = config)
