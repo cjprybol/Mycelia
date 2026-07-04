@@ -9,6 +9,29 @@ This directory contains a comprehensive performance benchmarking infrastructure 
 - **Identify performance bottlenecks** and optimization opportunities
 - **Support HPC environments** with SLURM integration and automated resource monitoring
 
+## Optimization Ordering: free → exact → approximate
+
+When a benchmark surfaces a slow path, optimize in this order and do not skip a
+tier while wins remain in it:
+
+1. **Free (zero-accuracy-cost) wins first** — parallelism (embarrassingly
+   parallel loops), dead-work elimination, convergence/iteration caps, avoiding
+   redundant recomputation. These change speed with provably zero change to the
+   result.
+2. **Exact algorithmic reductions next** — provably answer-preserving: collapse
+   unbranching nodes (unitig compaction) before path search, restrict to the
+   reachable/local subgraph (unreachable states cannot be optimal), banded DP,
+   memoization.
+3. **Approximations last** — beam search, sampling, heuristics that trade
+   accuracy for speed. Only after tiers 1–2 are exhausted, with the accuracy
+   trade-off made explicit and measurable.
+
+**Never pay accuracy for speed you could get for free.** Before optimizing a hot
+path, verify its cost is real (does the exception actually throw? does the branch
+execute?). Example: the iterative Viterbi corrector was made tractable first by
+parallelism + an iteration cap (free, ~10–30×), reserving beam pruning (an
+approximation) as the floor — not the first reach.
+
 ## ⚠️ Important Notes
 
 **These benchmarks are resource-intensive and should NOT be run in CI/CD pipelines.**
