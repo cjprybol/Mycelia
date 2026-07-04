@@ -509,11 +509,21 @@ function run_driver()
                 quast_dir = joinpath(arm_dir, "quast")
                 tq = time()
                 try
-                    Mycelia.run_quast(
-                        contigs_out;
-                        outdir = quast_dir,
-                        reference = reference_path,
-                        min_contig = quast_min_contig)
+                    # Redirect QUAST's ~700 lines of verbose stdout/stderr to a
+                    # per-arm tool logfile so only the parsed metrics reach the
+                    # main log — the decisive numbers were getting buried (td-cluf).
+                    quast_tool_log = joinpath(arm_dir, "quast_tool.log")
+                    open(quast_tool_log, "w") do qio
+                        redirect_stdout(qio) do
+                            redirect_stderr(qio) do
+                                Mycelia.run_quast(
+                                    contigs_out;
+                                    outdir = quast_dir,
+                                    reference = reference_path,
+                                    min_contig = quast_min_contig)
+                            end
+                        end
+                    end
                     quast_runtime_s = round(time() - tq; digits = 3)
                     report_tsv = joinpath(quast_dir, "report.tsv")
                     nga50 = parse_quast_metric(report_tsv, "NGA50")
