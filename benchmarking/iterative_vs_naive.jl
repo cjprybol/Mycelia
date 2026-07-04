@@ -262,10 +262,17 @@ function run_worker()
         polish_dir = joinpath(dirname(contigs_out), "iterative_out")
         println("  [worker:$(cell):iterative] polishing reads (max_k=$(max_k)) ...")
         tp = time()
+        # td-ve02 speed levers (zero accuracy change): (1) parallelize read
+        # correction — embarrassingly parallel, ~Nthreads x; (2) cap iterations
+        # per k — convergence is usually < 3, the default 10 is wasteful.
+        max_iter = parse(Int, get(ENV, "MYCELIA_ITERVN_MAX_ITER", "3"))
+        iter_verbose = get(ENV, "MYCELIA_ITERVN_VERBOSE", "false") == "true"
         res = Mycelia.mycelia_iterative_assemble(fastq;
             max_k = max_k,
+            max_iterations_per_k = max_iter,
+            enable_parallel = true,
             output_dir = polish_dir,
-            verbose = false,
+            verbose = iter_verbose,
             enable_checkpointing = false)
         polish_runtime_s = round(time() - tp; digits = 3)
         final_k = res[:metadata][:final_k]
@@ -274,6 +281,18 @@ function run_worker()
         polished_fastq = res[:metadata][:final_fastq_file]
         println("  [worker:$(cell):iterative] polish done: final_k=$(final_k), " *
                 "corrections=$(total_corrections), per_k=[$(per_k)] in $(polish_runtime_s)s")
+        # Surface the per-k, per-iteration wall-clock already recorded in
+        # iteration_history so the profile shows WHERE iterative time goes.
+        ihist = get(res[:metadata], :iteration_history, Dict())
+        for kk in sort(collect(keys(ihist)))
+            for it in ihist[kk]
+                println("    [profile] k=$(kk) iter=$(get(it, :iteration, 0)) " *
+                        "improvements=$(get(it, :improvements_made, 0)) " *
+                        "runtime_s=$(round(Float64(get(it, :runtime_seconds, 0.0)); digits=2)) " *
+                        "kmers=$(get(it, :memory_kmers, 0))")
+            end
+        end
+        flush(stdout)
 
         # Phase B: assemble the POLISHED reads with the SHARED config.
         records = load_reads_from_paths(polished_fastq, nothing)
