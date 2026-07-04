@@ -76,6 +76,7 @@ struct ViterbiCorrectionConfig{F <: Function}
     target_vertex::Any
     start_strand::Rhizomorph.StrandOrientation
     edge_weight::Function
+    beam_width::Int
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -86,7 +87,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             max_steps::Union{Nothing, Int} = nothing,
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
-            edge_weight::Function = Rhizomorph.edge_data_weight
+            edge_weight::Function = Rhizomorph.edge_data_weight,
+            beam_width::Int = typemax(Int)
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
@@ -97,6 +99,9 @@ struct ViterbiCorrectionConfig{F <: Function}
         if max_steps !== nothing && max_steps < 0
             throw(ArgumentError("max_steps must be non-negative, got $max_steps"))
         end
+        if beam_width <= 0
+            throw(ArgumentError("beam_width must be positive, got $beam_width"))
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -106,7 +111,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             max_steps,
             target_vertex,
             start_strand,
-            edge_weight
+            edge_weight,
+            beam_width
         )
     end
 end
@@ -120,7 +126,8 @@ function ViterbiCorrectionConfig(;
         max_steps::Union{Nothing, Int} = nothing,
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
-        edge_weight::Function = Rhizomorph.edge_data_weight
+        edge_weight::Function = Rhizomorph.edge_data_weight,
+        beam_width::Int = typemax(Int)
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -131,7 +138,8 @@ function ViterbiCorrectionConfig(;
         max_steps = max_steps,
         target_vertex = target_vertex,
         start_strand = start_strand,
-        edge_weight = edge_weight
+        edge_weight = edge_weight,
+        beam_width = beam_width
     )
 end
 
@@ -846,6 +854,28 @@ function _call_viterbi_emission_logp(
     end
 end
 
+# Keep only the `beam_width` highest-scoring states, pruning the score and
+# predecessor dicts in lockstep so path reconstruction stays consistent. States
+# are ranked by score descending; score ties are broken by `hash(state)` for a
+# deterministic (run-reproducible) beam. Called once per depth by
+# `_viterbi_correct_observation` when the frontier exceeds the beam.
+function _prune_correction_beam(
+        scores::Dict{S, Float64},
+        predecessors::Dict{S, S},
+        beam_width::Int
+)::Tuple{Dict{S, Float64}, Dict{S, S}} where {S}
+    ordered = sort!(collect(scores); by = kv -> (last(kv), hash(first(kv))), rev = true)
+    kept = Dict{S, Float64}()
+    kept_predecessors = Dict{S, S}()
+    for (state, score) in Iterators.take(ordered, beam_width)
+        kept[state] = score
+        if haskey(predecessors, state)
+            kept_predecessors[state] = predecessors[state]
+        end
+    end
+    return kept, kept_predecessors
+end
+
 function _viterbi_correct_observation(
         graph::MetaGraphsNext.MetaGraph,
         observation::AbstractVector,
@@ -998,6 +1028,19 @@ function _viterbi_correct_observation(
 
         if isempty(next_scores)
             break
+        end
+
+        # Beam pruning: cap the frontier to the top `beam_width` states by score
+        # before it becomes the next `active_scores`. Without this, the reachable
+        # (vertex, strand) set grows ~unboundedly with read-length depth on real
+        # branchy graphs (21B allocations / hard crash on a 48 kb phage). Keeping
+        # the top-K by score is the standard beam approximation; with the default
+        # beam_width = typemax(Int) the guard never fires and the decoder stays
+        # exact (B8 correction fixtures are byte-identical).
+        if length(next_scores) > config.beam_width
+            next_scores, next_predecessors = _prune_correction_beam(
+                next_scores, next_predecessors, config.beam_width)
+            diagnostics[:beam_pruned] = get(diagnostics, :beam_pruned, 0) + 1
         end
 
         push!(predecessors_by_depth, next_predecessors)

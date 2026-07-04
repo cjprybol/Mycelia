@@ -1232,10 +1232,16 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         end
 
         quality_scores = collect(FASTX.quality_scores(read))
+        # Bound the exact-Viterbi frontier: without a finite beam the reachable
+        # (vertex, strand) set grows ~unboundedly with read length on real graphs
+        # and the corrector explodes (21B allocations / crash on a 48 kb phage —
+        # td-63qy). 256 keeps enough candidates to preserve correction quality
+        # while making the corrector tractable at read scale; tune via benchmark.
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
-            max_steps = length(observations) - 1
+            max_steps = length(observations) - 1,
+            beam_width = 256
         )
         correction = Mycelia.correct_observations(graph, [observations]; config = config)
         corrected_path = only(correction.corrected_observations)
