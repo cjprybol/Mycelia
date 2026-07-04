@@ -1048,6 +1048,11 @@ function _viterbi_correct_observation(
     target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
     start_candidates = _viterbi_start_candidates(labels, start_observed, alphabet, strand_mode)
 
+    # Precompute each observation unit's quality once (depends only on the observed
+    # unit, not the node) — Fix 2 for the per-node quality re-extraction (td-ve02).
+    unit_qualities = [_viterbi_emission_quality(quality_graph, observation[j])
+                      for j in 1:length(observation)]
+
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
         :exact => true,
@@ -1081,7 +1086,8 @@ function _viterbi_correct_observation(
                 start_observed,
                 vertex,
                 alphabet,
-                strand_mode
+                strand_mode;
+                cached_quality = unit_qualities[1]
             )
             if isfinite(score) && (!haskey(active_scores, state) || score > active_scores[state])
                 active_scores[state] = score
@@ -1158,7 +1164,8 @@ function _viterbi_correct_observation(
                     observed_unit,
                     next_vertex,
                     alphabet,
-                    strand_mode
+                    strand_mode;
+                    cached_quality = unit_qualities[depth + 1]
                 )
                 next_score = state_score + log(transition_prob) + emission_score
                 if !isfinite(next_score)
@@ -1272,6 +1279,11 @@ function _viterbi_astar_correct_observation(
     Strand = Rhizomorph.StrandOrientation
     State = Tuple{label_type, Strand, Int}
 
+    # Precompute each observation unit's quality ONCE (it depends only on the
+    # observed unit, not the node) — Fix 2 for the per-node quality re-extraction
+    # that dominated the allocation profile (td-ve02, ~65%).
+    unit_qualities = [_viterbi_emission_quality(quality_graph, observation[j]) for j in 1:L]
+
     # Admissible remaining-cost bound. suffix_bound[j] = -(best achievable log-prob
     # over observed units j..L); a state at `depth` (emitted units 1..depth+1) has
     # remaining units depth+2..L. Dijkstra uses h=0; :gap/:seed use the emax base.
@@ -1311,7 +1323,8 @@ function _viterbi_astar_correct_observation(
     for vertex in start_candidates
         for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
             emit = _call_viterbi_state_emission_logp(
-                quality_graph, config, start_observed, vertex, alphabet, strand_mode)
+                quality_graph, config, start_observed, vertex, alphabet, strand_mode;
+                cached_quality = unit_qualities[1])
             isfinite(emit) || continue
             s = (vertex, strand, 0)
             cost = -emit
@@ -1367,7 +1380,8 @@ function _viterbi_astar_correct_observation(
             edge_w <= 0.0 && continue
             transition_prob = edge_w / total_out
             emission_score = _call_viterbi_state_emission_logp(
-                quality_graph, config, observed_unit, next_vertex, alphabet, strand_mode)
+                quality_graph, config, observed_unit, next_vertex, alphabet, strand_mode;
+                cached_quality = unit_qualities[depth + 2])
             step_logp = log(transition_prob) + emission_score
             isfinite(step_logp) || continue
             ns = (next_vertex, next_strand, depth + 1)
@@ -1503,9 +1517,15 @@ function _call_viterbi_state_emission_logp(
         observed_unit::Any,
         node::Any,
         alphabet::Symbol,
-        strand_mode::Symbol
+        strand_mode::Symbol;
+        cached_quality = missing
 )::Float64
-    quality = _viterbi_emission_quality(graph, observed_unit)
+    # The observed unit's quality depends only on `observed_unit`, not `node`, so
+    # decoders precompute it once per observation unit and pass it here — avoiding
+    # the per-node re-extraction that dominated the allocation profile (td-ve02:
+    # ~1968 bytes/call = 65%). `missing` = extract internally (other callers).
+    quality = cached_quality === missing ?
+              _viterbi_emission_quality(graph, observed_unit) : cached_quality
     direct = _call_viterbi_emission_logp(
         config,
         observed_unit,
