@@ -78,6 +78,9 @@ struct ViterbiCorrectionConfig{F <: Function}
     edge_weight::Function
     beam_width::Int
     local_radius::Int
+    decoder::Symbol
+    heuristic::Symbol
+    max_astar_pops::Union{Nothing, Int}
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -90,7 +93,10 @@ struct ViterbiCorrectionConfig{F <: Function}
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
             edge_weight::Function = Rhizomorph.edge_data_weight,
             beam_width::Int = typemax(Int),
-            local_radius::Int = 0
+            local_radius::Int = 0,
+            decoder::Symbol = :beam,
+            heuristic::Symbol = :gap,
+            max_astar_pops::Union{Nothing, Int} = nothing
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
@@ -107,6 +113,15 @@ struct ViterbiCorrectionConfig{F <: Function}
         if local_radius < 0
             throw(ArgumentError("local_radius must be non-negative, got $local_radius"))
         end
+        if !(decoder in (:beam, :astar))
+            throw(ArgumentError("decoder must be :beam or :astar, got $decoder"))
+        end
+        if !(heuristic in (:dijkstra, :gap, :seed))
+            throw(ArgumentError("heuristic must be :dijkstra, :gap, or :seed, got $heuristic"))
+        end
+        if max_astar_pops !== nothing && max_astar_pops <= 0
+            throw(ArgumentError("max_astar_pops must be positive, got $max_astar_pops"))
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -118,7 +133,10 @@ struct ViterbiCorrectionConfig{F <: Function}
             start_strand,
             edge_weight,
             beam_width,
-            local_radius
+            local_radius,
+            decoder,
+            heuristic,
+            max_astar_pops
         )
     end
 end
@@ -134,7 +152,10 @@ function ViterbiCorrectionConfig(;
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
         edge_weight::Function = Rhizomorph.edge_data_weight,
         beam_width::Int = typemax(Int),
-        local_radius::Int = 0
+        local_radius::Int = 0,
+        decoder::Symbol = :beam,
+        heuristic::Symbol = :gap,
+        max_astar_pops::Union{Nothing, Int} = nothing
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -147,7 +168,10 @@ function ViterbiCorrectionConfig(;
         start_strand = start_strand,
         edge_weight = edge_weight,
         beam_width = beam_width,
-        local_radius = local_radius
+        local_radius = local_radius,
+        decoder = decoder,
+        heuristic = heuristic,
+        max_astar_pops = max_astar_pops
     )
 end
 
@@ -280,29 +304,29 @@ _viterbi_observed_label(unit) = hasproperty(unit, :Kmer) ? getproperty(unit, :Km
 # built by walking only kept vertices' local edges (O(local)), never scanning the
 # full edge set.
 function _reachable_local_subgraph(
-        graph::MetaGraphsNext.MetaGraph,
+        graph::MetaGraphsNext.MetaGraph{Code, G, Label},
         observation::AbstractVector,
         alphabet::Symbol,
         strand_mode::Symbol,
         radius::Int
-)
+) where {Code, G, Label}
     supports_rc = _viterbi_supports_reverse_complement(alphabet)
-    anchors = Set{Any}()
+    anchors = Set{Label}()
     for unit in observation
         u = _viterbi_observed_label(unit)
-        if haskey(graph, u)
+        if u isa Label && haskey(graph, u)
             push!(anchors, u)
         elseif strand_mode == :canonical && supports_rc
             c = _viterbi_canonical_unit(u, alphabet)
-            c !== nothing && haskey(graph, c) && push!(anchors, c)
+            c isa Label && haskey(graph, c) && push!(anchors, c)
         end
     end
     isempty(anchors) && return graph
 
-    keep = Set{Any}(anchors)
+    keep = Set{Label}(anchors)
     frontier = collect(anchors)
     for _ in 1:radius
-        next_frontier = Any[]
+        next_frontier = Label[]
         for v in frontier
             for nb in MetaGraphsNext.outneighbor_labels(graph, v)
                 nb in keep || (push!(keep, nb); push!(next_frontier, nb))
@@ -352,7 +376,11 @@ function _correct_metagraphs_next_observations(
                            _reachable_local_subgraph(
                 weighted, observation, alphabet, strand_mode, config.local_radius) :
                            weighted
-            _viterbi_correct_observation(
+            # Tier 1C: exact admissible-bound A* decoder (opt-in via decoder=:astar);
+            # the beam decoder otherwise. Both compose with the Tier 1A local graph.
+            decode_fn = config.decoder == :astar ? _viterbi_astar_correct_observation :
+                        _viterbi_correct_observation
+            decode_fn(
                 decode_graph,
                 observation,
                 alphabet;
@@ -1148,6 +1176,187 @@ function _viterbi_correct_observation(
     end
 
     path = _reconstruct_correction_path(graph, best_state, best_depth, predecessors_by_depth)
+    diagnostics[:path_length] = length(path.steps)
+    return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
+end
+
+# Maximum achievable emission log-prob for an observed unit (a perfect match):
+# per position the match term log1p(-e_i) dominates the mismatch term, so this is
+# a true upper bound on any emission score for `unit`. Basis of the admissible
+# gap heuristic's per-unit optimistic remaining log-prob.
+function _viterbi_unit_emax(
+        quality_graph::MetaGraphsNext.MetaGraph,
+        config::ViterbiCorrectionConfig,
+        unit
+)::Float64
+    q = _normalize_viterbi_quality_scores(_viterbi_emission_quality(quality_graph, unit))
+    n = length(uppercase(_viterbi_unit_string(unit)))
+    total = 0.0
+    for i in 1:n
+        e = _viterbi_position_error_rate(q, i, config.error_rate)
+        total += log1p(-e)
+    end
+    return total
+end
+
+# Exact admissible-bound decoder (Tier 1C, td-4jdi): best-first A*/Dijkstra over
+# the (vertex, strand, depth) trellis, minimizing cost = -log-prob. Depth strictly
+# increases, so the trellis is a DAG (termination is guaranteed even on cyclic
+# dBGs). With an admissible heuristic (h=0 Dijkstra, or the gap bound) the first
+# proven-optimal terminal is exact — no beam approximation. Reuses the beam
+# decoder's emission, transition, start-candidate, tie-break, and path-building
+# helpers verbatim; only the synchronous depth loop becomes a priority-queue
+# expansion. Opt-in via config.decoder == :astar; the beam path is untouched.
+function _viterbi_astar_correct_observation(
+        graph::MetaGraphsNext.MetaGraph,
+        observation::AbstractVector,
+        alphabet::Symbol;
+        config::ViterbiCorrectionConfig,
+        strand_mode::Symbol,
+        quality_graph::MetaGraphsNext.MetaGraph = graph,
+        transition_scoring::Symbol = :normalized_edge_weight
+)::Rhizomorph.ViterbiDecodingResult
+    isempty(observation) && throw(ArgumentError("empty observation path"))
+    labels = collect(MetaGraphsNext.labels(graph))
+    isempty(labels) && throw(ArgumentError("cannot correct observations against an empty graph"))
+    label_type = eltype(labels)
+    L = length(observation)
+    start_observed = first(observation)
+    target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
+    start_candidates = _viterbi_start_candidates(labels, start_observed, alphabet, strand_mode)
+
+    Strand = Rhizomorph.StrandOrientation
+    State = Tuple{label_type, Strand, Int}
+
+    # Admissible remaining-cost bound. suffix_bound[j] = -(best achievable log-prob
+    # over observed units j..L); a state at `depth` (emitted units 1..depth+1) has
+    # remaining units depth+2..L. Dijkstra uses h=0; :gap/:seed use the emax base.
+    suffix_bound = zeros(Float64, L + 2)
+    if config.heuristic != :dijkstra
+        for j in L:-1:1
+            suffix_bound[j] = suffix_bound[j + 1] -
+                              _viterbi_unit_emax(quality_graph, config, observation[j])
+        end
+    end
+    hval(depth::Int) = depth + 2 > L ? 0.0 : suffix_bound[depth + 2]
+
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => :viterbi_astar_correct_observation,
+        :exact => true,
+        :alphabet => alphabet,
+        :strand_mode => strand_mode,
+        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
+        :max_steps => L - 1,
+        :target_vertex => target_vertex,
+        :start_strand => Rhizomorph._normalize_strand(config.start_strand),
+        :score_domain => :log_probability,
+        :transition_scoring => transition_scoring,
+        :emission_scoring => _viterbi_graph_has_quality(quality_graph) ?
+                             :quality_aware : :alphabet_parameterized,
+        :heuristic => config.heuristic,
+        :astar_pops => 0,
+        :astar_cap_hit => false,
+        :reached_target => target_vertex === nothing ? nothing : false
+    )
+
+    g = Dict{State, Float64}()
+    predecessors = Dict{State, State}()
+    settled = Set{State}()
+    pq = DataStructures.PriorityQueue{State, Float64}()
+
+    for vertex in start_candidates
+        for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
+            emit = _call_viterbi_state_emission_logp(
+                quality_graph, config, start_observed, vertex, alphabet, strand_mode)
+            isfinite(emit) || continue
+            s = (vertex, strand, 0)
+            cost = -emit
+            if !haskey(g, s) || cost < g[s]
+                g[s] = cost
+                pq[s] = cost + hval(0)
+            end
+        end
+    end
+    if isempty(pq)
+        diagnostics[:reason] = :no_finite_start_emission
+        return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+
+    max_pops = config.max_astar_pops === nothing ? typemax(Int) : config.max_astar_pops
+    incumbent_cost = Inf
+    incumbent_states = State[]
+    tol = 1e-9
+
+    while !isempty(pq)
+        s = DataStructures.dequeue!(pq)
+        s in settled && continue
+        push!(settled, s)
+        diagnostics[:astar_pops] += 1
+        gs = g[s]
+        if gs + hval(s[3]) > incumbent_cost + tol
+            break                       # no unexpanded state can beat the incumbent
+        end
+        if diagnostics[:astar_pops] > max_pops
+            diagnostics[:astar_cap_hit] = true
+            break
+        end
+        vertex, strand, depth = s
+        if depth == L - 1 && (target_vertex === nothing || vertex == target_vertex)
+            if gs < incumbent_cost - tol
+                incumbent_cost = gs
+                incumbent_states = State[s]
+            elseif abs(gs - incumbent_cost) <= tol
+                push!(incumbent_states, s)
+            end
+            continue                    # terminal: never expand past the last unit
+        end
+        depth >= L - 1 && continue
+        observed_unit = observation[depth + 2]
+        transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
+        isempty(transitions) && continue
+        total_out = Rhizomorph._total_outgoing_weight(graph, vertex, strand)
+        (!isfinite(total_out) || total_out <= 0.0) && continue
+        for transition in transitions
+            next_vertex = convert(label_type, transition[:target_vertex])
+            next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
+            edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
+            edge_w <= 0.0 && continue
+            transition_prob = edge_w / total_out
+            emission_score = _call_viterbi_state_emission_logp(
+                quality_graph, config, observed_unit, next_vertex, alphabet, strand_mode)
+            step_logp = log(transition_prob) + emission_score
+            isfinite(step_logp) || continue
+            ns = (next_vertex, next_strand, depth + 1)
+            ncost = gs - step_logp
+            if !haskey(g, ns) || ncost < g[ns] - 1e-15
+                g[ns] = ncost
+                predecessors[ns] = s
+                pq[ns] = ncost + hval(depth + 1)
+            end
+        end
+    end
+
+    if isempty(incumbent_states)
+        diagnostics[:reason] = target_vertex === nothing ? :no_completion : :target_unreachable
+        return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+    target_vertex === nothing || (diagnostics[:reached_target] = true)
+
+    # Deterministic tie-break among optimal terminals: same rule as the beam
+    # decoder (max score, then min string(vertex)).
+    terminal_scores = Dict{Tuple{label_type, Strand}, Float64}()
+    for (v, st, _) in incumbent_states
+        terminal_scores[(v, st)] = -incumbent_cost
+    end
+    best_vs, best_score = _best_correction_state(terminal_scores)
+
+    path_states = Vector{Tuple{label_type, Strand}}(undef, L)
+    cur = (best_vs[1], best_vs[2], L - 1)
+    for d in (L - 1):-1:0
+        path_states[d + 1] = (cur[1], cur[2])
+        d > 0 && (cur = predecessors[cur])
+    end
+    path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
     diagnostics[:path_length] = length(path.steps)
     return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
 end
