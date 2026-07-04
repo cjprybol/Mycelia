@@ -7,6 +7,24 @@ The callback shape is intentionally broader than B1 needs so follow-on beads can
 swap in alphabet- and quality-aware models without changing the dynamic
 programming seam.
 """
+# Allocation-free symbol view for the emission hot path: k-mers and BioSequences
+# are indexed directly (their symbols are canonical, matching the uppercased-string
+# comparison), so no `uppercase(string(unit))` materialization is needed. Units
+# without a BioSequence representation return `nothing` and take the string
+# fallback. The per-call stringification this avoids dominated the corrector's
+# allocation profile (td-ve02: ~4 string allocs/call × billions of calls = 56B).
+function _viterbi_symbol_view(unit)
+    unit isa BioSequences.BioSequence && return unit
+    if hasproperty(unit, :Kmer)
+        km = getproperty(unit, :Kmer)
+        km isa BioSequences.BioSequence && return km
+    elseif hasproperty(unit, :sequence)
+        sq = getproperty(unit, :sequence)
+        sq isa BioSequences.BioSequence && return sq
+    end
+    return nothing
+end
+
 function default_viterbi_emission_logp(
         observed_unit::Any,
         node::Any,
@@ -19,13 +37,39 @@ function default_viterbi_emission_logp(
     end
 
     resolved_alphabet = _normalize_viterbi_alphabet(alphabet)
+    quality_scores = _normalize_viterbi_quality_scores(quality)
+    alphabet_size = _viterbi_alphabet_size(resolved_alphabet)
+
+    # Fast path: both operands are BioSequences/k-mers — compare symbols directly,
+    # allocation-free. Byte-identical to the string path (symbols are already
+    # canonical); enforced by the exact-decoder conformance suite.
+    obs_seq = _viterbi_symbol_view(observed_unit)
+    exp_seq = _viterbi_symbol_view(node)
+    if obs_seq !== nothing && exp_seq !== nothing
+        lo = length(obs_seq)
+        le = length(exp_seq)
+        shared = min(lo, le)
+        logp = 0.0
+        @inbounds for index in 1:shared
+            position_error_rate = _viterbi_position_error_rate(
+                quality_scores, index, error_rate)
+            logp += obs_seq[index] == exp_seq[index] ?
+                    log1p(-position_error_rate) :
+                    log(position_error_rate / (alphabet_size - 1))
+        end
+        @inbounds for index in (shared + 1):max(lo, le)
+            position_error_rate = _viterbi_position_error_rate(
+                quality_scores, index, error_rate)
+            logp += log(position_error_rate / alphabet_size)
+        end
+        return logp
+    end
+
+    # String fallback: TEXT and other non-BioSequence units.
     observed = uppercase(_viterbi_unit_string(observed_unit))
     expected = uppercase(_viterbi_unit_string(node))
     _assert_viterbi_unit_matches_alphabet(observed, resolved_alphabet, :observed)
     _assert_viterbi_unit_matches_alphabet(expected, resolved_alphabet, :expected)
-
-    quality_scores = _normalize_viterbi_quality_scores(quality)
-    alphabet_size = _viterbi_alphabet_size(resolved_alphabet)
     shared = min(length(observed), length(expected))
 
     logp = 0.0
