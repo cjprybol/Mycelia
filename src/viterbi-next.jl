@@ -77,6 +77,7 @@ struct ViterbiCorrectionConfig{F <: Function}
     start_strand::Rhizomorph.StrandOrientation
     edge_weight::Function
     beam_width::Int
+    local_radius::Int
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -88,7 +89,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
             edge_weight::Function = Rhizomorph.edge_data_weight,
-            beam_width::Int = typemax(Int)
+            beam_width::Int = typemax(Int),
+            local_radius::Int = 0
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
@@ -102,6 +104,9 @@ struct ViterbiCorrectionConfig{F <: Function}
         if beam_width <= 0
             throw(ArgumentError("beam_width must be positive, got $beam_width"))
         end
+        if local_radius < 0
+            throw(ArgumentError("local_radius must be non-negative, got $local_radius"))
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -112,7 +117,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex,
             start_strand,
             edge_weight,
-            beam_width
+            beam_width,
+            local_radius
         )
     end
 end
@@ -127,7 +133,8 @@ function ViterbiCorrectionConfig(;
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
         edge_weight::Function = Rhizomorph.edge_data_weight,
-        beam_width::Int = typemax(Int)
+        beam_width::Int = typemax(Int),
+        local_radius::Int = 0
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -139,7 +146,8 @@ function ViterbiCorrectionConfig(;
         target_vertex = target_vertex,
         start_strand = start_strand,
         edge_weight = edge_weight,
-        beam_width = beam_width
+        beam_width = beam_width,
+        local_radius = local_radius
     )
 end
 
@@ -258,6 +266,67 @@ function _correct_observations(
     return _correct_metagraphs_next_observations(graph, observations; config = config)
 end
 
+# Extract the graph-label-comparable unit from an observation (a bare k-mer, or a
+# quality-wrapped observation carrying a `.Kmer`).
+_viterbi_observed_label(unit) = hasproperty(unit, :Kmer) ? getproperty(unit, :Kmer) : unit
+
+# Seed-anchored local subgraph (Tier 1A): the sub-dBG reachable within `radius`
+# hops of the read's exact-match anchor k-mers. Decoding against it is provably
+# lossless when the radius contains the read's true path (the induced subgraph
+# then contains the optimal path over graph vertices), while bounding the per-read
+# state set and — crucially — eliminating the all-labels start fallback
+# (`_viterbi_start_candidates` returns the whole graph on a first-k-mer miss).
+# Returns `graph` unchanged when no anchor matches (novel read). The subgraph is
+# built by walking only kept vertices' local edges (O(local)), never scanning the
+# full edge set.
+function _reachable_local_subgraph(
+        graph::MetaGraphsNext.MetaGraph,
+        observation::AbstractVector,
+        alphabet::Symbol,
+        strand_mode::Symbol,
+        radius::Int
+)
+    supports_rc = _viterbi_supports_reverse_complement(alphabet)
+    anchors = Set{Any}()
+    for unit in observation
+        u = _viterbi_observed_label(unit)
+        if haskey(graph, u)
+            push!(anchors, u)
+        elseif strand_mode == :canonical && supports_rc
+            c = _viterbi_canonical_unit(u, alphabet)
+            c !== nothing && haskey(graph, c) && push!(anchors, c)
+        end
+    end
+    isempty(anchors) && return graph
+
+    keep = Set{Any}(anchors)
+    frontier = collect(anchors)
+    for _ in 1:radius
+        next_frontier = Any[]
+        for v in frontier
+            for nb in MetaGraphsNext.outneighbor_labels(graph, v)
+                nb in keep || (push!(keep, nb); push!(next_frontier, nb))
+            end
+            for nb in MetaGraphsNext.inneighbor_labels(graph, v)
+                nb in keep || (push!(keep, nb); push!(next_frontier, nb))
+            end
+        end
+        isempty(next_frontier) && break
+        frontier = next_frontier
+    end
+
+    sub = Rhizomorph._empty_graph_like(graph)
+    for l in keep
+        sub[l] = graph[l]
+    end
+    for l in keep
+        for nb in MetaGraphsNext.outneighbor_labels(graph, l)
+            nb in keep && (sub[l, nb] = graph[l, nb])
+        end
+    end
+    return sub
+end
+
 function _correct_metagraphs_next_observations(
         graph::MetaGraphsNext.MetaGraph,
         observations;
@@ -275,8 +344,16 @@ function _correct_metagraphs_next_observations(
 
     for observation in observations
         result = if _uses_emission_scored_observation(observation)
+            # Tier 1A: decode against the read's local reachable subgraph (opt-in
+            # via config.local_radius > 0); the full weighted graph otherwise.
+            # quality_graph stays the full graph — local labels are a subset, so
+            # emission/quality lookups resolve correctly.
+            decode_graph = config.local_radius > 0 ?
+                           _reachable_local_subgraph(
+                weighted, observation, alphabet, strand_mode, config.local_radius) :
+                           weighted
             _viterbi_correct_observation(
-                weighted,
+                decode_graph,
                 observation,
                 alphabet;
                 config = config,

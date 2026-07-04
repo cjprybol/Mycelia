@@ -1237,11 +1237,19 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # and the corrector explodes (21B allocations / crash on a 48 kb phage —
         # td-63qy). 256 keeps enough candidates to preserve correction quality
         # while making the corrector tractable at read scale; tune via benchmark.
+        # Tier 1A: decode against the read's local reachable subgraph, not the
+        # whole graph. The profile showed the dominant cost is per-read Viterbi
+        # over the full graph (74B allocations even beamed+parallel) — plus the
+        # all-labels start fallback when a read's first k-mer has an error.
+        # local_radius must contain the read's true path; observation-count + 2k
+        # is generous (path spans <= observation-count vertices from any anchor),
+        # so the localized decode is provably lossless (td-ve02).
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
             max_steps = length(observations) - 1,
-            beam_width = 256
+            beam_width = 256,
+            local_radius = length(observations) + 2 * k
         )
         correction = Mycelia.correct_observations(graph, [observations]; config = config)
         corrected_path = only(correction.corrected_observations)
