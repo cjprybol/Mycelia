@@ -173,8 +173,11 @@ function main()
     println("ref=$REFLEN cov=$COVERAGE readlen=$READLEN err=$ERROR_RATE k=$K seed=$SEED")
     ref, recs = simulate(rng)
     truth = reference_kmer_set(ref)
+    # :full retains per-observation quality for the depth-independent per-base mean
+    # the fused arms need (review F2/C1); :lightweight_quality would silently zero
+    # the quality signal and corrupt QualityThreshold / the fused arms.
     graph = R.build_qualmer_graph(recs, K; dataset_id = DATASET, mode = :canonical,
-                                  memory_profile = :lightweight_quality)
+                                  memory_profile = :full)
     labels = collect(MetaGraphsNext.labels(graph))
     ys = Bool[label in truth for label in labels]
     n_genomic = count(ys)
@@ -192,6 +195,8 @@ function main()
     arms = [
         R.FixedCoverageThreshold(2),
         R.QualityThreshold(20.0),
+        R.MixtureModelClassifier(),
+        R.BloomFilterClassifier(),
         R.BayesianMixtureClassifier(genomic_mean_coverage = Float64(COVERAGE)),
         R.EffectiveCoverageClassifier(genomic_mean_coverage = Float64(COVERAGE)),
         logistic,
