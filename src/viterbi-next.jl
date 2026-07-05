@@ -668,6 +668,12 @@ function _normalize_viterbi_quality_scores(
         return nothing
     elseif quality isa Number
         return Float64[Float64(quality)]
+    elseif quality isa Vector{Float64}
+        # Already normalized (the common case: decoders pass a precomputed,
+        # already-Float64 per-unit quality) — return as-is, no per-call copy.
+        # This was the 416-byte/call residual after Fix 2 (td-ve02 Fix 3). Safe:
+        # the emission only reads the vector.
+        return quality
     elseif quality isa AbstractVector
         return Float64.(quality)
     elseif hasproperty(quality, :quality_scores)
