@@ -152,6 +152,7 @@ Enhanced with performance optimizations, caching, and progress tracking.
 """
 function mycelia_iterative_assemble(input_fastq::String;
         max_k::Int = 101,
+        initial_k::Int = 0,
         memory_limit::Int = 32_000_000_000,
         output_dir::String = "iterative_assembly",
         max_iterations_per_k::Int = 10,
@@ -230,7 +231,10 @@ function mycelia_iterative_assemble(input_fastq::String;
             println("Reading initial FASTQ file...")
         end
         initial_reads = collect(FASTX.FASTQ.Reader(open(input_fastq)))
-        k = find_initial_k(initial_reads)  # Reuse from intelligent-assembly.jl
+        # initial_k > 0 forces the ladder to START at that k, skipping dense low-k
+        # graphs where per-read graph decoding explores an enormous state space
+        # (td-ve02: low-k corrections were ~90% of the cost). 0 = auto (sparsity).
+        k = initial_k > 0 ? initial_k : find_initial_k(initial_reads)
 
         if verbose
             println("Initial k-mer size: $k (prime: $(Primes.isprime(k)))")

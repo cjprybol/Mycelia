@@ -267,8 +267,12 @@ function run_worker()
         # per k — convergence is usually < 3, the default 10 is wasteful.
         max_iter = parse(Int, get(ENV, "MYCELIA_ITERVN_MAX_ITER", "3"))
         iter_verbose = get(ENV, "MYCELIA_ITERVN_VERBOSE", "false") == "true"
+        # MYCELIA_ITERVN_INITIAL_K > 0 forces the ladder to start at that k,
+        # skipping dense low-k graphs (td-ve02: low-k decode was ~90% of cost).
+        initial_k = parse(Int, get(ENV, "MYCELIA_ITERVN_INITIAL_K", "0"))
         res = Mycelia.mycelia_iterative_assemble(fastq;
             max_k = max_k,
+            initial_k = initial_k,
             max_iterations_per_k = max_iter,
             enable_parallel = true,
             output_dir = polish_dir,
