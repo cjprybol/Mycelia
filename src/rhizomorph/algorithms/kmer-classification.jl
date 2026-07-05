@@ -16,9 +16,9 @@
 # evidence and the input→workflow router's training data.
 #
 # Coverage is read from `count_total_observations(vertex_data)`; quality from
-# `get_vertex_joint_quality(vertex_data, dataset_id)` (per-position combined Phred,
-# where combining = adding Phred in log space = accumulating observation
-# log-likelihoods). The principled default fuses BOTH.
+# `get_vertex_mean_quality(vertex_data, dataset_id)` (per-position MEAN Phred —
+# depth-INDEPENDENT, so quality is an evidence axis distinct from coverage rather
+# than a proxy for it). The fused arms combine BOTH independent signals.
 # ==============================================================================
 
 """
@@ -65,28 +65,35 @@ function classify_kmers end
 # ------------------------------------------------------------------------------
 
 """
-    _kmer_evidence(graph, label, dataset_id) -> (coverage::Int, joint_quality::Vector{UInt8})
+    _kmer_evidence(graph, label, dataset_id) -> (coverage::Int, mean_quality)
 
 Pull the two evidence signals for one k-mer: `coverage` = number of observations
-supporting it; `joint_quality` = per-position combined Phred across those
-observations (empty if none for this dataset).
+supporting it; `mean_quality` = per-position MEAN Phred across observations
+(`Vector{Float64}`, raw Phred 0–60), or `nothing` when the vertex has no evidence
+for this dataset.
+
+The quality signal is the per-position MEAN, which is depth-INDEPENDENT. Using the
+accumulated joint quality (`get_vertex_joint_quality`, a sum of Phred over
+observations that grows with coverage and saturates at 255) would make quality a
+coverage proxy and defeat the independence the fused arms assume (review C1).
 """
 function _kmer_evidence(graph, label, dataset_id::AbstractString)
     vertex_data = graph[label]
     coverage = count_total_observations(vertex_data)
-    joint_quality = get_vertex_joint_quality(vertex_data, dataset_id)
-    return coverage, joint_quality
+    mean_quality = get_vertex_mean_quality(vertex_data, dataset_id)
+    return coverage, mean_quality
 end
 
 """
-    _mean_phred(joint_quality) -> Float64
+    _mean_phred(quality) -> Float64
 
-Mean combined-Phred across the k-mer's positions (0.0 if no quality evidence).
-A convenience summary of the per-position joint-quality vector.
+Mean per-base Phred across the k-mer's positions (0.0 for `nothing` or empty).
+Accepts the `nothing`/`Vector{Float64}` returned by `get_vertex_mean_quality`
+(review C2: the accessor returns `nothing`, not an empty vector, on no evidence).
 """
-function _mean_phred(joint_quality::AbstractVector{UInt8})::Float64
-    isempty(joint_quality) && return 0.0
-    return Statistics.mean(Float64.(joint_quality))
+function _mean_phred(quality)::Float64
+    (quality === nothing || isempty(quality)) && return 0.0
+    return Statistics.mean(Float64.(quality))
 end
 
 # ------------------------------------------------------------------------------
@@ -185,7 +192,9 @@ P(the k-mer's bases are correct) from mean combined-Phred: `1 - 10^(-Q/10)`.
 Strong accumulated Phred ⇒ ≈1. The quality signal every fused arm consumes.
 """
 function _quality_correct_prob(mean_phred::Float64)::Float64
-    return 1.0 - 10.0^(-mean_phred / 10.0)
+    # Clamp strictly below 1.0 so the (1 - q) error-likelihood term in the fused
+    # arms never underflows to exactly 0 and collapses the posterior (review C1).
+    return min(1.0 - 10.0^(-mean_phred / 10.0), 1.0 - 1e-6)
 end
 
 function classify_kmers(clf::FusedClassifier, graph; dataset_id::AbstractString)
