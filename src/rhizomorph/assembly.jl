@@ -597,6 +597,7 @@ since the corrector requires per-base quality strings).
 """
 function _write_reads_to_fastq(reads, path::String)
     _placeholder_qual(n) = repeat("I", n)  # Phred+33 'I' == Q40
+    placeholder_used = Ref(false)
     open(path, "w") do io
         writer = FASTX.FASTQ.Writer(io)
         if reads isa Vector{String}
@@ -611,6 +612,7 @@ function _write_reads_to_fastq(reads, path::String)
                     open(FASTX.FASTA.Reader, file_path) do reader
                         for record in reader
                             seq = FASTX.FASTA.sequence(String, record)
+                            placeholder_used[] = true
                             write(writer, FASTX.FASTQ.Record(
                                 FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                         end
@@ -623,6 +625,7 @@ function _write_reads_to_fastq(reads, path::String)
                     write(writer, record)
                 elseif record isa FASTX.FASTA.Record
                     seq = FASTX.FASTA.sequence(String, record)
+                    placeholder_used[] = true
                     write(writer, FASTX.FASTQ.Record(
                         FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                 else
@@ -631,6 +634,11 @@ function _write_reads_to_fastq(reads, path::String)
             end
         end
         close(writer)
+    end
+    if placeholder_used[]
+        @warn "corrector=:iterative: input lacked per-base quality (FASTA / quality-less); " *
+              "assigned placeholder Q40. The corrector's quality model is degenerate (uniform) " *
+              "for these reads — its decisions become coverage-driven only."
     end
     return path
 end
@@ -650,37 +658,48 @@ result is marked `gfa_compatible=false`.
 function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
     _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
 
-    input_dir = mktempdir()
-    output_dir = mktempdir()
-    temp_fastq = joinpath(input_dir, "corrector_input.fastq")
-    _write_reads_to_fastq(reads, temp_fastq)
-
-    # The corrector's k-progression needs a sane floor; honor the config's k when
-    # it is at least the floor, otherwise use the floor (13).
+    # The corrector is k-mer based; a min_overlap-only config has no k, so the
+    # k-progression floors at 13 and min_overlap is not used — surface that rather
+    # than silently drop the OLC intent (review Important #3).
+    if config.k === nothing
+        @warn "corrector=:iterative is k-mer based; min_overlap is ignored and the k-progression floors at 13."
+    end
     max_k = config.k === nothing ? 13 : max(config.k, 13)
 
-    result_dict = Mycelia.mycelia_iterative_assemble(
-        temp_fastq;
-        max_k = max_k,
-        skip_solid = config.skip_solid,
-        graph_mode = _graph_mode_symbol(config.graph_mode),
-        verbose = false,
-        enable_checkpointing = false,
-        output_dir = output_dir
-    )
+    input_dir = mktempdir()
+    output_dir = mktempdir()
+    try
+        temp_fastq = joinpath(input_dir, "corrector_input.fastq")
+        _write_reads_to_fastq(reads, temp_fastq)
 
-    contigs = collect(String, result_dict[:final_assembly])
-    contig_names = ["corrected_contig_$(i)" for i in 1:length(contigs)]
-    assembly_stats = Dict{String, Any}(
-        "corrector" => "iterative",
-        "skip_solid" => config.skip_solid,
-        "k_progression" => result_dict[:k_progression],
-        "corrector_metadata" => result_dict[:metadata]
-    )
+        result_dict = Mycelia.mycelia_iterative_assemble(
+            temp_fastq;
+            max_k = max_k,
+            skip_solid = config.skip_solid,
+            graph_mode = _graph_mode_symbol(config.graph_mode),
+            verbose = false,
+            enable_checkpointing = false,
+            output_dir = output_dir
+        )
 
-    _log_info(config, "Iterative corrector produced $(length(contigs)) contigs")
-    return AssemblyResult(contigs, contig_names;
-        assembly_stats = assembly_stats, gfa_compatible = false)
+        contigs = collect(String, result_dict[:final_assembly])
+        contig_names = ["corrected_contig_$(i)" for i in 1:length(contigs)]
+        assembly_stats = Dict{String, Any}(
+            "corrector" => "iterative",
+            "skip_solid" => config.skip_solid,
+            "k_progression" => result_dict[:k_progression],
+            "corrector_metadata" => result_dict[:metadata]
+        )
+
+        _log_info(config, "Iterative corrector produced $(length(contigs)) contigs")
+        return AssemblyResult(contigs, contig_names;
+            assembly_stats = assembly_stats, gfa_compatible = false)
+    finally
+        # Prompt cleanup so repeated assemblies in a long-lived process do not leak
+        # the input FASTQ + corrector output dirs until process exit (review #2).
+        rm(input_dir; recursive = true, force = true)
+        rm(output_dir; recursive = true, force = true)
+    end
 end
 
 """
