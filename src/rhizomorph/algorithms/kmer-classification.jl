@@ -358,3 +358,199 @@ function fit_logistic_fusion(coverages::AbstractVector{<:Real},
     w0 = b0 - b1 * m1 / s1 - b2 * m2 / s2
     return LogisticFusionClassifier(w0, w_cov, w_phred; decision_threshold = decision_threshold)
 end
+
+# ------------------------------------------------------------------------------
+# Arm — MixtureModelClassifier (classic auto-threshold; BLESS/Quake/KmerGenie)
+# Build the k-mer coverage histogram over ALL vertices, model it as a mixture of a
+# low-count error component and a higher-count genomic component, and auto-select
+# the solid/weak boundary at the histogram VALLEY (the first local minimum between
+# the error peak and the genomic peak). Coverage-only, quality-agnostic. Because
+# it needs the whole histogram, it computes the valley once inside
+# `classify_kmers` rather than fitting the fused `_posterior(cov, phred)` contract.
+# ------------------------------------------------------------------------------
+
+"""
+    MixtureModelClassifier(; min_valley = 2, steepness = 1.0)
+
+Classic auto-threshold coverage classifier (BLESS/Quake/KmerGenie lineage). Builds
+the k-mer coverage histogram, treats it as an error-plus-genomic mixture, and picks
+the solid/weak cutoff at the histogram VALLEY — the first local minimum separating
+the error peak (near coverage 1) from the genomic peak. A k-mer is solid iff its
+coverage exceeds the valley. Coverage-only; quality is ignored.
+
+- `min_valley` : floor for the auto-selected valley when no clear valley exists
+                 (degenerate/monotonic histograms fall back to this cutoff)
+- `steepness`  : logistic steepness for the confidence score around the valley
+
+Score is a monotone confidence `σ(steepness · (coverage − valley))`: increasing in
+coverage and crossing 0.5 at the chosen valley.
+"""
+struct MixtureModelClassifier <: KmerClassifier
+    min_valley::Int
+    steepness::Float64
+end
+MixtureModelClassifier(; min_valley::Int = 2, steepness::Float64 = 1.0) =
+    MixtureModelClassifier(min_valley, steepness)
+
+"""
+    _coverage_histogram(coverages) -> Vector{Int}
+
+Histogram of k-mer coverages as counts indexed by coverage: `hist[c]` = number of
+k-mers observed exactly `c` times (index 1 ⇒ coverage 1). Length is the maximum
+observed coverage; empty input yields an empty histogram.
+"""
+function _coverage_histogram(coverages::AbstractVector{<:Integer})::Vector{Int}
+    isempty(coverages) && return Int[]
+    maxcov = maximum(coverages)
+    hist = zeros(Int, maxcov)
+    for c in coverages
+        c >= 1 && (hist[c] += 1)
+    end
+    return hist
+end
+
+"""
+    _histogram_valley(hist, min_valley) -> Int
+
+Auto-select the solid/weak coverage boundary as the first local minimum (valley)
+of the coverage histogram that lies above the initial error peak. Walks up from the
+low-count error mode until the histogram stops decreasing (the valley), returning
+that coverage. Falls back to `min_valley` for monotonic or degenerate histograms.
+"""
+function _histogram_valley(hist::AbstractVector{Int}, min_valley::Int)::Int
+    n = length(hist)
+    n < 2 && return min_valley
+    # Descend from coverage 1 while the histogram keeps falling (the error mode),
+    # then the first point where it turns back up is the valley.
+    valley = 1
+    while valley < n && hist[valley + 1] < hist[valley]
+        valley += 1
+    end
+    # A genuine valley requires a subsequent genomic peak (histogram rises again).
+    # If we ran to the end without rising, there is no clear bimodal split.
+    if valley >= n || valley == 1
+        return min_valley
+    end
+    return max(valley, min_valley)
+end
+
+function classify_kmers(clf::MixtureModelClassifier, graph; dataset_id::AbstractString)
+    labels = collect(MetaGraphsNext.labels(graph))
+    K = eltype(labels)
+    coverages = Dict{K, Int}()
+    for label in labels
+        coverage, _ = _kmer_evidence(graph, label, dataset_id)
+        coverages[label] = coverage
+    end
+    hist = _coverage_histogram(collect(values(coverages)))
+    valley = _histogram_valley(hist, clf.min_valley)
+    verdicts = Dict{K, Bool}()
+    scores = Dict{K, Float64}()
+    for label in labels
+        coverage = coverages[label]
+        verdicts[label] = coverage > valley
+        # Monotone confidence: logistic centred at the valley (0.5 at the cutoff).
+        scores[label] = 1.0 / (1.0 + exp(-clf.steepness * (coverage - valley)))
+    end
+    return KmerClassification{K}(
+        verdicts, scores, "MixtureModel",
+        Dict{Symbol, Any}(:valley => valley, :min_valley => clf.min_valley,
+                          :steepness => clf.steepness),
+    )
+end
+
+# ------------------------------------------------------------------------------
+# Arm — BloomFilterClassifier (memory-efficient tier)
+# Insert every k-mer whose coverage ≥ a cutoff into a minimal Bloom filter (a
+# BitVector with a few hash functions over the k-mer's hash), then classify solid =
+# membership. Coverage is still the decision signal; the Bloom filter is the
+# compact set representation the classic memory-lean pipelines use in place of an
+# exact solid-k-mer set. Score = raw coverage. No external Bloom dependency exists,
+# so a small self-contained one lives here.
+# ------------------------------------------------------------------------------
+
+"""
+    _BloomFilter(nbits, nhashes)
+
+Minimal Bloom filter: a `BitVector` of `nbits` slots probed by `nhashes` hash
+functions derived from an item's `hash`. Approximate-membership only — no false
+negatives, tunable false-positive rate via `nbits`/`nhashes`.
+"""
+struct _BloomFilter
+    bits::BitVector
+    nhashes::Int
+end
+_BloomFilter(nbits::Int, nhashes::Int) = _BloomFilter(falses(nbits), nhashes)
+
+"""
+    _bloom_indices(bf, item) -> Vector{Int}
+
+The `nhashes` bit positions an `item` maps to, using a seeded `hash` per function
+folded into `[1, length(bf.bits)]`.
+"""
+function _bloom_indices(bf::_BloomFilter, item)::Vector{Int}
+    nbits = length(bf.bits)
+    return [Int(mod(hash(item, UInt(i)), nbits)) + 1 for i in 1:bf.nhashes]
+end
+
+"""
+    _bloom_insert!(bf, item)
+
+Set every bit position `item` maps to. Idempotent.
+"""
+function _bloom_insert!(bf::_BloomFilter, item)
+    for idx in _bloom_indices(bf, item)
+        bf.bits[idx] = true
+    end
+    return bf
+end
+
+"""
+    _bloom_contains(bf, item) -> Bool
+
+`true` if every bit position `item` maps to is set (possible member; may be a false
+positive). `false` is definitive (never a member).
+"""
+function _bloom_contains(bf::_BloomFilter, item)::Bool
+    return all(bf.bits[idx] for idx in _bloom_indices(bf, item))
+end
+
+"""
+    BloomFilterClassifier(; min_count = 2, nbits = 1 << 16, nhashes = 4)
+
+Memory-efficient solid-k-mer tier. Inserts every k-mer with coverage ≥ `min_count`
+into a Bloom filter (`nbits` slots, `nhashes` hash functions), then classifies a
+k-mer solid iff the filter reports membership. Coverage-only decision signal;
+score = raw coverage. The Bloom filter trades a small false-positive rate for a
+compact set representation in place of an exact solid-k-mer table.
+"""
+struct BloomFilterClassifier <: KmerClassifier
+    min_count::Int
+    nbits::Int
+    nhashes::Int
+end
+BloomFilterClassifier(; min_count::Int = 2, nbits::Int = 1 << 16, nhashes::Int = 4) =
+    BloomFilterClassifier(min_count, nbits, nhashes)
+
+function classify_kmers(clf::BloomFilterClassifier, graph; dataset_id::AbstractString)
+    labels = collect(MetaGraphsNext.labels(graph))
+    K = eltype(labels)
+    coverages = Dict{K, Int}()
+    bf = _BloomFilter(clf.nbits, clf.nhashes)
+    for label in labels
+        coverage, _ = _kmer_evidence(graph, label, dataset_id)
+        coverages[label] = coverage
+        coverage >= clf.min_count && _bloom_insert!(bf, label)
+    end
+    verdicts = Dict{K, Bool}()
+    scores = Dict{K, Float64}()
+    for label in labels
+        verdicts[label] = _bloom_contains(bf, label)
+        scores[label] = Float64(coverages[label])
+    end
+    return KmerClassification{K}(
+        verdicts, scores, "BloomFilter",
+        Dict{Symbol, Any}(:min_count => clf.min_count, :nbits => clf.nbits,
+                          :nhashes => clf.nhashes),
+    )
+end
