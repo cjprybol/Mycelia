@@ -20,11 +20,26 @@ Test.@testset "Stage 0 k-mer classification" begin
         Test.@test R._quality_correct_prob(0.0) == 0.0
     end
 
-    Test.@testset "C2 guard: _mean_phred handles nothing and empty" begin
-        Test.@test R._mean_phred(nothing) == 0.0           # accessor returns nothing on no evidence
-        Test.@test R._mean_phred(Float64[]) == 0.0
+    Test.@testset "C2/F1 guard: _mean_phred signals no-evidence as NaN" begin
+        Test.@test isnan(R._mean_phred(nothing))           # accessor returns nothing on no evidence
+        Test.@test isnan(R._mean_phred(Float64[]))         # NaN sentinel, distinct from Phred 0
         Test.@test R._mean_phred([30.0, 40.0]) == 35.0
         Test.@test R._mean_phred(UInt8[20, 40]) == 30.0    # still accepts integer vectors
+    end
+
+    Test.@testset "F1: absent quality falls back to coverage, not error class" begin
+        # A high-coverage k-mer with NO quality evidence (mean_phred = NaN) must
+        # NOT be forced toward error; each fused arm falls back to coverage-only.
+        bm = R.BayesianMixtureClassifier(genomic_mean_coverage = 30.0)
+        ec = R.EffectiveCoverageClassifier(genomic_mean_coverage = 30.0)
+        lf = R.LogisticFusionClassifier(-5.0, 0.3, 0.05)   # coverage weight positive
+        for clf in (bm, ec, lf)
+            p_absent = R._posterior(clf, 30, NaN)          # high coverage, no quality
+            Test.@test !isnan(p_absent)                    # no NaN propagation into the score
+            Test.@test p_absent > 0.5                      # coverage evidence still wins
+        end
+        # And a low-coverage no-quality k-mer is not rescued by absent quality.
+        Test.@test R._posterior(bm, 1, NaN) < R._posterior(bm, 30, NaN)
     end
 
     Test.@testset "_histogram_valley finds the bimodal minimum" begin

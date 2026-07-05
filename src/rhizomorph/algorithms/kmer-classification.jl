@@ -87,12 +87,14 @@ end
 """
     _mean_phred(quality) -> Float64
 
-Mean per-base Phred across the k-mer's positions (0.0 for `nothing` or empty).
-Accepts the `nothing`/`Vector{Float64}` returned by `get_vertex_mean_quality`
-(review C2: the accessor returns `nothing`, not an empty vector, on no evidence).
+Mean per-base Phred across the k-mer's positions. Returns `NaN` for `nothing` or
+empty — the sentinel for "no quality evidence", kept DISTINCT from a genuine Phred
+of 0.0 so consumers can fall back to coverage rather than treating quality-less
+k-mers as definitely-erroneous (review F1). Accepts the `nothing`/`Vector{Float64}`
+returned by `get_vertex_mean_quality` (review C2).
 """
 function _mean_phred(quality)::Float64
-    (quality === nothing || isempty(quality)) && return 0.0
+    (quality === nothing || isempty(quality)) && return NaN
     return Statistics.mean(Float64.(quality))
 end
 
@@ -157,8 +159,11 @@ function classify_kmers(clf::QualityThreshold, graph; dataset_id::AbstractString
     for label in labels
         _, mean_quality = _kmer_evidence(graph, label, dataset_id)
         mean_phred = _mean_phred(mean_quality)
-        verdicts[label] = mean_phred >= clf.min_mean_phred
-        scores[label] = mean_phred
+        # No quality evidence (NaN) ⇒ this quality-only baseline cannot assess it
+        # ⇒ weak, score 0.0 (F1: do not let NaN propagate into verdict/ROC).
+        has_quality = !isnan(mean_phred)
+        verdicts[label] = has_quality && mean_phred >= clf.min_mean_phred
+        scores[label] = has_quality ? mean_phred : 0.0
     end
     return KmerClassification{K}(
         verdicts, scores, "QualityThreshold",
@@ -241,7 +246,10 @@ function BayesianMixtureClassifier(; genomic_mean_coverage::Float64,
 end
 
 function _posterior(clf::BayesianMixtureClassifier, coverage::Int, mean_phred::Float64)::Float64
-    q = _quality_correct_prob(mean_phred)
+    # No quality evidence ⇒ neutral q=0.5 ⇒ the two components' quality weights
+    # cancel and the posterior is coverage-only (F1: absent quality must not force
+    # the error class).
+    q = isnan(mean_phred) ? 0.5 : _quality_correct_prob(mean_phred)
     l_real = Distributions.pdf(Distributions.Poisson(clf.genomic_mean_coverage), coverage) * q
     l_error = Distributions.pdf(Distributions.Poisson(clf.error_mean_coverage), coverage) * (1.0 - q)
     num = clf.prior_real * l_real
@@ -287,7 +295,9 @@ end
 function _posterior(clf::EffectiveCoverageClassifier, coverage::Int, mean_phred::Float64)::Float64
     # Quality discounts coverage, then a Poisson likelihood ratio on the single
     # effective-coverage axis (rounded to an integer count for the discrete model).
-    eff_cov = round(Int, coverage * _quality_correct_prob(mean_phred))
+    # No quality evidence ⇒ no discount (q=1) ⇒ coverage-only (F1).
+    q = isnan(mean_phred) ? 1.0 : _quality_correct_prob(mean_phred)
+    eff_cov = round(Int, coverage * q)
     l_real = clf.prior_real * Distributions.pdf(Distributions.Poisson(clf.genomic_mean_coverage), eff_cov)
     l_error = (1.0 - clf.prior_real) * Distributions.pdf(Distributions.Poisson(clf.error_mean_coverage), eff_cov)
     den = l_real + l_error
@@ -324,7 +334,9 @@ LogisticFusionClassifier(w0, w_cov, w_phred; decision_threshold::Float64 = 0.5) 
     LogisticFusionClassifier(w0, w_cov, w_phred, decision_threshold)
 
 function _posterior(clf::LogisticFusionClassifier, coverage::Int, mean_phred::Float64)::Float64
-    z = clf.w0 + clf.w_cov * coverage + clf.w_phred * mean_phred
+    # No quality evidence ⇒ drop the quality term ⇒ coverage-only logit (F1).
+    phred_term = isnan(mean_phred) ? 0.0 : clf.w_phred * mean_phred
+    z = clf.w0 + clf.w_cov * coverage + phred_term
     return 1.0 / (1.0 + exp(-z))
 end
 _strategy_name(::LogisticFusionClassifier) = "LogisticFusion"
