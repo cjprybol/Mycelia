@@ -16,9 +16,9 @@
 # evidence and the input→workflow router's training data.
 #
 # Coverage is read from `count_total_observations(vertex_data)`; quality from
-# `get_vertex_joint_quality(vertex_data, dataset_id)` (per-position combined Phred,
-# where combining = adding Phred in log space = accumulating observation
-# log-likelihoods). The principled default fuses BOTH.
+# `get_vertex_mean_quality(vertex_data, dataset_id)` (per-position MEAN Phred —
+# depth-INDEPENDENT, so quality is an evidence axis distinct from coverage rather
+# than a proxy for it). The fused arms combine BOTH independent signals.
 # ==============================================================================
 
 """
@@ -59,34 +59,43 @@ evidence to use. Each `KmerClassifier` subtype provides its own method.
 function classify_kmers end
 
 # ------------------------------------------------------------------------------
-# Shared evidence extraction — every strategy reads (coverage, joint-quality)
+# Shared evidence extraction — every strategy reads (coverage, mean-quality)
 # through this one accessor so the arms differ only in their DECISION RULE, not
 # in how they touch the graph.
 # ------------------------------------------------------------------------------
 
 """
-    _kmer_evidence(graph, label, dataset_id) -> (coverage::Int, joint_quality::Vector{UInt8})
+    _kmer_evidence(graph, label, dataset_id) -> (coverage::Int, mean_quality)
 
 Pull the two evidence signals for one k-mer: `coverage` = number of observations
-supporting it; `joint_quality` = per-position combined Phred across those
-observations (empty if none for this dataset).
+supporting it; `mean_quality` = per-position MEAN Phred across observations
+(`Vector{Float64}`, raw Phred 0–60), or `nothing` when the vertex has no evidence
+for this dataset.
+
+The quality signal is the per-position MEAN, which is depth-INDEPENDENT. Using the
+accumulated joint quality (`get_vertex_joint_quality`, a sum of Phred over
+observations that grows with coverage and saturates at 255) would make quality a
+coverage proxy and defeat the independence the fused arms assume (review C1).
 """
 function _kmer_evidence(graph, label, dataset_id::AbstractString)
     vertex_data = graph[label]
     coverage = count_total_observations(vertex_data)
-    joint_quality = get_vertex_joint_quality(vertex_data, dataset_id)
-    return coverage, joint_quality
+    mean_quality = get_vertex_mean_quality(vertex_data, dataset_id)
+    return coverage, mean_quality
 end
 
 """
-    _mean_phred(joint_quality) -> Float64
+    _mean_phred(quality) -> Float64
 
-Mean combined-Phred across the k-mer's positions (0.0 if no quality evidence).
-A convenience summary of the per-position joint-quality vector.
+Mean per-base Phred across the k-mer's positions. Returns `NaN` for `nothing` or
+empty — the sentinel for "no quality evidence", kept DISTINCT from a genuine Phred
+of 0.0 so consumers can fall back to coverage rather than treating quality-less
+k-mers as definitely-erroneous (review F1). Accepts the `nothing`/`Vector{Float64}`
+returned by `get_vertex_mean_quality` (review C2).
 """
-function _mean_phred(joint_quality::AbstractVector{UInt8})::Float64
-    isempty(joint_quality) && return 0.0
-    return Statistics.mean(Float64.(joint_quality))
+function _mean_phred(quality)::Float64
+    (quality === nothing || isempty(quality)) && return NaN
+    return Statistics.mean(Float64.(quality))
 end
 
 # ------------------------------------------------------------------------------
@@ -125,7 +134,7 @@ end
 
 # ------------------------------------------------------------------------------
 # Arm 2 (comparison baseline) — QualityThreshold
-# The mirror image: a k-mer is solid iff its mean combined-Phred ≥ a cutoff.
+# The mirror image: a k-mer is solid iff its mean per-base Phred ≥ a cutoff.
 # Quality ONLY; ignores coverage. Isolating the quality signal lets the matrix
 # separate "quality helps" from "coverage helps" before the fused model claims
 # credit for either.
@@ -134,7 +143,7 @@ end
 """
     QualityThreshold(min_mean_phred::Float64 = 20.0)
 
-Solid iff mean combined-Phred ≥ `min_mean_phred`. Score = mean combined-Phred.
+Solid iff mean per-base Phred ≥ `min_mean_phred`. Score = mean per-base Phred.
 Quality-only baseline (contrast against coverage-only).
 """
 struct QualityThreshold <: KmerClassifier
@@ -148,10 +157,13 @@ function classify_kmers(clf::QualityThreshold, graph; dataset_id::AbstractString
     verdicts = Dict{K, Bool}()
     scores = Dict{K, Float64}()
     for label in labels
-        _, joint_quality = _kmer_evidence(graph, label, dataset_id)
-        mean_phred = _mean_phred(joint_quality)
-        verdicts[label] = mean_phred >= clf.min_mean_phred
-        scores[label] = mean_phred
+        _, mean_quality = _kmer_evidence(graph, label, dataset_id)
+        mean_phred = _mean_phred(mean_quality)
+        # No quality evidence (NaN) ⇒ this quality-only baseline cannot assess it
+        # ⇒ weak, score 0.0 (F1: do not let NaN propagate into verdict/ROC).
+        has_quality = !isnan(mean_phred)
+        verdicts[label] = has_quality && mean_phred >= clf.min_mean_phred
+        scores[label] = has_quality ? mean_phred : 0.0
     end
     return KmerClassification{K}(
         verdicts, scores, "QualityThreshold",
@@ -181,11 +193,13 @@ _threshold(clf::FusedClassifier)::Float64 = clf.decision_threshold
 """
     _quality_correct_prob(mean_phred) -> Float64
 
-P(the k-mer's bases are correct) from mean combined-Phred: `1 - 10^(-Q/10)`.
-Strong accumulated Phred ⇒ ≈1. The quality signal every fused arm consumes.
+P(the k-mer's bases are correct) from mean per-base Phred: `1 - 10^(-Q/10)`.
+Strong per-base Phred ⇒ ≈1. The quality signal every fused arm consumes.
 """
 function _quality_correct_prob(mean_phred::Float64)::Float64
-    return 1.0 - 10.0^(-mean_phred / 10.0)
+    # Clamp strictly below 1.0 so the (1 - q) error-likelihood term in the fused
+    # arms never underflows to exactly 0 and collapses the posterior (review C1).
+    return min(1.0 - 10.0^(-mean_phred / 10.0), 1.0 - 1e-6)
 end
 
 function classify_kmers(clf::FusedClassifier, graph; dataset_id::AbstractString)
@@ -195,8 +209,8 @@ function classify_kmers(clf::FusedClassifier, graph; dataset_id::AbstractString)
     scores = Dict{K, Float64}()
     thr = _threshold(clf)
     for label in labels
-        coverage, joint_quality = _kmer_evidence(graph, label, dataset_id)
-        posterior = _posterior(clf, coverage, _mean_phred(joint_quality))
+        coverage, mean_quality = _kmer_evidence(graph, label, dataset_id)
+        posterior = _posterior(clf, coverage, _mean_phred(mean_quality))
         verdicts[label] = posterior >= thr
         scores[label] = posterior
     end
@@ -232,7 +246,10 @@ function BayesianMixtureClassifier(; genomic_mean_coverage::Float64,
 end
 
 function _posterior(clf::BayesianMixtureClassifier, coverage::Int, mean_phred::Float64)::Float64
-    q = _quality_correct_prob(mean_phred)
+    # No quality evidence ⇒ neutral q=0.5 ⇒ the two components' quality weights
+    # cancel and the posterior is coverage-only (F1: absent quality must not force
+    # the error class).
+    q = isnan(mean_phred) ? 0.5 : _quality_correct_prob(mean_phred)
     l_real = Distributions.pdf(Distributions.Poisson(clf.genomic_mean_coverage), coverage) * q
     l_error = Distributions.pdf(Distributions.Poisson(clf.error_mean_coverage), coverage) * (1.0 - q)
     num = clf.prior_real * l_real
@@ -278,7 +295,9 @@ end
 function _posterior(clf::EffectiveCoverageClassifier, coverage::Int, mean_phred::Float64)::Float64
     # Quality discounts coverage, then a Poisson likelihood ratio on the single
     # effective-coverage axis (rounded to an integer count for the discrete model).
-    eff_cov = round(Int, coverage * _quality_correct_prob(mean_phred))
+    # No quality evidence ⇒ no discount (q=1) ⇒ coverage-only (F1).
+    q = isnan(mean_phred) ? 1.0 : _quality_correct_prob(mean_phred)
+    eff_cov = round(Int, coverage * q)
     l_real = clf.prior_real * Distributions.pdf(Distributions.Poisson(clf.genomic_mean_coverage), eff_cov)
     l_error = (1.0 - clf.prior_real) * Distributions.pdf(Distributions.Poisson(clf.error_mean_coverage), eff_cov)
     den = l_real + l_error
@@ -315,7 +334,9 @@ LogisticFusionClassifier(w0, w_cov, w_phred; decision_threshold::Float64 = 0.5) 
     LogisticFusionClassifier(w0, w_cov, w_phred, decision_threshold)
 
 function _posterior(clf::LogisticFusionClassifier, coverage::Int, mean_phred::Float64)::Float64
-    z = clf.w0 + clf.w_cov * coverage + clf.w_phred * mean_phred
+    # No quality evidence ⇒ drop the quality term ⇒ coverage-only logit (F1).
+    phred_term = isnan(mean_phred) ? 0.0 : clf.w_phred * mean_phred
+    z = clf.w0 + clf.w_cov * coverage + phred_term
     return 1.0 / (1.0 + exp(-z))
 end
 _strategy_name(::LogisticFusionClassifier) = "LogisticFusion"
@@ -357,4 +378,200 @@ function fit_logistic_fusion(coverages::AbstractVector{<:Real},
     w_phred = b2 / s2
     w0 = b0 - b1 * m1 / s1 - b2 * m2 / s2
     return LogisticFusionClassifier(w0, w_cov, w_phred; decision_threshold = decision_threshold)
+end
+
+# ------------------------------------------------------------------------------
+# Arm — MixtureModelClassifier (classic auto-threshold; BLESS/Quake/KmerGenie)
+# Build the k-mer coverage histogram over ALL vertices, model it as a mixture of a
+# low-count error component and a higher-count genomic component, and auto-select
+# the solid/weak boundary at the histogram VALLEY (the first local minimum between
+# the error peak and the genomic peak). Coverage-only, quality-agnostic. Because
+# it needs the whole histogram, it computes the valley once inside
+# `classify_kmers` rather than fitting the fused `_posterior(cov, phred)` contract.
+# ------------------------------------------------------------------------------
+
+"""
+    MixtureModelClassifier(; min_valley = 2, steepness = 1.0)
+
+Classic auto-threshold coverage classifier (BLESS/Quake/KmerGenie lineage). Builds
+the k-mer coverage histogram, treats it as an error-plus-genomic mixture, and picks
+the solid/weak cutoff at the histogram VALLEY — the first local minimum separating
+the error peak (near coverage 1) from the genomic peak. A k-mer is solid iff its
+coverage exceeds the valley. Coverage-only; quality is ignored.
+
+- `min_valley` : floor for the auto-selected valley when no clear valley exists
+                 (degenerate/monotonic histograms fall back to this cutoff)
+- `steepness`  : logistic steepness for the confidence score around the valley
+
+Score is a monotone confidence `σ(steepness · (coverage − valley))`: increasing in
+coverage and crossing 0.5 at the chosen valley.
+"""
+struct MixtureModelClassifier <: KmerClassifier
+    min_valley::Int
+    steepness::Float64
+end
+MixtureModelClassifier(; min_valley::Int = 2, steepness::Float64 = 1.0) =
+    MixtureModelClassifier(min_valley, steepness)
+
+"""
+    _coverage_histogram(coverages) -> Vector{Int}
+
+Histogram of k-mer coverages as counts indexed by coverage: `hist[c]` = number of
+k-mers observed exactly `c` times (index 1 ⇒ coverage 1). Length is the maximum
+observed coverage; empty input yields an empty histogram.
+"""
+function _coverage_histogram(coverages::AbstractVector{<:Integer})::Vector{Int}
+    isempty(coverages) && return Int[]
+    maxcov = maximum(coverages)
+    hist = zeros(Int, maxcov)
+    for c in coverages
+        c >= 1 && (hist[c] += 1)
+    end
+    return hist
+end
+
+"""
+    _histogram_valley(hist, min_valley) -> Int
+
+Auto-select the solid/weak coverage boundary as the first local minimum (valley)
+of the coverage histogram that lies above the initial error peak. Walks up from the
+low-count error mode until the histogram stops decreasing (the valley), returning
+that coverage. Falls back to `min_valley` for monotonic or degenerate histograms.
+"""
+function _histogram_valley(hist::AbstractVector{Int}, min_valley::Int)::Int
+    n = length(hist)
+    n < 2 && return min_valley
+    # Descend from coverage 1 while the histogram keeps falling (the error mode),
+    # then the first point where it turns back up is the valley.
+    valley = 1
+    while valley < n && hist[valley + 1] < hist[valley]
+        valley += 1
+    end
+    # A genuine valley requires a subsequent genomic peak (histogram rises again).
+    # If we ran to the end without rising, there is no clear bimodal split.
+    if valley >= n || valley == 1
+        return min_valley
+    end
+    return max(valley, min_valley)
+end
+
+function classify_kmers(clf::MixtureModelClassifier, graph; dataset_id::AbstractString)
+    labels = collect(MetaGraphsNext.labels(graph))
+    K = eltype(labels)
+    coverages = Dict{K, Int}()
+    for label in labels
+        coverage, _ = _kmer_evidence(graph, label, dataset_id)
+        coverages[label] = coverage
+    end
+    hist = _coverage_histogram(collect(values(coverages)))
+    valley = _histogram_valley(hist, clf.min_valley)
+    verdicts = Dict{K, Bool}()
+    scores = Dict{K, Float64}()
+    for label in labels
+        coverage = coverages[label]
+        verdicts[label] = coverage > valley
+        # Monotone confidence: logistic centred at the valley (0.5 at the cutoff).
+        scores[label] = 1.0 / (1.0 + exp(-clf.steepness * (coverage - valley)))
+    end
+    return KmerClassification{K}(
+        verdicts, scores, "MixtureModel",
+        Dict{Symbol, Any}(:valley => valley, :min_valley => clf.min_valley,
+                          :steepness => clf.steepness),
+    )
+end
+
+# ------------------------------------------------------------------------------
+# Arm — BloomFilterClassifier (memory-efficient tier)
+# Insert every k-mer whose coverage ≥ a cutoff into a minimal Bloom filter (a
+# BitVector with a few hash functions over the k-mer's hash), then classify solid =
+# membership. Coverage is still the decision signal; the Bloom filter is the
+# compact set representation the classic memory-lean pipelines use in place of an
+# exact solid-k-mer set. Score = raw coverage. No external Bloom dependency exists,
+# so a small self-contained one lives here.
+# ------------------------------------------------------------------------------
+
+"""
+    _BloomFilter(nbits, nhashes)
+
+Minimal Bloom filter: a `BitVector` of `nbits` slots probed by `nhashes` hash
+functions derived from an item's `hash`. Approximate-membership only — no false
+negatives, tunable false-positive rate via `nbits`/`nhashes`.
+"""
+struct _BloomFilter
+    bits::BitVector
+    nhashes::Int
+end
+_BloomFilter(nbits::Int, nhashes::Int) = _BloomFilter(falses(nbits), nhashes)
+
+"""
+    _bloom_indices(bf, item) -> Vector{Int}
+
+The `nhashes` bit positions an `item` maps to, using a seeded `hash` per function
+folded into `[1, length(bf.bits)]`.
+"""
+function _bloom_indices(bf::_BloomFilter, item)::Vector{Int}
+    nbits = length(bf.bits)
+    return [Int(mod(hash(item, UInt(i)), nbits)) + 1 for i in 1:bf.nhashes]
+end
+
+"""
+    _bloom_insert!(bf, item)
+
+Set every bit position `item` maps to. Idempotent.
+"""
+function _bloom_insert!(bf::_BloomFilter, item)
+    for idx in _bloom_indices(bf, item)
+        bf.bits[idx] = true
+    end
+    return bf
+end
+
+"""
+    _bloom_contains(bf, item) -> Bool
+
+`true` if every bit position `item` maps to is set (possible member; may be a false
+positive). `false` is definitive (never a member).
+"""
+function _bloom_contains(bf::_BloomFilter, item)::Bool
+    return all(bf.bits[idx] for idx in _bloom_indices(bf, item))
+end
+
+"""
+    BloomFilterClassifier(; min_count = 2, nbits = 1 << 16, nhashes = 4)
+
+Memory-efficient solid-k-mer tier. Inserts every k-mer with coverage ≥ `min_count`
+into a Bloom filter (`nbits` slots, `nhashes` hash functions), then classifies a
+k-mer solid iff the filter reports membership. Coverage-only decision signal;
+score = raw coverage. The Bloom filter trades a small false-positive rate for a
+compact set representation in place of an exact solid-k-mer table.
+"""
+struct BloomFilterClassifier <: KmerClassifier
+    min_count::Int
+    nbits::Int
+    nhashes::Int
+end
+BloomFilterClassifier(; min_count::Int = 2, nbits::Int = 1 << 16, nhashes::Int = 4) =
+    BloomFilterClassifier(min_count, nbits, nhashes)
+
+function classify_kmers(clf::BloomFilterClassifier, graph; dataset_id::AbstractString)
+    labels = collect(MetaGraphsNext.labels(graph))
+    K = eltype(labels)
+    coverages = Dict{K, Int}()
+    bf = _BloomFilter(clf.nbits, clf.nhashes)
+    for label in labels
+        coverage, _ = _kmer_evidence(graph, label, dataset_id)
+        coverages[label] = coverage
+        coverage >= clf.min_count && _bloom_insert!(bf, label)
+    end
+    verdicts = Dict{K, Bool}()
+    scores = Dict{K, Float64}()
+    for label in labels
+        verdicts[label] = _bloom_contains(bf, label)
+        scores[label] = Float64(coverages[label])
+    end
+    return KmerClassification{K}(
+        verdicts, scores, "BloomFilter",
+        Dict{Symbol, Any}(:min_count => clf.min_count, :nbits => clf.nbits,
+                          :nhashes => clf.nhashes),
+    )
 end
