@@ -73,6 +73,7 @@ include("algorithms/dynamic-k-selection.jl")
 include("algorithms/error-correction.jl")
 include("algorithms/filtering.jl")
 include("algorithms/kmer-classification.jl")
+include("algorithms/assembly-router.jl")
 include("algorithms/momentum-fork-resolution.jl")
 
 # Load analysis modules
