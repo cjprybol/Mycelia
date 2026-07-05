@@ -164,6 +164,40 @@ function main()
                 lpad(f(m.prec), 8), lpad(f(m.bal_acc), 9), lpad(f(m.auc), 8))
     end
 
+    # ---- Score-correlation confound guard (td-gz51) -------------------------
+    # The coverage-only arm (FixedCoverageThreshold, score = coverage) and the
+    # quality-only arm (QualityThreshold, score = mean Phred) are NOMINALLY
+    # independent signals. If accumulated "quality" is secretly a proxy for
+    # coverage (the C1 confound), the two continuous score vectors become
+    # near-perfectly correlated — the tell-tale of a hidden proxy. This prints a
+    # prominent WARNING when |Pearson r| exceeds the threshold. Non-breaking:
+    # correct data (partial-signal quality model) sits well below it.
+    corr_threshold = getenv("MYCELIA_S0_CORR_WARN", 0.98)
+    selftest_bad = get(ENV, "MYCELIA_S0_SELFTEST_BAD", "false") in ("1", "true")
+    cov_scores = Float64[classifications["FixedCoverageThreshold"].scores[l] for l in labels]
+    qual_scores = if selftest_bad
+        # feed the coverage vector as the "quality" vector to force r ≈ 1.0 and
+        # prove the warning fires (verification only; off by default).
+        println("[SELFTEST] using coverage scores as quality scores to force correlation ≈ 1.0")
+        copy(cov_scores)
+    else
+        Float64[classifications["QualityThreshold"].scores[l] for l in labels]
+    end
+    r = Statistics.cor(cov_scores, qual_scores)
+    println("\n--- Score-correlation confound guard ---")
+    println("Pearson r(coverage-only score, quality-only score) = ",
+            round(r; digits = 4), "  (warn if |r| > ", corr_threshold, ")")
+    if isfinite(r) && abs(r) > corr_threshold
+        println("!!! WARNING: coverage-only and quality-only scores are near-perfectly " *
+                "correlated (|r| = $(round(abs(r); digits = 4)) > $(corr_threshold)).")
+        println("!!! Nominally-independent signals should NOT track this tightly — this is " *
+                "the tell-tale of a hidden proxy (e.g. accumulated 'quality' is secretly " *
+                "coverage, the C1 confound). Inspect the quality evidence path before " *
+                "trusting the fused arms.")
+    else
+        println("OK: independent signals are not collinear (no hidden-proxy tell-tale).")
+    end
+
     outdir = joinpath(@__DIR__, "results"); mkpath(outdir)
     config = Dict("reflen" => REFLEN, "coverage" => COVERAGE, "readlen" => READLEN,
                   "error_rate" => ERROR_RATE, "k" => K, "seed" => SEED)
