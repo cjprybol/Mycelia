@@ -161,7 +161,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
         enable_checkpointing::Bool = true,
-        checkpoint_interval::Int = 5)
+        checkpoint_interval::Int = 5,
+        skip_solid::Bool = false)
     start_time = time()
 
     if verbose
@@ -302,7 +303,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 verbose = verbose,
                 batch_size = batch_size,
                 enable_parallel = enable_parallel,
-                graph_mode = graph_mode
+                graph_mode = graph_mode,
+                skip_solid = skip_solid
             )
 
             # Calculate iteration metrics
