@@ -59,7 +59,7 @@ evidence to use. Each `KmerClassifier` subtype provides its own method.
 function classify_kmers end
 
 # ------------------------------------------------------------------------------
-# Shared evidence extraction — every strategy reads (coverage, joint-quality)
+# Shared evidence extraction — every strategy reads (coverage, mean-quality)
 # through this one accessor so the arms differ only in their DECISION RULE, not
 # in how they touch the graph.
 # ------------------------------------------------------------------------------
@@ -132,7 +132,7 @@ end
 
 # ------------------------------------------------------------------------------
 # Arm 2 (comparison baseline) — QualityThreshold
-# The mirror image: a k-mer is solid iff its mean combined-Phred ≥ a cutoff.
+# The mirror image: a k-mer is solid iff its mean per-base Phred ≥ a cutoff.
 # Quality ONLY; ignores coverage. Isolating the quality signal lets the matrix
 # separate "quality helps" from "coverage helps" before the fused model claims
 # credit for either.
@@ -141,7 +141,7 @@ end
 """
     QualityThreshold(min_mean_phred::Float64 = 20.0)
 
-Solid iff mean combined-Phred ≥ `min_mean_phred`. Score = mean combined-Phred.
+Solid iff mean per-base Phred ≥ `min_mean_phred`. Score = mean per-base Phred.
 Quality-only baseline (contrast against coverage-only).
 """
 struct QualityThreshold <: KmerClassifier
@@ -155,8 +155,8 @@ function classify_kmers(clf::QualityThreshold, graph; dataset_id::AbstractString
     verdicts = Dict{K, Bool}()
     scores = Dict{K, Float64}()
     for label in labels
-        _, joint_quality = _kmer_evidence(graph, label, dataset_id)
-        mean_phred = _mean_phred(joint_quality)
+        _, mean_quality = _kmer_evidence(graph, label, dataset_id)
+        mean_phred = _mean_phred(mean_quality)
         verdicts[label] = mean_phred >= clf.min_mean_phred
         scores[label] = mean_phred
     end
@@ -188,8 +188,8 @@ _threshold(clf::FusedClassifier)::Float64 = clf.decision_threshold
 """
     _quality_correct_prob(mean_phred) -> Float64
 
-P(the k-mer's bases are correct) from mean combined-Phred: `1 - 10^(-Q/10)`.
-Strong accumulated Phred ⇒ ≈1. The quality signal every fused arm consumes.
+P(the k-mer's bases are correct) from mean per-base Phred: `1 - 10^(-Q/10)`.
+Strong per-base Phred ⇒ ≈1. The quality signal every fused arm consumes.
 """
 function _quality_correct_prob(mean_phred::Float64)::Float64
     # Clamp strictly below 1.0 so the (1 - q) error-likelihood term in the fused
@@ -204,8 +204,8 @@ function classify_kmers(clf::FusedClassifier, graph; dataset_id::AbstractString)
     scores = Dict{K, Float64}()
     thr = _threshold(clf)
     for label in labels
-        coverage, joint_quality = _kmer_evidence(graph, label, dataset_id)
-        posterior = _posterior(clf, coverage, _mean_phred(joint_quality))
+        coverage, mean_quality = _kmer_evidence(graph, label, dataset_id)
+        posterior = _posterior(clf, coverage, _mean_phred(mean_quality))
         verdicts[label] = posterior >= thr
         scores[label] = posterior
     end
