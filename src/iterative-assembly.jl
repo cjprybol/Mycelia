@@ -258,6 +258,11 @@ function mycelia_iterative_assemble(input_fastq::String;
 
         iteration = 1
         improvements_this_k = 0
+        # Declared in the outer-k scope so it is visible after the while loop
+        # (it is assigned inside the loop; Julia loop scope would otherwise leave
+        # it undefined at the post-loop "Final improvement rate" line — a latent
+        # crash that prevented the pipeline from completing past the first k).
+        current_reads = FASTX.FASTQ.Record[]
 
         # Iterative improvement loop for current k
         while iteration <= max_iterations_per_k
@@ -452,15 +457,22 @@ end
 Classify every k-mer once and return the set of SOLID (real-genomic) canonical
 k-mer labels. Defaults to the auto-threshold `MixtureModelClassifier` (a top
 default in the Stage 0 comparison matrix, coverage-based so it needs no per-arm
-tuning). Returns all labels (i.e. skip nothing) when the graph has no dataset
-evidence, so the skip can never drop a real k-mer by mistake.
+tuning). Returns the EMPTY set (⇒ `_read_is_all_solid` skips nothing ⇒ correct
+every read) when classification cannot run — no labels or no dataset evidence —
+so the skip is never applied on evidence it could not compute (review C1). The
+conservative default is "decode everything", NOT "skip everything": returning all
+labels would mark error k-mers (graph vertices at coverage 1) as solid and
+silently skip reads that needed correction.
 """
 function _solid_kmer_set(graph;
         classifier = Mycelia.Rhizomorph.MixtureModelClassifier())
     labels = collect(MetaGraphsNext.labels(graph))
     isempty(labels) && return Set{eltype(labels)}()
     dataset_id = _rhizomorph_first_dataset_id(graph[first(labels)])
-    dataset_id === nothing && return Set{eltype(labels)}(labels)
+    if dataset_id === nothing
+        @warn "skip_solid: graph has no dataset evidence; classification skipped, correcting all reads (no skip)."
+        return Set{eltype(labels)}()   # empty ⇒ skip nothing ⇒ correct everything
+    end
     classification = Mycelia.Rhizomorph.classify_kmers(classifier, graph;
         dataset_id = dataset_id)
     solid = Set{eltype(labels)}()
@@ -508,7 +520,13 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # solid has no weak region to correct and skips the per-read decode. Opt-in
     # (default off) so existing callers are unchanged. `solid_kmers === nothing`
     # ⇒ correct every read as before.
-    solid_kmers = skip_solid ? _solid_kmer_set(graph) : nothing
+    # The skip helpers canonicalize read k-mers, so they are only valid on a
+    # :canonical graph; on any other mode disable the skip (correct all) rather
+    # than mis-match strands and wrongly skip (review I1/I2 graph_mode).
+    if skip_solid && graph_mode != :canonical
+        @warn "skip_solid is only supported for graph_mode=:canonical; disabling skip (correcting all reads)." graph_mode
+    end
+    solid_kmers = (skip_solid && graph_mode == :canonical) ? _solid_kmer_set(graph) : nothing
     skipped_solid = 0
 
     if verbose
@@ -526,7 +544,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             # Parallel processing for large batches
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
 
-            skip_flags = falses(length(batch_reads))
+            # Vector{Bool} (one byte/elem), NOT falses()/BitVector (64 bits share a
+            # word) — the @threads writes below would otherwise race on the shared
+            # word and undercount the skip fraction (review I2).
+            skip_flags = fill(false, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 read = batch_reads[i]
                 if solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)
