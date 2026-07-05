@@ -40,7 +40,11 @@ pick a k-mer classification strategy. Computed from the records and their
   k-mers, total observations ≈ `num_reads · (mean_read_length − k + 1)`, so the
   mean multiplicity ≈ `num_reads · mean_read_length / G` — the usual
   depth = reads · read-length / genome-size relation with `G` standing in for
-  genome size. `0.0` if no k-mers were observed.
+  genome size. `0.0` if no k-mers were observed. **v0 limitation (review F6):**
+  `G` here is *distinct* k-mers, which includes singleton *error* k-mers, so this
+  estimate is biased DOWNWARD in error-heavy libraries — a genuinely deep but
+  error-rich set can report a low depth. A future revision should estimate depth
+  from the genomic peak of the histogram; tracked separately.
 - `mean_read_quality::Float64`: mean Phred score across every base of every
   read (`0.0` if there are no bases). A proxy for the library's error rate.
 - `kmer_spectrum_valley::Union{Int, Missing}`: multiplicity at the first local
@@ -55,6 +59,11 @@ pick a k-mer classification strategy. Computed from the records and their
 - `num_reads::Int`: number of records.
 - `mean_read_length::Float64`: mean sequence length across records (`0.0` if
   empty).
+- `n_informative_kmers::Int`: number of distinct k-mers observed. `0` signals
+  degenerate input (empty / sub-k / fully-ambiguous reads) distinctly from a
+  genuine low-coverage library (review F4).
+- `has_quality_evidence::Bool`: whether any quality-bearing bases were seen, so a
+  consumer can tell "no quality" from "worst quality" (review I1).
 
 The k-mer multiplicity spectrum is built over canonical DNA k-mers via
 `Kmers.UnambiguousDNAMers{k}` (ambiguous positions skipped), matching the
@@ -103,6 +112,11 @@ function extract_input_features(records::Vector{<:FASTX.FASTQ.Record}; k::Intege
         unique_to_total_kmer_ratio = unique_to_total_kmer_ratio,
         num_reads = num_reads,
         mean_read_length = mean_read_length,
+        # Structured degeneracy signals (review F4): distinguish "nothing was
+        # measured" from a genuine low-coverage / low-quality library so a caller
+        # can refuse rather than silently route on empty evidence.
+        n_informative_kmers = distinct_kmers,
+        has_quality_evidence = total_bases > 0,
     )
 end
 
@@ -166,6 +180,17 @@ Decision rules (first match wins):
    `genomic_mean_coverage` = estimated depth.
 """
 function select_classifier(features::NamedTuple)
+    # Fail loud on degenerate input (review F4): "nothing was measured" must never
+    # be laundered into a confident low-coverage recommendation. Distinguish an
+    # empty read set from reads that yielded no k-mers (shorter than k / ambiguous).
+    if features.num_reads == 0
+        throw(ArgumentError("select_classifier: empty read set (num_reads == 0) — nothing to characterize"))
+    end
+    if features.n_informative_kmers == 0
+        throw(ArgumentError("select_classifier: $(features.num_reads) reads but zero " *
+            "informative k-mers — reads shorter than k or fully ambiguous; check k vs read length"))
+    end
+
     depth = features.estimated_coverage_depth
     quality = features.mean_read_quality
     valley = features.kmer_spectrum_valley
@@ -182,8 +207,10 @@ function select_classifier(features::NamedTuple)
         return (classifier = classifier, rationale = rationale)
     end
 
-    # Rule 2 — elevated error rate: let quality discount coverage.
-    if quality < 20.0
+    # Rule 2 — elevated error rate: let quality discount coverage. Gated on
+    # ACTUAL quality evidence (review I1): absent quality (mean 0.0 sentinel) must
+    # not be read as terrible quality and routed to the quality-discount arm.
+    if features.has_quality_evidence && quality < 20.0
         genomic_mean_coverage = max(depth, 2.0)
         classifier = EffectiveCoverageClassifier(;
             genomic_mean_coverage = genomic_mean_coverage,
