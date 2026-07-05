@@ -140,6 +140,11 @@ struct AssemblyConfig
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
 
+    # Optional read-correction front-end (opt-in; default :none preserves today's
+    # single-k-from-uncorrected-reads behavior byte-for-byte).
+    corrector::Symbol                       # :none (default) or :iterative (mycelia_iterative_assemble)
+    skip_solid::Bool                        # When corrector=:iterative, skip already-solid/clean reads
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -156,7 +161,9 @@ struct AssemblyConfig
             tda::Union{Nothing, Mycelia.TDAConfig} = nothing,
             dedup_revcomp::Bool = false,
             compact_unitigs::Bool = false,
-            memory_profile::Symbol = :full
+            memory_profile::Symbol = :full,
+            corrector::Symbol = :none,
+            skip_solid::Bool = false
     )
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
@@ -179,6 +186,12 @@ struct AssemblyConfig
         _valid_memory_profiles = (:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
         if !(memory_profile in _valid_memory_profiles)
             error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
+        end
+
+        # Validation: corrector front-end must be a recognized mode
+        _valid_correctors = (:none, :iterative)
+        if !(corrector in _valid_correctors)
+            error("corrector must be one of $(_valid_correctors), got :$(corrector)")
         end
 
         # Validation: Parameter ranges
@@ -225,7 +238,9 @@ struct AssemblyConfig
             tda,
             dedup_revcomp,
             compact_unitigs,
-            memory_profile
+            memory_profile,
+            corrector,
+            skip_solid
         )
     end
 end
@@ -531,6 +546,13 @@ end
 Type-stable main assembly function that dispatches based on configuration.
 """
 function assemble_genome(reads, config::AssemblyConfig)
+    # Opt-in read-correction front-end. The default (corrector=:none) falls
+    # through to the byte-identical single-k pipeline below; only an explicit
+    # corrector=:iterative diverts to the iterative+skip corrector.
+    if config.corrector == :iterative
+        return _assemble_with_iterative_corrector(reads, config)
+    end
+
     _log_info(config, "Starting unified genome assembly", config.sequence_type,
         config.graph_mode, config.k, config.min_overlap)
 
@@ -565,6 +587,100 @@ function assemble_genome(reads, config::AssemblyConfig)
 
     _log_info(config, "Assembly completed: $(length(result.contigs)) contigs generated")
     return result
+end
+
+"""
+Write assembly input `reads` to a FASTQ file at `path` for the iterative
+corrector, which consumes a FASTQ file path. Handles FASTQ records (written
+verbatim), FASTA records and file paths (assigned a placeholder max quality,
+since the corrector requires per-base quality strings).
+"""
+function _write_reads_to_fastq(reads, path::String)
+    _placeholder_qual(n) = repeat("I", n)  # Phred+33 'I' == Q40
+    open(path, "w") do io
+        writer = FASTX.FASTQ.Writer(io)
+        if reads isa Vector{String}
+            for file_path in reads
+                if endswith(file_path, ".fastq") || endswith(file_path, ".fq")
+                    open(FASTX.FASTQ.Reader, file_path) do reader
+                        for record in reader
+                            write(writer, record)
+                        end
+                    end
+                else
+                    open(FASTX.FASTA.Reader, file_path) do reader
+                        for record in reader
+                            seq = FASTX.FASTA.sequence(String, record)
+                            write(writer, FASTX.FASTQ.Record(
+                                FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                        end
+                    end
+                end
+            end
+        else
+            for record in reads
+                if record isa FASTX.FASTQ.Record
+                    write(writer, record)
+                elseif record isa FASTX.FASTA.Record
+                    seq = FASTX.FASTA.sequence(String, record)
+                    write(writer, FASTX.FASTQ.Record(
+                        FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                else
+                    error("Unsupported read type for iterative corrector: $(typeof(record))")
+                end
+            end
+        end
+        close(writer)
+    end
+    return path
+end
+
+"""
+Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
+skip-solid maximum-likelihood corrector) and wrap its Dict result in an
+`AssemblyResult`.
+
+v0 return shape: the corrector returns a Dict with `:final_assembly`
+(Vector of sequence strings), `:k_progression`, and `:metadata`. We map
+`:final_assembly` directly onto `AssemblyResult.contigs` and stash the
+corrector's `:k_progression` / `:metadata` under `assembly_stats`. No graph is
+produced by this path, so `graph`/`simplified_graph` are `nothing` and the
+result is marked `gfa_compatible=false`.
+"""
+function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
+    _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
+
+    input_dir = mktempdir()
+    output_dir = mktempdir()
+    temp_fastq = joinpath(input_dir, "corrector_input.fastq")
+    _write_reads_to_fastq(reads, temp_fastq)
+
+    # The corrector's k-progression needs a sane floor; honor the config's k when
+    # it is at least the floor, otherwise use the floor (13).
+    max_k = config.k === nothing ? 13 : max(config.k, 13)
+
+    result_dict = Mycelia.mycelia_iterative_assemble(
+        temp_fastq;
+        max_k = max_k,
+        skip_solid = config.skip_solid,
+        graph_mode = _graph_mode_symbol(config.graph_mode),
+        verbose = false,
+        enable_checkpointing = false,
+        output_dir = output_dir
+    )
+
+    contigs = collect(String, result_dict[:final_assembly])
+    contig_names = ["corrected_contig_$(i)" for i in 1:length(contigs)]
+    assembly_stats = Dict{String, Any}(
+        "corrector" => "iterative",
+        "skip_solid" => config.skip_solid,
+        "k_progression" => result_dict[:k_progression],
+        "corrector_metadata" => result_dict[:metadata]
+    )
+
+    _log_info(config, "Iterative corrector produced $(length(contigs)) contigs")
+    return AssemblyResult(contigs, contig_names;
+        assembly_stats = assembly_stats, gfa_compatible = false)
 end
 
 """
