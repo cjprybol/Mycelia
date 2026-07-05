@@ -1,0 +1,91 @@
+{
+  "config": {
+    "k": 21,
+    "readlen": 100,
+    "reflen": 2000,
+    "coverage": 30,
+    "seed": 42,
+    "error_rate": 0.01
+  },
+  "matrix": {
+    "BayesianMixture": {
+      "bal_acc": 0.9480143317877483,
+      "spec": 0.9061501210653753,
+      "tp": 978,
+      "tn": 9356,
+      "fn": 10,
+      "auc": 0.9522993108586328,
+      "sens": 0.9898785425101214,
+      "prec": 0.50231124807396,
+      "params": {
+        "prior_real": 0.5,
+        "genomic_mean_coverage": 30.0,
+        "decision_threshold": 0.5,
+        "error_mean_coverage": 1.0
+      },
+      "fp": 969
+    },
+    "FixedCoverageThreshold": {
+      "bal_acc": 0.9389490349080001,
+      "spec": 0.8839709443099274,
+      "tp": 982,
+      "tn": 9127,
+      "fn": 6,
+      "auc": 0.9506004744586368,
+      "sens": 0.9939271255060729,
+      "prec": 0.4504587155963303,
+      "params": {
+        "min_count": 2
+      },
+      "fp": 1198
+    },
+    "QualityThreshold": {
+      "bal_acc": 0.5,
+      "spec": 0.0,
+      "tp": 988,
+      "tn": 0,
+      "fn": 0,
+      "auc": 0.951919645920538,
+      "sens": 1.0,
+      "prec": 0.08733315654556704,
+      "params": {
+        "min_mean_phred": 20.0
+      },
+      "fp": 10325
+    },
+    "EffectiveCoverage": {
+      "bal_acc": 0.9318248032074972,
+      "spec": 0.90818401937046,
+      "tp": 944,
+      "tn": 9377,
+      "fn": 44,
+      "auc": 0.9501305251394457,
+      "sens": 0.9554655870445344,
+      "prec": 0.4989429175475687,
+      "params": {
+        "prior_real": 0.5,
+        "genomic_mean_coverage": 30.0,
+        "decision_threshold": 0.5,
+        "error_mean_coverage": 1.0
+      },
+      "fp": 948
+    },
+    "LogisticFusion": {
+      "bal_acc": 0.7289952554136319,
+      "spec": 0.9529297820823245,
+      "tp": 499,
+      "tn": 9839,
+      "fn": 489,
+      "auc": 0.9532081344168766,
+      "sens": 0.5050607287449392,
+      "prec": 0.5065989847715736,
+      "params": {
+        "w_cov": 0.06915417943752251,
+        "decision_threshold": 0.5,
+        "w_phred": 0.008666394745689834,
+        "w0": -3.5373414954152196
+      },
+      "fp": 486
+    }
+  }
+}

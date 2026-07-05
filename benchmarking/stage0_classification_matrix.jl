@@ -159,24 +159,32 @@ function main()
                 lpad(f(m.prec), 8), lpad(f(m.bal_acc), 9), lpad(f(m.auc), 8))
     end
 
-    # persist the router's training table: per-kmer coverage, quality, arm scores, truth
     outdir = joinpath(@__DIR__, "results"); mkpath(outdir)
-    per_kmer = Vector{Dict{String, Any}}()
-    for (i, label) in enumerate(labels)
-        row = Dict{String, Any}("coverage" => covs[i], "mean_phred" => phreds[i],
-                                "genomic" => ys[i])
-        for (name, c) in classifications
-            row["score_$name"] = c.scores[label]
+    config = Dict("reflen" => REFLEN, "coverage" => COVERAGE, "readlen" => READLEN,
+                  "error_rate" => ERROR_RATE, "k" => K, "seed" => SEED)
+
+    # (a) SUMMARY matrix — small, durable knowledge → committed to git.
+    open(joinpath(outdir, "stage0_matrix_summary_seed$(SEED).json"), "w") do io
+        JSON.print(io, Dict("config" => config, "matrix" => results), 2)
+    end
+
+    # (b) PER-KMER router training table — large but DETERMINISTICALLY regenerable
+    # from (harness, seed), so it is gitignored (a cache, not durable knowledge).
+    # One JSON object per line (JSONL) so it streams cheaply at real scale.
+    perkmer_path = joinpath(outdir, "stage0_matrix_perkmer_seed$(SEED).jsonl")
+    open(perkmer_path, "w") do io
+        for (i, label) in enumerate(labels)
+            row = Dict{String, Any}("coverage" => covs[i], "mean_phred" => phreds[i],
+                                    "genomic" => ys[i])
+            for (name, c) in classifications
+                row["score_$name"] = c.scores[label]
+            end
+            JSON.print(io, row); print(io, "\n")
         end
-        push!(per_kmer, row)
     end
-    open(joinpath(outdir, "stage0_matrix_seed$(SEED).json"), "w") do io
-        JSON.print(io, Dict("config" => Dict("reflen" => REFLEN, "coverage" => COVERAGE,
-                            "readlen" => READLEN, "error_rate" => ERROR_RATE, "k" => K, "seed" => SEED),
-                            "matrix" => results, "per_kmer" => per_kmer), 2)
-    end
-    println("\npersisted: ", joinpath(outdir, "stage0_matrix_seed$(SEED).json"),
-            " ($(length(per_kmer)) k-mer rows — router training data)")
+    println("\npersisted summary: ", joinpath(outdir, "stage0_matrix_summary_seed$(SEED).json"))
+    println("persisted router training data: ", perkmer_path,
+            " ($(length(labels)) k-mer rows, gitignored — regenerable)")
     println("=== DONE ===")
 end
 
