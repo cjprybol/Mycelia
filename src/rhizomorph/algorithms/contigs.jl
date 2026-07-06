@@ -291,6 +291,17 @@ function generate_contig_sequence(
     first_vertex_data = graph[path[1]]
 
     if hasfield(typeof(first_vertex_data), :Kmer)
+        # Canonical (undirected) nucleotide k-mer graphs merge each k-mer with its
+        # reverse complement onto one canonical vertex, so consecutive labels are
+        # not guaranteed to overlap in their stored orientation. assemble_path_sequence
+        # assumes a fixed forward orientation, which yields an invalid contig on a
+        # canonical graph. Recover each k-mer's orientation from the (k-1) overlap
+        # instead, so canonical contigs match the DoubleStrand reconstruction.
+        SequenceType = Rhizomorph._sequence_type_from_kmer_type(T)
+        if !Graphs.is_directed(graph) && Rhizomorph._label_has_reverse_complement(T) &&
+           SequenceType <: BioSequences.LongSequence
+            return Rhizomorph._reconstruct_oriented_kmer_path(path, SequenceType, graph)
+        end
         # K-mer graph: reconstruct using overlap logic without string conversion
         return Rhizomorph.assemble_path_sequence(path)
     elseif hasfield(typeof(first_vertex_data), :sequence)
