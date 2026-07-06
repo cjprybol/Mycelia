@@ -97,6 +97,75 @@ function next_prime_k(current_k::Int; max_k::Int = 1000)::Int
 end
 
 """
+    build_k_ladder(initial_k, max_k; k_ladder=nothing, n_k_rungs=nothing)
+
+Compute the ordered set of k-mer sizes the iterative corrector should walk.
+
+- If `k_ladder` is given, use those values that fall in `[initial_k, max_k]`
+  (deduplicated and sorted). NOTE: the assembly loop always STARTS at
+  `find_initial_k` regardless of the ladder, so if `min(k_ladder) > initial_k` the
+  auto-detected initial k is processed first and then the ladder is followed — the
+  ladder specifies the k values to visit AFTER the initial k, not a replacement
+  for it. (In `n_k_rungs` mode the first rung is pinned to `initial_k`, so they
+  coincide.)
+- Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
+  `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
+  rungs to odd values and pinning the first rung to `initial_k` and the last to
+  the largest odd `<= max_k`.
+- Else return `nothing`, signalling the caller to use the original prime-by-prime
+  progression (`next_prime_k`) — this preserves legacy behavior.
+
+Returns a sorted `Vector{Int}` (or `nothing`).
+"""
+function build_k_ladder(initial_k::Int, max_k::Int;
+        k_ladder::Union{Nothing, Vector{Int}} = nothing,
+        n_k_rungs::Union{Nothing, Int} = nothing)::Union{Nothing, Vector{Int}}
+    if k_ladder !== nothing
+        rungs = sort(unique(filter(k -> initial_k <= k <= max_k, k_ladder)))
+        return isempty(rungs) ? [initial_k] : rungs
+    end
+    if n_k_rungs === nothing
+        return nothing
+    end
+    if initial_k >= max_k
+        return [initial_k]
+    end
+    n = max(2, n_k_rungs)
+    top = isodd(max_k) ? max_k : max_k - 1
+    if top <= initial_k
+        return [initial_k]
+    end
+    ratio = (top / initial_k)^(1 / (n - 1))
+    ks = Int[]
+    for i in 1:n
+        kv = round(Int, initial_k * ratio^(i - 1))
+        iseven(kv) && (kv += 1)          # prefer odd k
+        kv = clamp(kv, initial_k, top)
+        push!(ks, kv)
+    end
+    ks[1] = initial_k
+    ks[end] = top
+    return sort(unique(ks))
+end
+
+"""
+    _next_k_in_progression(current_k, max_k, k_schedule)
+
+Return the next k-mer size after `current_k`. When `k_schedule === nothing`, use
+the original prime progression (`next_prime_k`). Otherwise advance to the next
+scheduled rung strictly greater than `current_k`, or return `current_k` (a
+fixed point, which the main loop treats as "stop") when none remain.
+"""
+function _next_k_in_progression(current_k::Int, max_k::Int,
+        k_schedule::Union{Nothing, Vector{Int}})::Int
+    if k_schedule === nothing
+        return next_prime_k(current_k; max_k = max_k)
+    end
+    larger = filter(>(current_k), k_schedule)
+    return isempty(larger) ? current_k : minimum(larger)
+end
+
+"""
 Estimate memory usage for a graph with a given number of k-mers.
 Provides a rough estimate for memory monitoring.
 """
@@ -156,6 +225,9 @@ function mycelia_iterative_assemble(input_fastq::String;
         output_dir::String = "iterative_assembly",
         max_iterations_per_k::Int = 10,
         improvement_threshold::Float64 = 0.05,
+        stop_on_no_change::Bool = true,
+        k_ladder::Union{Nothing, Vector{Int}} = nothing,
+        n_k_rungs::Union{Nothing, Int} = nothing,
         graph_mode::Symbol = :canonical,
         verbose::Bool = true,
         enable_parallel::Bool = false,
@@ -164,6 +236,29 @@ function mycelia_iterative_assemble(input_fastq::String;
         checkpoint_interval::Int = 5,
         skip_solid::Bool = false)
     start_time = time()
+
+    # -- Convergence + k-ladder tuning knobs (td-q70n) -------------------------
+    #
+    # Two literature-backed speedups for the iterative corrector:
+    #
+    #   1. CONVERGENCE (Musket): `stop_on_no_change=true` breaks the per-k loop the
+    #      moment a pass makes 0 changes, independent of `improvement_threshold`
+    #      (the old code only bounded the loop when improvement < threshold, so it
+    #      never terminated on a 0-change pass when improvement_threshold==0).
+    #      `max_iterations_per_k` KEEPS its default of 10 — lowering it to 2
+    #      (Musket's ~2-pass heuristic) is a real accuracy/speed tradeoff that must
+    #      be measured on error-rich data before becoming a default, so it is
+    #      opt-in; the corrector=:iterative route in assemble_genome sets it
+    #      explicitly. Note the corrector is not strictly deterministic (the
+    #      statistical-resampling arm draws from the global RNG), so a 0-change
+    #      pass is a practical, not guaranteed, fixed point.
+    #
+    #   2. K-LADDER (LoRMA 3-rung): instead of walking every prime
+    #      (3,5,7,11,13,...) the caller may request a small, well-spaced ladder.
+    #      `k_ladder=[...]` uses exactly those k values; `n_k_rungs=N` builds an
+    #      ~N-rung geometric ladder from the initial k to `max_k`. Both default
+    #      to `nothing`, which preserves the original prime-by-prime progression
+    #      byte-for-byte, so existing callers are unchanged unless they opt in.
 
     if verbose
         println("Starting Mycelia Iterative Maximum Likelihood Assembly")
@@ -243,6 +338,13 @@ function mycelia_iterative_assemble(input_fastq::String;
         iteration_history = Dict{Int, Vector{Dict{Symbol, Any}}}()
         total_improvements = 0
         current_fastq_file = input_fastq
+    end
+
+    # Build the k-mer progression schedule. `nothing` => legacy prime-by-prime
+    # walk via next_prime_k; a Vector{Int} => explicit / coarse LoRMA-style ladder.
+    k_schedule = build_k_ladder(k, max_k; k_ladder = k_ladder, n_k_rungs = n_k_rungs)
+    if verbose && k_schedule !== nothing
+        println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
     # Main k-mer progression loop
@@ -388,6 +490,19 @@ function mycelia_iterative_assemble(input_fastq::String;
                 end
             end
 
+            # No-change convergence stop (Musket): a pass that made 0 changes is
+            # converged for this k — break immediately, independent of
+            # `improvement_threshold`. This is a strict superset of the
+            # threshold-based early stop below (which would also fire for 0
+            # improvements only when threshold > 0), and it is the guarantee that
+            # keeps the per-k loop bounded even when `improvement_threshold == 0`.
+            if stop_on_no_change && improvements_made == 0
+                if verbose
+                    println("No changes this pass (0 improvements) — converged at k=$k")
+                end
+                break
+            end
+
             # Check if we should continue with this k or move to next
             if sufficient_improvements(
                 improvements_made, length(current_reads), improvement_threshold,
@@ -412,11 +527,11 @@ function mycelia_iterative_assemble(input_fastq::String;
             println("  Final improvement rate: $(round(improvements_this_k / length(current_reads), digits=4))")
         end
 
-        # Move to next prime k-mer size
-        next_k = next_prime_k(k, max_k = max_k)
+        # Move to next scheduled k-mer size (coarse ladder or prime progression)
+        next_k = _next_k_in_progression(k, max_k, k_schedule)
         if next_k == k
             if verbose
-                println("No larger prime k-mer size available. Stopping at k=$k")
+                println("No larger k-mer size available. Stopping at k=$k")
             end
             break
         end

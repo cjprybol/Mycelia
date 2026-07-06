@@ -677,6 +677,12 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             max_k = max_k,
             skip_solid = config.skip_solid,
             graph_mode = _graph_mode_symbol(config.graph_mode),
+            # Opt into the tuned fast settings (td-q70n) explicitly on this route:
+            # a coarse ~3-rung k-ladder + a low iteration cap. Kept out of the
+            # mycelia_iterative_assemble DEFAULTS (which stay 10 / prime-walk) so
+            # other callers are unchanged until the accuracy tradeoff is validated.
+            n_k_rungs = 3,
+            max_iterations_per_k = 2,
             verbose = false,
             enable_checkpointing = false,
             output_dir = output_dir
