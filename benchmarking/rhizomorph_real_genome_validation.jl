@@ -226,22 +226,26 @@ end
 # mycelia_iterative_assemble(verbose=true) and parse the reported fraction.
 # ---------------------------------------------------------------------------
 function measure_skip_fraction(reads_fastq::String, k::Int, outdir::String)
-    buf = IOBuffer()
+    # redirect_stdout needs a fd-backed stream (IOStream/Pipe), NOT an IOBuffer,
+    # so capture the corrector's verbose stdout to a temp file and read it back.
+    logpath = joinpath(outdir, "skipfrac_probe.log")
     try
-        redirect_stdout(buf) do
-            Mycelia.mycelia_iterative_assemble(reads_fastq;
-                max_k = max(k, 13),
-                skip_solid = true,
-                graph_mode = :canonical,
-                verbose = true,
-                enable_checkpointing = false,
-                output_dir = joinpath(outdir, "skipfrac_probe"))
+        open(logpath, "w") do io
+            redirect_stdout(io) do
+                Mycelia.mycelia_iterative_assemble(reads_fastq;
+                    max_k = max(k, 13),
+                    skip_solid = true,
+                    graph_mode = :canonical,
+                    verbose = true,
+                    enable_checkpointing = false,
+                    output_dir = joinpath(outdir, "skipfrac_probe"))
+            end
         end
     catch e
         @warn "Skip-fraction probe failed" exception = e
         return nothing
     end
-    s = String(take!(buf))
+    s = isfile(logpath) ? read(logpath, String) : ""
     fracs = Float64[]
     for m in eachmatch(r"Stage 0 skipped[^()]*\(([\d.]+)%\)", s)
         push!(fracs, parse(Float64, m.captures[1]))
