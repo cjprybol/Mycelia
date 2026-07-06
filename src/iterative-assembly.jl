@@ -626,7 +626,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         batch_size::Int = 10000,
         enable_parallel::Bool = false,
         graph_mode::Symbol = :canonical,
-        skip_solid::Bool = false)::Tuple{Vector{FASTX.FASTQ.Record}, Int}
+        skip_solid::Bool = false,
+        beam_width::Int = typemax(Int))::Tuple{Vector{FASTX.FASTQ.Record}, Int}
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
     improvements_made = 0
@@ -670,7 +671,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     skip_flags[i] = true
                 else
                     improved_read,
-                    was_improved = improve_read_likelihood(read, graph, k; graph_mode = graph_mode)
+                    was_improved = improve_read_likelihood(
+                        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -692,7 +694,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     continue
                 end
                 improved_read,
-                was_improved = improve_read_likelihood(read, graph, k; graph_mode = graph_mode)
+                was_improved = improve_read_likelihood(
+                    read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -734,7 +737,8 @@ Improve likelihood of a single read using maximum likelihood path finding.
 Returns improved read and boolean indicating if improvement was made.
 """
 function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
-        graph_mode::Symbol = :canonical)::Tuple{FASTX.FASTQ.Record, Bool}
+        graph_mode::Symbol = :canonical,
+        beam_width::Int = typemax(Int))::Tuple{FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -745,9 +749,10 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         return read, false
     end
 
-    # Find optimal path through graph using enhanced statistical path improvement
+    # Find optimal path through graph via the exact-by-default trustworthy Viterbi.
     improved_read,
-    likelihood_improvement = find_optimal_sequence_path(read, graph, k; graph_mode = graph_mode)
+    likelihood_improvement = find_optimal_sequence_path(
+        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -778,39 +783,33 @@ function find_optimal_sequence_path(sequence::AbstractString, quality, graph, k:
 end
 
 function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
-        graph_mode::Symbol = :canonical)::Tuple{FASTX.FASTQ.Record, Float64}
-    # Enhanced Statistical Path Improvement (Phase 5.2b)
-    # Integrates iterative assembly with existing Viterbi algorithms from viterbi-next.jl
-
+        graph_mode::Symbol = :canonical,
+        beam_width::Int = typemax(Int))::Tuple{FASTX.FASTQ.Record, Float64}
+    # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
+    # maximum-likelihood path or report no improvement. The prior heuristic
+    # fallback cascade (0.01 abandon-threshold -> statistical resampling -> local
+    # edits) is removed from the correctness path: a "corrected" read must lie on
+    # an ML graph path, not on an off-path heuristic that may not correspond to
+    # any real traversal. `try_statistical_path_resampling` and
+    # `try_local_path_improvements` remain DEFINED as opt-in comparison baselines
+    # (and for direct callers/tests) but are no longer invoked here.
     original_likelihood = calculate_read_likelihood(read, graph, k; graph_mode = graph_mode)
 
-    # Option 1: Use Viterbi algorithm for full path optimization
-    viterbi_result = try_viterbi_path_improvement(read, graph, k; graph_mode = graph_mode)
-    if viterbi_result !== nothing
-        viterbi_read, viterbi_likelihood = viterbi_result
-        viterbi_improvement = viterbi_likelihood - original_likelihood
-
-        # If Viterbi shows significant improvement, use it
-        if viterbi_improvement > 0.01
-            return viterbi_read, viterbi_improvement
-        end
+    viterbi_result = try_viterbi_path_improvement(
+        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
+    if viterbi_result === nothing
+        # Viterbi could not decode (empty observation set, ArgumentError, etc.):
+        # report no improvement rather than falling back to a heuristic path.
+        return read, 0.0
     end
 
-    # Option 2: Statistical resampling for alternative paths
-    statistical_result = try_statistical_path_resampling(read, graph, k; graph_mode = graph_mode)
-    if statistical_result !== nothing
-        stat_read, stat_likelihood = statistical_result
-        stat_improvement = stat_likelihood - original_likelihood
-
-        # If statistical resampling shows improvement, use it
-        if stat_improvement > 0.01
-            return stat_read, stat_improvement
-        end
-    end
-
-    # Option 3: Local heuristic improvements (fallback)
-    return try_local_path_improvements(
-        read, graph, k, original_likelihood; graph_mode = graph_mode)
+    viterbi_read, viterbi_likelihood = viterbi_result
+    improvement = viterbi_likelihood - original_likelihood
+    # Accept the ML path only when it is at least as likely as the original; a
+    # non-positive delta means the ML path is not an improvement, so report none
+    # (never return a strictly-worse read). This is the ADR's "trust the ML path
+    # or report no improvement", NOT the removed 0.01 minimum-magnitude threshold.
+    return improvement > 0.0 ? (viterbi_read, improvement) : (read, 0.0)
 end
 
 """
@@ -1433,7 +1432,8 @@ Returns (improved_read, likelihood) or nothing if no improvement.
 function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph,
         k::Int;
-        graph_mode::Symbol = :canonical)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+        graph_mode::Symbol = :canonical,
+        beam_width::Int = typemax(Int))::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
         alphabet = Mycelia.detect_alphabet(sequence_string)
@@ -1459,11 +1459,19 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             observations[i] = Mycelia.QualityObservation(kmer, window)
         end
 
+        # Trustworthy Viterbi (td-ak6w): the decoder is EXACT by default
+        # (`beam_width = typemax(Int)` — the frontier is never pruned, so the
+        # returned path is the global maximum-likelihood path). `beam_width` is a
+        # documented OPT-IN scaling knob: pass a finite value to bound the
+        # (vertex, strand) frontier on very long reads / branchy graphs (it can
+        # otherwise grow ~unboundedly with read-length depth — 21B allocations on
+        # a 48 kb phage, td-63qy) at the cost of dropping the ML guarantee. It is
+        # NOT a default that silently changes correctness.
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
             max_steps = length(observations) - 1,
-            beam_width = 256
+            beam_width = beam_width
         )
         correction = Mycelia.correct_observations(graph, [observations]; config = config)
         corrected_path = only(correction.corrected_observations)
