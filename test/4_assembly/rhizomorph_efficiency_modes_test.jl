@@ -112,7 +112,7 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test contig_kmers == default_kmers
     end
 
-    Test.@testset "Mode 2: canonical graph (BLOCKED — undirected path reconstruction)" begin
+    Test.@testset "Mode 2: canonical graph (orientation-aware reconstruction)" begin
         reads = eff_tiling_reads(EFF_REF)
         k = 7
         ref_kmers = eff_canonical_kmers([EFF_REF], k)
@@ -130,39 +130,35 @@ Test.@testset "Rhizomorph efficiency modes" begin
 
         cfg_canon = Mycelia.Rhizomorph.AssemblyConfig(;
             k = k, graph_mode = Mycelia.Rhizomorph.Canonical, use_quality_scores = false)
-        # FIX 1: Canonical assembly must warn UNCONDITIONALLY (not verbose-gated)
-        # that contig reconstruction is not yet correct.
-        res_canon = Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.assemble_genome(reads, cfg_canon)
+        # Canonical assembly now reconstructs correctly and must NOT warn about
+        # invalid reconstruction (the orientation-aware traversal is in place).
+        res_canon = Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.assemble_genome(reads, cfg_canon)
 
-        # FIX 1: and it must flag the result as an invalid reconstruction.
-        Test.@test res_canon.assembly_stats["reconstruction_valid"] == false
+        # And it must flag the result as a VALID reconstruction.
+        Test.@test res_canon.assembly_stats["reconstruction_valid"] == true
 
-        # WHAT WORKS: the canonical graph is the compact (~1x) representation the
-        # mode is meant to produce — undirected, with roughly half the vertices of
-        # the DoubleStrand graph (RC pairs merged onto one canonical vertex).
+        # The canonical graph is the compact (~1x) representation the mode is meant
+        # to produce — undirected, with roughly half the vertices of the
+        # DoubleStrand graph (RC pairs merged onto one canonical vertex).
         canon_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :canonical)
         ds_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :doublestrand)
         Test.@test !Graphs.is_directed(canon_graph)
         Test.@test length(collect(MetaGraphsNext.labels(canon_graph))) <=
                    0.6 * length(collect(MetaGraphsNext.labels(ds_graph)))
 
-        # WHAT IS BROKEN: path reconstruction over the UNDIRECTED canonical graph is
-        # incorrect. find_eulerian_paths_next + path_to_sequence assume a single
-        # fixed forward orientation and concatenate the trailing base of each
-        # successive canonical k-mer. On an undirected/canonical graph, adjacent
-        # canonical labels do not carry which strand their (k-1)-overlap is on, so
-        # the reconstructed sequence corresponds to no real read path. Empirically
-        # the emitted contig is genome-length but shares almost none of the
-        # reference's canonical k-mers (~1/32 on this fixture).
+        # FIXED: path reconstruction over the UNDIRECTED canonical graph is now
+        # orientation-aware. find_eulerian_paths_next handles undirected graphs and
+        # path_to_sequence recovers each canonical k-mer's orientation from the
+        # (k-1) overlap with its predecessor, reverse-complementing where the
+        # overlap is on the reverse strand. Canonical coverage therefore reaches
+        # the correct 1.0, matching DoubleStrand.
         canon_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_canon.contigs, k))) /
                      length(ref_kmers)
-        # Documents the break: canonical coverage is far below the correct 1.0.
-        Test.@test canon_frac < 0.5
+        Test.@test canon_frac == 1.0
 
-        # The invariant that SHOULD hold once orientation-aware traversal exists for
-        # the canonical graph. Left as @test_broken so a future fix flips it to a
-        # visible pass (and any accidental "fix" that regresses is surfaced).
-        Test.@test_broken canon_frac == ds_frac
+        # The invariant that orientation-aware canonical traversal must satisfy:
+        # canonical genome-fraction matches the DoubleStrand baseline.
+        Test.@test canon_frac == ds_frac
     end
 
     Test.@testset "Mode 3a: memory_profile threading" begin

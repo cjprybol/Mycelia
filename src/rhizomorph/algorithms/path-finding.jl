@@ -1974,6 +1974,18 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{
         return Vector{Vector{T}}()
     end
 
+    # NOTE on canonical (undirected) graphs: even though the graph is undirected,
+    # the canonical builder stores each edge in the (src, dst) orientation of the
+    # observed read, so MetaGraphsNext.edge_labels yields a directionally-usable
+    # edge set and Hierholzer over it recovers the read traversal order. (A strict
+    # undirected degree-parity test would wrongly reject these graphs: an RC self-
+    # overlap fold can raise one vertex to odd undirected degree while its stored
+    # directed in/out-degrees stay balanced.) The single remaining problem for
+    # canonical mode is that adjacent CANONICAL labels are stored in their
+    # lexicographically-minimal orientation and therefore need not overlap as
+    # stored; path_to_sequence resolves that below by recovering each k-mer's
+    # orientation from the (k-1) overlap with its predecessor.
+
     adj_list = Dict{T, Vector{T}}()
     in_degrees = Dict{T, Int}()
     out_degrees = Dict{T, Int}()
@@ -2159,6 +2171,98 @@ end
 # Sequence Reconstruction from Paths
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# Orientation-aware reconstruction for undirected (canonical) k-mer paths
+# ----------------------------------------------------------------------------
+
+"""
+    _label_has_reverse_complement(::Type{T}) -> Bool
+
+True when a label type `T` is a nucleotide k-mer that has a defined reverse
+complement (so orientation-aware canonical reconstruction applies). False for
+amino-acid k-mers, strings, and everything else.
+"""
+_label_has_reverse_complement(::Type) = false
+function _label_has_reverse_complement(
+        ::Type{<:Kmers.Kmer{A}}) where {A <: BioSequences.NucleicAcidAlphabet}
+    return true
+end
+
+"""
+    _oriented_label(kmer, forward::Bool)
+
+Return `kmer` as-is when `forward`, else its reverse complement.
+"""
+function _oriented_label(kmer, forward::Bool)
+    return forward ? kmer : BioSequences.reverse_complement(kmer)
+end
+
+# True when the trailing (k-1) of `a` equals the leading (k-1) of `b` — i.e. `a`
+# and `b` overlap as a valid k-mer transition a→b.
+function _kmers_overlap(a, b, k::Int)
+    a_str = string(a)
+    b_str = string(b)
+    return @views a_str[2:k] == b_str[1:(k - 1)]
+end
+
+"""
+    _reconstruct_oriented_kmer_path(path::Vector{T}, SequenceType) where {T}
+
+Reconstruct a contig from an UNDIRECTED (canonical) k-mer label path. Canonical
+labels are stored in their lexicographically-minimal orientation, which need not
+overlap their neighbors, so this walks the path resolving each k-mer's
+orientation from the (k-1) overlap with the previous oriented k-mer and emits
+the oriented k-mer (reverse-complementing where the overlap is on the reverse
+strand). Falls back to the forward orientation for any step whose overlap cannot
+be resolved (should not occur on a valid path).
+"""
+function _reconstruct_oriented_kmer_path(path::Vector{T}, SequenceType) where {T}
+    n = length(path)
+    if n == 0
+        return SequenceType()
+    end
+    k = length(path[1])
+    if n == 1
+        return SequenceType(string(path[1]))
+    end
+
+    # Orient the first k-mer so it overlaps the second (either endpoint may need
+    # flipping). Prefer the forward orientation of the first k-mer when possible.
+    first_oriented = _oriented_label(path[1], true)
+    resolved_first = false
+    for a_fwd in (true, false)
+        candidate_a = _oriented_label(path[1], a_fwd)
+        for b_fwd in (true, false)
+            candidate_b = _oriented_label(path[2], b_fwd)
+            if _kmers_overlap(candidate_a, candidate_b, k)
+                first_oriented = candidate_a
+                resolved_first = true
+                break
+            end
+        end
+        resolved_first && break
+    end
+
+    result = SequenceType(string(first_oriented))
+    prev = first_oriented
+
+    for i in 2:n
+        # Choose the orientation of the next canonical label that overlaps `prev`.
+        next_oriented = _oriented_label(path[i], true)
+        for fwd in (true, false)
+            candidate = _oriented_label(path[i], fwd)
+            if _kmers_overlap(prev, candidate, k)
+                next_oriented = candidate
+                break
+            end
+        end
+        result = result * SequenceType(string(next_oriented)[end:end])
+        prev = next_oriented
+    end
+
+    return result
+end
+
 """
     path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where T
 
@@ -2187,6 +2291,18 @@ function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) wher
 
     # Determine the sequence type from the first k-mer
     SequenceType = _sequence_type_from_kmer_type(T)
+
+    # Undirected (canonical) nucleotide graphs merge each k-mer with its reverse
+    # complement onto one canonical vertex, so consecutive labels do NOT
+    # necessarily overlap in their as-stored (canonical) orientation. Naive
+    # trailing-base concatenation would emit an invalid contig. Recover each
+    # k-mer's orientation from the k-1 overlap with its predecessor and emit the
+    # oriented k-mer (reverse-complementing where the overlap is on the reverse
+    # strand). This makes canonical reconstruction match DoubleStrand.
+    if !Graphs.is_directed(graph) && _label_has_reverse_complement(T) &&
+       SequenceType <: BioSequences.LongSequence
+        return _reconstruct_oriented_kmer_path(path, SequenceType)
+    end
 
     # For k-mer paths: first k-mer in full, then add last base of each subsequent k-mer
     if SequenceType <: BioSequences.LongSequence

@@ -937,21 +937,16 @@ K-mer graph assembly implementation (fixed-length k-mer foundation).
 function _assemble_kmer_graph(observations, config)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
-    # Canonical graph_mode does not yet support correct contig reconstruction:
-    # undirected canonical traversal is not orientation-aware, so adjacent
-    # canonical labels do not carry which strand their (k-1)-overlap is on and
-    # the reconstructed contigs are INVALID (see the Canonical @test_broken in
-    # test/4_assembly/rhizomorph_efficiency_modes_test.jl). Warn UNCONDITIONALLY
-    # (matching the codebase's warn-on-incomplete-path convention) and flag the
-    # result; do NOT hard-error, so the mode stays runnable for the benchmark and
-    # to track the keystone fix.
-    reconstruction_valid = config.graph_mode != Canonical
-    if config.graph_mode == Canonical
-        @warn "Canonical graph_mode does not yet support correct contig " *
-              "reconstruction (undirected canonical traversal is not " *
-              "orientation-aware); emitted contigs are INVALID. Use " *
-              "graph_mode=DoubleStrand for correct assembly."
-    end
+    # Canonical graph_mode now supports correct contig reconstruction. The
+    # undirected canonical graph merges each k-mer with its reverse complement
+    # onto one vertex; find_eulerian_paths_next handles undirected graphs
+    # (degree-parity feasibility + symmetric Hierholzer) and path_to_sequence /
+    # generate_contig_sequence recover each k-mer's orientation from the (k-1)
+    # overlap, reverse-complementing where the overlap is on the reverse strand.
+    # Canonical reconstruction therefore matches DoubleStrand (verified in
+    # test/4_assembly/rhizomorph_efficiency_modes_test.jl Mode 2), so the result
+    # is flagged valid and no warning is emitted.
+    reconstruction_valid = true
     # Mode 3a (opt-in): memory_profile selects the k-mer graph's evidence footprint
     # (:full default, or :lightweight / :ultralight / *_quality). This is an internal
     # representation change; the assembled contigs are expected to be identical.
@@ -1058,8 +1053,8 @@ function _assemble_kmer_graph(observations, config)
         "graph_cleaning_applied" => false,
         "unitig_compaction_requested" => config.compact_unitigs,
         "unitig_compaction_effective" => unitig_compaction_effective,
-        # false for Canonical graph_mode: undirected canonical traversal is not
-        # orientation-aware, so the emitted contigs are not a valid reconstruction.
+        # Always true here: canonical (undirected) traversal is now orientation-
+        # aware, so its contigs are a valid reconstruction (matching DoubleStrand).
         "reconstruction_valid" => reconstruction_valid,
         "assembly_date" => string(Mycelia.Dates.now())
     )
