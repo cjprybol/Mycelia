@@ -618,4 +618,51 @@ Test.@testset "Iterative Assembly Tests" begin
             end
         end
     end
+
+    Test.@testset "N-read skip + swallowed-decode diagnostics (td-63qy family)" begin
+        # A read carrying an ambiguous base (N) cannot be 2-bit k-merized;
+        # FwDNAMers throws BioSequences.EncodeError (NOT ArgumentError). The
+        # corrector must SKIP such a read (pass it through uncorrected) and COUNT
+        # it, never crash the (threaded) batch on one N-containing read.
+        clean_seqs = [
+            "ATCGATCGATCGATCGATCG",
+            "TCGATCGATCGATCGATCGA",
+            "CGATCGATCGATCGATCGAT"
+        ]
+        clean_records = [FASTX.FASTQ.Record("clean$i", seq, repeat("I", length(seq)))
+                         for (i, seq) in enumerate(clean_seqs)]
+        k = 7
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            clean_records, k; dataset_id = "nread", mode = :canonical)
+
+        n_read = FASTX.FASTQ.Record("with_n", "ATCGATCGATNGATCGATCG", repeat("I", 20))
+
+        # Direct decoder call: returns nothing (skip) + counts, never throws.
+        diag = Mycelia.CorrectorDiagnostics()
+        result = Mycelia.try_viterbi_path_improvement(
+            n_read, graph, k; graph_mode = :canonical, diagnostics = diag)
+        Test.@test result === nothing
+        Test.@test diag.unkmerizable_reads[] == 1
+        Test.@test diag.structural_errors[] == 0
+
+        # Single-read path: improve_read_likelihood must not crash on the N read.
+        diag_single = Mycelia.CorrectorDiagnostics()
+        improved_read,
+        was_improved = Mycelia.improve_read_likelihood(
+            n_read, graph, k; graph_mode = :canonical, diagnostics = diag_single)
+        Test.@test was_improved == false
+        Test.@test FASTX.sequence(String, improved_read) == "ATCGATCGATNGATCGATCG"
+        Test.@test diag_single.unkmerizable_reads[] == 1
+
+        # End-to-end batch mixing an N read with clean reads completes (no crash);
+        # the N read passes through uncorrected and is tallied.
+        mixed = vcat(clean_records, [n_read])
+        diag_batch = Mycelia.CorrectorDiagnostics()
+        updated,
+        _ = Mycelia.improve_read_set_likelihood(
+            mixed, graph, k; graph_mode = :canonical, diagnostics = diag_batch)
+        Test.@test length(updated) == length(mixed)
+        Test.@test FASTX.sequence(String, updated[end]) == "ATCGATCGATNGATCGATCG"
+        Test.@test diag_batch.unkmerizable_reads[] == 1
+    end
 end

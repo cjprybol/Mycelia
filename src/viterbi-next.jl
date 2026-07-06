@@ -200,6 +200,80 @@ const _VITERBI_VARIABLE_LENGTH_EDGE_DATA = Union{
 }
 
 """
+An observation unit that carries the READ's own per-base Phred quality window
+alongside the observed k-mer.
+
+This is the central seam that restores the graph-as-HMM emission model
+(`docs/design/2026-07-06-graph-as-hmm-correction-redesign.md`). Bare k-mer
+observations force the emission to fall back to the graph vertex's
+population-average quality (or a uniform `error_rate`), so `P(observed | hidden)`
+loses the *observed* — it measures the graph's confidence in a k-mer rather than
+the read's confidence in its base. Wrapping each k-mer with the read's per-base
+Phred (`quality_scores[idx-k+1:idx]` for the k-mer ending at read index `idx`)
+makes `_viterbi_direct_quality_scores` return the read's real quality, so a
+low-quality read base yields a higher tolerance for correcting toward the graph,
+and a high-quality base resists it.
+
+!!! warning "RAW Phred, not ASCII Phred+33"
+    `quality_scores` stores RAW Phred values (integer quality, as returned by
+    `FASTX.quality_scores` — e.g. `0x28` == Q40), NOT ASCII-encoded Phred+33
+    bytes (where Q40 is the byte `'I'` == `0x49` == 73). This type deliberately
+    bypasses the generic ASCII-vs-Phred decode heuristic used elsewhere and
+    consumes the bytes verbatim (see `_viterbi_direct_quality_scores`). A caller
+    that passes ASCII Phred+33 bytes here would inflate every quality by ~33
+    (Q40 read as Q73), collapsing the emission model. Always construct with the
+    integer quality window (`FASTX.quality_scores(read)`), never the ASCII
+    quality string.
+
+The inner constructor enforces the one hard invariant — a non-empty quality
+window. An empty window makes `_viterbi_direct_quality_scores` return `nothing`,
+which silently drops the read's own quality and falls the emission back to the
+graph's population-average quality; guarding here surfaces that as an error at
+the construction site instead of a silent degradation deep in the decoder. (No
+ASCII-detection heuristic is added on purpose: raw-Phred and ASCII-Phred ranges
+overlap, so any such heuristic would misfire — the doc invariant above plus this
+non-empty guard is the deliberate, non-fragile contract.)
+"""
+struct QualityObservation{KmerT}
+    kmer::KmerT
+    quality_scores::Vector{UInt8}
+
+    function QualityObservation(kmer::KmerT,
+            quality_scores::AbstractVector{UInt8}) where {KmerT}
+        isempty(quality_scores) && throw(ArgumentError(
+            "QualityObservation requires a non-empty RAW-Phred quality window; an " *
+            "empty window would silently fall the emission back to the graph's " *
+            "population-average quality (see the RAW-Phred invariant in the docstring)."))
+        return new{KmerT}(kmer, quality_scores)
+    end
+end
+
+# The observed-unit accessors used by the emission chain. Bare-k-mer behavior is
+# preserved by delegating to the wrapped k-mer, so wrapping only ADDS the read's
+# per-base quality without changing string/alphabet resolution.
+_viterbi_unit_string(unit::QualityObservation)::String = _viterbi_unit_string(unit.kmer)
+
+function _infer_viterbi_alphabet(unit::QualityObservation)::Union{Nothing, Symbol}
+    return _infer_viterbi_alphabet(unit.kmer)
+end
+
+# QualityObservation stores RAW Phred; return it verbatim (no ASCII decode), which
+# is both correct and unambiguous for high-quality reads (Phred >= 33 would
+# otherwise be misread as ASCII-offset by the generic `Any` heuristic).
+function _viterbi_direct_quality_scores(
+        unit::QualityObservation
+)::Union{Nothing, Vector{Float64}}
+    return isempty(unit.quality_scores) ? nothing : Float64.(unit.quality_scores)
+end
+
+# For graph-label comparisons (start-candidate matching, target resolution) the
+# emission-carrying wrapper must be transparent: unwrap to the underlying k-mer so
+# the decode stays as targeted/efficient as it was for bare k-mers. Emission
+# scoring still receives the full `QualityObservation`.
+_viterbi_label_unit(unit) = unit
+_viterbi_label_unit(unit::QualityObservation) = unit.kmer
+
+"""
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Correct observations against a graph with a swappable emission model.
@@ -897,7 +971,8 @@ function _viterbi_correct_observation(
     label_type = eltype(labels)
     start_observed = first(observation)
     target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
-    start_candidates = _viterbi_start_candidates(labels, start_observed, alphabet, strand_mode)
+    start_candidates = _viterbi_start_candidates(
+        labels, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
@@ -1085,6 +1160,15 @@ function _emission_target_vertex(
     if config.target_vertex !== nothing
         return config.target_vertex
     end
+    # NOTE: deliberately do NOT unwrap a QualityObservation here. Pinning the
+    # decode's endpoint to the read's observed last k-mer would forbid correcting
+    # it — if that k-mer is an in-graph error (present from other reads' errors),
+    # the ML path would be forced onto the error instead of the higher-likelihood
+    # true vertex. Leaving the endpoint free (target === nothing for wrapped
+    # observations) lets the ML path + per-base emission choose it, which is the
+    # whole point of the correction core. The start (below) is still anchored for
+    # efficiency, since a read's first k-mer is a reasonable, usually-correct
+    # threading anchor and falls back to all labels when absent from the graph.
     candidate = last(observation)
     labels = collect(MetaGraphsNext.labels(graph))
     if candidate in labels
