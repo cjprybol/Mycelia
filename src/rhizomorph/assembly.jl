@@ -15,6 +15,7 @@ Assembly method enumeration for unified interface.
     StringGraph      # String graph assembly (simplified from N-gram graphs)
     BioSequenceGraph # BioSequence graph assembly (simplified from K-mer graphs)
     QualityBioSequenceGraph # Quality-aware BioSequence graph assembly (simplified from Qualmer graphs)
+    TokenGraph       # Token graph assembly (SentencePiece/word-token sequences, SingleStrand only)
 
     # Hybrid approaches
     HybridOLC        # Hybrid OLC + qualmer graph approach
@@ -145,6 +146,12 @@ struct AssemblyConfig
     corrector::Symbol                       # :none (default) or :iterative (mycelia_iterative_assemble)
     skip_solid::Bool                        # When corrector=:iterative, skip already-solid/clean reads
 
+    # Optional pre-tokenized input (opt-in; default `nothing` preserves the
+    # read-driven pipeline). When supplied, assemble_genome routes to the token
+    # graph and IGNORES `reads` — the tokens ARE the input. SingleStrand only
+    # (reverse complement is undefined for general string tokens).
+    token_sequences::Union{Nothing, Vector{Vector{String}}}
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -163,7 +170,8 @@ struct AssemblyConfig
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
             corrector::Symbol = :none,
-            skip_solid::Bool = false
+            skip_solid::Bool = false,
+            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing
     )
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
@@ -180,6 +188,13 @@ struct AssemblyConfig
         end
         if sequence_type == String && (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
+        end
+
+        # Validation: token-graph input is SingleStrand only. Tokens are opaque
+        # strings (SentencePiece pieces / words) with no defined reverse
+        # complement, so DoubleStrand/Canonical are meaningless for them.
+        if token_sequences !== nothing && graph_mode != SingleStrand
+            error("token_sequences requires SingleStrand mode (reverse complement undefined for string tokens)")
         end
 
         # Validation: memory_profile must be one recognized by build_kmer_graph
@@ -240,7 +255,8 @@ struct AssemblyConfig
             compact_unitigs,
             memory_profile,
             corrector,
-            skip_solid
+            skip_solid,
+            token_sequences
         )
     end
 end
@@ -551,6 +567,15 @@ function assemble_genome(reads, config::AssemblyConfig)
     # corrector=:iterative diverts to the iterative+skip corrector.
     if config.corrector == :iterative
         return _assemble_with_iterative_corrector(reads, config)
+    end
+
+    # Token-graph route. When the caller supplies pre-tokenized sequences, the
+    # tokens ARE the input and `reads` is ignored — token assembly is driven by
+    # config.token_sequences, not by loaded read observations. SingleStrand only
+    # (enforced in the AssemblyConfig constructor).
+    if config.token_sequences !== nothing
+        _log_info(config, "Routing to token graph assembly (token_sequences supplied)")
+        return _assemble_token_graph(config.token_sequences, config)
     end
 
     _log_info(config, "Starting unified genome assembly", config.sequence_type,
@@ -1644,6 +1669,70 @@ function _assemble_ngram_graph(observations, config)
         "vertex_type" => "unicode_character_vectors",
         "k" => config.k,
         "num_input_sequences" => length(observations),
+        "assembly_date" => string(Mycelia.Dates.now())
+    )
+
+    return AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
+end
+
+"""
+Token graph assembly implementation (variable-length SentencePiece/word-token
+analysis).
+
+Assembles pre-tokenized sequences (e.g. SentencePiece pieces or whitespace
+tokens) into contigs. It builds a token graph over the String token labels,
+finds an Eulerian path when one exists (or, when it does not, the maximal linear
+contigs), and reconstructs each contig by joining that path's token labels with
+`token_separator`.
+
+Modeled on `_assemble_ngram_graph`, with one deliberate difference: token
+vertices are whole opaque strings, not fixed-length character windows, so the
+character-overlap reconstruction used by `path_to_sequence` /
+`generate_contig_sequence` (append only the last char of each subsequent vertex)
+is wrong here. Instead the ordered token labels are joined directly. Tokens are
+SingleStrand only — reverse complement is undefined for general string tokens —
+so no reverse-complement handling is performed.
+"""
+function _assemble_token_graph(
+        token_sequences::Vector{Vector{String}}, config;
+        token_separator::AbstractString = " "
+)
+    _log_info(config, "Using token graph assembly strategy (variable-length token analysis)")
+
+    graph = Rhizomorph.build_token_graph(token_sequences)
+
+    # Fast path: a single Eulerian traversal covering every edge, if one exists.
+    paths = Rhizomorph.find_eulerian_paths_next(graph)
+    contigs = String[]
+    for path in paths
+        if length(path) > 1
+            push!(contigs, join(path, token_separator))
+        end
+    end
+
+    # Fallback: emit maximal linear contigs (token label paths). `min_contig_length`
+    # is measured against find_contigs_next's character-overlap string, so use 1
+    # to keep short token contigs (single-token paths included).
+    if isempty(contigs)
+        contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
+        for contig in contig_paths
+            if !isempty(contig.vertices)
+                push!(contigs, join(contig.vertices, token_separator))
+            end
+        end
+    end
+
+    contig_names = ["token_contig_$i" for i in 1:length(contigs)]
+
+    stats = Dict{String, Any}(
+        "method" => "TokenGraph",
+        "graph_type" => "variable_length",
+        "vertex_type" => "string_tokens",
+        "token_separator" => String(token_separator),
+        "graph_mode" => string(config.graph_mode),
+        "num_vertices" => length(MetaGraphsNext.labels(graph)),
+        "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
+        "num_input_sequences" => length(token_sequences),
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
