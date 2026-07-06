@@ -237,6 +237,12 @@ function mycelia_iterative_assemble(input_fastq::String;
         skip_solid::Bool = false)
     start_time = time()
 
+    # Accumulates swallowed decode failures (structural / un-k-merizable) across
+    # every k and iteration so a systematically-broken corrector that reports
+    # "0 improvements" is visible in the result metadata rather than passing as
+    # "nothing to fix". See CorrectorDiagnostics.
+    corrector_diagnostics = CorrectorDiagnostics()
+
     # -- Convergence + k-ladder tuning knobs (td-q70n) -------------------------
     #
     # Two literature-backed speedups for the iterative corrector:
@@ -404,6 +410,11 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Processing reads for likelihood improvements...")
             end
+            # `beam_width` is intentionally NOT passed here: the shipping path uses
+            # the size-aware auto-beam default (exact where tractable, bounded on
+            # large reads) so the production assembler cannot OOM-crash (td-63qy).
+            # `corrector_diagnostics` accumulates swallowed decode failures across
+            # every k and iteration and is surfaced in the result metadata.
             updated_reads,
             improvements_made = improve_read_set_likelihood(
                 current_reads, graph, k,
@@ -411,7 +422,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 batch_size = batch_size,
                 enable_parallel = enable_parallel,
                 graph_mode = graph_mode,
-                skip_solid = skip_solid
+                skip_solid = skip_solid,
+                diagnostics = corrector_diagnostics
             )
 
             # Calculate iteration metrics
@@ -552,7 +564,8 @@ function mycelia_iterative_assemble(input_fastq::String;
 
     # Finalize iterative assembly
     return finalize_iterative_assembly(
-        output_dir, k_progression, iteration_history, total_runtime, verbose = verbose)
+        output_dir, k_progression, iteration_history, total_runtime,
+        verbose = verbose, diagnostics = corrector_diagnostics)
 end
 
 # =============================================================================
@@ -616,10 +629,81 @@ function _read_is_all_solid(read::FASTX.FASTQ.Record, k::Int, solid_kmers::Abstr
     return saw_kmer
 end
 
+# ------------------------------------------------------------------------------
+# Corrector diagnostics + size-aware auto-beam (review: robustness blockers)
+# ------------------------------------------------------------------------------
+
+"""
+    CorrectorDiagnostics()
+
+Thread-safe tally of decode outcomes the per-read corrector would otherwise
+swallow SILENTLY. When `try_viterbi_path_improvement` fails to decode a read it
+returns `nothing` and the read passes through uncorrected; without this tally a
+SYSTEMATICALLY broken corrector — empty graph, alphabet-inference miss, config
+error, or a read that cannot be k-merized — reports `0/N improvements` as if it
+had actually run and found nothing to fix. Counters are `Threads.Atomic` so the
+parallel (`@threads`) read loop increments them race-free.
+
+- `structural_errors`  : `ArgumentError` from the decoder (empty graph,
+  alphabet-inference miss, config error). Means "the decoder could not run",
+  NOT "the decoder ran and found no gain".
+- `unkmerizable_reads` : `BioSequences.EncodeError` — a read carrying an
+  ambiguous base (e.g. `N`) that the 2-bit k-mer iterator cannot encode. The
+  read is SKIPPED (passes through uncorrected), never crashed on.
+"""
+mutable struct CorrectorDiagnostics
+    structural_errors::Threads.Atomic{Int}
+    unkmerizable_reads::Threads.Atomic{Int}
+end
+CorrectorDiagnostics() = CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+
+# Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
+# 48 kb phage that OOM-crashed — ~21B allocations — at the unbounded typemax
+# default). A read whose observation count is at/below the threshold keeps the
+# EXACT maximum-likelihood guarantee (its frontier is small); above the threshold
+# the frontier is bounded so the SHIPPING assembler cannot OOM-crash.
+const _AUTO_BEAM_BOUNDED_WIDTH = 256
+# Heuristic cutoff on a read's observation (k-mer) count. Typical short reads
+# (Illumina, up to a few hundred bp) stay exact; long reads (PacBio/ONT, or the
+# 48 kb-scale inputs behind td-63qy) get bounded. This is NOT a correctness
+# constant: it only trades exactness for tractability, and only ABOVE the line.
+const _AUTO_BEAM_EXACT_THRESHOLD = 1024
+
+"""
+    _auto_beam_width(n_observations) -> Int
+
+Size-aware default beam width reconciling the ADR's "exact by default" with the
+td-63qy OOM crash. Returns `typemax(Int)` (exact — the unbounded frontier
+preserves the ML guarantee) when `n_observations <= _AUTO_BEAM_EXACT_THRESHOLD`,
+and the bounded `_AUTO_BEAM_BOUNDED_WIDTH` above it, emitting a one-line `@info`
+when it bounds so the exactness→tractability switch is visible in the log.
+Callers can still FORCE exact on a large read by passing an explicit
+`beam_width = typemax(Int)`.
+"""
+function _auto_beam_width(n_observations::Integer)::Int
+    if n_observations <= _AUTO_BEAM_EXACT_THRESHOLD
+        return typemax(Int)
+    end
+    @info "iterative corrector: read has $(n_observations) observations " *
+          "(> $(_AUTO_BEAM_EXACT_THRESHOLD)); bounding Viterbi beam_width=" *
+          "$(_AUTO_BEAM_BOUNDED_WIDTH) to stay tractable (exact ML would risk OOM, " *
+          "td-63qy). Pass beam_width=typemax(Int) to force exact." maxlog = 3
+    return _AUTO_BEAM_BOUNDED_WIDTH
+end
+
 """
 Improve likelihood of entire read set using current graph and k-mer size.
 Returns updated reads and count of improvements made.
 Uses memory-efficient batch processing for large datasets.
+
+`beam_width` defaults to `nothing` (size-aware auto-beam per read via
+`_auto_beam_width`): exact ML where the read is small enough to be tractable,
+a bounded frontier on large reads so the SHIPPING assembler cannot OOM-crash
+(td-63qy). Pass an explicit `Int` (including `typemax(Int)`) to override — a
+caller/test passing `beam_width = typemax(Int)` still gets exact decoding on
+every read. Swallowed structural/un-k-merizable decode failures are tallied into
+`diagnostics` (auto-created if not supplied) and a high swallowed fraction is
+`@warn`ed so a run that silently corrected nothing is visible.
 """
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
@@ -627,7 +711,13 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         enable_parallel::Bool = false,
         graph_mode::Symbol = :canonical,
         skip_solid::Bool = false,
-        beam_width::Int = typemax(Int))::Tuple{Vector{FASTX.FASTQ.Record}, Int}
+        beam_width::Union{Int, Nothing} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{Vector{FASTX.FASTQ.Record}, Int}
+    diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
+    # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
+    # when `diag` is a shared accumulator threaded across many passes.
+    struct_before = diag.structural_errors[]
+    unk_before = diag.unkmerizable_reads[]
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
     improvements_made = 0
@@ -672,7 +762,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 else
                     improved_read,
                     was_improved = improve_read_likelihood(
-                        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
+                        read, graph, k; graph_mode = graph_mode,
+                        beam_width = beam_width, diagnostics = diag)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -695,7 +786,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 end
                 improved_read,
                 was_improved = improve_read_likelihood(
-                    read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
+                    read, graph, k; graph_mode = graph_mode,
+                    beam_width = beam_width, diagnostics = diag)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -729,6 +821,25 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
+    # Surface swallowed decode failures for THIS pass (see CorrectorDiagnostics):
+    # a systematically broken corrector otherwise reports 0 improvements as if it
+    # ran. Distinguish "every read failed structurally" (the corrector is not
+    # running at all) from a merely-high swallowed fraction.
+    struct_swallowed = diag.structural_errors[] - struct_before
+    unk_swallowed = diag.unkmerizable_reads[] - unk_before
+    swallowed = struct_swallowed + unk_swallowed
+    if total_reads > 0 && swallowed > 0
+        frac = swallowed / total_reads
+        if struct_swallowed == total_reads
+            @warn "iterative corrector: EVERY read failed to decode with a structural " *
+                  "error (empty graph / alphabet-inference miss / config error) — the " *
+                  "corrector is not running; 0 improvements is NOT 'nothing to fix'." total_reads structural_errors = struct_swallowed
+        elseif frac >= 0.5
+            @warn "iterative corrector: high swallowed-decode fraction; many reads " *
+                  "passed through uncorrected (not conflated with 'no likelihood gain')." total_reads structural_errors = struct_swallowed unkmerizable_reads = unk_swallowed fraction = round(frac, digits = 3)
+        end
+    end
+
     return updated_reads, improvements_made
 end
 
@@ -738,7 +849,8 @@ Returns improved read and boolean indicating if improvement was made.
 """
 function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
-        beam_width::Int = typemax(Int))::Tuple{FASTX.FASTQ.Record, Bool}
+        beam_width::Union{Int, Nothing} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -749,10 +861,21 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         return read, false
     end
 
-    # Find optimal path through graph via the exact-by-default trustworthy Viterbi.
+    # Find optimal path through graph via the trustworthy Viterbi. `beam_width`
+    # defaults to `nothing` = size-aware auto-beam (exact where tractable, bounded
+    # above the threshold to avoid the td-63qy OOM); an explicit Int overrides it.
+    #
+    # Two-gate design (intentional, not a narrative/code mismatch): the inner
+    # `find_optimal_sequence_path` gates on `improvement > 0.0` (accept the ML path
+    # only when it is at least as likely as the original — never return a strictly
+    # worse read), while THIS function additionally requires `> 0.01` so a
+    # negligible likelihood wiggle is not counted as a real correction. The two
+    # thresholds serve different jobs (correctness floor vs. meaningful-change
+    # floor) and compose deliberately.
     improved_read,
     likelihood_improvement = find_optimal_sequence_path(
-        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
+        read, graph, k; graph_mode = graph_mode,
+        beam_width = beam_width, diagnostics = diagnostics)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -784,7 +907,8 @@ end
 
 function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
-        beam_width::Int = typemax(Int))::Tuple{FASTX.FASTQ.Record, Float64}
+        beam_width::Union{Int, Nothing} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
     # fallback cascade (0.01 abandon-threshold -> statistical resampling -> local
@@ -793,13 +917,33 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     # any real traversal. `try_statistical_path_resampling` and
     # `try_local_path_improvements` remain DEFINED as opt-in comparison baselines
     # (and for direct callers/tests) but are no longer invoked here.
-    original_likelihood = calculate_read_likelihood(read, graph, k; graph_mode = graph_mode)
+    #
+    # `calculate_read_likelihood` k-merizes the read with the 2-bit iterator and
+    # runs BEFORE the decoder, so an un-k-merizable read (ambiguous base, e.g. `N`)
+    # throws `BioSequences.EncodeError` HERE, not in `try_viterbi_path_improvement`.
+    # Treat it identically: SKIP the read (pass through uncorrected) + count, so a
+    # single N-containing read never crashes the (threaded) corrector (td-63qy
+    # family). Returning before the decoder means each such read is tallied once.
+    original_likelihood = try
+        calculate_read_likelihood(read, graph, k; graph_mode = graph_mode)
+    catch error
+        if error isa BioSequences.EncodeError
+            diagnostics === nothing ||
+                Threads.atomic_add!(diagnostics.unkmerizable_reads, 1)
+            return read, 0.0
+        end
+        rethrow()
+    end
 
     viterbi_result = try_viterbi_path_improvement(
-        read, graph, k; graph_mode = graph_mode, beam_width = beam_width)
+        read, graph, k; graph_mode = graph_mode,
+        beam_width = beam_width, diagnostics = diagnostics)
     if viterbi_result === nothing
-        # Viterbi could not decode (empty observation set, ArgumentError, etc.):
-        # report no improvement rather than falling back to a heuristic path.
+        # Viterbi could not decode (empty observation set, structural error, or an
+        # un-k-merizable read): report no improvement rather than falling back to a
+        # heuristic path. Genuine decode FAILURES (vs. "no observations") are
+        # tallied in `diagnostics` inside try_viterbi_path_improvement so they are
+        # not silently conflated with "the ML path had no gain".
         return read, 0.0
     end
 
@@ -1286,7 +1430,8 @@ Finalize iterative assembly by combining results from all k-mer sizes and iterat
 """
 function finalize_iterative_assembly(output_dir::String, k_progression::Vector{Int},
         iteration_history::Dict{Int, Vector{Dict{Symbol, Any}}},
-        total_runtime::Float64; verbose::Bool = true)
+        total_runtime::Float64; verbose::Bool = true,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)
     if verbose
         println("Finalizing iterative assembly results...")
     end
@@ -1313,6 +1458,14 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         final_assembly = String[]
     end
 
+    # Swallowed-decode tally (structural / un-k-merizable). Surfaced on the result
+    # so a caller can detect a corrector that reported 0 improvements because it
+    # never actually ran, distinct from "ran and found nothing to fix".
+    corrector_errors = diagnostics === nothing ?
+                       Dict(:structural => 0, :unkmerizable => 0) :
+                       Dict(:structural => diagnostics.structural_errors[],
+        :unkmerizable => diagnostics.unkmerizable_reads[])
+
     # Create comprehensive metadata
     metadata = Dict(
         :total_runtime => total_runtime,
@@ -1323,6 +1476,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :final_fastq_file => final_fastq,
         :output_directory => output_dir,
         :iteration_history => iteration_history,
+        :corrector_errors => corrector_errors,
         :assembly_type => "iterative_maximum_likelihood",
         :version => "Phase_5.2a"
     )
@@ -1433,12 +1587,17 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph,
         k::Int;
         graph_mode::Symbol = :canonical,
-        beam_width::Int = typemax(Int))::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+        beam_width::Union{Int, Nothing} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
         alphabet = Mycelia.detect_alphabet(sequence_string)
         sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
         sequence = Mycelia.extract_typed_sequence(read, sequence_type)
+        # NOTE: `_record_kmer_iterator` uses a 2-bit (unambiguous) k-mer iterator,
+        # so `collect` here throws `BioSequences.EncodeError` on a read carrying an
+        # ambiguous base (e.g. a single `N`). That is handled as a SKIP-with-count
+        # in the catch below, NOT a crash of the (threaded) batch (td-63qy family).
         kmers = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
         if isempty(kmers)
             return nothing
@@ -1459,19 +1618,25 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             observations[i] = Mycelia.QualityObservation(kmer, window)
         end
 
-        # Trustworthy Viterbi (td-ak6w): the decoder is EXACT by default
-        # (`beam_width = typemax(Int)` — the frontier is never pruned, so the
-        # returned path is the global maximum-likelihood path). `beam_width` is a
-        # documented OPT-IN scaling knob: pass a finite value to bound the
-        # (vertex, strand) frontier on very long reads / branchy graphs (it can
-        # otherwise grow ~unboundedly with read-length depth — 21B allocations on
-        # a 48 kb phage, td-63qy) at the cost of dropping the ML guarantee. It is
-        # NOT a default that silently changes correctness.
+        # Trustworthy Viterbi (td-ak6w), reconciled with the td-63qy OOM crash:
+        # the decoder is EXACT where tractable and BOUNDED (with a log line) above
+        # a size threshold. `beam_width === nothing` (the default) resolves the
+        # frontier bound PER READ via `_auto_beam_width(length(observations))`:
+        # `typemax(Int)` (never pruned → global maximum-likelihood path) for small
+        # reads, the proven-tractable finite bound for large reads (the unbounded
+        # frontier grows ~unboundedly with read-length depth — 21B allocations on
+        # a 48 kb phage). An explicit `beam_width::Int` (including `typemax(Int)`)
+        # is an OPT-IN override that is honored verbatim — a caller/test can force
+        # exact decoding on every read. This trades the ML guarantee for
+        # tractability ONLY above the threshold, and only under the auto-default;
+        # it never silently changes correctness of an explicit request.
+        effective_beam_width = beam_width === nothing ?
+                               _auto_beam_width(length(observations)) : beam_width
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
             max_steps = length(observations) - 1,
-            beam_width = beam_width
+            beam_width = effective_beam_width
         )
         correction = Mycelia.correct_observations(graph, [observations]; config = config)
         corrected_path = only(correction.corrected_observations)
@@ -1491,6 +1656,22 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         return (improved_record, improved_likelihood)
     catch error
         if error isa ArgumentError
+            # STRUCTURAL decode failure (empty graph, alphabet-inference miss,
+            # config error). Swallow as "no improvement" so one broken read does
+            # not abort the (threaded) batch — but COUNT it so a run that silently
+            # corrected nothing is visible (not conflated with "decoder ran, no
+            # gain"). See CorrectorDiagnostics + the per-pass @warn.
+            diagnostics === nothing ||
+                Threads.atomic_add!(diagnostics.structural_errors, 1)
+            return nothing
+        elseif error isa BioSequences.EncodeError
+            # UN-K-MERIZABLE read: the 2-bit k-mer iterator throws EncodeError (NOT
+            # ArgumentError) on an ambiguous base (e.g. a single `N` in an Illumina
+            # read). Treat as a SKIP — the read passes through uncorrected — and
+            # count it, rather than rethrowing and crashing the whole threaded
+            # corrector on one N-containing read (td-63qy family).
+            diagnostics === nothing ||
+                Threads.atomic_add!(diagnostics.unkmerizable_reads, 1)
             return nothing
         end
         rethrow()

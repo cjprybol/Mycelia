@@ -700,6 +700,13 @@ read, via a numerically-stable softmax:
 decoded path this is `1.0`; when several paths compete the mass splits by
 relative likelihood — the soft assignment that distinguishes soft-EM from the
 current hard argmax rebuild.
+
+# Precondition
+`path_logp` MUST itself be one of `competing_logps` (the softmax normalizer is the
+full competing set INCLUDING the decoded path). If `path_logp` is omitted from the
+denominator the numerator can exceed the denominator and the "responsibility"
+returns `> 1.0`, which is not a posterior weight. The assertion below enforces
+this rather than silently returning an out-of-range value.
 """
 function path_responsibility(
         path_logp::Real,
@@ -708,6 +715,11 @@ function path_responsibility(
     isempty(competing_logps) && return 1.0
     m = maximum(competing_logps)
     isfinite(m) || return 0.0
+    # Precondition: the decoded path is part of the competing set it is normalized
+    # against (see docstring). Guard with a tolerance for float round-trips.
+    @assert any(lp -> isapprox(Float64(lp), Float64(path_logp); atol = 1e-9), competing_logps) (
+        "path_responsibility: path_logp=$(path_logp) must be included in competing_logps " *
+        "(the softmax denominator); otherwise the responsibility can exceed 1.0.")
     denom = sum(exp(Float64(lp) - m) for lp in competing_logps)
     return exp(Float64(path_logp) - m) / denom
 end

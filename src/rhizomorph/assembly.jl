@@ -1384,34 +1384,48 @@ Convert observations to FASTQ records for quality processing.
 """
 function _prepare_fastq_observations(observations)
     fastq_records = FASTX.FASTQ.Record[]
+    # Mirror `_write_reads_to_fastq`: any FASTA (quality-less) input that gets a
+    # placeholder Q40 must be SURFACED once per call, never silently substituted.
+    # A degenerate uniform-Q40 model makes the corrector's decisions
+    # coverage-driven only, so a silent substitution masks that the quality model
+    # is inert (review: silent Q40).
+    placeholder_used = false
 
     for (i, obs) in enumerate(observations)
         # Handle different observation formats
         if obs isa FASTX.FASTQ.Record
             push!(fastq_records, obs)
         elseif obs isa FASTX.FASTA.Record
-            # Convert FASTA to FASTQ with default quality (assume high quality)
+            # Convert FASTA to FASTQ with placeholder quality (Q40).
             seq = FASTX.FASTA.sequence(obs)
-            qual = repeat('I', length(seq))  # Quality score 40 (high quality)
+            qual = repeat('I', length(seq))  # Phred+33 'I' == Q40 placeholder
             record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(obs), seq, qual)
             push!(fastq_records, record)
+            placeholder_used = true
         elseif obs isa Tuple && length(obs) >= 1
             # Handle tuple format like (record, index) or (record, other_data)
             record = obs[1]
             if record isa FASTX.FASTQ.Record
                 push!(fastq_records, record)
             elseif record isa FASTX.FASTA.Record
-                # Convert FASTA to FASTQ with default quality
+                # Convert FASTA to FASTQ with placeholder quality (Q40).
                 seq = FASTX.FASTA.sequence(record)
-                qual = repeat('I', length(seq))  # Quality score 40 (high quality)
+                qual = repeat('I', length(seq))  # Phred+33 'I' == Q40 placeholder
                 fastq_record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(record), seq, qual)
                 push!(fastq_records, fastq_record)
+                placeholder_used = true
             else
                 @warn "Unsupported record type in tuple: $(typeof(record))"
             end
         else
             @warn "Unsupported observation type: $(typeof(obs))"
         end
+    end
+
+    if placeholder_used
+        @warn "corrector: observation input lacked per-base quality (FASTA / quality-less); " *
+              "assigned placeholder Q40. The corrector's quality model is degenerate (uniform) " *
+              "for these reads — its decisions become coverage-driven only."
     end
 
     return fastq_records

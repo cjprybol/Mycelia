@@ -214,13 +214,38 @@ makes `_viterbi_direct_quality_scores` return the read's real quality, so a
 low-quality read base yields a higher tolerance for correcting toward the graph,
 and a high-quality base resists it.
 
-`quality_scores` stores RAW Phred values (as returned by `FASTX.quality_scores`),
-not ASCII-encoded scores, so the emission consumes them directly without the
-ambiguous ASCII-vs-Phred decode heuristic.
+!!! warning "RAW Phred, not ASCII Phred+33"
+    `quality_scores` stores RAW Phred values (integer quality, as returned by
+    `FASTX.quality_scores` — e.g. `0x28` == Q40), NOT ASCII-encoded Phred+33
+    bytes (where Q40 is the byte `'I'` == `0x49` == 73). This type deliberately
+    bypasses the generic ASCII-vs-Phred decode heuristic used elsewhere and
+    consumes the bytes verbatim (see `_viterbi_direct_quality_scores`). A caller
+    that passes ASCII Phred+33 bytes here would inflate every quality by ~33
+    (Q40 read as Q73), collapsing the emission model. Always construct with the
+    integer quality window (`FASTX.quality_scores(read)`), never the ASCII
+    quality string.
+
+The inner constructor enforces the one hard invariant — a non-empty quality
+window. An empty window makes `_viterbi_direct_quality_scores` return `nothing`,
+which silently drops the read's own quality and falls the emission back to the
+graph's population-average quality; guarding here surfaces that as an error at
+the construction site instead of a silent degradation deep in the decoder. (No
+ASCII-detection heuristic is added on purpose: raw-Phred and ASCII-Phred ranges
+overlap, so any such heuristic would misfire — the doc invariant above plus this
+non-empty guard is the deliberate, non-fragile contract.)
 """
 struct QualityObservation{KmerT}
     kmer::KmerT
     quality_scores::Vector{UInt8}
+
+    function QualityObservation(kmer::KmerT,
+            quality_scores::AbstractVector{UInt8}) where {KmerT}
+        isempty(quality_scores) && throw(ArgumentError(
+            "QualityObservation requires a non-empty RAW-Phred quality window; an " *
+            "empty window would silently fall the emission back to the graph's " *
+            "population-average quality (see the RAW-Phred invariant in the docstring)."))
+        return new{KmerT}(kmer, quality_scores)
+    end
 end
 
 # The observed-unit accessors used by the emission chain. Bare-k-mer behavior is

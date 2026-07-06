@@ -94,4 +94,39 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
         Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width=0)
         Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_width=-4)
     end
+
+    # Size-aware auto-beam (td-63qy): the SHIPPING corrector default must stay
+    # exact on small reads (preserving the ML guarantee) yet bound the frontier on
+    # large reads so it cannot OOM-crash (~21B allocations on a 48 kb phage).
+    Test.@testset "size-aware auto-beam default (_auto_beam_width)" begin
+        # Small read (observation count at/below the threshold): stays EXACT.
+        Test.@test Mycelia._auto_beam_width(1) == typemax(Int)
+        Test.@test Mycelia._auto_beam_width(300) == typemax(Int)
+        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD) ==
+                   typemax(Int)
+        # Large read (above the threshold): BOUNDED to the proven-tractable width.
+        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD + 1) ==
+                   Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        Test.@test Mycelia._auto_beam_width(48_000) == Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        # The bounded width is a finite, positive, previously-proven value (256).
+        Test.@test Mycelia._AUTO_BEAM_BOUNDED_WIDTH == 256
+        Test.@test 0 < Mycelia._AUTO_BEAM_BOUNDED_WIDTH < typemax(Int)
+    end
+
+    # An explicit beam_width override is honored verbatim by the per-read decoder
+    # entry point: passing typemax(Int) forces EXACT decoding regardless of the
+    # auto-default, and the correction still completes on a small read.
+    Test.@testset "explicit beam_width override forces exact on the decoder entry" begin
+        records = [FASTX.FASTQ.Record("r", "ATGCGT", repeat("I", 6))]
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            records, 3; dataset_id="beam_override", mode=:singlestrand)
+        read = FASTX.FASTQ.Record("q", "ATGCGT", repeat("I", 6))
+        # Explicit exact override.
+        forced = Mycelia.try_viterbi_path_improvement(
+            read, graph, 3; graph_mode=:singlestrand, beam_width=typemax(Int))
+        Test.@test forced isa Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+        # Auto default (nothing) also completes on this small read.
+        auto = Mycelia.try_viterbi_path_improvement(read, graph, 3; graph_mode=:singlestrand)
+        Test.@test auto isa Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+    end
 end
