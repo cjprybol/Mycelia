@@ -43,17 +43,21 @@
 # cleanest and most defensible comparison because the corrector is identical
 # and ONLY skip_solid differs.
 #
-# Scaling: toy-runnable defaults finish locally in minutes on a real subregion
-# of lambda; env vars scale to the full genome + higher coverage for a full run
-# (Lovelace). QUAST is wrapped via Conda.jl and is skipped gracefully (with a
-# clear message) when its conda env cannot be provisioned locally.
+# Scaling: the toy defaults are deliberately SMALL (a ~1 kb real slice of lambda,
+# ~60 short reads) because the v0 iterative corrector runs a per-read Viterbi
+# decode on EVERY read (see src/viterbi-next.jl), which is expensive; the toy
+# path is sized so all three arms complete locally in a few minutes. The full
+# scientific run -- full 48.5 kb genome at ~30x -- is env-scaled and belongs on
+# Lovelace (set MYCELIA_RGV_REGION_LEN=0 MYCELIA_RGV_COVERAGE=30). QUAST is
+# wrapped via Conda.jl and is skipped gracefully (with a clear message) when its
+# conda env cannot be provisioned locally.
 #
 #   MYCELIA_RGV_ACCESSION   NCBI accession                 (default NC_001416)
-#   MYCELIA_RGV_REGION_LEN  bp of real genome to use; 0=full   (default 4000)
-#   MYCELIA_RGV_COVERAGE    fold read coverage                 (default 15)
-#   MYCELIA_RGV_READLEN     simulated read length (bp)         (default 300)
+#   MYCELIA_RGV_REGION_LEN  bp of real genome to use; 0=full   (default 1000)
+#   MYCELIA_RGV_COVERAGE    fold read coverage                 (default 6)
+#   MYCELIA_RGV_READLEN     simulated read length (bp)         (default 100)
 #   MYCELIA_RGV_ERR         per-base substitution error rate   (default 0.02)
-#   MYCELIA_RGV_K           k-mer size                         (default 21)
+#   MYCELIA_RGV_K           k-mer size                         (default 13)
 #   MYCELIA_RGV_SEED        RNG seed                           (default 42)
 #   MYCELIA_RGV_MIN_CONTIG  QUAST --min-contig                 (default 100)
 #   MYCELIA_RGV_QUAST       run QUAST: auto|on|off             (default auto)
@@ -61,8 +65,12 @@
 #   MYCELIA_RGV_SYNTHETIC   allow synthetic ref if offline     (default false)
 #
 # Usage:
+#   # toy (local, a few minutes):
 #   LD_LIBRARY_PATH='' ~/.juliaup/bin/julia --project=. benchmarking/rhizomorph_real_genome_validation.jl
-#   MYCELIA_RGV_REGION_LEN=0 MYCELIA_RGV_COVERAGE=30 ... (full run, Lovelace)
+#   # full validation (Lovelace, QUAST env available):
+#   MYCELIA_RGV_REGION_LEN=0 MYCELIA_RGV_COVERAGE=30 MYCELIA_RGV_READLEN=300 \
+#     MYCELIA_RGV_K=21 LD_LIBRARY_PATH='' julia --project=. \
+#     benchmarking/rhizomorph_real_genome_validation.jl
 
 import Mycelia
 import Random
@@ -79,11 +87,11 @@ getenv(k, d::Float64) = haskey(ENV, k) ? parse(Float64, ENV[k]) : d
 getenv(k, d::String) = get(ENV, k, d)
 
 const ACCESSION  = getenv("MYCELIA_RGV_ACCESSION", "NC_001416")
-const REGION_LEN = getenv("MYCELIA_RGV_REGION_LEN", 4000)   # 0 => full genome
-const COVERAGE   = getenv("MYCELIA_RGV_COVERAGE", 15)
-const READLEN    = getenv("MYCELIA_RGV_READLEN", 300)
+const REGION_LEN = getenv("MYCELIA_RGV_REGION_LEN", 1000)   # 0 => full genome
+const COVERAGE   = getenv("MYCELIA_RGV_COVERAGE", 6)
+const READLEN    = getenv("MYCELIA_RGV_READLEN", 100)
 const ERR        = getenv("MYCELIA_RGV_ERR", 0.02)
-const K          = getenv("MYCELIA_RGV_K", 21)
+const K          = getenv("MYCELIA_RGV_K", 13)
 const SEED       = getenv("MYCELIA_RGV_SEED", 42)
 const MIN_CONTIG = getenv("MYCELIA_RGV_MIN_CONTIG", 100)
 const QUAST_MODE = getenv("MYCELIA_RGV_QUAST", "auto")      # auto|on|off
@@ -290,6 +298,7 @@ function main()
 
     # -- 1. reference ------------------------------------------------------
     println("\n[1/5] Acquiring reference $(ACCESSION) ...")
+    flush(stdout)
     full_seq = acquire_reference(ACCESSION, workdir)
     if full_seq === nothing
         println("\nSKIP: could not acquire the reference genome and synthetic " *
@@ -303,6 +312,7 @@ function main()
 
     # -- 2. reads ----------------------------------------------------------
     println("\n[2/5] Simulating reads (coverage=$(COVERAGE)x, readlen=$(READLEN), err=$(ERR)) ...")
+    flush(stdout)
     reads = simulate_reads(ref_seq; coverage = COVERAGE, readlen = READLEN, err = ERR, seed = SEED)
     println("  simulated reads  : $(length(reads))")
     reads_fastq = joinpath(workdir, "reads.fastq")
@@ -317,18 +327,25 @@ function main()
     # -- 3. three assembly arms via assemble_genome ------------------------
     println("\n[3/5] Assembling three arms via Rhizomorph.assemble_genome ...")
     println("  arm 1/3 naive (corrector=:none, DoubleStrand) ...")
+    flush(stdout)
     naive_contigs, naive_t = run_arm(reads;
         k = K, corrector = :none, graph_mode = Mycelia.Rhizomorph.DoubleStrand)
+    println("    -> $(length(naive_contigs)) contigs in $(round(naive_t; digits = 1))s")
 
     println("  arm 2/3 iterative (skip_solid=false, Canonical) ...")
+    flush(stdout)
     iter_contigs, iter_t = run_arm(reads;
         k = K, corrector = :iterative, skip_solid = false,
         graph_mode = Mycelia.Rhizomorph.Canonical)
+    println("    -> $(length(iter_contigs)) contigs in $(round(iter_t; digits = 1))s")
 
     println("  arm 3/3 iterative+skip (skip_solid=true, Canonical) ...")
+    flush(stdout)
     skip_contigs, skip_t = run_arm(reads;
         k = K, corrector = :iterative, skip_solid = true,
         graph_mode = Mycelia.Rhizomorph.Canonical)
+    println("    -> $(length(skip_contigs)) contigs in $(round(skip_t; digits = 1))s")
+    flush(stdout)
 
     naive_fa = write_fasta(joinpath(workdir, "naive.fasta"), naive_contigs)
     iter_fa  = write_fasta(joinpath(workdir, "iterative.fasta"), iter_contigs)
@@ -338,6 +355,7 @@ function main()
     skip_fraction = nothing
     if DO_SKIPFRAC
         println("\n  measuring skip fraction (direct verbose corrector probe) ...")
+        flush(stdout)
         skip_fraction = measure_skip_fraction(reads_fastq, K, workdir)
     end
 
