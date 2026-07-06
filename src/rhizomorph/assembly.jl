@@ -904,9 +904,12 @@ function _prepare_observations(reads)
     elseif reads isa Vector{<:FASTX.FASTA.Record}
         return reads
     elseif reads isa Vector{<:FASTX.FASTQ.Record}
-        # Convert FASTQ to FASTA records
-        return [FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record))
-                for record in reads]
+        # PRESERVE FASTQ records (do NOT strip quality). FASTQ input always routes to
+        # the quality-aware paths (use_quality_scores=true → qualmer / quality-biosequence),
+        # which consume per-base quality; stripping to FASTA here forced the downstream
+        # _prepare_fastq_observations to re-inject placeholder Q40 (td-tps5). FASTA input
+        # (which legitimately lacks quality) still flows through the FASTA branch above.
+        return reads
     else
         throw(ArgumentError("Unsupported reads format: $(typeof(reads))"))
     end
