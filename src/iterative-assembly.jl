@@ -101,8 +101,13 @@ end
 
 Compute the ordered set of k-mer sizes the iterative corrector should walk.
 
-- If `k_ladder` is given, use exactly those values that fall in
-  `[initial_k, max_k]` (deduplicated and sorted).
+- If `k_ladder` is given, use those values that fall in `[initial_k, max_k]`
+  (deduplicated and sorted). NOTE: the assembly loop always STARTS at
+  `find_initial_k` regardless of the ladder, so if `min(k_ladder) > initial_k` the
+  auto-detected initial k is processed first and then the ladder is followed — the
+  ladder specifies the k values to visit AFTER the initial k, not a replacement
+  for it. (In `n_k_rungs` mode the first rung is pinned to `initial_k`, so they
+  coincide.)
 - Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
   `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
   rungs to odd values and pinning the first rung to `initial_k` and the last to
@@ -218,7 +223,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         max_k::Int = 101,
         memory_limit::Int = 32_000_000_000,
         output_dir::String = "iterative_assembly",
-        max_iterations_per_k::Int = 2,
+        max_iterations_per_k::Int = 10,
         improvement_threshold::Float64 = 0.05,
         stop_on_no_change::Bool = true,
         k_ladder::Union{Nothing, Vector{Int}} = nothing,
@@ -236,12 +241,17 @@ function mycelia_iterative_assemble(input_fastq::String;
     #
     # Two literature-backed speedups for the iterative corrector:
     #
-    #   1. CONVERGENCE (Musket): `max_iterations_per_k` now defaults to 2 (was 10)
-    #      and `stop_on_no_change=true` breaks the per-k loop the moment a pass
-    #      makes 0 changes (a no-op pass can never help), independent of
-    #      `improvement_threshold`. This is a strict superset of the old
-    #      threshold-only early stop and always safe: a 0-improvement iteration
-    #      is by definition converged for that k.
+    #   1. CONVERGENCE (Musket): `stop_on_no_change=true` breaks the per-k loop the
+    #      moment a pass makes 0 changes, independent of `improvement_threshold`
+    #      (the old code only bounded the loop when improvement < threshold, so it
+    #      never terminated on a 0-change pass when improvement_threshold==0).
+    #      `max_iterations_per_k` KEEPS its default of 10 — lowering it to 2
+    #      (Musket's ~2-pass heuristic) is a real accuracy/speed tradeoff that must
+    #      be measured on error-rich data before becoming a default, so it is
+    #      opt-in; the corrector=:iterative route in assemble_genome sets it
+    #      explicitly. Note the corrector is not strictly deterministic (the
+    #      statistical-resampling arm draws from the global RNG), so a 0-change
+    #      pass is a practical, not guaranteed, fixed point.
     #
     #   2. K-LADDER (LoRMA 3-rung): instead of walking every prime
     #      (3,5,7,11,13,...) the caller may request a small, well-spaced ladder.
