@@ -587,6 +587,14 @@ weight = compute_edge_weight(edge)
 ```
 """
 function compute_edge_weight(edge)
+    # Soft-EM consumption (td-e70t): when this edge was registered with a soft
+    # (probability-weighted) weight for the current pass, return it. The registry
+    # is empty on every non-soft-EM path, so this is a single `isempty` check and
+    # the raw-count behavior is byte-for-byte unchanged elsewhere.
+    if !isempty(_SOFT_EDGE_WEIGHT_REGISTRY)
+        soft = get(_SOFT_EDGE_WEIGHT_REGISTRY, edge, nothing)
+        soft === nothing || return soft::Float64
+    end
     # Simple weight: count of unique observations
     return Float64(count_total_observations(edge))
 end
@@ -722,6 +730,61 @@ function path_responsibility(
         "(the softmax denominator); otherwise the responsibility can exceed 1.0.")
     denom = sum(exp(Float64(lp) - m) for lp in competing_logps)
     return exp(Float64(path_logp) - m) / denom
+end
+
+# ----------------------------------------------------------------------------
+# Soft-EM M-step consumption: identity-keyed edge-weight registry (td-e70t)
+# ----------------------------------------------------------------------------
+#
+# `compute_edge_weight(edge)` (the graph `weight_function`, and the Viterbi
+# transition weight via `edge_data_weight`) receives ONLY the edge payload — not
+# its `(src, dst)` vertex labels — so it cannot look up a soft weight keyed by
+# label pair directly. This registry bridges that gap: after a graph is built,
+# the corrector registers each edge-data OBJECT (by identity) -> the soft weight
+# computed from the accumulator's `(src, dst)` key (see
+# `register_soft_edge_weights!`). `compute_edge_weight` then consults the registry
+# by object identity, falling back to the raw coverage count for any edge absent
+# from it.
+#
+# Invariant preserved: the registry is EMPTY except during a soft-EM `:scalable`
+# pass (populated between decode passes, cleared after), so every other code path
+# — and the whole `:exhaustive` tier — computes raw counts, byte-for-byte
+# unchanged.
+#
+# CAVEAT: this is process-global state. In the shipped scalable route it is
+# written single-threaded between decode passes and only READ during the soft-EM
+# (⇒ sequential) decode, so there is no read/write race. A lock-free / scoped
+# design is a tracked follow-on before enabling parallel soft-EM.
+
+const _SOFT_EDGE_WEIGHT_REGISTRY = Base.IdDict{Any, Float64}()
+
+"""
+    register_soft_edge_weights!(graph, acc::SoftEdgeWeightAccumulator) -> graph
+
+Register each of `graph`'s edges (by edge-data object identity) with its soft
+weight from `acc`, so a subsequent `compute_edge_weight(edge_data)` returns the
+probability-weighted value instead of the raw coverage count. Edges NOT visited
+by any decoded path in `acc` are left unregistered and keep their raw count.
+"""
+function register_soft_edge_weights!(graph, acc::SoftEdgeWeightAccumulator)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        w = soft_edge_weight(acc, (src, dst); prior = NaN)
+        isnan(w) && continue   # edge unvisited by any decoded path ⇒ keep raw count
+        _SOFT_EDGE_WEIGHT_REGISTRY[graph[src, dst]] = w
+    end
+    return graph
+end
+
+"""
+    clear_soft_edge_weights!() -> nothing
+
+Empty the soft-edge-weight registry so `compute_edge_weight` reverts to raw
+coverage counts. Called after each soft-EM decode pass so no unrelated caller
+(or the `:exhaustive` tier) ever sees registered soft weights.
+"""
+function clear_soft_edge_weights!()
+    empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
+    return nothing
 end
 
 # ============================================================================
