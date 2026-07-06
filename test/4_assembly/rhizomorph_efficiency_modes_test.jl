@@ -161,6 +161,52 @@ Test.@testset "Rhizomorph efficiency modes" begin
         Test.@test canon_frac == ds_frac
     end
 
+    Test.@testset "Mode 2b: canonical repeat / RC-overlap (orientation disambiguation)" begin
+        # EFF_REF above has no reverse-complement-symmetric junctions at k=7, so a
+        # naive sequence-derived reconstruction (pick the first orientation whose
+        # (k-1) prefix overlaps the predecessor) happens to succeed there. This
+        # fixture DOES contain such junctions: at k=6 the dinucleotide run and the
+        # TTGGCAAT / palindromic region create reverse-complement-symmetric overlaps
+        # where BOTH orientations of the next canonical k-mer overlap the previous
+        # oriented k-mer. Greedy sequence-derivation silently picks the wrong strand
+        # there and corrupts the contig (empirically it recovers only ~0.75 of the
+        # reference canonical k-mers). Orientation-aware reconstruction consumes the
+        # STORED strand evidence the canonical builder recorded to break the tie, so
+        # the emitted contig recovers the full reference (canon_frac == 1.0).
+        rc_ref = "TGTGTGTTGGCAATAAACCGCCATCCGACTGAGCGCC"
+        k = 6
+        reads = eff_tiling_reads(rc_ref)
+        ref_kmers = eff_canonical_kmers([rc_ref], k)
+
+        cfg_ds = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = false)
+        res_ds = Mycelia.Rhizomorph.assemble_genome(reads, cfg_ds)
+        ds_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_ds.contigs, k))) /
+                  length(ref_kmers)
+        Test.@test ds_frac == 1.0
+
+        cfg_canon = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.Canonical, use_quality_scores = false)
+        # Orientation-aware canonical reconstruction must succeed WITHOUT any warning
+        # (no invalid-reconstruction warning, and no unresolved-overlap fallback).
+        res_canon = Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.assemble_genome(reads, cfg_canon)
+        Test.@test res_canon.assembly_stats["reconstruction_valid"] == true
+
+        # The single canonical eulerian path exists (path-finding is not the failure
+        # mode being exercised here) and every vertex on it carries an unambiguous
+        # stored strand, so the disambiguation has a clean authoritative signal.
+        canon_graph = Mycelia.Rhizomorph.build_kmer_graph(reads, k; mode = :canonical)
+        canon_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(canon_graph)
+        Test.@test length(canon_paths) == 1
+
+        # The payload assertion: canonical reconstruction recovers the FULL reference
+        # (which greedy sequence-derivation cannot), matching DoubleStrand.
+        canon_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_canon.contigs, k))) /
+                     length(ref_kmers)
+        Test.@test canon_frac == 1.0
+        Test.@test canon_frac == ds_frac
+    end
+
     Test.@testset "Mode 3a: memory_profile threading" begin
         reads = eff_tiling_reads(EFF_REF)
         k = 7
@@ -329,6 +375,76 @@ Test.@testset "Rhizomorph efficiency modes" begin
         # existing quality assemblies stay byte-for-byte unchanged with no noise.
         Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.AssemblyConfig(;
             k = 7, use_quality_scores = true)
+    end
+
+    Test.@testset "Canonical qualmer: orientation-aware sequence AND quality" begin
+        # The quality (qualmer) arm reconstructs canonical contigs through the SAME
+        # orientation-aware path as the k-mer arm, and per-base quality is oriented
+        # to match. Exercise it on the RC-overlap fixture with a STRICTLY MONOTONIC
+        # per-position quality gradient: because each read encodes the same quality
+        # for a given reference position, the correct per-position mean quality is
+        # itself monotonic along the reference. If any reverse-oriented k-mer emitted
+        # the wrong-end quality (the pre-fix bug used vertex_quality[end] for a
+        # reverse k-mer, whose emitted base is actually complement(first base) ->
+        # vertex_quality[1]), the output quality would be scrambled and NON-monotonic.
+        rc_ref = "TGTGTGTTGGCAATAAACCGCCATCCGACTGAGCGCC"
+        k = 6
+        read_len = 15
+        qual_for(pos) = Char(min(20 + pos, 60) + 33)  # strictly increasing along ref
+        fastq_reads = FASTX.FASTQ.Record[]
+        for i in 1:(length(rc_ref) - read_len + 1)
+            sub = rc_ref[i:(i + read_len - 1)]
+            qs = join(qual_for(i + j - 1) for j in 1:read_len)
+            push!(fastq_reads, FASTX.FASTQ.Record("r$(i)", sub, qs))
+        end
+        ref_kmers = eff_canonical_kmers([rc_ref], k)
+
+        cfg_ds = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.DoubleStrand, use_quality_scores = true)
+        res_ds = Mycelia.Rhizomorph.assemble_genome(fastq_reads, cfg_ds)
+        ds_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_ds.contigs, k))) /
+                  length(ref_kmers)
+        Test.@test ds_frac == 1.0
+
+        cfg_canon = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, graph_mode = Mycelia.Rhizomorph.Canonical, use_quality_scores = true)
+        # Canonical qualmer must reconstruct correctly and emit NO warning (no
+        # invalid-reconstruction warning, no unresolved-overlap or length-clamp warn).
+        res_canon = Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.assemble_genome(fastq_reads, cfg_canon)
+        Test.@test res_canon.assembly_stats["reconstruction_valid"] == true
+
+        # Sequence correctness: full canonical coverage, matching DoubleStrand.
+        canon_frac = length(intersect(ref_kmers, eff_canonical_kmers(res_canon.contigs, k))) /
+                     length(ref_kmers)
+        Test.@test canon_frac == 1.0
+        Test.@test canon_frac == ds_frac
+
+        # Rebuild the canonical qualmer contig record to inspect sequence/quality.
+        fq = Mycelia.Rhizomorph._prepare_fastq_observations(fastq_reads)
+        gc = Mycelia.Rhizomorph.build_qualmer_graph(fq, k; mode = :canonical)
+        canon_paths = Mycelia.Rhizomorph.find_eulerian_paths_next(gc)
+        Test.@test length(canon_paths) == 1
+        path = canon_paths[argmax(length.(canon_paths))]
+
+        # The orientation-aware path MUST actually reverse-complement some k-mers,
+        # otherwise the quality-orientation logic would be untested.
+        flags = Mycelia.Rhizomorph._resolve_path_orientations(path, gc)
+        Test.@test count(!, flags) > 0
+
+        rec = Mycelia.Rhizomorph._qualmer_path_to_consensus_fastq(path, gc, "canon")
+        seq = String(FASTX.sequence(rec))
+        qual = collect(FASTX.quality_scores(rec))
+
+        # Sequence == reference (or its reverse complement) and quality/sequence stay
+        # length-consistent (the length clamp must never shorten a correct contig).
+        Test.@test seq == rc_ref || seq == eff_rc(rc_ref)
+        Test.@test length(qual) == length(seq)
+
+        # FIX 3 payload: the per-base quality tracks the emitted base's orientation,
+        # so the monotonic reference-quality gradient survives (ascending if the
+        # contig came out forward, descending if reverse-complemented). A misoriented
+        # quality vector would break this.
+        Test.@test issorted(qual) || issorted(qual; rev = true)
     end
 
 end

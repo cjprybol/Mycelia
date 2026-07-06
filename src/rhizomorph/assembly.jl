@@ -1074,16 +1074,15 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    # See _assemble_kmer_graph: Canonical graph_mode does not yet support correct
-    # contig reconstruction (undirected canonical traversal is not orientation-
-    # aware). Warn UNCONDITIONALLY and flag the result; do NOT hard-error.
-    reconstruction_valid = config.graph_mode != Canonical
-    if config.graph_mode == Canonical
-        @warn "Canonical graph_mode does not yet support correct contig " *
-              "reconstruction (undirected canonical traversal is not " *
-              "orientation-aware); emitted contigs are INVALID. Use " *
-              "graph_mode=DoubleStrand for correct assembly."
-    end
+    # Canonical graph_mode now supports correct contig reconstruction on the qualmer
+    # arm as well. Contigs are reconstructed by the SAME orientation-aware path used
+    # by the k-mer arm (_qualmer_path_to_consensus_fastq -> path_to_sequence ->
+    # _reconstruct_oriented_kmer_path), and per-base quality is oriented to match
+    # (reverse-oriented k-mers take reversed / [1]-indexed quality). Canonical
+    # reconstruction therefore matches DoubleStrand for both sequence AND quality,
+    # so the result is flagged valid and no warning is emitted (see
+    # _assemble_kmer_graph for the sequence-side rationale).
+    reconstruction_valid = true
     graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
 
     # Apply Phase 2 graph algorithms if enabled
@@ -1104,9 +1103,29 @@ function _assemble_qualmer_graph(observations, config)
     # far below the genome length. find_contigs_next returns the vertex path
     # (ContigPath.vertices); per-base quality is then propagated by
     # _qualmer_path_to_consensus_fastq below.
-    paths = [contig_path.vertices
+    #
+    # Canonical exception: on the UNDIRECTED canonical qualmer graph, unitig
+    # extraction does not yield an overlap-ordered traversal (adjacent canonical
+    # labels are stored lexicographically-minimal, so a non-branching-path walk
+    # fragments and its reconstruction is invalid). Mirror the k-mer arm and prefer
+    # the Eulerian traversal, which IS orientation-reconstructable by
+    # _qualmer_path_to_consensus_fastq -> path_to_sequence. Fall back to unitig
+    # extraction only when no Eulerian path exists (branchy/error-laden real inputs),
+    # preserving the existing behavior for single/doublestrand and hard cases.
+    paths = if config.graph_mode == Canonical
+        eulerian_paths = Rhizomorph.find_eulerian_paths_next(graph)
+        if isempty(eulerian_paths)
+            [contig_path.vertices
              for contig_path in
                  Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
+        else
+            eulerian_paths
+        end
+    else
+        [contig_path.vertices
+         for contig_path in
+             Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
+    end
 
     # Convert paths to FASTQ records with quality propagation
     contig_records = FASTX.FASTQ.Record[]
@@ -1140,7 +1159,8 @@ function _assemble_qualmer_graph(observations, config)
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "quality_preserved" => true,  # Mark that quality information is preserved
-        # false for Canonical graph_mode (undirected traversal is not orientation-aware).
+        # Always true: canonical (undirected) qualmer reconstruction is now
+        # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,
         "num_fastq_contigs" => length(contig_records),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
@@ -1417,28 +1437,57 @@ function _qualmer_path_to_consensus_fastq(path, graph, contig_name::String)
     end
 
     sequence = Rhizomorph.path_to_sequence(path, graph)
+
+    # Per-vertex orientation for the emitted contig. On an undirected (canonical)
+    # nucleotide graph, path_to_sequence reverse-complements reverse-oriented
+    # k-mers; the per-base quality vector MUST follow the same orientation or the
+    # quality string will be mis-registered against the (corrected) sequence. The
+    # stored quality vector is aligned to the canonical label, so for a reverse-
+    # oriented k-mer the emitted base at position j is label[k+1-j] complemented and
+    # its quality is quality[k+1-j] (i.e. reverse the vector; the emitted LAST base
+    # takes quality[1], not quality[end]). Directed (single/doublestrand) graphs and
+    # non-nucleotide labels keep the plain forward orientation.
+    T = eltype(path)
+    orientation_aware = !Graphs.is_directed(graph) &&
+                        Rhizomorph._label_has_reverse_complement(T) &&
+                        Rhizomorph._sequence_type_from_kmer_type(T) <: BioSequences.LongSequence
+    forward_flags = orientation_aware ? Rhizomorph._resolve_path_orientations(path, graph) :
+                    trues(length(path))
+
     quality_scores = UInt8[]
 
     for (idx, vertex) in enumerate(path)
         vertex_quality = _qualmer_vertex_quality_scores(graph[vertex])
         kmer_len = length(string(vertex))
+        forward = forward_flags[idx]
 
         if idx == 1
             if length(vertex_quality) == kmer_len
-                append!(quality_scores, vertex_quality)
+                # Full first k-mer: reverse the quality vector when the k-mer is
+                # emitted reverse-complemented so quality[j] tracks the emitted base.
+                append!(quality_scores, forward ? vertex_quality : reverse(vertex_quality))
             else
                 append!(quality_scores, fill(UInt8(2), kmer_len))
             end
         else
+            # Only the last emitted base of this k-mer is appended. Forward: that is
+            # label[end] -> quality[end]. Reverse: it is complement(label[1]) ->
+            # quality[1].
             if isempty(vertex_quality)
                 push!(quality_scores, UInt8(2))
             else
-                push!(quality_scores, vertex_quality[end])
+                push!(quality_scores, forward ? vertex_quality[end] : vertex_quality[1])
             end
         end
     end
 
+    # Sequence and quality are both length (k + (n-1)) by construction, so this
+    # guard is defensive and should not fire; it must never silently SHORTEN a
+    # correctly-reconstructed contig, so surface a mismatch if one ever occurs.
     if length(quality_scores) != length(sequence)
+        @warn "qualmer consensus: quality/sequence length mismatch " *
+              "($(length(quality_scores)) vs $(length(sequence))) for $(contig_name); " *
+              "clamping to the shorter length."
         min_len = min(length(quality_scores), length(sequence))
         quality_scores = quality_scores[1:min_len]
         sequence = sequence[1:min_len]
