@@ -49,7 +49,7 @@ Test.@testset "assemble_genome iterative corrector wiring (td-k6oc)" begin
         Test.@test_throws Exception Mycelia.Rhizomorph.AssemblyConfig(k = 13, corrector = :bogus)
     end
 
-    Test.@testset "corrector=:iterative runs end-to-end, non-empty contigs" begin
+    Test.@testset "corrector=:iterative re-assembles corrected reads (not raw reads)" begin
         result = Mycelia.Rhizomorph.assemble_genome(reads; k = 13, corrector = :iterative)
         Test.@test result isa Mycelia.Rhizomorph.AssemblyResult
         Test.@test !isempty(result.contigs)
@@ -57,6 +57,18 @@ Test.@testset "assemble_genome iterative corrector wiring (td-k6oc)" begin
         # corrector provenance is recorded
         Test.@test get(result.assembly_stats, "corrector", nothing) == "iterative"
         Test.@test haskey(result.assembly_stats, "k_progression")
+        # REGRESSION GUARD (td-zru6): these distinguish a real re-assembly from the
+        # v0 "return corrected reads as contigs" bug — all of them were false/absent
+        # under v0, so the old bug can no longer pass this test silently.
+        Test.@test result.gfa_compatible == true            # v0 was false (no graph)
+        Test.@test result.graph !== nothing                 # v0 produced no graph
+        Test.@test haskey(result.assembly_stats, "corrected_read_count")
+        # Behavioral guard: a real assembly does not pass reads through 1:1, so the
+        # contig set is not identical to the corrected read set. (Count alone is not
+        # an invariant — a fragmented DBG can yield more unitigs than reads — so
+        # compare the actual sequences, not the counts.)
+        corrected_seqs = Set(FASTX.sequence(String, r) for r in reads)
+        Test.@test Set(result.contigs) != corrected_seqs
     end
 
     Test.@testset "default (corrector=:none) path is unchanged" begin
