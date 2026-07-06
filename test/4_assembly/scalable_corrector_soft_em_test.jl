@@ -1,16 +1,18 @@
-# Stage 2 (td-e70t): soft-EM v1 edge-memory wiring. After each successful Viterbi
+# Stage 2 (td-e70t): soft-EM edge-memory PRIMITIVES. After each successful Viterbi
 # decode the ML path's edges accumulate responsibility (1.0 for the single argmax
-# path) into a SoftEdgeWeightAccumulator; the NEXT iteration's graph is re-weighted
-# from that accumulator so the M-step consumes probability-weighted evidence
-# instead of raw coverage counts. Rare (error) edges — traversed by few paths —
-# accrue little soft weight and are non-increasing across iterations, which is the
-# "probability memory" that makes emergent cleaning possible.
+# path) into a SoftEdgeWeightAccumulator; `register_soft_edge_weights!` can then
+# re-weight a graph so `compute_edge_weight` returns probability-weighted evidence
+# instead of raw coverage counts, reverting byte-for-byte after `clear!`. This
+# test exercises those primitives at the UNIT level.
 #
-# CAVEAT (v1): with a single argmax path per read, responsibility is always 1.0
-# (soft weight == hard count). Full emergent coalescence to ~1 contig needs the v2
-# competing-paths E-step (several candidate paths per read); this test asserts the
-# v1 mechanism (accumulation + consumption + non-increasing rare edges), not full
-# coalescence.
+# IMPORTANT (v1 is RECORD-ONLY): the shipped pipeline (`mycelia_iterative_assemble`)
+# runs the E-step accumulation but does NOT consume it — it never calls
+# `register_soft_edge_weights!`, so `compute_edge_weight` always returns raw counts
+# and the graph is never soft-reweighted (see the FIX-1 note in
+# src/iterative-assembly.jl). Registration/consumption is a v2-reserved capability;
+# this file tests the primitives directly (not the pipeline) so they are ready for
+# the v2 competing-paths M-step. With a single argmax path per read, responsibility
+# is always 1.0 (soft weight == hard count); v2 softens it via competing paths.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/scalable_corrector_soft_em_test.jl")'
@@ -54,15 +56,20 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
 
         acc = R.SoftEdgeWeightAccumulator()
         R.accumulate_path_probability!(acc, [(src, dst)], 0.37)
-        R.register_soft_edge_weights!(graph, acc)
-        Test.@test R.compute_edge_weight(edge_data) == 0.37   # soft weight consumed
-        # An edge NOT in the accumulator keeps its raw count.
-        if length(edge_labels) > 1
-            (s2, d2) = edge_labels[2]
-            Test.@test R.compute_edge_weight(graph[s2, d2]) ==
-                       R.count_total_observations(graph[s2, d2])
+        # Test hygiene (FIX 6): register→assert→clear in try/finally so a failed
+        # assertion cannot leak the process-global registry into later tests.
+        try
+            R.register_soft_edge_weights!(graph, acc)
+            Test.@test R.compute_edge_weight(edge_data) == 0.37   # soft weight consumed
+            # An edge NOT in the accumulator keeps its raw count.
+            if length(edge_labels) > 1
+                (s2, d2) = edge_labels[2]
+                Test.@test R.compute_edge_weight(graph[s2, d2]) ==
+                           R.count_total_observations(graph[s2, d2])
+            end
+        finally
+            R.clear_soft_edge_weights!()
         end
-        R.clear_soft_edge_weights!()
         Test.@test R.compute_edge_weight(edge_data) == raw    # byte-identical revert
     end
 
@@ -101,12 +108,17 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
             reads, graph1, k; graph_mode = :canonical, soft_weights = acc1)
 
         graph2 = R.build_qualmer_graph(corrected1, k; mode = :canonical)
-        R.register_soft_edge_weights!(graph2, acc1)   # consume iter-1 soft memory
         acc2 = R.SoftEdgeWeightAccumulator()
-        _corrected2, _n2,
-        _s2 = Mycelia.improve_read_set_likelihood(
-            corrected1, graph2, k; graph_mode = :canonical, soft_weights = acc2)
-        R.clear_soft_edge_weights!()
+        # Test hygiene (FIX 6): register→decode→clear in try/finally so the
+        # process-global registry is always cleared even if the decode throws.
+        try
+            R.register_soft_edge_weights!(graph2, acc1)   # consume iter-1 soft memory
+            _corrected2, _n2,
+            _s2 = Mycelia.improve_read_set_likelihood(
+                corrected1, graph2, k; graph_mode = :canonical, soft_weights = acc2)
+        finally
+            R.clear_soft_edge_weights!()
+        end
 
         Test.@test !isempty(acc1.weights)
         # The distribution is right-skewed: consensus edges accrue high weight,

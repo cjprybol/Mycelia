@@ -1,8 +1,11 @@
 # Stage 1 (td-fuo8): the corrector `strategy` fork. The :scalable tier (DEFAULT)
-# routes to the coarse/skip engine settings; the :exhaustive tier reproduces
-# today's hyper-sensitive engine byte-for-byte (prime-walk / 10 iters / exact
-# beam / no skip / no hard-window / no soft-EM). The knob mapping is a pure
-# function so it can be asserted without running the (slow) corrector, and a
+# routes to the coarse/skip engine settings; the :exhaustive tier is the
+# maximum-sensitivity EXACT-ML engine (prime-walk / 10 iters / exact UNBOUNDED
+# beam / no skip / no hard-window / no soft-EM). NOTE :exhaustive is NOT a
+# byte-identical reproduction of the prior corrector default — master's route used
+# the bounded auto-beam, so :exhaustive's exact unbounded beam can OOM above that
+# threshold; it is for small-scale / high-sensitivity use. The knob mapping is a
+# pure function so it can be asserted without running the (slow) corrector, and a
 # full end-to-end assemble on a toy proves both tiers reach a real AssemblyResult.
 #
 # Run directly:
@@ -34,8 +37,10 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
 
     Test.@testset "strategy knob routing (pure)" begin
         ex = R._corrector_strategy_knobs(:exhaustive)
-        # Exhaustive = today's hyper-sensitive engine (byte-identical passthrough):
-        # prime-by-prime walk, 10 iterations/k, exact beam, none of the new gates.
+        # Exhaustive = maximum-sensitivity exact-ML engine (prime-by-prime walk,
+        # 10 iterations/k, exact UNBOUNDED beam, none of the new gates). This is
+        # the intended hyper-sensitive tier, NOT a reproduction of the prior
+        # corrector default (which used the bounded auto-beam).
         Test.@test ex.n_k_rungs === nothing
         Test.@test ex.max_iterations_per_k == 10
         Test.@test ex.skip_solid == false
@@ -45,7 +50,10 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
 
         sc = R._corrector_strategy_knobs(:scalable)
         # Scalable = coarse 3-rung ladder, low iteration cap, all volume/quality
-        # gates on, size-aware auto-beam (nothing).
+        # gates on, size-aware auto-beam (nothing). `soft_em=true` is the ENGINE
+        # switch that runs the record-only E-step (accumulate responsibilities);
+        # the pipeline does NOT consume them (v1), which the surfaced provenance
+        # flag ("scaffold-v1-record-only") reflects — asserted end-to-end below.
         Test.@test sc.n_k_rungs == 3
         Test.@test sc.max_iterations_per_k == 2
         Test.@test sc.skip_solid == true
@@ -71,7 +79,13 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test !isempty(sc.contigs)
         Test.@test sc.assembly_stats["strategy"] == "scalable"
         Test.@test sc.assembly_stats["hard_window"] == true
-        Test.@test sc.assembly_stats["soft_em"] == true
+        Test.@test sc.assembly_stats["hard_read_gate"] == true
+        # Per-hard-region windowed decode is scaffolded (hard reads decoded WHOLE),
+        # so the honest flag is false even on :scalable (FIX 5).
+        Test.@test sc.assembly_stats["windowed_decode"] == false
+        # soft-EM v1 is RECORD-ONLY (E-step records, M-step does not consume), so
+        # the surfaced provenance is a scaffold marker, never a bare `true` (FIX 1/5).
+        Test.@test sc.assembly_stats["soft_em"] == "scaffold-v1-record-only"
         Test.@test sc.assembly_stats["skip_solid"] == true
         # Skip fraction is a real fraction in [0, 1].
         skip = sc.assembly_stats["skip_fraction"]
@@ -81,8 +95,9 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test ex isa R.AssemblyResult
         Test.@test !isempty(ex.contigs)
         Test.@test ex.assembly_stats["strategy"] == "exhaustive"
-        # Exhaustive threads neither gate (byte-identical passthrough).
+        # Exhaustive threads neither gate nor soft-EM.
         Test.@test ex.assembly_stats["hard_window"] == false
+        Test.@test ex.assembly_stats["windowed_decode"] == false
         Test.@test ex.assembly_stats["soft_em"] == false
         Test.@test ex.assembly_stats["skip_solid"] == false
     end

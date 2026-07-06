@@ -246,6 +246,20 @@ function mycelia_iterative_assemble(input_fastq::String;
     # "nothing to fix". See CorrectorDiagnostics.
     corrector_diagnostics = CorrectorDiagnostics()
 
+    # -- Soft-EM registry hygiene (td-e70t, v1 record-only) --------------------
+    # Soft-EM v1 is a RECORD-ONLY scaffold: the E-step accumulates per-edge path
+    # responsibilities (for the future v2 competing-paths M-step) but the pipeline
+    # NEVER calls `register_soft_edge_weights!`, so `compute_edge_weight` always
+    # returns raw coverage counts and the identity-keyed soft-weight registry MUST
+    # stay empty for this whole run. Defensively clear it at entry so no prior
+    # crash mid-registration (a direct unit-test primitive call, or a future v2
+    # path) can leak soft weights into this correction, then assert the invariant
+    # (belt-and-suspenders). The registry is reserved for v2.
+    Mycelia.Rhizomorph.clear_soft_edge_weights!()
+    @assert isempty(Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY) (
+        "soft-EM registry must be empty at corrector entry (v1 is record-only; " *
+        "the pipeline never registers soft weights)")
+
     # -- Convergence + k-ladder tuning knobs (td-q70n) -------------------------
     #
     # Two literature-backed speedups for the iterative corrector:
@@ -356,16 +370,11 @@ function mycelia_iterative_assemble(input_fastq::String;
         println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
-    # Soft-EM edge memory (td-e70t). `prev_soft_weights` carries the accumulated
-    # per-edge path responsibilities from the PREVIOUS iteration's decodes; they
-    # re-weight THIS iteration's transition graph so error edges — traversed only
-    # by rare paths — decay across iterations WITHOUT explicit tip-clipping. Off
-    # unless `soft_em=true` (the :scalable tier), so :exhaustive is unperturbed.
-    prev_soft_weights = nothing
     # Hard-window skip telemetry (td-nn6l): the fraction of reads the hard-window
-    # gate passed through WITHOUT a decode on the most recent pass. Reported in
-    # the run metadata so the volume reduction is visible.
-    last_skip_fraction = 0.0
+    # gate passed through WITHOUT a decode, recorded PER PASS (across every k and
+    # iteration) so the run metadata can surface min/mean/max, not just the last
+    # value (FIX 6). Empty on the :exhaustive tier (no gate ⇒ no skips).
+    skip_fractions = Float64[]
 
     # Main k-mer progression loop
     while k <= max_k
@@ -420,18 +429,19 @@ function mycelia_iterative_assemble(input_fastq::String;
                 break
             end
 
-            # --- Soft-EM M-step consumption (td-e70t) -------------------------
-            # Re-weight THIS iteration's transition graph with the previous pass's
-            # soft (probability-weighted) edge evidence. Registered by edge-data
-            # object identity so the decode's `compute_edge_weight` returns the soft
-            # weight instead of the raw coverage count (see evidence-functions.jl).
-            # Empty/absent accumulator ⇒ raw counts ⇒ byte-identical to today.
-            if soft_em && prev_soft_weights !== nothing &&
-               !isempty(prev_soft_weights.weights)
-                Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
-            end
-            # Fresh accumulator for THIS pass's decodes (the E-step tally). Only
-            # allocated under soft-EM so :exhaustive threads `nothing`.
+            # --- Soft-EM E-step accumulation (td-e70t, v1 RECORD-ONLY) --------
+            # v1 is a DORMANT scaffold: a fresh accumulator tallies THIS pass's
+            # decoded-path responsibilities (the E-step), but the pipeline does NOT
+            # consume it — `register_soft_edge_weights!` is deliberately NOT called,
+            # so `compute_edge_weight` always returns raw coverage counts and the
+            # graph is never soft-reweighted. This keeps the accumulation machinery
+            # live and exercised (recording path probabilities for the future v2
+            # competing-paths M-step) while removing v1's uncontrolled perturbation:
+            # a single-path decode makes every responsibility 1.0 and hard-skipped
+            # reads never accumulate, so consuming the accumulator would mix
+            # DECODED-SUBSET coverage with raw counts on unvisited edges — an
+            # uncontrolled reweighting, not principled soft-EM. Only allocated under
+            # soft-EM so :exhaustive threads `nothing`.
             current_soft_weights = soft_em ?
                                    Mycelia.Rhizomorph.SoftEdgeWeightAccumulator() : nothing
 
@@ -470,14 +480,12 @@ function mycelia_iterative_assemble(input_fastq::String;
                 hard_vertices = hard_vertices,
                 diagnostics = corrector_diagnostics
             )
-            last_skip_fraction = pass_skip_fraction
-            # Clear the identity-keyed soft-weight registry so the next graph build
-            # (and any unrelated caller) sees raw counts again. Carry this pass's
-            # accumulator forward as the next iteration's memory.
-            if soft_em
-                Mycelia.Rhizomorph.clear_soft_edge_weights!()
-                prev_soft_weights = current_soft_weights
-            end
+            push!(skip_fractions, pass_skip_fraction)
+            # Soft-EM v1 is record-only: `current_soft_weights` was populated by the
+            # E-step but is deliberately NOT registered/consumed, so there is nothing
+            # to clear from the registry (it stayed empty) and no cross-iteration
+            # carry-forward — the accumulator is dropped once recorded. The v2
+            # competing-paths M-step will consume it.
 
             # Calculate iteration metrics
             iteration_time = time() - iteration_start
@@ -619,7 +627,7 @@ function mycelia_iterative_assemble(input_fastq::String;
     return finalize_iterative_assembly(
         output_dir, k_progression, iteration_history, total_runtime,
         verbose = verbose, diagnostics = corrector_diagnostics,
-        last_skip_fraction = last_skip_fraction,
+        skip_fractions = skip_fractions,
         hard_window = hard_window, soft_em = soft_em)
 end
 
@@ -1673,7 +1681,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         iteration_history::Dict{Int, Vector{Dict{Symbol, Any}}},
         total_runtime::Float64; verbose::Bool = true,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
-        last_skip_fraction::Float64 = 0.0,
+        skip_fractions::Vector{Float64} = Float64[],
         hard_window::Bool = false,
         soft_em::Bool = false)
     if verbose
@@ -1710,6 +1718,13 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
                        Dict(:structural => diagnostics.structural_errors[],
         :unkmerizable => diagnostics.unkmerizable_reads[])
 
+    # Per-pass skip-fraction summary (FIX 6): min/mean/max across every k+iteration
+    # pass, not just the last. `last_skip_fraction` is retained for back-compat.
+    last_skip_fraction = isempty(skip_fractions) ? 0.0 : skip_fractions[end]
+    skip_min = isempty(skip_fractions) ? 0.0 : minimum(skip_fractions)
+    skip_max = isempty(skip_fractions) ? 0.0 : maximum(skip_fractions)
+    skip_mean = isempty(skip_fractions) ? 0.0 : sum(skip_fractions) / length(skip_fractions)
+
     # Create comprehensive metadata
     metadata = Dict(
         :total_runtime => total_runtime,
@@ -1725,9 +1740,25 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :version => "Phase_5.2a",
         # Scalable-tier telemetry (td-fuo8/td-nn6l/td-e70t). Zero/false on the
         # exhaustive tier, which threads neither gate.
+        #
+        # Honest gate provenance (FIX 5): `hard_read_gate` is the SKIP gate
+        # (easy reads pass through untouched) — that IS active on :scalable.
+        # `windowed_decode` is the per-hard-region WINDOWED decode, which is
+        # scaffolded (hard reads are decoded WHOLE), so it is always false in v1;
+        # surfaced separately so `hard_window` can't be misread as "windowed
+        # decode active". `hard_window` is kept as a back-compat alias.
         :hard_window => hard_window,
-        :soft_em => soft_em,
-        :last_skip_fraction => last_skip_fraction
+        :hard_read_gate => hard_window,
+        :windowed_decode => false,
+        # Soft-EM v1 is RECORD-ONLY (E-step accumulates, M-step does NOT consume),
+        # so report a scaffold marker rather than a bare `true` that would imply
+        # active soft reweighting (FIX 1/5). `false` on the exhaustive tier.
+        :soft_em => (soft_em ? "scaffold-v1-record-only" : false),
+        :last_skip_fraction => last_skip_fraction,
+        :skip_fraction_per_pass => skip_fractions,
+        :skip_fraction_min => skip_min,
+        :skip_fraction_mean => skip_mean,
+        :skip_fraction_max => skip_max
     )
 
     if verbose
@@ -2139,12 +2170,18 @@ end
 # by rare, low-probability paths — accrue little weight and decay below the
 # `generate_alternative_qualmer_paths` `weight > 0.01` gate WITHOUT tip-clipping.
 #
-# NOT yet called from `mycelia_iterative_assemble`: emergent coalescence also
-# needs the qualmer graph rebuild / transition weighting to CONSUME these soft
-# weights instead of raw coverage counts, which is outside the correction-core
-# file boundary (the td-e70t follow-on). This hook is deliberately additive and
-# side-effect-free so wiring it in cannot destabilize the current EM loop until
-# the M-step consumption lands.
+# v1 status — E-step WIRED (record-only), M-step NOT wired. Under `soft_em=true`
+# this hook IS called per decode from `try_viterbi_path_improvement`, so the
+# accumulator records decoded-path responsibilities each pass. But the pipeline
+# deliberately does NOT consume them: `register_soft_edge_weights!` is never
+# called from `mycelia_iterative_assemble`, so `compute_edge_weight` always
+# returns raw coverage counts and the graph is never soft-reweighted. Emergent
+# coalescence needs the M-step to consume these weights (and, before that, the
+# v2 competing-paths E-step so responsibilities stop being a degenerate 1.0),
+# which is the tracked td-e70t follow-on. Keeping the E-step live but the M-step
+# dormant avoids v1's uncontrolled reweighting (single-path 1.0 responsibilities
+# + hard-skipped reads never accumulating would mix decoded-subset coverage with
+# raw counts) while exercising the recording machinery for v2.
 
 """
     _decoded_path_edges(result) -> Vector

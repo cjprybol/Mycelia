@@ -70,25 +70,38 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         Test.@test 0 < n_decode <= length(reads)
     end
 
-    Test.@testset "hard reads are decoded, easy reads skipped" begin
-        # A synthetic graph whose ONLY hard vertices come from one weak region:
-        # reads overlapping it must decode, reads elsewhere must skip.
+    Test.@testset "hard reads decode, clean reads skip (independent ground truth)" begin
+        # Independently-constructed expectation (FIX 6): rather than re-deriving
+        # should_decode_read's own overlap predicate and asserting they agree (a
+        # tautology), inject a KNOWN error at a KNOWN locus and assert the gate
+        # against externally-known truth — an error-straddling read MUST decode; a
+        # clean read from a well-covered region far from the error MUST skip.
         rng = Random.MersenneTwister(22)
-        ref = join(rand(rng, _BASES, 400))
-        clean = _clean_reads(rng, ref; n_reads = 200, readlen = 60)
-        graph = R.build_qualmer_graph(clean, k; mode = :canonical)
+        ref = join(rand(rng, _BASES, 1000))
+        # High-coverage clean reads ⇒ every ref k-mer is solid (non-hard).
+        clean = _clean_reads(rng, ref; n_reads = 300, readlen = 80)
+        # Inject a substitution at a fixed locus via several reads so the error
+        # allele registers as a bubble / weak (hard) region in the graph.
+        err_locus = 850                    # 1-based ref position of the substitution
+        err_reads = FASTX.FASTQ.Record[]
+        for i in 1:6
+            s = err_locus - 40             # read spans [810, 889], error at offset 41
+            seq = collect(ref[s:(s + 79)])
+            seq[41] = first(filter(!=(seq[41]), _BASES))   # deterministic substitution
+            push!(err_reads, FASTX.FASTQ.Record("e$i", String(seq), String(fill('I', 80))))
+        end
+        graph = R.build_qualmer_graph(vcat(clean, err_reads), k; mode = :canonical)
         hard = Mycelia._hard_vertex_set(graph, k)
 
-        # For each read, the gate's decision must match "does it overlap a hard
-        # k-mer?" — i.e. should_decode_read is exactly the hard-overlap predicate.
-        for r in clean[1:20]
-            seq = FASTX.sequence(Mycelia.BioSequences.LongDNA{4}, r)
-            overlaps = any(
-                Mycelia.BioSequences.canonical(kmer) in hard
-            for (kmer, _) in Mycelia.Kmers.UnambiguousDNAMers{k}(seq)
-            )
-            Test.@test Mycelia.should_decode_read(r, k, hard) == overlaps
-        end
+        # Ground truth 1: a read carrying the injected error straddles the hard
+        # region ⇒ MUST decode.
+        Test.@test Mycelia.should_decode_read(err_reads[1], k, hard) == true
+
+        # Ground truth 2: a clean read pulled straight from the reference, in a
+        # well-covered region far from the error locus, touches only solid,
+        # non-bubble k-mers ⇒ MUST skip.
+        clean_probe = FASTX.FASTQ.Record("clean_probe", ref[100:179], String(fill('I', 80)))
+        Test.@test Mycelia.should_decode_read(clean_probe, k, hard) == false
     end
 
     Test.@testset "_hard_window_ranges scaffold (Stage 3c primitive)" begin
