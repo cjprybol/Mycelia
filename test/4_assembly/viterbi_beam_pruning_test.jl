@@ -99,15 +99,23 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
     # exact on small reads (preserving the ML guarantee) yet bound the frontier on
     # large reads so it cannot OOM-crash (~21B allocations on a 48 kb phage).
     Test.@testset "size-aware auto-beam default (_auto_beam_width)" begin
-        # Small read (observation count at/below the threshold): stays EXACT.
-        Test.@test Mycelia._auto_beam_width(1) == typemax(Int)
-        Test.@test Mycelia._auto_beam_width(300) == typemax(Int)
-        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD) ==
+        small_g = 8   # tiny graph (<= bounded width) — exact is lossless here
+        # Small read AND small graph: stays EXACT.
+        Test.@test Mycelia._auto_beam_width(1, small_g) == typemax(Int)
+        Test.@test Mycelia._auto_beam_width(300, small_g) == typemax(Int)
+        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD, small_g) ==
                    typemax(Int)
-        # Large read (above the threshold): BOUNDED to the proven-tractable width.
-        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD + 1) ==
+        # Large read (above obs threshold), small graph: BOUNDED.
+        Test.@test Mycelia._auto_beam_width(Mycelia._AUTO_BEAM_EXACT_THRESHOLD + 1, small_g) ==
                    Mycelia._AUTO_BEAM_BOUNDED_WIDTH
-        Test.@test Mycelia._auto_beam_width(48_000) == Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        Test.@test Mycelia._auto_beam_width(48_000, small_g) == Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        # td-7tdt: a SHORT read on a LARGE graph must bound (the real cost driver) —
+        # this is the case the read-length-only threshold missed (5kb -> 2230 vertices).
+        Test.@test Mycelia._auto_beam_width(130, 2230) == Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        Test.@test Mycelia._auto_beam_width(130, Mycelia._AUTO_BEAM_BOUNDED_WIDTH + 1) ==
+                   Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        # Graph exactly at the bounded width: exact == bounded (frontier can't exceed vertices).
+        Test.@test Mycelia._auto_beam_width(130, Mycelia._AUTO_BEAM_BOUNDED_WIDTH) == typemax(Int)
         # The bounded width is a finite, positive, previously-proven value (256).
         Test.@test Mycelia._AUTO_BEAM_BOUNDED_WIDTH == 256
         Test.@test 0 < Mycelia._AUTO_BEAM_BOUNDED_WIDTH < typemax(Int)

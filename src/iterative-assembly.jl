@@ -670,24 +670,34 @@ const _AUTO_BEAM_BOUNDED_WIDTH = 256
 const _AUTO_BEAM_EXACT_THRESHOLD = 1024
 
 """
-    _auto_beam_width(n_observations) -> Int
+    _auto_beam_width(n_observations, n_vertices) -> Int
 
 Size-aware default beam width reconciling the ADR's "exact by default" with the
-td-63qy OOM crash. Returns `typemax(Int)` (exact — the unbounded frontier
-preserves the ML guarantee) when `n_observations <= _AUTO_BEAM_EXACT_THRESHOLD`,
-and the bounded `_AUTO_BEAM_BOUNDED_WIDTH` above it, emitting a one-line `@info`
-when it bounds so the exactness→tractability switch is visible in the log.
-Callers can still FORCE exact on a large read by passing an explicit
-`beam_width = typemax(Int)`.
+td-63qy OOM crash AND the td-7tdt intractable-slowdown. The Viterbi frontier is
+bounded by `min(active_states, n_vertices)` per step, so exact cost is driven by
+GRAPH SIZE, not read length: a 150 bp read on a 2230-vertex uncleaned graph timed
+out under exact beam. Returns `typemax(Int)` (exact — lossless, since the frontier
+cannot exceed `n_vertices`) only when `n_vertices <= _AUTO_BEAM_BOUNDED_WIDTH` AND
+`n_observations <= _AUTO_BEAM_EXACT_THRESHOLD`; otherwise the bounded
+`_AUTO_BEAM_BOUNDED_WIDTH`, with a one-line `@info` so the switch is visible.
+Callers can still FORCE exact by passing an explicit `beam_width = typemax(Int)`.
 """
-function _auto_beam_width(n_observations::Integer)::Int
-    if n_observations <= _AUTO_BEAM_EXACT_THRESHOLD
+function _auto_beam_width(n_observations::Integer, n_vertices::Integer)::Int
+    # The Viterbi frontier at each of ~n_observations steps is bounded by
+    # min(active_states, n_vertices) — so exact (unbounded) cost is driven by the
+    # GRAPH size, NOT read length. A short read on a large/branchy graph still
+    # explodes: td-7tdt saw a 5 kb genome -> 2230-vertex uncleaned graph time out
+    # under exact beam even for 150 bp reads. Crucially, when n_vertices <=
+    # _AUTO_BEAM_BOUNDED_WIDTH the frontier can never exceed the bound, so exact and
+    # bounded are EQUIVALENT there (bounding is lossless); above it, bounding trades
+    # the ML guarantee for tractability. Gate on BOTH graph size and read length.
+    if n_vertices <= _AUTO_BEAM_BOUNDED_WIDTH && n_observations <= _AUTO_BEAM_EXACT_THRESHOLD
         return typemax(Int)
     end
-    @info "iterative corrector: read has $(n_observations) observations " *
-          "(> $(_AUTO_BEAM_EXACT_THRESHOLD)); bounding Viterbi beam_width=" *
-          "$(_AUTO_BEAM_BOUNDED_WIDTH) to stay tractable (exact ML would risk OOM, " *
-          "td-63qy). Pass beam_width=typemax(Int) to force exact." maxlog = 3
+    @info "iterative corrector: bounding Viterbi beam_width=$(_AUTO_BEAM_BOUNDED_WIDTH) " *
+          "(read=$(n_observations) obs, graph=$(n_vertices) vertices) — exact ML is " *
+          "intractable on large/branchy graphs (frontier ~ min(active, vertices) x depth; " *
+          "td-63qy/td-7tdt). Pass beam_width=typemax(Int) to force exact." maxlog = 3
     return _AUTO_BEAM_BOUNDED_WIDTH
 end
 
@@ -1631,7 +1641,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # tractability ONLY above the threshold, and only under the auto-default;
         # it never silently changes correctness of an explicit request.
         effective_beam_width = beam_width === nothing ?
-                               _auto_beam_width(length(observations)) : beam_width
+                               _auto_beam_width(length(observations), Graphs.nv(graph)) : beam_width
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
