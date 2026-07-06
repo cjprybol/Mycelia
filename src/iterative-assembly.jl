@@ -234,7 +234,10 @@ function mycelia_iterative_assemble(input_fastq::String;
         batch_size::Int = 10000,
         enable_checkpointing::Bool = true,
         checkpoint_interval::Int = 5,
-        skip_solid::Bool = false)
+        skip_solid::Bool = false,
+        hard_window::Bool = false,
+        soft_em::Bool = false,
+        beam_width::Union{Int, Nothing} = nothing)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -353,6 +356,17 @@ function mycelia_iterative_assemble(input_fastq::String;
         println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
+    # Soft-EM edge memory (td-e70t). `prev_soft_weights` carries the accumulated
+    # per-edge path responsibilities from the PREVIOUS iteration's decodes; they
+    # re-weight THIS iteration's transition graph so error edges — traversed only
+    # by rare paths — decay across iterations WITHOUT explicit tip-clipping. Off
+    # unless `soft_em=true` (the :scalable tier), so :exhaustive is unperturbed.
+    prev_soft_weights = nothing
+    # Hard-window skip telemetry (td-nn6l): the fraction of reads the hard-window
+    # gate passed through WITHOUT a decode on the most recent pass. Reported in
+    # the run metadata so the volume reduction is visible.
+    last_skip_fraction = 0.0
+
     # Main k-mer progression loop
     while k <= max_k
         if verbose
@@ -406,25 +420,64 @@ function mycelia_iterative_assemble(input_fastq::String;
                 break
             end
 
+            # --- Soft-EM M-step consumption (td-e70t) -------------------------
+            # Re-weight THIS iteration's transition graph with the previous pass's
+            # soft (probability-weighted) edge evidence. Registered by edge-data
+            # object identity so the decode's `compute_edge_weight` returns the soft
+            # weight instead of the raw coverage count (see evidence-functions.jl).
+            # Empty/absent accumulator ⇒ raw counts ⇒ byte-identical to today.
+            if soft_em && prev_soft_weights !== nothing &&
+               !isempty(prev_soft_weights.weights)
+                Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
+            end
+            # Fresh accumulator for THIS pass's decodes (the E-step tally). Only
+            # allocated under soft-EM so :exhaustive threads `nothing`.
+            current_soft_weights = soft_em ?
+                                   Mycelia.Rhizomorph.SoftEdgeWeightAccumulator() : nothing
+
+            # --- Hard-window gating (td-nn6l) --------------------------------
+            # Restrict decoding to reads that touch a "hard" vertex (bubble
+            # entry/exit/interior, high-out-degree/repeat-like, or weak/non-solid
+            # k-mer). Easy reads pass through untouched, cutting decode volume
+            # ~85-95% on clean data. Off unless `hard_window=true` (:scalable).
+            hard_vertices = (hard_window && graph_mode == :canonical) ?
+                            _hard_vertex_set(graph, k) : nothing
+            if hard_window && graph_mode != :canonical
+                @warn "hard_window gating is only supported for graph_mode=:canonical; " *
+                      "disabling (decoding all non-solid reads)." graph_mode maxlog = 1
+            end
+
             # Process each read for likelihood improvement with performance optimizations
             if verbose
                 println("Processing reads for likelihood improvements...")
             end
-            # `beam_width` is intentionally NOT passed here: the shipping path uses
-            # the size-aware auto-beam default (exact where tractable, bounded on
-            # large reads) so the production assembler cannot OOM-crash (td-63qy).
+            # `beam_width` defaults to the size-aware auto-beam (exact where
+            # tractable, bounded on large reads) so the production assembler cannot
+            # OOM-crash (td-63qy); :exhaustive passes typemax(Int) to force exact.
             # `corrector_diagnostics` accumulates swallowed decode failures across
             # every k and iteration and is surfaced in the result metadata.
             updated_reads,
-            improvements_made = improve_read_set_likelihood(
+            improvements_made,
+            pass_skip_fraction = improve_read_set_likelihood(
                 current_reads, graph, k,
                 verbose = verbose,
                 batch_size = batch_size,
                 enable_parallel = enable_parallel,
                 graph_mode = graph_mode,
                 skip_solid = skip_solid,
+                beam_width = beam_width,
+                soft_weights = current_soft_weights,
+                hard_vertices = hard_vertices,
                 diagnostics = corrector_diagnostics
             )
+            last_skip_fraction = pass_skip_fraction
+            # Clear the identity-keyed soft-weight registry so the next graph build
+            # (and any unrelated caller) sees raw counts again. Carry this pass's
+            # accumulator forward as the next iteration's memory.
+            if soft_em
+                Mycelia.Rhizomorph.clear_soft_edge_weights!()
+                prev_soft_weights = current_soft_weights
+            end
 
             # Calculate iteration metrics
             iteration_time = time() - iteration_start
@@ -565,7 +618,9 @@ function mycelia_iterative_assemble(input_fastq::String;
     # Finalize iterative assembly
     return finalize_iterative_assembly(
         output_dir, k_progression, iteration_history, total_runtime,
-        verbose = verbose, diagnostics = corrector_diagnostics)
+        verbose = verbose, diagnostics = corrector_diagnostics,
+        last_skip_fraction = last_skip_fraction,
+        hard_window = hard_window, soft_em = soft_em)
 end
 
 # =============================================================================
@@ -630,6 +685,143 @@ function _read_is_all_solid(read::FASTX.FASTQ.Record, k::Int, solid_kmers::Abstr
 end
 
 # ------------------------------------------------------------------------------
+# Hard-window gating (td-nn6l): decode only reads that touch a "hard" region
+# (bubble / repeat / weak k-mer) and pass every other read through untouched.
+# This is the primary decode-volume reduction on top of skip-solid — on clean
+# data the vast majority of reads touch no hard vertex and are skipped.
+# ------------------------------------------------------------------------------
+
+"""
+    should_decode_read(read, k, hard_vertices) -> Bool
+
+True iff any canonical k-mer of `read` is a member of `hard_vertices` (the
+bubble / repeat-like / weak-k-mer set). Reads that touch no hard vertex have no
+region worth decoding and are passed through untouched. Mirrors
+`_read_is_all_solid`'s canonical k-mer iteration so the two gates compose on the
+same `:canonical` graph. An empty `hard_vertices` means "no gate" ⇒ decode.
+"""
+function should_decode_read(read::FASTX.FASTQ.Record, k::Int, hard_vertices::AbstractSet)
+    isempty(hard_vertices) && return true
+    sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
+    for (kmer, _) in Kmers.UnambiguousDNAMers{k}(sequence)
+        (BioSequences.canonical(kmer) in hard_vertices) && return true
+    end
+    return false
+end
+
+"""
+    _hard_vertex_set(graph, k) -> Set
+
+Build the set of "hard" vertices for hard-window gating (td-nn6l): the union of
+(1) bubble entry/exit/interior vertices (`detect_bubbles_next`),
+(2) high-out-degree (out-degree > 1, repeat-like) vertices, and
+(3) weak / non-solid k-mers (the complement of `_solid_kmer_set`).
+When k-mer classification cannot run (empty solid set) every vertex is treated as
+hard — the conservative "decode everything" fallback that never skips on absent
+evidence. Intended for `:canonical` graphs (matches the skip-solid gate).
+"""
+function _hard_vertex_set(graph, k::Int)
+    labels = collect(MetaGraphsNext.labels(graph))
+    T = eltype(labels)
+    hard = Set{T}()
+    isempty(labels) && return hard
+
+    # (1) Bubble vertices (entry, exit, both alternative interiors).
+    for bubble in Mycelia.Rhizomorph.detect_bubbles_next(graph)
+        push!(hard, bubble.entry_vertex)
+        push!(hard, bubble.exit_vertex)
+        for v in bubble.path1
+            push!(hard, v)
+        end
+        for v in bubble.path2
+            push!(hard, v)
+        end
+    end
+
+    # (2) High out-degree (repeat-like) vertices — single O(E) pass over edges.
+    outdeg = Dict{T, Int}()
+    for (src, _dst) in MetaGraphsNext.edge_labels(graph)
+        outdeg[src] = get(outdeg, src, 0) + 1
+    end
+    for (v, d) in outdeg
+        d > 1 && push!(hard, v)
+    end
+
+    # (3) Weak (non-solid) k-mers = complement of the solid set. Empty solid set
+    # (classification could not run) ⇒ treat all vertices as hard (decode all).
+    solid = _solid_kmer_set(graph)
+    if isempty(solid)
+        union!(hard, labels)
+    else
+        for v in labels
+            (v in solid) || push!(hard, v)
+        end
+    end
+    return hard
+end
+
+# ------------------------------------------------------------------------------
+# Stage 3c SCAFFOLD (td-nn6l): per-hard-region WINDOWED decode.
+#
+# STATUS: NOT wired into the gate. Stage 3 currently decodes each hard read
+# WHOLE (the skip-gate part of Stage 3 is fully delivered — easy reads are
+# skipped, hard reads are decoded). The windowed variant below is the primitive
+# for the remaining 3c work: instead of decoding a hard read end-to-end, extract
+# the k-mer sub-window (<=500 bp) around each hard region and decode ONLY that
+# window with start_vertex/target_vertex boundary constraints (which
+# `Mycelia.correct_observations` supports via the observation's first/last vertex
+# and `ViterbiCorrectionConfig.target_vertex`), then splice the corrected window
+# back into the read. Windowing bounds decode cost to the hard neighborhood
+# rather than the whole read.
+#
+# `_hard_window_ranges` (the read-coordinate ranges to decode) is implemented and
+# unit-tested; the correct_observations-with-boundaries call + splice is the
+# deferred wiring. See the PR description for the 3c caveat.
+# ------------------------------------------------------------------------------
+
+"""
+    _hard_window_ranges(read, k, hard_vertices; pad=1, max_window=500) -> Vector{UnitRange{Int}}
+
+Read-coordinate ranges (1-based, in read bases) covering each hard region of a
+read: for every k-mer position whose canonical k-mer is in `hard_vertices`, take
+the base span `[pos-pad, pos+k-1+pad]`, clamp to the read, merge overlapping
+spans, and cap each merged span at `max_window` bases. These are the windows a
+Stage 3c windowed decode would correct in isolation (whole-read decode is the
+union of all bases; windowing decodes only these). Empty when the read touches
+no hard vertex.
+"""
+function _hard_window_ranges(read::FASTX.FASTQ.Record, k::Int, hard_vertices::AbstractSet;
+        pad::Int = 1, max_window::Int = 500)
+    ranges = UnitRange{Int}[]
+    isempty(hard_vertices) && return ranges
+    sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
+    n = length(sequence)
+    n < k && return ranges
+    for (km, kpos) in Kmers.UnambiguousDNAMers{k}(sequence)
+        if BioSequences.canonical(km) in hard_vertices
+            lo = max(1, kpos - pad)
+            hi = min(n, kpos + k - 1 + pad)
+            push!(ranges, lo:hi)
+        end
+    end
+    isempty(ranges) && return ranges
+    # Merge overlapping/adjacent ranges, capping each merged span at max_window.
+    sort!(ranges; by = first)
+    merged = UnitRange{Int}[]
+    cur = ranges[1]
+    for r in ranges[2:end]
+        if first(r) <= last(cur) + 1
+            cur = first(cur):max(last(cur), last(r))
+        else
+            push!(merged, cur)
+            cur = r
+        end
+    end
+    push!(merged, cur)
+    return [first(r):min(last(r), first(r) + max_window - 1) for r in merged]
+end
+
+# ------------------------------------------------------------------------------
 # Corrector diagnostics + size-aware auto-beam (review: robustness blockers)
 # ------------------------------------------------------------------------------
 
@@ -655,7 +847,9 @@ mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
     unkmerizable_reads::Threads.Atomic{Int}
 end
-CorrectorDiagnostics() = CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+function CorrectorDiagnostics()
+    CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
 # 48 kb phage that OOM-crashed — ~21B allocations — at the unbounded typemax
@@ -704,6 +898,19 @@ caller/test passing `beam_width = typemax(Int)` still gets exact decoding on
 every read. Swallowed structural/un-k-merizable decode failures are tallied into
 `diagnostics` (auto-created if not supplied) and a high swallowed fraction is
 `@warn`ed so a run that silently corrected nothing is visible.
+
+`hard_vertices` (td-nn6l): when non-`nothing`, restricts decoding to reads whose
+k-mers overlap the "hard" vertex set (bubbles / repeats / weak k-mers); every
+other read passes through untouched. Composes with `skip_solid` — a read is
+decoded only when it is NOT all-solid AND (no hard set, or it touches one).
+
+`soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
+accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
+NOT thread-safe, so supplying it forces sequential processing for this pass.
+
+Returns `(updated_reads, improvements_made, skip_fraction)` where `skip_fraction`
+is the fraction of reads passed through WITHOUT a decode (solid + hard-window
+skips). Callers destructuring only the first two values are unaffected.
 """
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
@@ -712,7 +919,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         graph_mode::Symbol = :canonical,
         skip_solid::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{Vector{FASTX.FASTQ.Record}, Int}
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        hard_vertices::Union{Nothing, AbstractSet} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        Vector{FASTX.FASTQ.Record}, Int, Float64}
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
     # when `diag` is a shared accumulator threaded across many passes.
@@ -732,8 +942,27 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     if skip_solid && graph_mode != :canonical
         @warn "skip_solid is only supported for graph_mode=:canonical; disabling skip (correcting all reads)." graph_mode
     end
-    solid_kmers = (skip_solid && graph_mode == :canonical) ? _solid_kmer_set(graph) : nothing
-    skipped_solid = 0
+    solid_kmers = (skip_solid && graph_mode == :canonical) ? _solid_kmer_set(graph) :
+                  nothing
+    skipped_reads = 0
+
+    # A read is SKIPPED (passed through uncorrected, no decode) when it is either
+    # all-solid (Stage 0) OR — under hard-window gating — it touches no hard
+    # vertex. Both are volume-reduction skips and both count toward the reported
+    # skip fraction. Returns true ⇒ skip.
+    _skip_this_read = read -> begin
+        (solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)) && return true
+        (hard_vertices !== nothing && !should_decode_read(read, k, hard_vertices)) &&
+            return true
+        return false
+    end
+
+    # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
+    # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
+    use_parallel = enable_parallel && Threads.nthreads() > 1 && soft_weights === nothing
+    if enable_parallel && soft_weights !== nothing && Threads.nthreads() > 1
+        @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
+    end
 
     if verbose
         println("  Processing $total_reads reads in batches of $batch_size")
@@ -746,7 +975,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
 
         batch_improvements = 0
 
-        if enable_parallel && Threads.nthreads() > 1
+        if use_parallel
             # Parallel processing for large batches
             batch_results = Vector{Tuple{FASTX.FASTQ.Record, Bool}}(undef, length(batch_reads))
 
@@ -756,8 +985,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             skip_flags = fill(false, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 read = batch_reads[i]
-                if solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)
-                    batch_results[i] = (read, false)   # all-solid ⇒ skip the decode
+                if _skip_this_read(read)
+                    batch_results[i] = (read, false)   # skip the decode
                     skip_flags[i] = true
                 else
                     improved_read,
@@ -767,7 +996,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
-            skipped_solid += count(skip_flags)
+            skipped_reads += count(skip_flags)
 
             # Collect results
             for (i, (improved_read, was_improved)) in enumerate(batch_results)
@@ -777,17 +1006,19 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 end
             end
         else
-            # Sequential processing
+            # Sequential processing (also the soft-EM path: accumulation into
+            # `soft_weights` happens per-read inside improve_read_likelihood).
             for (i, read) in enumerate(batch_reads)
-                if solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)
-                    updated_reads[batch_start + i - 1] = read   # all-solid ⇒ skip
-                    skipped_solid += 1
+                if _skip_this_read(read)
+                    updated_reads[batch_start + i - 1] = read   # skip the decode
+                    skipped_reads += 1
                     continue
                 end
                 improved_read,
                 was_improved = improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
-                    beam_width = beam_width, diagnostics = diag)
+                    beam_width = beam_width, soft_weights = soft_weights,
+                    diagnostics = diag)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -812,12 +1043,12 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
+    skip_fraction = total_reads > 0 ? skipped_reads / total_reads : 0.0
     if verbose
         total_improvement_rate = improvements_made / total_reads * 100
         println("  Total improvements: $improvements_made/$total_reads ($(round(total_improvement_rate, digits=1))%)")
-        if skip_solid
-            skip_rate = total_reads > 0 ? skipped_solid / total_reads * 100 : 0.0
-            println("  Stage 0 skipped (all-solid, no decode): $skipped_solid/$total_reads ($(round(skip_rate, digits=1))%)")
+        if skip_solid || hard_vertices !== nothing
+            println("  Skipped (no decode): $skipped_reads/$total_reads ($(round(skip_fraction * 100, digits=1))%)")
         end
     end
 
@@ -835,22 +1066,28 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                   "error (empty graph / alphabet-inference miss / config error) — the " *
                   "corrector is not running; 0 improvements is NOT 'nothing to fix'." total_reads structural_errors = struct_swallowed
         elseif frac >= 0.5
-            @warn "iterative corrector: high swallowed-decode fraction; many reads " *
-                  "passed through uncorrected (not conflated with 'no likelihood gain')." total_reads structural_errors = struct_swallowed unkmerizable_reads = unk_swallowed fraction = round(frac, digits = 3)
+            @warn "iterative corrector: high swallowed-decode fraction; many reads "*
+            "passed through uncorrected (not conflated with 'no likelihood gain')." total_reads structural_errors=struct_swallowed unkmerizable_reads=unk_swallowed fraction=round(
+                frac, digits = 3)
         end
     end
 
-    return updated_reads, improvements_made
+    return updated_reads, improvements_made, skip_fraction
 end
 
 """
 Improve likelihood of a single read using maximum likelihood path finding.
 Returns improved read and boolean indicating if improvement was made.
+
+`soft_weights` (td-e70t): when supplied, the read's decoded ML path accumulates
+edge responsibilities into it (responsibility 1.0 for the single argmax path).
 """
 function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{FASTX.FASTQ.Record, Bool}
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -875,7 +1112,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
     improved_read,
     likelihood_improvement = find_optimal_sequence_path(
         read, graph, k; graph_mode = graph_mode,
-        beam_width = beam_width, diagnostics = diagnostics)
+        beam_width = beam_width, soft_weights = soft_weights,
+        diagnostics = diagnostics)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -908,7 +1146,9 @@ end
 function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{FASTX.FASTQ.Record, Float64}
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
     # fallback cascade (0.01 abandon-threshold -> statistical resampling -> local
@@ -937,7 +1177,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
 
     viterbi_result = try_viterbi_path_improvement(
         read, graph, k; graph_mode = graph_mode,
-        beam_width = beam_width, diagnostics = diagnostics)
+        beam_width = beam_width, soft_weights = soft_weights,
+        diagnostics = diagnostics)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
         # un-k-merizable read): report no improvement rather than falling back to a
@@ -1431,7 +1672,10 @@ Finalize iterative assembly by combining results from all k-mer sizes and iterat
 function finalize_iterative_assembly(output_dir::String, k_progression::Vector{Int},
         iteration_history::Dict{Int, Vector{Dict{Symbol, Any}}},
         total_runtime::Float64; verbose::Bool = true,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        last_skip_fraction::Float64 = 0.0,
+        hard_window::Bool = false,
+        soft_em::Bool = false)
     if verbose
         println("Finalizing iterative assembly results...")
     end
@@ -1478,7 +1722,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :iteration_history => iteration_history,
         :corrector_errors => corrector_errors,
         :assembly_type => "iterative_maximum_likelihood",
-        :version => "Phase_5.2a"
+        :version => "Phase_5.2a",
+        # Scalable-tier telemetry (td-fuo8/td-nn6l/td-e70t). Zero/false on the
+        # exhaustive tier, which threads neither gate.
+        :hard_window => hard_window,
+        :soft_em => soft_em,
+        :last_skip_fraction => last_skip_fraction
     )
 
     if verbose
@@ -1588,7 +1837,9 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{
+        Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
         alphabet = Mycelia.detect_alphabet(sequence_string)
@@ -1644,8 +1895,18 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             return nothing
         end
 
+        # Soft-EM E-step (td-e70t): accumulate this read's decoded ML path edges
+        # onto the shared accumulator. With a single argmax path per read the
+        # responsibility is 1.0 (soft weight == hard count); the softening emerges
+        # once competing paths per read are wired (v2). Additive + guarded so it
+        # cannot perturb the :exhaustive path (soft_weights === nothing there).
+        if soft_weights !== nothing
+            accumulate_soft_em_edge_weights!(soft_weights, correction.paths)
+        end
+
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
-        corrected_sequence_string = corrected_sequence isa AbstractString ? corrected_sequence :
+        corrected_sequence_string = corrected_sequence isa AbstractString ?
+                                    corrected_sequence :
                                     string(corrected_sequence)
         improved_likelihood = Mycelia.calculate_sequence_likelihood(
             corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)

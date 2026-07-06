@@ -146,6 +146,16 @@ struct AssemblyConfig
     corrector::Symbol                       # :none (default) or :iterative (mycelia_iterative_assemble)
     skip_solid::Bool                        # When corrector=:iterative, skip already-solid/clean reads
 
+    # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
+    # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
+    #   hard-window gating + soft-EM edge memory. Built for real-scale inputs.
+    # :exhaustive — the retained hyper-sensitive engine: prime-by-prime k-walk,
+    #   10 iterations/k, exact (typemax) Viterbi beam, no skip, no hard-window,
+    #   no soft-EM. This path is a BYTE-IDENTICAL passthrough to today's
+    #   mycelia_iterative_assemble defaults (proven at 1 kb: N50 903, 21 contigs),
+    #   so none of the :scalable-gated behavior can perturb it.
+    strategy::Symbol
+
     # Optional pre-tokenized input (opt-in; default `nothing` preserves the
     # read-driven pipeline). When supplied, assemble_genome routes to the token
     # graph and IGNORES `reads` — the tokens ARE the input. SingleStrand only
@@ -171,6 +181,7 @@ struct AssemblyConfig
             memory_profile::Symbol = :full,
             corrector::Symbol = :none,
             skip_solid::Bool = false,
+            strategy::Symbol = :scalable,
             token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing
     )
         # Validation: Must specify exactly one of k or min_overlap
@@ -183,10 +194,12 @@ struct AssemblyConfig
         # Validation: Check strand compatibility with sequence types.
         # DoubleStrand and Canonical both require a defined reverse complement,
         # so both are rejected for amino acids and general strings.
-        if sequence_type <: BioSequences.LongAA && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type <: BioSequences.LongAA &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
         end
-        if sequence_type == String && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type == String &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
         end
 
@@ -198,7 +211,8 @@ struct AssemblyConfig
         end
 
         # Validation: memory_profile must be one recognized by build_kmer_graph
-        _valid_memory_profiles = (:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
+        _valid_memory_profiles = (
+            :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
         if !(memory_profile in _valid_memory_profiles)
             error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
         end
@@ -207,6 +221,13 @@ struct AssemblyConfig
         _valid_correctors = (:none, :iterative)
         if !(corrector in _valid_correctors)
             error("corrector must be one of $(_valid_correctors), got :$(corrector)")
+        end
+
+        # Validation: corrector tier (only meaningful when corrector=:iterative,
+        # but validate unconditionally so a typo is caught at construction time).
+        _valid_strategies = (:scalable, :exhaustive)
+        if !(strategy in _valid_strategies)
+            error("strategy must be one of $(_valid_strategies), got :$(strategy)")
         end
 
         # Validation: Parameter ranges
@@ -256,6 +277,7 @@ struct AssemblyConfig
             memory_profile,
             corrector,
             skip_solid,
+            strategy,
             token_sequences
         )
     end
@@ -638,8 +660,9 @@ function _write_reads_to_fastq(reads, path::String)
                         for record in reader
                             seq = FASTX.FASTA.sequence(String, record)
                             placeholder_used[] = true
-                            write(writer, FASTX.FASTQ.Record(
-                                FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                            write(writer,
+                                FASTX.FASTQ.Record(
+                                    FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                         end
                     end
                 end
@@ -651,8 +674,9 @@ function _write_reads_to_fastq(reads, path::String)
                 elseif record isa FASTX.FASTA.Record
                     seq = FASTX.FASTA.sequence(String, record)
                     placeholder_used[] = true
-                    write(writer, FASTX.FASTQ.Record(
-                        FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                    write(writer,
+                        FASTX.FASTQ.Record(
+                            FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                 else
                     error("Unsupported read type for iterative corrector: $(typeof(record))")
                 end
@@ -669,6 +693,46 @@ function _write_reads_to_fastq(reads, path::String)
 end
 
 """
+    _corrector_strategy_knobs(strategy::Symbol) -> NamedTuple
+
+Map a corrector `strategy` tier onto the concrete engine knobs threaded into
+`Mycelia.mycelia_iterative_assemble` (td-fuo8). Pure + side-effect-free so the
+routing can be unit-tested without running the (slow) corrector.
+
+- `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
+  skip-solid volume reduction, hard-window gating (Stage 3), soft-EM edge memory
+  (Stage 2), and the size-aware auto-beam (`beam_width=nothing`).
+- `:exhaustive` — the retained hyper-sensitive engine: prime-by-prime k-walk
+  (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  and an exact (`typemax(Int)`) Viterbi beam. These are exactly the
+  `mycelia_iterative_assemble` DEFAULTS at the proven ≤toy scale, so `:exhaustive`
+  is a byte-identical passthrough (none of the `:scalable`-gated code activates).
+"""
+function _corrector_strategy_knobs(strategy::Symbol)
+    if strategy == :scalable
+        return (
+            n_k_rungs = 3,
+            max_iterations_per_k = 2,
+            skip_solid = true,
+            hard_window = true,
+            soft_em = true,
+            beam_width = nothing   # size-aware auto-beam (bounded on huge reads)
+        )
+    elseif strategy == :exhaustive
+        return (
+            n_k_rungs = nothing,    # prime-by-prime hyper-sensitive walk
+            max_iterations_per_k = 10,
+            skip_solid = false,
+            hard_window = false,
+            soft_em = false,
+            beam_width = typemax(Int)  # exact ML decode
+        )
+    else
+        error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
+    end
+end
+
+"""
 Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
 skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
 into a real `AssemblyResult`.
@@ -678,8 +742,9 @@ corrected READS (not contigs). This function reads the corrected FASTQ back and
 re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
 so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
 — NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
-td-zru6). Corrector provenance (`corrector`, `skip_solid`, `k_progression`,
-`corrected_read_count`) is stamped onto the re-assembly's `assembly_stats`.
+td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
+`k_progression`, `corrected_read_count`) is stamped onto the re-assembly's
+`assembly_stats`.
 
 The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
 (DoubleStrand for DNA) rather than inheriting `config.graph_mode`: the corrector
@@ -690,7 +755,9 @@ i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
 apples.
 """
 function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
-    _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
+    _log_info(config,
+        "Routing assembly through iterative corrector " *
+        "(corrector=:iterative, strategy=:$(config.strategy))")
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
     # k-progression floors at 13 and min_overlap is not used — surface that rather
@@ -706,17 +773,30 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
 
+        # Fork the engine knobs by tier (td-fuo8). :exhaustive reproduces today's
+        # hyper-sensitive defaults byte-for-byte (n_k_rungs=nothing / 10 iters /
+        # exact beam / no skip / no hard-window / no soft-EM); :scalable opts into
+        # the coarse ladder + low iteration cap + skip-solid + hard-window +
+        # soft-EM. The per-tier knobs live in _corrector_strategy_knobs so the
+        # routing is unit-testable without running the corrector.
+        knobs = _corrector_strategy_knobs(config.strategy)
+        # The :scalable gates (skip-solid + hard-window) canonicalize read k-mers,
+        # so they REQUIRE :canonical (mycelia_iterative_assemble's own default);
+        # forcing config.graph_mode (DoubleStrand for DNA) would silently disable
+        # both gates. :exhaustive keeps today's config-derived mode so it stays a
+        # byte-identical passthrough.
+        corrector_graph_mode = config.strategy == :scalable ?
+                               :canonical : _graph_mode_symbol(config.graph_mode)
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
-            skip_solid = config.skip_solid,
-            graph_mode = _graph_mode_symbol(config.graph_mode),
-            # Opt into the tuned fast settings (td-q70n) explicitly on this route:
-            # a coarse ~3-rung k-ladder + a low iteration cap. Kept out of the
-            # mycelia_iterative_assemble DEFAULTS (which stay 10 / prime-walk) so
-            # other callers are unchanged until the accuracy tradeoff is validated.
-            n_k_rungs = 3,
-            max_iterations_per_k = 2,
+            skip_solid = knobs.skip_solid,
+            graph_mode = corrector_graph_mode,
+            n_k_rungs = knobs.n_k_rungs,
+            max_iterations_per_k = knobs.max_iterations_per_k,
+            hard_window = knobs.hard_window,
+            soft_em = knobs.soft_em,
+            beam_width = knobs.beam_width,
             verbose = false,
             enable_checkpointing = false,
             output_dir = output_dir
@@ -760,9 +840,16 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             k = reassembly_k, corrector = :none)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
-        assembly.assembly_stats["skip_solid"] = config.skip_solid
+        assembly.assembly_stats["strategy"] = String(config.strategy)
+        # Record the knob actually used (strategy-forked), not the raw config flag.
+        assembly.assembly_stats["skip_solid"] = knobs.skip_solid
         assembly.assembly_stats["k_progression"] = result_dict[:k_progression]
         assembly.assembly_stats["corrected_read_count"] = n_corrected
+        # Scalable-tier telemetry (hard-window skip fraction + gate flags).
+        _corr_meta = result_dict[:metadata]
+        assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
+        assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         if isempty(assembly.contigs)
             @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
                   "contigs — the corrected read set did not assemble."
@@ -1506,7 +1593,8 @@ function _qualmer_path_to_consensus_fastq(path, graph, contig_name::String)
     T = eltype(path)
     orientation_aware = !Graphs.is_directed(graph) &&
                         Rhizomorph._label_has_reverse_complement(T) &&
-                        Rhizomorph._sequence_type_from_kmer_type(T) <: BioSequences.LongSequence
+                        Rhizomorph._sequence_type_from_kmer_type(T) <:
+                        BioSequences.LongSequence
     forward_flags = orientation_aware ? Rhizomorph._resolve_path_orientations(path, graph) :
                     trues(length(path))
 
