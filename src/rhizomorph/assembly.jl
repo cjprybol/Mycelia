@@ -688,18 +688,32 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             output_dir = output_dir
         )
 
-        contigs = collect(String, result_dict[:final_assembly])
-        contig_names = ["corrected_contig_$(i)" for i in 1:length(contigs)]
-        assembly_stats = Dict{String, Any}(
-            "corrector" => "iterative",
-            "skip_solid" => config.skip_solid,
-            "k_progression" => result_dict[:k_progression],
-            "corrector_metadata" => result_dict[:metadata]
-        )
-
-        _log_info(config, "Iterative corrector produced $(length(contigs)) contigs")
-        return AssemblyResult(contigs, contig_names;
-            assembly_stats = assembly_stats, gfa_compatible = false)
+        # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
+        # corrected READS, not an assembly. Re-assemble the corrected reads through
+        # the naive path so assemble_genome returns real contigs + a graph —
+        # otherwise downstream (QUAST, GFA) would treat raw corrected reads as an
+        # assembly, which is not an apples-to-apples assembly result (td-zru6).
+        corrected_fastq = get(result_dict[:metadata], :final_fastq_file, nothing)
+        if corrected_fastq === nothing || !isfile(corrected_fastq)
+            error("iterative corrector produced no final corrected FASTQ to re-assemble")
+        end
+        corrected_reads = collect(FASTX.FASTQ.Reader(open(corrected_fastq)))
+        n_corrected = length(corrected_reads)
+        _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
+        reassembly_k = config.k === nothing ? max_k : config.k
+        # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): the
+        # corrector needs :canonical for skip_solid, but the naive graph path emits
+        # invalid contigs under :canonical, so the re-assembly must use the mode the
+        # naive baseline uses (DoubleStrand for DNA), which auto-config selects.
+        assembly = assemble_genome(corrected_reads;
+            k = reassembly_k, corrector = :none)
+        # Stamp the corrector provenance onto the real assembly's stats.
+        assembly.assembly_stats["corrector"] = "iterative"
+        assembly.assembly_stats["skip_solid"] = config.skip_solid
+        assembly.assembly_stats["k_progression"] = result_dict[:k_progression]
+        assembly.assembly_stats["corrected_read_count"] = n_corrected
+        _log_info(config, "Re-assembled corrected reads into $(length(assembly.contigs)) contigs")
+        return assembly
     finally
         # Prompt cleanup so repeated assemblies in a long-lived process do not leak
         # the input FASTQ + corrector output dirs until process exit (review #2).
