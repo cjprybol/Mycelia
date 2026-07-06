@@ -645,15 +645,24 @@ end
 
 """
 Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
-skip-solid maximum-likelihood corrector) and wrap its Dict result in an
-`AssemblyResult`.
+skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
+into a real `AssemblyResult`.
 
-v0 return shape: the corrector returns a Dict with `:final_assembly`
-(Vector of sequence strings), `:k_progression`, and `:metadata`. We map
-`:final_assembly` directly onto `AssemblyResult.contigs` and stash the
-corrector's `:k_progression` / `:metadata` under `assembly_stats`. No graph is
-produced by this path, so `graph`/`simplified_graph` are `nothing` and the
-result is marked `gfa_compatible=false`.
+`mycelia_iterative_assemble` is a read CORRECTOR: its `:final_assembly` is the
+corrected READS (not contigs). This function reads the corrected FASTQ back and
+re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
+so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
+— NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
+td-zru6). Corrector provenance (`corrector`, `skip_solid`, `k_progression`,
+`corrected_read_count`) is stamped onto the re-assembly's `assembly_stats`.
+
+The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
+(DoubleStrand for DNA) rather than inheriting `config.graph_mode`: the corrector
+needs `:canonical` for skip-solid, but the naive contig path is invalid under
+`:canonical`. Corrected reads are FASTQ, so the re-assembly runs the same
+quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
+i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
+apples.
 """
 function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
     _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
@@ -694,11 +703,28 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # otherwise downstream (QUAST, GFA) would treat raw corrected reads as an
         # assembly, which is not an apples-to-apples assembly result (td-zru6).
         corrected_fastq = get(result_dict[:metadata], :final_fastq_file, nothing)
-        if corrected_fastq === nothing || !isfile(corrected_fastq)
-            error("iterative corrector produced no final corrected FASTQ to re-assemble")
+        if corrected_fastq === nothing
+            error("iterative corrector metadata is missing the :final_fastq_file key; " *
+                  "keys=$(collect(keys(result_dict[:metadata])))")
+        elseif !isfile(corrected_fastq)
+            error("iterative corrector :final_fastq_file points at a nonexistent path: " *
+                  "$(corrected_fastq) (output_dir=$(output_dir))")
         end
-        corrected_reads = collect(FASTX.FASTQ.Reader(open(corrected_fastq)))
+        # Eager `collect` inside a do-block: materializes ALL corrected reads into
+        # memory (load-bearing — the finally-block rm's output_dir, so a lazy reader
+        # would hit a deleted file) AND closes the stream (no leaked fd across many
+        # assemblies, and closes on a malformed-FASTQ throw too).
+        corrected_reads = open(FASTX.FASTQ.Reader, corrected_fastq) do reader
+            collect(reader)
+        end
         n_corrected = length(corrected_reads)
+        # A corrector that silently ate every read (empty/header-only FASTQ) would
+        # otherwise flow into assemble_genome([]) → a 0-contig "successful" assembly.
+        # Fail loud instead of handing downstream a silently-empty assembly.
+        if n_corrected == 0
+            error("iterative corrector produced 0 corrected reads (from $(corrected_fastq)); " *
+                  "refusing to return an empty assembly")
+        end
         _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
         reassembly_k = config.k === nothing ? max_k : config.k
         # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): the
@@ -712,6 +738,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["skip_solid"] = config.skip_solid
         assembly.assembly_stats["k_progression"] = result_dict[:k_progression]
         assembly.assembly_stats["corrected_read_count"] = n_corrected
+        if isempty(assembly.contigs)
+            @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
+                  "contigs — the corrected read set did not assemble."
+        end
         _log_info(config, "Re-assembled corrected reads into $(length(assembly.contigs)) contigs")
         return assembly
     finally
