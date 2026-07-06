@@ -1684,6 +1684,68 @@ function try_local_path_improvements(
     return FASTX.sequence(String, improved_record), improvement
 end
 
+# ============================================================================
+# Soft-EM M-step accumulation hook (SCAFFOLD, td-e70t)
+# ============================================================================
+#
+# See the design note over `SoftEdgeWeightAccumulator` in
+# `src/rhizomorph/core/evidence-functions.jl`. This is the correction-side hook
+# that turns a read's competing decoded paths into probability-weighted edge
+# evidence: each candidate path's RESPONSIBILITY (posterior over the read's own
+# candidate set) is accumulated onto the edges it traverses. Summed over reads,
+# the accumulator holds soft edge weights in which error edges — traversed only
+# by rare, low-probability paths — accrue little weight and decay below the
+# `generate_alternative_qualmer_paths` `weight > 0.01` gate WITHOUT tip-clipping.
+#
+# NOT yet called from `mycelia_iterative_assemble`: emergent coalescence also
+# needs the qualmer graph rebuild / transition weighting to CONSUME these soft
+# weights instead of raw coverage counts, which is outside the correction-core
+# file boundary (the td-e70t follow-on). This hook is deliberately additive and
+# side-effect-free so wiring it in cannot destabilize the current EM loop until
+# the M-step consumption lands.
+
+"""
+    _decoded_path_edges(result) -> Vector
+
+Ordered `(src_label, dst_label)` edge tuples of a decoded Viterbi path, or an
+empty vector when the result carries no path.
+"""
+function _decoded_path_edges(result::Mycelia.Rhizomorph.ViterbiDecodingResult)
+    labels = _decoded_path_labels(result)
+    labels === nothing && return Tuple{Any, Any}[]
+    return Tuple{Any, Any}[(labels[i], labels[i + 1]) for i in 1:(length(labels) - 1)]
+end
+
+"""
+    accumulate_soft_em_edge_weights!(accumulator, candidate_paths) -> accumulator
+
+Soft-EM M-step seam (td-e70t scaffold). Given a single read's competing decoded
+paths (`ViterbiDecodingResult`s, each with a `.score` log-likelihood and a
+`.path`), compute each path's responsibility by softmax-normalizing its score
+against the candidate set (`Mycelia.Rhizomorph.path_responsibility`) and
+accumulate that responsibility onto the edges it traverses
+(`Mycelia.Rhizomorph.accumulate_path_probability!`).
+
+With a single argmax path per read the responsibility is `1.0` (soft weight ==
+hard count); the softening emerges once several candidate paths per read compete
+(e.g. from `generate_alternative_qualmer_paths`), which is the regime the
+follow-on wires into the iteration loop.
+"""
+function accumulate_soft_em_edge_weights!(
+        accumulator::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+        candidate_paths
+)
+    scores = Float64[result.score for result in candidate_paths if isfinite(result.score)]
+    isempty(scores) && return accumulator
+    for result in candidate_paths
+        isfinite(result.score) || continue
+        responsibility = Mycelia.Rhizomorph.path_responsibility(result.score, scores)
+        Mycelia.Rhizomorph.accumulate_path_probability!(
+            accumulator, _decoded_path_edges(result), responsibility)
+    end
+    return accumulator
+end
+
 """
 Generate alternative qualmer paths through the graph using quality-aware probabilistic sampling.
 """

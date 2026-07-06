@@ -606,6 +606,113 @@ function compute_edge_coverage(edge)
 end
 
 # ============================================================================
+# Soft-EM edge weighting (SCAFFOLD, td-e70t)
+# ============================================================================
+#
+# Design note (graph-as-HMM correction redesign). Today the M-step is a HARD
+# assignment: `compute_edge_weight` returns `count_total_observations(edge)` — a
+# raw integer coverage count — and each EM iteration rebuilds the graph from the
+# corrected *sequences*. The graph keeps no path-probability memory, so cleaning
+# only happens because corrected reads stop emitting error k-mers, not because
+# low-probability edges decay on their own.
+#
+# The soft-EM thesis replaces the hard count with probability-weighted evidence:
+# after Viterbi returns a path + likelihood, the path's RESPONSIBILITY (posterior
+# probability, normalized against competing paths) is accumulated onto each edge
+# it traverses. Summing responsibilities over all reads gives a soft, real-valued
+# edge weight. Error edges — traversed only by low-probability paths — accumulate
+# little weight and fall below the emergent-cleaning gate
+# (`generate_alternative_qualmer_paths`' `weight > 0.01` filter), so they decay
+# across iterations WITHOUT explicit tip-clipping. Cleaning becomes an emergent
+# property of the EM rather than a bolted-on heuristic.
+#
+# This block is the ACCUMULATION HOOK (the primitive + math). The remaining work
+# to reach emergent coalescence is to make the M-step CONSUME these soft weights
+# instead of rebuilding from hard sequences — that lives in the qualmer graph
+# rebuild (`build_qualmer_graph`) / `_get_valid_transitions` weighting, which is
+# outside the correction-core file boundary and is tracked as the follow-on for
+# td-e70t. The full-pipeline acceptance (1 kb toy coalesces to ~1 contig; error
+# edge weight decreases across iterations) is encoded as a skipped test until the
+# M-step consumption is wired.
+
+"""
+    SoftEdgeWeightAccumulator
+
+Probability-weighted (soft) edge-evidence accumulator for soft-EM correction
+(td-e70t scaffold). Maps an edge identity (e.g. an ordered `(src_label,
+dst_label)` tuple) to the sum of the responsibilities of the decoded paths that
+traversed it. Unlike `count_total_observations` (a hard integer count), the
+accumulated value is a real-valued soft weight in which a low-probability error
+edge contributes proportionally little.
+"""
+struct SoftEdgeWeightAccumulator
+    weights::Dict{Any, Float64}
+end
+
+SoftEdgeWeightAccumulator() = SoftEdgeWeightAccumulator(Dict{Any, Float64}())
+
+"""
+    accumulate_path_probability!(acc, path_edges, probability)
+
+Accumulate a single decoded path's `probability` (its responsibility / posterior
+weight, in `[0, 1]`) onto every edge in `path_edges` (the soft E->M update). Edges
+shared by many high-probability paths accrue large weight; edges visited only by
+rare, low-probability (error) paths accrue little, so they decay relative to the
+true consensus edges across EM iterations. Returns `acc`.
+"""
+function accumulate_path_probability!(
+        acc::SoftEdgeWeightAccumulator,
+        path_edges,
+        probability::Real
+)
+    p = Float64(probability)
+    for edge_id in path_edges
+        acc.weights[edge_id] = get(acc.weights, edge_id, 0.0) + p
+    end
+    return acc
+end
+
+"""
+    soft_edge_weight(acc, edge_id; prior=0.0)
+
+The soft (probability-weighted) weight for `edge_id`: the accumulated path
+responsibility, or `prior` when no soft evidence exists yet. This is the
+probability-weighted replacement for `compute_edge_weight`'s raw coverage count;
+the M-step consumes it so that emergent cleaning (low-weight error edges falling
+below the `generate_alternative_qualmer_paths` gate) replaces heuristic
+tip-clipping.
+"""
+function soft_edge_weight(
+        acc::SoftEdgeWeightAccumulator,
+        edge_id;
+        prior::Real = 0.0
+)::Float64
+    return get(acc.weights, edge_id, Float64(prior))
+end
+
+"""
+    path_responsibility(path_logp, competing_logps)
+
+Convert a decoded path's log-likelihood into a responsibility (posterior weight)
+by normalizing against the log-likelihoods of the competing paths for the same
+read, via a numerically-stable softmax:
+`exp(path_logp - logsumexp(competing_logps))`. When a read yields a single
+decoded path this is `1.0`; when several paths compete the mass splits by
+relative likelihood — the soft assignment that distinguishes soft-EM from the
+current hard argmax rebuild.
+"""
+function path_responsibility(
+        path_logp::Real,
+        competing_logps::AbstractVector{<:Real}
+)::Float64
+    isempty(competing_logps) && return 1.0
+    m = maximum(competing_logps)
+    isfinite(m) || return 0.0
+    denom = sum(exp(Float64(lp) - m) for lp in competing_logps)
+    return exp(Float64(path_logp) - m) / denom
+end
+
+# ============================================================================
 # Lightweight Type Overloads
 #
 # These methods enable lightweight vertex/edge types to satisfy the same
