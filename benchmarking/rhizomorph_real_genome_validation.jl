@@ -247,7 +247,10 @@ function measure_skip_fraction(reads_fastq::String, k::Int, outdir::String)
     end
     s = isfile(logpath) ? read(logpath, String) : ""
     fracs = Float64[]
-    for m in eachmatch(r"Stage 0 skipped[^()]*\(([\d.]+)%\)", s)
+    # The corrector prints e.g. "Stage 0 skipped (all-solid, no decode): 27/60
+    # (45.0%)" -- two parenthetical groups on the line, so match greedily to the
+    # trailing "(NN.N%)".
+    for m in eachmatch(r"Stage 0 skipped[^\n]*\(([\d.]+)%\)", s)
         push!(fracs, parse(Float64, m.captures[1]))
     end
     return isempty(fracs) ? nothing : maximum(fracs)
