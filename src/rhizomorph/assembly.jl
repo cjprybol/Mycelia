@@ -862,6 +862,20 @@ end
 
 """
 Prepare observations from various input formats (FASTA/FASTQ records or file paths).
+
+Quality note (graph-as-HMM correction redesign,
+`docs/design/2026-07-06-graph-as-hmm-correction-redesign.md`): this helper
+normalizes to FASTA records, which DROPS per-base quality. That is intentional
+for the naive k-mer / string / n-gram graph builders, which do not consume
+quality. The iterative CORRECTOR does NOT use this path — it preserves real
+FASTQ quality end-to-end via `_write_reads_to_fastq` (FASTQ written verbatim;
+FASTA flagged quality-absent with a warning, never silently Q40) and the per-read
+per-base emission wrapping in `try_viterbi_path_improvement`. The remaining gap is
+the qualmer GRAPH builder (`_assemble_qualmer_graph`), which currently receives
+these quality-stripped observations and then re-injects a Q40 placeholder in
+`_prepare_fastq_observations`; giving it real FASTQ quality requires routing raw
+reads through the `assemble_genome` dispatch (a separate track) rather than this
+FASTA-normalizing helper.
 """
 function _prepare_observations(reads)
     if reads isa Vector{String}

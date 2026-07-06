@@ -1439,17 +1439,26 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         alphabet = Mycelia.detect_alphabet(sequence_string)
         sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
         sequence = Mycelia.extract_typed_sequence(read, sequence_type)
-        observations = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
-        if isempty(observations)
+        kmers = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
+        if isempty(kmers)
             return nothing
         end
 
+        # Restore the emission model (graph-as-HMM correction core, td-jqdf): the
+        # read's per-base Phred quality is the emission P(observed | hidden). The
+        # k-mer at index `i` spans read positions `i:(i+k-1)`, so wrap it with that
+        # per-base window (clamped to bounds) instead of discarding the quality and
+        # letting the emission fall back to the graph's population-average quality.
         quality_scores = collect(FASTX.quality_scores(read))
-        # Bound the exact-Viterbi frontier: without a finite beam the reachable
-        # (vertex, strand) set grows ~unboundedly with read length on real graphs
-        # and the corrector explodes (21B allocations / crash on a 48 kb phage —
-        # td-63qy). 256 keeps enough candidates to preserve correction quality
-        # while making the corrector tractable at read scale; tune via benchmark.
+        n_qual = length(quality_scores)
+        observations = Vector{Mycelia.QualityObservation}(undef, length(kmers))
+        for (i, kmer) in enumerate(kmers)
+            lo = clamp(i, 1, n_qual)
+            hi = clamp(i + k - 1, 1, n_qual)
+            window = UInt8.(@view quality_scores[lo:hi])
+            observations[i] = Mycelia.QualityObservation(kmer, window)
+        end
+
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
