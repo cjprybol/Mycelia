@@ -146,6 +146,20 @@ struct AssemblyConfig
     corrector::Symbol                       # :none (default) or :iterative (mycelia_iterative_assemble)
     skip_solid::Bool                        # When corrector=:iterative, skip already-solid/clean reads
 
+    # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
+    # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
+    #   hard-read gating + soft-EM edge memory (record-only v1). Built for
+    #   real-scale inputs.
+    # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
+    #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
+    #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
+    #   default: master's corrector route used the size-aware auto-beam
+    #   (beam_width=nothing, bounded on large reads), so forcing an exact unbounded
+    #   beam here can OOM above the auto-beam threshold (the td-63qy regime). Use
+    #   :exhaustive for small-scale / high-sensitivity inputs; use :scalable at
+    #   scale. None of the :scalable-gated behavior perturbs :exhaustive.
+    strategy::Symbol
+
     # Optional pre-tokenized input (opt-in; default `nothing` preserves the
     # read-driven pipeline). When supplied, assemble_genome routes to the token
     # graph and IGNORES `reads` — the tokens ARE the input. SingleStrand only
@@ -170,9 +184,18 @@ struct AssemblyConfig
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
             corrector::Symbol = :none,
-            skip_solid::Bool = false,
+            skip_solid::Union{Bool, Nothing} = nothing,
+            strategy::Union{Symbol, Nothing} = nothing,
             token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing
     )
+        # Sentinel `nothing` defaults let us DETECT whether the caller set
+        # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
+        # :scalable default and on a skip_solid the tier will override, without
+        # changing the stored field types. Resolve to concrete values here.
+        strategy_explicit = strategy !== nothing
+        skip_solid_explicit = skip_solid !== nothing
+        effective_strategy = strategy === nothing ? :scalable : strategy
+        effective_skip_solid = skip_solid === nothing ? false : skip_solid
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -183,10 +206,12 @@ struct AssemblyConfig
         # Validation: Check strand compatibility with sequence types.
         # DoubleStrand and Canonical both require a defined reverse complement,
         # so both are rejected for amino acids and general strings.
-        if sequence_type <: BioSequences.LongAA && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type <: BioSequences.LongAA &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
         end
-        if sequence_type == String && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type == String &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
         end
 
@@ -198,7 +223,8 @@ struct AssemblyConfig
         end
 
         # Validation: memory_profile must be one recognized by build_kmer_graph
-        _valid_memory_profiles = (:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
+        _valid_memory_profiles = (
+            :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
         if !(memory_profile in _valid_memory_profiles)
             error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
         end
@@ -207,6 +233,38 @@ struct AssemblyConfig
         _valid_correctors = (:none, :iterative)
         if !(corrector in _valid_correctors)
             error("corrector must be one of $(_valid_correctors), got :$(corrector)")
+        end
+
+        # Validation: corrector tier (only meaningful when corrector=:iterative,
+        # but validate unconditionally so a typo is caught at construction time).
+        _valid_strategies = (:scalable, :exhaustive)
+        if !(effective_strategy in _valid_strategies)
+            error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
+        end
+
+        # FIX 4 (silent-default + skip_solid-override provenance). corrector=:iterative
+        # now DEFAULTS to strategy=:scalable, which is a materially different engine
+        # than the prior corrector route (coarse ladder / low iteration cap /
+        # skip-solid / canonical / hard-read gate). Announce the default once so a
+        # caller relying on old behavior is not silently switched.
+        if corrector == :iterative && !strategy_explicit
+            @warn "corrector=:iterative now defaults to strategy=:scalable — a coarse " *
+                  "k-ladder + low iteration cap with skip-solid, canonical graph mode, " *
+                  "and hard-read gating enabled. This is NOT the prior corrector " *
+                  "behavior; pass strategy=:exhaustive for the maximum-sensitivity " *
+                  "exact-ML engine, or strategy=:scalable to silence this warning." maxlog = 1
+        end
+        # The tier fully determines skip_solid (see _corrector_strategy_knobs):
+        # :scalable ⇒ true, :exhaustive ⇒ false. An explicit config.skip_solid that
+        # disagrees is silently overridden by the corrector route; warn so the
+        # override is visible.
+        if corrector == :iterative && skip_solid_explicit
+            _tier_skip_solid = effective_strategy == :scalable
+            if effective_skip_solid != _tier_skip_solid
+                @warn "strategy=:$(effective_strategy) forces skip_solid=$(_tier_skip_solid); " *
+                      "your explicit skip_solid=$(effective_skip_solid) is overridden by the " *
+                      "corrector tier. assembly_stats records both requested and effective." maxlog = 1
+            end
         end
 
         # Validation: Parameter ranges
@@ -255,7 +313,8 @@ struct AssemblyConfig
             compact_unitigs,
             memory_profile,
             corrector,
-            skip_solid,
+            effective_skip_solid,
+            effective_strategy,
             token_sequences
         )
     end
@@ -638,8 +697,9 @@ function _write_reads_to_fastq(reads, path::String)
                         for record in reader
                             seq = FASTX.FASTA.sequence(String, record)
                             placeholder_used[] = true
-                            write(writer, FASTX.FASTQ.Record(
-                                FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                            write(writer,
+                                FASTX.FASTQ.Record(
+                                    FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                         end
                     end
                 end
@@ -651,8 +711,9 @@ function _write_reads_to_fastq(reads, path::String)
                 elseif record isa FASTX.FASTA.Record
                     seq = FASTX.FASTA.sequence(String, record)
                     placeholder_used[] = true
-                    write(writer, FASTX.FASTQ.Record(
-                        FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                    write(writer,
+                        FASTX.FASTQ.Record(
+                            FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                 else
                     error("Unsupported read type for iterative corrector: $(typeof(record))")
                 end
@@ -669,6 +730,49 @@ function _write_reads_to_fastq(reads, path::String)
 end
 
 """
+    _corrector_strategy_knobs(strategy::Symbol) -> NamedTuple
+
+Map a corrector `strategy` tier onto the concrete engine knobs threaded into
+`Mycelia.mycelia_iterative_assemble` (td-fuo8). Pure + side-effect-free so the
+routing can be unit-tested without running the (slow) corrector.
+
+- `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
+  skip-solid volume reduction, hard-read gating (Stage 3), soft-EM edge memory
+  (Stage 2, record-only v1), and the size-aware auto-beam (`beam_width=nothing`).
+- `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
+  (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
+  of the prior corrector default: master's corrector route used the size-aware
+  auto-beam (`beam_width=nothing`, bounded on large reads), so forcing an exact
+  unbounded beam here reintroduces the td-63qy OOM ABOVE the auto-beam threshold.
+  Intended for SMALL-SCALE / high-sensitivity inputs; the exact beam can OOM on
+  very large reads — use `:scalable` at scale.
+"""
+function _corrector_strategy_knobs(strategy::Symbol)
+    if strategy == :scalable
+        return (
+            n_k_rungs = 3,
+            max_iterations_per_k = 2,
+            skip_solid = true,
+            hard_window = true,
+            soft_em = true,
+            beam_width = nothing   # size-aware auto-beam (bounded on huge reads)
+        )
+    elseif strategy == :exhaustive
+        return (
+            n_k_rungs = nothing,    # prime-by-prime hyper-sensitive walk
+            max_iterations_per_k = 10,
+            skip_solid = false,
+            hard_window = false,
+            soft_em = false,
+            beam_width = typemax(Int)  # exact ML decode
+        )
+    else
+        error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
+    end
+end
+
+"""
 Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
 skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
 into a real `AssemblyResult`.
@@ -678,8 +782,9 @@ corrected READS (not contigs). This function reads the corrected FASTQ back and
 re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
 so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
 — NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
-td-zru6). Corrector provenance (`corrector`, `skip_solid`, `k_progression`,
-`corrected_read_count`) is stamped onto the re-assembly's `assembly_stats`.
+td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
+`k_progression`, `corrected_read_count`) is stamped onto the re-assembly's
+`assembly_stats`.
 
 The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
 (DoubleStrand for DNA) rather than inheriting `config.graph_mode`: the corrector
@@ -690,7 +795,9 @@ i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
 apples.
 """
 function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
-    _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
+    _log_info(config,
+        "Routing assembly through iterative corrector " *
+        "(corrector=:iterative, strategy=:$(config.strategy))")
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
     # k-progression floors at 13 and min_overlap is not used — surface that rather
@@ -706,17 +813,32 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
 
+        # Fork the engine knobs by tier (td-fuo8). :exhaustive is the
+        # maximum-sensitivity exact-ML engine (n_k_rungs=nothing / 10 iters /
+        # exact UNBOUNDED beam / no skip / no hard-window / no soft-EM) — NOT a
+        # byte-for-byte reproduction of the prior corrector default (which used the
+        # bounded auto-beam), so it can OOM on very large reads; :scalable opts into
+        # the coarse ladder + low iteration cap + skip-solid + hard-read gate +
+        # soft-EM. The per-tier knobs live in _corrector_strategy_knobs so the
+        # routing is unit-testable without running the corrector.
+        knobs = _corrector_strategy_knobs(config.strategy)
+        # The :scalable gates (skip-solid + hard-window) canonicalize read k-mers,
+        # so they REQUIRE :canonical (mycelia_iterative_assemble's own default);
+        # forcing config.graph_mode (DoubleStrand for DNA) would silently disable
+        # both gates. :exhaustive keeps today's config-derived mode so it stays a
+        # byte-identical passthrough.
+        corrector_graph_mode = config.strategy == :scalable ?
+                               :canonical : _graph_mode_symbol(config.graph_mode)
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
-            skip_solid = config.skip_solid,
-            graph_mode = _graph_mode_symbol(config.graph_mode),
-            # Opt into the tuned fast settings (td-q70n) explicitly on this route:
-            # a coarse ~3-rung k-ladder + a low iteration cap. Kept out of the
-            # mycelia_iterative_assemble DEFAULTS (which stay 10 / prime-walk) so
-            # other callers are unchanged until the accuracy tradeoff is validated.
-            n_k_rungs = 3,
-            max_iterations_per_k = 2,
+            skip_solid = knobs.skip_solid,
+            graph_mode = corrector_graph_mode,
+            n_k_rungs = knobs.n_k_rungs,
+            max_iterations_per_k = knobs.max_iterations_per_k,
+            hard_window = knobs.hard_window,
+            soft_em = knobs.soft_em,
+            beam_width = knobs.beam_width,
             verbose = false,
             enable_checkpointing = false,
             output_dir = output_dir
@@ -760,9 +882,29 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             k = reassembly_k, corrector = :none)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
-        assembly.assembly_stats["skip_solid"] = config.skip_solid
+        assembly.assembly_stats["strategy"] = String(config.strategy)
+        # Provenance (FIX 4): stamp BOTH the caller's requested skip_solid and the
+        # value the tier actually used, so the tier's silent override cannot hide.
+        # `skip_solid` is retained as the EFFECTIVE value for back-compat.
+        assembly.assembly_stats["skip_solid_requested"] = config.skip_solid
+        assembly.assembly_stats["skip_solid_effective"] = knobs.skip_solid
+        assembly.assembly_stats["skip_solid"] = knobs.skip_solid
         assembly.assembly_stats["k_progression"] = result_dict[:k_progression]
         assembly.assembly_stats["corrected_read_count"] = n_corrected
+        # Scalable-tier telemetry (hard-read skip fraction + honest gate flags).
+        _corr_meta = result_dict[:metadata]
+        # `hard_window`/`hard_read_gate` = the skip gate (active on :scalable);
+        # `windowed_decode` = per-hard-region windowed decode, scaffolded ⇒ false
+        # (hard reads decoded WHOLE). Kept distinct so the surfaced flag is honest.
+        assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
+        assembly.assembly_stats["hard_read_gate"] = get(_corr_meta, :hard_read_gate, false)
+        assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
+        # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
+        # :exhaustive), never a bare `true` (FIX 1/5).
+        assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
+        assembly.assembly_stats["skip_fraction_per_pass"] =
+            get(_corr_meta, :skip_fraction_per_pass, Float64[])
         if isempty(assembly.contigs)
             @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
                   "contigs — the corrected read set did not assemble."
@@ -1506,7 +1648,8 @@ function _qualmer_path_to_consensus_fastq(path, graph, contig_name::String)
     T = eltype(path)
     orientation_aware = !Graphs.is_directed(graph) &&
                         Rhizomorph._label_has_reverse_complement(T) &&
-                        Rhizomorph._sequence_type_from_kmer_type(T) <: BioSequences.LongSequence
+                        Rhizomorph._sequence_type_from_kmer_type(T) <:
+                        BioSequences.LongSequence
     forward_flags = orientation_aware ? Rhizomorph._resolve_path_orientations(path, graph) :
                     trues(length(path))
 
