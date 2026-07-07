@@ -79,9 +79,9 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         sc = R._corrector_strategy_knobs(:scalable)
         # Scalable = coarse 3-rung ladder, low iteration cap, all volume/quality
         # gates on, size-aware auto-beam (nothing). `soft_em=true` is the ENGINE
-        # switch that runs the record-only E-step (accumulate responsibilities);
-        # the pipeline does NOT consume them (v1), which the surfaced provenance
-        # flag ("scaffold-v1-record-only") reflects — asserted end-to-end below.
+        # switch that runs the v2 competing-paths E-step AND the support-floored
+        # M-step consumption, which the surfaced provenance flag
+        # ("v2-competing-paths-floor") reflects — asserted end-to-end below.
         Test.@test sc.n_k_rungs == 3
         Test.@test sc.max_iterations_per_k == 2
         Test.@test sc.skip_solid == true
@@ -116,9 +116,10 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         # Per-hard-region windowed decode is scaffolded (hard reads decoded WHOLE),
         # so the honest flag is false even on :scalable (FIX 5).
         Test.@test sc.assembly_stats["windowed_decode"] == false
-        # soft-EM v1 is RECORD-ONLY (E-step records, M-step does not consume), so
-        # the surfaced provenance is a scaffold marker, never a bare `true` (FIX 1/5).
-        Test.@test sc.assembly_stats["soft_em"] == "scaffold-v1-record-only"
+        # soft-EM v2 is ACTIVE (E-step enumerates competing paths, M-step registers
+        # the support-floored soft weights), so the surfaced provenance is the v2
+        # marker, never a bare `true`.
+        Test.@test sc.assembly_stats["soft_em"] == "v2-competing-paths-floor"
         Test.@test sc.assembly_stats["skip_solid"] == true
         # Skip fraction is a real fraction in [0, 1].
         skip = sc.assembly_stats["skip_fraction"]

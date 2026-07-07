@@ -1,18 +1,20 @@
 # Stage 2 (td-e70t): soft-EM edge-memory PRIMITIVES. After each successful Viterbi
-# decode the ML path's edges accumulate responsibility (1.0 for the single argmax
-# path) into a SoftEdgeWeightAccumulator; `register_soft_edge_weights!` can then
-# re-weight a graph so `compute_edge_weight` returns probability-weighted evidence
-# instead of raw coverage counts, reverting byte-for-byte after `clear!`. This
-# test exercises those primitives at the UNIT level.
+# decode the ML path's edges accumulate responsibility into a
+# SoftEdgeWeightAccumulator; `register_soft_edge_weights!` re-weights a graph so
+# `compute_edge_weight` returns probability-weighted evidence instead of raw
+# coverage counts, reverting byte-for-byte after `clear!`. This test exercises
+# those primitives at the UNIT level.
 #
-# IMPORTANT (v1 is RECORD-ONLY): the shipped pipeline (`mycelia_iterative_assemble`)
-# runs the E-step accumulation but does NOT consume it — it never calls
-# `register_soft_edge_weights!`, so `compute_edge_weight` always returns raw counts
-# and the graph is never soft-reweighted (see the FIX-1 note in
-# src/iterative-assembly.jl). Registration/consumption is a v2-reserved capability;
-# this file tests the primitives directly (not the pipeline) so they are ready for
-# the v2 competing-paths M-step. With a single argmax path per read, responsibility
-# is always 1.0 (soft weight == hard count); v2 softens it via competing paths.
+# SUPPORT FLOOR (td-h6w9): as of soft-EM v2, `register_soft_edge_weights!` clamps
+# a well-supported edge (raw coverage >= SOFT_EM_MIN_SUPPORT) to at least its raw
+# count, so a real skewed minority allele is never decayed below its own support;
+# only near-zero-support (error) edges are free to decay. The consumption test
+# below therefore checks `max(soft, floor)`: a soft weight ABOVE raw is consumed
+# verbatim, a soft weight BELOW raw on a supported edge is floored back to raw.
+#
+# The shipped pipeline (`mycelia_iterative_assemble`) now runs BOTH the E-step
+# accumulation and the M-step consumption (register the prior iteration's
+# accumulator, decode, clear). This file tests the primitives directly.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/scalable_corrector_soft_em_test.jl")'
@@ -41,10 +43,10 @@ end
 Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
     R = Mycelia.Rhizomorph
 
-    Test.@testset "registry consumption + byte-identical revert" begin
-        # A soft-registered edge returns its soft weight from compute_edge_weight;
-        # after clear!, the raw coverage count is restored EXACTLY (the invariant
-        # that keeps every non-soft-EM path unchanged).
+    Test.@testset "registry consumption (support-floored) + byte-identical revert" begin
+        # A soft-registered edge returns `max(soft_weight, support_floor)` from
+        # compute_edge_weight; after clear!, the raw coverage count is restored
+        # EXACTLY (the invariant that keeps every non-soft-EM path unchanged).
         reads = _toy_fastq_records(Random.MersenneTwister(3); n_reads = 60, err = 0.0)
         graph = R.build_qualmer_graph(reads, 13; mode = :canonical)
         edge_labels = collect(Mycelia.Rhizomorph.MetaGraphsNext.edge_labels(graph))
@@ -53,14 +55,20 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
         edge_data = graph[src, dst]
         raw = R.compute_edge_weight(edge_data)
         Test.@test raw >= 1.0
+        # This toy edge is well-supported (raw coverage >= SOFT_EM_MIN_SUPPORT); its
+        # floor is therefore its raw coverage.
+        Test.@test R.count_total_observations(edge_data) >= R.SOFT_EM_MIN_SUPPORT
+        floor = Float64(R.count_total_observations(edge_data))
 
-        acc = R.SoftEdgeWeightAccumulator()
-        R.accumulate_path_probability!(acc, [(src, dst)], 0.37)
-        # Test hygiene (FIX 6): register→assert→clear in try/finally so a failed
-        # assertion cannot leak the process-global registry into later tests.
+        # (a) A soft weight BELOW raw on a supported edge is FLOORED back to raw
+        # (variation preservation — a real edge never decays below its support).
+        acc_low = R.SoftEdgeWeightAccumulator()
+        R.accumulate_path_probability!(acc_low, [(src, dst)], 0.37)
+        # Test hygiene: register→assert→clear in try/finally so a failed assertion
+        # cannot leak the process-global registry into later tests.
         try
-            R.register_soft_edge_weights!(graph, acc)
-            Test.@test R.compute_edge_weight(edge_data) == 0.37   # soft weight consumed
+            R.register_soft_edge_weights!(graph, acc_low)
+            Test.@test R.compute_edge_weight(edge_data) == floor   # floored, not 0.37
             # An edge NOT in the accumulator keeps its raw count.
             if length(edge_labels) > 1
                 (s2, d2) = edge_labels[2]
@@ -71,6 +79,39 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
             R.clear_soft_edge_weights!()
         end
         Test.@test R.compute_edge_weight(edge_data) == raw    # byte-identical revert
+
+        # (b) A soft weight ABOVE raw is consumed verbatim (the floor is a lower
+        # bound only; a decode can raise an edge's soft weight above raw when reads
+        # are corrected onto it).
+        acc_high = R.SoftEdgeWeightAccumulator()
+        R.accumulate_path_probability!(acc_high, [(src, dst)], raw + 5.0)
+        try
+            R.register_soft_edge_weights!(graph, acc_high)
+            Test.@test R.compute_edge_weight(edge_data) == raw + 5.0   # soft consumed
+        finally
+            R.clear_soft_edge_weights!()
+        end
+        Test.@test R.compute_edge_weight(edge_data) == raw    # byte-identical revert
+
+        # (c) On a below-support edge (raw < SOFT_EM_MIN_SUPPORT) the floor is 0, so
+        # a decayed soft weight is consumed as-is — the error-decay path.
+        low_key = nothing
+        for (s, d) in edge_labels
+            if R.count_total_observations(graph[s, d]) < R.SOFT_EM_MIN_SUPPORT
+                low_key = (s, d)
+                break
+            end
+        end
+        if low_key !== nothing
+            acc_err = R.SoftEdgeWeightAccumulator()
+            R.accumulate_path_probability!(acc_err, [low_key], 0.02)
+            try
+                R.register_soft_edge_weights!(graph, acc_err)
+                Test.@test R.compute_edge_weight(graph[low_key...]) == 0.02   # unfloored
+            finally
+                R.clear_soft_edge_weights!()
+            end
+        end
     end
 
     Test.@testset "decode pass populates the accumulator (responsibility 1.0)" begin
