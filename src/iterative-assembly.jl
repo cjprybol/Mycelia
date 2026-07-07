@@ -247,19 +247,21 @@ function mycelia_iterative_assemble(input_fastq::String;
     # "nothing to fix". See CorrectorDiagnostics.
     corrector_diagnostics = CorrectorDiagnostics()
 
-    # -- Soft-EM registry hygiene (td-e70t, v1 record-only) --------------------
-    # Soft-EM v1 is a RECORD-ONLY scaffold: the E-step accumulates per-edge path
-    # responsibilities (for the future v2 competing-paths M-step) but the pipeline
-    # NEVER calls `register_soft_edge_weights!`, so `compute_edge_weight` always
-    # returns raw coverage counts and the identity-keyed soft-weight registry MUST
-    # stay empty for this whole run. Defensively clear it at entry so no prior
-    # crash mid-registration (a direct unit-test primitive call, or a future v2
-    # path) can leak soft weights into this correction, then assert the invariant
-    # (belt-and-suspenders). The registry is reserved for v2.
+    # -- Soft-EM registry hygiene (td-e70t, v2 competing-paths + support floor) -
+    # Soft-EM v2 ACTIVATES the M-step: within each k's EM loop, iteration N's
+    # per-edge path responsibilities are REGISTERED onto iteration N+1's graph
+    # (`register_soft_edge_weights!`, floored to each edge's own raw support so
+    # supported variation is retained — td-h6w9) so `compute_edge_weight` returns
+    # the probability-weighted (soft) evidence and unsupported error edges decay.
+    # Registration is ALWAYS paired with `clear!` in a try/finally INSIDE the loop,
+    # so the process-global registry is EMPTY at corrector entry (and between
+    # iterations). Defensively clear it here so no prior crash mid-registration (a
+    # direct unit-test primitive call, an aborted run) can leak soft weights into
+    # this correction, then assert the invariant (belt-and-suspenders).
     Mycelia.Rhizomorph.clear_soft_edge_weights!()
     @assert isempty(Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY) (
-        "soft-EM registry must be empty at corrector entry (v1 is record-only; " *
-        "the pipeline never registers soft weights)")
+        "soft-EM registry must be empty at corrector entry (registration is scoped " *
+        "to each EM iteration and always cleared in a try/finally)")
 
     # -- Convergence + k-ladder tuning knobs (td-q70n) -------------------------
     #
@@ -401,6 +403,14 @@ function mycelia_iterative_assemble(input_fastq::String;
         # crash that prevented the pipeline from completing past the first k).
         current_reads = FASTX.FASTQ.Record[]
 
+        # Soft-EM M-step memory (td-e70t v2): the PREVIOUS EM iteration's soft
+        # edge-weight accumulator, registered onto THIS iteration's freshly-built
+        # graph so the decode consumes the floored, probability-weighted edges.
+        # Reset to `nothing` at each new k — accumulator keys are (src,dst) k-mer
+        # label tuples, so weights from a different k never match and must not
+        # carry over.
+        prev_soft_weights = nothing
+
         # Iterative improvement loop for current k
         while iteration <= max_iterations_per_k
             if verbose
@@ -435,19 +445,17 @@ function mycelia_iterative_assemble(input_fastq::String;
                 break
             end
 
-            # --- Soft-EM E-step accumulation (td-e70t, v1 RECORD-ONLY) --------
-            # v1 is a DORMANT scaffold: a fresh accumulator tallies THIS pass's
-            # decoded-path responsibilities (the E-step), but the pipeline does NOT
-            # consume it — `register_soft_edge_weights!` is deliberately NOT called,
-            # so `compute_edge_weight` always returns raw coverage counts and the
-            # graph is never soft-reweighted. This keeps the accumulation machinery
-            # live and exercised (recording path probabilities for the future v2
-            # competing-paths M-step) while removing v1's uncontrolled perturbation:
-            # a single-path decode makes every responsibility 1.0 and hard-skipped
-            # reads never accumulate, so consuming the accumulator would mix
-            # DECODED-SUBSET coverage with raw counts on unvisited edges — an
-            # uncontrolled reweighting, not principled soft-EM. Only allocated under
-            # soft-EM so :exhaustive threads `nothing`.
+            # --- Soft-EM E-step accumulator (td-e70t, v2 COMPETING-PATHS) -----
+            # A fresh accumulator tallies THIS pass's per-edge responsibilities. In
+            # v2 the E-step enumerates COMPETING candidate paths per decoded read
+            # (the observed read path vs a consensus alternative re-routed through
+            # the best-supported sibling) and splits the responsibility across them
+            # by a stable softmax over their normalized-transition log-probabilities.
+            # This accumulator is then REGISTERED (support-floored) onto the NEXT
+            # iteration's graph in the M-step below, closing the loop that lets
+            # unsupported error edges decay while supported variation is retained.
+            # Only allocated under soft-EM so :exhaustive threads `nothing` and is
+            # byte-for-byte unchanged.
             current_soft_weights = soft_em ?
                                    Mycelia.Rhizomorph.SoftEdgeWeightAccumulator() : nothing
 
@@ -477,29 +485,50 @@ function mycelia_iterative_assemble(input_fastq::String;
             # OOM-crash (td-63qy); :exhaustive passes typemax(Int) to force exact.
             # `corrector_diagnostics` accumulates swallowed decode failures across
             # every k and iteration and is surfaced in the result metadata.
-            updated_reads,
-            improvements_made,
-            pass_skip_fraction,
-            pass_cheap_corrections = improve_read_set_likelihood(
-                current_reads, graph, k,
-                verbose = verbose,
-                batch_size = batch_size,
-                enable_parallel = enable_parallel,
-                graph_mode = graph_mode,
-                skip_solid = skip_solid,
-                cheap_correct = cheap_correct,
-                beam_width = beam_width,
-                soft_weights = current_soft_weights,
-                hard_vertices = hard_vertices,
-                diagnostics = corrector_diagnostics
-            )
+            # --- Soft-EM M-step consumption (td-e70t v2) ---------------------
+            # Register the PREVIOUS EM iteration's soft edge weights (support-
+            # floored) onto THIS freshly-built graph so `compute_edge_weight` — and
+            # thus the Viterbi transition scoring AND the competing-path enumeration
+            # in the E-step — consumes the decayed, probability-weighted edges
+            # instead of raw counts. The floor holds every >= MIN_SUPPORT edge at
+            # its raw coverage (real variation preserved), so only unsupported error
+            # edges decay. Paired with `clear!` in a `finally` so the process-global
+            # registry never leaks past this iteration — including on :exhaustive,
+            # where `soft_em` is false, nothing is registered, and the decode is
+            # byte-identical. Assignments in the `try` share the enclosing scope.
+            updated_reads = current_reads
+            improvements_made = 0
+            pass_skip_fraction = 0.0
+            pass_cheap_corrections = 0
+            try
+                if soft_em && prev_soft_weights !== nothing
+                    Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
+                end
+                updated_reads,
+                improvements_made,
+                pass_skip_fraction,
+                pass_cheap_corrections = improve_read_set_likelihood(
+                    current_reads, graph, k,
+                    verbose = verbose,
+                    batch_size = batch_size,
+                    enable_parallel = enable_parallel,
+                    graph_mode = graph_mode,
+                    skip_solid = skip_solid,
+                    cheap_correct = cheap_correct,
+                    beam_width = beam_width,
+                    soft_weights = current_soft_weights,
+                    hard_vertices = hard_vertices,
+                    diagnostics = corrector_diagnostics
+                )
+            finally
+                Mycelia.Rhizomorph.clear_soft_edge_weights!()
+            end
             push!(skip_fractions, pass_skip_fraction)
             push!(cheap_correction_counts, pass_cheap_corrections)
-            # Soft-EM v1 is record-only: `current_soft_weights` was populated by the
-            # E-step but is deliberately NOT registered/consumed, so there is nothing
-            # to clear from the registry (it stayed empty) and no cross-iteration
-            # carry-forward — the accumulator is dropped once recorded. The v2
-            # competing-paths M-step will consume it.
+            # Carry this iteration's soft edge memory forward: it becomes the next
+            # EM iteration's M-step input (registered onto the next graph). `nothing`
+            # on :exhaustive (no soft-EM) so that tier stays byte-identical.
+            prev_soft_weights = soft_em ? current_soft_weights : nothing
 
             # Calculate iteration metrics
             iteration_time = time() - iteration_start
@@ -2015,10 +2044,11 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :hard_window => hard_window,
         :hard_read_gate => hard_window,
         :windowed_decode => false,
-        # Soft-EM v1 is RECORD-ONLY (E-step accumulates, M-step does NOT consume),
-        # so report a scaffold marker rather than a bare `true` that would imply
-        # active soft reweighting (FIX 1/5). `false` on the exhaustive tier.
-        :soft_em => (soft_em ? "scaffold-v1-record-only" : false),
+        # Soft-EM v2 ACTIVE: the E-step enumerates competing paths and the M-step
+        # registers the support-floored soft edge weights onto the next EM
+        # iteration's graph, so unsupported error edges decay while supported
+        # variation is retained. `false` on the exhaustive tier (soft-EM off there).
+        :soft_em => (soft_em ? "v2-competing-paths-floor" : false),
         :last_skip_fraction => last_skip_fraction,
         :skip_fraction_per_pass => skip_fractions,
         :skip_fraction_min => skip_min,
@@ -2203,13 +2233,21 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             return nothing
         end
 
-        # Soft-EM E-step (td-e70t): accumulate this read's decoded ML path edges
-        # onto the shared accumulator. With a single argmax path per read the
-        # responsibility is 1.0 (soft weight == hard count); the softening emerges
-        # once competing paths per read are wired (v2). Additive + guarded so it
-        # cannot perturb the :exhaustive path (soft_weights === nothing there).
+        # Soft-EM E-step (td-e70t v2): build this read's COMPETING candidate paths
+        # (the observed read path + a consensus alternative re-routed through the
+        # best-supported sibling branch) and split the responsibility across them
+        # by a stable softmax over their normalized-transition log-probabilities,
+        # accumulating each path's edges weighted by its share. A data-supported
+        # branch keeps high mass; an unsupported (error) branch accrues little and
+        # decays across EM iterations (the M-step registers this accumulator —
+        # support-floored — onto the next graph). Additive + guarded so it cannot
+        # perturb the :exhaustive path (soft_weights === nothing there); degenerates
+        # to the single observed path at responsibility 1.0 when no distinct
+        # alternative exists (a balanced variant, whose branches are retained
+        # through their own reads).
         if soft_weights !== nothing
-            accumulate_soft_em_edge_weights!(soft_weights, correction.paths)
+            accumulate_competing_paths!(
+                soft_weights, read, graph, k; graph_mode = graph_mode)
         end
 
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
@@ -2435,7 +2473,7 @@ function try_local_path_improvements(
 end
 
 # ============================================================================
-# Soft-EM M-step accumulation hook (SCAFFOLD, td-e70t)
+# Soft-EM E-step + M-step accumulation hook (ACTIVE, td-e70t v2 + support floor)
 # ============================================================================
 #
 # See the design note over `SoftEdgeWeightAccumulator` in
@@ -2444,21 +2482,32 @@ end
 # evidence: each candidate path's RESPONSIBILITY (posterior over the read's own
 # candidate set) is accumulated onto the edges it traverses. Summed over reads,
 # the accumulator holds soft edge weights in which error edges — traversed only
-# by rare, low-probability paths — accrue little weight and decay below the
-# `generate_alternative_qualmer_paths` `weight > 0.01` gate WITHOUT tip-clipping.
+# by rare, low-probability paths — accrue little weight; once the M-step registers
+# them, `compute_edge_weight` (and thus the Viterbi transition scoring) sees the
+# decayed weight and the next iteration's decode + rebuild drops the error edge.
+# NOTE the decay acts through `compute_edge_weight` / the Viterbi transition
+# score, NOT through the vertex `weight > 0.01` gate in
+# `generate_alternative_qualmer_paths` (that gate filters vertex candidates).
 #
-# v1 status — E-step WIRED (record-only), M-step NOT wired. Under `soft_em=true`
-# this hook IS called per decode from `try_viterbi_path_improvement`, so the
-# accumulator records decoded-path responsibilities each pass. But the pipeline
-# deliberately does NOT consume them: `register_soft_edge_weights!` is never
-# called from `mycelia_iterative_assemble`, so `compute_edge_weight` always
-# returns raw coverage counts and the graph is never soft-reweighted. Emergent
-# coalescence needs the M-step to consume these weights (and, before that, the
-# v2 competing-paths E-step so responsibilities stop being a degenerate 1.0),
-# which is the tracked td-e70t follow-on. Keeping the E-step live but the M-step
-# dormant avoids v1's uncontrolled reweighting (single-path 1.0 responsibilities
-# + hard-skipped reads never accumulating would mix decoded-subset coverage with
-# raw counts) while exercising the recording machinery for v2.
+# v2 status — E-step AND M-step both WIRED. Under `soft_em=true`:
+#   * E-step: `accumulate_competing_paths!` (below) builds each decoded read's
+#     COMPETING candidate paths — the observed read path and a consensus
+#     alternative re-routed through the best-supported sibling branch — then
+#     softmax-splits the responsibility across them by normalized-transition
+#     log-probability, so a real branch keeps high mass and an unsupported (error)
+#     branch gets little.
+#   * M-step: `mycelia_iterative_assemble` registers the accumulator onto the NEXT
+#     EM iteration's graph (`register_soft_edge_weights!`), so `compute_edge_weight`
+#     returns the decayed soft weight and the next iteration's transition scoring
+#     is biased away from the error edge — a feedback loop that drives the error
+#     edge's weight strictly down.
+# VARIATION PRESERVATION (td-h6w9): the M-step registration applies a SUPPORT
+# FLOOR — an edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is clamped to at least
+# its raw coverage, so a real but SKEWED minority allele (e.g. a 10x branch in a
+# 20x/10x bubble) NEVER decays toward zero regardless of a heavier sibling. Only
+# near-zero-support (error) edges are free to decay below the cleaning gate. This
+# fixes the prior v2's collapse of skewed variants (the responsibility split alone
+# gave `W_min' = N*W/(W_maj+W_min)`, a geometric decay to zero for any imbalance).
 
 """
     _decoded_path_edges(result) -> Vector
@@ -2475,17 +2524,18 @@ end
 """
     accumulate_soft_em_edge_weights!(accumulator, candidate_paths) -> accumulator
 
-Soft-EM M-step seam (td-e70t scaffold). Given a single read's competing decoded
-paths (`ViterbiDecodingResult`s, each with a `.score` log-likelihood and a
-`.path`), compute each path's responsibility by softmax-normalizing its score
+Soft-EM E-step core (Viterbi-result flavor). Given a single read's competing
+decoded paths (`ViterbiDecodingResult`s, each with a `.score` log-likelihood and
+a `.path`), compute each path's responsibility by softmax-normalizing its score
 against the candidate set (`Mycelia.Rhizomorph.path_responsibility`) and
 accumulate that responsibility onto the edges it traverses
 (`Mycelia.Rhizomorph.accumulate_path_probability!`).
 
-With a single argmax path per read the responsibility is `1.0` (soft weight ==
-hard count); the softening emerges once several candidate paths per read compete
-(e.g. from `generate_alternative_qualmer_paths`), which is the regime the
-follow-on wires into the iteration loop.
+With a single decoded path per read the responsibility is `1.0` (soft weight ==
+hard count); the softening comes from `accumulate_competing_paths!`, which
+supplies several candidate paths per read. Retained as a primitive (used by the
+unit tests) alongside the graph-level `accumulate_competing_paths!` used by the
+pipeline E-step.
 """
 function accumulate_soft_em_edge_weights!(
         accumulator::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
@@ -2498,6 +2548,226 @@ function accumulate_soft_em_edge_weights!(
         responsibility = Mycelia.Rhizomorph.path_responsibility(result.score, scores)
         Mycelia.Rhizomorph.accumulate_path_probability!(
             accumulator, _decoded_path_edges(result), responsibility)
+    end
+    return accumulator
+end
+
+# ----------------------------------------------------------------------------
+# Soft-EM v2 competing-paths E-step (td-e70t): graph-level candidate enumeration
+# ----------------------------------------------------------------------------
+
+"""
+    _graph_oriented_edges(labels, graph) -> Vector{Tuple}
+
+Turn an ordered list of vertex `labels` into the `(src, dst)` edge tuples in the
+ORIENTATION the graph actually stores them (checking both directions), skipping
+any consecutive pair with no edge in `graph`. Keying the accumulator in the
+graph's own orientation is what lets `register_soft_edge_weights!` — which
+iterates `MetaGraphsNext.edge_labels(graph)` — find and consume the soft weight.
+A candidate substitution that is not a real graph traversal contributes no edge.
+"""
+function _graph_oriented_edges(labels, graph)
+    edges = Tuple{Any, Any}[]
+    for i in 1:(length(labels) - 1)
+        a, b = labels[i], labels[i + 1]
+        if MetaGraphsNext.haskey(graph, a, b)
+            push!(edges, (a, b))
+        elseif MetaGraphsNext.haskey(graph, b, a)
+            push!(edges, (b, a))
+        end
+    end
+    return edges
+end
+
+# The observed read path, resolved to graph vertex labels (canonical where the
+# graph is canonical). Empty when no k-mer of the read resolves onto the graph.
+function _read_resolved_labels(read::FASTX.FASTQ.Record, graph, k::Int; graph_mode::Symbol)
+    labels = Any[]
+    for (qmer, _pos) in qualmers_unambiguous(read, k)
+        resolved = _resolve_qualmer_for_graph(graph, qmer; graph_mode = graph_mode)
+        resolved === nothing || push!(labels, resolved.kmer)
+    end
+    return labels
+end
+
+# Soft-weight-aware edge weight between two vertex labels in either stored
+# orientation, or `nothing` when they are not adjacent. `compute_edge_weight`
+# consults the soft-edge registry, so an edge the M-step decayed reads back its
+# decayed weight here — the cross-iteration feedback that sharpens the split.
+function _edge_weight_between(graph, a, b)
+    if MetaGraphsNext.haskey(graph, a, b)
+        return Float64(Mycelia.Rhizomorph.compute_edge_weight(graph[a, b]))
+    elseif MetaGraphsNext.haskey(graph, b, a)
+        return Float64(Mycelia.Rhizomorph.compute_edge_weight(graph[b, a]))
+    end
+    return nothing
+end
+
+# All labels adjacent to `a` (either orientation), deduplicated. Used both as the
+# transition normalizer support and as the branch-candidate set.
+function _incident_labels(graph, a)
+    ns = Any[]
+    for n in MetaGraphsNext.outneighbor_labels(graph, a)
+        push!(ns, n)
+    end
+    for n in MetaGraphsNext.inneighbor_labels(graph, a)
+        push!(ns, n)
+    end
+    return unique(ns)
+end
+
+# Sum of the soft-weight-aware edge weights on every edge incident to `a` — the
+# denominator that turns a raw edge weight into a normalized transition
+# probability. Normalizing here counts a single branch decision ONCE (internal
+# edges of a linear run normalize to ~0.5 on BOTH competing branches and cancel
+# in the responsibility softmax), so the divergence edge carries the coverage
+# contrast and a real but skewed variant is not collapsed like a raw
+# coverage-ratio prune would.
+function _incident_weight_sum(graph, a)
+    total = 0.0
+    for x in _incident_labels(graph, a)
+        w = _edge_weight_between(graph, a, x)
+        w === nothing || (total += w)
+    end
+    return total
+end
+
+# Normalized-transition log-probability of a label path: sum of log(w(a,b)/S(a)).
+# Returns -Inf if any consecutive pair is non-adjacent or zero-weight, so an
+# invalid candidate is dropped by the softmax `isfinite` guard.
+function _path_transition_logscore(labels, graph)
+    total = 0.0
+    for i in 2:length(labels)
+        a, b = labels[i - 1], labels[i]
+        w = _edge_weight_between(graph, a, b)
+        (w === nothing || w <= 0.0) && return -Inf
+        s = _incident_weight_sum(graph, a)
+        s <= 0.0 && return -Inf
+        total += log(w / s)
+    end
+    return total
+end
+
+# Generate ONE competing alternative to `observed` by re-routing its first
+# clearly-weak branch through the highest-weight sibling and walking greedily
+# until rejoining `observed`. Returns the spliced label path, or `nothing` when
+# no weak branch exists (a linear region, or a balanced variant whose sibling is
+# not strictly better — which is retained, not competed away). Bounded by the
+# observed length so it always terminates.
+function _consensus_alternative(observed, graph)
+    n = length(observed)
+    n < 3 && return nothing
+    firstpos = Dict{Any, Int}()
+    for i in 1:n
+        haskey(firstpos, observed[i]) || (firstpos[observed[i]] = i)
+    end
+    for i in 1:(n - 1)
+        a, b = observed[i], observed[i + 1]
+        w_ab = _edge_weight_between(graph, a, b)
+        w_ab === nothing && continue
+        best_x, best_w = nothing, w_ab
+        for x in _incident_labels(graph, a)
+            x == b && continue
+            (i > 1 && x == observed[i - 1]) && continue
+            wx = _edge_weight_between(graph, a, x)
+            wx === nothing && continue
+            if wx > best_w
+                best_w, best_x = wx, x
+            end
+        end
+        best_x === nothing && continue   # no strictly-better sibling ⇒ not weak
+        # Greedy highest-weight walk from the sibling until we rejoin `observed`
+        # at or after position i+1.
+        mid = Any[best_x]
+        prev, cur = a, best_x
+        rejoin = get(firstpos, best_x, 0) >= i + 1 ? firstpos[best_x] : 0
+        steps = 0
+        while rejoin == 0 && steps < n
+            steps += 1
+            nxt, nxt_w = nothing, 0.0
+            for y in _incident_labels(graph, cur)
+                y == prev && continue
+                y in mid && continue
+                wy = _edge_weight_between(graph, cur, y)
+                wy === nothing && continue
+                if wy > nxt_w
+                    nxt_w, nxt = wy, y
+                end
+            end
+            nxt === nothing && break
+            if get(firstpos, nxt, 0) >= i + 1
+                rejoin = firstpos[nxt]
+                break
+            end
+            push!(mid, nxt)
+            prev, cur = cur, nxt
+        end
+        if rejoin >= i + 1
+            return vcat(observed[1:i], mid, observed[rejoin:end])
+        end
+    end
+    return nothing
+end
+
+"""
+    accumulate_competing_paths!(accumulator, read, graph, k; graph_mode) -> accumulator
+
+Soft-EM v2 competing-paths E-step for ONE read (td-e70t). Builds the read's
+COMPETING candidate paths — the observed read path and (when the observed path
+takes a weak branch) a consensus alternative re-routed through the best-supported
+sibling (`_consensus_alternative`) — scores each by its normalized-transition
+log-probability on the graph (`_path_transition_logscore`, which reads the
+soft-weight-aware `compute_edge_weight`), converts the scores to responsibilities
+with a stable softmax (`Mycelia.Rhizomorph.path_responsibility`), and accumulates
+each candidate's graph-oriented edges weighted by its responsibility.
+
+The responsibility split alone would decay a real but skewed minority allele
+toward zero (`W_min' = N*W/(W_maj+W_min)`); variation is preserved by the SUPPORT
+FLOOR applied when the accumulator is registered in the M-step
+(`register_soft_edge_weights!`), which clamps every `>= SOFT_EM_MIN_SUPPORT` edge
+to at least its raw coverage. So this E-step is free to split responsibility while
+supported edges are held at raw and only unsupported (error) edges decay. A
+balanced variant produces no strictly-better sibling, so no alternative is
+generated and the observed path keeps responsibility 1.0. Never throws (guarded),
+so the decode is always safe.
+"""
+function accumulate_competing_paths!(
+        accumulator::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+        read::FASTX.FASTQ.Record,
+        graph,
+        k::Int;
+        graph_mode::Symbol = :canonical
+)
+    observed = _read_resolved_labels(read, graph, k; graph_mode = graph_mode)
+    isempty(observed) && return accumulator
+
+    alternative = try
+        _consensus_alternative(observed, graph)
+    catch
+        nothing
+    end
+
+    if alternative === nothing || alternative == observed
+        # No genuine competition: the observed path owns all responsibility.
+        Mycelia.Rhizomorph.accumulate_path_probability!(
+            accumulator, _graph_oriented_edges(observed, graph), 1.0)
+        return accumulator
+    end
+
+    candidate_paths = (observed, alternative)
+    scores = Float64[_path_transition_logscore(labels, graph) for labels in candidate_paths]
+    finite = Float64[s for s in scores if isfinite(s)]
+    if isempty(finite)
+        # Fall back to the observed path if scoring degenerated.
+        Mycelia.Rhizomorph.accumulate_path_probability!(
+            accumulator, _graph_oriented_edges(observed, graph), 1.0)
+        return accumulator
+    end
+    for (idx, labels) in enumerate(candidate_paths)
+        isfinite(scores[idx]) || continue
+        responsibility = Mycelia.Rhizomorph.path_responsibility(scores[idx], finite)
+        Mycelia.Rhizomorph.accumulate_path_probability!(
+            accumulator, _graph_oriented_edges(labels, graph), responsibility)
     end
     return accumulator
 end
