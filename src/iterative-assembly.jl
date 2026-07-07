@@ -237,6 +237,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         skip_solid::Bool = false,
         hard_window::Bool = false,
         soft_em::Bool = false,
+        cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing)
     start_time = time()
 
@@ -376,6 +377,11 @@ function mycelia_iterative_assemble(input_fastq::String;
     # value (FIX 6). Empty on the :exhaustive tier (no gate ⇒ no skips).
     skip_fractions = Float64[]
 
+    # Stage 0 cheap-correction telemetry (td-bjnt): bases fixed by the linear
+    # k-mer-spectrum pass, recorded PER PASS. Empty/zero when cheap_correct is off
+    # (:exhaustive), so the exhaustive tier is unaffected.
+    cheap_correction_counts = Int[]
+
     # Main k-mer progression loop
     while k <= max_k
         if verbose
@@ -468,19 +474,22 @@ function mycelia_iterative_assemble(input_fastq::String;
             # every k and iteration and is surfaced in the result metadata.
             updated_reads,
             improvements_made,
-            pass_skip_fraction = improve_read_set_likelihood(
+            pass_skip_fraction,
+            pass_cheap_corrections = improve_read_set_likelihood(
                 current_reads, graph, k,
                 verbose = verbose,
                 batch_size = batch_size,
                 enable_parallel = enable_parallel,
                 graph_mode = graph_mode,
                 skip_solid = skip_solid,
+                cheap_correct = cheap_correct,
                 beam_width = beam_width,
                 soft_weights = current_soft_weights,
                 hard_vertices = hard_vertices,
                 diagnostics = corrector_diagnostics
             )
             push!(skip_fractions, pass_skip_fraction)
+            push!(cheap_correction_counts, pass_cheap_corrections)
             # Soft-EM v1 is record-only: `current_soft_weights` was populated by the
             # E-step but is deliberately NOT registered/consumed, so there is nothing
             # to clear from the registry (it stayed empty) and no cross-iteration
@@ -628,7 +637,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         output_dir, k_progression, iteration_history, total_runtime,
         verbose = verbose, diagnostics = corrector_diagnostics,
         skip_fractions = skip_fractions,
-        hard_window = hard_window, soft_em = soft_em)
+        cheap_correction_counts = cheap_correction_counts,
+        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct)
 end
 
 # =============================================================================
@@ -693,10 +703,167 @@ function _read_is_all_solid(read::FASTX.FASTQ.Record, k::Int, solid_kmers::Abstr
 end
 
 # ------------------------------------------------------------------------------
+# Stage 0 CHEAP k-mer-spectrum correction (td-bjnt): fix simple single-base
+# substitution errors with a LINEAR scan, BFC/Lighter/Bloocoo-style, BEFORE the
+# expensive per-read graph Viterbi. A WEAK (low-coverage, non-solid) k-mer flanked
+# by SOLID k-mers is the signature of a single-base error; if exactly one base
+# substitution turns the whole weak run solid (a UNIQUE solid neighbor), apply it.
+# Ambiguous cases (no fix, or >1 candidate — e.g. a balanced heterozygous site
+# where both alleles are real) are LEFT untouched for the graph decode. Reserving
+# graph Viterbi for genuine ambiguity is the critical-path lever: on err=0.01 data
+# ~78% of reads carry an error k-mer, so cheaply clearing the simple ones collapses
+# the graph-decode fraction toward the true bubble/repeat ~5–15%.
+# Only invoked on the :scalable tier (`cheap_correct=true`, canonical graph); the
+# :exhaustive path never calls it and is byte-identical.
+# ------------------------------------------------------------------------------
+
+# Canonical k-mer at 1-based read position `i` (bases [i, i+k-1]) of an ACGT-only
+# char vector, comparable against the `_solid_kmer_set` labels. The read is
+# pre-screened for ambiguity by the caller so this construction cannot throw.
+@inline function _canonical_kmer_at(chars::Vector{Char}, k::Int, i::Int)
+    return BioSequences.canonical(Kmers.DNAKmer{k}(String(@view chars[i:(i + k - 1)])))
+end
+
+"""
+    _stage0_correct_read(read, k, solid_kmers) -> (record, n_corrections)
+
+Cheaply correct simple single-substitution errors in ONE read via the k-mer
+spectrum. Walk the read's k-mers; for each maximal run of consecutive WEAK
+(non-solid) k-mers that is flanked by SOLID k-mers on BOTH sides (an interior
+error) and is short enough to be a single substitution (run length ≤ k), search
+the base position(s) shared by every k-mer in the run for a substitution that
+makes EVERY k-mer overlapping that position solid. Apply the fix only when EXACTLY
+ONE (position, base) candidate qualifies — a unique solid neighbor. Zero
+candidates (a real but low-coverage allele with no solid neighbor) or multiple
+candidates (a balanced variant with two solid alleles, or genuine ambiguity) are
+left untouched for the graph decode, so Stage 0 never collapses real variation.
+
+Reads shorter than `k`, reads with ambiguous bases (e.g. `N`), and reads with no
+weak run are returned unchanged with a 0 count. Returns the (possibly rewritten)
+record and the number of bases corrected.
+"""
+function _stage0_correct_read(read::FASTX.FASTQ.Record, k::Int, solid_kmers::AbstractSet)
+    seq_str = FASTX.sequence(String, read)
+    n = length(seq_str)
+    n < k && return read, 0
+    chars = collect(seq_str)
+    # Ambiguity screen: the 2-bit k-mer construction cannot encode non-ACGT bases.
+    # Such reads are left for the decode (which tallies un-k-merizable reads).
+    for c in chars
+        (c == 'A' || c == 'C' || c == 'G' || c == 'T') || return read, 0
+    end
+
+    nkmers = n - k + 1
+    solid = Vector{Bool}(undef, nkmers)
+    @inbounds for i in 1:nkmers
+        solid[i] = _canonical_kmer_at(chars, k, i) in solid_kmers
+    end
+
+    n_corr = 0
+    i = 1
+    while i <= nkmers
+        if solid[i]
+            i += 1
+            continue
+        end
+        # Maximal weak run [a, b].
+        a = i
+        b = i
+        while b + 1 <= nkmers && !solid[b + 1]
+            b += 1
+        end
+        run_len = b - a + 1
+        # Interior error: flanked by solid on both sides, run short enough to be a
+        # single substitution (the base shared by all k-mers a..b is non-empty).
+        flanked = (a - 1 >= 1 && solid[a - 1]) && (b + 1 <= nkmers && solid[b + 1])
+        if flanked && run_len <= k
+            # Base positions shared by every k-mer in [a, b]: [b, a+k-1] (1-based
+            # read coordinates). A single substitution at one of these explains the
+            # whole run.
+            lo = b
+            hi = a + k - 1
+            fix_p = 0
+            fix_base = ' '
+            n_candidates = 0
+            for p in lo:hi
+                cur = chars[p]
+                # k-mers whose window covers base p — the ONLY ones a substitution
+                # at p can change. Requiring all of these solid after the edit both
+                # fixes the run and guarantees no flanking k-mer is broken.
+                lo_j = max(1, p - k + 1)
+                hi_j = min(nkmers, p)
+                for base in ('A', 'C', 'G', 'T')
+                    base == cur && continue
+                    chars[p] = base
+                    ok = true
+                    for j in lo_j:hi_j
+                        if !(_canonical_kmer_at(chars, k, j) in solid_kmers)
+                            ok = false
+                            break
+                        end
+                    end
+                    chars[p] = cur   # restore before testing the next candidate
+                    if ok
+                        n_candidates += 1
+                        n_candidates > 1 && break   # ambiguous: stop early
+                        fix_p = p
+                        fix_base = base
+                    end
+                end
+                n_candidates > 1 && break
+            end
+            if n_candidates == 1
+                chars[fix_p] = fix_base
+                # The corrected k-mers overlapping fix_p are now solid; mark them so
+                # the scan does not re-enter this (now resolved) run.
+                lo_j = max(1, fix_p - k + 1)
+                hi_j = min(nkmers, fix_p)
+                for j in lo_j:hi_j
+                    solid[j] = true
+                end
+                n_corr += 1
+            end
+        end
+        i = b + 1
+    end
+
+    n_corr == 0 && return read, 0
+    corrected_seq = String(chars)
+    # Preserve identifier, description, and per-base quality (a substitution does
+    # not change the length, so the original quality string still aligns).
+    new_record = FASTX.FASTQ.Record(
+        FASTX.identifier(read), corrected_seq, FASTX.quality(read))
+    return new_record, n_corr
+end
+
+"""
+    _stage0_cheap_correct(reads, k, solid_kmers) -> (corrected_reads, n_corrections)
+
+Apply `_stage0_correct_read` across a read set, returning a NEW vector of records
+(unchanged records are shared, corrected ones replaced) and the total number of
+bases corrected. An empty `solid_kmers` (classification could not run) is a no-op:
+without a solid reference every k-mer looks weak and there is no trustworthy
+neighbor to correct toward, so nothing is changed.
+"""
+function _stage0_cheap_correct(reads::Vector{<:FASTX.FASTQ.Record}, k::Int,
+        solid_kmers::AbstractSet)
+    total = 0
+    isempty(solid_kmers) && return collect(reads), 0
+    corrected = Vector{FASTX.FASTQ.Record}(undef, length(reads))
+    for (idx, read) in enumerate(reads)
+        rec, n = _stage0_correct_read(read, k, solid_kmers)
+        corrected[idx] = rec
+        total += n
+    end
+    return corrected, total
+end
+
+# ------------------------------------------------------------------------------
 # Hard-window gating (td-nn6l): decode only reads that touch a "hard" region
-# (bubble / repeat / weak k-mer) and pass every other read through untouched.
-# This is the primary decode-volume reduction on top of skip-solid — on clean
-# data the vast majority of reads touch no hard vertex and are skipped.
+# (bubble / repeat) and pass every other read through untouched. This is the
+# primary decode-volume reduction on top of skip-solid and Stage 0 cheap
+# correction — after Stage 0 clears simple errors, the vast majority of reads
+# touch no hard (bubble/repeat) vertex and are skipped.
 # ------------------------------------------------------------------------------
 
 """
@@ -720,13 +887,25 @@ end
 """
     _hard_vertex_set(graph, k) -> Set
 
-Build the set of "hard" vertices for hard-window gating (td-nn6l): the union of
-(1) bubble entry/exit/interior vertices (`detect_bubbles_next`),
-(2) high-out-degree (out-degree > 1, repeat-like) vertices, and
-(3) weak / non-solid k-mers (the complement of `_solid_kmer_set`).
-When k-mer classification cannot run (empty solid set) every vertex is treated as
-hard — the conservative "decode everything" fallback that never skips on absent
-evidence. Intended for `:canonical` graphs (matches the skip-solid gate).
+Build the set of "hard" vertices for hard-window gating (td-nn6l/td-bjnt): the
+union of
+(1) bubble entry/exit/interior vertices (`detect_bubbles_next`), and
+(2) high-out-degree (out-degree > 1, repeat-like) vertices.
+
+NARROWED for Stage 0 (td-bjnt): the former clause (3) — "every weak / non-solid
+k-mer is hard" — is REMOVED. Under the old clause any read carrying a single
+error k-mer (≈78% of reads on err=0.01 data) was classified hard and sent to the
+expensive per-read graph Viterbi, which is what times the :scalable corrector out
+at 5 kb. Simple single-substitution errors are now fixed CHEAPLY by the Stage 0
+k-mer-spectrum pass (`_stage0_cheap_correct`, a linear scan) BEFORE this gate, so
+the only reads that must still reach graph Viterbi are those touching GENUINE
+ambiguity — a bubble/superbubble (competing balanced alleles) or a repeat-like
+high-out-degree vertex. Those are the true ~5–15%. A weak k-mer flanked by solid
+neighbors is no longer "hard"; it is an error Stage 0 either already corrected or
+left as genuinely ambiguous (in which case it typically also sits in a bubble and
+is caught by clause 1). Intended for `:canonical` graphs (matches the skip gate);
+only reached on the :scalable tier (`hard_window=true`), so :exhaustive is
+unaffected.
 """
 function _hard_vertex_set(graph, k::Int)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -734,7 +913,8 @@ function _hard_vertex_set(graph, k::Int)
     hard = Set{T}()
     isempty(labels) && return hard
 
-    # (1) Bubble vertices (entry, exit, both alternative interiors).
+    # (1) Bubble vertices (entry, exit, both alternative interiors) — REAL
+    # competing-path ambiguity that a linear cheap-correction cannot resolve.
     for bubble in Mycelia.Rhizomorph.detect_bubbles_next(graph)
         push!(hard, bubble.entry_vertex)
         push!(hard, bubble.exit_vertex)
@@ -747,6 +927,8 @@ function _hard_vertex_set(graph, k::Int)
     end
 
     # (2) High out-degree (repeat-like) vertices — single O(E) pass over edges.
+    # A branch point with >1 successor is a repeat/ambiguity the per-read decode
+    # must disambiguate; a cheap linear scan cannot.
     outdeg = Dict{T, Int}()
     for (src, _dst) in MetaGraphsNext.edge_labels(graph)
         outdeg[src] = get(outdeg, src, 0) + 1
@@ -755,16 +937,6 @@ function _hard_vertex_set(graph, k::Int)
         d > 1 && push!(hard, v)
     end
 
-    # (3) Weak (non-solid) k-mers = complement of the solid set. Empty solid set
-    # (classification could not run) ⇒ treat all vertices as hard (decode all).
-    solid = _solid_kmer_set(graph)
-    if isempty(solid)
-        union!(hard, labels)
-    else
-        for v in labels
-            (v in solid) || push!(hard, v)
-        end
-    end
     return hard
 end
 
@@ -916,9 +1088,20 @@ decoded only when it is NOT all-solid AND (no hard set, or it touches one).
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
 NOT thread-safe, so supplying it forces sequential processing for this pass.
 
-Returns `(updated_reads, improvements_made, skip_fraction)` where `skip_fraction`
-is the fraction of reads passed through WITHOUT a decode (solid + hard-window
-skips). Callers destructuring only the first two values are unaffected.
+`cheap_correct` (td-bjnt): when `true` (and `graph_mode==:canonical`), run the
+Stage 0 k-mer-spectrum correction pass (`_stage0_cheap_correct`) over the read set
+BEFORE any gating/decode, cheaply fixing simple single-substitution errors with a
+linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
+(bubbles/repeats). The decode then operates on the cheaply-corrected reads. Only
+enabled on the :scalable tier.
+
+Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections)`
+where `skip_fraction` is the fraction of reads passed through WITHOUT a decode
+(solid + hard-window skips) and `cheap_corrections` is the number of bases fixed
+by the Stage 0 pass. The graph-Viterbi decode fraction is `1 - skip_fraction`.
+`improvements_made` counts BOTH cheap corrections and decode-accepted corrections
+so per-k convergence sees Stage 0 progress. Callers destructuring only the first
+two or three values are unaffected.
 """
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
@@ -926,11 +1109,12 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         enable_parallel::Bool = false,
         graph_mode::Symbol = :canonical,
         skip_solid::Bool = false,
+        cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
-        Vector{FASTX.FASTQ.Record}, Int, Float64}
+        Vector{FASTX.FASTQ.Record}, Int, Float64, Int}
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
     # when `diag` is a shared accumulator threaded across many passes.
@@ -950,16 +1134,40 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     if skip_solid && graph_mode != :canonical
         @warn "skip_solid is only supported for graph_mode=:canonical; disabling skip (correcting all reads)." graph_mode
     end
-    solid_kmers = (skip_solid && graph_mode == :canonical) ? _solid_kmer_set(graph) :
-                  nothing
+    if cheap_correct && graph_mode != :canonical
+        @warn "cheap_correct is only supported for graph_mode=:canonical; disabling Stage 0 cheap correction." graph_mode
+    end
+    # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
+    # corrector needs the solid set (both canonicalize read k-mers ⇒ :canonical
+    # only). Compute once, share both consumers.
+    need_solid = (skip_solid || cheap_correct) && graph_mode == :canonical
+    solid_kmers = need_solid ? _solid_kmer_set(graph) : nothing
+
+    # Stage 0 CHEAP correction (td-bjnt): fix simple single-substitution errors
+    # with a linear k-mer-spectrum scan BEFORE any gating/decode, so graph Viterbi
+    # is reserved for genuine ambiguity. The decode below then runs on the
+    # cheaply-corrected reads. Gated on :scalable (cheap_correct=true, canonical).
+    cheap_corrections = 0
+    work_reads = reads
+    if cheap_correct && graph_mode == :canonical && solid_kmers !== nothing
+        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers)
+        improvements_made += cheap_corrections
+        if verbose && cheap_corrections > 0
+            println("  Stage 0 cheap correction: fixed $cheap_corrections base(s) " *
+                    "before decode")
+        end
+    end
     skipped_reads = 0
 
     # A read is SKIPPED (passed through uncorrected, no decode) when it is either
-    # all-solid (Stage 0) OR — under hard-window gating — it touches no hard
-    # vertex. Both are volume-reduction skips and both count toward the reported
-    # skip fraction. Returns true ⇒ skip.
+    # all-solid (skip-solid gate) OR — under hard-window gating — it touches no
+    # hard vertex. Both are volume-reduction skips and both count toward the
+    # reported skip fraction. `solid_kmers` may be populated for cheap correction
+    # even when skip_solid is off, so the all-solid skip is gated on `skip_solid`
+    # explicitly. Returns true ⇒ skip.
     _skip_this_read = read -> begin
-        (solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)) && return true
+        (skip_solid && solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)) &&
+            return true
         (hard_vertices !== nothing && !should_decode_read(read, k, hard_vertices)) &&
             return true
         return false
@@ -976,10 +1184,12 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         println("  Processing $total_reads reads in batches of $batch_size")
     end
 
-    # Process in batches for memory efficiency
+    # Process in batches for memory efficiency. `work_reads` is the Stage 0
+    # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
+    # decode operates on already-simplified reads.
     for batch_start in 1:batch_size:total_reads
         batch_end = min(batch_start + batch_size - 1, total_reads)
-        batch_reads = reads[batch_start:batch_end]
+        batch_reads = work_reads[batch_start:batch_end]
 
         batch_improvements = 0
 
@@ -1057,6 +1267,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         println("  Total improvements: $improvements_made/$total_reads ($(round(total_improvement_rate, digits=1))%)")
         if skip_solid || hard_vertices !== nothing
             println("  Skipped (no decode): $skipped_reads/$total_reads ($(round(skip_fraction * 100, digits=1))%)")
+            decode_fraction = 1.0 - skip_fraction
+            println("  Graph-Viterbi decode fraction: $(round(decode_fraction * 100, digits=1))%")
+        end
+        if cheap_correct
+            println("  Stage 0 cheap corrections (this pass): $cheap_corrections")
         end
     end
 
@@ -1080,7 +1295,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
-    return updated_reads, improvements_made, skip_fraction
+    return updated_reads, improvements_made, skip_fraction, cheap_corrections
 end
 
 """
@@ -1682,8 +1897,10 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         total_runtime::Float64; verbose::Bool = true,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         skip_fractions::Vector{Float64} = Float64[],
+        cheap_correction_counts::Vector{Int} = Int[],
         hard_window::Bool = false,
-        soft_em::Bool = false)
+        soft_em::Bool = false,
+        cheap_correct::Bool = false)
     if verbose
         println("Finalizing iterative assembly results...")
     end
@@ -1725,6 +1942,20 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     skip_max = isempty(skip_fractions) ? 0.0 : maximum(skip_fractions)
     skip_mean = isempty(skip_fractions) ? 0.0 : sum(skip_fractions) / length(skip_fractions)
 
+    # Graph-Viterbi decode fraction per pass = 1 - skip_fraction (the reads that
+    # actually reached the expensive decode). This is the critical-path metric:
+    # narrowing the hard-vertex set + Stage 0 cheap correction should drive it down
+    # toward the true bubble/repeat ~5-15% (td-bjnt). Zero on tiers without a gate.
+    decode_fractions = [1.0 - s for s in skip_fractions]
+    decode_min = isempty(decode_fractions) ? 0.0 : minimum(decode_fractions)
+    decode_max = isempty(decode_fractions) ? 0.0 : maximum(decode_fractions)
+    decode_mean = isempty(decode_fractions) ? 0.0 :
+                  sum(decode_fractions) / length(decode_fractions)
+
+    # Stage 0 cheap-correction totals (td-bjnt).
+    total_cheap_corrections = isempty(cheap_correction_counts) ? 0 :
+                              sum(cheap_correction_counts)
+
     # Create comprehensive metadata
     metadata = Dict(
         :total_runtime => total_runtime,
@@ -1758,7 +1989,19 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :skip_fraction_per_pass => skip_fractions,
         :skip_fraction_min => skip_min,
         :skip_fraction_mean => skip_mean,
-        :skip_fraction_max => skip_max
+        :skip_fraction_max => skip_max,
+        # Graph-Viterbi decode fraction (= 1 - skip_fraction). The critical-path
+        # win metric (td-bjnt): after Stage 0 + hard-set narrowing this drops
+        # toward the true bubble/repeat ~5-15%.
+        :decode_fraction_per_pass => decode_fractions,
+        :decode_fraction_min => decode_min,
+        :decode_fraction_mean => decode_mean,
+        :decode_fraction_max => decode_max,
+        # Stage 0 cheap k-mer-spectrum correction (td-bjnt): bases fixed by the
+        # linear pass, per pass and in total. Zero/false on :exhaustive.
+        :cheap_correct => cheap_correct,
+        :cheap_corrections_per_pass => cheap_correction_counts,
+        :cheap_corrections_total => total_cheap_corrections
     )
 
     if verbose

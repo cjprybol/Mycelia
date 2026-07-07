@@ -737,8 +737,10 @@ Map a corrector `strategy` tier onto the concrete engine knobs threaded into
 routing can be unit-tested without running the (slow) corrector.
 
 - `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
-  skip-solid volume reduction, hard-read gating (Stage 3), soft-EM edge memory
-  (Stage 2, record-only v1), and the size-aware auto-beam (`beam_width=nothing`).
+  skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
+  linear single-substitution fix before the decode), hard-read gating (Stage 3,
+  now narrowed to bubble/repeat vertices only), soft-EM edge memory (Stage 2,
+  record-only v1), and the size-aware auto-beam (`beam_width=nothing`).
 - `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
   (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
   and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
@@ -756,6 +758,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             skip_solid = true,
             hard_window = true,
             soft_em = true,
+            cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
             beam_width = nothing   # size-aware auto-beam (bounded on huge reads)
         )
     elseif strategy == :exhaustive
@@ -765,6 +768,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             skip_solid = false,
             hard_window = false,
             soft_em = false,
+            cheap_correct = false,  # exact-ML tier: no cheap pre-correction
             beam_width = typemax(Int)  # exact ML decode
         )
     else
@@ -838,6 +842,7 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             max_iterations_per_k = knobs.max_iterations_per_k,
             hard_window = knobs.hard_window,
             soft_em = knobs.soft_em,
+            cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
             verbose = false,
             enable_checkpointing = false,
@@ -905,6 +910,18 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] =
             get(_corr_meta, :skip_fraction_per_pass, Float64[])
+        # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode
+        # fraction is the critical-path win metric (reads that reached graph
+        # Viterbi); Stage 0 + hard-set narrowing drive it toward the true ~5-15%.
+        assembly.assembly_stats["cheap_correct"] = get(_corr_meta, :cheap_correct, false)
+        assembly.assembly_stats["cheap_corrections_total"] =
+            get(_corr_meta, :cheap_corrections_total, 0)
+        assembly.assembly_stats["cheap_corrections_per_pass"] =
+            get(_corr_meta, :cheap_corrections_per_pass, Int[])
+        assembly.assembly_stats["decode_fraction"] =
+            get(_corr_meta, :decode_fraction_mean, 0.0)
+        assembly.assembly_stats["decode_fraction_per_pass"] =
+            get(_corr_meta, :decode_fraction_per_pass, Float64[])
         if isempty(assembly.contigs)
             @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
                   "contigs — the corrected read set did not assemble."
