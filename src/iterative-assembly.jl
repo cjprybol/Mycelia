@@ -456,10 +456,15 @@ function mycelia_iterative_assemble(input_fastq::String;
             # entry/exit/interior, high-out-degree/repeat-like, or weak/non-solid
             # k-mer). Easy reads pass through untouched, cutting decode volume
             # ~85-95% on clean data. Off unless `hard_window=true` (:scalable).
-            hard_vertices = (hard_window && graph_mode == :canonical) ?
+            # Mode-agnostic (td-nt69): `_hard_vertex_set` operates on graph
+            # vertices/edges and `should_decode_read` matches reads in their observed
+            # orientation, so the gate works on both :canonical and :doublestrand
+            # (:scalable now runs :doublestrand). Only :singlestrand — which has no
+            # RC vertices and is not a corrector target — is excluded.
+            hard_vertices = (hard_window && graph_mode != :singlestrand) ?
                             _hard_vertex_set(graph, k) : nothing
-            if hard_window && graph_mode != :canonical
-                @warn "hard_window gating is only supported for graph_mode=:canonical; " *
+            if hard_window && graph_mode == :singlestrand
+                @warn "hard_window gating is not supported for graph_mode=:singlestrand; " *
                       "disabling (decoding all non-solid reads)." graph_mode maxlog = 1
             end
 
@@ -683,21 +688,37 @@ function _solid_kmer_set(graph;
     return solid
 end
 
-"""
-    _read_is_all_solid(read, k, solid_kmers) -> Bool
+# Mode-aware lookup key for classification/gating (td-nt69). `solid_kmers` /
+# `hard_vertices` are graph VERTEX LABELS, so the key that a read's observed k-mer
+# maps to depends on how the graph was built:
+#   :canonical    → labels are canonical k-mers, so canonicalize the read k-mer.
+#   :doublestrand → both a k-mer and its RC are SEPARATE vertices, so the read
+#                   traverses its observed-orientation k-mer; use it as-is.
+#   :singlestrand → no RC vertices; use the observed k-mer as-is.
+# Classification is coverage-based and therefore mode-agnostic: under
+# :doublestrand each strand-vertex still separates real (≈half-coverage) from
+# error (coverage-1) k-mers, so the solid/hard sets remain valid.
+@inline function _lookup_key(kmer, graph_mode::Symbol)
+    return graph_mode == :canonical ? BioSequences.canonical(kmer) : kmer
+end
 
-True iff every canonical k-mer of `read` is in `solid_kmers` (⇒ no weak region ⇒
-the read needs no correction and can skip the decode). A read with no k-mers
-(shorter than k, or fully ambiguous) returns `false` so it is never skipped on the
-basis of absent evidence.
 """
-function _read_is_all_solid(read::FASTX.FASTQ.Record, k::Int, solid_kmers::AbstractSet)
+    _read_is_all_solid(read, k, solid_kmers; graph_mode) -> Bool
+
+True iff every k-mer of `read` (resolved to its graph label via `_lookup_key`) is
+in `solid_kmers` (⇒ no weak region ⇒ the read needs no correction and can skip the
+decode). A read with no k-mers (shorter than k, or fully ambiguous) returns
+`false` so it is never skipped on the basis of absent evidence. Works on both
+`:canonical` and `:doublestrand` graphs (td-nt69).
+"""
+function _read_is_all_solid(read::FASTX.FASTQ.Record, k::Int, solid_kmers::AbstractSet;
+        graph_mode::Symbol = :canonical)
     isempty(solid_kmers) && return false
     sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
     saw_kmer = false
     for (kmer, _) in Kmers.UnambiguousDNAMers{k}(sequence)
         saw_kmer = true
-        (BioSequences.canonical(kmer) in solid_kmers) || return false
+        (_lookup_key(kmer, graph_mode) in solid_kmers) || return false
     end
     return saw_kmer
 end
@@ -717,11 +738,13 @@ end
 # :exhaustive path never calls it and is byte-identical.
 # ------------------------------------------------------------------------------
 
-# Canonical k-mer at 1-based read position `i` (bases [i, i+k-1]) of an ACGT-only
-# char vector, comparable against the `_solid_kmer_set` labels. The read is
-# pre-screened for ambiguity by the caller so this construction cannot throw.
-@inline function _canonical_kmer_at(chars::Vector{Char}, k::Int, i::Int)
-    return BioSequences.canonical(Kmers.DNAKmer{k}(String(@view chars[i:(i + k - 1)])))
+# Graph-label lookup key for the k-mer at 1-based read position `i` (bases
+# [i, i+k-1]) of an ACGT-only char vector, comparable against the `_solid_kmer_set`
+# labels. Mode-aware (td-nt69): canonicalized under :canonical, observed
+# orientation under :doublestrand / :singlestrand. The read is pre-screened for
+# ambiguity by the caller so this construction cannot throw.
+@inline function _lookup_kmer_at(chars::Vector{Char}, k::Int, i::Int, graph_mode::Symbol)
+    return _lookup_key(Kmers.DNAKmer{k}(String(@view chars[i:(i + k - 1)])), graph_mode)
 end
 
 """
@@ -740,9 +763,12 @@ left untouched for the graph decode, so Stage 0 never collapses real variation.
 
 Reads shorter than `k`, reads with ambiguous bases (e.g. `N`), and reads with no
 weak run are returned unchanged with a 0 count. Returns the (possibly rewritten)
-record and the number of bases corrected.
+record and the number of bases corrected. `graph_mode` selects the solid-set
+lookup key (canonicalized under :canonical, observed orientation otherwise —
+td-nt69).
 """
-function _stage0_correct_read(read::FASTX.FASTQ.Record, k::Int, solid_kmers::AbstractSet)
+function _stage0_correct_read(read::FASTX.FASTQ.Record, k::Int, solid_kmers::AbstractSet;
+        graph_mode::Symbol = :canonical)
     seq_str = FASTX.sequence(String, read)
     n = length(seq_str)
     n < k && return read, 0
@@ -756,7 +782,7 @@ function _stage0_correct_read(read::FASTX.FASTQ.Record, k::Int, solid_kmers::Abs
     nkmers = n - k + 1
     solid = Vector{Bool}(undef, nkmers)
     @inbounds for i in 1:nkmers
-        solid[i] = _canonical_kmer_at(chars, k, i) in solid_kmers
+        solid[i] = _lookup_kmer_at(chars, k, i, graph_mode) in solid_kmers
     end
 
     n_corr = 0
@@ -797,7 +823,7 @@ function _stage0_correct_read(read::FASTX.FASTQ.Record, k::Int, solid_kmers::Abs
                     chars[p] = base
                     ok = true
                     for j in lo_j:hi_j
-                        if !(_canonical_kmer_at(chars, k, j) in solid_kmers)
+                        if !(_lookup_kmer_at(chars, k, j, graph_mode) in solid_kmers)
                             ok = false
                             break
                         end
@@ -846,12 +872,12 @@ without a solid reference every k-mer looks weak and there is no trustworthy
 neighbor to correct toward, so nothing is changed.
 """
 function _stage0_cheap_correct(reads::Vector{<:FASTX.FASTQ.Record}, k::Int,
-        solid_kmers::AbstractSet)
+        solid_kmers::AbstractSet; graph_mode::Symbol = :canonical)
     total = 0
     isempty(solid_kmers) && return collect(reads), 0
     corrected = Vector{FASTX.FASTQ.Record}(undef, length(reads))
     for (idx, read) in enumerate(reads)
-        rec, n = _stage0_correct_read(read, k, solid_kmers)
+        rec, n = _stage0_correct_read(read, k, solid_kmers; graph_mode = graph_mode)
         corrected[idx] = rec
         total += n
     end
@@ -867,19 +893,21 @@ end
 # ------------------------------------------------------------------------------
 
 """
-    should_decode_read(read, k, hard_vertices) -> Bool
+    should_decode_read(read, k, hard_vertices; graph_mode) -> Bool
 
-True iff any canonical k-mer of `read` is a member of `hard_vertices` (the
-bubble / repeat-like / weak-k-mer set). Reads that touch no hard vertex have no
-region worth decoding and are passed through untouched. Mirrors
-`_read_is_all_solid`'s canonical k-mer iteration so the two gates compose on the
-same `:canonical` graph. An empty `hard_vertices` means "no gate" ⇒ decode.
+True iff any k-mer of `read` (resolved to its graph label via `_lookup_key`) is a
+member of `hard_vertices` (the bubble / repeat-like / weak-k-mer set). Reads that
+touch no hard vertex have no region worth decoding and are passed through
+untouched. Mirrors `_read_is_all_solid`'s k-mer iteration so the two gates compose
+on the same graph. Works on both `:canonical` and `:doublestrand` graphs
+(td-nt69). An empty `hard_vertices` means "no gate" ⇒ decode.
 """
-function should_decode_read(read::FASTX.FASTQ.Record, k::Int, hard_vertices::AbstractSet)
+function should_decode_read(read::FASTX.FASTQ.Record, k::Int, hard_vertices::AbstractSet;
+        graph_mode::Symbol = :canonical)
     isempty(hard_vertices) && return true
     sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
     for (kmer, _) in Kmers.UnambiguousDNAMers{k}(sequence)
-        (BioSequences.canonical(kmer) in hard_vertices) && return true
+        (_lookup_key(kmer, graph_mode) in hard_vertices) && return true
     end
     return false
 end
@@ -903,9 +931,11 @@ ambiguity — a bubble/superbubble (competing balanced alleles) or a repeat-like
 high-out-degree vertex. Those are the true ~5–15%. A weak k-mer flanked by solid
 neighbors is no longer "hard"; it is an error Stage 0 either already corrected or
 left as genuinely ambiguous (in which case it typically also sits in a bubble and
-is caught by clause 1). Intended for `:canonical` graphs (matches the skip gate);
-only reached on the :scalable tier (`hard_window=true`), so :exhaustive is
-unaffected.
+is caught by clause 1). Operates directly on the graph vertices/edges, so it is
+mode-agnostic (works on `:canonical` and `:doublestrand` graphs — on a
+doublestrand graph a bubble/repeat is flagged on both strands, and reads are
+matched in their observed orientation by `should_decode_read`; td-nt69). Only
+reached on the :scalable tier (`hard_window=true`), so :exhaustive is unaffected.
 """
 function _hard_vertex_set(graph, k::Int)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -1128,19 +1158,20 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # solid has no weak region to correct and skips the per-read decode. Opt-in
     # (default off) so existing callers are unchanged. `solid_kmers === nothing`
     # ⇒ correct every read as before.
-    # The skip helpers canonicalize read k-mers, so they are only valid on a
-    # :canonical graph; on any other mode disable the skip (correct all) rather
-    # than mis-match strands and wrongly skip (review I1/I2 graph_mode).
-    if skip_solid && graph_mode != :canonical
-        @warn "skip_solid is only supported for graph_mode=:canonical; disabling skip (correcting all reads)." graph_mode
+    # td-nt69: the skip/cheap-correct helpers resolve read k-mers to their graph
+    # label via `_lookup_key` (canonicalized under :canonical, observed orientation
+    # under :doublestrand), so they are valid on BOTH modes — classification is
+    # coverage-based and mode-agnostic. :scalable now runs :doublestrand. Only
+    # :singlestrand (no RC vertices, not a corrector target) is excluded.
+    if skip_solid && graph_mode == :singlestrand
+        @warn "skip_solid is not supported for graph_mode=:singlestrand; disabling skip (correcting all reads)." graph_mode
     end
-    if cheap_correct && graph_mode != :canonical
-        @warn "cheap_correct is only supported for graph_mode=:canonical; disabling Stage 0 cheap correction." graph_mode
+    if cheap_correct && graph_mode == :singlestrand
+        @warn "cheap_correct is not supported for graph_mode=:singlestrand; disabling Stage 0 cheap correction." graph_mode
     end
     # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
-    # corrector needs the solid set (both canonicalize read k-mers ⇒ :canonical
-    # only). Compute once, share both consumers.
-    need_solid = (skip_solid || cheap_correct) && graph_mode == :canonical
+    # corrector needs the solid set. Compute once, share both consumers.
+    need_solid = (skip_solid || cheap_correct) && graph_mode != :singlestrand
     solid_kmers = need_solid ? _solid_kmer_set(graph) : nothing
 
     # Stage 0 CHEAP correction (td-bjnt): fix simple single-substitution errors
@@ -1149,8 +1180,9 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # cheaply-corrected reads. Gated on :scalable (cheap_correct=true, canonical).
     cheap_corrections = 0
     work_reads = reads
-    if cheap_correct && graph_mode == :canonical && solid_kmers !== nothing
-        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers)
+    if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
+        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
+            graph_mode = graph_mode)
         improvements_made += cheap_corrections
         if verbose && cheap_corrections > 0
             println("  Stage 0 cheap correction: fixed $cheap_corrections base(s) " *
@@ -1166,9 +1198,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # even when skip_solid is off, so the all-solid skip is gated on `skip_solid`
     # explicitly. Returns true ⇒ skip.
     _skip_this_read = read -> begin
-        (skip_solid && solid_kmers !== nothing && _read_is_all_solid(read, k, solid_kmers)) &&
+        (skip_solid && solid_kmers !== nothing &&
+             _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
             return true
-        (hard_vertices !== nothing && !should_decode_read(read, k, hard_vertices)) &&
+        (hard_vertices !== nothing &&
+             !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
             return true
         return false
     end

@@ -14,6 +14,7 @@
 import Test
 import Mycelia
 import FASTX
+import BioSequences
 import Random
 
 const _BASES = ['A', 'C', 'G', 'T']
@@ -28,6 +29,30 @@ function _toy_fastq_records(rng; reflen = 1000, n_reads = 80, readlen = 80, err 
             rand(rng) < err && (seq[j] = rand(rng, filter(!=(seq[j]), _BASES)))
         end
         push!(records, FASTX.FASTQ.Record("r$i", String(seq), String(fill('I', readlen))))
+    end
+    return records
+end
+
+# 1kb quality-gap fixture (mirrors benchmarking/quality_gap_diagnostic.jl): reads
+# sampled from BOTH strands and passed through Mycelia.observe at err=0.01, so the
+# corrector runs on a realistic double-stranded read set. Used by the td-nt69
+# doublestrand-recovery testset below.
+function _qgd_reads(; genome_len = 1000, readlen = 100, coverage = 20,
+        err = 0.01, seed = 42)
+    rec = Mycelia.random_fasta_record(moltype = :DNA, seed = seed, L = genome_len)
+    refseq = FASTX.sequence(BioSequences.LongDNA{4}, rec)
+    rng = Random.MersenneTwister(seed)
+    glen = length(refseq)
+    n_reads = max(1, ceil(Int, coverage * glen / readlen))
+    records = FASTX.FASTQ.Record[]
+    for i in 1:n_reads
+        start = rand(rng, 1:(glen - readlen + 1))
+        frag = refseq[start:(start + readlen - 1)]
+        rand(rng, Bool) && (frag = BioSequences.reverse_complement(frag))
+        obs_seq, quals = Mycelia.observe(frag; error_rate = err, tech = :illumina)
+        isempty(obs_seq) && continue
+        qstr = String([Char(q + 33) for q in quals])
+        push!(records, FASTX.FASTQ.Record("read_$(i)", string(obs_seq), qstr))
     end
     return records
 end
@@ -47,6 +72,9 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test ex.hard_window == false
         Test.@test ex.soft_em == false
         Test.@test ex.beam_width == typemax(Int)
+        # td-nt69: :exhaustive derives its corrector graph_mode from
+        # config.graph_mode (nothing ⇒ derive), a byte-identical passthrough.
+        Test.@test ex.graph_mode === nothing
 
         sc = R._corrector_strategy_knobs(:scalable)
         # Scalable = coarse 3-rung ladder, low iteration cap, all volume/quality
@@ -60,6 +88,11 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test sc.hard_window == true
         Test.@test sc.soft_em == true
         Test.@test sc.beam_width === nothing
+        # td-nt69: :scalable runs the corrector on a :doublestrand graph. Forcing
+        # :canonical was THE cause of the quality gap (skip machinery was over-
+        # constrained to require it); the classification is coverage-based and
+        # mode-agnostic, so skip stays active under :doublestrand.
+        Test.@test sc.graph_mode == :doublestrand
 
         Test.@test_throws Exception R._corrector_strategy_knobs(:bogus)
     end
@@ -107,5 +140,47 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         # No explicit strategy ⇒ scalable.
         res = R.assemble_genome(reads; k = 13, corrector = :iterative)
         Test.@test res.assembly_stats["strategy"] == "scalable"
+    end
+
+    Test.@testset ":scalable doublestrand recovers low-contig regime (td-nt69)" begin
+        # THE quality fix. On the same 1kb fixture the quality-gap diagnostic used
+        # (err=0.01, ~20x, 100bp), the previously-forced :canonical corrector
+        # shattered the re-assembly to ~197 contigs / N50 43. Running the corrector
+        # on :doublestrand (all other :scalable knobs held) recovers the historical
+        # near-complete regime (~14-21 contigs / N50 ~900), WITH the skip gate still
+        # active. This is an invariant (regime recovery + skip-active), not a golden
+        # contig count, so the thresholds are deliberately loose.
+        reads = _qgd_reads()
+        asm = R.assemble_genome(reads; k = 21, corrector = :iterative, strategy = :scalable)
+
+        n_contigs = length(asm.contigs)
+        lens = sort(length.(asm.contigs); rev = true)
+        total = sum(lens; init = 0)
+        # N50 (contig length at which cumulative coverage reaches half the total).
+        n50 = 0
+        acc = 0
+        for l in lens
+            acc += l
+            if acc >= total / 2
+                n50 = l
+                break
+            end
+        end
+        skip_fraction = get(asm.assembly_stats, "skip_fraction", 0.0)
+
+        Test.@info "td-nt69 doublestrand recovery" n_contigs n50 largest = (isempty(lens) ? 0 : lens[1]) skip_fraction skip_solid = asm.assembly_stats["skip_solid"] hard_window = asm.assembly_stats["hard_window"]
+
+        # RECOVERED low-contig regime: nowhere near the ~197 canonical shatter.
+        # Loose upper bound (observed ~14) that still fails hard on a regression to
+        # the fragmented canonical behavior.
+        Test.@test n_contigs <= 40
+        # High N50 — the historical near-complete regime was ~891-903; require a
+        # large jump over the canonical N50 of 43.
+        Test.@test n50 >= 400
+        # Skip MUST stay ACTIVE under :doublestrand (the whole point: the fix does
+        # not disable the volume-reduction gate, it just runs it on the right graph).
+        Test.@test skip_fraction > 0.0
+        Test.@test asm.assembly_stats["skip_solid"] == true
+        Test.@test asm.assembly_stats["hard_window"] == true
     end
 end

@@ -245,11 +245,11 @@ struct AssemblyConfig
         # FIX 4 (silent-default + skip_solid-override provenance). corrector=:iterative
         # now DEFAULTS to strategy=:scalable, which is a materially different engine
         # than the prior corrector route (coarse ladder / low iteration cap /
-        # skip-solid / canonical / hard-read gate). Announce the default once so a
-        # caller relying on old behavior is not silently switched.
+        # skip-solid / doublestrand graph mode / hard-read gate). Announce the default
+        # once so a caller relying on old behavior is not silently switched.
         if corrector == :iterative && !strategy_explicit
             @warn "corrector=:iterative now defaults to strategy=:scalable — a coarse " *
-                  "k-ladder + low iteration cap with skip-solid, canonical graph mode, " *
+                  "k-ladder + low iteration cap with skip-solid, doublestrand graph mode, " *
                   "and hard-read gating enabled. This is NOT the prior corrector " *
                   "behavior; pass strategy=:exhaustive for the maximum-sensitivity " *
                   "exact-ML engine, or strategy=:scalable to silence this warning." maxlog = 1
@@ -740,10 +740,14 @@ routing can be unit-tested without running the (slow) corrector.
   skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
   linear single-substitution fix before the decode), hard-read gating (Stage 3,
   now narrowed to bubble/repeat vertices only), soft-EM edge memory (Stage 2,
-  record-only v1), and the size-aware auto-beam (`beam_width=nothing`).
+  record-only v1), the size-aware auto-beam (`beam_width=nothing`), and
+  `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
+  machinery and was the cause of the quality gap; the skip/classification is
+  coverage-based and mode-agnostic).
 - `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
   (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
-  and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
+  `graph_mode=nothing` (derive from `config.graph_mode`, byte-identical
+  passthrough), and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
   of the prior corrector default: master's corrector route used the size-aware
   auto-beam (`beam_width=nothing`, bounded on large reads), so forcing an exact
   unbounded beam here reintroduces the td-63qy OOM ABOVE the auto-beam threshold.
@@ -759,7 +763,17 @@ function _corrector_strategy_knobs(strategy::Symbol)
             hard_window = true,
             soft_em = true,
             cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
-            beam_width = nothing   # size-aware auto-beam (bounded on huge reads)
+            beam_width = nothing,  # size-aware auto-beam (bounded on huge reads)
+            # graph_mode=:doublestrand (td-nt69): forcing :canonical was THE cause of
+            # the :scalable quality gap. On a controlled 1kb fixture, flipping ONLY
+            # canonical→doublestrand (all other knobs held) collapses 197→16 contigs
+            # and lifts N50 43→891 — the historical near-complete regime. Canonical
+            # was forced only because the skip machinery was (wrongly) wired to
+            # require it; the k-mer classification is coverage-based and mode-agnostic
+            # (each vertex + its RC are separate doublestrand vertices, still
+            # separable by coverage), so skip_solid + hard_window work under
+            # :doublestrand too — the naive contig path stays valid.
+            graph_mode = :doublestrand
         )
     elseif strategy == :exhaustive
         return (
@@ -769,7 +783,10 @@ function _corrector_strategy_knobs(strategy::Symbol)
             hard_window = false,
             soft_em = false,
             cheap_correct = false,  # exact-ML tier: no cheap pre-correction
-            beam_width = typemax(Int)  # exact ML decode
+            beam_width = typemax(Int),  # exact ML decode
+            # nothing ⇒ derive the corrector graph_mode from config.graph_mode below,
+            # keeping :exhaustive a byte-identical passthrough of prior behavior.
+            graph_mode = nothing
         )
     else
         error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
@@ -791,9 +808,8 @@ td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
 `assembly_stats`.
 
 The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
-(DoubleStrand for DNA) rather than inheriting `config.graph_mode`: the corrector
-needs `:canonical` for skip-solid, but the naive contig path is invalid under
-`:canonical`. Corrected reads are FASTQ, so the re-assembly runs the same
+(DoubleStrand for DNA) rather than inheriting `config.graph_mode`. Corrected
+reads are FASTQ, so the re-assembly runs the same
 quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
 i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
 apples.
@@ -826,13 +842,15 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # soft-EM. The per-tier knobs live in _corrector_strategy_knobs so the
         # routing is unit-testable without running the corrector.
         knobs = _corrector_strategy_knobs(config.strategy)
-        # The :scalable gates (skip-solid + hard-window) canonicalize read k-mers,
-        # so they REQUIRE :canonical (mycelia_iterative_assemble's own default);
-        # forcing config.graph_mode (DoubleStrand for DNA) would silently disable
-        # both gates. :exhaustive keeps today's config-derived mode so it stays a
-        # byte-identical passthrough.
-        corrector_graph_mode = config.strategy == :scalable ?
-                               :canonical : _graph_mode_symbol(config.graph_mode)
+        # td-nt69: :scalable now runs the corrector on a :doublestrand graph
+        # (`knobs.graph_mode == :doublestrand`). Forcing :canonical was THE cause of
+        # the quality gap — the skip machinery was over-constrained to require it,
+        # but skip-solid + hard-window classification is coverage-based and
+        # mode-agnostic, so both gates stay ACTIVE under :doublestrand and the naive
+        # contig path stays valid. :exhaustive threads `knobs.graph_mode === nothing`
+        # ⇒ derive from config.graph_mode, a byte-identical passthrough.
+        corrector_graph_mode = knobs.graph_mode === nothing ?
+                               _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
@@ -879,10 +897,9 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         end
         _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
         reassembly_k = config.k === nothing ? max_k : config.k
-        # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): the
-        # corrector needs :canonical for skip_solid, but the naive graph path emits
-        # invalid contigs under :canonical, so the re-assembly must use the mode the
-        # naive baseline uses (DoubleStrand for DNA), which auto-config selects.
+        # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): match
+        # the mode the naive baseline uses (DoubleStrand for DNA), which auto-config
+        # selects, so the corrected-read re-assembly is apples-to-apples.
         assembly = assemble_genome(corrected_reads;
             k = reassembly_k, corrector = :none)
         # Stamp the corrector provenance onto the real assembly's stats.
