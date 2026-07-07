@@ -1,18 +1,18 @@
-# SCAFFOLD test for soft-EM edge weighting (td-e70t).
+# Soft-EM edge weighting tests (td-e70t) — v2 competing-paths ACTIVE.
 #
 # The graph-as-HMM correction redesign replaces the hard-count M-step
 # (`compute_edge_weight` == raw coverage) with probability-weighted evidence:
-# after Viterbi decodes a read, each candidate path's RESPONSIBILITY (posterior
-# over the read's candidate set) is accumulated onto its edges. Error edges,
-# traversed only by rare low-probability paths, accrue little soft weight and
-# decay below the emergent-cleaning gate WITHOUT tip-clipping.
+# each competing candidate path's RESPONSIBILITY (posterior over the read's
+# candidate set) is accumulated onto its edges. Error edges, traversed only by
+# low-probability paths, accrue little soft weight and decay below the
+# emergent-cleaning gate WITHOUT tip-clipping.
 #
-# What lands here: the accumulation PRIMITIVE + the correction-side hook, proven
-# at the unit level (passing tests below). What does NOT land yet: making the
-# qualmer graph rebuild / transition weighting CONSUME these soft weights so the
-# full pipeline coalesces a 1 kb toy to ~1 contig across EM iterations — that
-# M-step consumption is outside the correction-core file boundary and is the
-# td-e70t follow-on. The full-pipeline acceptance is therefore a skipped test.
+# This file exercises the accumulation PRIMITIVES (softmax responsibility,
+# accumulator, single-path hook) at the unit level AND the v2 activation: the
+# final testset drives the competing-paths E-step + the M-step consumption
+# feedback loop end-to-end (register soft weights -> compute_edge_weight decays ->
+# next iteration's responsibility sharpens) and asserts a tracked error edge's
+# soft weight strictly decreases across EM iterations below the 0.01 gate.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/soft_em_edge_weight_scaffold_test.jl")'
@@ -21,6 +21,7 @@ import BioSequences
 import FASTX
 import Kmers
 import Mycelia
+import Random
 import Test
 
 Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
@@ -110,16 +111,75 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
         end
     end
 
-    Test.@testset "FULL-PIPELINE ACCEPTANCE (skipped until M-step consumes soft weights)" begin
-        # td-e70t acceptance: running mycelia_iterative_assemble on a clean ~1 kb
-        # toy should coalesce the qualmer graph toward ~1 contig across EM
-        # iterations, and the summed soft weight of error edges should DECREASE
-        # across iterations, WITHOUT any explicit tip/bubble removal. This requires
-        # the qualmer graph rebuild / transition weighting to consume the soft
-        # weights produced by `accumulate_soft_em_edge_weights!` in place of raw
-        # coverage counts -- the follow-on that lives outside the correction-core
-        # file boundary. Skipped (not @test false) so it documents the target
-        # without failing CI on unlanded work.
-        Test.@test_skip false
+    Test.@testset "ERROR-EDGE DECAY across EM iterations (v2 competing paths, td-e70t)" begin
+        # td-e70t acceptance, now ACTIVE (v2). Controlled fixture: a random backbone
+        # at high coverage plus ONE coverage-1 error read. The single substitution
+        # creates coverage-1 error k-mers/edges while every consensus edge is
+        # high-coverage. The v2 competing-paths E-step
+        # (`accumulate_competing_paths!`) gives the error branch a small
+        # responsibility (a genuine split — v1 was always 1.0), and REGISTERING that
+        # soft weight (the M-step) makes `compute_edge_weight` return the decayed
+        # value, so the next iteration's transition scoring sharpens the split
+        # further — a positive feedback loop. We isolate the loop by re-accumulating
+        # on the SAME reads across iterations (stable edge identity) and assert the
+        # tracked error edge's soft weight decreases strictly and falls below the
+        # 0.01 emergent-cleaning gate, WITHOUT any explicit tip/bubble removal.
+        R = Mycelia.Rhizomorph
+        bases = ['A', 'C', 'G', 'T']
+        rng = Random.MersenneTwister(7)
+        L, cov, readlen, errpos, kk = 300, 25, 100, 150, 13
+        backbone = collect(join(rand(rng, bases, L)))
+        reads = FASTX.FASTQ.Record[]
+        qual = String(fill('I', readlen))
+        for i in 1:cov
+            s = rand(rng, 1:(L - readlen + 1))
+            push!(reads, FASTX.FASTQ.Record("c$i", String(backbone[s:(s + readlen - 1)]), qual))
+        end
+        errseq = copy(backbone)
+        errseq[errpos] = rand(rng, filter(!=(errseq[errpos]), bases))
+        s0 = errpos - readlen ÷ 2
+        push!(reads, FASTX.FASTQ.Record("err", String(errseq[s0:(s0 + readlen - 1)]), qual))
+
+        graph = R.build_qualmer_graph(reads, kk; mode = :canonical)
+        err_edges = [(a, b) for (a, b) in R.MetaGraphsNext.edge_labels(graph)
+                     if R.count_total_observations(graph[a, b]) == 1]
+        Test.@test !isempty(err_edges)
+
+        # Iteration 1 E-step (raw weights).
+        acc1 = R.SoftEdgeWeightAccumulator()
+        for rd in reads
+            Mycelia.accumulate_competing_paths!(acc1, rd, graph, kk; graph_mode = :canonical)
+        end
+        # v2 genuinely SPLITS: at least one error edge received a fractional (<1)
+        # responsibility because a consensus alternative outscored the observed
+        # error branch. (v1's single-path decode made every responsibility 1.0.)
+        competed = [(e, acc1.weights[e]) for e in err_edges
+                    if haskey(acc1.weights, e) && acc1.weights[e] < 1.0]
+        Test.@test !isempty(competed)
+        tracked = last(sort(competed; by = x -> x[2]))[1]   # largest still-competed edge
+
+        # Feedback iterations: register the previous accumulator (M-step), then
+        # re-accumulate; `compute_edge_weight` now reads the decayed soft weight.
+        trace = Float64[acc1.weights[tracked]]
+        prev = acc1
+        for _ in 1:4
+            acc = R.SoftEdgeWeightAccumulator()
+            try
+                R.register_soft_edge_weights!(graph, prev)
+                for rd in reads
+                    Mycelia.accumulate_competing_paths!(acc, rd, graph, kk; graph_mode = :canonical)
+                end
+            finally
+                R.clear_soft_edge_weights!()   # never leak the process-global registry
+            end
+            push!(trace, get(acc.weights, tracked, 0.0))
+            prev = acc
+        end
+        # Strictly decreasing across EM iterations, and below the 0.01 gate.
+        Test.@test all(diff(trace) .< 0)
+        Test.@test trace[end] < 0.01
+        # Registry cleared ⇒ the raw coverage count is restored byte-for-byte.
+        Test.@test R.compute_edge_weight(graph[tracked...]) ==
+                   R.count_total_observations(graph[tracked...])
     end
 end

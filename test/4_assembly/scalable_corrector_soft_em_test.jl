@@ -1,18 +1,18 @@
-# Stage 2 (td-e70t): soft-EM edge-memory PRIMITIVES. After each successful Viterbi
-# decode the ML path's edges accumulate responsibility (1.0 for the single argmax
-# path) into a SoftEdgeWeightAccumulator; `register_soft_edge_weights!` can then
-# re-weight a graph so `compute_edge_weight` returns probability-weighted evidence
-# instead of raw coverage counts, reverting byte-for-byte after `clear!`. This
-# test exercises those primitives at the UNIT level.
+# Soft-EM edge-memory tests (td-e70t) — v2 competing-paths ACTIVE. The E-step
+# splits each read's responsibility across COMPETING candidate paths (the observed
+# read path vs a consensus alternative re-routed through the best-supported
+# sibling) and accumulates each path's edges weighted by its responsibility into a
+# SoftEdgeWeightAccumulator. `register_soft_edge_weights!` then re-weights a graph
+# so `compute_edge_weight` returns the probability-weighted evidence instead of raw
+# coverage counts, reverting byte-for-byte after `clear!` — the M-step consumption
+# the shipped pipeline (`mycelia_iterative_assemble`) now performs each EM
+# iteration.
 #
-# IMPORTANT (v1 is RECORD-ONLY): the shipped pipeline (`mycelia_iterative_assemble`)
-# runs the E-step accumulation but does NOT consume it — it never calls
-# `register_soft_edge_weights!`, so `compute_edge_weight` always returns raw counts
-# and the graph is never soft-reweighted (see the FIX-1 note in
-# src/iterative-assembly.jl). Registration/consumption is a v2-reserved capability;
-# this file tests the primitives directly (not the pipeline) so they are ready for
-# the v2 competing-paths M-step. With a single argmax path per read, responsibility
-# is always 1.0 (soft weight == hard count); v2 softens it via competing paths.
+# On CLEAN data (no bubbles) there is no competing branch, so responsibility is
+# 1.0 (soft weight == hard count); on error-bearing data the observed error branch
+# gets a fractional responsibility and its soft weight decays. This file exercises
+# the primitives + the pipeline E-step; the strict cross-iteration decay-below-gate
+# is asserted in soft_em_edge_weight_scaffold_test.jl.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/scalable_corrector_soft_em_test.jl")'
@@ -38,7 +38,7 @@ function _toy_fastq_records(rng; reflen = 1000, n_reads = 120, readlen = 80, err
     return records
 end
 
-Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
+Test.@testset "scalable corrector soft-EM v2 (td-e70t)" begin
     R = Mycelia.Rhizomorph
 
     Test.@testset "registry consumption + byte-identical revert" begin
@@ -73,30 +73,31 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
         Test.@test R.compute_edge_weight(edge_data) == raw    # byte-identical revert
     end
 
-    Test.@testset "decode pass populates the accumulator (responsibility 1.0)" begin
+    Test.@testset "clean-data decode pass: no competition ⇒ responsibility 1.0" begin
+        # On error-free reads the qualmer graph has (essentially) no bubbles, so the
+        # v2 competing-paths E-step finds no consensus alternative for any read and
+        # every read's observed path owns all responsibility (1.0). The accumulated
+        # soft weights are therefore sums of unit responsibilities ⇒ integer-valued
+        # and >= 1 (soft weight == hard coverage count in the no-competition case).
         reads = _toy_fastq_records(Random.MersenneTwister(5); n_reads = 80, err = 0.0)
         graph = R.build_qualmer_graph(reads, 13; mode = :canonical)
         acc = R.SoftEdgeWeightAccumulator()
         _updated, _n,
         _skip = Mycelia.improve_read_set_likelihood(
             reads, graph, 13; graph_mode = :canonical, soft_weights = acc)
-        # The E-step accumulated ML-path edges: non-empty, and every soft weight is
-        # a sum of unit (1.0) responsibilities ⇒ integer-valued and >= 1.
         Test.@test !isempty(acc.weights)
         Test.@test all(w -> w >= 1.0 && isapprox(w, round(w)), values(acc.weights))
     end
 
     Test.@testset "rare (error) edge soft weight is non-increasing across iterations" begin
-        # Two manual EM iterations. Iteration 2's graph is re-weighted from
-        # iteration 1's accumulator (the M-step consumption), then decoded on the
-        # CORRECTED reads. The probability-memory / decay property is AGGREGATE in
-        # v1 (responsibility is always 1.0, so a single edge's soft weight is just
-        # its ML-path coverage and can rise if a read is corrected onto it): the
-        # rare-edge (error) POPULATION shrinks. We assert both the count of rare
-        # edges and their total tail mass are non-increasing.
-        #
-        # v1 CAVEAT: full coalescence to ~1 contig (and strict per-edge decay)
-        # needs the v2 competing-paths E-step; this asserts the v1 aggregate trend.
+        # Two manual EM iterations mirroring the pipeline: iteration 2's graph is
+        # rebuilt from the CORRECTED reads and re-weighted from iteration 1's
+        # accumulator (the M-step consumption), then re-decoded. Under v2 the
+        # competing-paths E-step gives error branches fractional responsibility, and
+        # the feedback loop + rebuild shrink the rare-edge (error) POPULATION: we
+        # assert both the count of rare edges and their total tail mass are
+        # non-increasing across the two iterations. (The strict per-edge
+        # decay-below-gate is asserted in soft_em_edge_weight_scaffold_test.jl.)
         reads = _toy_fastq_records(Random.MersenneTwister(9); n_reads = 150, err = 0.008)
         k = 13
         rare_threshold = 2.0   # <=2 supporting ML paths ⇒ error-like edge
