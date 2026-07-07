@@ -29,10 +29,10 @@ import Random
 
 # KernelAbstractions is a kernel DSL: the `@kernel` macro rewrites the kernel
 # body and only recognizes the index/const DSL macros when they are in scope
-# unqualified, so these three specific macro names are brought in by name (the
-# rest of the API — allocate/synchronize/CPU/etc. — stays fully qualified as
-# `KA.`).
-using KernelAbstractions: @kernel, @index, @Const
+# unqualified, so these two DSL macro names are brought in by name (the rest of
+# the API — including `@kernel` itself, invoked below as `KA.@kernel`, plus
+# allocate/synchronize/CPU/etc. — stays fully qualified as `KA.`).
+using KernelAbstractions: @index, @Const
 
 const KA = KernelAbstractions
 
