@@ -238,16 +238,28 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
         Test.@test all(w -> w ≈ raw_min, floor_trace)
     end
 
-    Test.@testset "FULL-PIPELINE ACCEPTANCE (skipped until M-step consumes soft weights)" begin
+    Test.@testset "FULL-PIPELINE ACCEPTANCE (skipped pending low-skip-fraction integration harness — td-969e)" begin
         # td-e70t acceptance: running mycelia_iterative_assemble on a clean ~1 kb
         # toy should coalesce the qualmer graph toward ~1 contig across EM
         # iterations, and the summed soft weight of error edges should DECREASE
-        # across iterations, WITHOUT any explicit tip/bubble removal. This requires
-        # the qualmer graph rebuild / transition weighting to consume the soft
-        # weights produced by `accumulate_soft_em_edge_weights!` in place of raw
-        # coverage counts -- the follow-on that lives outside the correction-core
-        # file boundary. Skipped (not @test false) so it documents the target
-        # without failing CI on unlanded work.
+        # across iterations, WITHOUT any explicit tip/bubble removal.
+        #
+        # M-step consumption IS LANDED on this branch: `mycelia_iterative_assemble`
+        # registers each EM iteration's soft-weight accumulator onto the next
+        # iteration's freshly-built graph (`register_soft_edge_weights!`), so
+        # `compute_edge_weight` / the Viterbi transition scoring consume the
+        # support-floored soft weights in place of raw coverage counts. The wiring
+        # is exercised by scalable_corrector_soft_em_test.jl and the M-step-floor
+        # recurrence above.
+        #
+        # This end-to-end monotonic-decrease assertion remains @test_skip only
+        # because it needs a dedicated LOW-SKIP-FRACTION integration harness (bead
+        # td-969e): on the default :scalable route most clean reads are
+        # skip-solid'd, so few reads reach the decoder and the per-iteration
+        # error-edge soft-weight trace is too sparse to assert a stable monotonic
+        # trend without a fixture that forces a meaningful decode fraction. Skipped
+        # (not @test false) so it documents the target without failing CI pending
+        # that harness.
         Test.@test_skip false
     end
 end

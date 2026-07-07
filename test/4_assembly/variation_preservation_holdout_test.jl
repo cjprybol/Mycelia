@@ -204,8 +204,17 @@ end
 # This holdout asserts BOTH branches of a 20x/10x AND a 30x/15x bubble survive
 # THROUGH THE PIPELINE (assemble_genome → mycelia_iterative_assemble, not manual
 # re-accumulation) at strategy=:scalable (soft_em ON), alongside a coverage-1
-# error being removed. It is the gate that would FAIL against a
-# variant-collapsing soft-EM.
+# error being removed. It is a pipeline-scale REGRESSION guard on end-to-end
+# variant retention, NOT a discriminator that isolates the support floor: at this
+# fixture scale it passes even with the floor DISABLED (the pipeline's other
+# retention machinery already keeps a >=SOFT_EM_MIN_SUPPORT branch alive), so a
+# green result here does not by itself prove the floor is doing work. The floor's
+# distinct effect — clamping a skewed minority edge to at least its raw coverage
+# so the responsibility-split recurrence cannot contract it toward zero — is
+# proven at the MECHANISM level by the unit tests in
+# soft_em_edge_weight_scaffold_test.jl, which exercise the M-step registration
+# directly. Treat this holdout as the coarse end-to-end safety net and those unit
+# tests as the fine-grained proof that the floor works.
 
 """
 Build a controlled SKEWED-heterozygous-plus-error fixture: one allele at
