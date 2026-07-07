@@ -165,6 +165,17 @@ function _next_k_in_progression(current_k::Int, max_k::Int,
     return isempty(larger) ? current_k : minimum(larger)
 end
 
+# Default ADAPTIVE low-k decode-gate density threshold (td-9h5r): if, at a given
+# k-rung, the post-Stage-0 hard-window gate would still send AT LEAST this fraction
+# of reads to the expensive per-read graph-Viterbi decode, the gate is judged
+# NON-DISCRIMINATING (it is not reducing decode volume) and the whole decode is
+# skipped for that pass — the reads fall back on Stage 0 cheap correction +
+# skip-solid, and the whole-read Viterbi is deferred to higher, selective rungs
+# where the gate actually filters. 0.90 leaves a genuinely selective low-k decode
+# (e.g. a gate that skips ~40-60% of reads) ON, and only gates the dense-graph
+# "decode almost everything" pathology the #370 profile flagged.
+const _DEFAULT_DECODE_GATE_DENSITY = 0.90
+
 """
 Estimate memory usage for a graph with a given number of k-mers.
 Provides a rough estimate for memory monitoring.
@@ -238,7 +249,9 @@ function mycelia_iterative_assemble(input_fastq::String;
         hard_window::Bool = false,
         soft_em::Bool = false,
         cheap_correct::Bool = false,
-        beam_width::Union{Int, Nothing} = nothing)
+        beam_width::Union{Int, Nothing} = nothing,
+        min_decode_k::Union{Int, Nothing} = nothing,
+        decode_gate_density::Union{Float64, Nothing} = nothing)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -373,6 +386,51 @@ function mycelia_iterative_assemble(input_fastq::String;
         println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
+    # -- Low-k decode gating (td-9h5r) -----------------------------------------
+    # The finding (PR #370 profile): the per-read graph-Viterbi decode is 57-78% of
+    # every :scalable iteration — the dominant runtime term — yet at LOW k the graph
+    # is dense (nearly every k-mer sits on a bubble/repeat vertex), so the
+    # hard-window gate cannot discriminate and flags essentially EVERY read for a
+    # full whole-read decode. That is correction Stage 0's cheap linear pass already
+    # largely did. Two composable gates cut that wasted volume; BOTH still BUILD the
+    # graph and run Stage 0 cheap correction + skip-solid, deferring only the
+    # expensive whole-read Viterbi to higher, selective rungs:
+    #
+    #   (1) ADAPTIVE (default): at a rung whose post-Stage-0 hard-window decode
+    #       fraction would be >= `decode_gate_density`, the gate is non-
+    #       discriminating (it would decode ~everything → no volume reduction), so
+    #       the whole decode is skipped for that pass. This fires EXACTLY on the
+    #       dense-low-k pathology and is a NO-OP where the gate genuinely filters
+    #       (so a load-bearing selective low-k decode is preserved). Measured
+    #       post-Stage-0 inside improve_read_set_likelihood (raw-read density is
+    #       uninformative — Stage 0 clears most apparent hardness first).
+    #   (2) EXPLICIT floor: `min_decode_k` hard-gates every rung `k < min_decode_k`
+    #       (the LoRMA-style "start the graph-decode ladder higher" lever). Off by
+    #       default; deterministic, for tuning/tests.
+    #
+    # Both are gated behind the `:scalable` tier (only active when `hard_window` is
+    # true), so the `:exhaustive` tier (hard_window=false) is BYTE-IDENTICAL.
+    effective_min_decode_k = hard_window ? min_decode_k : nothing
+    # Adaptive-gate density threshold (fraction of reads the hard-window gate would
+    # still decode after Stage 0 above which the gate counts as non-discriminating).
+    # Default 0.90 on :scalable; `nothing` (or the exhaustive tier) disables it.
+    effective_decode_gate_density = hard_window ?
+                                    (decode_gate_density === nothing ?
+                                     _DEFAULT_DECODE_GATE_DENSITY : decode_gate_density) :
+                                    nothing
+    if verbose && (effective_min_decode_k !== nothing ||
+                   effective_decode_gate_density !== nothing)
+        println("Low-k decode gating (td-9h5r): " *
+                (effective_min_decode_k !== nothing ?
+                 "explicit floor min_decode_k=$(effective_min_decode_k); " : "") *
+                (effective_decode_gate_density !== nothing ?
+                 "adaptive gate-off when post-Stage-0 decode fraction >= " *
+                 "$(effective_decode_gate_density). " : "") *
+                "Gated rungs rely on Stage 0 cheap correction + skip-solid.")
+    end
+    # Telemetry: the k-rungs whose per-read decode was gated OFF (low-k skip).
+    decode_gated_rungs = Int[]
+
     # Hard-window skip telemetry (td-nn6l): the fraction of reads the hard-window
     # gate passed through WITHOUT a decode, recorded PER PASS (across every k and
     # iteration) so the run metadata can surface min/mean/max, not just the last
@@ -469,9 +527,22 @@ function mycelia_iterative_assemble(input_fastq::String;
             # orientation, so the gate works on both :canonical and :doublestrand
             # (:scalable now runs :doublestrand). Only :singlestrand — which has no
             # RC vertices and is not a corrector target — is excluded.
-            hard_vertices = (hard_window && graph_mode != :singlestrand) ?
+            # Low-k decode gating (td-9h5r) — EXPLICIT floor. Below
+            # `effective_min_decode_k` the per-read graph-Viterbi decode is skipped
+            # for EVERY read this pass. Stage 0 cheap correction + skip-solid still
+            # run below. Only active on the :scalable tier (hard_window=true), so
+            # :exhaustive is byte-identical. The ADAPTIVE gate (density-based) is
+            # decided inside improve_read_set_likelihood — it needs the post-Stage-0
+            # decode fraction — and is reported back via `pass_decode_gated`.
+            explicit_floor_gated = effective_min_decode_k !== nothing &&
+                                   k < effective_min_decode_k
+            # Building the hard-vertex set is pointless when the explicit floor
+            # already gates the decode off; the adaptive gate needs it, though, so
+            # build it whenever the floor is NOT gating and hard_window is on.
+            hard_vertices = (hard_window && !explicit_floor_gated &&
+                             graph_mode != :singlestrand) ?
                             _hard_vertex_set(graph, k) : nothing
-            if hard_window && graph_mode == :singlestrand
+            if hard_window && !explicit_floor_gated && graph_mode == :singlestrand
                 @warn "hard_window gating is not supported for graph_mode=:singlestrand; " *
                       "disabling (decoding all non-solid reads)." graph_mode maxlog = 1
             end
@@ -500,6 +571,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             improvements_made = 0
             pass_skip_fraction = 0.0
             pass_cheap_corrections = 0
+            pass_decode_gated = false
             try
                 if soft_em && prev_soft_weights !== nothing
                     Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
@@ -507,7 +579,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 updated_reads,
                 improvements_made,
                 pass_skip_fraction,
-                pass_cheap_corrections = improve_read_set_likelihood(
+                pass_cheap_corrections,
+                pass_decode_gated = improve_read_set_likelihood(
                     current_reads, graph, k,
                     verbose = verbose,
                     batch_size = batch_size,
@@ -518,6 +591,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                     beam_width = beam_width,
                     soft_weights = current_soft_weights,
                     hard_vertices = hard_vertices,
+                    decode_enabled = !explicit_floor_gated,
+                    decode_gate_density = effective_decode_gate_density,
                     diagnostics = corrector_diagnostics
                 )
             finally
@@ -525,6 +600,12 @@ function mycelia_iterative_assemble(input_fastq::String;
             end
             push!(skip_fractions, pass_skip_fraction)
             push!(cheap_correction_counts, pass_cheap_corrections)
+            # Record a rung whose per-read decode was gated OFF (explicit floor OR
+            # adaptive density gate) — telemetry surfaced in the run metadata.
+            if (explicit_floor_gated || pass_decode_gated) &&
+               (isempty(decode_gated_rungs) || last(decode_gated_rungs) != k)
+                push!(decode_gated_rungs, k)
+            end
             # Carry this iteration's soft edge memory forward: it becomes the next
             # EM iteration's M-step input (registered onto the next graph). `nothing`
             # on :exhaustive (no soft-EM) so that tier stays byte-identical.
@@ -672,7 +753,10 @@ function mycelia_iterative_assemble(input_fastq::String;
         verbose = verbose, diagnostics = corrector_diagnostics,
         skip_fractions = skip_fractions,
         cheap_correction_counts = cheap_correction_counts,
-        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct)
+        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct,
+        min_decode_k = effective_min_decode_k,
+        decode_gate_density = effective_decode_gate_density,
+        decode_gated_rungs = decode_gated_rungs)
 end
 
 # =============================================================================
@@ -1143,6 +1227,25 @@ k-mers overlap the "hard" vertex set (bubbles / repeats / weak k-mers); every
 other read passes through untouched. Composes with `skip_solid` — a read is
 decoded only when it is NOT all-solid AND (no hard set, or it touches one).
 
+`decode_enabled` (td-9h5r): when `false`, the per-read graph-Viterbi decode is
+skipped for EVERY read this pass (skip_fraction == 1.0) — the EXPLICIT low-k decode
+floor. Stage 0 cheap correction still runs first (on `work_reads`), so simple
+errors are still fixed; only the expensive whole-read Viterbi is deferred to higher
+k-rungs. Defaults to `true`; the `:scalable` k-ladder sets it `false` below
+`min_decode_k`.
+
+`decode_gate_density` (td-9h5r): the ADAPTIVE low-k decode gate. When non-`nothing`
+and a hard-window gate is active, the pass measures the post-Stage-0 fraction of
+reads the gate would still decode; if that is `>= decode_gate_density` the gate is
+NON-DISCRIMINATING (the dense-low-k "gate skips nothing" pathology) and the whole
+decode is skipped for the pass. A genuinely selective low-k decode (gate skips a
+meaningful fraction) is left ON. `nothing` (default / `:exhaustive`) disables it.
+
+Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
+decode_gated)` where `decode_gated` is `true` iff the per-read decode was gated OFF
+for this pass (explicit floor OR adaptive density). Callers destructuring only the
+first two/three/four values are unaffected.
+
 `soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
 NOT thread-safe, so supplying it forces sequential processing for this pass.
@@ -1154,13 +1257,15 @@ linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
 (bubbles/repeats). The decode then operates on the cheaply-corrected reads. Only
 enabled on the :scalable tier.
 
-Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections)`
-where `skip_fraction` is the fraction of reads passed through WITHOUT a decode
-(solid + hard-window skips) and `cheap_corrections` is the number of bases fixed
-by the Stage 0 pass. The graph-Viterbi decode fraction is `1 - skip_fraction`.
-`improvements_made` counts BOTH cheap corrections and decode-accepted corrections
-so per-k convergence sees Stage 0 progress. Callers destructuring only the first
-two or three values are unaffected.
+Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
+decode_gated)` where `skip_fraction` is the fraction of reads passed through WITHOUT
+a decode (solid + hard-window skips, plus the whole set when the low-k decode gate
+fires) and `cheap_corrections` is the number of bases fixed by the Stage 0 pass. The
+graph-Viterbi decode fraction is `1 - skip_fraction`. `improvements_made` counts
+BOTH cheap corrections and decode-accepted corrections so per-k convergence sees
+Stage 0 progress. `decode_gated` is `true` iff the per-read decode was gated OFF for
+the whole pass (low-k gate, td-9h5r). Callers destructuring only the first
+two/three/four values are unaffected.
 """
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
@@ -1172,8 +1277,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
+        decode_enabled::Bool = true,
+        decode_gate_density::Union{Float64, Nothing} = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
-        Vector{FASTX.FASTQ.Record}, Int, Float64, Int}
+        Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool}
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
     # when `diag` is a shared accumulator threaded across many passes.
@@ -1225,8 +1332,9 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # hard vertex. Both are volume-reduction skips and both count toward the
     # reported skip fraction. `solid_kmers` may be populated for cheap correction
     # even when skip_solid is off, so the all-solid skip is gated on `skip_solid`
-    # explicitly. Returns true ⇒ skip.
-    _skip_this_read = read -> begin
+    # explicitly. Returns true ⇒ skip. Stage 0 has ALREADY run above (on
+    # `work_reads`), so this predicate sees the cheaply-corrected reads.
+    _gate_skip = read -> begin
         (skip_solid && solid_kmers !== nothing &&
              _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
             return true
@@ -1235,6 +1343,44 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             return true
         return false
     end
+
+    # Precompute per-read skip decisions ONCE (cheap k-mer-membership checks) so the
+    # adaptive low-k gate can measure the natural decode fraction and the decode loop
+    # can reuse the same flags (no double evaluation).
+    base_skip_flags = Vector{Bool}(undef, total_reads)
+    @inbounds for i in 1:total_reads
+        base_skip_flags[i] = _gate_skip(work_reads[i])
+    end
+    natural_decode_fraction = total_reads > 0 ?
+                              count(!, base_skip_flags) / total_reads : 0.0
+
+    # -- Low-k decode gating (td-9h5r) -----------------------------------------
+    # `decode_enabled == false` (EXPLICIT floor `min_decode_k`): skip the per-read
+    # graph-Viterbi decode for EVERY read this pass. Stage 0 cheap correction has
+    # already run (on `work_reads`), so error correction still happens; only the
+    # expensive whole-read Viterbi is deferred to higher, selective k-rungs.
+    #
+    # ADAPTIVE density gate: even with `decode_enabled`, if the hard-window gate
+    # would still send >= `decode_gate_density` of reads to the decode (i.e. it is
+    # NON-DISCRIMINATING — the dense-low-k pathology where "the gate skips nothing"),
+    # skip the whole decode too: the gate is not reducing volume, so the decode is
+    # ~pure waste Stage 0 + the selective higher rungs recover. Requires an active
+    # hard-window gate (`hard_vertices !== nothing`) — with no gate there is no
+    # discrimination signal to act on, so the decode runs as before.
+    adaptive_gated = decode_enabled && decode_gate_density !== nothing &&
+                     hard_vertices !== nothing &&
+                     natural_decode_fraction >= decode_gate_density
+    pass_decode_off = !decode_enabled || adaptive_gated
+    if verbose && adaptive_gated
+        println("  Low-k decode gate (td-9h5r): hard-window gate non-discriminating " *
+                "at k=$k (would decode $(round(natural_decode_fraction * 100, digits=1))% " *
+                ">= $(round(decode_gate_density * 100, digits=1))%); skipping decode " *
+                "this pass (Stage 0 + higher-k rungs recover).")
+    end
+
+    # Final per-read skip decision: all reads skip when the pass decode is gated off;
+    # otherwise use the precomputed gate flags.
+    _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
     # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
     # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
@@ -1266,7 +1412,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             skip_flags = fill(false, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 read = batch_reads[i]
-                if _skip_this_read(read)
+                if _skip_this_read_at(batch_start + i - 1)
                     batch_results[i] = (read, false)   # skip the decode
                     skip_flags[i] = true
                 else
@@ -1290,7 +1436,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             # Sequential processing (also the soft-EM path: accumulation into
             # `soft_weights` happens per-read inside improve_read_likelihood).
             for (i, read) in enumerate(batch_reads)
-                if _skip_this_read(read)
+                if _skip_this_read_at(batch_start + i - 1)
                     updated_reads[batch_start + i - 1] = read   # skip the decode
                     skipped_reads += 1
                     continue
@@ -1328,10 +1474,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     if verbose
         total_improvement_rate = improvements_made / total_reads * 100
         println("  Total improvements: $improvements_made/$total_reads ($(round(total_improvement_rate, digits=1))%)")
-        if skip_solid || hard_vertices !== nothing
+        if skip_solid || hard_vertices !== nothing || pass_decode_off
             println("  Skipped (no decode): $skipped_reads/$total_reads ($(round(skip_fraction * 100, digits=1))%)")
             decode_fraction = 1.0 - skip_fraction
-            println("  Graph-Viterbi decode fraction: $(round(decode_fraction * 100, digits=1))%")
+            gated = pass_decode_off ? " [low-k decode gated OFF, td-9h5r]" : ""
+            println("  Graph-Viterbi decode fraction: $(round(decode_fraction * 100, digits=1))%$(gated)")
         end
         if cheap_correct
             println("  Stage 0 cheap corrections (this pass): $cheap_corrections")
@@ -1358,7 +1505,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
-    return updated_reads, improvements_made, skip_fraction, cheap_corrections
+    return updated_reads, improvements_made, skip_fraction, cheap_corrections,
+    pass_decode_off
 end
 
 """
@@ -1963,7 +2111,10 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         cheap_correction_counts::Vector{Int} = Int[],
         hard_window::Bool = false,
         soft_em::Bool = false,
-        cheap_correct::Bool = false)
+        cheap_correct::Bool = false,
+        min_decode_k::Union{Int, Nothing} = nothing,
+        decode_gate_density::Union{Float64, Nothing} = nothing,
+        decode_gated_rungs::Vector{Int} = Int[])
     if verbose
         println("Finalizing iterative assembly results...")
     end
@@ -2049,6 +2200,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # iteration's graph, so unsupported error edges decay while supported
         # variation is retained. `false` on the exhaustive tier (soft-EM off there).
         :soft_em => (soft_em ? "v2-competing-paths-floor" : false),
+        # Low-k decode gating (td-9h5r): the explicit floor (if any), the adaptive
+        # density threshold, and the specific rungs whose per-read decode was gated
+        # OFF (explicit floor OR adaptive). `nothing`/empty on the exhaustive tier.
+        :min_decode_k => min_decode_k,
+        :decode_gate_density => decode_gate_density,
+        :decode_gated_rungs => decode_gated_rungs,
         :last_skip_fraction => last_skip_fraction,
         :skip_fraction_per_pass => skip_fractions,
         :skip_fraction_min => skip_min,
