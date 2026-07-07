@@ -138,6 +138,14 @@ include("viterbi-next.jl")
 # docs/design/2026-07-06-gpu-simd-corrector-acceleration.md.
 include("rhizomorph/algorithms/batched-viterbi-poc.jl")
 
+# Phase B: backend-agnostic (CPU + CUDA/GPU) frontier kernel for the batched
+# corrector, built on the CPU PoC above. Declares the public entry points here;
+# the KernelAbstractions kernel + decoder + oracle + benchmark live in the
+# package extension `ext/MyceliaKernelAbstractionsExt.jl` (loaded lazily on
+# `import KernelAbstractions`). The base package carries NO GPU dependency; see
+# docs/design/2026-07-06-gpu-simd-corrector-acceleration.md (bead td-qoo3).
+include("rhizomorph/algorithms/batched-viterbi-kernel.jl")
+
 # # Cross-validation pipeline (depends on both intelligent and iterative assembly)
 # include("cross-validation.jl")
 
