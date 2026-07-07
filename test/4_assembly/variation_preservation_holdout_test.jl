@@ -33,12 +33,15 @@
 #      correction from variation the naive de Bruijn path never represented.
 #   3. ERROR HANDLING — the coverage-1 error IS removable by the machinery:
 #      strategy=:exhaustive (hyper-sensitive tier) removes it (HARD positive
-#      control, proving the corrector can distinguish error from signal). The
-#      conservative strategy=:scalable tier does NOT yet remove it, because
-#      skip-solid skips the mostly-solid error read; that is recorded with
-#      @test_broken so the suite stays green now and FLIPS to a failure prompt
-#      when v2 competing-paths / aggressive cleaning starts removing it (the
-#      point at which this should be promoted to a hard @test).
+#      control, proving the corrector can distinguish error from signal). As of
+#      the Stage 0 cheap k-mer-spectrum corrector (td-bjnt), strategy=:scalable
+#      ALSO removes it: the coverage-1 error is a weak k-mer run flanked by solid
+#      consensus with a UNIQUE solid neighbor, the textbook Stage 0 single-
+#      substitution target, so the linear pre-decode pass fixes it while leaving
+#      the balanced het site untouched (no unique solid neighbor there). This was
+#      previously @test_broken (skip-solid skipped the mostly-solid error read
+#      before it reached the decode); Stage 0 runs BEFORE the skip gate, so it is
+#      now a HARD assertion — error removed AND both real alleles preserved.
 #
 # DELIBERATELY SCOPED OUT (kept honest rather than flaky):
 #   * Paralog/repeat retention: near-identical repeat copies collapse under any
@@ -173,10 +176,11 @@ Test.@testset "variation-preservation holdout (td-h6w9)" begin
         Test.@test ex_b
         Test.@test !ex_err                 # exhaustive removes the unsupported error
 
-        # Conservative :scalable tier does NOT yet remove the error, because
-        # skip-solid skips the mostly-solid error read. Recorded as broken so the
-        # suite is green now and FLIPS when v2 aggressive cleaning starts removing
-        # it — at which point promote this to `Test.@test !sc_err`.
-        Test.@test_broken !sc_err
+        # Stage 0 cheap k-mer-spectrum correction (td-bjnt) now removes the
+        # coverage-1 error even on the conservative :scalable tier: it runs BEFORE
+        # the skip gate and the error is a single-substitution weak run with a
+        # unique solid neighbor. Promoted from @test_broken to a hard assertion —
+        # the error is gone while both balanced alleles (testset above) survive.
+        Test.@test !sc_err
     end
 end
