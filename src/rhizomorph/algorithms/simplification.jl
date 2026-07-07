@@ -62,6 +62,46 @@ end
 # ============================================================================
 
 """
+    _build_out_adjacency_index(graph::MetaGraphsNext.MetaGraph, ::Type{T}) where {T}
+
+Build a vertex -> outgoing-neighbor-labels index in a single `O(E)` pass over the
+graph's edge labels.
+
+This replaces the per-vertex `get_out_neighbors` scan (each of which is itself
+`O(E)`) inside bubble detection. Building the index once up front turns the
+detection pass from `O(V*E)` into `O(V+E)`. For any given source vertex the
+neighbor order matches what `get_out_neighbors` would return — both consume
+`MetaGraphsNext.edge_labels(graph)` in the same order — so downstream bubble
+results are identical to the pre-index scan.
+
+# Arguments
+- `graph::MetaGraphsNext.MetaGraph`: Graph to index
+- `T`: Vertex label type
+
+# Returns
+- `Dict{T, Vector{T}}`: Map from each source vertex to its outgoing neighbors
+"""
+function _build_out_adjacency_index(graph::MetaGraphsNext.MetaGraph, ::Type{T}) where {T}
+    out_index = Dict{T, Vector{T}}()
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        push!(get!(() -> T[], out_index, src), dst)
+    end
+    return out_index
+end
+
+"""
+    _indexed_out_neighbors(out_index::AbstractDict{T, Vector{T}}, vertex) where {T}
+
+Look up the outgoing neighbors of `vertex` in a prebuilt out-adjacency index in
+`O(1)`. Returns an empty vector for vertices with no outgoing edges. Mirrors the
+result of `get_out_neighbors(graph, vertex)` without rescanning the edge set.
+"""
+function _indexed_out_neighbors(out_index::AbstractDict{T, Vector{T}}, vertex) where {T}
+    return haskey(out_index, vertex) ? out_index[vertex] : T[]
+end
+
+"""
     detect_bubbles_next(graph::MetaGraphsNext.MetaGraph; min_bubble_length::Int=2, max_bubble_length::Int=100)
 
 Detect bubble structures (alternative paths) in the assembly graph.
@@ -94,14 +134,20 @@ function detect_bubbles_next(graph::MetaGraphsNext.MetaGraph;
     T = eltype(vertices)
     bubbles = BubbleStructure{T}[]
 
+    # Build the out-adjacency index ONCE in O(E), then reuse it for every
+    # entry-point out-degree check and every forward path trace. This is the
+    # fix for the former O(V*E) scaling: each vertex previously triggered a
+    # full O(E) get_out_neighbors edge scan.
+    out_index = _build_out_adjacency_index(graph, T)
+
     for entry_vertex in vertices
         # Find potential bubble entry points (vertices with out-degree > 1)
-        out_neighbors = get_out_neighbors(graph, entry_vertex)
+        out_neighbors = _indexed_out_neighbors(out_index, entry_vertex)
 
         if length(out_neighbors) >= 2
             # Look for bubbles starting from this vertex
             bubble_candidates = find_bubble_paths(graph, entry_vertex, out_neighbors,
-                min_bubble_length, max_bubble_length)
+                min_bubble_length, max_bubble_length; out_index = out_index)
 
             for bubble in bubble_candidates
                 if is_valid_bubble(graph, bubble)
@@ -193,7 +239,8 @@ candidates = Mycelia.Rhizomorph.find_bubble_paths(graph, vertex, neighbors, 2, 5
 function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
         entry_vertex::T,
         out_neighbors::Vector,
-        min_length::Int, max_length::Int) where {T}
+        min_length::Int, max_length::Int;
+        out_index::AbstractDict = _build_out_adjacency_index(graph, T)) where {T}
     bubbles = BubbleStructure{T}[]
 
     # Try all pairs of outgoing paths
@@ -202,9 +249,9 @@ function find_bubble_paths(graph::MetaGraphsNext.MetaGraph,
             path1_start = out_neighbors[i]
             path2_start = out_neighbors[j]
 
-            # Find paths from each starting point
-            path1 = find_limited_path(graph, path1_start, max_length)
-            path2 = find_limited_path(graph, path2_start, max_length)
+            # Find paths from each starting point (reuse the shared O(E) index)
+            path1 = find_limited_path(graph, path1_start, max_length; out_index = out_index)
+            path2 = find_limited_path(graph, path2_start, max_length; out_index = out_index)
 
             # Check if paths reconverge
             convergence_point = find_path_convergence(path1, path2)
@@ -256,12 +303,14 @@ Trace a simple path forward from `start_vertex` while the out-degree stays `1`.
 path = Mycelia.Rhizomorph.find_limited_path(graph, vertex, 25)
 ```
 """
-function find_limited_path(graph::MetaGraphsNext.MetaGraph, start_vertex, max_length::Int)
+function find_limited_path(graph::MetaGraphsNext.MetaGraph, start_vertex, max_length::Int;
+        out_index::AbstractDict = _build_out_adjacency_index(
+            graph, eltype(collect(MetaGraphsNext.labels(graph)))))
     path = [start_vertex]
     current = start_vertex
 
     for _ in 1:max_length
-        neighbors = get_out_neighbors(graph, current)
+        neighbors = _indexed_out_neighbors(out_index, current)
         if length(neighbors) == 1
             next_vertex = neighbors[1]
             if next_vertex in path  # Avoid cycles
