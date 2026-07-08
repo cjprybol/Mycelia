@@ -260,7 +260,7 @@ function _batched_decode_bin(
         diagnostics[r] = diag
 
         start_candidates = _viterbi_start_candidates(
-            labels, _viterbi_label_unit(start_observed), alphabet, strand_mode)
+            graph, L, _viterbi_label_unit(start_observed), alphabet, strand_mode)
         for vertex in start_candidates
             for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
                 sid = state_id[(convert(L, vertex), strand)]
