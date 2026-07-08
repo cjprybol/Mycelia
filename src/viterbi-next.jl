@@ -285,17 +285,21 @@ through the Rhizomorph weighted-graph and `viterbi_decode_next` primitives.
 function correct_observations(
         graph,
         observations = _default_correction_observations(graph);
-        config::ViterbiCorrectionConfig = ViterbiCorrectionConfig()
+        config::ViterbiCorrectionConfig = ViterbiCorrectionConfig(),
+        weighted_graph = nothing
 )
     vertex_data_type = _correction_vertex_data_type(graph)
-    return _correct_observations(vertex_data_type, graph, observations; config = config)
+    return _correct_observations(
+        vertex_data_type, graph, observations; config = config,
+        weighted_graph = weighted_graph)
 end
 
 function _correct_observations(
         ::Type{<:Any},
         graph::MetaGraphs.MetaDiGraph,
         observations;
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        weighted_graph = nothing
 )::ViterbiCorrectionResult
     _assert_legacy_stranded_graph(graph)
     observed_paths = observations === nothing ? graph.gprops[:observed_paths] : observations
@@ -318,29 +322,74 @@ function _correct_observations(
         ::Type{<:_VITERBI_CORRECTION_VERTEX_DATA},
         graph::MetaGraphsNext.MetaGraph,
         observations;
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        weighted_graph = nothing
 )::ViterbiCorrectionResult
-    return _correct_metagraphs_next_observations(graph, observations; config = config)
+    return _correct_metagraphs_next_observations(
+        graph, observations; config = config, weighted_graph = weighted_graph)
 end
 
 function _correct_observations(
         ::Type{Any},
         graph::MetaGraphsNext.MetaGraph,
         observations;
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        weighted_graph = nothing
 )::ViterbiCorrectionResult
-    return _correct_metagraphs_next_observations(graph, observations; config = config)
+    return _correct_metagraphs_next_observations(
+        graph, observations; config = config, weighted_graph = weighted_graph)
 end
+
+# O(1) label type from the MetaGraph type parameters (used only to type the
+# precomputed outgoing-weight table's keys — does NOT touch the decode's own
+# state dicts, so it cannot affect decode determinism).
+function _viterbi_graph_label_type(
+        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL}
+)::Type where {CODE, GRAPH, LABEL}
+    return LABEL
+end
+
+# Build the weighted decode graph ONCE for a correction pass so callers that
+# decode many reads against the same graph (the :scalable corrector's per-read
+# loop) can hoist it OUT of the per-read path (td-y4oj). `weighted_graph_from_
+# rhizomorph` is O(V+E); with n_reads ∝ genome and V ∝ genome, rebuilding it per
+# read is one of two co-dominant O(genome^2) terms (the other is the per-state
+# outgoing-weight scan, fixed in `_total_outgoing_weight`). The weighted graph
+# depends ONLY on `graph` and the (constant-across-reads) `config.edge_weight`, so
+# a single build is bit-identical in DATA to what each per-read
+# `_correct_metagraphs_next_observations` call would have produced (build
+# determinism verified). Returns `nothing` for graphs that don't use the
+# weighted-decode path (legacy stranded / non-MetaGraph inputs). READ-ONLY during
+# decode (correction mutates a separate accumulator, never the graph — verified no
+# edge mutation across a pass), so one instance is safely shared across reads and
+# threads.
+function build_correction_weighted_graph(
+        graph::MetaGraphsNext.MetaGraph;
+        config::ViterbiCorrectionConfig = ViterbiCorrectionConfig()
+)
+    if _correction_edge_data_type(graph) <: Rhizomorph.StrandWeightedEdgeData
+        return graph
+    end
+    transition_edge_weight = _viterbi_transition_edge_weight(graph, config.edge_weight)
+    return Rhizomorph.weighted_graph_from_rhizomorph(
+        graph; edge_weight = transition_edge_weight)
+end
+
+build_correction_weighted_graph(graph; config::ViterbiCorrectionConfig = ViterbiCorrectionConfig()) = nothing
 
 function _correct_metagraphs_next_observations(
         graph::MetaGraphsNext.MetaGraph,
         observations;
-        config::ViterbiCorrectionConfig
+        config::ViterbiCorrectionConfig,
+        weighted_graph = nothing
 )::ViterbiCorrectionResult
     alphabet = _resolve_viterbi_alphabet(graph, observations, config.alphabet)
     strand_mode = _resolve_viterbi_strand_mode(graph, alphabet, config.strand_mode)
     transition_edge_weight = _viterbi_transition_edge_weight(graph, config.edge_weight)
-    weighted = if _correction_edge_data_type(graph) <: Rhizomorph.StrandWeightedEdgeData
+    weighted = if weighted_graph !== nothing
+        # Hoisted precomputed weighted graph (td-y4oj) — reuse across reads.
+        weighted_graph
+    elseif _correction_edge_data_type(graph) <: Rhizomorph.StrandWeightedEdgeData
         graph
     else
         Rhizomorph.weighted_graph_from_rhizomorph(graph; edge_weight = transition_edge_weight)
@@ -963,16 +1012,23 @@ function _viterbi_correct_observation(
         throw(ArgumentError("empty observation path"))
     end
 
-    labels = collect(MetaGraphsNext.labels(graph))
-    if isempty(labels)
+    # Per-read decode hot path (td-y4oj): resolve the label type and emptiness in
+    # O(1) from the graph's type parameters instead of materializing the whole
+    # O(V) label vector on EVERY read, and resolve start/target candidates with
+    # O(1) `haskey` lookups. The prior `collect(MetaGraphsNext.labels)` + linear
+    # `in labels` membership tests were an O(V)-per-read (⇒ O(genome^2)) cost that
+    # is CO-dominant with the outgoing-weight scan. `haskey(graph, x)` matches
+    # `x in collect(labels(graph))` exactly (verified: 0 disagreements over 53k
+    # k-mer and QualityObservation lookups), so this is a pure performance change.
+    if Graphs.nv(graph.graph) == 0
         throw(ArgumentError("cannot correct observations against an empty graph"))
     end
 
-    label_type = eltype(labels)
+    label_type = _viterbi_graph_label_type(graph)
     start_observed = first(observation)
     target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
     start_candidates = _viterbi_start_candidates(
-        labels, _viterbi_label_unit(start_observed), alphabet, strand_mode)
+        graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
     diagnostics = Dict{Symbol, Any}(
         :algorithm => :viterbi_emission_correct_observation,
@@ -1169,36 +1225,46 @@ function _emission_target_vertex(
     # whole point of the correction core. The start (below) is still anchored for
     # efficiency, since a read's first k-mer is a reasonable, usually-correct
     # threading anchor and falls back to all labels when absent from the graph.
+    # O(1) `haskey` membership (td-y4oj) replaces the O(V) `collect(labels)` +
+    # linear `in labels` scan that ran per read. `haskey(graph, x)` is the graph's
+    # vertex-label lookup and matches `x in collect(labels(graph))` exactly (a
+    # wrapped QualityObservation candidate is not a vertex label ⇒ `false` ⇒
+    # endpoint left free, preserving the documented behavior).
     candidate = last(observation)
-    labels = collect(MetaGraphsNext.labels(graph))
-    if candidate in labels
+    if haskey(graph, candidate)
         return candidate
     end
     if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
         canonical = _viterbi_canonical_unit(candidate, alphabet)
-        if canonical in labels
+        if haskey(graph, canonical)
             return canonical
         end
     end
     return nothing
 end
 
+# Resolve start candidates with O(1) `haskey` lookups (td-y4oj). The common case
+# (the read's first k-mer is a graph vertex) is a single hash probe; only the
+# rare fallback (start k-mer absent ⇒ the decode may thread from any vertex)
+# materializes the O(V) label vector. Byte-identical to the prior O(V) linear
+# `in labels` scan.
 function _viterbi_start_candidates(
-        labels::Vector{T},
+        graph::MetaGraphsNext.MetaGraph,
+        ::Type{T},
         observed_unit::Any,
         alphabet::Symbol,
         strand_mode::Symbol
 )::Vector{T} where {T}
-    if observed_unit in labels
+    if haskey(graph, observed_unit)
         return T[convert(T, observed_unit)]
     end
     if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
         canonical = _viterbi_canonical_unit(observed_unit, alphabet)
-        if canonical in labels
+        if haskey(graph, canonical)
             return T[convert(T, canonical)]
         end
     end
-    return labels
+    return collect(MetaGraphsNext.labels(graph))
 end
 
 function _viterbi_start_strands(

@@ -1393,6 +1393,18 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         println("  Processing $total_reads reads in batches of $batch_size")
     end
 
+    # Hoist the weighted-decode graph OUT of the per-read loop (td-y4oj). The
+    # per-read `correct_observations` previously rebuilt an O(V+E) weighted COPY
+    # of the whole graph ONCE PER READ; since n_reads ∝ genome and V ∝ genome,
+    # that made the decode O(genome^2) (the dominant #372 super-linear term,
+    # alpha≈2.14). Build it once here and thread the shared, read-only instance
+    # into every per-read decode so the rebuild cost is amortized across the pass
+    # (linear in n_reads). Returns `nothing` for graphs without a weighted-decode
+    # path (legacy / non-MetaGraph), which the callee handles by falling back to
+    # its unchanged per-read behavior. Skip the build entirely when the pass
+    # decode is gated off (no read decodes this pass).
+    pass_weighted_graph = pass_decode_off ? nothing : build_correction_weighted_graph(graph)
+
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
     # decode operates on already-simplified reads.
@@ -1419,7 +1431,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     improved_read,
                     was_improved = improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
-                        beam_width = beam_width, diagnostics = diag)
+                        beam_width = beam_width, weighted_graph = pass_weighted_graph,
+                        diagnostics = diag)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -1445,6 +1458,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 was_improved = improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
+                    weighted_graph = pass_weighted_graph,
                     diagnostics = diag)
                 updated_reads[batch_start + i - 1] = improved_read
 
@@ -1520,6 +1534,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
@@ -1547,6 +1562,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
     likelihood_improvement = find_optimal_sequence_path(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        weighted_graph = weighted_graph,
         diagnostics = diagnostics)
 
     # Only update if significant improvement
@@ -1581,6 +1597,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
@@ -1612,6 +1629,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     viterbi_result = try_viterbi_path_improvement(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
+        weighted_graph = weighted_graph,
         diagnostics = diagnostics)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
@@ -2333,6 +2351,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{
         Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
@@ -2384,7 +2403,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             max_steps = length(observations) - 1,
             beam_width = effective_beam_width
         )
-        correction = Mycelia.correct_observations(graph, [observations]; config = config)
+        correction = Mycelia.correct_observations(
+            graph, [observations]; config = config, weighted_graph = weighted_graph)
         corrected_path = only(correction.corrected_observations)
         if corrected_path === nothing || isempty(corrected_path)
             return nothing

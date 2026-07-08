@@ -185,7 +185,7 @@ function _kernel_decode_bin(
         diagnostics[r] = diag
 
         start_candidates = Mycelia._viterbi_start_candidates(
-            labels, Mycelia._viterbi_label_unit(start_observed), alphabet, strand_mode)
+            graph, L, Mycelia._viterbi_label_unit(start_observed), alphabet, strand_mode)
         for vertex in start_candidates
             for strand in Mycelia._viterbi_start_strands(
                     graph, vertex, strand_mode, config.start_strand)
