@@ -1459,26 +1459,34 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
     # removes twins that share a breakpoint, but RC twins with OFFSET fragment
     # breakpoints (or the probabilistic-walk fallback, which does not honor rc_aware)
     # can still slip through — the same case the k-mer arm covers with a post-hoc
-    # _dedup_reverse_complements. Here we dedup by canonical key but KEEP the first-seen
-    # ORIGINAL record (not the RC'd string), so per-base quality stays aligned with the
-    # sequence it was measured on. Gated on config.dedup_revcomp (default ON for the
-    # corrector route), so plain both-strands assemblies are unchanged.
+    # _dedup_reverse_complements. We dedup by canonical key AND emit each survivor in
+    # its CANONICAL orientation (min(seq, reverse_complement(seq))), reversing the
+    # per-base quality when the reverse complement is canonical so quality stays
+    # registered against the emitted sequence. Emitting the canonical orientation
+    # (rather than keeping whichever strand was traversed) makes the output
+    # ORDER-INDEPENDENT: rc_aware picks one strand per pair based on graph iteration
+    # order, so the corrector's REUSED final-pass graph and a from-scratch REBUILD
+    # could otherwise emit opposite strands for the same locus and diverge. Canonical
+    # emission keeps them byte-identical (reassembly_graph_reuse_test invariant).
+    # Gated on config.dedup_revcomp (default ON for the corrector route), so plain
+    # both-strands assemblies are unchanged.
     if config.dedup_revcomp && length(contig_records) > 1
         seen = Set{String}()
         deduped = FASTX.FASTQ.Record[]
         for record in contig_records
-            canonical = _canonical_string(String(FASTX.sequence(record)))
-            if !(canonical in seen)
-                push!(seen, canonical)
-                push!(deduped, record)
+            canonical_record = _canonical_fastq_record(record)
+            canonical_seq = String(FASTX.sequence(canonical_record))
+            if !(canonical_seq in seen)
+                push!(seen, canonical_seq)
+                push!(deduped, canonical_record)
             end
         end
         if length(deduped) < length(contig_records)
             _log_info(config,
                 "Reverse-complement dedup (qualmer): $(length(contig_records)) -> " *
                 "$(length(deduped)) contig records")
-            contig_records = deduped
         end
+        contig_records = deduped
     end
 
     # Convert FASTQ records to strings for backward compatibility with existing code
@@ -1587,6 +1595,28 @@ function _canonical_string(seq::AbstractString)::String
         return fwd
     end
     return min(fwd, rc)
+end
+
+"""
+    _canonical_fastq_record(record::FASTX.FASTQ.Record) -> FASTX.FASTQ.Record
+
+Return `record` re-oriented to its canonical strand: if the reverse complement of
+the sequence is lexicographically smaller than the forward sequence, emit a new
+record holding the reverse-complemented sequence with its per-base quality REVERSED
+(Phred values are strand-invariant; only their order flips under reverse-complement),
+otherwise return `record` unchanged. Sequences that are not valid DNA (no defined
+reverse complement) are passed through unchanged. Used by the qualmer RC-dedup so a
+contig's emitted orientation is a deterministic function of its content, not of the
+graph-traversal order — keeping the corrector's reused-graph and from-scratch-rebuild
+assemblies byte-identical under dedup.
+"""
+function _canonical_fastq_record(record::FASTX.FASTQ.Record)::FASTX.FASTQ.Record
+    seq = String(FASTX.sequence(record))
+    canonical = _canonical_string(seq)
+    canonical == seq && return record
+    id = String(FASTX.identifier(record))
+    quality = reverse(collect(FASTX.quality_scores(record)))
+    return FASTX.FASTQ.Record(id, canonical, quality)
 end
 
 """
