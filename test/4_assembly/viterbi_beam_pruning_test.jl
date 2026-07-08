@@ -113,6 +113,32 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
         Test.@test 0 < Mycelia._AUTO_BEAM_BOUNDED_WIDTH < typemax(Int)
     end
 
+    # Graph-density-aware auto-beam (td-35ux): the read-length-only rule left short
+    # reads (n_obs <= threshold) EXACT even on a dense intermediate k-rung, where
+    # the exact retained frontier grows O(n_vertices) per decode depth →
+    # O(genome^2) per pass (~15,723 frontier states / ~2.15 s for one 150 bp read
+    # at 5 kb / k=9). The two-arg form bounds the beam when the graph is dense,
+    # regardless of read length.
+    Test.@testset "graph-density-aware auto-beam (_auto_beam_width, td-35ux)" begin
+        bound = Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+        # Short read (130 observations, below the exact threshold) on a DENSE graph
+        # (2230 vertices > 256): bounded despite the small read length. This is the
+        # #376 short-read blowup case — the exact frontier would grow O(n_vertices).
+        Test.@test Mycelia._auto_beam_width(130, 2230) == bound
+        # Short read on a SPARSE graph (few vertices): stays exact — the exact
+        # frontier is tiny, so the ML guarantee is preserved at no tractability cost.
+        Test.@test Mycelia._auto_beam_width(130, 10) == typemax(Int)
+        Test.@test Mycelia._auto_beam_width(130, bound) == typemax(Int)
+        # Boundary: one vertex past the bounded width flips exact → bounded.
+        Test.@test Mycelia._auto_beam_width(130, bound + 1) == bound
+        # Large read stays bounded no matter how sparse the graph (read-length rule
+        # still dominates — a large read is never exact regardless of density).
+        Test.@test Mycelia._auto_beam_width(
+            Mycelia._AUTO_BEAM_EXACT_THRESHOLD + 1, 10) == bound
+        # A large read on a dense graph is likewise bounded.
+        Test.@test Mycelia._auto_beam_width(48_000, 5000) == bound
+    end
+
     # An explicit beam_width override is honored verbatim by the per-read decoder
     # entry point: passing typemax(Int) forces EXACT decoding regardless of the
     # auto-default, and the correction still completes on a small read.
