@@ -136,8 +136,11 @@ struct AssemblyConfig
     # Additive efficiency modes (all default to today's behavior, so existing
     # assemblies are byte-for-byte unchanged unless a caller opts in).
     # NOTE: with dedup_revcomp on, a reported contig may be the reverse-complement
-    # (canonical) orientation of the sequence that was actually assembled.
-    dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep (post-assembly)
+    # (canonical) orientation of the sequence that was actually assembled. Wired into
+    # BOTH the k-mer and qualmer arms (td-47di): structural rc_aware traversal in
+    # find_contigs_next plus a post-hoc canonical collapse. Defaults ON for the
+    # corrector=:iterative route, OFF otherwise (see constructor).
+    dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
 
@@ -180,7 +183,7 @@ struct AssemblyConfig
             repeat_resolution::Bool = true,
             verbose::Bool = false,
             tda::Union{Nothing, Mycelia.TDAConfig} = nothing,
-            dedup_revcomp::Bool = false,
+            dedup_revcomp::Union{Bool, Nothing} = nothing,
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
             corrector::Symbol = :none,
@@ -196,6 +199,16 @@ struct AssemblyConfig
         skip_solid_explicit = skip_solid !== nothing
         effective_strategy = strategy === nothing ? :scalable : strategy
         effective_skip_solid = skip_solid === nothing ? false : skip_solid
+        # Default decision (td-47di): a DoubleStrand assembly emits BOTH strands of
+        # every contig, so on that path canonical (RC-deduped) output — one contig
+        # per genomic locus rather than a forward/reverse twin pair — is the sensible
+        # default. The iterative corrector always re-assembles DNA on a DoubleStrand
+        # graph, so dedup_revcomp defaults ON for corrector=:iterative. It stays OFF
+        # for the plain (corrector=:none) k-mer/qualmer route, preserving the existing
+        # both-strands behavior that current tests assert. Either default can be
+        # overridden by passing an explicit dedup_revcomp=true/false.
+        effective_dedup_revcomp = dedup_revcomp === nothing ?
+                                  (corrector == :iterative) : dedup_revcomp
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -281,19 +294,20 @@ struct AssemblyConfig
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
         end
 
-        # The additive efficiency modes (dedup_revcomp / compact_unitigs /
-        # memory_profile) are only implemented on the non-quality k-mer path
-        # (_assemble_kmer_graph). FASTQ input auto-sets use_quality_scores=true,
-        # which dispatches to the qualmer arm and silently ignores these flags.
-        # Warn unconditionally so a caller opting in on quality data is not left
-        # believing the flag took effect. (Default config sets no flags, so this
-        # never fires for existing assemblies.)
+        # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
+        # quality-aware find_contigs_next calls in _qualmer_graph_to_assembly pass
+        # rc_aware=config.dedup_revcomp, matching the k-mer arm, so it is NO LONGER
+        # ignored on the quality path. The remaining efficiency modes
+        # (compact_unitigs / memory_profile) are still only implemented on the
+        # non-quality k-mer path (_assemble_kmer_graph); FASTQ input auto-sets
+        # use_quality_scores=true, which dispatches to the qualmer arm and silently
+        # ignores them. Warn so a caller opting in on quality data is not left
+        # believing those flags took effect.
         if use_quality_scores &&
-           (dedup_revcomp || compact_unitigs || memory_profile != :full)
-            @warn "Efficiency modes (dedup_revcomp / compact_unitigs / " *
-                  "memory_profile) are only implemented on the non-quality " *
-                  "k-mer path and are ignored on the quality/qualmer path. " *
-                  "Set use_quality_scores=false to use them."
+           (compact_unitigs || memory_profile != :full)
+            @warn "Efficiency modes (compact_unitigs / memory_profile) are only " *
+                  "implemented on the non-quality k-mer path and are ignored on " *
+                  "the quality/qualmer path. Set use_quality_scores=false to use them."
         end
 
         new(
@@ -309,7 +323,7 @@ struct AssemblyConfig
             repeat_resolution,
             verbose,
             tda,
-            dedup_revcomp,
+            effective_dedup_revcomp,
             compact_unitigs,
             memory_profile,
             corrector,
@@ -911,8 +925,14 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # marked it reusable. Otherwise fall back to a full rebuild. The reuse path
         # calls the SAME downstream contig extraction the rebuild would, so contigs /
         # N50 / sequences are identical — this is a pure-performance change.
+        # Thread dedup_revcomp through (td-47di): the re-assembly config is built with
+        # corrector=:none, so it would otherwise default dedup_revcomp OFF and re-inflate
+        # the corrected-read assembly with both-strand twins. Forward the OUTER config's
+        # resolved value (default ON for corrector=:iterative) so the corrected re-assembly
+        # emits the canonical (deduped) contig set.
         reassembly_config = _auto_configure_assembly(corrected_reads;
-            k = reassembly_k, corrector = :none)
+            k = reassembly_k, corrector = :none,
+            dedup_revcomp = config.dedup_revcomp)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -1391,19 +1411,29 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
     # _qualmer_path_to_consensus_fastq -> path_to_sequence. Fall back to unitig
     # extraction only when no Eulerian path exists (branchy/error-laden real inputs),
     # preserving the existing behavior for single/doublestrand and hard cases.
+    # rc_aware=config.dedup_revcomp (td-47di): on a DoubleStrand qualmer graph the
+    # unitig walk otherwise emits BOTH strands of every contig (forward + reverse-
+    # complement twin), ~2x-inflating the assembly. Passing rc_aware marks each walked
+    # vertex's RC partner visited so the reverse strand is never independently
+    # traversed — the same structural dedup the k-mer arm uses via
+    # _generate_contigs_probabilistic.
     paths = if config.graph_mode == Canonical
         eulerian_paths = Rhizomorph.find_eulerian_paths_next(graph)
         if isempty(eulerian_paths)
             [contig_path.vertices
              for contig_path in
-                 Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
+                 Rhizomorph.find_contigs_next(
+                     graph; min_contig_length = config.k + 1,
+                     rc_aware = config.dedup_revcomp)]
         else
             eulerian_paths
         end
     else
         [contig_path.vertices
          for contig_path in
-             Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
+             Rhizomorph.find_contigs_next(
+                 graph; min_contig_length = config.k + 1,
+                 rc_aware = config.dedup_revcomp)]
     end
 
     # Convert paths to FASTQ records with quality propagation
@@ -1423,6 +1453,40 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
     if isempty(contig_records)
         _log_info(config, "No quality-aware paths found, using probabilistic walks")
         contig_records = _generate_fastq_contigs_from_qualmer_graph(graph, config)
+    end
+
+    # Belt-and-suspenders RC dedup (td-47di): the structural rc_aware traversal above
+    # removes twins that share a breakpoint, but RC twins with OFFSET fragment
+    # breakpoints (or the probabilistic-walk fallback, which does not honor rc_aware)
+    # can still slip through — the same case the k-mer arm covers with a post-hoc
+    # _dedup_reverse_complements. We dedup by canonical key AND emit each survivor in
+    # its CANONICAL orientation (min(seq, reverse_complement(seq))), reversing the
+    # per-base quality when the reverse complement is canonical so quality stays
+    # registered against the emitted sequence. Emitting the canonical orientation
+    # (rather than keeping whichever strand was traversed) makes the output
+    # ORDER-INDEPENDENT: rc_aware picks one strand per pair based on graph iteration
+    # order, so the corrector's REUSED final-pass graph and a from-scratch REBUILD
+    # could otherwise emit opposite strands for the same locus and diverge. Canonical
+    # emission keeps them byte-identical (reassembly_graph_reuse_test invariant).
+    # Gated on config.dedup_revcomp (default ON for the corrector route), so plain
+    # both-strands assemblies are unchanged.
+    if config.dedup_revcomp && length(contig_records) > 1
+        seen = Set{String}()
+        deduped = FASTX.FASTQ.Record[]
+        for record in contig_records
+            canonical_record = _canonical_fastq_record(record)
+            canonical_seq = String(FASTX.sequence(canonical_record))
+            if !(canonical_seq in seen)
+                push!(seen, canonical_seq)
+                push!(deduped, canonical_record)
+            end
+        end
+        if length(deduped) < length(contig_records)
+            _log_info(config,
+                "Reverse-complement dedup (qualmer): $(length(contig_records)) -> " *
+                "$(length(deduped)) contig records")
+        end
+        contig_records = deduped
     end
 
     # Convert FASTQ records to strings for backward compatibility with existing code
@@ -1531,6 +1595,28 @@ function _canonical_string(seq::AbstractString)::String
         return fwd
     end
     return min(fwd, rc)
+end
+
+"""
+    _canonical_fastq_record(record::FASTX.FASTQ.Record) -> FASTX.FASTQ.Record
+
+Return `record` re-oriented to its canonical strand: if the reverse complement of
+the sequence is lexicographically smaller than the forward sequence, emit a new
+record holding the reverse-complemented sequence with its per-base quality REVERSED
+(Phred values are strand-invariant; only their order flips under reverse-complement),
+otherwise return `record` unchanged. Sequences that are not valid DNA (no defined
+reverse complement) are passed through unchanged. Used by the qualmer RC-dedup so a
+contig's emitted orientation is a deterministic function of its content, not of the
+graph-traversal order — keeping the corrector's reused-graph and from-scratch-rebuild
+assemblies byte-identical under dedup.
+"""
+function _canonical_fastq_record(record::FASTX.FASTQ.Record)::FASTX.FASTQ.Record
+    seq = String(FASTX.sequence(record))
+    canonical = _canonical_string(seq)
+    canonical == seq && return record
+    id = String(FASTX.identifier(record))
+    quality = reverse(collect(FASTX.quality_scores(record)))
+    return FASTX.FASTQ.Record(id, canonical, quality)
 end
 
 """
