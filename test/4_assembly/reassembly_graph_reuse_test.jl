@@ -133,13 +133,17 @@ Test.@testset "re-assembly graph reuse (td-04tb)" begin
     Test.@testset "end-to-end corrector output == from-scratch rebuild" begin
         # THE invariant that must hold whether or not reuse fired: the corrector's
         # assembled contigs equal a from-scratch rebuild of the corrected reads.
-        # corrector=:iterative now defaults dedup_revcomp ON (td-47di), so the honest
-        # baseline holds that SAME dedup setting constant — this isolates the reuse
-        # variable (graph reuse is a pure-performance change) from the orthogonal
-        # dedup-policy variable. Both sides therefore emit the canonical (RC-deduped)
-        # contig set and must still match.
+        # corrector=:iterative now defaults dedup_revcomp ON (td-47di) AND
+        # graph_cleanup ON (td-969e), so the honest baseline holds BOTH of those
+        # corrector-default policies constant — this isolates the reuse variable
+        # (graph reuse is a pure-performance change) from the orthogonal dedup- and
+        # cleanup-policy variables. Both sides therefore run the same tip/bubble
+        # cleanup and emit the canonical (RC-deduped) contig set, and must still
+        # match: cleanup is deterministic on the byte-identical reused/rebuilt graph
+        # (the td-04tb reuse==rebuild identity is proven cleanup-OFF above).
         asm = R.assemble_genome(reads; k = k, corrector = :iterative, strategy = :scalable)
-        rebuild = R.assemble_genome(corrected; k = k, corrector = :none, dedup_revcomp = true)
+        rebuild = R.assemble_genome(corrected; k = k, corrector = :none,
+            dedup_revcomp = true, graph_cleanup = true)
         Test.@test sort(asm.contigs) == sort(rebuild.contigs)
         Test.@test _n50(length.(asm.contigs)) == _n50(length.(rebuild.contigs))
         # Provenance flag is present and (in this converging regime) true.
