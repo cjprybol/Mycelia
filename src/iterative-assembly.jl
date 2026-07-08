@@ -1209,6 +1209,47 @@ function _auto_beam_width(n_observations::Integer)::Int
 end
 
 """
+    _auto_beam_width(n_observations, n_vertices) -> Int
+
+Graph-density-aware size-aware default beam width (td-35ux). The read-length-only
+[`_auto_beam_width`](@ref) keeps the exact/unbounded frontier for any read with
+`n_observations <= _AUTO_BEAM_EXACT_THRESHOLD` (typical short reads). That is
+correct on a sparse graph, but at a dense intermediate k-rung the EXACT retained
+(vertex, strand) frontier grows `O(n_vertices)` per decode depth — i.e.
+`O(genome)` per pass, `O(genome^2)` over the read set — even for a single short
+150 bp read (~15,723 frontier states at 5 kb / k=9, ~2.15 s per read). Long reads
+already dodge this because the read-length rule bounds them; short reads did not,
+which is why only short reads blew up (#376).
+
+This two-arg form bounds the beam to `_AUTO_BEAM_BOUNDED_WIDTH` whenever EITHER
+the read is large (read-length rule) OR the graph is dense
+(`n_vertices > _AUTO_BEAM_BOUNDED_WIDTH`), so a short read on a big graph is
+capped regardless of its length. On a small/sparse graph
+(`n_vertices <= _AUTO_BEAM_BOUNDED_WIDTH`) the exact frontier is already tiny, so
+a small read keeps the exact `typemax(Int)` (ML guarantee preserved). Callers can
+still FORCE exact by passing an explicit `beam_width = typemax(Int)`.
+"""
+function _auto_beam_width(n_observations::Integer, n_vertices::Integer)::Int
+    # Read-length rule first: a large read is bounded no matter the graph.
+    by_length = _auto_beam_width(n_observations)
+    if by_length != typemax(Int)
+        return by_length
+    end
+    # The read is small (exact by read length). If the graph is dense the exact
+    # frontier can still grow O(n_vertices) per depth → O(genome^2) per pass, so
+    # bound it. On a sparse graph the exact frontier is tiny; keep it exact.
+    if n_vertices > _AUTO_BEAM_BOUNDED_WIDTH
+        @info "iterative corrector: short read ($(n_observations) observations) on a " *
+              "dense graph ($(n_vertices) vertices > $(_AUTO_BEAM_BOUNDED_WIDTH)); " *
+              "bounding Viterbi beam_width=$(_AUTO_BEAM_BOUNDED_WIDTH) to keep the " *
+              "retained frontier O(1) instead of O(n_vertices) per depth (td-35ux). " *
+              "Pass beam_width=typemax(Int) to force exact." maxlog = 3
+        return _AUTO_BEAM_BOUNDED_WIDTH
+    end
+    return typemax(Int)
+end
+
+"""
 Improve likelihood of entire read set using current graph and k-mer size.
 Returns updated reads and count of improvements made.
 Uses memory-efficient batch processing for large datasets.
@@ -2383,20 +2424,25 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             observations[i] = Mycelia.QualityObservation(kmer, window)
         end
 
-        # Trustworthy Viterbi (td-ak6w), reconciled with the td-63qy OOM crash:
-        # the decoder is EXACT where tractable and BOUNDED (with a log line) above
-        # a size threshold. `beam_width === nothing` (the default) resolves the
-        # frontier bound PER READ via `_auto_beam_width(length(observations))`:
-        # `typemax(Int)` (never pruned → global maximum-likelihood path) for small
-        # reads, the proven-tractable finite bound for large reads (the unbounded
-        # frontier grows ~unboundedly with read-length depth — 21B allocations on
-        # a 48 kb phage). An explicit `beam_width::Int` (including `typemax(Int)`)
-        # is an OPT-IN override that is honored verbatim — a caller/test can force
-        # exact decoding on every read. This trades the ML guarantee for
-        # tractability ONLY above the threshold, and only under the auto-default;
-        # it never silently changes correctness of an explicit request.
+        # Trustworthy Viterbi (td-ak6w), reconciled with the td-63qy OOM crash and
+        # the td-35ux short-read O(genome^2) frontier blowup: the decoder is EXACT
+        # where tractable and BOUNDED (with a log line) otherwise. `beam_width ===
+        # nothing` (the default) resolves the frontier bound PER READ via the
+        # GRAPH-DENSITY-AWARE `_auto_beam_width(length(observations), Graphs.nv(graph))`:
+        # `typemax(Int)` (never pruned → global maximum-likelihood path) only when
+        # BOTH the read is small AND the graph is sparse; the proven-tractable
+        # finite bound when the read is large (read-length rule, td-63qy) OR the
+        # graph is dense (density rule, td-35ux — a short read on a big graph
+        # otherwise retains an O(n_vertices) frontier at each decode depth). The
+        # graph threaded into this call is the one being decoded, so its vertex
+        # count is exactly the density the frontier can reach. An explicit
+        # `beam_width::Int` (including `typemax(Int)`) is an OPT-IN override honored
+        # verbatim — a caller/test can force exact decoding on every read. This
+        # trades the ML guarantee for tractability only under the auto-default; it
+        # never silently changes correctness of an explicit request.
         effective_beam_width = beam_width === nothing ?
-                               _auto_beam_width(length(observations)) : beam_width
+                               _auto_beam_width(length(observations), Graphs.nv(graph)) :
+                               beam_width
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
