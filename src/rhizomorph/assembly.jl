@@ -900,11 +900,51 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): match
         # the mode the naive baseline uses (DoubleStrand for DNA), which auto-config
         # selects, so the corrected-read re-assembly is apples-to-apples.
-        assembly = assemble_genome(corrected_reads;
+        #
+        # Final-pass graph reuse (td-04tb). The corrector already built a qualmer
+        # graph in its final pass; when that pass converged (0 improvements), the
+        # graph is byte-identical to the one a from-scratch re-assembly would build
+        # from the corrected reads. Resolve the re-assembly config exactly as
+        # `assemble_genome(corrected_reads; k=reassembly_k, corrector=:none)` would
+        # (same auto-detected sequence type / graph mode / quality flag), then reuse
+        # the corrector's graph ONLY when every parameter matches AND the corrector
+        # marked it reusable. Otherwise fall back to a full rebuild. The reuse path
+        # calls the SAME downstream contig extraction the rebuild would, so contigs /
+        # N50 / sequences are identical — this is a pure-performance change.
+        reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none)
+        reused_graph = get(result_dict, :final_graph, nothing)
+        _rmeta = result_dict[:metadata]
+        can_reuse_graph = reused_graph !== nothing &&
+                          get(_rmeta, :final_graph_reusable, false) === true &&
+                          get(_rmeta, :final_graph_k, nothing) == reassembly_config.k &&
+                          get(_rmeta, :final_graph_mode, nothing) ==
+                              _graph_mode_symbol(reassembly_config.graph_mode) &&
+                          reassembly_config.k !== nothing &&
+                          reassembly_config.use_quality_scores &&
+                          reassembly_config.sequence_type <: BioSequences.BioSequence
+        assembly = if can_reuse_graph
+            _log_info(config,
+                "Reusing corrector final-pass qualmer graph (k=$(reassembly_config.k), " *
+                "mode=$(_graph_mode_symbol(reassembly_config.graph_mode))); " *
+                "skipping redundant from-scratch build_qualmer_graph (td-04tb)")
+            _qualmer_graph_to_assembly(reused_graph, n_corrected, reassembly_config)
+        else
+            _log_info(config,
+                "Corrector final-pass graph not reusable " *
+                "(reusable=$(get(_rmeta, :final_graph_reusable, false)), " *
+                "graph_k=$(get(_rmeta, :final_graph_k, nothing)) vs reassembly_k=$(reassembly_config.k)); " *
+                "rebuilding from corrected reads")
+            assemble_genome(corrected_reads, reassembly_config)
+        end
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
         assembly.assembly_stats["strategy"] = String(config.strategy)
+        # Final-pass graph reuse provenance (td-04tb): true when the re-assembly
+        # reused the corrector's already-built final-pass graph (converged run),
+        # false when it rebuilt from scratch. Pure telemetry — does not affect the
+        # contigs/N50/sequences (identical either way).
+        assembly.assembly_stats["reassembly_graph_reused"] = can_reuse_graph
         # Provenance (FIX 4): stamp BOTH the caller's requested skip_solid and the
         # value the tier actually used, so the tier's silent override cannot hide.
         # `skip_solid` is retained as the EFFECTIVE value for back-compat.
@@ -1292,6 +1332,28 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
+    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+
+    # Contig extraction + AssemblyResult assembly is factored into
+    # `_qualmer_graph_to_assembly` so the iterative corrector can REUSE its already-
+    # built final-pass qualmer graph (td-04tb) and skip the redundant from-scratch
+    # build_qualmer_graph here — the two paths share this exact downstream code, so
+    # the reused-graph assembly is byte-identical to a from-scratch re-assembly.
+    return _qualmer_graph_to_assembly(graph, length(observations), config)
+end
+
+"""
+    _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config) -> AssemblyResult
+
+Extract contigs from an already-built qualmer `graph` and assemble the
+`AssemblyResult` (paths -> consensus FASTQ contigs -> stats). Split out of
+`_assemble_qualmer_graph` (td-04tb) so the iterative corrector's re-assembly can
+REUSE the corrector's final-pass qualmer graph instead of rebuilding an identical
+one from scratch. Given the same `graph`, `num_input_sequences`, and `config`
+this is a pure function of the graph structure, so a reused graph yields
+byte-identical contigs/N50/sequences.
+"""
+function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
     # Canonical graph_mode now supports correct contig reconstruction on the qualmer
     # arm as well. Contigs are reconstructed by the SAME orientation-aware path used
     # by the k-mer arm (_qualmer_path_to_consensus_fastq -> path_to_sequence ->
@@ -1301,7 +1363,6 @@ function _assemble_qualmer_graph(observations, config)
     # so the result is flagged valid and no warning is emitted (see
     # _assemble_kmer_graph for the sequence-side rationale).
     reconstruction_valid = true
-    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
 
     # Apply Phase 2 graph algorithms if enabled
     if config.bubble_resolution
@@ -1382,7 +1443,7 @@ function _assemble_qualmer_graph(observations, config)
         "reconstruction_valid" => reconstruction_valid,
         "num_fastq_contigs" => length(contig_records),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
-        "num_input_sequences" => length(observations),
+        "num_input_sequences" => num_input_sequences,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 

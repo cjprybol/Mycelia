@@ -442,6 +442,22 @@ function mycelia_iterative_assemble(input_fastq::String;
     # (:exhaustive), so the exhaustive tier is unaffected.
     cheap_correction_counts = Int[]
 
+    # --- Final-pass graph reuse (td-04tb) -----------------------------------
+    # The corrector builds a qualmer graph FROM SCRATCH each pass; the LAST pass at
+    # the largest k builds the graph whose input reads become the final corrected
+    # read set — but ONLY when that pass makes 0 improvements (a converged, no-change
+    # pass). In that case the graph built from `current_reads` is byte-identical to
+    # the graph a downstream re-assembly would build from the corrected reads, so we
+    # hand it back and `_assemble_with_iterative_corrector` reuses it instead of
+    # rebuilding, saving the redundant build_qualmer_graph (~22-36% of the iterative
+    # arm). `final_pass_graph_reusable` is set true ONLY on a 0-improvement pass;
+    # when the last pass changed reads the graph is stale and the caller rebuilds.
+    # These are overwritten every pass, so after the loop they reflect the LAST
+    # pass at the LARGEST k processed (the pass that produced the final FASTQ).
+    final_pass_graph = nothing
+    final_pass_graph_k = 0
+    final_pass_graph_reusable = false
+
     # Main k-mer progression loop
     while k <= max_k
         if verbose
@@ -643,6 +659,17 @@ function mycelia_iterative_assemble(input_fastq::String;
                 println("Wrote $(length(updated_reads)) reads to $output_file")
             end
 
+            # Capture this pass's graph for potential final-pass reuse (td-04tb).
+            # `graph` was built from `current_reads` this pass; `output_file`
+            # (== updated_reads) is this pass's corrected output. When the pass made
+            # 0 improvements, updated_reads == current_reads content, so `graph` is
+            # byte-identical to a rebuild from the corrected reads and is REUSABLE.
+            # Overwritten every pass ⇒ after the loop this holds the last pass at the
+            # largest k, i.e. the pass whose FASTQ finalize selects as the result.
+            final_pass_graph = graph
+            final_pass_graph_k = k
+            final_pass_graph_reusable = (improvements_made == 0)
+
             # Create checkpoint if enabled and at checkpoint interval
             if enable_checkpointing && iteration % checkpoint_interval == 0
                 checkpoint_data = Dict(
@@ -756,7 +783,13 @@ function mycelia_iterative_assemble(input_fastq::String;
         hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct,
         min_decode_k = effective_min_decode_k,
         decode_gate_density = effective_decode_gate_density,
-        decode_gated_rungs = decode_gated_rungs)
+        decode_gated_rungs = decode_gated_rungs,
+        # Final-pass graph reuse (td-04tb): hand the corrector's last-pass qualmer
+        # graph back so a converged run's re-assembly can skip a redundant rebuild.
+        final_pass_graph = final_pass_graph,
+        final_pass_graph_k = final_pass_graph_k,
+        final_pass_graph_mode = graph_mode,
+        final_pass_graph_reusable = final_pass_graph_reusable)
 end
 
 # =============================================================================
@@ -2132,9 +2165,20 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         cheap_correct::Bool = false,
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
-        decode_gated_rungs::Vector{Int} = Int[])
+        decode_gated_rungs::Vector{Int} = Int[],
+        final_pass_graph = nothing,
+        final_pass_graph_k::Int = 0,
+        final_pass_graph_mode::Symbol = :canonical,
+        final_pass_graph_reusable::Bool = false)
     if verbose
         println("Finalizing iterative assembly results...")
+    end
+
+    # Only retain the (potentially large) final-pass graph when it is byte-identical-
+    # reusable (td-04tb); otherwise drop the reference so a fallback rebuild does not
+    # double-hold graph memory.
+    if !final_pass_graph_reusable
+        final_pass_graph = nothing
     end
 
     # Find the final output file (last iteration of largest k)
@@ -2240,7 +2284,15 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # linear pass, per pass and in total. Zero/false on :exhaustive.
         :cheap_correct => cheap_correct,
         :cheap_corrections_per_pass => cheap_correction_counts,
-        :cheap_corrections_total => total_cheap_corrections
+        :cheap_corrections_total => total_cheap_corrections,
+        # Final-pass graph reuse provenance (td-04tb). `final_graph_reusable` is true
+        # only when the final pass at the largest k made 0 improvements, so the
+        # returned `:final_graph` is byte-identical to a from-scratch rebuild of the
+        # corrected reads at `final_graph_k` under `final_graph_mode`. The caller
+        # verifies k + mode match its re-assembly parameters before reusing.
+        :final_graph_k => final_pass_graph_k,
+        :final_graph_mode => final_pass_graph_mode,
+        :final_graph_reusable => final_pass_graph_reusable
     )
 
     if verbose
@@ -2254,7 +2306,10 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     return Dict(
         :final_assembly => final_assembly,
         :k_progression => k_progression,
-        :metadata => metadata
+        :metadata => metadata,
+        # The corrector's final-pass qualmer graph (td-04tb). `nothing` when no pass
+        # completed; only byte-identical-reusable when `metadata[:final_graph_reusable]`.
+        :final_graph => final_pass_graph
     )
 end
 
