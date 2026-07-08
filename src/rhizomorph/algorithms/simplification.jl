@@ -1101,3 +1101,306 @@ function _shift_edge_entry(entry::EdgeQualityEvidenceEntry, offset::Int; shift_f
         entry.from_quality_scores,
         entry.to_quality_scores)
 end
+
+# ============================================================================
+# Linear-time corrector-graph defragmentation cleanup (td-969e)
+# ============================================================================
+#
+# The scalable corrector's final graph retains error-induced BRANCH POINTS
+# (dead-end tips + low-coverage bubbles). find_contigs_next breaks a unitig at
+# every branch vertex, so each residual branch point becomes a contig boundary
+# (~6 contigs for a 1kb genome after RC-dedup). This module removes ONLY the
+# unambiguous errors before contig extraction, in O(V+E), while never collapsing
+# a data-supported variant (the td-h6w9 variation-preservation invariant).
+#
+# Two safe passes:
+#   1. clip_error_tips!        — coverage-1 dead-end branches dangling off a
+#                                junction (never a stand-alone run / genome
+#                                terminus, never a rejoining variant).
+#   2. collapse_error_bubbles! — a bubble branch collapsed ONLY when its mean
+#                                coverage is ~1 (error) AND the sibling is well
+#                                supported. Both-supported bubbles (balanced or
+#                                skewed) retain BOTH branches.
+
+"""
+    _build_in_adjacency_index(graph::MetaGraphsNext.MetaGraph, ::Type{T}) where {T}
+
+Build a vertex -> incoming-neighbor-labels index in a single `O(E)` pass over the
+graph's edge labels. The incoming-edge counterpart to
+[`_build_out_adjacency_index`](@ref); together they give `O(1)` in/out-degree and
+neighbor lookups so tip/bubble cleanup stays `O(V+E)`.
+"""
+function _build_in_adjacency_index(graph::MetaGraphsNext.MetaGraph, ::Type{T}) where {T}
+    in_index = Dict{T, Vector{T}}()
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        src, dst = edge_label
+        push!(get!(() -> T[], in_index, dst), src)
+    end
+    return in_index
+end
+
+"""
+    _vertex_support(graph::MetaGraphsNext.MetaGraph, vertex) -> Int
+
+Coverage support (number of evidence entries) on `vertex`, or `0` when the vertex
+data carries no `evidence` field. This is the per-vertex coverage used to
+separate coverage-1 errors from data-supported sequence.
+"""
+function _vertex_support(graph::MetaGraphsNext.MetaGraph, vertex)
+    haskey(graph, vertex) || return 0
+    data = graph[vertex]
+    return hasproperty(data, :evidence) ? count_evidence(data) : 0
+end
+
+"""
+    _collect_dangling_tip(deadend, in_index, out_index, indeg, outdeg, max_len, ::Type{T}; backward) where {T}
+
+Walk inward from a dead-end vertex, collecting the maximal linear chain until it
+either reaches a branch JUNCTION (the vertex the tip dangles off, whose relevant
+degree is > 1) or terminates without one.
+
+`backward=true` walks a SINK tip (dead end with no out-edges) back toward its
+in-neighbors; `backward=false` walks a SOURCE tip (dead end with no in-edges)
+forward. Returns `(vertices, reached_junction)`. The junction vertex itself is
+NOT included in `vertices`. A chain that reaches the other terminus (a stand-
+alone linear run / genome end) without a junction returns `reached_junction=false`
+and is therefore NEVER clipped — the variation/terminus-preservation guard.
+"""
+function _collect_dangling_tip(deadend, in_index, out_index, indeg, outdeg,
+        max_len::Int, ::Type{T}; backward::Bool) where {T}
+    tip = T[deadend]
+    cur = deadend
+    reached_junction = false
+    step_index = backward ? in_index : out_index
+    # The junction is detected on the vertex's degree on the SIDE we walk toward:
+    # a sink tip dangles off a vertex with out-degree > 1; a source tip off a
+    # vertex with in-degree > 1.
+    branch_degree = backward ? outdeg : indeg
+    while length(tip) <= max_len
+        steps = get(step_index, cur, T[])
+        length(steps) == 1 || break            # 0 neighbors => other terminus, no junction
+        nxt = steps[1]
+        if branch_degree(nxt) > 1
+            reached_junction = true             # dangling tip off a real branch junction
+            break
+        end
+        # Continue only through purely linear interior (indeg==1 && outdeg==1).
+        if indeg(nxt) == 1 && outdeg(nxt) == 1
+            push!(tip, nxt)
+            cur = nxt
+        else
+            break                               # convergence/other structure: not a clean tip
+        end
+    end
+    return (vertices = tip, reached_junction = reached_junction)
+end
+
+"""
+    clip_error_tips!(graph; max_tip_length, max_tip_support=1, max_rounds=10) -> (; removed, rounds)
+
+Remove short, low-coverage dead-end branches ("tips") that dangle off a branch
+vertex. Runs in `O(V+E)` per round using prebuilt in/out adjacency indices.
+
+A tip is clipped only when BOTH unambiguous-error conditions hold:
+  * every vertex on the tip has coverage `<= max_tip_support` (coverage-1 error
+    support), and
+  * the tip has at most `max_tip_length` vertices.
+
+A maximal dead-end chain that reaches the OTHER dead end (a stand-alone linear
+run or genome terminus) WITHOUT passing a junction is NEVER clipped. Real variants
+rejoin (bubbles) and are never dead ends, so tip clipping structurally cannot
+collapse a real variant — this is the safe subset of the cleanup.
+
+Iterates up to `max_rounds` times because removing a tip can turn a former
+junction into a linear vertex and expose a nested tip one layer up.
+
+# Returns
+- `(; removed::Int, rounds::Int)`: total vertices removed and rounds executed.
+"""
+function clip_error_tips!(graph::MetaGraphsNext.MetaGraph;
+        max_tip_length::Int,
+        max_tip_support::Real = 1,
+        max_rounds::Int = 10)
+    total_removed = 0
+    rounds = 0
+    for _ in 1:max_rounds
+        labels = collect(MetaGraphsNext.labels(graph))
+        isempty(labels) && break
+        T = eltype(labels)
+        out_index = _build_out_adjacency_index(graph, T)
+        in_index = _build_in_adjacency_index(graph, T)
+        outdeg = v -> length(get(out_index, v, T[]))
+        indeg = v -> length(get(in_index, v, T[]))
+
+        to_remove = Set{T}()
+        visited = Set{T}()
+
+        for v in labels
+            (v in visited || v in to_remove) && continue
+            od = outdeg(v)
+            id = indeg(v)
+            tip = if od == 0 && id >= 1
+                _collect_dangling_tip(v, in_index, out_index, indeg, outdeg,
+                    max_tip_length, T; backward = true)
+            elseif id == 0 && od >= 1
+                _collect_dangling_tip(v, in_index, out_index, indeg, outdeg,
+                    max_tip_length, T; backward = false)
+            else
+                nothing
+            end
+            tip === nothing && continue
+            for u in tip.vertices
+                push!(visited, u)
+            end
+            if tip.reached_junction &&
+               all(u -> _vertex_support(graph, u) <= max_tip_support, tip.vertices)
+                for u in tip.vertices
+                    push!(to_remove, u)
+                end
+            end
+        end
+
+        isempty(to_remove) && break
+        for label in to_remove
+            haskey(graph, label) && delete!(graph, label)
+        end
+        total_removed += length(to_remove)
+        rounds += 1
+    end
+    return (; removed = total_removed, rounds = rounds)
+end
+
+"""
+    _branch_mean_coverage(graph, path::Vector) -> Union{Float64, Nothing}
+
+Mean per-vertex coverage across a bubble branch, excluding the shared
+convergence vertex (`path[end]`). Returns `nothing` for an empty branch. Used to
+separate a coverage-1 error branch from a data-supported (real) allele.
+"""
+function _branch_mean_coverage(graph::MetaGraphsNext.MetaGraph, path::Vector)
+    isempty(path) && return nothing
+    interior = length(path) > 1 ? @view(path[1:(end - 1)]) : path
+    total = 0.0
+    n = 0
+    for v in interior
+        haskey(graph, v) || continue
+        total += _vertex_support(graph, v)
+        n += 1
+    end
+    return n == 0 ? nothing : total / n
+end
+
+"""
+    collapse_error_bubbles!(graph; max_error_support=2, min_real_support=3, ...) -> (; collapsed)
+
+Collapse a bubble branch ONLY when it is an unambiguous error: its mean per-vertex
+coverage `<= max_error_support` (≈ coverage-1) AND the sibling branch's mean
+per-vertex coverage `>= min_real_support`. When both branches are data-supported —
+a balanced (e.g. 15x/15x) or skewed-but-supported (e.g. 20x/10x) bubble — BOTH
+branches are retained (neither branch coverage is `<= max_error_support`), so real
+variation is preserved (the td-h6w9 invariant).
+
+Bubble detection is the `O(V+E)` `detect_bubbles_next`; each error branch is
+removed with [`remove_path_from_graph!`](@ref).
+
+# Returns
+- `(; collapsed::Int)`: number of error branches removed.
+"""
+function collapse_error_bubbles!(graph::MetaGraphsNext.MetaGraph;
+        max_error_support::Real = 2,
+        min_real_support::Real = 3,
+        min_bubble_length::Int = 2,
+        max_bubble_length::Int = 100)
+    isempty(collect(MetaGraphsNext.labels(graph))) && return (; collapsed = 0)
+    bubbles = detect_bubbles_next(graph;
+        min_bubble_length = min_bubble_length, max_bubble_length = max_bubble_length)
+    collapsed = 0
+    for bubble in bubbles
+        # A prior collapse may have already removed this bubble's boundary.
+        (haskey(graph, bubble.entry_vertex) && haskey(graph, bubble.exit_vertex)) || continue
+        m1 = _branch_mean_coverage(graph, bubble.path1)
+        m2 = _branch_mean_coverage(graph, bubble.path2)
+        (m1 === nothing || m2 === nothing) && continue
+        if m1 <= max_error_support && m2 >= min_real_support && m2 > m1
+            remove_path_from_graph!(graph, bubble.path1, bubble.entry_vertex, bubble.exit_vertex)
+            collapsed += 1
+        elseif m2 <= max_error_support && m1 >= min_real_support && m1 > m2
+            remove_path_from_graph!(graph, bubble.path2, bubble.entry_vertex, bubble.exit_vertex)
+            collapsed += 1
+        end
+    end
+    return (; collapsed = collapsed)
+end
+
+"""
+    clean_corrector_graph!(graph; k=21, clip_tips=true, collapse_bubbles=true, ...) -> Dict{String,Any}
+
+Linear-time defragmentation of the corrector's final graph, run BEFORE contig
+extraction (td-969e). Combines coverage-1 dead-end tip clipping and guarded
+low-coverage bubble collapse, then re-clips any tips exposed by a collapse. Every
+removal targets an unambiguous error; a data-supported variant is never collapsed
+(the td-h6w9 variation-preservation invariant is enforced by
+[`clip_error_tips!`](@ref) and [`collapse_error_bubbles!`](@ref)).
+
+# Keywords
+- `k::Int=21`: k-mer size; the tip-length ceiling is `tip_length_multiple * k`.
+- `clip_tips::Bool=true`: run coverage-1 dead-end tip clipping.
+- `collapse_bubbles::Bool=true`: run the guarded low-coverage bubble collapse.
+- `max_tip_support::Real=1`: max coverage for a removable tip vertex.
+- `tip_length_multiple::Int=3`: tip-length ceiling in units of `k`.
+- `max_error_support::Real=2`: max mean coverage for a collapsible bubble branch.
+- `min_real_support::Real=3`: min mean coverage the surviving sibling must have.
+- `max_bubble_length::Int=100`: max branch trace length for bubble detection.
+- `max_rounds::Int=10`: max tip-clipping rounds per invocation.
+
+# Returns
+- `Dict{String,Any}`: cleanup telemetry (vertices before/after, tips removed,
+  bubbles collapsed).
+"""
+function clean_corrector_graph!(graph::MetaGraphsNext.MetaGraph;
+        k::Int = 21,
+        clip_tips::Bool = true,
+        collapse_bubbles::Bool = true,
+        max_tip_support::Real = 2,
+        tip_length_multiple::Int = 3,
+        max_error_support::Real = 2,
+        min_real_support::Real = 3,
+        max_bubble_length::Int = 100,
+        max_rounds::Int = 10,
+        max_outer_rounds::Int = 5)
+    n_before = length(collect(MetaGraphsNext.labels(graph)))
+    tip_max_length = max(1, tip_length_multiple * k)
+    tips_removed = 0
+    bubbles_collapsed = 0
+
+    # Alternate tip clipping and guarded bubble collapse to a fixpoint: clipping a
+    # tip can expose a bubble whose error branch is now reachable, and collapsing a
+    # bubble can turn a former junction into a linear vertex that exposes a nested
+    # tip. Each pass only removes unambiguous errors, so iterating to convergence
+    # cannot cross into real-variant territory (the td-h6w9 invariant holds
+    # per-pass). Bounded by max_outer_rounds.
+    for _ in 1:max_outer_rounds
+        round_tips = 0
+        round_bubbles = 0
+        if clip_tips
+            r = clip_error_tips!(graph; max_tip_length = tip_max_length,
+                max_tip_support = max_tip_support, max_rounds = max_rounds)
+            round_tips += r.removed
+        end
+        if collapse_bubbles
+            r = collapse_error_bubbles!(graph; max_error_support = max_error_support,
+                min_real_support = min_real_support, max_bubble_length = max_bubble_length)
+            round_bubbles += r.collapsed
+        end
+        tips_removed += round_tips
+        bubbles_collapsed += round_bubbles
+        (round_tips == 0 && round_bubbles == 0) && break
+    end
+
+    return Dict{String, Any}(
+        "graph_cleanup_vertices_before" => n_before,
+        "graph_cleanup_vertices_after" => length(collect(MetaGraphsNext.labels(graph))),
+        "graph_cleanup_tips_removed" => tips_removed,
+        "graph_cleanup_bubbles_collapsed" => bubbles_collapsed,
+    )
+end

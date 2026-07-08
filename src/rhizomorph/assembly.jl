@@ -166,6 +166,15 @@ struct AssemblyConfig
     # (reverse complement is undefined for general string tokens).
     token_sequences::Union{Nothing, Vector{Vector{String}}}
 
+    # Linear-time defragmentation of the (qualmer) assembly graph BEFORE contig
+    # extraction (td-969e): coverage-1 dead-end tip clipping + guarded low-coverage
+    # bubble collapse. Three-state sentinel so the DEFAULT can differ by context
+    # (see _qualmer_graph_to_assembly): `nothing` = context default (ON for the
+    # iterative corrector's re-assembly, OFF for a plain qualmer assembly), `true`
+    # / `false` = force. Removes only unambiguous errors; never collapses a
+    # data-supported variant (td-h6w9), so it cannot lose real sequence.
+    graph_cleanup::Union{Bool, Nothing}
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -186,7 +195,8 @@ struct AssemblyConfig
             corrector::Symbol = :none,
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
-            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing
+            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing,
+            graph_cleanup::Union{Bool, Nothing} = nothing
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -315,7 +325,8 @@ struct AssemblyConfig
             corrector,
             effective_skip_solid,
             effective_strategy,
-            token_sequences
+            token_sequences,
+            graph_cleanup
         )
     end
 end
@@ -911,8 +922,13 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # marked it reusable. Otherwise fall back to a full rebuild. The reuse path
         # calls the SAME downstream contig extraction the rebuild would, so contigs /
         # N50 / sequences are identical — this is a pure-performance change.
+        # Graph defragmentation (td-969e): the corrector's final graph retains
+        # error-induced branch points that fragment the re-assembly. Clean it before
+        # contig extraction by default; a caller can force it off with
+        # graph_cleanup=false (nothing = context default ON for the corrector).
+        corrector_cleanup = config.graph_cleanup === nothing ? true : config.graph_cleanup
         reassembly_config = _auto_configure_assembly(corrected_reads;
-            k = reassembly_k, corrector = :none)
+            k = reassembly_k, corrector = :none, graph_cleanup = corrector_cleanup)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -928,7 +944,8 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
                 "Reusing corrector final-pass qualmer graph (k=$(reassembly_config.k), " *
                 "mode=$(_graph_mode_symbol(reassembly_config.graph_mode))); " *
                 "skipping redundant from-scratch build_qualmer_graph (td-04tb)")
-            _qualmer_graph_to_assembly(reused_graph, n_corrected, reassembly_config)
+            _qualmer_graph_to_assembly(reused_graph, n_corrected, reassembly_config;
+                graph_cleanup = corrector_cleanup)
         else
             _log_info(config,
                 "Corrector final-pass graph not reusable " *
@@ -1339,7 +1356,11 @@ function _assemble_qualmer_graph(observations, config)
     # built final-pass qualmer graph (td-04tb) and skip the redundant from-scratch
     # build_qualmer_graph here — the two paths share this exact downstream code, so
     # the reused-graph assembly is byte-identical to a from-scratch re-assembly.
-    return _qualmer_graph_to_assembly(graph, length(observations), config)
+    # A plain qualmer assembly cleans only when the caller explicitly opts in
+    # (config.graph_cleanup === true). The corrector's re-assembly path opts in
+    # via the reuse call in the :iterative branch and via reassembly_config below.
+    return _qualmer_graph_to_assembly(graph, length(observations), config;
+        graph_cleanup = config.graph_cleanup === true)
 end
 
 """
@@ -1353,7 +1374,8 @@ one from scratch. Given the same `graph`, `num_input_sequences`, and `config`
 this is a pure function of the graph structure, so a reused graph yields
 byte-identical contigs/N50/sequences.
 """
-function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
+function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
+        graph_cleanup::Bool = false)
     # Canonical graph_mode now supports correct contig reconstruction on the qualmer
     # arm as well. Contigs are reconstructed by the SAME orientation-aware path used
     # by the k-mer arm (_qualmer_path_to_consensus_fastq -> path_to_sequence ->
@@ -1373,6 +1395,27 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
     if config.repeat_resolution
         # Note: This would use resolve_repeats_next adapted for qualmer graphs
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
+    end
+
+    # Linear-time graph defragmentation BEFORE contig extraction (td-969e). The
+    # scalable corrector's final graph keeps error-induced branch points (dead-end
+    # tips + coverage-1 bubbles); find_contigs_next breaks a unitig at every branch
+    # vertex, so each residual branch point is a contig boundary. clean_corrector_
+    # graph! removes ONLY unambiguous errors (coverage-1 dead-end tips + guarded
+    # low-coverage bubble collapse) in O(V+E), never collapsing a data-supported
+    # variant (the td-h6w9 invariant). Operate on a deepcopy so a REUSED corrector
+    # final-pass graph (td-04tb) is not mutated for other consumers; the cleaned
+    # copy is what we both extract contigs from AND return in the AssemblyResult.
+    cleanup_stats = nothing
+    if graph_cleanup
+        graph = deepcopy(graph)
+        cleanup_stats = Rhizomorph.clean_corrector_graph!(
+            graph; k = config.k === nothing ? 21 : config.k)
+        _log_info(config,
+            "Graph cleanup (td-969e): $(cleanup_stats["graph_cleanup_vertices_before"]) -> " *
+            "$(cleanup_stats["graph_cleanup_vertices_after"]) vertices " *
+            "($(cleanup_stats["graph_cleanup_tips_removed"]) tips clipped, " *
+            "$(cleanup_stats["graph_cleanup_bubbles_collapsed"]) error bubbles collapsed)")
     end
 
     # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
@@ -1452,6 +1495,14 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config)
         qualmer_stats = Rhizomorph.get_qualmer_statistics(graph)
         for (key, value) in qualmer_stats
             stats[string(key)] = value
+        end
+    end
+
+    # Graph-cleanup provenance (td-969e). Present only when the defrag pass ran.
+    stats["graph_cleanup_applied"] = graph_cleanup
+    if cleanup_stats !== nothing
+        for (key, value) in cleanup_stats
+            stats[key] = value
         end
     end
 
