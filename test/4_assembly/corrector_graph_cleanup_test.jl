@@ -290,4 +290,109 @@ Test.@testset "corrector graph cleanup primitives (td-969e)" begin
         Test.@test !haskey(graph, island_kmer)                        # island gone
         Test.@test all(kmref -> haskey(graph, kmref), backbone_kmers) # backbone intact
     end
+
+    # ------------------------------------------------------------------
+    # Size-cap opt-out (td-byva): a LARGE (span > default 2000) uniformly
+    # coverage-1 disconnected island sharing no real k-mer content is genuine
+    # error debris, but the default size cap RETAINS it (it might be an under-
+    # sequenced real replicon). `max_component_length = nothing` disables that
+    # conservatism knob so the island is pruned — while the coverage floor and
+    # real-sequence guard stay binding (proved by the two follow-on cases).
+    # ------------------------------------------------------------------
+    # A larger k for the large-island cases so a ~2050 bp random sequence has
+    # (w.h.p.) all-unique k-mers -> uniform coverage 1, no internal repeat that
+    # would spuriously raise a vertex above the coverage floor. span at k=kk is
+    # (n_vertices + kk - 1) ~= 2050 > the default 2000 cap.
+    kk = 21
+    Test.@testset "prune: large coverage-1 island retained by default cap, pruned when disabled" begin
+        rng = Random.MersenneTwister(202)
+        # Main genome must be LARGER than the island so argmax(component length)
+        # keeps the island a prune CANDIDATE (not the retained main component).
+        backbone = _cgc_backbone(rng, 3000)               # main genome, coverage 10
+        # ~2050 bp error island => span > 2000, coverage 1, shares NO k-mer with
+        # the backbone.
+        big_island = _cgc_backbone(Random.MersenneTwister(30303), 2050)
+        base_reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(base_reads, _cgc_fasta("main$i", backbone))
+        end
+        push!(base_reads, _cgc_fasta("big_island", big_island))
+        island_kmer = Kmers.DNAKmer{kk}(big_island[100:(100 + kk - 1)])
+        backbone_kmers = [Kmers.DNAKmer{kk}(backbone[i:(i + kk - 1)])
+                          for i in 1:(length(backbone) - kk + 1)]
+
+        # DEFAULT cap: the large island is above the span cap -> RETAINED.
+        graph_default = _CGC.build_kmer_graph(base_reads, kk;
+            dataset_id = "t", mode = :singlestrand)
+        Test.@test _cgc_cov(graph_default, island_kmer) == 1
+        res_default = _CGC.prune_disconnected_error_components!(graph_default; k = kk,
+            max_component_support = 2, min_real_support = 3)
+        Test.@test res_default.components_pruned == 0
+        Test.@test haskey(graph_default, island_kmer)                 # retained by size cap
+
+        # DISABLED cap: coverage floor + guard both pass for this error island,
+        # so with the span gate off it is pruned; the backbone is untouched.
+        graph_nocap = _CGC.build_kmer_graph(base_reads, kk;
+            dataset_id = "t", mode = :singlestrand)
+        res_nocap = _CGC.prune_disconnected_error_components!(graph_nocap; k = kk,
+            max_component_length = nothing,
+            max_component_support = 2, min_real_support = 3)
+        Test.@test res_nocap.components_pruned >= 1
+        Test.@test res_nocap.removed >= 1
+        Test.@test !haskey(graph_nocap, island_kmer)                  # error island removed
+        Test.@test all(kmref -> haskey(graph_nocap, kmref), backbone_kmers)
+    end
+
+    Test.@testset "prune: cap disabled STILL retains large high-coverage disconnected genome" begin
+        rng = Random.MersenneTwister(303)
+        # Main genome larger than the second so the second stays a prune CANDIDATE
+        # and its retention is genuinely due to the coverage floor.
+        backbone = _cgc_backbone(rng, 3000)               # main component
+        # A large SECOND real genome (~2050 bp), disconnected but well-supported
+        # (coverage 10). The coverage floor must retain it even with the span gate
+        # off -> disabling the cap does NOT weaken the coverage-floor safety proof.
+        second = _cgc_backbone(Random.MersenneTwister(40404), 2050)
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+            push!(reads, _cgc_fasta("second$i", second))
+        end
+        graph = _CGC.build_kmer_graph(reads, kk; dataset_id = "t", mode = :singlestrand)
+        second_kmer = Kmers.DNAKmer{kk}(second[100:(100 + kk - 1)])
+        Test.@test _cgc_cov(graph, second_kmer) == 10
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = kk,
+            max_component_length = nothing,
+            max_component_support = 2, min_real_support = 3)
+
+        Test.@test res.components_pruned == 0
+        Test.@test haskey(graph, second_kmer)             # well-supported genome kept
+    end
+
+    Test.@testset "prune: cap disabled STILL retains large real-content-sharing island (guard)" begin
+        rng = Random.MersenneTwister(404)
+        backbone = _cgc_backbone(rng, 2100)               # large main genome, coverage 10
+        # A large coverage-1 read that is the REVERSE COMPLEMENT of a backbone
+        # segment: distinct singlestrand vertices (separate component) whose
+        # CANONICAL k-mers match the backbone. The real-sequence guard must retain
+        # it even with the span gate off -> disabling the cap does NOT weaken the
+        # real-sequence guard.
+        rc_segment = _cgc_rc(backbone[1:2050])
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+        end
+        push!(reads, _cgc_fasta("rc", rc_segment))
+        graph = _CGC.build_kmer_graph(reads, kk; dataset_id = "t", mode = :singlestrand)
+        rc_kmer = Kmers.DNAKmer{kk}(rc_segment[100:(100 + kk - 1)])
+        Test.@test haskey(graph, rc_kmer)
+        Test.@test _cgc_cov(graph, rc_kmer) == 1          # low coverage, but real content
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = kk,
+            max_component_length = nothing,
+            max_component_support = 2, min_real_support = 3)
+
+        Test.@test res.components_pruned == 0             # guard binding despite no size cap
+        Test.@test haskey(graph, rc_kmer)
+    end
 end

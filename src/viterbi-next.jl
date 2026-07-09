@@ -26,7 +26,15 @@ function default_viterbi_emission_logp(
 
     quality_scores = _normalize_viterbi_quality_scores(quality)
     alphabet_size = _viterbi_alphabet_size(resolved_alphabet)
-    shared = min(length(observed), length(expected))
+    # Compare by CHARACTER, not byte. `length`/`getindex` on a String count
+    # characters vs. address bytes respectively, so `observed[index]` throws a
+    # `StringIndexError` on any multibyte UTF-8 unit (e.g. the SentencePiece
+    # U+2581 word-boundary marker, accented letters, emoji). Materializing to
+    # `Vector{Char}` makes positional indexing character-aware for arbitrary
+    # Unicode tokens while keeping the O(n) scan.
+    observed_chars = collect(observed)
+    expected_chars = collect(expected)
+    shared = min(length(observed_chars), length(expected_chars))
 
     logp = 0.0
     for index in 1:shared
@@ -35,14 +43,14 @@ function default_viterbi_emission_logp(
             index,
             error_rate
         )
-        if observed[index] == expected[index]
+        if observed_chars[index] == expected_chars[index]
             logp += log1p(-position_error_rate)
         else
             logp += log(position_error_rate / (alphabet_size - 1))
         end
     end
 
-    for index in (shared + 1):max(length(observed), length(expected))
+    for index in (shared + 1):max(length(observed_chars), length(expected_chars))
         position_error_rate = _viterbi_position_error_rate(
             quality_scores,
             index,
@@ -1625,10 +1633,15 @@ function _decoded_path_labels(
 end
 
 function _hamming_like_distance(left::AbstractString, right::AbstractString)::Int
-    shared = min(length(left), length(right))
-    distance = abs(length(left) - length(right))
+    # Character-aware indexing (see `default_viterbi_emission_logp`): byte offsets
+    # into a multibyte UTF-8 string throw `StringIndexError`, so iterate the
+    # decoded `Char`s to keep the distance well-defined for arbitrary Unicode.
+    left_chars = collect(left)
+    right_chars = collect(right)
+    shared = min(length(left_chars), length(right_chars))
+    distance = abs(length(left_chars) - length(right_chars))
     for index in 1:shared
-        distance += left[index] == right[index] ? 0 : 1
+        distance += left_chars[index] == right_chars[index] ? 0 : 1
     end
     return distance
 end
