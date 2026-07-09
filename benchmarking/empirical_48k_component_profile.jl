@@ -139,15 +139,24 @@ const BUCKETS = [
         ["_qualmer_path_to_consensus_fastq", "path_to_sequence",
          "_reconstruct_oriented_kmer_path", "_generate_fastq_contigs_from_qualmer_graph"]),
     # --- correction-phase components ---
-    ("C5. per-read Viterbi decode",
+    # per-read decode split into sub-components so, if decode is the driver, the
+    # fix rec can target the exact internal term (weighted-graph rebuild vs the
+    # Viterbi frontier engine vs likelihood vs soft-EM competing paths).
+    ("C5a. decode: weighted-graph build",
+        ["build_correction_weighted_graph", "weighted_graph_from_rhizomorph"]),
+    ("C5b. decode: Viterbi frontier engine",
+        ["viterbi_decode_next", "beam_pruned_viterbi_decode_next",
+         "_beam_pruned_viterbi_decode_next", "_get_valid_transitions",
+         "_total_outgoing_weight", "_prune_viterbi_beam", "find_optimal_sequence_path"]),
+    ("C5c. decode: soft-EM competing paths",
+        ["accumulate_competing_paths", "_enumerate_competing_paths",
+         "register_soft_edge_weights", "clear_soft_edge_weights"]),
+    ("C5d. decode: read likelihood calc",
+        ["calculate_read_likelihood", "calculate_sequence_likelihood"]),
+    ("C5e. decode: setup/other",
         ["improve_read_likelihood", "try_viterbi_path_improvement",
-         "find_optimal_sequence_path", "calculate_read_likelihood",
-         "calculate_sequence_likelihood", "build_correction_weighted_graph",
-         "weighted_graph_from_rhizomorph", "viterbi_decode_next",
-         "beam_pruned_viterbi_decode_next", "_beam_pruned_viterbi_decode_next",
-         "_get_valid_transitions", "_prune_viterbi_beam",
-         "accumulate_competing_paths", "_enumerate_competing_paths",
-         "correct_observations", "adjust_quality_scores"]),
+         "correct_observations", "path_to_sequence", "adjust_quality_scores",
+         "should_decode_read"]),
     ("C4. stage0 cheap_correct", ["_stage0_cheap_correct", "_stage0_correct_read"]),
     ("C3. solid_kmer classification",
         ["_solid_kmer_set", "classify_kmers", "MixtureModelClassifier"]),
@@ -383,6 +392,14 @@ function main()
         hdr *= Printf.@sprintf(" %8s %10s", "alpha", "alpha_lg")
         println(sink, hdr)
         println(sink, "-"^length(hdr))
+        # Aggregate the decode sub-components (C5a..C5e) into a synthetic
+        # "C5*. per-read decode (TOTAL)" so the component-level answer (decode as a
+        # whole vs cleanup/contig/build) is directly readable next to the split.
+        decode_labels = filter(l -> startswith(l, "C5"), all_labels)
+        agg_decode = Dict{Int, Float64}()  # size-index -> summed decode seconds
+        for (i, r) in enumerate(results)
+            agg_decode[i] = sum(get(r.seconds, l, 0.0) for l in decode_labels; init = 0.0)
+        end
         # sort components by seconds at the largest size (descending)
         largest = results[end]
         order = sort(all_labels; by = l -> -get(largest.seconds, l, 0.0))
@@ -400,6 +417,22 @@ function main()
                 isnan(a) ? "-" : Printf.@sprintf("%.2f", a),
                 isnan(alg) ? "-" : Printf.@sprintf("%.2f", alg))
             println(sink, row)
+        end
+        # synthetic aggregate decode row
+        if !isempty(decode_labels)
+            dys = Float64[agg_decode[i] for i in 1:length(results)]
+            da = loglog_alpha(gfloat, dys)
+            dalg = length(results) >= 2 ?
+                pairwise_alpha(gfloat[end-1], dys[end-1], gfloat[end], dys[end]) : NaN
+            drow = Printf.@sprintf("%-42s", "C5*. per-read decode (TOTAL C5a-e)")
+            for y in dys
+                drow *= Printf.@sprintf(" %10.1f", y)
+            end
+            drow *= Printf.@sprintf(" %8s %10s",
+                isnan(da) ? "-" : Printf.@sprintf("%.2f", da),
+                isnan(dalg) ? "-" : Printf.@sprintf("%.2f", dalg))
+            println(sink, "-"^length(hdr))
+            println(sink, drow)
         end
         println(sink, "-"^length(hdr))
         totrow = Printf.@sprintf("%-42s", "TOTAL (wall)")
@@ -420,15 +453,23 @@ function main()
         println(sink, "  at the biggest size is the TRUE residual super-linear (alpha~1.47) driver.")
 
         # --- auto-verdict: dominant super-linear component at the large end ---
+        # Candidates = individual non-decode components + the AGGREGATE decode
+        # (so a decode driver is judged as one component, not diluted across C5a-e).
+        candidates = Vector{Tuple{String, Vector{Float64}}}()
+        for label in all_labels
+            startswith(label, "C5") && continue  # folded into the aggregate below
+            push!(candidates, (label, Float64[get(r.seconds, label, 0.0) for r in results]))
+        end
+        !isempty(decode_labels) &&
+            push!(candidates, ("C5*. per-read decode (TOTAL C5a-e)",
+                Float64[agg_decode[i] for i in 1:length(results)]))
         best_label = ""
         best_score = -Inf
-        for label in all_labels
-            ys = Float64[get(r.seconds, label, 0.0) for r in results]
+        for (label, ys) in candidates
             alg = length(results) >= 2 ?
                 pairwise_alpha(gfloat[end-1], ys[end-1], gfloat[end], ys[end]) : NaN
             (isnan(alg) || alg <= 1.3) && continue
-            # score = large-end seconds weighted by how super-linear it is
-            score = ys[end] * (alg - 1.0)
+            score = ys[end] * (alg - 1.0)   # large-end seconds x super-linearity
             if score > best_score
                 best_score = score
                 best_label = label
@@ -439,7 +480,9 @@ function main()
             println(sink, "AUTO-VERDICT: no single component exceeds alpha_lg 1.3 at the large end;")
             println(sink, "  the residual is diffuse across components (re-examine the table above).")
         else
-            ys = Float64[get(r.seconds, label, 0.0) for label in [best_label] for r in results]
+            ys = startswith(best_label, "C5*") ?
+                Float64[agg_decode[i] for i in 1:length(results)] :
+                Float64[get(r.seconds, best_label, 0.0) for r in results]
             println(sink, "AUTO-VERDICT: dominant super-linear component at the large end =")
             println(sink, "  >>> $(best_label) <<<")
             println(sink, "  ($(Printf.@sprintf("%.1f", ys[end]))s at $(results[end].glen)bp, " *
