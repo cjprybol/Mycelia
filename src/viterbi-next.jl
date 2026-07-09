@@ -65,6 +65,30 @@ keeps the default simple so the legacy B0 oracle remains the behavioral anchor.
 `:doublestrand`, `:canonical`, or `:auto`). BioSequences empirically preserves
 RNA type and U-aware complements (`AUGC` reverse-complements to `GCAU`), while
 AA/text alphabets remain reverse-complement naive singlestrand paths.
+
+Two candidate-generation bounds (both default to exact / no-op; opted into by the
+:scalable corrector alongside the size-aware `beam_width`) keep the per-depth
+frontier expansion O(1) in graph size instead of growing toward the width beam as
+the graph densifies (td-plqi):
+
+  * `max_successors_per_state` — per expanded state, only the top-B outgoing
+    transitions by edge weight are materialized before emission scoring, so
+    generation per state is O(B) not O(out-degree). On a k-mer de Bruijn graph the
+    structural out-degree is ≤ 4 (the four next bases), so any `B ≥ 4` is a strict
+    no-op here; it is a robustness guard for pathological high-branching inputs
+    (collapsed-repeat multigraphs, non-DNA alphabets). Default `typemax(Int)`.
+
+  * `beam_score_margin` — Δ log-probability threshold ("histogram" beam pruning).
+    After the width beam, retained states whose score is more than `Δ` below the
+    depth's best are dropped. This is the term that actually bounds generation at
+    scale: on a dense intermediate-k graph the width-256 frontier is ~99% states
+    that are >Δ below best (astronomically improbable) and can never win the ML
+    path, yet each one still generates + emission-scores successors at the next
+    depth. Keeping only the within-Δ band holds the generating frontier to a few
+    states independent of genome size (the true path and its genuine competitors
+    are high-probability, always within the band). Default `Inf` (no threshold =
+    exact). Only engages where the width beam is already finite (approximate), so
+    exact-ML reads (`beam_width == typemax`) stay byte-identical.
 """
 struct ViterbiCorrectionConfig{F <: Function}
     error_rate::Float64
@@ -77,6 +101,8 @@ struct ViterbiCorrectionConfig{F <: Function}
     start_strand::Rhizomorph.StrandOrientation
     edge_weight::Function
     beam_width::Int
+    max_successors_per_state::Int
+    beam_score_margin::Float64
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -88,7 +114,9 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
             edge_weight::Function = Rhizomorph.edge_data_weight,
-            beam_width::Int = typemax(Int)
+            beam_width::Int = typemax(Int),
+            max_successors_per_state::Int = typemax(Int),
+            beam_score_margin::Float64 = Inf
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
@@ -102,6 +130,14 @@ struct ViterbiCorrectionConfig{F <: Function}
         if beam_width <= 0
             throw(ArgumentError("beam_width must be positive, got $beam_width"))
         end
+        if max_successors_per_state <= 0
+            throw(ArgumentError(
+                "max_successors_per_state must be positive, got $max_successors_per_state"))
+        end
+        if isnan(beam_score_margin) || beam_score_margin <= 0.0
+            throw(ArgumentError(
+                "beam_score_margin must be a positive number or Inf, got $beam_score_margin"))
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -112,7 +148,9 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex,
             start_strand,
             edge_weight,
-            beam_width
+            beam_width,
+            max_successors_per_state,
+            beam_score_margin
         )
     end
 end
@@ -127,7 +165,9 @@ function ViterbiCorrectionConfig(;
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
         edge_weight::Function = Rhizomorph.edge_data_weight,
-        beam_width::Int = typemax(Int)
+        beam_width::Int = typemax(Int),
+        max_successors_per_state::Int = typemax(Int),
+        beam_score_margin::Float64 = Inf
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -139,7 +179,9 @@ function ViterbiCorrectionConfig(;
         target_vertex = target_vertex,
         start_strand = start_strand,
         edge_weight = edge_weight,
-        beam_width = beam_width
+        beam_width = beam_width,
+        max_successors_per_state = max_successors_per_state,
+        beam_score_margin = beam_score_margin
     )
 end
 
@@ -999,6 +1041,55 @@ function _prune_correction_beam(
     return kept, kept_predecessors
 end
 
+# Bound successor GENERATION per expanded state (td-plqi): keep only the top-B
+# outgoing transitions ranked by edge weight BEFORE any emission is scored, so the
+# per-state candidate set is O(B) rather than O(out-degree). Ranking is by
+# `_edge_transition_weight` descending; ties are broken by target-vertex string for
+# a deterministic (run-reproducible) selection. Returns `transitions` unchanged when
+# it already fits within `b` (the common case: a k-mer de Bruijn vertex has ≤ 4
+# structural successors, so any `b ≥ 4` is a no-op). Only bites on pathological
+# high-branching vertices, where the low-weight tail is the least-probable
+# (error/spurious) edges — the true, well-supported branch is high-weight and
+# always survives.
+function _top_b_transitions(transitions, b::Int)
+    length(transitions) <= b && return transitions
+    ordered = sort(
+        transitions;
+        by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
+                   string(t[:target_vertex])),
+        rev = true
+    )
+    return ordered[1:b]
+end
+
+# Score-margin ("histogram") beam pruning (td-plqi): drop states whose score is
+# more than `margin` log-probability units below `best_score` (the best score in
+# the frontier). Applied AFTER the width beam, in lockstep on the score and
+# predecessor dicts so path reconstruction stays consistent. This bounds the set of
+# states that will GENERATE successors at the next depth to the near-best band,
+# which — unlike the width beam — does not grow with graph density (the improbable
+# tail is discarded), keeping per-depth generation O(1) in genome size. `margin ===
+# Inf` (default) is a no-op, preserving exact decoding.
+function _prune_correction_beam_by_margin(
+        scores::Dict{S, Float64},
+        predecessors::Dict{S, S},
+        best_score::Float64,
+        margin::Float64
+)::Tuple{Dict{S, Float64}, Dict{S, S}} where {S}
+    (isinf(margin) || isempty(scores)) && return scores, predecessors
+    threshold = best_score - margin
+    kept = Dict{S, Float64}()
+    kept_predecessors = Dict{S, S}()
+    for (state, score) in scores
+        score >= threshold || continue
+        kept[state] = score
+        if haskey(predecessors, state)
+            kept_predecessors[state] = predecessors[state]
+        end
+    end
+    return kept, kept_predecessors
+end
+
 function _viterbi_correct_observation(
         graph::MetaGraphsNext.MetaGraph,
         observation::AbstractVector,
@@ -1125,6 +1216,17 @@ function _viterbi_correct_observation(
                 continue
             end
 
+            # Bound successor generation to the top-B highest-weight transitions
+            # BEFORE emission scoring (td-plqi). No-op when B >= out-degree (the
+            # de Bruijn common case, out-degree <= 4). `total_out` is unchanged —
+            # transition probabilities stay normalized against the FULL outgoing
+            # mass, so a bounded expansion is a strict subset of the exact frontier.
+            if length(transitions) > config.max_successors_per_state
+                diagnostics[:successor_bounded] =
+                    get(diagnostics, :successor_bounded, 0) + 1
+                transitions = _top_b_transitions(transitions, config.max_successors_per_state)
+            end
+
             for transition in transitions
                 next_vertex = convert(label_type, transition[:target_vertex])
                 next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
@@ -1172,6 +1274,20 @@ function _viterbi_correct_observation(
             next_scores, next_predecessors = _prune_correction_beam(
                 next_scores, next_predecessors, config.beam_width)
             diagnostics[:beam_pruned] = get(diagnostics, :beam_pruned, 0) + 1
+        end
+
+        # Score-margin ("histogram") prune: keep only states within
+        # `beam_score_margin` log-prob of the depth's best (td-plqi). This is the
+        # bound that holds the GENERATING frontier O(1) in genome size on dense
+        # intermediate-k graphs; a no-op under the default Inf margin (exact ML).
+        if isfinite(config.beam_score_margin) && !isempty(next_scores)
+            depth_best = maximum(values(next_scores))
+            pre_margin = length(next_scores)
+            next_scores, next_predecessors = _prune_correction_beam_by_margin(
+                next_scores, next_predecessors, depth_best, config.beam_score_margin)
+            if length(next_scores) < pre_margin
+                diagnostics[:margin_pruned] = get(diagnostics, :margin_pruned, 0) + 1
+            end
         end
 
         push!(predecessors_by_depth, next_predecessors)

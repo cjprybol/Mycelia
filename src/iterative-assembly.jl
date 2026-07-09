@@ -1219,6 +1219,32 @@ const _AUTO_BEAM_BOUNDED_WIDTH = 256
 # constant: it only trades exactness for tractability, and only ABOVE the line.
 const _AUTO_BEAM_EXACT_THRESHOLD = 1024
 
+# Candidate-GENERATION bounds applied alongside the finite width beam (td-plqi).
+# The width beam caps the RETAINED frontier at 256, but on a dense intermediate-k
+# graph nearly all 256 retained states are >20 log-prob below the best — improbable
+# junk that can never win the ML path yet still generates + emission-scores
+# successors at the next depth, so per-depth generation climbs toward the width cap
+# as the graph densifies (the empirically-measured residual super-linear term at
+# k=9; #386). These bound generation directly:
+#
+#   * _AUTO_SUCCESSOR_BOUND — top-B outgoing transitions per expanded state, ranked
+#     by edge weight before emission. A k-mer de Bruijn vertex has ≤ 4 structural
+#     successors, so 16 is a strict no-op on DNA (a robustness guard for pathological
+#     high-branching / non-DNA inputs), kept for correctness parity with the design.
+#
+#   * _AUTO_BEAM_SCORE_MARGIN — Δ log-prob "histogram" beam: keep only frontier
+#     states within Δ of the depth's best. This is the term that actually linearizes
+#     the dense-rung decode — the near-best band (true path + genuine competing
+#     alleles) does NOT grow with genome, so the generating frontier stays O(1) in
+#     size while the improbable tail is discarded. Δ = 30 nats ≈ 5 substitution
+#     log-likelihood units of headroom at err=0.01 — far more than any real
+#     correction needs, so the ML/variant path is always retained (validated by the
+#     variation-preservation holdout + toy quality sweep). Both engage ONLY where
+#     the width beam is already finite (approximate); exact-ML reads
+#     (beam_width == typemax) keep margin = Inf and stay byte-identical.
+const _AUTO_SUCCESSOR_BOUND = 16
+const _AUTO_BEAM_SCORE_MARGIN = 30.0
+
 """
     _auto_beam_width(n_observations) -> Int
 
@@ -2498,11 +2524,24 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         effective_beam_width = beam_width === nothing ?
                                _auto_beam_width(length(observations), Graphs.nv(graph)) :
                                beam_width
+        # Candidate-generation bounds (td-plqi) engage ONLY where the width beam is
+        # already finite (i.e. the decode is already the bounded approximation, not
+        # exact ML). When the beam is exact (typemax — small read on a sparse graph,
+        # OR an explicit caller override forcing exact), the score margin stays Inf
+        # and the successor bound stays unbounded, so exact-ML reads are byte-
+        # identical. Where the beam is bounded (dense/large — the k=9-style rungs
+        # that carry the #386 super-linear residual) the margin holds the generating
+        # frontier O(1) in genome size.
+        beam_is_exact = effective_beam_width == typemax(Int)
+        effective_margin = beam_is_exact ? Inf : _AUTO_BEAM_SCORE_MARGIN
+        effective_successor_bound = beam_is_exact ? typemax(Int) : _AUTO_SUCCESSOR_BOUND
         config = Mycelia.ViterbiCorrectionConfig(
             alphabet = alphabet,
             strand_mode = graph_mode,
             max_steps = length(observations) - 1,
-            beam_width = effective_beam_width
+            beam_width = effective_beam_width,
+            max_successors_per_state = effective_successor_bound,
+            beam_score_margin = effective_margin
         )
         correction = Mycelia.correct_observations(
             graph, [observations]; config = config, weighted_graph = weighted_graph)
