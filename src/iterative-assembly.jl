@@ -1232,15 +1232,16 @@ const _AUTO_BEAM_EXACT_THRESHOLD = 1024
 #     successors, so 16 is a strict no-op on DNA (a robustness guard for pathological
 #     high-branching / non-DNA inputs), kept for correctness parity with the design.
 #
-#   * _AUTO_BEAM_SCORE_MARGIN — Δ log-prob "histogram" beam: keep only frontier
-#     states within Δ of the depth's best. This is the term that actually linearizes
-#     the dense-rung decode — the near-best band (true path + genuine competing
-#     alleles) does NOT grow with genome, so the generating frontier stays O(1) in
-#     size while the improbable tail is discarded. Δ = 30 nats ≈ 5 substitution
-#     log-likelihood units of headroom at err=0.01 — far more than any real
-#     correction needs, so the ML/variant path is always retained (validated by the
-#     variation-preservation holdout + toy quality sweep). Both engage ONLY where
-#     the width beam is already finite (approximate); exact-ML reads
+#   * _AUTO_BEAM_SCORE_MARGIN — Δ log-prob "histogram" beam with an EMISSION
+#     exemption: prune a frontier state only when it is >Δ below the depth's best
+#     on BOTH the full score AND the cumulative emission (read-consistency). This
+#     linearizes the dense-rung decode — the read-INCONSISTENT junk (low on both
+#     axes) is discarded so the generating frontier stays O(1) in size — WITHOUT
+#     dropping a real-but-rare allele: a supported minor allele in a skewed pool
+#     has good emission but a coverage-driven transition penalty, and the emission
+#     clause exempts it from pruning (the margin removes WRONG paths, not merely
+#     RARE ones; PR #388 variation-safety review). Δ = 30 nats. Both engage ONLY
+#     where the width beam is already finite (approximate); exact-ML reads
 #     (beam_width == typemax) keep margin = Inf and stay byte-identical.
 const _AUTO_SUCCESSOR_BOUND = 16
 const _AUTO_BEAM_SCORE_MARGIN = 30.0
