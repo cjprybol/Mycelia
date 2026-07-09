@@ -1332,46 +1332,233 @@ function collapse_error_bubbles!(graph::MetaGraphsNext.MetaGraph;
     return (; collapsed = collapsed)
 end
 
+# ----------------------------------------------------------------------------
+# Disconnected error-component pruning (td-byva)
+# ----------------------------------------------------------------------------
+#
+# clip_error_tips!/collapse_error_bubbles! only touch structure WITHIN a
+# component (dangling tips off a junction, error branches of a bubble). After
+# RC-dedup + those passes the main genome collapses to a single full-length
+# contig, but the graph still carries standalone DISCONNECTED components — small
+# coverage-1/2 islands of sequencing-error k-mers that never joined the main
+# path. Each is its own contig at extraction, so a 1kb genome can extract ~5
+# contigs (1 real + ~4 error islands) and a 48kb genome ~98 (1 real + ~97).
+#
+# A standalone linear run is deliberately protected by the terminus guard in
+# clip_error_tips! (it reaches its other dead end without a junction), so tip
+# clipping cannot remove these islands — hence this dedicated pass. It removes a
+# whole component ONLY when it is provably error under ALL of:
+#   * SEPARATE component (never the main/largest component),
+#   * SMALL (span <= max_component_length),
+#   * uniformly LOW coverage (MAX per-vertex coverage <= max_component_support,
+#     the ~1-2 error floor), AND
+#   * REAL-SEQUENCE GUARD: shares no canonical k-mer with any well-supported
+#     (coverage >= min_real_support) vertex. A standalone island that COULD be
+#     genuine low-coverage minor sequence — because it re-uses real k-mer content
+#     — is RETAINED. This biases to UNDER-pruning (td-h6w9): leave a debris
+#     contig rather than risk removing a real low-coverage variant.
+
+"""
+    _label_dna_string(label) -> String
+
+Best-effort DNA string for a vertex label. K-mer / BioSequence labels stringify
+to their sequence; an already-string label is returned as-is.
+"""
+function _label_dna_string(label)
+    label isa AbstractString && return label
+    return String(label)
+end
+
+"""
+    _accumulate_canonical_kmers!(kset::Set{String}, label, k::Int)
+
+Add the canonical `k`-mer string keys of a vertex `label`'s sequence to `kset`.
+Canonicalization is the lexicographic min of a k-mer and its reverse complement
+(strand-agnostic key), so a run and its reverse-complement copy hash together —
+this is what lets the real-sequence guard recognise reverse-strand overlap with a
+supported contig. For a fixed-length k-mer graph each label contributes exactly
+one key.
+"""
+function _accumulate_canonical_kmers!(kset::Set{String}, label, k::Int)
+    s = _label_dna_string(label)
+    n = length(s)
+    n < k && return kset
+    for i in 1:(n - k + 1)
+        sub = s[i:(i + k - 1)]
+        rc = String(BioSequences.reverse_complement(BioSequences.LongDNA{4}(sub)))
+        push!(kset, min(sub, rc))
+    end
+    return kset
+end
+
+"""
+    _connected_components_labels(labels, out_index, in_index, ::Type{T}) where {T}
+
+Weakly-connected components of the graph, as label vectors, via BFS over the
+UNDIRECTED closure of the prebuilt in/out adjacency indices. `O(V+E)`: every
+vertex is enqueued once and every edge is followed a constant number of times.
+"""
+function _connected_components_labels(labels::AbstractVector{T},
+        out_index::AbstractDict, in_index::AbstractDict, ::Type{T}) where {T}
+    components = Vector{Vector{T}}()
+    seen = Set{T}()
+    queue = T[]
+    for start in labels
+        start in seen && continue
+        push!(seen, start)
+        empty!(queue)
+        push!(queue, start)
+        comp = T[]
+        head = 1
+        while head <= length(queue)
+            v = queue[head]
+            head += 1
+            push!(comp, v)
+            for nbr in get(out_index, v, T[])
+                if !(nbr in seen)
+                    push!(seen, nbr)
+                    push!(queue, nbr)
+                end
+            end
+            for nbr in get(in_index, v, T[])
+                if !(nbr in seen)
+                    push!(seen, nbr)
+                    push!(queue, nbr)
+                end
+            end
+        end
+        push!(components, comp)
+    end
+    return components
+end
+
+"""
+    prune_disconnected_error_components!(graph; k, max_component_length=2000,
+        max_component_support=2, min_real_support=3) -> (; removed, components_pruned)
+
+Remove standalone DISCONNECTED components that are provably sequencing-error
+debris, in `O(V+E)`. A component is pruned ONLY when it is NOT the main (largest)
+component AND its span `<= max_component_length` AND its MAXIMUM per-vertex
+coverage `<= max_component_support` (uniformly at the ~1-2 error floor) AND it
+shares no canonical k-mer with any well-supported (`coverage >= min_real_support`)
+vertex (the real-sequence guard). Any component failing even one condition —
+including a data-supported genome that happens to be disconnected — is RETAINED.
+
+The design deliberately UNDER-prunes (td-h6w9): the coverage gate keys on the
+component MAXIMUM (not mean), so a single supported k-mer anywhere in the
+component vetoes removal, and the canonical-k-mer guard retains anything that
+re-uses real sequence content. Span is estimated as `n_vertices + k - 1` (the
+length of a linear k-mer chain), an over-estimate for branchy components, which
+only makes the size cap MORE conservative.
+
+# Returns
+- `(; removed::Int, components_pruned::Int)`: vertices removed and components
+  pruned.
+"""
+function prune_disconnected_error_components!(graph::MetaGraphsNext.MetaGraph;
+        k::Int,
+        max_component_length::Int = 2000,
+        max_component_support::Real = 2,
+        min_real_support::Real = 3)
+    labels = collect(MetaGraphsNext.labels(graph))
+    isempty(labels) && return (; removed = 0, components_pruned = 0)
+    T = eltype(labels)
+    out_index = _build_out_adjacency_index(graph, T)
+    in_index = _build_in_adjacency_index(graph, T)
+
+    components = _connected_components_labels(labels, out_index, in_index, T)
+    # A single component means nothing is disconnected: this pass only removes
+    # SEPARATE components, so structure within the one component is out of scope.
+    length(components) <= 1 && return (; removed = 0, components_pruned = 0)
+
+    # The largest component is the main assembly and is never a prune candidate.
+    main_idx = argmax(map(length, components))
+
+    # Canonical k-mers of every well-supported vertex, built once in O(V). A
+    # candidate that touches any of these is retained (real-sequence guard).
+    # Candidate vertices (max coverage <= max_component_support < min_real_support)
+    # are never themselves in this set, so it cannot self-veto a genuine error.
+    well_supported_kmers = Set{String}()
+    for v in labels
+        if _vertex_support(graph, v) >= min_real_support
+            _accumulate_canonical_kmers!(well_supported_kmers, v, k)
+        end
+    end
+
+    removed = 0
+    components_pruned = 0
+    for (ci, comp) in enumerate(components)
+        ci == main_idx && continue
+        span = length(comp) + k - 1
+        span <= max_component_length || continue
+        all(v -> _vertex_support(graph, v) <= max_component_support, comp) || continue
+
+        comp_kmers = Set{String}()
+        for v in comp
+            _accumulate_canonical_kmers!(comp_kmers, v, k)
+        end
+        any(km -> km in well_supported_kmers, comp_kmers) && continue
+
+        for v in comp
+            haskey(graph, v) && delete!(graph, v)
+        end
+        removed += length(comp)
+        components_pruned += 1
+    end
+    return (; removed = removed, components_pruned = components_pruned)
+end
+
 """
     clean_corrector_graph!(graph; k=21, clip_tips=true, collapse_bubbles=true, ...) -> Dict{String,Any}
 
 Linear-time defragmentation of the corrector's final graph, run BEFORE contig
-extraction (td-969e). Combines coverage-1 dead-end tip clipping and guarded
-low-coverage bubble collapse, then re-clips any tips exposed by a collapse. Every
-removal targets an unambiguous error; a data-supported variant is never collapsed
-(the td-h6w9 variation-preservation invariant is enforced by
-[`clip_error_tips!`](@ref) and [`collapse_error_bubbles!`](@ref)).
+extraction (td-969e). Combines coverage-1 dead-end tip clipping, guarded
+low-coverage bubble collapse, and disconnected error-component pruning (td-byva):
+first tips/bubbles are alternated to a fixpoint (re-clipping any tips exposed by a
+collapse), then whole standalone error-debris components are pruned. Every removal
+targets an unambiguous error; a data-supported variant is never collapsed (the
+td-h6w9 variation-preservation invariant is enforced by
+[`clip_error_tips!`](@ref), [`collapse_error_bubbles!`](@ref), and
+[`prune_disconnected_error_components!`](@ref)).
 
 # Keywords
 - `k::Int=21`: k-mer size; the tip-length ceiling is `tip_length_multiple * k`.
 - `clip_tips::Bool=true`: run coverage-1 dead-end tip clipping.
 - `collapse_bubbles::Bool=true`: run the guarded low-coverage bubble collapse.
+- `prune_components::Bool=true`: run disconnected error-component pruning.
 - `max_tip_support::Real=1`: max coverage for a removable tip vertex.
 - `tip_length_multiple::Int=3`: tip-length ceiling in units of `k`.
 - `max_error_support::Real=2`: max mean coverage for a collapsible bubble branch.
 - `min_real_support::Real=3`: min mean coverage the surviving sibling must have.
 - `max_bubble_length::Int=100`: max branch trace length for bubble detection.
 - `max_rounds::Int=10`: max tip-clipping rounds per invocation.
+- `max_component_length::Int=2000`: max span of a prunable disconnected component.
+- `max_component_support::Real=2`: max per-vertex coverage in a prunable component.
 
 # Returns
 - `Dict{String,Any}`: cleanup telemetry (vertices before/after, tips removed,
-  bubbles collapsed).
+  bubbles collapsed, components pruned, component vertices removed).
 """
 function clean_corrector_graph!(graph::MetaGraphsNext.MetaGraph;
         k::Int = 21,
         clip_tips::Bool = true,
         collapse_bubbles::Bool = true,
+        prune_components::Bool = true,
         max_tip_support::Real = 2,
         tip_length_multiple::Int = 3,
         max_error_support::Real = 2,
         min_real_support::Real = 3,
         max_bubble_length::Int = 100,
         max_rounds::Int = 10,
-        max_outer_rounds::Int = 5)
+        max_outer_rounds::Int = 5,
+        max_component_length::Int = 2000,
+        max_component_support::Real = 2)
     n_before = length(collect(MetaGraphsNext.labels(graph)))
     tip_max_length = max(1, tip_length_multiple * k)
     tips_removed = 0
     bubbles_collapsed = 0
+    components_pruned = 0
+    component_vertices_removed = 0
 
     # Alternate tip clipping and guarded bubble collapse to a fixpoint: clipping a
     # tip can expose a bubble whose error branch is now reachable, and collapsing a
@@ -1397,10 +1584,27 @@ function clean_corrector_graph!(graph::MetaGraphsNext.MetaGraph;
         (round_tips == 0 && round_bubbles == 0) && break
     end
 
+    # Prune standalone error-debris components AFTER the tip/bubble fixpoint.
+    # Tip clipping and bubble collapse only reshape structure WITHIN a component
+    # and never split one component into two, so the disconnected-component set is
+    # stable and a single pruning pass suffices. The main (largest) component is
+    # always retained; only small, uniformly-low-coverage islands that share no
+    # real k-mer content are removed (td-byva / td-h6w9).
+    if prune_components
+        r = prune_disconnected_error_components!(graph; k = k,
+            max_component_length = max_component_length,
+            max_component_support = max_component_support,
+            min_real_support = min_real_support)
+        components_pruned += r.components_pruned
+        component_vertices_removed += r.removed
+    end
+
     return Dict{String, Any}(
         "graph_cleanup_vertices_before" => n_before,
         "graph_cleanup_vertices_after" => length(collect(MetaGraphsNext.labels(graph))),
         "graph_cleanup_tips_removed" => tips_removed,
         "graph_cleanup_bubbles_collapsed" => bubbles_collapsed,
+        "graph_cleanup_components_pruned" => components_pruned,
+        "graph_cleanup_component_vertices_removed" => component_vertices_removed,
     )
 end

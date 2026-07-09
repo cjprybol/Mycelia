@@ -19,6 +19,7 @@ import FASTX
 import Kmers
 import MetaGraphsNext
 import Random
+import BioSequences
 
 const _CGC = Mycelia.Rhizomorph
 const _CGC_BASES = ['A', 'C', 'G', 'T']
@@ -169,5 +170,124 @@ Test.@testset "corrector graph cleanup primitives (td-969e)" begin
         # Real balanced variant SURVIVES the composed cleanup (both alleles kept).
         Test.@test haskey(graph, kmer_a)
         Test.@test haskey(graph, kmer_b)
+    end
+
+    # Reverse complement of a plain DNA string (for the real-sequence guard test).
+    _cgc_rc(s) = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(s)))
+
+    Test.@testset "prune_disconnected_error_components!: coverage-1 island pruned, backbone kept" begin
+        rng = Random.MersenneTwister(66)
+        backbone = _cgc_backbone(rng, 60)                 # main genome, coverage 10
+        # A totally unrelated coverage-1 read: a SEPARATE connected component of
+        # error k-mers that shares no k-mer with the backbone.
+        island = _cgc_backbone(Random.MersenneTwister(4242), 30)
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+        end
+        push!(reads, _cgc_fasta("island", island))
+
+        graph = _CGC.build_kmer_graph(reads, k; dataset_id = "t", mode = :singlestrand)
+        island_kmer = Kmers.DNAKmer{k}(island[10:(10 + k - 1)])
+        backbone_kmers = [Kmers.DNAKmer{k}(backbone[i:(i + k - 1)])
+                          for i in 1:(length(backbone) - k + 1)]
+        Test.@test _cgc_cov(graph, island_kmer) == 1
+        Test.@test all(kmref -> haskey(graph, kmref), backbone_kmers)
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = k,
+            max_component_support = 2, min_real_support = 3)
+
+        Test.@test res.components_pruned >= 1
+        Test.@test res.removed >= 1
+        Test.@test !haskey(graph, island_kmer)                        # error island removed
+        Test.@test all(kmref -> haskey(graph, kmref), backbone_kmers) # backbone untouched
+    end
+
+    Test.@testset "prune_disconnected_error_components!: high-coverage disconnected genome RETAINED" begin
+        rng = Random.MersenneTwister(77)
+        backbone = _cgc_backbone(rng, 80)                 # larger main component
+        # A SECOND real genome, disconnected but well-supported (coverage 10). The
+        # coverage gate must retain it even though it is not the main component.
+        second = _cgc_backbone(Random.MersenneTwister(8484), 50)
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+            push!(reads, _cgc_fasta("second$i", second))
+        end
+
+        graph = _CGC.build_kmer_graph(reads, k; dataset_id = "t", mode = :singlestrand)
+        second_kmer = Kmers.DNAKmer{k}(second[20:(20 + k - 1)])
+        Test.@test _cgc_cov(graph, second_kmer) == 10
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = k,
+            max_component_support = 2, min_real_support = 3)
+
+        Test.@test res.components_pruned == 0
+        Test.@test haskey(graph, second_kmer)             # well-supported genome kept
+    end
+
+    Test.@testset "prune_disconnected_error_components!: real-sequence guard RETAINS overlapping island" begin
+        rng = Random.MersenneTwister(88)
+        backbone = _cgc_backbone(rng, 60)                 # main genome, coverage 10
+        # A coverage-1 read that is the REVERSE COMPLEMENT of a backbone segment.
+        # In :singlestrand mode its k-mers are distinct vertices (a separate
+        # component) but their CANONICAL forms match the backbone's, so the
+        # real-sequence guard must RETAIN it (it could be genuine reverse-strand
+        # minor sequence), even though it is small and coverage-1.
+        rc_segment = _cgc_rc(backbone[1:30])
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+        end
+        push!(reads, _cgc_fasta("rc", rc_segment))
+
+        graph = _CGC.build_kmer_graph(reads, k; dataset_id = "t", mode = :singlestrand)
+        rc_kmer = Kmers.DNAKmer{k}(rc_segment[10:(10 + k - 1)])
+        Test.@test haskey(graph, rc_kmer)
+        Test.@test _cgc_cov(graph, rc_kmer) == 1          # low coverage, but real content
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = k,
+            max_component_support = 2, min_real_support = 3)
+
+        # Shares canonical k-mers with the well-supported backbone -> retained.
+        Test.@test res.components_pruned == 0
+        Test.@test haskey(graph, rc_kmer)
+    end
+
+    Test.@testset "prune_disconnected_error_components!: single component -> no-op" begin
+        rng = Random.MersenneTwister(99)
+        backbone = _cgc_backbone(rng, 60)
+        graph = _CGC.build_kmer_graph([_cgc_fasta("g", backbone)], k;
+            dataset_id = "t", mode = :singlestrand)
+        n_before = length(collect(MetaGraphsNext.labels(graph)))
+
+        res = _CGC.prune_disconnected_error_components!(graph; k = k)
+
+        Test.@test res.removed == 0
+        Test.@test res.components_pruned == 0
+        Test.@test length(collect(MetaGraphsNext.labels(graph))) == n_before
+    end
+
+    Test.@testset "clean_corrector_graph!: prunes error island + reports telemetry" begin
+        rng = Random.MersenneTwister(101)
+        backbone = _cgc_backbone(rng, 80)
+        island = _cgc_backbone(Random.MersenneTwister(1357), 30)
+        reads = FASTX.FASTA.Record[]
+        for i in 1:10
+            push!(reads, _cgc_fasta("main$i", backbone))
+        end
+        push!(reads, _cgc_fasta("island", island))
+
+        graph = _CGC.build_kmer_graph(reads, k; dataset_id = "t", mode = :singlestrand)
+        island_kmer = Kmers.DNAKmer{k}(island[10:(10 + k - 1)])
+        backbone_kmers = [Kmers.DNAKmer{k}(backbone[i:(i + k - 1)])
+                          for i in 1:(length(backbone) - k + 1)]
+
+        stats = _CGC.clean_corrector_graph!(graph; k = k)
+
+        Test.@test stats["graph_cleanup_components_pruned"] >= 1
+        Test.@test stats["graph_cleanup_component_vertices_removed"] >= 1
+        Test.@test !haskey(graph, island_kmer)                        # island gone
+        Test.@test all(kmref -> haskey(graph, kmref), backbone_kmers) # backbone intact
     end
 end

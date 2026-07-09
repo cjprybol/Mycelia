@@ -1439,7 +1439,8 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
             "Graph cleanup (td-969e): $(cleanup_stats["graph_cleanup_vertices_before"]) -> " *
             "$(cleanup_stats["graph_cleanup_vertices_after"]) vertices " *
             "($(cleanup_stats["graph_cleanup_tips_removed"]) tips clipped, " *
-            "$(cleanup_stats["graph_cleanup_bubbles_collapsed"]) error bubbles collapsed)")
+            "$(cleanup_stats["graph_cleanup_bubbles_collapsed"]) error bubbles collapsed, " *
+            "$(get(cleanup_stats, "graph_cleanup_components_pruned", 0)) error components pruned)")
     end
 
     # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
