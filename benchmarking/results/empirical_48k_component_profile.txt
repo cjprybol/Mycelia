@@ -1,0 +1,57 @@
+============================================================================================
+EMPIRICAL :scalable per-component scaling on the REAL corrector run (td-firp)
+  started : 2026-07-09T15:56:06.133
+  entry   : assemble_genome(reads; corrector=:iterative, strategy=:scalable, k=21)
+  sizes   : [5000, 10000, 20000] bp   readlen=150  cov=20.0x  err=0.01
+  sampler : Profile delay=0.002s   (per-component sec = wall * sample-share)
+  NOTE    : full end-to-end real run (correction + reassembly WITH clean_corrector_graph!).
+            NOT a proxy graph, NOT source O(.) reasoning, NOT an isolated component.
+============================================================================================
+[size 5000bp] wall=59.5s samples=11178 contigs=15 max_contig=2807bp k_prog=[3, 9, 21] passes=5 cleanup=10596->10134V(-180tips,-14bub)
+[size 10000bp] wall=151.0s samples=30948 contigs=36 max_contig=5355bp k_prog=[3, 9, 21] passes=5 cleanup=21542->20669V(-532tips,-17bub)
+[size 20000bp] wall=455.1s samples=93095 contigs=71 max_contig=13529bp k_prog=[3, 9, 21] passes=5 cleanup=43270->41878V(-854tips,-27bub)
+
+============================================================================================
+REAL-RUN GRAPH DIAGNOSTICS (evidence the corrected graph is branchy, not linear)
+  size       nreads  contigs  maxcontig   passes         k_prog   cleanupV   tips/bub
+  5000bp        667       15      2807bp        5     [3, 9, 21] 10596->10134   180/14   
+  10000bp      1334       36      5355bp        5     [3, 9, 21] 21542->20669   532/17   
+  20000bp      2667       71     13529bp        5     [3, 9, 21] 43270->41878   854/27   
+  (max_contig << genome and contigs>>1 => branchy; find_linear_path never
+   enters its quadratic regime -- confirming the #381 linear-proxy premise was wrong.)
+
+============================================================================================
+PER-COMPONENT SCALING TABLE (seconds attributed from the REAL run)
+component                                      5000bp    10000bp    20000bp    alpha   alpha_lg
+-----------------------------------------------------------------------------------------------
+C5e. decode: setup/other                         25.4       64.3      186.4     1.44       1.53
+C5b. decode: Viterbi frontier engine             20.2       51.4      174.5     1.56       1.76
+0. other (corrector/reassembly/GC/overhead)        7.6       21.0       50.7     1.37       1.27
+B1. build_qualmer_graph                           3.6        7.6       22.5     1.31       1.56
+C5c. decode: soft-EM competing paths              0.9        2.8       10.4     1.78       1.91
+C5d. decode: read likelihood calc                 0.9        2.2        3.0     0.87       0.44
+C3. solid_kmer classification                     0.2        0.3        2.4     1.85       2.82
+R4. consensus/quality (path->fastq)               0.0        0.1        1.7     2.88       4.01
+R1. clean_corrector_graph! (NEW defrag)           0.2        0.3        1.5     1.53       2.47
+C4. stage0 cheap_correct                          0.4        0.6        1.2     0.89       0.97
+C5a. decode: weighted-graph build                 0.1        0.2        0.5     0.97       1.03
+C2. hard_vertex_set (corr bubbles)                0.0        0.1        0.2     1.02       1.17
+R2. contig extraction (find_contigs)              0.0        0.0        0.0     0.94       1.42
+IO. write/read fastq                              0.0        0.0        0.0        -          -
+-----------------------------------------------------------------------------------------------
+C5*. per-read decode (TOTAL C5a-e)               47.5      121.0      374.8     1.49       1.63
+-----------------------------------------------------------------------------------------------
+TOTAL (wall)                                     59.5      151.0      455.1     1.47       1.59
+
+  alpha    = log-log regression slope of seconds vs genome length (full range)
+  alpha_lg = large-end pairwise slope over the last two sizes
+  Interpretation: the component with alpha_lg > ~1.3 AND a large second-count
+  at the biggest size is the TRUE residual super-linear (alpha~1.47) driver.
+
+============================================================================================
+AUTO-VERDICT: dominant super-linear component at the large end =
+  >>> C5*. per-read decode (TOTAL C5a-e) <<<
+  (374.8s at 20000bp, 82% of wall).
+  This is the EMPIRICALLY MEASURED driver on the real corrector run.
+  finished: 2026-07-09T16:07:29.649
+============================================================================================
