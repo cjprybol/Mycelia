@@ -55,3 +55,58 @@ AUTO-VERDICT: dominant super-linear component at the large end =
   This is the EMPIRICALLY MEASURED driver on the real corrector run.
   finished: 2026-07-09T16:07:29.649
 ============================================================================================
+
+============================================================================================
+ROOT-CAUSE DRILL-DOWN: per-k-rung decode scaling (empirical, real decode path)
+============================================================================================
+Measured Mycelia.try_viterbi_path_improvement (the real per-read decode used by the
+:scalable corrector, hoisted weighted graph, graph_mode=:doublestrand, beam auto=256)
+over ALL reads at each genome size, per k-rung. Read count is exactly linear
+(667/1334/2667). alpha = large-end (10->20kb) pairwise slope of total decode seconds.
+
+  k-rung   5kb(s)   10kb(s)   20kb(s)   alpha_lg   ms/read@20kb   V@20kb
+  k= 7     114.98   310.81    834.03    1.42       312.7          16376  (V saturates: 4^7=16384)
+  k=11       2.89     8.95     61.29    2.78        23.0         147710
+  k=17       2.09     3.91      7.33    0.91         2.8         197924
+  k=21 (steady-state, separate probe): 1.66 / 3.08 / 5.98 s -> alpha ~0.9 (LINEAR)
+
+FINDING: the residual super-linearity is concentrated in the LOW/MID-k rungs. The
+high-k rung (k=17/k=21) decode is LINEAR (per-read cost bounded); the low/mid-k rungs
+(k=7 huge+super-linear, k=11 alpha 2.78) are the driver. The real corrector ladder is
+[3,9,21], so the k=9 dense-graph decode carries the alpha~1.47.
+
+MECHANISM (why low-k decode is super-linear despite the 256-state beam CAP):
+The beam bounds RETAINED states per depth to 256, but the per-depth candidate
+GENERATION is O(retained_beam x out_degree): every retained state's out-edges are
+enumerated, transition-scored, AND emission-scored (_call_viterbi_state_emission_logp)
+BEFORE the beam prune. On a low-k graph the vertex set saturates (k=7 V ~ 16k flat)
+while accumulating ever more distinct transitions per vertex as genome/read count grow,
+so mean out_degree rises with genome -> generation cost per depth rises with genome ->
+per-read decode is super-linear. On a high-k graph the 21-mers are near-unique
+(out_degree ~1-2), so generation is bounded and decode is linear.
+
+HOT LINES (src/viterbi-next.jl, _viterbi_correct_observation):
+  * ~1113  for (state, state_score) in active_scores   (<=256 retained states)
+  * ~1119  transitions = _get_valid_transitions(...)    (O(out_degree), grows at low k)
+  * ~1138  for transition in transitions ... _call_viterbi_state_emission_logp(...)
+           emission-scores EVERY generated candidate = O(beam x out_degree) per depth
+  * ~1178  _prune_correction_beam(...)  <- cap applies only AFTER full generation
+
+RULED OUT empirically (not the driver): the _viterbi_start_candidates O(V) fallback
+(src/viterbi-next.jl:1308) NEVER fires -- every read's first k-mer is already a graph
+vertex (0/667, 0/1334, 0/2667 fallbacks), since the graph is built from the reads.
+Also NOT: clean_corrector_graph! (0.3% of wall), contig extraction/find_linear_path (~0s).
+
+FIX RECOMMENDATION (empirically grounded, changes the alpha not just the constant):
+  1. Bound candidate GENERATION to top-B out-edges per state (B~4-8, by edge weight)
+     BEFORE emission-scoring, in the transition loop above the prune. This caps
+     per-depth work at O(beam x B) regardless of low-k out_degree -- directly attacks
+     the measured super-linearity at its source.
+  2. Gate decode by RUNG density: skip / shorten the low-k rungs (start the ladder
+     higher, e.g. [15,21], or skip Viterbi decode when a rung's mean out_degree exceeds
+     a threshold). The k=9 rung carries most of the decode cost for little marginal
+     correction vs k=21; the hard-read gate already skips ~50% of reads but not the
+     expensive low-k RUNG itself.
+  3. Batch/GPU decode (#365) reduces the constant factor but does NOT change alpha;
+     prefer 1-2 to restore alpha -> ~1.0.
+============================================================================================
