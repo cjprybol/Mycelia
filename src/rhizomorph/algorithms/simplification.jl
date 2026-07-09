@@ -1451,13 +1451,33 @@ re-uses real sequence content. Span is estimated as `n_vertices + k - 1` (the
 length of a linear k-mer chain), an over-estimate for branchy components, which
 only makes the size cap MORE conservative.
 
+The two SAFETY proofs are the coverage floor (`<= max_component_support`) and the
+real-sequence guard (no shared canonical k-mer with a `>= min_real_support`
+vertex). The size cap is a separate, OPTIONAL conservatism knob whose only job is
+to spare a large but shallow island that might be a genuinely under-sequenced
+real replicon; pass `max_component_length = nothing` to disable it and prune
+large provably-error islands too (td-byva). Disabling the size cap never weakens
+the two safety proofs — a well-supported or real-content-sharing component is
+retained regardless of span.
+
+# Empirical scope note (td-byva, 10-48 kb toy genomes at 20x illumina)
+This pass removes only SEPARATE components; on the corrector's final k=21 graph at
+these scales the corrected read graph is typically a SINGLE connected component
+(0-2 disconnected islands), and the residual debris-contig count is dominated by
+WITHIN-main-component branch fragmentation (find_contigs breaks a unitig at every
+branch vertex), which is out of this pass's scope. When disconnected islands do
+occur they are usually at real-sequence coverage (correctly retained by the
+coverage floor). Extending this pass therefore cannot, by construction, reduce
+within-component fragmentation; the `max_component_length = nothing` opt-in only
+widens reach over genuine large disconnected error islands.
+
 # Returns
 - `(; removed::Int, components_pruned::Int)`: vertices removed and components
   pruned.
 """
 function prune_disconnected_error_components!(graph::MetaGraphsNext.MetaGraph;
         k::Int,
-        max_component_length::Int = 2000,
+        max_component_length::Union{Int, Nothing} = 2000,
         max_component_support::Real = 2,
         min_real_support::Real = 3)
     labels = collect(MetaGraphsNext.labels(graph))
@@ -1489,8 +1509,20 @@ function prune_disconnected_error_components!(graph::MetaGraphsNext.MetaGraph;
     components_pruned = 0
     for (ci, comp) in enumerate(components)
         ci == main_idx && continue
-        span = length(comp) + k - 1
-        span <= max_component_length || continue
+        # Size gate: an OPTIONAL conservatism knob (not one of the two safety
+        # proofs). Its sole job is to spare a LARGE low-coverage island that might
+        # be a genuinely under-sequenced real replicon (a real plasmid/segment can
+        # be big yet shallow). `max_component_length === nothing` disables it, for
+        # callers that know their input carries no low-coverage real replicon
+        # (e.g. single high-coverage isolate) and want large error islands pruned.
+        # The coverage floor and the real-sequence guard below remain binding
+        # either way, so disabling the span gate never removes real sequence that
+        # is well-supported OR shares canonical k-mer content with supported
+        # sequence — it only widens the reach over provably-error debris.
+        if max_component_length !== nothing
+            span = length(comp) + k - 1
+            span <= max_component_length || continue
+        end
         all(v -> _vertex_support(graph, v) <= max_component_support, comp) || continue
 
         comp_kmers = Set{String}()
@@ -1532,7 +1564,11 @@ td-h6w9 variation-preservation invariant is enforced by
 - `min_real_support::Real=3`: min mean coverage the surviving sibling must have.
 - `max_bubble_length::Int=100`: max branch trace length for bubble detection.
 - `max_rounds::Int=10`: max tip-clipping rounds per invocation.
-- `max_component_length::Int=2000`: max span of a prunable disconnected component.
+- `max_component_length::Union{Int,Nothing}=2000`: max span of a prunable
+  disconnected component, or `nothing` to disable the span gate and prune large
+  provably-error islands too (the coverage floor + real-sequence guard stay
+  binding). Default retains large shallow islands as possible under-sequenced
+  real replicons.
 - `max_component_support::Real=2`: max per-vertex coverage in a prunable component.
 
 # Returns
@@ -1551,7 +1587,7 @@ function clean_corrector_graph!(graph::MetaGraphsNext.MetaGraph;
         max_bubble_length::Int = 100,
         max_rounds::Int = 10,
         max_outer_rounds::Int = 5,
-        max_component_length::Int = 2000,
+        max_component_length::Union{Int, Nothing} = 2000,
         max_component_support::Real = 2)
     n_before = length(collect(MetaGraphsNext.labels(graph)))
     tip_max_length = max(1, tip_length_multiple * k)
