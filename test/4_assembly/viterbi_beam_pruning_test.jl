@@ -156,3 +156,152 @@ Test.@testset "Viterbi corrector beam pruning (td-63qy)" begin
         Test.@test auto isa Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     end
 end
+
+# Candidate-GENERATION bounds (td-plqi): the width beam caps the RETAINED frontier,
+# but on a dense intermediate-k graph the generating frontier (the states that
+# enumerate successors + emission-score them each depth) still climbs toward the
+# width cap as the graph densifies — the empirically-measured residual super-linear
+# decode term (#386). Two additive bounds cut generation directly:
+#   * `max_successors_per_state` (top-B) — a per-state successor cap (no-op on DNA,
+#     out-degree <= 4; a guard for pathological high-branching).
+#   * `beam_score_margin` (Δ) — a score-threshold ("histogram") beam that keeps only
+#     the near-best band, which does NOT grow with genome, so the generating
+#     frontier stays O(1) in size while the improbable tail is discarded.
+# Both default to a strict no-op (exact ML) and only engage where the width beam is
+# already finite (approximate), so exact-ML reads stay byte-identical.
+Test.@testset "Viterbi corrector candidate-generation bounds (td-plqi)" begin
+    linear_records = [FASTX.FASTA.Record("dna", BioSequences.dna"ATGCGT")]
+    linear_graph = Mycelia.Rhizomorph.build_kmer_graph(
+        linear_records, 3; dataset_id="candgen_linear", mode=:singlestrand
+    )
+    linear_observed = [
+        Kmers.DNAKmer{3}("ATG"),
+        Kmers.DNAKmer{3}("TGA"),
+        Kmers.DNAKmer{3}("GCG"),
+        Kmers.DNAKmer{3}("CGT"),
+    ]
+
+    bubble_records = [
+        FASTX.FASTA.Record("path_a", BioSequences.dna"ATGCGTA"),
+        FASTX.FASTA.Record("path_b", BioSequences.dna"ATGAGTA"),
+    ]
+    bubble_graph = Mycelia.Rhizomorph.build_kmer_graph(
+        bubble_records, 3; dataset_id="candgen_bubble", mode=:singlestrand
+    )
+    bubble_observed = [
+        Kmers.DNAKmer{3}("ATG"),
+        Kmers.DNAKmer{3}("TGC"),
+        Kmers.DNAKmer{3}("GCG"),
+        Kmers.DNAKmer{3}("CGT"),
+        Kmers.DNAKmer{3}("GTA"),
+    ]
+
+    Test.@testset "constructor validation" begin
+        # A positive successor cap and a positive-or-Inf score margin are required.
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(max_successors_per_state=0)
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(max_successors_per_state=-3)
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_score_margin=0.0)
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_score_margin=-5.0)
+        Test.@test_throws ArgumentError Mycelia.ViterbiCorrectionConfig(beam_score_margin=NaN)
+        # Inf (the default) is valid — it means "no threshold" (exact).
+        Test.@test Mycelia.ViterbiCorrectionConfig(beam_score_margin=Inf).beam_score_margin == Inf
+    end
+
+    Test.@testset "defaults are exact (both bounds are no-ops)" begin
+        cfg = Mycelia.ViterbiCorrectionConfig(alphabet=:DNA)
+        Test.@test cfg.max_successors_per_state == typemax(Int)
+        Test.@test cfg.beam_score_margin == Inf
+        # Byte-identical to the established B8 exact fixture, and neither bound fires.
+        result = Mycelia.correct_observations(linear_graph, [linear_observed])
+        Test.@test beam_decoded_label_strings(result) == ["ATG", "TGC", "GCG", "CGT"]
+        diag = only(result.paths).diagnostics
+        Test.@test get(diag, :successor_bounded, 0) == 0
+        Test.@test get(diag, :margin_pruned, 0) == 0
+    end
+
+    Test.@testset "top-B successor bound: B >= out-degree is byte-identical (no-op)" begin
+        # On a DNA de Bruijn graph the out-degree is <= 4, so B = 16 can never bite:
+        # the corrected path must match the unbounded exact answer exactly.
+        cfg = Mycelia.ViterbiCorrectionConfig(alphabet=:DNA, max_successors_per_state=16)
+        result = Mycelia.correct_observations(bubble_graph, [bubble_observed]; config=cfg)
+        exact = Mycelia.correct_observations(bubble_graph, [bubble_observed])
+        Test.@test beam_decoded_label_strings(result) == beam_decoded_label_strings(exact)
+        Test.@test get(only(result.paths).diagnostics, :successor_bounded, 0) == 0
+    end
+
+    Test.@testset "top-B successor bound: a tight B engages on a branch and completes" begin
+        # B = 1 forces each expanded state to enumerate only its single top-weight
+        # successor. The branch vertex has 2 successors, so the bound MUST fire, and
+        # the decode still completes with a valid, non-empty correction.
+        cfg = Mycelia.ViterbiCorrectionConfig(alphabet=:DNA, max_successors_per_state=1)
+        result = Mycelia.correct_observations(bubble_graph, [bubble_observed]; config=cfg)
+        decoded = only(result.corrected_observations)
+        Test.@test !isempty(decoded)
+        Test.@test get(only(result.paths).diagnostics, :successor_bounded, 0) >= 1
+        # Bounded generation is an approximation: its score cannot exceed the exact.
+        exact = Mycelia.correct_observations(bubble_graph, [bubble_observed])
+        Test.@test only(exact.paths).score >= only(result.paths).score - 1e-9
+    end
+
+    Test.@testset "score-margin bound: generous Δ keeps the exact best path" begin
+        # A wide margin drops only states far below the best; on a small graph the
+        # exact best path is preserved (its states are always within the band).
+        cfg = Mycelia.ViterbiCorrectionConfig(alphabet=:DNA, beam_score_margin=1000.0)
+        result = Mycelia.correct_observations(bubble_graph, [bubble_observed]; config=cfg)
+        exact = Mycelia.correct_observations(bubble_graph, [bubble_observed])
+        Test.@test beam_decoded_label_strings(result) == beam_decoded_label_strings(exact)
+    end
+
+    Test.@testset "score-margin bound: a tight Δ prunes and never beats exact" begin
+        # A tight margin discards the improbable frontier tail (margin_pruned fires),
+        # completes, and — as an approximation — never scores above exact.
+        cfg = Mycelia.ViterbiCorrectionConfig(alphabet=:DNA, beam_score_margin=1.0)
+        result = Mycelia.correct_observations(bubble_graph, [bubble_observed]; config=cfg)
+        Test.@test !isempty(only(result.corrected_observations))
+        Test.@test get(only(result.paths).diagnostics, :margin_pruned, 0) >= 1
+        exact = Mycelia.correct_observations(bubble_graph, [bubble_observed])
+        Test.@test only(exact.paths).score >= only(result.paths).score - 1e-9
+    end
+
+    # Emission exemption (PR #388 variation-safety review): the margin must prune a
+    # WRONG path (bad emission), never merely a RARE one (good emission, low full
+    # score from a coverage-driven transition penalty). This unit-tests the pruning
+    # predicate directly on hand-built frontiers so the exemption is proven
+    # deterministically, independent of any graph fixture.
+    Test.@testset "score-margin: emission clause exempts read-consistent states" begin
+        Margin = 20.0
+        # Three states at one depth. `best` sets both the best full score (0.0) and
+        # best emission (0.0). `rare` is 25 nats below on FULL score (a large
+        # coverage/transition penalty) but only 1 nat below on EMISSION (the read
+        # genuinely supports it) — the real-but-rare-allele signature. `junk` is far
+        # below on BOTH axes (read-inconsistent).
+        scores = Dict(:best => 0.0, :rare => -25.0, :junk => -25.0)
+        emissions = Dict(:best => 0.0, :rare => -1.0, :junk => -25.0)
+        predecessors = Dict(:best => :p, :rare => :p, :junk => :p)
+        kept, kept_pred, kept_em = Mycelia._prune_correction_beam_by_margin(
+            scores, predecessors, emissions, 0.0, 0.0, Margin)
+        # rare is exempt (emission within Δ) despite full score >Δ below best.
+        Test.@test haskey(kept, :best)
+        Test.@test haskey(kept, :rare)
+        # junk is >Δ below on BOTH axes -> pruned.
+        Test.@test !haskey(kept, :junk)
+        # Companion dicts stay aligned to the survivors.
+        Test.@test keys(kept) == keys(kept_em)
+        Test.@test haskey(kept_pred, :rare)
+        # A full-score-ONLY margin would have dropped `rare` (25 > 20 below best full
+        # score); the emission clause is what saves it. Assert that contrast so a
+        # regression to full-score-only pruning fails here.
+        Test.@test scores[:rare] < 0.0 - Margin      # would fail a full-only threshold
+        Test.@test emissions[:rare] >= 0.0 - Margin  # but passes on emission
+    end
+
+    Test.@testset "score-margin: Inf margin is an exact no-op" begin
+        scores = Dict(:a => 0.0, :b => -100.0)
+        emissions = Dict(:a => 0.0, :b => -100.0)
+        predecessors = Dict(:a => :p, :b => :p)
+        kept, _, kept_em = Mycelia._prune_correction_beam_by_margin(
+            scores, predecessors, emissions, 0.0, 0.0, Inf)
+        Test.@test kept == scores              # nothing dropped
+        Test.@test kept_em == emissions
+    end
+end

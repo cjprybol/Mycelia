@@ -60,6 +60,7 @@ import Mycelia
 import FASTX
 import BioSequences
 import Random
+import Graphs
 
 const _VPH_BASES = ['A', 'C', 'G', 'T']
 
@@ -297,6 +298,132 @@ Test.@testset "SKEWED-variant holdout: soft-EM v2 support floor (td-h6w9)" begin
             # The coverage-1 error is still removed (Stage 0 + soft-EM decay of the
             # unsupported edge), proving the floor did not blunt error removal.
             Test.@test !sc_err
+        end
+    end
+end
+
+# ============================================================================
+# DENSE-REGIME rare-allele retention under the score-margin beam (td-plqi / PR #388)
+# ============================================================================
+#
+# The two holdouts above run on a 300 bp backbone: at k=21 that graph has < 256
+# vertices, so the corrector's size-aware beam stays EXACT (typemax) and the score
+# margin (which engages only where the width beam is finite, i.e. on a DENSE graph)
+# never fires there. That left the score margin's interaction with variation
+# UNTESTED (PR #388 review). This holdout closes the gap: it builds a DENSE graph
+# (nv >> 256 -> the finite beam + score margin ENGAGE) carrying a SKEWED-coverage
+# variant, and asserts a read from the RARE haplotype is still corrected onto its
+# OWN (rare) allele — i.e. the margin prunes WRONG paths, not merely RARE ones.
+#
+# It is decode-level on purpose (asserts the corrected READ, not the final contig),
+# isolating the Viterbi score-margin from the downstream soft-EM / defrag so a
+# failure here points squarely at the margin.
+
+# Build a DENSE two-haplotype fixture: a `bg_cov`x background tiling of the majority
+# haplotype across the WHOLE backbone (so nv >> 256 and the margin engages) plus
+# `min_cov` reads of the MINORITY haplotype spanning the central variant. Returns
+# the read set, the minority reads, and the minority allele signature k-mer.
+function _vph_build_dense_skewed_fixture(; min_cov::Int, bg_cov::Int = 20,
+        k::Int = 21, L::Int = 1000, seed::Int = 20260709)
+    rng = Random.MersenneTwister(seed)
+    backbone = collect(join(rand(rng, _VPH_BASES, L)))
+    pvar = L ÷ 2
+    base_a = backbone[pvar]
+    base_b = rand(rng, filter(!=(base_a), _VPH_BASES))
+    hap_a = copy(backbone)
+    hap_b = copy(backbone); hap_b[pvar] = base_b
+    half = k ÷ 2
+    kmer_b = uppercase(String(hap_b[(pvar - half):(pvar + half)]))  # minority signature
+    readlen = 150
+    qual = String(fill('I', readlen))
+    reads = FASTX.FASTQ.Record[]
+    # Background tiling of the majority haplotype across the whole backbone -> dense
+    # graph (also makes the majority allele the dominant, high-coverage branch).
+    n_bg = ceil(Int, bg_cov * L / readlen)
+    for i in 1:n_bg
+        s = rand(rng, 1:(L - readlen + 1))
+        push!(reads, FASTX.FASTQ.Record("BG$i", String(hap_a[s:(s + readlen - 1)]), qual))
+    end
+    # Minority-haplotype reads spanning the central variant (the rare allele).
+    lo = pvar - readlen + half + 1
+    hi = pvar - half
+    minority_reads = FASTX.FASTQ.Record[]
+    for i in 1:min_cov
+        s = rand(rng, lo:hi)
+        r = FASTX.FASTQ.Record("MIN$i", String(hap_b[s:(s + readlen - 1)]), qual)
+        push!(reads, r)
+        push!(minority_reads, r)
+    end
+    return (; reads, minority_reads, k, kmer_b)
+end
+
+# Decode one read through the SHIPPING corrector config (size-aware beam + the
+# td-plqi generation bounds wired exactly as `try_viterbi_path_improvement` does)
+# and return the uppercased vertex-label strings of the corrected path.
+function _vph_decode_labels(graph, weighted, read, k::Int)
+    R = Mycelia.Rhizomorph
+    seqstr = FASTX.sequence(String, read)
+    seq = Mycelia.extract_typed_sequence(
+        read, Mycelia.alphabet_to_biosequence_type(Mycelia.detect_alphabet(seqstr)))
+    kmers = collect(Mycelia._record_kmer_iterator(typeof(seq), k, seq))
+    qs = collect(FASTX.quality_scores(read))
+    nq = length(qs)
+    obs = Vector{Mycelia.QualityObservation}(undef, length(kmers))
+    for (i, km) in enumerate(kmers)
+        lo = clamp(i, 1, nq)
+        hi = clamp(i + k - 1, 1, nq)
+        obs[i] = Mycelia.QualityObservation(km, UInt8.(@view qs[lo:hi]))
+    end
+    beam = Mycelia._auto_beam_width(length(obs), Graphs.nv(graph.graph))
+    beam_is_exact = beam == typemax(Int)
+    cfg = Mycelia.ViterbiCorrectionConfig(
+        alphabet = :DNA, strand_mode = :doublestrand, max_steps = length(obs) - 1,
+        beam_width = beam,
+        max_successors_per_state = beam_is_exact ? typemax(Int) : Mycelia._AUTO_SUCCESSOR_BOUND,
+        beam_score_margin = beam_is_exact ? Inf : Mycelia._AUTO_BEAM_SCORE_MARGIN)
+    corr = Mycelia.correct_observations(graph, [obs]; config = cfg, weighted_graph = weighted)
+    path = only(corr.corrected_observations)
+    path === nothing && return (String[], beam)
+    return (uppercase.(string.(path)), beam)
+end
+
+Test.@testset "DENSE-regime rare-allele retention under score margin (td-plqi)" begin
+    R = Mycelia.Rhizomorph
+    # (background/majority coverage, minority coverage, k). Spans balanced, mild-skew,
+    # and EXTREME-skew (33:1) cases, at k=21 and k=9 (smaller emission advantage).
+    for (bg, minr, k) in ((15, 15, 21), (20, 4, 21), (100, 3, 21), (20, 4, 9))
+        Test.@testset "dense skew bg=$(bg)x min=$(minr)x k=$k: minority allele retained" begin
+            fx = _vph_build_dense_skewed_fixture(; min_cov = minr, bg_cov = bg, k = k)
+            graph = R.build_qualmer_graph(fx.reads, k; mode = :doublestrand)
+            weighted = Mycelia.build_correction_weighted_graph(graph)
+
+            # Precondition: the graph MUST be dense enough that the size-aware beam
+            # is finite (the margin engages). If this ever fails the test is vacuous.
+            nv = Graphs.nv(graph.graph)
+            Test.@test nv > Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+            Test.@test Mycelia._auto_beam_width(150, nv) == Mycelia._AUTO_BEAM_BOUNDED_WIDTH
+
+            kmer_b = fx.kmer_b
+            kmer_b_rc = _vph_revcomp(kmer_b)
+            retained = 0
+            total = 0
+            beam = 0
+            for r in fx.minority_reads
+                labels, beam = _vph_decode_labels(graph, weighted, r, k)
+                isempty(labels) && continue
+                total += 1
+                any(l -> l == kmer_b || uppercase(l) == uppercase(kmer_b_rc), labels) &&
+                    (retained += 1)
+            end
+
+            @info "dense-regime rare-allele retention" bg minr k nv beam retained total
+
+            # KEY INVARIANT: every decoded minority read keeps its OWN rare allele.
+            # A margin that penalized rarity (coverage-driven transition penalty)
+            # rather than wrongness (emission) would drop it here — the emission
+            # exemption prevents that.
+            Test.@test total >= 1
+            Test.@test retained == total
         end
     end
 end
