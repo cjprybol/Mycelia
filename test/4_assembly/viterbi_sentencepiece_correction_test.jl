@@ -24,21 +24,21 @@
 # `correct_observations` unchanged — NO core (viterbi-next.jl) or
 # string-graphs.jl edge-data fix was needed.
 #
-# Finding 2 (follow-on, do NOT fix here — viterbi-next.jl is owned elsewhere):
-# the TEXT emission model in viterbi-next.jl indexes token strings by BYTE, so a
-# token containing a multibyte UTF-8 character throws `StringIndexError`. Real
-# SentencePiece emits the U+2581 ("▁", 3 bytes) word-boundary marker on
-# word-initial pieces, so a raw token graph built from unstripped pieces trips
-# this. The gated leg below strips U+2581 before graph construction as a
-# workaround; a proper fix (character-aware indexing in the emission model)
-# belongs in the correction-core track.
+# Finding 2 (RESOLVED, td-oj72): the TEXT emission model in viterbi-next.jl used
+# to index token strings by BYTE, so a token containing a multibyte UTF-8
+# character threw `StringIndexError`. Real SentencePiece emits the U+2581 ("▁",
+# 3 bytes) word-boundary marker on word-initial pieces, tripping this on raw
+# token graphs. The emission model (and `_hamming_like_distance`) now index by
+# CHARACTER, so unstripped multibyte pieces correct end-to-end — see the
+# "multibyte UTF-8 tokens correct" always-on testset below. The gated leg still
+# strips U+2581 for a clean word-model vocabulary, not because it must.
 
 import Mycelia
 import Test
 
-# SentencePiece prints this 3-byte marker before word-initial pieces; stripped
-# for the correction path because the TEXT emission model is byte-indexed (see
-# Finding 2 in the header).
+# SentencePiece prints this 3-byte marker before word-initial pieces. The
+# correction path now handles it natively (see Finding 2 in the header); the
+# gated leg still strips it only for a cleaner word-model vocabulary.
 const _SP_WORD_BOUNDARY = "▁"
 
 function _sp_decoded_labels(result::Mycelia.ViterbiCorrectionResult)::Vector{String}
@@ -77,6 +77,47 @@ Test.@testset "SentencePiece token-graph Viterbi correction" begin
         # The corrupted token is restored to "brown".
         Test.@test _sp_decoded_labels(result) ==
                    ["the", "quick", "brown", "fox", "jumps"]
+    end
+
+    Test.@testset "multibyte UTF-8 tokens correct (U+2581 boundary marker)" begin
+        # Regression for the byte-indexed TEXT emission model (former Finding 2):
+        # tokens carrying the raw SentencePiece U+2581 ("▁", 3 bytes) word-
+        # boundary marker previously threw `StringIndexError` because the emission
+        # model indexed token strings by byte. The corrector now indexes by
+        # character, so unstripped multibyte pieces correct end-to-end.
+        token_sequences = [
+            ["▁the", "▁quick", "▁brown", "▁fox", "▁jumps"],
+            ["▁the", "▁lazy", "▁brown", "▁dog", "▁sleeps"],
+        ]
+        graph = Mycelia.Rhizomorph.build_token_graph(
+            token_sequences; dataset_id = "sp_unicode_tokens"
+        )
+
+        # Corrupt exactly ONE interior token with a same-length (same character
+        # count) substitution that is off-graph: "▁brown" -> "▁brawn". The marker
+        # itself stays intact, exercising the multibyte code path in emission
+        # scoring for every position.
+        observed = ["▁the", "▁quick", "▁brawn", "▁fox", "▁jumps"]
+        result = Mycelia.correct_observations(graph, [observed])
+
+        Test.@test result.diagnostics[:alphabet] == :TEXT
+        Test.@test _sp_decoded_labels(result) ==
+                   ["▁the", "▁quick", "▁brown", "▁fox", "▁jumps"]
+
+        # A second alphabet: accented Latin + emoji, to confirm the fix is not
+        # specific to U+2581. Same-length off-graph corruption of an interior
+        # token restores to the supported graph token.
+        emoji_sequences = [
+            ["café", "☕", "☀️", "π"],
+            ["café", "☕", "🌙", "π"],
+        ]
+        emoji_graph = Mycelia.Rhizomorph.build_token_graph(
+            emoji_sequences; dataset_id = "sp_emoji_tokens"
+        )
+        emoji_observed = ["café", "☕", "☀️", "ρ"]
+        emoji_result = Mycelia.correct_observations(emoji_graph, [emoji_observed])
+        Test.@test emoji_result.diagnostics[:alphabet] == :TEXT
+        Test.@test _sp_decoded_labels(emoji_result) == ["café", "☕", "☀️", "π"]
     end
 
     Test.@testset "TEXT token graph rejects reverse-complement strand modes" begin
@@ -127,8 +168,9 @@ Test.@testset "SentencePiece token-graph Viterbi correction" begin
                     output_format = :pieces
                 )
                 Test.@test encoded isa Vector{Vector{String}}
-                # Strip the U+2581 word-boundary marker: the TEXT emission model
-                # is byte-indexed and throws on multibyte pieces (Finding 2).
+                # Strip the U+2581 word-boundary marker for a clean word-model
+                # vocabulary. The corrector handles multibyte pieces natively
+                # now (Finding 2 resolved); stripping is a vocabulary choice.
                 token_sequences = [
                     [replace(piece, _SP_WORD_BOUNDARY => "") for piece in pieces]
                     for pieces in encoded
