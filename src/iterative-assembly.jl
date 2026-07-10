@@ -2564,8 +2564,16 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # alternative exists (a balanced variant, whose branches are retained
         # through their own reads).
         if soft_weights !== nothing
+            # Bound the competing-path GENERATION with the same discipline as the
+            # decode bounds above (td-e70t speed residual C5c): engage the walk band
+            # + successor cap ONLY where the width beam is already finite (the
+            # dense/large reads that carry the residual), so exact-ML reads keep the
+            # unbounded (byte-identical) generation. The rejoin test precedes the
+            # band cutoff, so no real variant's read-consistent competing path drops.
             accumulate_competing_paths!(
-                soft_weights, read, graph, k; graph_mode = graph_mode)
+                soft_weights, read, graph, k; graph_mode = graph_mode,
+                walk_band = beam_is_exact ? typemax(Int) : _soft_em_walk_band(k),
+                successor_bound = beam_is_exact ? typemax(Int) : _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
@@ -2966,13 +2974,127 @@ function _path_transition_logscore(labels, graph)
     return total
 end
 
+# ----------------------------------------------------------------------------
+# Competing-path generation bounds (td-e70t speed residual C5c)
+# ----------------------------------------------------------------------------
+#
+# After the decode score-margin fix (#388) linearized per-read Viterbi decode,
+# the empirical profile's fastest-growing residual is the soft-EM competing-paths
+# E-step (C5c, alpha ~1.9 in isolation). The driver is the greedy re-route walk in
+# `_consensus_alternative`: it walks highest-weight edges until it rejoins the
+# read, bounded only by the read length `n`. In a large genome a k-mer de Bruijn
+# graph has many SPURIOUS k-mer repeats (chance collisions whose incident edges
+# are themselves well covered), so a greedy re-route increasingly wanders into
+# graph bulk and runs the full `n` steps WITHOUT rejoining — the per-read cost
+# climbs with graph density even though `n` is fixed, giving the super-linear
+# term. These bounds cap the generation with the SAME discipline as the decode
+# fix (top-B successors + a near-best band + a read-consistency exemption):
+#
+#   * `_soft_em_walk_band(k)` — a genome-INDEPENDENT cap on the re-route walk. A
+#     read-consistent single-variant bubble at rung k diverges for ~k k-mers
+#     before rejoining, so `_SOFT_EM_WALK_BAND_FACTOR * k` gives generous headroom
+#     for multi-base variants while never growing with genome. The rejoin test is
+#     applied BEFORE the band cutoff, so a real allele that returns to the read
+#     within the band is ALWAYS captured; the band prunes only NON-rejoining
+#     excursions, which yield no valid spliced alternative anyway. This is the
+#     term that removes the super-linearity — the analog of the decode
+#     `beam_score_margin`. A support-based test cannot substitute here: spurious-
+#     repeat edges in a large genome are themselves high-coverage, so only the
+#     rejoin-within-band criterion (read-consistency) separates a real competing
+#     allele from graph-bulk wandering. This is the emission-exemption analog:
+#     the bound removes WRONG (non-read-consistent) paths, never a real variant's
+#     read-consistent competing path.
+#
+#   * `_SOFT_EM_ALT_SUCCESSOR_BOUND` — caps the incident branches examined per step
+#     in EACH direction (out, in). A canonical DNA de Bruijn vertex has <= 4 out and
+#     <= 4 in neighbors, so both the default `typemax` and the :scalable value 8 are
+#     no-ops on DNA; it is a robustness guard bounding per-step work on pathological
+#     high-branching (non-DNA / reduced-alphabet) inputs, matching the intent of the
+#     decode `max_successors_per_state`.
+#
+# Both default to unbounded (`typemax(Int)`), reproducing the pre-td-e70t behavior
+# byte-for-byte — the default for direct/unit-test callers and the exact decode
+# tier. The `:scalable` corrector opts in ONLY where the width beam is already
+# finite (`!beam_is_exact` — the dense/large reads that carry the residual), so
+# exact-ML reads stay byte-identical, exactly like the #388 decode bounds.
+const _SOFT_EM_WALK_BAND_FACTOR = 4
+_soft_em_walk_band(k::Integer) = _SOFT_EM_WALK_BAND_FACTOR * Int(k)
+const _SOFT_EM_ALT_SUCCESSOR_BOUND = 8
+
+# Strictly-heavier sibling of the observed branch `a -> b` (excluding `b` and the
+# incoming `avoid` vertex), or `nothing` when no strictly-better sibling exists (a
+# linear region or a balanced variant — retained, not competed away). Iterates the
+# out- then in-neighbors DIRECTLY (no intermediate label vector): finding the
+# argmax is idempotent to a bidirectional neighbor appearing in both lists (same
+# label, same `_edge_weight_between` value), so no dedup pass is needed — this
+# removes the per-position allocation that dominated the C5c profile. `bound` caps
+# the neighbors examined in each direction (a per-step work guard; on a canonical
+# DNA vertex there are <= 4 each, so the default `typemax` and the :scalable 8 are
+# both no-ops), matching the decode `max_successors_per_state`.
+function _best_alternative_sibling(graph, a, b, avoid, w_ab::Float64, bound::Int)
+    best_x, best_w = nothing, w_ab
+    c = 0
+    for x in MetaGraphsNext.outneighbor_labels(graph, a)
+        c += 1
+        c > bound && break
+        (x == b || (avoid !== nothing && x == avoid)) && continue
+        w = _edge_weight_between(graph, a, x)
+        w === nothing && continue
+        w > best_w && ((best_w, best_x) = (w, x))
+    end
+    c = 0
+    for x in MetaGraphsNext.inneighbor_labels(graph, a)
+        c += 1
+        c > bound && break
+        (x == b || (avoid !== nothing && x == avoid)) && continue
+        w = _edge_weight_between(graph, a, x)
+        w === nothing && continue
+        w > best_w && ((best_w, best_x) = (w, x))
+    end
+    return best_x
+end
+
+# Highest-weight next vertex from `cur` (excluding the incoming `prev` and any
+# vertex already in `seen`), or `nothing` when the walk dead-ends. Same direct
+# out-then-in iteration (argmax idempotent to duplicates) and `bound` guard as
+# `_best_alternative_sibling`.
+function _best_next_step(graph, cur, prev, seen, bound::Int)
+    nxt, nxt_w = nothing, 0.0
+    c = 0
+    for y in MetaGraphsNext.outneighbor_labels(graph, cur)
+        c += 1
+        c > bound && break
+        (y == prev || y in seen) && continue
+        w = _edge_weight_between(graph, cur, y)
+        w === nothing && continue
+        w > nxt_w && ((nxt_w, nxt) = (w, y))
+    end
+    c = 0
+    for y in MetaGraphsNext.inneighbor_labels(graph, cur)
+        c += 1
+        c > bound && break
+        (y == prev || y in seen) && continue
+        w = _edge_weight_between(graph, cur, y)
+        w === nothing && continue
+        w > nxt_w && ((nxt_w, nxt) = (w, y))
+    end
+    return nxt
+end
+
 # Generate ONE competing alternative to `observed` by re-routing its first
 # clearly-weak branch through the highest-weight sibling and walking greedily
 # until rejoining `observed`. Returns the spliced label path, or `nothing` when
 # no weak branch exists (a linear region, or a balanced variant whose sibling is
-# not strictly better — which is retained, not competed away). Bounded by the
-# observed length so it always terminates.
-function _consensus_alternative(observed, graph)
+# not strictly better — which is retained, not competed away).
+#
+# `walk_band` caps a NON-rejoining re-route to a genome-independent number of steps
+# (see `_soft_em_walk_band`); `successor_bound` caps the incident branches examined
+# per step (see `_SOFT_EM_ALT_SUCCESSOR_BOUND`). Both default to `typemax(Int)`
+# (unbounded — the pre-td-e70t behavior). Always bounded by the observed length so
+# it terminates regardless.
+function _consensus_alternative(observed, graph;
+        walk_band::Int = typemax(Int),
+        successor_bound::Int = typemax(Int))
     n = length(observed)
     n < 3 && return nothing
     firstpos = Dict{Any, Int}()
@@ -2983,41 +3105,34 @@ function _consensus_alternative(observed, graph)
         a, b = observed[i], observed[i + 1]
         w_ab = _edge_weight_between(graph, a, b)
         w_ab === nothing && continue
-        best_x, best_w = nothing, w_ab
-        for x in _incident_labels(graph, a)
-            x == b && continue
-            (i > 1 && x == observed[i - 1]) && continue
-            wx = _edge_weight_between(graph, a, x)
-            wx === nothing && continue
-            if wx > best_w
-                best_w, best_x = wx, x
-            end
-        end
+        best_x = _best_alternative_sibling(
+            graph, a, b, i > 1 ? observed[i - 1] : nothing, w_ab, successor_bound)
         best_x === nothing && continue   # no strictly-better sibling ⇒ not weak
         # Greedy highest-weight walk from the sibling until we rejoin `observed`
-        # at or after position i+1.
+        # at or after position i+1. `seen` is a Set so the membership test is O(1)
+        # rather than O(length(mid)) (removes a hidden per-step super-linear term).
         mid = Any[best_x]
+        seen = Set{Any}(mid)
         prev, cur = a, best_x
         rejoin = get(firstpos, best_x, 0) >= i + 1 ? firstpos[best_x] : 0
         steps = 0
         while rejoin == 0 && steps < n
             steps += 1
-            nxt, nxt_w = nothing, 0.0
-            for y in _incident_labels(graph, cur)
-                y == prev && continue
-                y in mid && continue
-                wy = _edge_weight_between(graph, cur, y)
-                wy === nothing && continue
-                if wy > nxt_w
-                    nxt_w, nxt = wy, y
-                end
-            end
+            nxt = _best_next_step(graph, cur, prev, seen, successor_bound)
             nxt === nothing && break
+            # Rejoin is tested BEFORE the band cutoff: a read-consistent competing
+            # allele that returns to the observed path (at/after i+1) is always
+            # captured, so the band never drops a real variant's competing path.
             if get(firstpos, nxt, 0) >= i + 1
                 rejoin = firstpos[nxt]
                 break
             end
+            # Band cutoff (genome-independent): beyond `walk_band` non-rejoining
+            # steps the walk is threading spurious k-mer repeats / graph bulk, not a
+            # competing allele — abandon it (yields no valid rejoined splice anyway).
+            steps >= walk_band && break
             push!(mid, nxt)
+            push!(seen, nxt)
             prev, cur = cur, nxt
         end
         if rejoin >= i + 1
@@ -3028,7 +3143,8 @@ function _consensus_alternative(observed, graph)
 end
 
 """
-    accumulate_competing_paths!(accumulator, read, graph, k; graph_mode) -> accumulator
+    accumulate_competing_paths!(accumulator, read, graph, k; graph_mode,
+        walk_band, successor_bound) -> accumulator
 
 Soft-EM v2 competing-paths E-step for ONE read (td-e70t). Builds the read's
 COMPETING candidate paths — the observed read path and (when the observed path
@@ -3048,19 +3164,31 @@ supported edges are held at raw and only unsupported (error) edges decay. A
 balanced variant produces no strictly-better sibling, so no alternative is
 generated and the observed path keeps responsibility 1.0. Never throws (guarded),
 so the decode is always safe.
+
+`walk_band` / `successor_bound` bound the alternative GENERATION (td-e70t speed
+residual C5c): `walk_band` caps a non-rejoining re-route to a genome-independent
+number of steps and `successor_bound` caps the incident branches examined per step
+(see `_soft_em_walk_band` / `_SOFT_EM_ALT_SUCCESSOR_BOUND`). Both default to
+`typemax(Int)` (unbounded — byte-identical to the pre-bound behavior); the
+`:scalable` corrector passes finite bounds only where the width beam is already
+finite, so exact-ML reads are unchanged and no real variant's read-consistent
+competing path is dropped (the rejoin test precedes the band cutoff).
 """
 function accumulate_competing_paths!(
         accumulator::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
         read::FASTX.FASTQ.Record,
         graph,
         k::Int;
-        graph_mode::Symbol = :canonical
+        graph_mode::Symbol = :canonical,
+        walk_band::Int = typemax(Int),
+        successor_bound::Int = typemax(Int)
 )
     observed = _read_resolved_labels(read, graph, k; graph_mode = graph_mode)
     isempty(observed) && return accumulator
 
     alternative = try
-        _consensus_alternative(observed, graph)
+        _consensus_alternative(
+            observed, graph; walk_band = walk_band, successor_bound = successor_bound)
     catch
         nothing
     end
