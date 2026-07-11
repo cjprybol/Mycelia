@@ -16,6 +16,24 @@
 # fix injected errors WITHOUT over-correcting (changing a correct base to a
 # wrong one), and is its edit VOLUME ~ the injected error rate?
 #
+# TWO CONTROLS (the pair the manuscript flags as missing next to a recall table):
+#   * Control A — over-correction on UN-CORRUPTED input. The default error-rate
+#     sweep includes an err=0.0 cell: no substitutions are injected, so every edit
+#     the corrector makes on that row is a false positive. recall/precision are
+#     NaN there (injected==0, an "undefined here" signal, not a measured 0); the
+#     load-bearing columns are over_correction_rate and correction_rate, which
+#     directly measure whether the WIRED corrector damages already-correct reads.
+#   * Control B — read-scramble null (the discriminating null). For each read a
+#     fixed-seed PER-READ permutation is applied to its bases BEFORE correction
+#     (and the SAME permutation to that read's truth for scoring). Distinct
+#     per-read permutations destroy the shared k-mer coverage the corrector relies
+#     on, so the internally-built graph has no consensus and CANNOT recover the
+#     (still-present) injected errors: null recall should COLLAPSE relative to the
+#     real arm. Null columns (null_recall, null_over_correction_rate, ...) sit
+#     beside the real metrics in the same CSV row. The injected-error COUNT is
+#     preserved by the permutation (a bijection applied identically to observed
+#     and truth), so real and null recall are directly comparable.
+#
 # WHY per-base and not assembly metrics: a prior program error (td-wlfq
 # retraction) quoted an assembly-level genome-fraction "improvement" that was
 # actually a read-coverage artifact. Correction quality is a per-read / per-base
@@ -81,7 +99,7 @@
 #   MYCELIA_RCA_SMOKE            truthy -> synthetic genome, no download (default false)
 #   MYCELIA_RCA_ACCESSION       reference accession (default NC_001416, Lambda phage)
 #   MYCELIA_RCA_SMOKE_GENOME_LEN synthetic genome length in smoke mode (default 2000)
-#   MYCELIA_RCA_ERR             comma-separated substitution rates (default 0.01,0.05,0.10)
+#   MYCELIA_RCA_ERR             comma-separated substitution rates (default 0.0,0.01,0.05,0.10; the 0.0 cell is Control A)
 #   MYCELIA_RCA_READLEN         comma-separated read lengths (default 150)
 #   MYCELIA_RCA_COVERAGE        target fold coverage (default 30; smoke default 10)
 #   MYCELIA_RCA_K               assembly k-mer size (default 21)
@@ -202,6 +220,53 @@ function correct_reads_scalable(records::Vector{FASTX.FASTQ.Record}, k::Int)
     return corrected_by_id, result
 end
 
+# === Control B: read-scramble null ==========================================
+# Fixed seed for the per-read scramble null so the null CSV columns are
+# byte-reproducible across runs. Each read's permutation is drawn from
+# MersenneTwister(RCA_NULL_SEED + read_index), so permutations DIFFER across reads
+# (which is what destroys the shared k-mer coverage), yet the whole null arm is
+# deterministic.
+const RCA_NULL_SEED = 20260711
+
+"""
+    scramble_reads(records, truth_by_id, observed_by_id, assigned_q; seed=RCA_NULL_SEED)
+
+Build the Control-B null read set. For each read draw a PER-READ base permutation
+(seeded from `seed + read_index`) and apply it to BOTH the observed sequence (the
+input the corrector sees) and that read's truth (used for scoring). Because each
+read's permutation is different, the scrambled reads share no k-mers, so the
+correction graph built internally from them has no coverage consensus and cannot
+recover injected errors — null recall should collapse relative to the real arm.
+
+The permutation is a bijection applied identically to observed and truth, so the
+per-read injected-error COUNT (positions where observed != truth) is preserved:
+real-arm and null-arm recall are therefore directly comparable. Returns
+`(scrambled_records, scrambled_truth_by_id, scrambled_observed_by_id)` mirroring
+`simulate_substitution_reads` so the SAME `correct_reads_scalable` +
+`per_base_metrics` path scores the null arm.
+"""
+function scramble_reads(records::Vector{FASTX.FASTQ.Record},
+        truth_by_id::Dict{String, String}, observed_by_id::Dict{String, String},
+        assigned_q::Int; seed::Int = RCA_NULL_SEED)
+    scrambled_records = Vector{FASTX.FASTQ.Record}()
+    scrambled_truth_by_id = Dict{String, String}()
+    scrambled_observed_by_id = Dict{String, String}()
+    qstr_for = (n) -> repeat(string(Char(assigned_q + 33)), n)
+    for (i, rec) in enumerate(records)
+        rid = FASTX.identifier(rec)
+        Tc = collect(truth_by_id[rid])
+        Oc = collect(observed_by_id[rid])
+        perm = Random.randperm(Random.MersenneTwister(seed + i), length(Oc))
+        scrambled_truth = String(Tc[perm])
+        scrambled_observed = String(Oc[perm])
+        scrambled_truth_by_id[rid] = scrambled_truth
+        scrambled_observed_by_id[rid] = scrambled_observed
+        push!(scrambled_records,
+            FASTX.FASTQ.Record(rid, scrambled_observed, qstr_for(length(scrambled_observed))))
+    end
+    return scrambled_records, scrambled_truth_by_id, scrambled_observed_by_id
+end
+
 # === Per-base metric computation ============================================
 # `per_base_metrics` lives in a pure, Mycelia-free companion so its
 # classification math is unit-testable in milliseconds. See that file's header
@@ -215,7 +280,10 @@ function run_accuracy_benchmark()
     smoke = _truthy(get(ENV, "MYCELIA_RCA_SMOKE", "false"))
     accession = get(ENV, "MYCELIA_RCA_ACCESSION", "NC_001416")  # Lambda phage
     smoke_len = parse(Int, get(ENV, "MYCELIA_RCA_SMOKE_GENOME_LEN", "2000"))
-    errs = _parse_float_list(get(ENV, "MYCELIA_RCA_ERR", ""), [0.01, 0.05, 0.10])
+    # Control A lives at err=0.0 (no injected errors -> every edit is over-
+    # correction). Keep it FIRST so the sweep's first cell is the specificity
+    # control.
+    errs = _parse_float_list(get(ENV, "MYCELIA_RCA_ERR", ""), [0.0, 0.01, 0.05, 0.10])
     readlens = _parse_int_list(get(ENV, "MYCELIA_RCA_READLEN", ""), [150])
     coverage = parse(Float64, get(ENV, "MYCELIA_RCA_COVERAGE", smoke ? "10" : "30"))
     k = parse(Int, get(ENV, "MYCELIA_RCA_K", "21"))
@@ -270,7 +338,13 @@ function run_accuracy_benchmark()
         true_fixes = Int[], mis_fixes = Int[], over_corrections = Int[],
         correct_positions = Int[], recall = Float64[], precision = Float64[],
         over_correction_rate = Float64[], correction_rate = Float64[],
-        corrector_runtime_s = Float64[]
+        corrector_runtime_s = Float64[],
+        # Control B — read-scramble null (same reads, per-read base permutation).
+        null_seed = Int[], null_ok = Bool[], null_reads_scored = Int[],
+        null_injected_errors = Int[], null_true_fixes = Int[],
+        null_recall = Float64[], null_precision = Float64[],
+        null_over_correction_rate = Float64[], null_correction_rate = Float64[],
+        null_runtime_s = Float64[]
     )
 
     min_effective_coverage = Inf
@@ -279,6 +353,12 @@ function run_accuracy_benchmark()
     # drops/exclusions) must NOT be quotable as validation.
     total_reads_all = 0
     total_scored_all = 0
+    # Control-B aggregation (over cells with injected errors, where recall is
+    # defined): pooled true_fixes / injected for the real and null arms.
+    real_tp_all = 0
+    real_injected_all = 0
+    null_tp_all = 0
+    null_injected_all = 0
 
     println("\n--- Sweeping (error_rate x read-regime) on the wired :scalable corrector ---")
     for err in errs
@@ -311,6 +391,37 @@ function run_accuracy_benchmark()
             m = per_base_metrics(truth_by_id, observed_by_id, corrected_by_id)
             total_reads_all += length(records)
             total_scored_all += m.reads_scored
+
+            # --- Control B: read-scramble null arm ---------------------------
+            # Same reads + same injected errors, but each read's bases are
+            # permuted (per-read seed) before correction so no shared k-mer
+            # coverage survives. Score the corrected scramble against the SAME
+            # permutation of truth. Null recall should collapse vs the real arm.
+            scr_records, scr_truth_by_id,
+            scr_observed_by_id = scramble_reads(
+                records, truth_by_id, observed_by_id, assigned_q)
+            local null_corrected_by_id
+            tn0 = time()
+            null_ok = true
+            try
+                null_corrected_by_id, _null_result = correct_reads_scalable(scr_records, k)
+            catch e
+                @warn "Null-arm corrector failed for this cell — recording NaN null metrics" err readlen exception = (
+                    e, catch_backtrace())
+                null_ok = false
+                null_corrected_by_id = Dict{String, String}()
+            end
+            null_runtime = round(time() - tn0; digits = 3)
+            mn = per_base_metrics(scr_truth_by_id, scr_observed_by_id, null_corrected_by_id)
+            # Pool recall numerator/denominator over injected-bearing cells only.
+            if m.injected > 0
+                real_tp_all += m.tp
+                real_injected_all += m.injected
+            end
+            if mn.injected > 0
+                null_tp_all += mn.tp
+                null_injected_all += mn.injected
+            end
             # ID-format mismatch diagnostic: corrected reads exist but none
             # joined to truth => the corrector renamed ids, NOT a genuine drop.
             # Without this, every read reports as "dropped" and the operator
@@ -333,13 +444,21 @@ function run_accuracy_benchmark()
                     over_corrections = m.over, correct_positions = m.correct_positions,
                     recall = m.recall, precision = m.precision,
                     over_correction_rate = m.over_rate, correction_rate = m.correction_rate,
-                    corrector_runtime_s = runtime))
+                    corrector_runtime_s = runtime,
+                    null_seed = RCA_NULL_SEED, null_ok = null_ok,
+                    null_reads_scored = mn.reads_scored, null_injected_errors = mn.injected,
+                    null_true_fixes = mn.tp, null_recall = mn.recall,
+                    null_precision = mn.precision, null_over_correction_rate = mn.over_rate,
+                    null_correction_rate = mn.correction_rate, null_runtime_s = null_runtime))
             println("    ok=$ok scored=$(m.reads_scored)/$(length(records)) " *
                     "(frac=$(round(m.scored_fraction; digits=3))) " *
                     "dropped=$(m.reads_dropped) excl_len=$(m.reads_excluded_len)")
             println("    recall=$(round(m.recall; digits=4)) precision=$(round(m.precision; digits=4)) " *
                     "mis_fixes=$(m.mis_fixes) over_corr_rate=$(round(m.over_rate; digits=6)) " *
                     "correction_rate=$(round(m.correction_rate; digits=4)) (vs err=$err) $(runtime)s")
+            println("    [null] scored=$(mn.reads_scored)/$(length(scr_records)) " *
+                    "recall=$(round(mn.recall; digits=4)) (real=$(round(m.recall; digits=4))) " *
+                    "over_corr_rate=$(round(mn.over_rate; digits=6)) $(null_runtime)s")
         end
     end
 
@@ -347,16 +466,44 @@ function run_accuracy_benchmark()
     println("\n=== Per-(error_rate, regime) correction accuracy ===")
     _fmt = (v) -> rpad(string(v), 12)
     println(join(
-        _fmt.(["err", "regime", "readlen", "recall", "precision", "mis_fix",
+        _fmt.(["err", "regime", "readlen", "recall", "null_recall", "precision",
             "over_rate", "corr_rate", "scored"]),
         ""))
     for r in eachrow(sort(rows, [:error_rate, :readlen]))
         println(join(
             _fmt.([r.error_rate, r.regime, r.readlen,
-                round(r.recall; digits = 4), round(r.precision; digits = 4),
-                r.mis_fixes, round(r.over_correction_rate; digits = 6),
+                round(r.recall; digits = 4), round(r.null_recall; digits = 4),
+                round(r.precision; digits = 4), round(r.over_correction_rate; digits = 6),
                 round(r.correction_rate; digits = 4), r.reads_scored]),
             ""))
+    end
+
+    # === Control A (over-correction on un-corrupted input) ===
+    # The err=0.0 rows: no errors injected, so over_correction_rate is a direct
+    # specificity readout (recall/precision are NaN there by construction).
+    control_a = rows[rows.error_rate .== 0.0, :]
+    println("\n=== Control A: over-correction on un-corrupted input (err=0.0) ===")
+    if DataFrames.nrow(control_a) == 0
+        println("  (no err=0.0 cell in this sweep — set MYCELIA_RCA_ERR to include 0.0)")
+    else
+        for r in eachrow(control_a)
+            println("  regime=$(r.regime) readlen=$(r.readlen): " *
+                    "over_correction_rate=$(round(r.over_correction_rate; digits=6)) " *
+                    "correction_rate=$(round(r.correction_rate; digits=6)) " *
+                    "(edits=$(r.total_edits)/$(r.total_bases) bases, scored=$(r.reads_scored))")
+        end
+    end
+
+    # === Control B (read-scramble null) aggregate recall comparison ===
+    real_pooled_recall = real_injected_all == 0 ? NaN : real_tp_all / real_injected_all
+    null_pooled_recall = null_injected_all == 0 ? NaN : null_tp_all / null_injected_all
+    println("\n=== Control B: read-scramble null vs real (pooled over injected-bearing cells) ===")
+    println("  real recall = $(round(real_pooled_recall; digits=4)) " *
+            "($(real_tp_all)/$(real_injected_all) injected errors fixed)")
+    println("  null recall = $(round(null_pooled_recall; digits=4)) " *
+            "($(null_tp_all)/$(null_injected_all) injected errors fixed)")
+    if isfinite(real_pooled_recall) && isfinite(null_pooled_recall)
+        println("  recall collapse (real - null) = $(round(real_pooled_recall - null_pooled_recall; digits=4))")
     end
 
     # === Scale + scored-fraction guard ===
@@ -403,7 +550,8 @@ function run_accuracy_benchmark()
     end
 
     println("\n=== Accuracy benchmark complete: $(Dates.now()) ===")
-    return (csv_path = csv_path, mode = mode, rows = rows)
+    return (csv_path = csv_path, mode = mode, rows = rows,
+        real_pooled_recall = real_pooled_recall, null_pooled_recall = null_pooled_recall)
 end
 
 # Only run when invoked as a script; `include`-ing this file (from the unit test)
