@@ -61,11 +61,26 @@ Test.@testset "Viterbi per-position gap telemetry (record_position_gaps)" begin
     Test.@test !isempty(gaps)                       # >=1 decode depth for a 3-unit observation
     Test.@test all(g -> g >= 0.0, gaps)             # margin = best - 2nd-best >= 0 (or Inf)
     Test.@test all(g -> !isnan(g), gaps)
+    # ALIGNMENT CONTRACT: one gap per on-path transition; the start step has none.
+    Test.@test length(gaps) == length(something(withgaps.paths[1].path).steps) - 1
 
     # --- Byte-identity: the telemetry must not change the decode ------------
     Test.@test path_labels(something(withgaps.paths[1].path)) ==
                path_labels(something(base.paths[1].path))
     Test.@test withgaps.paths[1].score == base.paths[1].score
+
+    # --- Inf sentinel on a collapsed (single-state) frontier ----------------
+    # A linear graph S->T->U has no branching, so each depth's surviving frontier
+    # is a single state => the margin is Inf. This is the ROUTINE Inf case the
+    # consumption contract warns about; the documented consumer pattern
+    # filter(isfinite, gaps) must drop it cleanly.
+    lin = create_weighted_graph(["S", "T", "U"])
+    add_edge!(lin, "S", "T", 1.0)
+    add_edge!(lin, "T", "U", 1.0)
+    linres = Mycelia.correct_observations(lin, [["S", "T", "U"]]; config = cfg)
+    lingaps = linres.paths[1].diagnostics[:position_gaps]
+    Test.@test any(isinf, lingaps)                  # collapsed frontier => Inf present
+    Test.@test all(isfinite, filter(isfinite, lingaps))   # the documented filter is safe
 
     # --- _top2_score_gap unit behavior --------------------------------------
     Test.@test Mycelia._top2_score_gap(Dict(:a => 5.0, :b => 2.0, :c => -1.0)) == 3.0

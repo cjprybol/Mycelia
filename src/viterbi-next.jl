@@ -1408,13 +1408,29 @@ function _viterbi_correct_observation(
 
     if target_vertex !== nothing && !isfinite(best_score)
         diagnostics[:reason] = :target_unreachable
+        # position_gaps is intentionally NOT stashed on a failed decode: there is no
+        # path to align it to. `path === nothing` (+ diagnostics[:reason]) is the
+        # failure discriminant — a consumer must not read absence of :position_gaps
+        # as "flag was off".
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
 
     path = _reconstruct_correction_path(graph, best_state, best_depth, predecessors_by_depth)
     diagnostics[:path_length] = length(path.steps)
     if config.record_position_gaps
-        diagnostics[:position_gaps] = position_gaps
+        # CONSUMPTION CONTRACT (per PR #400 review). `position_gaps[i]` is the
+        # Viterbi margin (best − 2nd-best surviving log-prob) at the transition INTO
+        # `path.steps[i+1]`; the start position `path.steps[1]` has no gap. Truncate
+        # to `best_depth` so `length(position_gaps) == length(path.steps) - 1` in ALL
+        # cases — under target anchoring the loop can run PAST the last on-path depth,
+        # leaving trailing gaps for abandoned frontiers. TWO caveats for consumers:
+        #   • An entry of `Inf` means "no surviving competitor at that depth" — a
+        #     ROUTINE value on a collapsed/beam-pruned frontier — so consumers MUST
+        #     `filter(isfinite, _)` (or clip) BEFORE any sum-based calibration metric
+        #     (reliability/ECE/Brier); a raw `Inf` silently poisons those to Inf/NaN.
+        #   • Under a finite `beam_width`/`beam_score_margin` this is a SURVIVOR
+        #     margin (2nd-best among survivors), not the exact Viterbi margin.
+        diagnostics[:position_gaps] = position_gaps[1:min(best_depth, length(position_gaps))]
     end
     return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
 end
@@ -1639,7 +1655,10 @@ end
 
 # Best-minus-second-best of a state->score Dict's values (the per-position Viterbi
 # margin, td-4osf / Tier-2 calibration). Single pass, no allocation. Returns Inf
-# when fewer than two states survive (no competitor => maximally confident).
+# when fewer than two states survive (no competitor => maximally confident). NOTE:
+# Inf is a ROUTINE value (any collapsed frontier), so downstream calibration must
+# filter/clip it before averaging — see the consumption contract at the
+# diagnostics[:position_gaps] stash site.
 function _top2_score_gap(scores)::Float64
     best = -Inf
     second = -Inf
