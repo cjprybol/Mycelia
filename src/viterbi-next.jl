@@ -123,6 +123,32 @@ struct ViterbiCorrectionConfig{F <: Function}
     # each depth) into its diagnostics. Default false => the decode is byte-
     # identical AND perf-neutral (no top-2 scan on the hot path).
     record_position_gaps::Bool
+    # Indel-aware pair-HMM extension (nanopore correction). All fields DEFAULT to
+    # the substitution-collapse values, so the constructor default reproduces the
+    # substitution-only decoder byte-for-byte: `indel_moves=false` short-circuits
+    # before the gap kernel is ever entered, and every gap mass is 0 (⇒ gap
+    # transitions score `log(0) = -Inf` ⇒ dropped by the `isfinite` guard even if
+    # the kernel is entered with these zero fractions). `insertion_fraction` and
+    # `deletion_fraction` partition the per-base error rate into gap-open masses
+    # (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`); the remainder is the
+    # substitution mass that rides inside the existing emission term. The
+    # `*_extend_probability` fields are the affine gap-EXTEND probabilities
+    # (`γ_I`, `γ_D`) — one-time open then cheaper extend, because nanopore indels
+    # cluster in homopolymer runs (geometric run lengths). `deletion_max_run`
+    # (`D_max`) bounds consecutive deletions (the bounded Bellman-Ford relaxation
+    # replacing the legacy O(V³) Floyd-Warshall; also guards graph-cycle
+    # no-progress loops). `max_insertion_run` bounds consecutive insertions.
+    # `band_width` is the adaptive diagonal-band half-width on the net gap
+    # (graph-steps − read-index); `nothing` = unbounded (the exact/oracle setting).
+    indel_moves::Bool
+    insertion_fraction::Float64
+    deletion_fraction::Float64
+    insertion_extend_probability::Float64
+    deletion_extend_probability::Float64
+    deletion_max_run::Int
+    max_insertion_run::Int
+    band_width::Union{Nothing, Int}
+    insertion_emission_logp::Union{Nothing, Function}
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -137,10 +163,43 @@ struct ViterbiCorrectionConfig{F <: Function}
             beam_width::Int = typemax(Int),
             max_successors_per_state::Int = typemax(Int),
             beam_score_margin::Float64 = Inf,
-            record_position_gaps::Bool = false
+            record_position_gaps::Bool = false,
+            indel_moves::Bool = false,
+            insertion_fraction::Float64 = 0.0,
+            deletion_fraction::Float64 = 0.0,
+            insertion_extend_probability::Float64 = 0.0,
+            deletion_extend_probability::Float64 = 0.0,
+            deletion_max_run::Int = 0,
+            max_insertion_run::Int = 0,
+            band_width::Union{Nothing, Int} = nothing,
+            insertion_emission_logp::Union{Nothing, Function} = nothing
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
+        end
+        if insertion_fraction < 0.0 || deletion_fraction < 0.0 ||
+           insertion_fraction + deletion_fraction >= 1.0
+            throw(ArgumentError(
+                "insertion_fraction/deletion_fraction must be non-negative and sum " *
+                "to < 1 (the remainder is substitution mass), got " *
+                "$insertion_fraction / $deletion_fraction"))
+        end
+        for (name, value) in (
+            (:insertion_extend_probability, insertion_extend_probability),
+            (:deletion_extend_probability, deletion_extend_probability)
+        )
+            if value < 0.0 || value >= 1.0
+                throw(ArgumentError("$name must be in [0, 1), got $value"))
+            end
+        end
+        if deletion_max_run < 0
+            throw(ArgumentError("deletion_max_run must be non-negative, got $deletion_max_run"))
+        end
+        if max_insertion_run < 0
+            throw(ArgumentError("max_insertion_run must be non-negative, got $max_insertion_run"))
+        end
+        if band_width !== nothing && band_width < 0
+            throw(ArgumentError("band_width must be non-negative or nothing, got $band_width"))
         end
         if !(verbosity in ("debug", "reads", "dataset", "silent"))
             throw(ArgumentError("unsupported verbosity: $verbosity"))
@@ -172,7 +231,16 @@ struct ViterbiCorrectionConfig{F <: Function}
             beam_width,
             max_successors_per_state,
             beam_score_margin,
-            record_position_gaps
+            record_position_gaps,
+            indel_moves,
+            insertion_fraction,
+            deletion_fraction,
+            insertion_extend_probability,
+            deletion_extend_probability,
+            deletion_max_run,
+            max_insertion_run,
+            band_width,
+            insertion_emission_logp
         )
     end
 end
@@ -190,7 +258,16 @@ function ViterbiCorrectionConfig(;
         beam_width::Int = typemax(Int),
         max_successors_per_state::Int = typemax(Int),
         beam_score_margin::Float64 = Inf,
-        record_position_gaps::Bool = false
+        record_position_gaps::Bool = false,
+        indel_moves::Bool = false,
+        insertion_fraction::Float64 = 0.0,
+        deletion_fraction::Float64 = 0.0,
+        insertion_extend_probability::Float64 = 0.0,
+        deletion_extend_probability::Float64 = 0.0,
+        deletion_max_run::Int = 0,
+        max_insertion_run::Int = 0,
+        band_width::Union{Nothing, Int} = nothing,
+        insertion_emission_logp::Union{Nothing, Function} = nothing
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -205,7 +282,16 @@ function ViterbiCorrectionConfig(;
         beam_width = beam_width,
         max_successors_per_state = max_successors_per_state,
         beam_score_margin = beam_score_margin,
-        record_position_gaps = record_position_gaps
+        record_position_gaps = record_position_gaps,
+        indel_moves = indel_moves,
+        insertion_fraction = insertion_fraction,
+        deletion_fraction = deletion_fraction,
+        insertion_extend_probability = insertion_extend_probability,
+        deletion_extend_probability = deletion_extend_probability,
+        deletion_max_run = deletion_max_run,
+        max_insertion_run = max_insertion_run,
+        band_width = band_width,
+        insertion_emission_logp = insertion_emission_logp
     )
 end
 
