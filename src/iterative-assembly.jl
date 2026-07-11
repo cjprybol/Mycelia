@@ -2198,6 +2198,10 @@ function should_continue_k_progression(k_history::Vector{Dict{Symbol, Any}},
         max_k::Int;
         convergence_window::Int = 3,
         quality_improvement_threshold::Float64 = 0.001)::Bool
+    # NOTE: the :scalable coarse ladder now tops out at `prevprime(max_k)` (see
+    # build_k_ladder), so for a COMPOSITE max_k this `>= max_k` equality is only
+    # reached by the legacy prime-by-prime walk, never by the scalable ladder — do
+    # not assume the ladder reaches max_k exactly if this helper is wired back in.
     if current_k >= max_k
         return false
     end
