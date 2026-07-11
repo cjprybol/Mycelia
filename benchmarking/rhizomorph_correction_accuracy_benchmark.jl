@@ -381,6 +381,9 @@ function run_accuracy_benchmark()
             try
                 corrected_by_id, _result = correct_reads_scalable(records, k)
             catch e
+                # A user interrupt (Ctrl-C during a long run) must abort, not be
+                # swallowed as a "corrector failure" that records NaN and marches on.
+                e isa InterruptException && rethrow()
                 @warn "Corrector failed for this cell — recording NaN metrics" err readlen exception = (
                     e, catch_backtrace())
                 ok = false
@@ -406,6 +409,7 @@ function run_accuracy_benchmark()
             try
                 null_corrected_by_id, _null_result = correct_reads_scalable(scr_records, k)
             catch e
+                e isa InterruptException && rethrow()
                 @warn "Null-arm corrector failed for this cell — recording NaN null metrics" err readlen exception = (
                     e, catch_backtrace())
                 null_ok = false
@@ -413,6 +417,16 @@ function run_accuracy_benchmark()
             end
             null_runtime = round(time() - tn0; digits = 3)
             mn = per_base_metrics(scr_truth_by_id, scr_observed_by_id, null_corrected_by_id)
+            # Mirror the real-arm ID-mismatch diagnostic on the null arm: a null
+            # recall of 0 is EXPECTED (collapse), but reads_scored==0 with
+            # corrected reads that did not join to truth is a read-ID FORMAT
+            # mismatch (renamed ids), byte-indistinguishable from a legitimate
+            # collapse in the metrics — surface it rather than let a join bug
+            # masquerade as "the null correctly recovered nothing".
+            if null_ok && mn.reads_scored == 0 && mn.corrected_unjoined > 0
+                @warn "Null arm: no corrected read joined to truth by id, yet the corrector emitted reads — " *
+                      "likely a read-ID FORMAT mismatch (renamed ids), not a genuine null collapse" err readlen corrected_unjoined = mn.corrected_unjoined
+            end
             # Pool recall numerator/denominator over injected-bearing cells only.
             if m.injected > 0
                 real_tp_all += m.tp

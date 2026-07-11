@@ -132,11 +132,14 @@ Test.@testset "run_accuracy_benchmark — Control A (err=0) + Control B (scrambl
     # hard-coded collapse magnitude — and reports the observed numbers via the
     # benchmark's own stdout. Heavy (invokes mycelia_iterative_assemble) but
     # bounded by the small ENV config below.
+    # err=0.0 is Control A; err=0.01 is the real-recovery cell (low enough error
+    # that the real corrector genuinely fixes most injected errors, giving a wide
+    # real>>null gap for the C1 positive control below).
     withenv(
         "MYCELIA_RCA_SMOKE" => "true",
         "MYCELIA_RCA_SMOKE_GENOME_LEN" => "1500",
         "MYCELIA_RCA_COVERAGE" => "8",
-        "MYCELIA_RCA_ERR" => "0.0,0.05",
+        "MYCELIA_RCA_ERR" => "0.0,0.01",
         "MYCELIA_RCA_READLEN" => "120",
         "MYCELIA_RCA_K" => "21",
         "MYCELIA_RCA_SEED" => "42"
@@ -157,14 +160,21 @@ Test.@testset "run_accuracy_benchmark — Control A (err=0) + Control B (scrambl
         # reader, and that NaN is the correct "undefined here" signal.
         Test.@test all(isnan, control_a.recall)
 
-        # --- Control B: null recall must NOT exceed the real recall (aggregate) --
-        # A degraded (per-read scrambled) graph cannot recover injected errors
-        # BETTER than the real one. The magnitude of the collapse is a reported
-        # finding, not asserted, so a surprising non-collapse surfaces as data.
-        Test.@test isfinite(result.real_pooled_recall)   # err=0.05 cell has injected errors
-        if isfinite(result.null_pooled_recall)
-            Test.@test result.null_pooled_recall <= result.real_pooled_recall + 1e-9
-        end
+        # --- Control B (C1 positive control): real recall must EXCEED null by a
+        # strict margin. A weaker `null <= real` check would pass a silent real-
+        # corrector regression (runs but fixes nothing => real recall 0.0, which
+        # is finite and still >= null 0.0), collapsing the "real >> null" claim to
+        # "real == null == 0" under green CI. Assert a STRICT gap safely below the
+        # observed real recall (~1.0 at err=0.01) so a regression to ~0 fails loud.
+        Test.@test isfinite(result.real_pooled_recall)   # err=0.01 cell has injected errors
+        Test.@test isfinite(result.null_pooled_recall)
+        Test.@test result.real_pooled_recall >= result.null_pooled_recall + 0.05
+        # Both arms must have RUN (no caught-but-recorded corrector exception): a
+        # crashed cell recorded as ok=false must not be scored as a legitimate
+        # recall — otherwise a real-arm crash (recall NaN/0) could satisfy the gap
+        # against an also-crashed null arm.
+        Test.@test all(rows.ok)
+        Test.@test all(rows.null_ok)
         # Null columns present, seeded, and in-range where defined.
         Test.@test all(rows.null_seed .== 20260711)
         for v in rows.null_recall
