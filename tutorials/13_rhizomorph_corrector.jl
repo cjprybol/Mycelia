@@ -12,7 +12,7 @@
 # - **corrected** — `assemble_genome(reads; k=21, corrector=:iterative, strategy=:scalable)`
 #
 # See the validated real-genome numbers on the
-# [Benchmarks](../benchmarks.md) page and the algorithm write-up in
+# [Benchmarks](../../benchmarks.md) page and the algorithm write-up in
 # `docs/design/2026-07-graph-as-hmm-corrector-methods.md`.
 
 # ## Setup
@@ -30,7 +30,6 @@ end
 import Mycelia
 import FASTX
 import Random
-import Statistics
 
 Random.seed!(42)
 
@@ -162,7 +161,7 @@ end
 # ART HS25 50x), the `:scalable` corrector collapses thousands of naive contigs
 # (N50 = 41) into one contig at the full genome length while holding ~99.3–100%
 # genome fraction and ~99.99–100% identity. See the
-# [Benchmarks](../benchmarks.md) page for the full table.
+# [Benchmarks](../../benchmarks.md) page for the full table.
 
 # ## Next steps
 #
