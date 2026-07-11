@@ -5,9 +5,10 @@
 # injected-error ground truth. This closes the gap left by the two existing
 # harnesses:
 #
-#   * benchmarking/viterbi_accuracy_benchmark.jl ("B8") measures RECALL ONLY and
-#     targets the bare `correct_observations` decode primitive — NOT the shipped
-#     assemble_genome(corrector=:iterative, strategy=:scalable) pipeline.
+#   * benchmarking/viterbi_accuracy_benchmark.jl ("B8") measures recall and net
+#     edit-distance reduction — but NOT per-base precision / over-correction rate
+#     — and targets the bare `correct_observations` decode primitive, NOT the
+#     shipped assemble_genome(corrector=:iterative, strategy=:scalable) pipeline.
 #   * benchmarking/rhizomorph_correction_validation_sweep.jl measures ASSEMBLY
 #     metrics (N50 / genome_fraction), not per-base correction accuracy.
 #
@@ -21,14 +22,16 @@
 # property and must be measured there, against known injected errors.
 #
 # CORRECTOR ENTRY POINT: this harness calls `Mycelia.mycelia_iterative_assemble`
-# directly with the EXACT knobs `_corrector_strategy_knobs(:scalable)` supplies
-# to the wired path (src/rhizomorph/assembly.jl:783). That function IS the
-# read-corrector half of assemble_genome(corrector=:iterative, strategy=:scalable)
-# — assemble_genome merely re-assembles its corrected reads into contigs (which
-# would discard the per-read identity this harness needs). Corrected reads are
-# read back from `result[:metadata][:final_fastq_file]` and joined to their truth
-# fragments by read ID (unkmerizable/skipped reads pass through uncorrected; the
-# ID-join surfaces any drop-outs explicitly rather than silently miscounting).
+# directly with the EXACT knobs the `:scalable` branch of
+# `_corrector_strategy_knobs` supplies to the wired path (both live in
+# src/rhizomorph/assembly.jl; symbol-anchored, not line-anchored, since that file
+# is actively edited). `mycelia_iterative_assemble` IS the read-corrector half of
+# assemble_genome(corrector=:iterative, strategy=:scalable) — assemble_genome
+# merely re-assembles its corrected reads into contigs (which would discard the
+# per-read identity this harness needs). Corrected reads are read back from
+# `result[:metadata][:final_fastq_file]` and joined to their truth fragments by
+# read ID (unkmerizable/skipped reads pass through uncorrected; the ID-join
+# surfaces any drop-outs explicitly rather than silently miscounting).
 #
 # GROUND TRUTH (substitution-only, this version): errors are injected with
 # `Mycelia.mutate_dna_substitution_fraction` (length-preserving, no indels), so
@@ -50,7 +53,17 @@
 #   precision       = true_fixes / total_edits          (total_edits = C != O)
 #   over_correction = over_corrections / correct_positions  (O==T but C!=T)
 #   correction_rate = total_edits / total_bases         (compare to error_rate)
-# where a true_fix is an injected position corrected to truth (C==T at O!=T).
+# where a true_fix is an injected position corrected to truth (C==T at O!=T). An
+# edit is one of three classes — true_fix, mis_fix (error edited to a WRONG base),
+# or over_correction (correct base made wrong) — and they partition exactly:
+# total_edits == true_fixes + mis_fixes + over_corrections. mis_fixes vs
+# over_corrections attributes precision loss to failed corrections vs collateral
+# damage. Zero-denominator metrics are NaN ("undefined here", not a measured 0).
+#
+# GUARDS: a VERDICT requires BOTH the scale floor AND a minimum aggregate SCORED
+# fraction (MYCELIA_RCA_MIN_SCORED_FRACTION) so clean-looking metrics on a tiny
+# surviving subset (mass drops/exclusions) cannot be quoted as validation; a
+# crashed cell is marked ok=false in the CSV; an empty corrector output errors.
 #
 # SCALE GUARD: reuses rhizomorph_scale_guard.jl (via the sweep include). Below
 # the floor the run is labelled SMOKE-ONLY and MUST NOT be quoted as validation.
@@ -92,8 +105,10 @@ include(joinpath(@__DIR__, "rhizomorph_correction_validation_sweep.jl"))
 """
 Simulate fixed-length substitution-only reads for one (error_rate, readlen) cell.
 Each read samples a random fragment (either strand) of `refseq`, injects
-substitutions at `error_rate` via `Mycelia.mutate_dna_substitution_fraction`
-(length-preserving), and is emitted with a uniform Phred `assigned_q`.
+`ceil(error_rate * readlen)` substitutions (so the realized rate is >= nominal;
+e.g. err=0.01 at readlen=150 -> ceil(1.5)=2 -> 0.0133 realized) via
+`Mycelia.mutate_dna_substitution_fraction` (length-preserving), and is emitted
+with a uniform Phred `assigned_q`.
 
 Returns `(records, truth_by_id, observed_by_id, injected_total, sampled_bases)`:
 `truth_by_id[id]` / `observed_by_id[id]` are the pre-/post-error read sequences
@@ -132,9 +147,10 @@ end
 # === Run the wired :scalable corrector on one read set ======================
 
 """
-Correct `records` with the WIRED :scalable knobs (exact replica of
-`_corrector_strategy_knobs(:scalable)` as consumed at
-src/rhizomorph/assembly.jl:879). Returns `(corrected_by_id, result_dict)` where
+Correct `records` with the WIRED :scalable knobs (exact replica of the
+`:scalable` branch of `_corrector_strategy_knobs` as consumed by the
+`mycelia_iterative_assemble` call in `_assemble_with_iterative_corrector`, both
+in src/rhizomorph/assembly.jl). Returns `(corrected_by_id, result_dict)` where
 `corrected_by_id[id]` is the corrected read sequence keyed by read id.
 """
 function correct_reads_scalable(records::Vector{FASTX.FASTQ.Record}, k::Int)
@@ -175,71 +191,23 @@ function correct_reads_scalable(records::Vector{FASTX.FASTQ.Record}, k::Int)
             corrected_by_id[FASTX.identifier(rec)] = String(FASTX.sequence(BioSequences.LongDNA{4}, rec))
         end
     end
+    # A structurally-valid but EMPTY corrected FASTQ (zero records) is never a
+    # legitimate result for a non-empty input — it would otherwise flow to
+    # per_base_metrics as "every read dropped" (all-NaN metrics) with no error.
+    # Fail loud so an empty-output corrector bug can't masquerade as a real run.
+    if !isempty(records) && isempty(corrected_by_id)
+        error("iterative corrector produced 0 corrected reads from $(length(records)) input reads " *
+              "(corrected FASTQ $(corrected_fastq) was empty); refusing to score an empty result")
+    end
     return corrected_by_id, result
 end
 
 # === Per-base metric computation ============================================
-
-"""
-Compute per-base correction metrics over all reads by joining `corrected_by_id`
-to `truth_by_id` / `observed_by_id` on read id. Reads absent from the corrected
-set (`reads_dropped`) and reads whose corrected length != truth length
-(`reads_excluded_len`, a Viterbi indel path) are counted and EXCLUDED from the
-positional metric rather than silently miscounted.
-
-Position classification for a scored read (truth T, observed O, corrected C, |T|=|O|=|C|):
-  injected error   : O[p] != T[p]
-  edit             : C[p] != O[p]
-  true_fix         : O[p] != T[p]  AND  C[p] == T[p]
-  over_correction  : O[p] == T[p]  AND  C[p] != T[p]   (a correct base made wrong)
-"""
-function per_base_metrics(truth_by_id::Dict{String, String},
-        observed_by_id::Dict{String, String}, corrected_by_id::Dict{String, String})
-    tp = 0                 # true fixes
-    total_edits = 0        # positions where C != O
-    injected = 0           # positions where O != T
-    over = 0               # over-corrections (O==T, C!=T)
-    correct_positions = 0  # positions where O == T
-    total_bases = 0
-    reads_scored = 0
-    reads_excluded_len = 0
-    reads_dropped = 0
-    for (rid, T) in truth_by_id
-        O = observed_by_id[rid]
-        if !haskey(corrected_by_id, rid)
-            reads_dropped += 1
-            continue
-        end
-        C = corrected_by_id[rid]
-        # collect to Char vectors: ACGT are ASCII, but this is robust to any
-        # codeunit subtlety and lets us index positionally.
-        Tc = collect(T)
-        Oc = collect(O)
-        Cc = collect(C)
-        if length(Cc) != length(Tc)
-            reads_excluded_len += 1
-            continue
-        end
-        reads_scored += 1
-        L = length(Tc)
-        total_bases += L
-        for p in 1:L
-            terr = Oc[p] != Tc[p]
-            edited = Cc[p] != Oc[p]
-            terr ? (injected += 1) : (correct_positions += 1)
-            edited && (total_edits += 1)
-            (terr && Cc[p] == Tc[p]) && (tp += 1)
-            (!terr && Cc[p] != Tc[p]) && (over += 1)
-        end
-    end
-    recall = injected == 0 ? NaN : tp / injected
-    precision = total_edits == 0 ? NaN : tp / total_edits
-    over_rate = correct_positions == 0 ? NaN : over / correct_positions
-    correction_rate = total_bases == 0 ? NaN : total_edits / total_bases
-    return (; tp, total_edits, injected, over, correct_positions, total_bases,
-        recall, precision, over_rate, correction_rate,
-        reads_scored, reads_excluded_len, reads_dropped)
-end
+# `per_base_metrics` lives in a pure, Mycelia-free companion so its
+# classification math is unit-testable in milliseconds. See that file's header
+# for the full position classification and the
+# `total_edits == true_fixes + mis_fixes + over_corrections` partition invariant.
+include(joinpath(@__DIR__, "rhizomorph_correction_accuracy_metrics.jl"))
 
 # === Main sweep =============================================================
 
@@ -254,6 +222,10 @@ function run_accuracy_benchmark()
     assigned_q = parse(Int, get(ENV, "MYCELIA_RCA_ASSIGNED_Q", "20"))
     seed = parse(Int, get(ENV, "MYCELIA_RCA_SEED", "42"))
     scale_floor = parse(Float64, get(ENV, "MYCELIA_RCA_SCALE_FLOOR", string(SCALE_FLOOR_BASES)))
+    # Minimum aggregate fraction of reads that must actually be SCORED (joined +
+    # positionally comparable) for a VERDICT — guards against clean-looking
+    # metrics computed on a tiny surviving subset. SMOKE-ONLY otherwise.
+    min_scored_fraction = parse(Float64, get(ENV, "MYCELIA_RCA_MIN_SCORED_FRACTION", "0.5"))
 
     println("=== Rhizomorph Correction ACCURACY Benchmark (wired :scalable corrector) ===")
     println("Start time     : $(Dates.now())")
@@ -276,9 +248,13 @@ function run_accuracy_benchmark()
     glen = length(refseq)
     println("Reference: $ref_label ($glen bp)")
 
+    # Harness-local guard (the wired pipeline does NOT clamp k — it uses config.k
+    # directly): only triggers in degenerate tiny-genome / short-read configs. At
+    # the default k=21, readlen>=150 it never fires, and max_k=max(k,13) matches
+    # the authoritative floor either way.
     min_readlen = minimum(min.(readlens, glen))
     if k > min_readlen
-        @warn "k=$k exceeds shortest effective read length $min_readlen; clamping"
+        @warn "k=$k exceeds shortest effective read length $min_readlen; clamping (harness-local, not in the wired pipeline)"
         k = min_readlen
     end
 
@@ -288,15 +264,21 @@ function run_accuracy_benchmark()
         reference = String[], genome_len = Int[], error_rate = Float64[],
         regime = String[], readlen = Int[], target_coverage = Float64[],
         effective_coverage = Float64[], k = Int[], assigned_q = Int[],
-        n_reads = Int[], reads_scored = Int[], reads_dropped = Int[],
-        reads_excluded_len = Int[], total_bases = Int[],
-        injected_errors = Int[], total_edits = Int[], true_fixes = Int[],
-        over_corrections = Int[], correct_positions = Int[],
-        recall = Float64[], precision = Float64[], over_correction_rate = Float64[],
-        correction_rate = Float64[], corrector_runtime_s = Float64[]
+        ok = Bool[], n_reads = Int[], reads_scored = Int[], scored_fraction = Float64[],
+        reads_dropped = Int[], reads_excluded_len = Int[], corrected_unjoined = Int[],
+        total_bases = Int[], injected_errors = Int[], total_edits = Int[],
+        true_fixes = Int[], mis_fixes = Int[], over_corrections = Int[],
+        correct_positions = Int[], recall = Float64[], precision = Float64[],
+        over_correction_rate = Float64[], correction_rate = Float64[],
+        corrector_runtime_s = Float64[]
     )
 
     min_effective_coverage = Inf
+    # Aggregate scored-fraction across cells governs the VERDICT alongside the
+    # scale floor: clean-looking recall/precision on a tiny scored subset (mass
+    # drops/exclusions) must NOT be quotable as validation.
+    total_reads_all = 0
+    total_scored_all = 0
 
     println("\n--- Sweeping (error_rate x read-regime) on the wired :scalable corrector ---")
     for err in errs
@@ -327,23 +309,36 @@ function run_accuracy_benchmark()
             runtime = round(time() - t0; digits = 3)
 
             m = per_base_metrics(truth_by_id, observed_by_id, corrected_by_id)
+            total_reads_all += length(records)
+            total_scored_all += m.reads_scored
+            # ID-format mismatch diagnostic: corrected reads exist but none
+            # joined to truth => the corrector renamed ids, NOT a genuine drop.
+            # Without this, every read reports as "dropped" and the operator
+            # misdiagnoses a join bug as a corrector that fixed nothing.
+            if ok && m.reads_scored == 0 && m.corrected_unjoined > 0
+                @warn "No corrected read joined to truth by id, yet the corrector emitted reads — " *
+                      "likely a read-ID FORMAT mismatch (renamed ids), not genuine drops" err readlen corrected_unjoined = m.corrected_unjoined
+            end
             push!(rows,
                 (
                     reference = ref_label, genome_len = glen, error_rate = err,
                     regime = regime, readlen = readlen, target_coverage = coverage,
                     effective_coverage = eff_cov, k = k, assigned_q = assigned_q,
-                    n_reads = length(records), reads_scored = m.reads_scored,
-                    reads_dropped = m.reads_dropped, reads_excluded_len = m.reads_excluded_len,
+                    ok = ok, n_reads = length(records), reads_scored = m.reads_scored,
+                    scored_fraction = m.scored_fraction, reads_dropped = m.reads_dropped,
+                    reads_excluded_len = m.reads_excluded_len,
+                    corrected_unjoined = m.corrected_unjoined,
                     total_bases = m.total_bases, injected_errors = m.injected,
-                    total_edits = m.total_edits, true_fixes = m.tp,
+                    total_edits = m.total_edits, true_fixes = m.tp, mis_fixes = m.mis_fixes,
                     over_corrections = m.over, correct_positions = m.correct_positions,
                     recall = m.recall, precision = m.precision,
                     over_correction_rate = m.over_rate, correction_rate = m.correction_rate,
                     corrector_runtime_s = runtime))
             println("    ok=$ok scored=$(m.reads_scored)/$(length(records)) " *
+                    "(frac=$(round(m.scored_fraction; digits=3))) " *
                     "dropped=$(m.reads_dropped) excl_len=$(m.reads_excluded_len)")
             println("    recall=$(round(m.recall; digits=4)) precision=$(round(m.precision; digits=4)) " *
-                    "over_corr_rate=$(round(m.over_rate; digits=6)) " *
+                    "mis_fixes=$(m.mis_fixes) over_corr_rate=$(round(m.over_rate; digits=6)) " *
                     "correction_rate=$(round(m.correction_rate; digits=4)) (vs err=$err) $(runtime)s")
         end
     end
@@ -352,43 +347,59 @@ function run_accuracy_benchmark()
     println("\n=== Per-(error_rate, regime) correction accuracy ===")
     _fmt = (v) -> rpad(string(v), 12)
     println(join(
-        _fmt.(["err", "regime", "readlen", "recall", "precision",
+        _fmt.(["err", "regime", "readlen", "recall", "precision", "mis_fix",
             "over_rate", "corr_rate", "scored"]),
         ""))
     for r in eachrow(sort(rows, [:error_rate, :readlen]))
         println(join(
             _fmt.([r.error_rate, r.regime, r.readlen,
                 round(r.recall; digits = 4), round(r.precision; digits = 4),
-                round(r.over_correction_rate; digits = 6),
+                r.mis_fixes, round(r.over_correction_rate; digits = 6),
                 round(r.correction_rate; digits = 4), r.reads_scored]),
             ""))
     end
 
-    # === Scale guard ===
+    # === Scale + scored-fraction guard ===
+    # Two independent gates must BOTH pass for a VERDICT:
+    #   (1) scale floor  — enough sequenced bases (coverage x genome length)
+    #   (2) scored floor — enough reads actually entered the positional metric,
+    #       so recall/precision don't rest on a tiny surviving subset.
     eff_cov_for_guard = isfinite(min_effective_coverage) ? min_effective_coverage : 0.0
     metric = scale_metric_bases(eff_cov_for_guard, glen)
-    verdict_allowed = scale_verdict_allowed(eff_cov_for_guard, glen; floor = scale_floor)
+    scale_ok = scale_verdict_allowed(eff_cov_for_guard, glen; floor = scale_floor)
+    agg_scored_fraction = total_reads_all == 0 ? 0.0 : total_scored_all / total_reads_all
+    scored_ok = agg_scored_fraction >= min_scored_fraction
+    verdict_allowed = scale_ok && scored_ok
     mode = verdict_allowed ? "VERDICT" : "SMOKE-ONLY"
 
     rows[!, :mode] = fill(mode, DataFrames.nrow(rows))
     rows[!, :scale_metric_bases] = fill(metric, DataFrames.nrow(rows))
     rows[!, :scale_floor_bases] = fill(scale_floor, DataFrames.nrow(rows))
+    rows[!, :agg_scored_fraction] = fill(round(agg_scored_fraction; digits = 4), DataFrames.nrow(rows))
     timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
     csv_path = joinpath(results_dir, "rhizomorph_correction_accuracy_$(timestamp).csv")
     CSV.write(csv_path, rows)
     println("\nCSV written: $csv_path")
+    println("Aggregate scored fraction: $(round(agg_scored_fraction; digits=4)) (floor $(min_scored_fraction))")
 
     if verdict_allowed
-        println("\n=== VERDICT (scale metric $(round(metric; digits=0)) bases >= floor $(scale_floor)) ===")
+        println("\n=== VERDICT (scale $(round(metric; digits=0)) bases >= $(scale_floor); scored $(round(agg_scored_fraction; digits=3)) >= $(min_scored_fraction)) ===")
         println("Interpretation per cell:")
         println("  recall high + precision high + over_correction_rate ~0 => corrector fixes errors cleanly")
-        println("  precision < recall or over_correction_rate elevated    => corrector over-corrects")
+        println("  precision < recall via mis_fixes => failed corrections; via over_corrections => collateral damage")
         println("  correction_rate should track error_rate (edits ~ true errors); >> error_rate => over-editing")
     else
-        println("\n=== SMOKE-ONLY (scale metric $(round(metric; digits=0)) bases < floor $(scale_floor)) ===")
-        println("This run is BELOW the scale floor and MUST NOT be quoted as validation.")
-        println("It confirms the harness parses + runs end-to-end. Raise coverage/genome size")
-        println("(or run the full Lambda-phage config on Lovelace) for a VERDICT.")
+        reasons = String[]
+        scale_ok ||
+            push!(reasons, "scale metric $(round(metric; digits=0)) < floor $(scale_floor)")
+        scored_ok || push!(reasons,
+            "scored fraction $(round(agg_scored_fraction; digits=3)) < floor $(min_scored_fraction)")
+        println("\n=== SMOKE-ONLY ($(join(reasons, "; "))) ===")
+        println("This run MUST NOT be quoted as validation. " *
+                (scale_ok ? "" : "Raise coverage/genome size. ") *
+                (scored_ok ? "" :
+                 "Too few reads scored (mass drops/exclusions) — investigate before trusting metrics. "))
+        println("Run the full Lambda-phage config on Lovelace for a VERDICT.")
     end
 
     println("\n=== Accuracy benchmark complete: $(Dates.now()) ===")
