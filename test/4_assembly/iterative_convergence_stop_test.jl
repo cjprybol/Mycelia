@@ -17,6 +17,7 @@ import Test
 import Mycelia
 import FASTX
 import Random
+import Primes
 
 const CBASES = ['A', 'C', 'G', 'T']
 
@@ -27,7 +28,9 @@ function write_clean_fastq(path, rng; reflen = 800, n_reads = 60, readlen = 80)
         for i in 1:n_reads
             s = rand(rng, 1:(reflen - readlen + 1))
             seq = ref[s:(s + readlen - 1)]
-            println(io, "@r$i"); println(io, seq); println(io, "+")
+            println(io, "@r$i");
+            println(io, seq);
+            println(io, "+")
             println(io, String(fill('I', readlen)))
         end
     end
@@ -35,19 +38,20 @@ function write_clean_fastq(path, rng; reflen = 800, n_reads = 60, readlen = 80)
 end
 
 Test.@testset "iterative corrector: no-change convergence + k-ladder" begin
-
     Test.@testset "build_k_ladder" begin
         # Coarse geometric ladder: 3 rungs from initial to max.
         Test.@test Mycelia.build_k_ladder(3, 31; n_k_rungs = 3) == [3, 11, 31]
         # Explicit ladder is filtered to [initial_k, max_k] and sorted/deduped.
-        Test.@test Mycelia.build_k_ladder(3, 31; k_ladder = [15, 5, 9, 100, 5]) == [5, 9, 15]
+        Test.@test Mycelia.build_k_ladder(3, 31; k_ladder = [15, 5, 9, 100, 5]) ==
+                   [5, 9, 15]
         # No knob set => nothing (legacy prime progression preserved).
         Test.@test Mycelia.build_k_ladder(3, 31) === nothing
-        # First rung pinned to initial_k, last rung <= max_k and odd.
+        # First rung pinned to initial_k; last rung = largest odd <= max_k (== max_k
+        # here so re-assembly graph reuse fires); intermediate rungs prime.
         ladder = Mycelia.build_k_ladder(5, 40; n_k_rungs = 4)
         Test.@test first(ladder) == 5
-        Test.@test last(ladder) <= 40
-        Test.@test isodd(last(ladder))
+        Test.@test last(ladder) == (isodd(40) ? 40 : 39)   # 39
+        Test.@test all(Primes.isprime, ladder[1:(end - 1)])  # first + intermediates prime
         Test.@test issorted(ladder)
     end
 
