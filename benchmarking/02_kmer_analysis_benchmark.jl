@@ -300,8 +300,10 @@ for k in [15, 21, 31]  # Test key k values
     actual_genome_size = benchmark_genome_size
     dense_estimate = Mycelia.estimate_dense_matrix_memory(Float64, theoretical_kmers, 1)
     
-    # Check if matrix would fit in memory
-    memory_check = Mycelia.check_matrix_fits_in_memory(dense_estimate)
+    # Check if matrix would fit in memory (severity=:silent: this loop
+    # intentionally probes the full theoretical 4^k k-mer space, which is
+    # expected to be infeasible for k=21,31 - the warning is not actionable)
+    memory_check = Mycelia.check_matrix_fits_in_memory(dense_estimate; severity=:silent)
     
     println("k=$k:")
     println("  Theoretical k-mer space: $(theoretical_kmers)")
