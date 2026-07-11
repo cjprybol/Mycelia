@@ -139,7 +139,7 @@ c = contig_summary(corrected)
 println("\n" * "="^64)
 println("RESULT — same reads, two arms (phiX174 reference = $ref_length bp)")
 println("="^64)
-println("  baseline  (:none)      contigs=$(b.n)  largest=$(b.largest) bp  total=$(b.total) bp  t=$(baseline_elapsed)s")
+println("  naive     (:none)      contigs=$(b.n)  largest=$(b.largest) bp  total=$(b.total) bp  t=$(baseline_elapsed)s")
 println("  corrected (:scalable)  contigs=$(c.n)  largest=$(c.largest) bp  total=$(c.total) bp  t=$(corrected_elapsed)s")
 
 # The corrector reports what it did:
@@ -158,9 +158,9 @@ end
 # assembly resolves to a single near-full-length contig. The trade-off is
 # runtime: correction adds a per-read maximum-likelihood decode, so the corrected
 # arm is slower. On the committed real-genome benchmark (phiX174 + lambda,
-# ART HS25 50x), the `:scalable` corrector collapses thousands of naive contigs
-# (N50 = 41) into one contig at the full genome length while holding ~99.3–100%
-# genome fraction and ~99.99–100% identity. See the
+# ART HS25 50x), the `:scalable` corrector collapses hundreds to thousands of
+# naive contigs (N50 = 41) into one near-full-length contig while holding
+# ~99.3–100% genome fraction and ~99.99–100% identity. See the
 # [Benchmarks](../../benchmarks.md) page for the full table.
 
 # ## Next steps

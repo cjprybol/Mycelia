@@ -221,7 +221,7 @@ Raw CSV results are archived under
 Rhizomorph ships an opt-in **read corrector** — a graph-structured hidden Markov
 model that decodes each read to its maximum-likelihood path before assembly (see
 `docs/design/2026-07-graph-as-hmm-corrector-methods.md` and
-[Tutorial 13b](tutorials.md)). This section validates the production
+[Tutorial 13b](generated/tutorials/13_rhizomorph_corrector.md)). This section validates the production
 `:scalable` tier on real genomes, contrasting two arms on identical reads:
 
 - **naive** — `assemble_genome(reads; corrector=:none, k=21)`
@@ -250,13 +250,17 @@ Both arms use the `DoubleStrand` graph mode.
 
 ![Corrector before/after metrics](assets/rhizomorph/corrector_before_after.png)
 
-The naive short-read assembly fragments each genome into thousands of redundant
-contigs (N50 = 41 bp; total length roughly 9× the genome, since each strand and
-its error debris assemble separately). The `:scalable` corrector collapses these
-into a **single contig at the full genome length** while holding genome fraction
-at 99.3–100 % and identity at 99.99–100 %.
+The naive short-read assembly fragments each genome into hundreds to thousands of
+redundant contigs (N50 = 41 bp; total length roughly 9× the genome, since each
+strand and its error debris assemble separately). The `:scalable` corrector
+collapses these into a **single near-full-length contig** while holding genome
+fraction at 99.3–100 % and identity at 99.99–100 %.
 
-![Corrector assembly contiguity](assets/rhizomorph/corrector_graph.png)
+The same result viewed as assembly redundancy — total assembled length relative
+to the genome length. The naive arm carries ≈9× the genome (both strands plus
+error debris); the corrector returns to ≈1× (a single near-full-length contig).
+
+![Corrector assembly redundancy: naive ≈9× vs corrected ≈1× the genome length](assets/rhizomorph/corrector_graph.png)
 
 ### Trade-offs and caveats
 

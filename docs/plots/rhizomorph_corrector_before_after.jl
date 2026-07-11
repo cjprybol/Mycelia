@@ -35,7 +35,7 @@ df = CSV.read(CSV_PATH, DataFrames.DataFrame)
 genomes = ["phix174", "lambda"]
 genome_labels = ["phiX174\n(5.4 kb)", "lambda\n(48.5 kb)"]
 arms = ["naive", "scalable"]
-arm_labels = ["naive (:none)", "scalable (:iterative)"]
+arm_labels = ["naive (:none)", "corrected (:scalable)"]
 arm_colors = [COLOR_NAIVE, COLOR_SCALABLE]
 
 """Pull one metric column into a genome x arm matrix in the fixed order."""
@@ -84,7 +84,7 @@ CairoMakie.set_theme!(CairoMakie.theme_minimal())
 fig = CairoMakie.Figure(size = (860, 460), figure_padding = 18)
 
 CairoMakie.Label(fig[0, 1:2],
-    "Rhizomorph corrector: naive vs :iterative/:scalable (real-genome validation)";
+    "Rhizomorph corrector: naive vs corrected (real-genome validation)";
     fontsize = 17, font = :bold, padding = (0, 0, 6, 0))
 
 ax1 = CairoMakie.Axis(fig[1, 1];
