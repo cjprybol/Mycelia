@@ -13,6 +13,9 @@
 import Test
 
 include(joinpath(@__DIR__, "rhizomorph_scale_guard.jl"))
+# Dependency-free QUAST parser + per-arm attribution helper (same file the sweep
+# includes), so the parse/wiring logic is exercised without running QUAST.
+include(joinpath(@__DIR__, "quast_report_parsing.jl"))
 
 Test.@testset "rhizomorph correction validation scale guard" begin
     # --- Toy-scale config triggers SMOKE-ONLY --------------------------------
@@ -44,4 +47,47 @@ Test.@testset "rhizomorph correction validation scale guard" begin
     # explicit floor argument in both directions.
     Test.@test scale_verdict_allowed(10.0, 2_000; floor = 10_000) == true
     Test.@test scale_verdict_allowed(10.0, 2_000; floor = 100_000) == false
+end
+
+Test.@testset "QUAST report parsing + per-arm metric wiring" begin
+    mktempdir() do dir
+        # --- Fixture: a minimal QUAST report.tsv with the four metrics we wire --
+        report_tsv = joinpath(dir, "report.tsv")
+        open(report_tsv, "w") do io
+            println(io, "Assembly\tnaive_contigs")
+            println(io, "# contigs\t12")
+            println(io, "Genome fraction (%)\t94.37")
+            println(io, "Duplication ratio\t1.02")
+            println(io, "NGA50\t8421")
+            println(io, "# misassemblies\t3")
+            # QUAST prints "-" for a metric it could not compute; must -> missing.
+            println(io, "LGA50\t-")
+        end
+
+        # --- parse_quast_metric extracts each metric value correctly -----------
+        Test.@test parse_quast_metric(report_tsv, "Genome fraction (%)") == 94.37
+        Test.@test parse_quast_metric(report_tsv, "NGA50") == 8421.0
+        Test.@test parse_quast_metric(report_tsv, "# misassemblies") == 3.0
+        Test.@test parse_quast_metric(report_tsv, "Duplication ratio") == 1.02
+        # Non-numeric "-" and absent metrics both yield missing.
+        Test.@test parse_quast_metric(report_tsv, "LGA50") === missing
+        Test.@test parse_quast_metric(report_tsv, "Nonexistent metric") === missing
+
+        # --- quast_metrics_for_report: QUAST-present path populates the row cols -
+        q = quast_metrics_for_report(report_tsv)
+        Test.@test q.metric_source == "quast"
+        Test.@test q.quast_genome_fraction == 94.37
+        Test.@test q.quast_nga50 == 8421.0
+        Test.@test q.quast_num_misassemblies == 3.0
+        Test.@test q.quast_duplication_ratio == 1.02
+
+        # --- Fallback: no report.tsv -> internal source, all quast_* missing ----
+        missing_report = joinpath(dir, "does_not_exist", "report.tsv")
+        f = quast_metrics_for_report(missing_report)
+        Test.@test f.metric_source == "internal"
+        Test.@test f.quast_genome_fraction === missing
+        Test.@test f.quast_nga50 === missing
+        Test.@test f.quast_num_misassemblies === missing
+        Test.@test f.quast_duplication_ratio === missing
+    end
 end

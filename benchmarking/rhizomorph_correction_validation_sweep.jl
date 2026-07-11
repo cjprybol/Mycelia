@@ -46,7 +46,12 @@
 #   MYCELIA_RGV_K              assembly k-mer size (default 21)
 #   MYCELIA_RGV_SEED           RNG seed for reproducibility (default 42)
 #   MYCELIA_RGV_SCALE_FLOOR    override the scale-guard floor in bases
-#   MYCELIA_RUN_EXTERNAL       truthy -> run QUAST (degrades gracefully if absent)
+#   MYCELIA_RUN_EXTERNAL       truthy -> run QUAST per arm and parse its
+#                              alignment-validated metrics (Genome fraction,
+#                              NGA50, # misassemblies, Duplication ratio) back
+#                              into the CSV (metric_source="quast"); degrades
+#                              gracefully to internal size-ratio metrics
+#                              (metric_source="internal") if QUAST is absent
 
 import Pkg
 if isinteractive()
@@ -64,6 +69,9 @@ import Random
 
 # Pure, dependency-free scale guard (shared with the unit test).
 include(joinpath(@__DIR__, "rhizomorph_scale_guard.jl"))
+# Pure, dependency-free QUAST report.tsv parser + per-arm metric attribution
+# (shared with the unit test and with mode_comparison.jl).
+include(joinpath(@__DIR__, "quast_report_parsing.jl"))
 
 # === Configuration parsing =================================================
 
@@ -99,7 +107,8 @@ reference is downloaded by accession, reusing real_genome_benchmark.jl's
 
 Returns `(refseq::BioSequences.LongDNA{4}, ref_fasta_path::String, label::String)`.
 """
-function acquire_reference(; smoke::Bool, accession::String, smoke_len::Int, seed::Int, workdir::String)
+function acquire_reference(;
+        smoke::Bool, accession::String, smoke_len::Int, seed::Int, workdir::String)
     if smoke
         rec = Mycelia.random_fasta_record(moltype = :DNA, seed = seed, L = smoke_len)
         ref_path = joinpath(workdir, "synthetic_reference.fasta")
@@ -245,7 +254,8 @@ function run_sweep()
     mkpath(results_dir)
 
     println("\n--- Acquiring reference ---")
-    refseq, ref_path, ref_label = acquire_reference(
+    refseq, ref_path,
+    ref_label = acquire_reference(
         smoke = smoke, accession = accession, smoke_len = smoke_len, seed = seed, workdir = workdir)
     glen = length(refseq)
     println("Reference: $ref_label ($glen bp)")
@@ -264,7 +274,14 @@ function run_sweep()
         regime = String[], readlen = Int[], tech = String[], target_coverage = Float64[],
         effective_coverage = Float64[], k = Int[], arm = String[], ok = Bool[],
         n_contigs = Int[], total_length = Int[], largest_contig = Int[], n50 = Int[],
-        genome_fraction = Float64[], runtime_s = Float64[]
+        genome_fraction = Float64[], runtime_s = Float64[],
+        # Alignment-validated QUAST metrics (populated per arm when QUAST ran);
+        # `genome_fraction` above stays the INTERNAL total_length/glen size ratio.
+        quast_genome_fraction = Union{Missing, Float64}[],
+        quast_nga50 = Union{Missing, Float64}[],
+        quast_num_misassemblies = Union{Missing, Float64}[],
+        quast_duplication_ratio = Union{Missing, Float64}[],
+        metric_source = String[]
     )
 
     # Track the minimum effective coverage across cells for the scale guard: the
@@ -279,7 +296,8 @@ function run_sweep()
             mkpath(cell_dir)
             println("\n[cell] err=$err  regime=$regime  readlen=$readlen  tech=$tech")
 
-            reads, sampled_bases = simulate_regime_reads(refseq, readlen, coverage, err, tech, rng)
+            reads,
+            sampled_bases = simulate_regime_reads(refseq, readlen, coverage, err, tech, rng)
             eff_cov = glen == 0 ? 0.0 : round(sampled_bases / glen; digits = 2)
             min_effective_coverage = min(min_effective_coverage, eff_cov)
             println("  simulated $(length(reads)) reads, effective coverage $(eff_cov)x")
@@ -288,34 +306,49 @@ function run_sweep()
                 tag = "$(ref_label)_err$(err)_len$(readlen)"
                 arm_name = corrector == :none ? "naive" : "iterative"
                 res = run_arm(reads, corrector, k, glen, cell_dir, tag)
-                push!(rows, (
-                    reference = ref_label, genome_len = glen, error_rate = err,
-                    regime = regime, readlen = readlen, tech = String(tech),
-                    target_coverage = coverage, effective_coverage = eff_cov, k = k,
-                    arm = arm_name, ok = res.ok, n_contigs = res.n_contigs,
-                    total_length = res.total_length, largest_contig = res.largest_contig,
-                    n50 = res.n50, genome_fraction = res.genome_fraction,
-                    runtime_s = res.runtime_s))
-                println("    $(rpad(arm_name, 9)) -> ok=$(res.ok) contigs=$(res.n_contigs) " *
-                        "total=$(res.total_length)bp largest=$(res.largest_contig) " *
-                        "n50=$(res.n50) frac=$(res.genome_fraction)% $(res.runtime_s)s")
-            end
 
-            # Optional QUAST validation for this cell (both arms vs reference).
-            if run_external
-                cell_contigs = String[joinpath(cell_dir, f) for f in readdir(cell_dir)
-                                      if endswith(f, "_contigs.fasta") && filesize(joinpath(cell_dir, f)) > 0]
-                if !isempty(cell_contigs)
+                # Optional QUAST validation for THIS arm (per-arm attribution:
+                # one assembly per invocation so the alignment-based metrics land
+                # on the correct row). Defaults to the internal-metric fallback;
+                # a QUAST failure is non-fatal and NEVER flips `res.ok`.
+                quast = (metric_source = "internal", quast_genome_fraction = missing,
+                    quast_nga50 = missing, quast_num_misassemblies = missing,
+                    quast_duplication_ratio = missing)
+                if run_external && res.ok && !isempty(res.contigs_path) &&
+                   isfile(res.contigs_path) && filesize(res.contigs_path) > 0
+                    quast_dir = joinpath(cell_dir, "quast_$(arm_name)")
                     try
-                        Mycelia.run_quast(cell_contigs;
-                            outdir = joinpath(cell_dir, "quast"),
+                        Mycelia.run_quast(res.contigs_path;
+                            outdir = quast_dir,
                             reference = ref_path,
                             min_contig = max(50, glen ÷ 10))
-                        println("  QUAST: $(joinpath(cell_dir, "quast"))")
+                        quast = quast_metrics_for_report(joinpath(quast_dir, "report.tsv"))
+                        println("  QUAST[$arm_name]: gf=$(quast.quast_genome_fraction)% " *
+                                "nga50=$(quast.quast_nga50) misasm=$(quast.quast_num_misassemblies) " *
+                                "dup=$(quast.quast_duplication_ratio) ($quast_dir)")
                     catch e
-                        @warn "QUAST unavailable / failed for this cell — continuing without it" exception = e
+                        @warn "QUAST unavailable / failed for this arm — falling back to internal metrics" arm_name exception = e
                     end
                 end
+
+                push!(rows,
+                    (
+                        reference = ref_label, genome_len = glen, error_rate = err,
+                        regime = regime, readlen = readlen, tech = String(tech),
+                        target_coverage = coverage, effective_coverage = eff_cov, k = k,
+                        arm = arm_name, ok = res.ok, n_contigs = res.n_contigs,
+                        total_length = res.total_length, largest_contig = res.largest_contig,
+                        n50 = res.n50, genome_fraction = res.genome_fraction,
+                        runtime_s = res.runtime_s,
+                        quast_genome_fraction = quast.quast_genome_fraction,
+                        quast_nga50 = quast.quast_nga50,
+                        quast_num_misassemblies = quast.quast_num_misassemblies,
+                        quast_duplication_ratio = quast.quast_duplication_ratio,
+                        metric_source = quast.metric_source))
+                println("    $(rpad(arm_name, 9)) -> ok=$(res.ok) contigs=$(res.n_contigs) " *
+                        "total=$(res.total_length)bp largest=$(res.largest_contig) " *
+                        "n50=$(res.n50) frac=$(res.genome_fraction)% " *
+                        "src=$(quast.metric_source) $(res.runtime_s)s")
             end
         end
     end
@@ -323,11 +356,15 @@ function run_sweep()
     # === Tidy per-(err, regime) table ===
     println("\n=== Per-(error_rate, regime) summary: naive vs iterative ===")
     _fmt = (v) -> rpad(string(v), 10)
-    println(join(_fmt.(["err", "regime", "readlen", "arm", "contigs", "total_bp",
-        "largest", "n50", "frac_%", "runtime_s"]), ""))
+    println(join(
+        _fmt.(["err", "regime", "readlen", "arm", "contigs", "total_bp",
+            "largest", "n50", "frac_%", "runtime_s"]),
+        ""))
     for r in eachrow(sort(rows, [:error_rate, :readlen, :arm]))
-        println(join(_fmt.([r.error_rate, r.regime, r.readlen, r.arm, r.n_contigs,
-            r.total_length, r.largest_contig, r.n50, r.genome_fraction, r.runtime_s]), ""))
+        println(join(
+            _fmt.([r.error_rate, r.regime, r.readlen, r.arm, r.n_contigs,
+                r.total_length, r.largest_contig, r.n50, r.genome_fraction, r.runtime_s]),
+            ""))
     end
 
     # === Scale guard ===
