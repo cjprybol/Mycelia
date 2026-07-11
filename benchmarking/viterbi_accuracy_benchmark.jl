@@ -17,9 +17,11 @@ import Test
 include(joinpath(@__DIR__, "benchmark_artifacts.jl"))
 
 const VITERBI_ACCURACY_ERROR_RATES = (0.01, 0.05, 0.10)
-# Fixed seed for the shuffled-edge-weight null (Control B). Deterministic so the
-# null table is byte-reproducible across runs; only the permutation of the real
-# edge weights is randomized, never the topology, observations, or emission model.
+# Fixed seed shared by BOTH Control-B nulls (shuffled-edge-weight and
+# random-rewire). Deterministic so the null tables are byte-reproducible across
+# runs. The observations and emission model are never randomized; the
+# weight-shuffle null randomizes only edge weights (topology fixed), while the
+# random-rewire null randomizes topology (vertices/edge-count/weight-multiset fixed).
 const VITERBI_NULL_SEED = 20260711
 const VITERBI_ACCURACY_FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "viterbi_accuracy")
 const VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR = joinpath(
@@ -283,7 +285,14 @@ function _viterbi_overcorrection_row(
     config = Mycelia.ViterbiCorrectionConfig(error_rate = assumed_error_rate)
     result = Mycelia.correct_observations(
         fixture.graph, [converted_observed]; config = config)
-    corrected = [string(observation) for observation in only(result.corrected_observations)]
+    raw = only(result.corrected_observations)
+    # On un-corrupted input against the REAL graph the corrector must decode; a
+    # `nothing` here is a genuine regression, not a null collapse — fail loud
+    # rather than throw an opaque MethodError iterating `nothing`. (review)
+    raw === nothing && error(
+        "over-correction control: corrector returned nothing on un-corrupted " *
+        "input for $(fixture.dataset_id) at assumed_error_rate=$(assumed_error_rate)")
+    corrected = [string(observation) for observation in raw]
 
     Test.@test length(corrected) == length(fixture.truth)
 
@@ -328,6 +337,13 @@ end
 #       topology. This is the discriminating null the weight-shuffle cannot be.
 # --------------------------------------------------------------------------
 function _shuffle_weighted_graph_weights(weighted, seed::Integer)
+    # deepcopy first: this mutates edge data in place, and although
+    # build_correction_weighted_graph returns a FRESH graph for the current
+    # KmerEdgeData/StringEdgeData fixtures, it has an early-out that returns the
+    # input graph unchanged when the input already carries StrandWeightedEdgeData.
+    # Operating on a copy keeps the null leak-proof (never mutates fixture.graph)
+    # even if a future fixture ships pre-weighted. (review: aliasing-landmine)
+    weighted = deepcopy(weighted)
     edge_labels = collect(MetaGraphsNext.edge_labels(weighted))
     weights = [weighted[src, dst].weight for (src, dst) in edge_labels]
     rng = Random.MersenneTwister(seed)
@@ -377,6 +393,15 @@ function _random_rewired_weighted_graph(weighted, seed::Integer)
             Mycelia.Rhizomorph.Forward)
         added += 1
     end
+    # Enforce the invariant the metadata/docstring advertise ("edge-count +
+    # weight-multiset held fixed"). If rejection sampling exhausts max_attempts on
+    # a future dense/tiny fixture, a silently sparser null with a truncated weight
+    # multiset would be an artificially-weak (or -strong) control — fail loud
+    # instead. (review: rewire under-fill, 4-reviewer convergent)
+    added == target_edges || error(
+        "random-rewire null placed $added/$target_edges edges " *
+        "(n_labels=$n_labels, attempts=$attempts); edge-count/weight-multiset " *
+        "invariant violated — raise max_attempts or revisit the fixture")
     return rewired
 end
 
@@ -423,6 +448,13 @@ function _viterbi_null_row(
     end
 
     real = _recovery(nothing)
+    # The real graph must ALWAYS decode. Only the degraded nulls may collapse to
+    # the observed-fallback. Without this assertion a real-graph decode
+    # regression would be silently scored as recall 0 — which, because the
+    # headline outputs are the real-minus-null gaps, would INVERT the control's
+    # conclusion (null looks as good as real). Assert loudly here; the null arms
+    # keep tolerating collapse. (review: real-arm silent-collapse, convergent)
+    Test.@test real.decoded
     # Shuffled-weight null: same topology, permuted edge weights.
     weight_null = _recovery(
         _shuffle_weighted_graph_weights(

@@ -38,6 +38,13 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
     Test.@test all(overcorrection.injected_error_count .== 0)
     Test.@test all(overcorrection.over_correction_edit_distance .>= 0)
     Test.@test all(0.0 .<= overcorrection.over_correction_rate .<= 1.0)
+    # Cross-field accounting invariant: a row has zero changed observations iff it
+    # has zero over-correction edit distance. Exercises the numerator logic even
+    # though every observed row is the (expected) zero case — a mis-indexed or
+    # inverted count would break this equivalence. (review: over-correction path)
+    Test.@test all(
+        (overcorrection.changed_observations .== 0) .==
+        (overcorrection.over_correction_edit_distance .== 0))
     # The specificity claim the manuscript needs: the corrector does not damage
     # already-correct input (abstains). Asserted as an aggregate so a single
     # tiny-fixture edit does not flake the suite.
@@ -53,13 +60,24 @@ Test.@testset "B8 Viterbi accuracy benchmark artifacts" begin
         Test.@test all(0.0 .<= null_control[!, col] .<= 1.0)
     end
     # Robust invariant: neither null may recover injected errors BETTER than the
-    # real graph (a degraded graph cannot help more than the true one). The
-    # magnitude of the rewire-null collapse is a reported finding, not asserted
-    # here, so a surprising non-collapse surfaces as data rather than a red test.
+    # real graph (a degraded graph cannot help more than the true one).
     Test.@test Statistics.mean(null_control.real_injected_error_recall) >=
                Statistics.mean(null_control.weight_null_injected_error_recall) - 1e-9
     Test.@test Statistics.mean(null_control.real_injected_error_recall) >=
                Statistics.mean(null_control.rewire_null_injected_error_recall) - 1e-9
+    # POSITIVE CONTROL: without this, the "null <= real" invariant is vacuous —
+    # it also passes if the corrector itself regressed to zero recovery (real ==
+    # null == 0). The real graph must actually recover on these fixtures, and it
+    # must never fall into the decode-collapse fallback.
+    Test.@test Statistics.mean(null_control.real_injected_error_recall) > 0.5
+    Test.@test all(null_control.real_decoded)
+    # Fixture-scoped regression guard on the DISCRIMINATING signal: on these
+    # pinned fixtures (RefSeq NC_002030.1 / NC_001422.1 + fixed text excerpt,
+    # deterministic injector, fixed seed) destroying the true adjacency abolishes
+    # recovery entirely. If pointed at new fixtures, re-baseline this one line;
+    # the portable "null <= real" invariant above carries over unchanged.
+    Test.@test Statistics.mean(null_control.rewire_null_injected_error_recall) == 0.0
+    Test.@test all(.!null_control.rewire_null_decoded)
 end
 
 Test.@testset "shuffled-weight null preserves topology + weight multiset" begin
@@ -78,6 +96,18 @@ Test.@testset "shuffled-weight null preserves topology + weight multiset" begin
 
     Test.@test before_edges == after_edges
     Test.@test before_weights ≈ after_weights
+    # Aliasing guard: the shuffle must NOT mutate the caller's graph (it deepcopies
+    # internally), so the null can never leak into the real/Control-A arms even if
+    # a future fixture ships pre-weighted. Verify `weighted` is untouched and the
+    # returned graph is a distinct object. (review: aliasing-landmine)
+    Test.@test shuffled !== weighted
+    Test.@test sort([weighted[s, d].weight
+                     for (s, d) in
+                         MetaGraphsNext.edge_labels(weighted)]) ≈ before_weights
+    # build_correction_weighted_graph must itself return a fresh graph for these
+    # fixtures (the precondition that makes the in-place null isolated).
+    Test.@test Mycelia.build_correction_weighted_graph(fixture.graph; config = config) !==
+               fixture.graph
 end
 
 Test.@testset "random-rewire null preserves vertices/edge-count/weight multiset" begin
@@ -103,4 +133,8 @@ Test.@testset "random-rewire null preserves vertices/edge-count/weight multiset"
     # Topology genuinely changed (not a no-op permutation): at least some edges
     # differ from the real graph. (With hundreds of vertices this is ~certain.)
     Test.@test Set(after_edges) != Set(before_edges)
+    # No self-loops: the rewire rejects src == dst, so no vertex points to itself.
+    # (The vertex/edge-count/weight tests above would all still pass with a
+    # self-loop, so assert it explicitly.)
+    Test.@test all(s != d for (s, d) in after_edges)
 end
