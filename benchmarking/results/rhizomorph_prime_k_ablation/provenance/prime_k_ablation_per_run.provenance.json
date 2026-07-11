@@ -1,0 +1,79 @@
+{
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "dataset_id",
+    "dataset_name",
+    "period_note",
+    "k",
+    "k_class",
+    "error_mode",
+    "target_error_rate",
+    "sequence_length",
+    "kmer_count",
+    "injected_error_count",
+    "baseline_method",
+    "corrected_method",
+    "baseline_mismatch",
+    "corrected_mismatch",
+    "edit_distance_reduction",
+    "injected_error_recall",
+    "over_correction_positions",
+    "reconstructed_length",
+    "corrected_all_injected_positions"
+  ],
+  "command_args": [
+    "julia",
+    "--project=.",
+    "benchmarking/rhizomorph_prime_k_ablation_benchmark.jl"
+  ],
+  "dataset_ids": [
+    "control_nonrepetitive",
+    "palindrome_rich",
+    "tandem_period2_ga",
+    "tandem_period3_atg"
+  ],
+  "generated_at": "2026-07-11T23:39:45.843Z",
+  "git": {
+    "commit": "806f0748c6cf9027cf42fb676d78eb272f49437f",
+    "is_dirty": true
+  },
+  "metadata": {
+    "baseline": "uncorrected sequence-level injected-error observations",
+    "bead": "td-tjym",
+    "benchmark": "prime_vs_composite_k_ablation_repeat_rich",
+    "clean_margin_bp": 23,
+    "composite_k": [
+      9,
+      15,
+      21
+    ],
+    "error_rates": [
+      0.02,
+      0.05,
+      0.1
+    ],
+    "hypothesis": "composite k sharing a factor with a tandem period alias the repeat onto self-periodic k-mers, degrading path decode; prime k break the periodicity",
+    "injection": "sequence-level, interior, k-independent (same corrupted sequence decoded at every k)",
+    "prime_k": [
+      11,
+      19,
+      23
+    ],
+    "scoring": "reconstruct corrected overlapping k-mers to a sequence; recall + edit-distance-reduction at sequence level"
+  },
+  "row_count": 144,
+  "run_id": "prime_k_ablation_local_20260711",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "table_name": "prime_k_ablation_per_run",
+  "table_path": "tables/prime_k_ablation_per_run.csv",
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}

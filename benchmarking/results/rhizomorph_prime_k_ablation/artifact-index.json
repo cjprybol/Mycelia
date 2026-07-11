@@ -1,0 +1,72 @@
+{
+  "directories": {
+    "logs": "logs",
+    "plots": "plots",
+    "provenance": "provenance",
+    "tables": "tables"
+  },
+  "run_id": "prime_k_ablation_local_20260711",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tables": {
+    "prime_k_ablation_delta": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_dataset_id",
+        "dataset_id",
+        "dataset_name",
+        "error_mode",
+        "period_note",
+        "prime_k",
+        "composite_k",
+        "prime_mean_recall",
+        "composite_mean_recall",
+        "recall_delta_prime_minus_composite",
+        "prime_mean_edit_distance_reduction",
+        "composite_mean_edit_distance_reduction",
+        "edit_distance_reduction_delta",
+        "prime_mean_over_correction",
+        "composite_mean_over_correction"
+      ],
+      "provenance": "provenance/prime_k_ablation_delta.provenance.json",
+      "rows": 8,
+      "table": "tables/prime_k_ablation_delta.csv"
+    },
+    "prime_k_ablation_per_run": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_dataset_id",
+        "dataset_id",
+        "dataset_name",
+        "period_note",
+        "k",
+        "k_class",
+        "error_mode",
+        "target_error_rate",
+        "sequence_length",
+        "kmer_count",
+        "injected_error_count",
+        "baseline_method",
+        "corrected_method",
+        "baseline_mismatch",
+        "corrected_mismatch",
+        "edit_distance_reduction",
+        "injected_error_recall",
+        "over_correction_positions",
+        "reconstructed_length",
+        "corrected_all_injected_positions"
+      ],
+      "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
+      "rows": 144,
+      "table": "tables/prime_k_ablation_per_run.csv"
+    }
+  }
+}
