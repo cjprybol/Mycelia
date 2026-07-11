@@ -37,15 +37,20 @@
     "phix174_nc001422",
     "pstvd_nc002030"
   ],
-  "generated_at": "2026-07-11T19:40:23.878Z",
+  "generated_at": "2026-07-11T23:14:35.689Z",
   "git": {
-    "commit": "b9537e3ee6c81225c2fe98b941b9d1f670cff61e",
+    "commit": "806f0748c6cf9027cf42fb676d78eb272f49437f",
     "is_dirty": true
   },
   "metadata": {
     "baseline": "uncorrected injected-error observations",
     "bead": "td-he0z.9",
     "benchmark": "generalized_viterbi_accuracy_vs_error_rate",
+    "controls": {
+      "over_correction_uncorrupted": "corrector run on uncorrupted truth; any edit is a false positive",
+      "random_rewire_null": "edges rewired to random vertex pairs (seed 20260711); vertices/edge-count/weight-multiset held fixed; destroys true adjacency",
+      "shuffled_weight_null": "edge weights permuted (seed 20260711); topology/emission held fixed"
+    },
     "error_rates": [
       0.01,
       0.05,
