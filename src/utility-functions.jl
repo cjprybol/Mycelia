@@ -700,7 +700,7 @@ end
 Checks whether the specified number of bytes can fit in the computer's memory.
 
 - `bytes_needed`: The number of bytes required (output from `estimate_dense_matrix_memory` or `estimate_sparse_matrix_memory`).
-- `severity`: What to do if there is not enough available memory. Can be `:warn` (default) or `:error`.
+- `severity`: What to do if there is not enough available memory. Can be `:warn` (default), `:error`, or `:silent` (no-op).
 
 Returns a named tuple:
     (will_fit_total, will_fit_available, total_memory, free_memory, bytes_needed)
@@ -738,6 +738,9 @@ function check_matrix_fits_in_memory(bytes_needed::Integer; severity::Symbol = :
             error("Matrix will not fit in available memory! $msg")
         elseif severity == :warn
             @warn "Matrix may not fit in available memory! $msg"
+        elseif severity == :silent
+            # no-op: caller has already reported the estimate and intentionally
+            # suppresses this check's own warning/error.
         end
     end
 
