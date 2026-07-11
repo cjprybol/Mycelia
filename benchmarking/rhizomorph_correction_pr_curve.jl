@@ -12,14 +12,14 @@
 #
 # Operating points (all exposed knobs — NO src changes):
 #   scalable        skip_solid=true,  cheap_correct=true, hard_window=true,  iter=2   (the wired default)
-#   scalable+iter   skip_solid=true,  cheap_correct=true, hard_window=true,  iter=5
-#   noskip          skip_solid=FALSE, cheap_correct=true, hard_window=true,  iter=2   (decode reads scalable would skip)
-#   noskip+nogate   skip_solid=FALSE, cheap_correct=true, hard_window=FALSE, iter=2   (also drop the decode gate)
-#   exhaustive      skip_solid=FALSE, cheap_correct=false,hard_window=FALSE, iter=10, beam=exact  (max sensitivity)
+#   noskip          skip_solid=FALSE, cheap_correct=true, hard_window=true,  iter=2   (isolates the skip_solid lever)
+#   noskip+nogate   skip_solid=FALSE, cheap_correct=true, hard_window=FALSE, iter=2   (also drops the decode gate)
 #
-# skip_solid is the primary recall lever: :scalable SKIPS "mostly-solid" reads, so
-# errors on skipped reads are never corrected. Turning it off decodes them
-# (recall up) at some precision / runtime cost — the core tradeoff under test.
+# A smoke run localized the recall lever to the hard_window DECODE GATE, not
+# skip_solid: turning skip_solid off alone leaves recall unchanged; dropping the
+# gate too lifts recall from ~0.24 to ~1.0 (at a precision cost that grows with
+# error rate). Exact-beam / more-iteration points are dropped — the former is
+# intractable on the dense low-k graph, the latter is a no-op once converged.
 #
 # Reuses simulate_substitution_reads + per_base_metrics from the merged accuracy
 # harness. Reports (precision, recall, over_correction, mis_fixes, correction_rate,
@@ -31,7 +31,7 @@
 #
 # Env (RPC prefix): MYCELIA_RPC_SMOKE, MYCELIA_RPC_SMOKE_GENOME_LEN,
 #   MYCELIA_RPC_ERR (default 0.05,0.10), MYCELIA_RPC_READLEN (default 150),
-#   MYCELIA_RPC_COVERAGE (default 15), MYCELIA_RPC_K (default 21),
+#   MYCELIA_RPC_COVERAGE (default 30; smoke default 15), MYCELIA_RPC_K (default 21),
 #   MYCELIA_RPC_ASSIGNED_Q (default 20), MYCELIA_RPC_SEED (default 42),
 #   MYCELIA_RPC_POINTS (comma list of point names; default all)
 
@@ -129,10 +129,10 @@ function run_pr_curve()
     rng = Random.MersenneTwister(seed)
 
     rows = DataFrames.DataFrame(
-        error_rate = Float64[], point = String[], n_reads = Int[], reads_scored = Int[],
-        injected = Int[], true_fixes = Int[], mis_fixes = Int[], over_corrections = Int[],
-        recall = Float64[], precision = Float64[], over_correction_rate = Float64[],
-        correction_rate = Float64[], runtime_s = Float64[])
+        error_rate = Float64[], point = String[], ok = Bool[], n_reads = Int[],
+        reads_scored = Int[], injected = Int[], true_fixes = Int[], mis_fixes = Int[],
+        over_corrections = Int[], recall = Float64[], precision = Float64[],
+        over_correction_rate = Float64[], correction_rate = Float64[], runtime_s = Float64[])
 
     for err in errs
         # SAME reads for every operating point at this error rate (fair comparison).
@@ -143,6 +143,11 @@ function run_pr_curve()
             refseq, readlens[1], coverage, err, rng; assigned_q = assigned_q)
         println("\n[err=$err] $(length(records)) reads, injected $injected_total substitutions")
         for pt in points
+            # Re-seed the GLOBAL RNG before each point: mycelia_iterative_assemble's
+            # statistical-resampling arm draws from it, so without this each point's
+            # stochastic behavior would depend on how much prior points drew —
+            # confounding the very knob-comparison this harness exists to make.
+            Random.seed!(seed)
             t0 = time()
             local corrected
             ok = true
@@ -156,7 +161,7 @@ function run_pr_curve()
             rt = round(time() - t0; digits = 2)
             m = per_base_metrics(truth_by_id, observed_by_id, corrected)
             push!(rows,
-                (error_rate = err, point = pt.name, n_reads = length(records),
+                (error_rate = err, point = pt.name, ok = ok, n_reads = length(records),
                     reads_scored = m.reads_scored, injected = m.injected, true_fixes = m.tp,
                     mis_fixes = m.mis_fixes, over_corrections = m.over, recall = m.recall,
                     precision = m.precision, over_correction_rate = m.over_rate,
