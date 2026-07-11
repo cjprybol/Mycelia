@@ -109,6 +109,8 @@ function run_calibration_benchmark()
     seed = parse(Int, get(ENV, "MYCELIA_RCC_SEED", "42"))
     k_cal = parse(Int, get(ENV, "MYCELIA_RCC_KCAL", "15"))
     c0 = parse(Float64, get(ENV, "MYCELIA_RCC_C0", "2.0"))
+    c0 > 0 ||
+        throw(ArgumentError("MYCELIA_RCC_C0 must be > 0 (it is the naive-map denominator constant)"))
     nbins = parse(Int, get(ENV, "MYCELIA_RCC_NBINS", "10"))
 
     println("=== Rhizomorph Correction CALIBRATION Benchmark (Tier-1: min-k-mer-coverage) ===")
@@ -188,6 +190,14 @@ function run_calibration_benchmark()
 
     # Naive monotone map to a probability for reliability/ECE/Brier (a fitted
     # Platt/isotonic map is the follow-on; this is illustrative).
+    # NOTE: the coverage table is self-counted (it includes the read being
+    # scored), so min_cov >= 1 for every scored read and the mapped probability is
+    # FLOORED at 1/(1+c0) (=0.333 at the default c0=2). Reliability bins below that
+    # floor are therefore always empty by construction — a structural property of
+    # a self-counted reference-free signal, NOT a signal failure. It does not
+    # affect the AUROC headline (rank-based on the raw min_cov). A leave-one-out
+    # count (exclude the scored read's own k-mers) would let the signal express
+    # coverage 0; deferred with the fitted-map work.
     probs = Float64[mc / (mc + c0) for mc in min_covs]
     ece = expected_calibration_error(probs, corrects; nbins = nbins)
     br = brier_score(probs, corrects)
