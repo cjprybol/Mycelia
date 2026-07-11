@@ -19,14 +19,20 @@ const VITERBI_ACCURACY_FIXTURE_DIR = joinpath(@__DIR__, "fixtures", "viterbi_acc
 const VITERBI_ACCURACY_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "viterbi_accuracy_b8"
 )
-const VITERBI_ACCURACY_K = 9
+# PRIME k (was 9 = 3x3, the worst period-3 case). A composite k aliases
+# period-p tandem repeats onto self-overlapping k-mers, which can make single-k
+# correction look either trivially perfect or pathologically wrong; a prime k
+# breaks that periodicity. Matches the prime-only k progression the iterative
+# corrector uses (find_initial_k draws from Primes.primes; build_k_ladder and
+# next_prime_k snap to primes).
+const VITERBI_ACCURACY_K = 11
 
 struct ViterbiAccuracyFixture
     dataset_id::String
     dataset_name::String
     domain::Symbol
     alphabet::Vector{Char}
-    graph
+    graph::Any
     truth::Vector{String}
     source::String
 end
@@ -63,7 +69,8 @@ function run_viterbi_accuracy_benchmark(
         run_id = "b8_viterbi_accuracy_local_20260625",
         scale = "local-smoke",
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
-        command_args = ["julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl"],
+        command_args = [
+            "julia", "--project=.", "benchmarking/viterbi_accuracy_benchmark.jl"],
         metadata = Dict(
             "bead" => "td-he0z.9",
             "benchmark" => "generalized_viterbi_accuracy_vs_error_rate",
@@ -161,7 +168,8 @@ function _viterbi_accuracy_row(
         fixture::ViterbiAccuracyFixture,
         target_error_rate::Float64
 )::NamedTuple
-    observed, injected_positions = _inject_fixture_errors(
+    observed,
+    injected_positions = _inject_fixture_errors(
         fixture.truth, fixture.alphabet, target_error_rate
     )
     converted_observed = _convert_observations(observed, fixture.domain)
@@ -214,7 +222,8 @@ end
 
 function _read_fasta_sequence(path::AbstractString)::String
     lines = readlines(path)
-    sequence_lines = [strip(line) for line in lines if !isempty(line) && !startswith(line, ">")]
+    sequence_lines = [strip(line)
+                      for line in lines if !isempty(line) && !startswith(line, ">")]
     return uppercase(join(sequence_lines))
 end
 
@@ -281,7 +290,8 @@ function _convert_observations(observed::Vector{String}, domain::Symbol)::Vector
 end
 
 function _sum_edit_distance(left::Vector{String}, right::Vector{String})::Int
-    return sum(_edit_distance(left_item, right_item) for (left_item, right_item) in zip(left, right))
+    return sum(_edit_distance(left_item, right_item)
+    for (left_item, right_item) in zip(left, right))
 end
 
 function _edit_distance(left::AbstractString, right::AbstractString)::Int

@@ -110,8 +110,13 @@ Compute the ordered set of k-mer sizes the iterative corrector should walk.
   coincide.)
 - Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
   `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
-  rungs to odd values and pinning the first rung to `initial_k` and the last to
-  the largest odd `<= max_k`.
+  rungs to PRIME values and pinning the first rung to `initial_k` and the last to
+  the largest prime `<= max_k`. Prime (not merely odd) k avoids period-p aliasing:
+  a composite k like 9=3x3 or 21=3x7 makes every period-3/period-7 tandem repeat
+  collapse to a self-overlapping k-mer, the worst case for de Bruijn correction.
+  The loop's starting k (`find_initial_k`) already draws from `Primes.primes`, and
+  the sequential fallback uses `next_prime_k`, so with a prime `initial_k` the
+  whole `:scalable` k-walk is prime end-to-end.
 - Else return `nothing`, signalling the caller to use the original prime-by-prime
   progression (`next_prime_k`) — this preserves legacy behavior.
 
@@ -131,7 +136,10 @@ function build_k_ladder(initial_k::Int, max_k::Int;
         return [initial_k]
     end
     n = max(2, n_k_rungs)
-    top = isodd(max_k) ? max_k : max_k - 1
+    # Top rung = largest PRIME <= max_k (prevprime is inclusive: prevprime(19)=19,
+    # prevprime(21)=19). Prime, not merely odd, avoids period-p aliasing (9=3x3,
+    # 21=3x7 collapse period-3/7 tandem repeats to self-overlapping k-mers).
+    top = max_k < 2 ? max_k : Primes.prevprime(max_k)
     if top <= initial_k
         return [initial_k]
     end
@@ -139,7 +147,7 @@ function build_k_ladder(initial_k::Int, max_k::Int;
     ks = Int[]
     for i in 1:n
         kv = round(Int, initial_k * ratio^(i - 1))
-        iseven(kv) && (kv += 1)          # prefer odd k
+        kv = Primes.nextprime(kv)        # snap up to the nearest prime
         kv = clamp(kv, initial_k, top)
         push!(ks, kv)
     end
@@ -419,7 +427,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                                      _DEFAULT_DECODE_GATE_DENSITY : decode_gate_density) :
                                     nothing
     if verbose && (effective_min_decode_k !== nothing ||
-                   effective_decode_gate_density !== nothing)
+        effective_decode_gate_density !== nothing)
         println("Low-k decode gating (td-9h5r): " *
                 (effective_min_decode_k !== nothing ?
                  "explicit floor min_decode_k=$(effective_min_decode_k); " : "") *
@@ -1418,7 +1426,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     cheap_corrections = 0
     work_reads = reads
     if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
-        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
+        work_reads,
+        cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
             graph_mode = graph_mode)
         improvements_made += cheap_corrections
         if verbose && cheap_corrections > 0
@@ -1437,10 +1446,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # `work_reads`), so this predicate sees the cheaply-corrected reads.
     _gate_skip = read -> begin
         (skip_solid && solid_kmers !== nothing &&
-             _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
+         _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
             return true
         (hard_vertices !== nothing &&
-             !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
+         !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
             return true
         return false
     end
@@ -2573,7 +2582,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             accumulate_competing_paths!(
                 soft_weights, read, graph, k; graph_mode = graph_mode,
                 walk_band = beam_is_exact ? typemax(Int) : _soft_em_walk_band(k),
-                successor_bound = beam_is_exact ? typemax(Int) : _SOFT_EM_ALT_SUCCESSOR_BOUND)
+                successor_bound = beam_is_exact ? typemax(Int) :
+                                  _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
