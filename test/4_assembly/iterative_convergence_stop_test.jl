@@ -46,11 +46,12 @@ Test.@testset "iterative corrector: no-change convergence + k-ladder" begin
                    [5, 9, 15]
         # No knob set => nothing (legacy prime progression preserved).
         Test.@test Mycelia.build_k_ladder(3, 31) === nothing
-        # First rung pinned to initial_k, last rung = largest PRIME <= max_k.
+        # First rung pinned to initial_k; last rung = largest odd <= max_k (== max_k
+        # here so re-assembly graph reuse fires); intermediate rungs prime.
         ladder = Mycelia.build_k_ladder(5, 40; n_k_rungs = 4)
         Test.@test first(ladder) == 5
-        Test.@test last(ladder) == Primes.prevprime(40)   # 37, not the old odd 39
-        Test.@test all(Primes.isprime, ladder)
+        Test.@test last(ladder) == (isodd(40) ? 40 : 39)   # 39
+        Test.@test all(Primes.isprime, ladder[1:(end - 1)])  # first + intermediates prime
         Test.@test issorted(ladder)
     end
 

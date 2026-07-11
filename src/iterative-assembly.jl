@@ -109,14 +109,22 @@ Compute the ordered set of k-mer sizes the iterative corrector should walk.
   for it. (In `n_k_rungs` mode the first rung is pinned to `initial_k`, so they
   coincide.)
 - Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
-  `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
-  rungs to PRIME values and pinning the first rung to `initial_k` and the last to
-  the largest prime `<= max_k`. Prime (not merely odd) k avoids period-p aliasing:
-  a composite k like 9=3x3 or 21=3x7 makes every period-3/period-7 tandem repeat
-  collapse to a self-overlapping k-mer, the worst case for de Bruijn correction.
-  The loop's starting k (`find_initial_k`) already draws from `Primes.primes`, and
-  the sequential fallback uses `next_prime_k`, so with a prime `initial_k` the
-  whole `:scalable` k-walk is prime end-to-end.
+  `initial_k` to `max_k` (LoRMA-style coarse progression). INTERMEDIATE rungs are
+  snapped to PRIME values (not merely odd): a composite k like 9=3x3 or 15=3x5
+  makes period-3/period-5 tandem repeats collapse to self-overlapping k-mers, the
+  worst case for de Bruijn correction — and period-p aliasing is a LOW-k
+  phenomenon, so it is exactly the mid-range auto-selected rungs that must avoid
+  it. The first rung is pinned to `initial_k` (which `find_initial_k` already
+  draws from `Primes.primes`) and the last to the largest ODD `<= max_k`.
+
+  The TOP rung is deliberately `max_k` (largest odd ≤ max_k), NOT `prevprime(max_k)`:
+  the final-pass graph-reuse optimization (td-04tb) requires the corrector's final
+  k to equal the re-assembly k (`config.k == max_k`), so topping below `max_k`
+  would silently disable reuse AND reduce the user's requested assembly resolution.
+  At the high k a top rung sits at, k-mers are long enough that a composite k
+  rarely spans a short-period repeat, so the aliasing cost there is negligible —
+  the win is in the mid-range intermediates, which ARE prime. (The single-k B8
+  accuracy benchmark, which has no re-assembly, does use a prime k.)
 - Else return `nothing`, signalling the caller to use the original prime-by-prime
   progression (`next_prime_k`) — this preserves legacy behavior.
 
@@ -136,10 +144,9 @@ function build_k_ladder(initial_k::Int, max_k::Int;
         return [initial_k]
     end
     n = max(2, n_k_rungs)
-    # Top rung = largest PRIME <= max_k (prevprime is inclusive: prevprime(19)=19,
-    # prevprime(21)=19). Prime, not merely odd, avoids period-p aliasing (9=3x3,
-    # 21=3x7 collapse period-3/7 tandem repeats to self-overlapping k-mers).
-    top = max_k < 2 ? max_k : Primes.prevprime(max_k)
+    # Top rung stays at max_k (largest odd ≤ max_k) to preserve final-pass graph
+    # reuse (td-04tb): the reuse gate needs final_graph_k == reassembly_k == max_k.
+    top = isodd(max_k) ? max_k : max_k - 1
     if top <= initial_k
         return [initial_k]
     end
@@ -147,10 +154,12 @@ function build_k_ladder(initial_k::Int, max_k::Int;
     ks = Int[]
     for i in 1:n
         kv = round(Int, initial_k * ratio^(i - 1))
-        kv = Primes.nextprime(kv)        # snap up to the nearest prime
+        kv = Primes.nextprime(kv)        # snap intermediate rungs UP to a prime
         kv = clamp(kv, initial_k, top)
         push!(ks, kv)
     end
+    # First rung pinned to initial_k (prime in practice); last rung to the top
+    # (= max_k, kept composite-tolerant so re-assembly graph reuse still fires).
     ks[1] = initial_k
     ks[end] = top
     return sort(unique(ks))
@@ -2198,10 +2207,6 @@ function should_continue_k_progression(k_history::Vector{Dict{Symbol, Any}},
         max_k::Int;
         convergence_window::Int = 3,
         quality_improvement_threshold::Float64 = 0.001)::Bool
-    # NOTE: the :scalable coarse ladder now tops out at `prevprime(max_k)` (see
-    # build_k_ladder), so for a COMPOSITE max_k this `>= max_k` equality is only
-    # reached by the legacy prime-by-prime walk, never by the scalable ladder — do
-    # not assume the ladder reaches max_k exactly if this helper is wired back in.
     if current_k >= max_k
         return false
     end
