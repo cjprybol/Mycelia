@@ -118,6 +118,11 @@ struct ViterbiCorrectionConfig{F <: Function}
     beam_width::Int
     max_successors_per_state::Int
     beam_score_margin::Float64
+    # OPT-IN telemetry (td-4osf / Tier-2 calibration): when true, the decoder
+    # records a per-position best-vs-2nd-best log-prob GAP (the Viterbi margin at
+    # each depth) into its diagnostics. Default false => the decode is byte-
+    # identical AND perf-neutral (no top-2 scan on the hot path).
+    record_position_gaps::Bool
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -131,7 +136,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             edge_weight::Function = Rhizomorph.edge_data_weight,
             beam_width::Int = typemax(Int),
             max_successors_per_state::Int = typemax(Int),
-            beam_score_margin::Float64 = Inf
+            beam_score_margin::Float64 = Inf,
+            record_position_gaps::Bool = false
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
@@ -165,7 +171,8 @@ struct ViterbiCorrectionConfig{F <: Function}
             edge_weight,
             beam_width,
             max_successors_per_state,
-            beam_score_margin
+            beam_score_margin,
+            record_position_gaps
         )
     end
 end
@@ -182,7 +189,8 @@ function ViterbiCorrectionConfig(;
         edge_weight::Function = Rhizomorph.edge_data_weight,
         beam_width::Int = typemax(Int),
         max_successors_per_state::Int = typemax(Int),
-        beam_score_margin::Float64 = Inf
+        beam_score_margin::Float64 = Inf,
+        record_position_gaps::Bool = false
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -196,7 +204,8 @@ function ViterbiCorrectionConfig(;
         edge_weight = edge_weight,
         beam_width = beam_width,
         max_successors_per_state = max_successors_per_state,
-        beam_score_margin = beam_score_margin
+        beam_score_margin = beam_score_margin,
+        record_position_gaps = record_position_gaps
     )
 end
 
@@ -401,7 +410,8 @@ end
 # precomputed outgoing-weight table's keys — does NOT touch the decode's own
 # state dicts, so it cannot affect decode determinism).
 function _viterbi_graph_label_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL}
+        graph::MetaGraphsNext.MetaGraph{
+        CODE, GRAPH, LABEL}
 )::Type where {CODE, GRAPH, LABEL}
     return LABEL
 end
@@ -432,7 +442,9 @@ function build_correction_weighted_graph(
         graph; edge_weight = transition_edge_weight)
 end
 
-build_correction_weighted_graph(graph; config::ViterbiCorrectionConfig = ViterbiCorrectionConfig()) = nothing
+function build_correction_weighted_graph(graph; config::ViterbiCorrectionConfig = ViterbiCorrectionConfig())
+    nothing
+end
 
 function _correct_metagraphs_next_observations(
         graph::MetaGraphsNext.MetaGraph,
@@ -465,7 +477,8 @@ function _correct_metagraphs_next_observations(
                 transition_scoring = _viterbi_transition_scoring(graph, transition_edge_weight)
             )
         else
-            start_vertex, target_vertex, max_steps = _decode_observation_bounds(
+            start_vertex, target_vertex,
+            max_steps = _decode_observation_bounds(
                 observation,
                 config
             )
@@ -498,13 +511,15 @@ function _correct_metagraphs_next_observations(
 end
 
 function _correction_vertex_data_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA}
+        graph::MetaGraphsNext.MetaGraph{
+        CODE, GRAPH, LABEL, VERTEX_DATA}
 )::Type where {CODE, GRAPH, LABEL, VERTEX_DATA}
     return VERTEX_DATA
 end
 
 function _correction_edge_data_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA, EDGE_DATA}
+        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA,
+        EDGE_DATA}
 )::Type where {CODE, GRAPH, LABEL, VERTEX_DATA, EDGE_DATA}
     return EDGE_DATA
 end
@@ -593,8 +608,10 @@ function _decode_observation_bounds(
             throw(ArgumentError("empty observation path"))
         end
         start_vertex = first(observation)
-        target_vertex = config.target_vertex === nothing ? last(observation) : config.target_vertex
-        max_steps = config.max_steps === nothing ? length(observation) - 1 : config.max_steps
+        target_vertex = config.target_vertex === nothing ? last(observation) :
+                        config.target_vertex
+        max_steps = config.max_steps === nothing ? length(observation) - 1 :
+                    config.max_steps
         return start_vertex, target_vertex, max_steps
     end
 
@@ -604,7 +621,6 @@ function _decode_observation_bounds(
     return start_vertex, target_vertex, max_steps
 end
 
-
 function _normalize_viterbi_alphabet(alphabet::Symbol)::Symbol
     normalized = Symbol(uppercase(String(alphabet)))
     if !(normalized in (:DNA, :RNA, :AA, :TEXT))
@@ -612,7 +628,6 @@ function _normalize_viterbi_alphabet(alphabet::Symbol)::Symbol
     end
     return normalized
 end
-
 
 function _normalize_viterbi_strand_mode(strand_mode::Symbol)::Symbol
     normalized = Symbol(lowercase(String(strand_mode)))
@@ -1071,7 +1086,7 @@ function _top_b_transitions(transitions, b::Int)
     ordered = sort(
         transitions;
         by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
-                   string(t[:target_vertex])),
+            string(t[:target_vertex])),
         rev = true
     )
     return ordered[1:b]
@@ -1158,7 +1173,8 @@ function _viterbi_correct_observation(
 
     label_type = _viterbi_graph_label_type(graph)
     start_observed = first(observation)
-    target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
+    target_vertex = _emission_target_vertex(
+        graph, observation, config, alphabet, strand_mode)
     start_candidates = _viterbi_start_candidates(
         graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
@@ -1192,7 +1208,8 @@ function _viterbi_correct_observation(
     # transition term, so the start emission == the start score.
     active_emissions = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
     for vertex in start_candidates
-        for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
+        for strand in
+            _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
             state = (vertex, strand)
             score = _call_viterbi_state_emission_logp(
                 quality_graph,
@@ -1202,7 +1219,8 @@ function _viterbi_correct_observation(
                 alphabet,
                 strand_mode
             )
-            if isfinite(score) && (!haskey(active_scores, state) || score > active_scores[state])
+            if isfinite(score) &&
+               (!haskey(active_scores, state) || score > active_scores[state])
                 active_scores[state] = score
                 active_emissions[state] = score
             end
@@ -1221,7 +1239,8 @@ function _viterbi_correct_observation(
     best_depth = 0
     if target_vertex !== nothing
         if length(observation) == 1
-            target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
+            target_state,
+            target_score = _best_correction_target_state(active_scores, target_vertex)
             if target_state !== nothing
                 best_state = target_state
                 best_score = target_score
@@ -1236,11 +1255,14 @@ function _viterbi_correct_observation(
 
     predecessors_by_depth = Vector{
         Dict{
-            Tuple{label_type, Rhizomorph.StrandOrientation},
-            Tuple{label_type, Rhizomorph.StrandOrientation}
-        }
+        Tuple{label_type, Rhizomorph.StrandOrientation},
+        Tuple{label_type, Rhizomorph.StrandOrientation}
+    }
     }()
 
+    # Opt-in Tier-2 telemetry: per-depth Viterbi margin (best - 2nd-best surviving
+    # log-prob). Empty + untouched unless config.record_position_gaps is set.
+    position_gaps = Float64[]
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1270,8 +1292,8 @@ function _viterbi_correct_observation(
             # transition probabilities stay normalized against the FULL outgoing
             # mass, so a bounded expansion is a strict subset of the exact frontier.
             if length(transitions) > config.max_successors_per_state
-                diagnostics[:successor_bounded] =
-                    get(diagnostics, :successor_bounded, 0) + 1
+                diagnostics[:successor_bounded] = get(diagnostics, :successor_bounded, 0) +
+                                                  1
                 transitions = _top_b_transitions(transitions, config.max_successors_per_state)
             end
 
@@ -1305,8 +1327,8 @@ function _viterbi_correct_observation(
                     next_predecessors[next_state] = state
                     # Carry the emission (read-consistency) component of THIS path
                     # in lockstep with the Viterbi (max full-score) choice.
-                    next_emissions[next_state] =
-                        get(active_emissions, state, 0.0) + emission_score
+                    next_emissions[next_state] = get(active_emissions, state, 0.0) +
+                                                 emission_score
                 end
             end
         end
@@ -1323,7 +1345,8 @@ function _viterbi_correct_observation(
         # beam_width = typemax(Int) the guard never fires and the decoder stays
         # exact (B8 correction fixtures are byte-identical).
         if length(next_scores) > config.beam_width
-            next_scores, next_predecessors = _prune_correction_beam(
+            next_scores,
+            next_predecessors = _prune_correction_beam(
                 next_scores, next_predecessors, config.beam_width)
             # Keep the emission dict aligned to the width-beam survivors.
             next_emissions = Dict(
@@ -1342,13 +1365,21 @@ function _viterbi_correct_observation(
             depth_best = maximum(values(next_scores))
             depth_best_emission = maximum(values(next_emissions))
             pre_margin = length(next_scores)
-            next_scores, next_predecessors, next_emissions =
-                _prune_correction_beam_by_margin(
-                    next_scores, next_predecessors, next_emissions,
-                    depth_best, depth_best_emission, config.beam_score_margin)
+            next_scores, next_predecessors,
+            next_emissions = _prune_correction_beam_by_margin(
+                next_scores, next_predecessors, next_emissions,
+                depth_best, depth_best_emission, config.beam_score_margin)
             if length(next_scores) < pre_margin
                 diagnostics[:margin_pruned] = get(diagnostics, :margin_pruned, 0) + 1
             end
+        end
+
+        # Tier-2 opt-in: record this position's Viterbi margin (best - 2nd-best
+        # surviving log-prob). Small margin => an ambiguous decode here; large =>
+        # a confident call. Pure telemetry: it reads next_scores but never mutates
+        # it or the chosen path, so the decode stays byte-identical when off.
+        if config.record_position_gaps
+            push!(position_gaps, _top2_score_gap(next_scores))
         end
 
         push!(predecessors_by_depth, next_predecessors)
@@ -1364,7 +1395,8 @@ function _viterbi_correct_observation(
             best_state, best_score = _best_correction_state(active_scores)
             best_depth = depth
         else
-            target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
+            target_state,
+            target_score = _best_correction_target_state(active_scores, target_vertex)
             if target_state !== nothing
                 best_state = target_state
                 best_score = target_score
@@ -1376,11 +1408,30 @@ function _viterbi_correct_observation(
 
     if target_vertex !== nothing && !isfinite(best_score)
         diagnostics[:reason] = :target_unreachable
+        # position_gaps is intentionally NOT stashed on a failed decode: there is no
+        # path to align it to. `path === nothing` (+ diagnostics[:reason]) is the
+        # failure discriminant — a consumer must not read absence of :position_gaps
+        # as "flag was off".
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
 
     path = _reconstruct_correction_path(graph, best_state, best_depth, predecessors_by_depth)
     diagnostics[:path_length] = length(path.steps)
+    if config.record_position_gaps
+        # CONSUMPTION CONTRACT (per PR #400 review). `position_gaps[i]` is the
+        # Viterbi margin (best − 2nd-best surviving log-prob) at the transition INTO
+        # `path.steps[i+1]`; the start position `path.steps[1]` has no gap. Truncate
+        # to `best_depth` so `length(position_gaps) == length(path.steps) - 1` in ALL
+        # cases — under target anchoring the loop can run PAST the last on-path depth,
+        # leaving trailing gaps for abandoned frontiers. TWO caveats for consumers:
+        #   • An entry of `Inf` means "no surviving competitor at that depth" — a
+        #     ROUTINE value on a collapsed/beam-pruned frontier — so consumers MUST
+        #     `filter(isfinite, _)` (or clip) BEFORE any sum-based calibration metric
+        #     (reliability/ECE/Brier); a raw `Inf` silently poisons those to Inf/NaN.
+        #   • Under a finite `beam_width`/`beam_score_margin` this is a SURVIVOR
+        #     margin (2nd-best among survivors), not the exact Viterbi margin.
+        diagnostics[:position_gaps] = position_gaps[1:min(best_depth, length(position_gaps))]
+    end
     return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
 end
 
@@ -1602,15 +1653,35 @@ function _best_correction_target_state(
     return _best_correction_state(target_scores)
 end
 
+# Best-minus-second-best of a state->score Dict's values (the per-position Viterbi
+# margin, td-4osf / Tier-2 calibration). Single pass, no allocation. Returns Inf
+# when fewer than two states survive (no competitor => maximally confident). NOTE:
+# Inf is a ROUTINE value (any collapsed frontier), so downstream calibration must
+# filter/clip it before averaging — see the consumption contract at the
+# diagnostics[:position_gaps] stash site.
+function _top2_score_gap(scores)::Float64
+    best = -Inf
+    second = -Inf
+    for v in values(scores)
+        if v > best
+            second = best
+            best = v
+        elseif v > second
+            second = v
+        end
+    end
+    return isfinite(second) ? best - second : Inf
+end
+
 function _reconstruct_correction_path(
         graph::MetaGraphsNext.MetaGraph,
         end_state::Tuple{T, Rhizomorph.StrandOrientation},
         depth::Int,
         predecessors_by_depth::Vector{
             Dict{
-                Tuple{T, Rhizomorph.StrandOrientation},
-                Tuple{T, Rhizomorph.StrandOrientation}
-            }
+            Tuple{T, Rhizomorph.StrandOrientation},
+            Tuple{T, Rhizomorph.StrandOrientation}
+        }
         }
 ) where {T}
     path_states = Vector{Tuple{T, Rhizomorph.StrandOrientation}}(undef, depth + 1)
