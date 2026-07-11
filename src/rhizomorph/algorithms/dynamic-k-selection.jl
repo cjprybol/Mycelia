@@ -293,3 +293,128 @@ function select_dynamic_kmer_plan(
         singleton_separation_by_k
     )
 end
+
+# --- Residual-error estimation + survival-based re-assembly k selection ---------
+#
+# `select_dynamic_kmer_plan` (above) picks a START k for the corrector's k-ladder
+# from raw observations; it is NOT the right tool for the *re-assembly* of already
+# CORRECTED reads (empirically it returns a flat floor k regardless of error,
+# because its singleton-separation heuristic rarely fires on real read sets). The
+# re-assembly of corrected reads needs a k that keeps the contig graph connected:
+# high k for clean (Illumina) corrected reads, but a LOWER k for high-error long
+# reads (nanopore) whose residual errors — substitutions and, dominantly, indels —
+# shatter a high-k de Bruijn graph. The functions below estimate the residual error
+# reference-free and map it to a prime k via the k-mer survival model.
+
+_read_quality_scores(::Any) = nothing
+function _read_quality_scores(record::FASTX.FASTQ.Record)
+    quality = FASTX.FASTQ.quality(record)
+    return Int[Int(character) - 33 for character in quality]
+end
+
+# Mean per-base error probability from Phred quality (e = 10^(-Q/10)), or `nothing`
+# when no read carries usable quality (FASTA / string / BioSequence input). A
+# placeholder constant-Q40 does no harm: it yields e ≈ 1e-4, which the caller's
+# `max` with the k-mer estimate ignores.
+function _quality_residual_error(reads)::Union{Float64, Nothing}
+    total_error = 0.0
+    base_count = 0
+    for record in reads
+        scores = _read_quality_scores(record)
+        scores === nothing && continue
+        for score in scores
+            total_error += 10.0^(-score / 10.0)
+            base_count += 1
+        end
+    end
+    return base_count == 0 ? nothing : clamp(total_error / base_count, 0.0, 0.499)
+end
+
+# k-mer spectrum estimate: genomic k-mer positions (error-free) recur at ~coverage
+# and are "solid" (count >= solid_min); erroneous positions are singletons. The
+# solid FRACTION of k-mer occurrences approximates (1-e)^k_ref, so
+# e ≈ 1 - solid_fraction^(1/k_ref). Because an indel disrupts many downstream
+# k-mers, this (correctly) reports a higher effective error for indel-heavy reads.
+function _kmer_spectrum_residual_error(reads, k_ref::Int, solid_min::Int)::Float64
+    sequences = _collect_dynamic_k_sequences(reads)
+    isempty(sequences) && return 0.0
+    character_sequences = _dynamic_k_character_sequences(sequences)
+    counts = Dict{UInt64, Int}()
+    total_occurrences = 0
+    for characters in character_sequences
+        if length(characters) >= k_ref
+            for start_index in 1:(length(characters) - k_ref + 1)
+                kmer_hash = _dynamic_k_window_hash(characters, start_index, k_ref)
+                counts[kmer_hash] = get(counts, kmer_hash, 0) + 1
+                total_occurrences += 1
+            end
+        end
+    end
+    total_occurrences == 0 && return 0.0
+    solid_occurrences = 0
+    for occurrence_count in values(counts)
+        if occurrence_count >= solid_min
+            solid_occurrences += occurrence_count
+        end
+    end
+    solid_fraction = solid_occurrences / total_occurrences
+    solid_fraction <= 0.0 && return 0.499
+    return clamp(1.0 - solid_fraction^(1.0 / k_ref), 0.0, 0.499)
+end
+
+"""
+    estimate_residual_error(reads; k_ref = 13, solid_min = 2) -> Float64
+
+Reference-free estimate of the per-base residual error rate of `reads`, used to
+choose a re-assembly k that keeps the corrected-read graph connected. Combines two
+signals and returns the more conservative (higher-error) one, clamped to `[0, 0.5)`:
+
+- **k-mer spectrum** (always available): solid-fraction of k-mer occurrences at
+  `k_ref` inverted through the survival model `(1-e)^k_ref`.
+- **per-base Q-values** (FASTQ input only): `mean(10^(-Q/10))`.
+
+`reads` may be FASTQ/FASTA records, strings, or `BioSequence`s.
+"""
+function estimate_residual_error(reads; k_ref::Int = 13, solid_min::Int = 2)::Float64
+    kmer_error = _kmer_spectrum_residual_error(reads, k_ref, solid_min)
+    quality_error = _quality_residual_error(reads)
+    estimate = quality_error === nothing ? kmer_error : max(kmer_error, quality_error)
+    return clamp(estimate, 0.0, 0.499)
+end
+
+function _largest_prime_at_most(n::Int)::Int
+    candidate = max(n, 2)
+    while candidate >= 2 && !Mycelia.Primes.isprime(candidate)
+        candidate -= 1
+    end
+    return max(candidate, 2)
+end
+
+"""
+    select_reassembly_k(reads, ceiling_k; floor_k = 7) -> Int
+
+Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`.
+The residual error `e = estimate_residual_error(reads)` is mapped to the largest k
+whose expected k-mer survival stays above 0.5 via `k <= log(0.5)/log(1-e)`.
+
+When the requested `ceiling_k` already survives (clean / low-error reads), it is
+returned UNCHANGED — this keeps clean/Illumina behavior byte-identical and
+preserves the corrector's final-pass graph-reuse eligibility (which requires
+`reassembly_k == final_graph_k`). Only when residual error forces a lower k is the
+adapted value snapped down to the nearest prime (the `:scalable` k-ladder is prime,
+so an adaptively-chosen re-assembly k stays on primes too). High-error long reads
+drop toward `floor_k`. Never exceeds `ceiling_k`.
+"""
+function select_reassembly_k(reads, ceiling_k::Int; floor_k::Int = 7)::Int
+    error_rate = estimate_residual_error(reads)
+    # Low residual error: the requested ceiling survives — honor it unchanged
+    # (identical clean/Illumina behavior; preserves graph-reuse eligibility).
+    error_rate <= 1.0e-6 && return ceiling_k
+    survival_k = Int(floor(log(0.5) / log(1.0 - error_rate)))
+    survival_k >= ceiling_k && return ceiling_k
+    # Residual error forces a lower k: drop to the largest prime that keeps the
+    # graph connected, floored (but never above the ceiling).
+    effective_floor = min(floor_k, ceiling_k)
+    target_k = clamp(survival_k, effective_floor, ceiling_k)
+    return clamp(_largest_prime_at_most(target_k), min(effective_floor, target_k), ceiling_k)
+end
