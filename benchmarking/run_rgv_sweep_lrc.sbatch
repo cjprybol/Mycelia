@@ -75,8 +75,29 @@ else
 fi
 
 echo ""
+# Post-check: a green exit with no ok=true VERDICT arm is a silent failure — the
+# .jl records a failed arm as ok=false and still writes the CSV + exits 0. Fail
+# loud so sacct shows FAILED rather than green-but-empty.
+if [[ "${rc}" -eq 0 ]]; then
+  newest="$(ls -t results/rhizomorph_correction_validation_sweep_*.csv 2>/dev/null | head -1)"
+  if [[ -z "${newest}" ]]; then
+    echo ">>> FAIL: sweep exited 0 but produced no results CSV" >&2; rc=1
+  elif ! awk -F, '
+      NR==1 { for (i=1;i<=NF;i++) { if ($i=="ok") ok=i; if ($i=="mode") m=i }; next }
+      ($ok=="true") && ($m=="VERDICT") { found=1 }
+      END { exit found ? 0 : 1 }' "${newest}"; then
+    echo ">>> FAIL: newest CSV (${newest}) has no ok=true VERDICT arm — green-but-empty" >&2; rc=1
+  else
+    echo ">>> OK: verified >=1 ok=true VERDICT arm in ${newest}"
+  fi
+fi
+
 echo "=== complete: $(date) ==="
-echo "--- result CSVs ---"
-ls -t results/rhizomorph_correction_validation_sweep_*.csv 2>/dev/null | head || true
+if [[ "${rc}" -eq 0 ]]; then
+  echo "--- result CSVs ---"
+  ls -t results/rhizomorph_correction_validation_sweep_*.csv 2>/dev/null | head || true
+else
+  echo "(sweep failed — not listing stale CSVs)" >&2
+fi
 
 exit "${rc}"
