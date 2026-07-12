@@ -206,12 +206,17 @@ Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
     k = 13
     mode = :doublestrand
 
-    Test.@testset "indel quality alignment preserves base coordinates" begin
-        align_quality = Mycelia._align_corrected_quality
-        Test.@test align_quality("ACGT", "BCDE", "ACGT") == "BCDE"
-        Test.@test align_quality("ACGT", "BCDE", "AGT") == "BDE"
-        Test.@test align_quality("ACGT", "BCDE", "ACGAT") == "BCDDE"
-        Test.@test_throws ArgumentError align_quality("ACGT", "BCD", "ACGT")
+    Test.@testset "pair-HMM traceback preserves quality coordinates" begin
+        traced_quality = Mycelia._quality_from_indel_trace
+        Test.@test traced_quality("BCDE", [:M, :M, :M], [1, 2, 3], 2, 4) == "BCDE"
+        # I consumes observed position 3 without emitting a corrected base.
+        Test.@test traced_quality("BCDE", [:M, :I, :M], [1, 2, 3], 2, 3) == "BCE"
+        # D emits a corrected base after observed position 3 with conservative
+        # adjacent quality min('D', 'E') == 'D'.
+        Test.@test traced_quality(
+            "BCDE", [:M, :M, :D, :M], [1, 2, 2, 3], 2, 5) == "BCDDE"
+        Test.@test traced_quality("BCDE", [:I], [1], 2, 3) === nothing
+        Test.@test traced_quality("BCDE", [:M], [1, 2], 2, 2) === nothing
     end
 
     # (A) POSITIVE CONTROL — the ORIGINAL-COORDINATE segment rebuild (the risky new

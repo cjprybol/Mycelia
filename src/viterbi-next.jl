@@ -1936,12 +1936,18 @@ function _viterbi_correct_observation_indel(
     reverse!(chain)
 
     path_states = State[]
-    for (index, (_, state, phase)) in enumerate(chain)
+    move_trace = Symbol[]
+    read_index_trace = Int[]
+    for (index, (read_index, state, phase)) in enumerate(chain)
         diagnostics[:move_counts][phase] += 1
+        push!(move_trace, phase)
+        push!(read_index_trace, read_index)
         if index == 1 || phase != :I
             push!(path_states, state)
         end
     end
+    diagnostics[:move_trace] = move_trace
+    diagnostics[:read_index_trace] = read_index_trace
 
     path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
     diagnostics[:path_length] = length(path.steps)

@@ -191,6 +191,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test diag[:indel_moves] == true
         # The deletion was bridged by >=1 D-move.
         Test.@test diag[:move_counts][:D] >= 1
+        Test.@test count(==(:D), diag[:move_trace]) >= 1
+        Test.@test length(diag[:move_trace]) == length(diag[:read_index_trace])
 
         ins_result = Mycelia.correct_observations(
             graph,
@@ -199,6 +201,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             config = _indel_config())
         ins_diag = only(ins_result.paths).diagnostics
         Test.@test ins_diag[:move_counts][:I] >= 1
+        Test.@test count(==(:I), ins_diag[:move_trace]) >= 1
+        Test.@test length(ins_diag[:move_trace]) == length(ins_diag[:read_index_trace])
     end
 
     Test.@testset "Milestone C: bounding knobs actually bite" begin
