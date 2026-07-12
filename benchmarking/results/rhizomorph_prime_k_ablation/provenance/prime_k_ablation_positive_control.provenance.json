@@ -1,4 +1,16 @@
 {
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "k",
+    "k_class",
+    "shared_recovery",
+    "distinct_recovery",
+    "collision_penalty"
+  ],
   "command_args": [
     "julia",
     "--project=.",
@@ -57,9 +69,12 @@
       ]
     ]
   },
+  "row_count": 2,
   "run_id": "prime_k_ablation_denovo_local_20260711",
   "scale": "local-smoke",
   "schema_version": 1,
+  "table_name": "prime_k_ablation_positive_control",
+  "table_path": "tables/prime_k_ablation_positive_control.csv",
   "tool_versions": {
     "Mycelia": "0.1.0",
     "julia": "1.10.10"

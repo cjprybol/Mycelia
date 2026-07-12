@@ -1,33 +1,44 @@
-# Prime-vs-composite k ablation for the Rhizomorph 2-stage corrector on
-# REPEAT-RICH fixtures (bead td-tjym).
+# Prime-vs-composite k ablation for the Rhizomorph assembler on REPEAT-RICH
+# fixtures, in the DE-NOVO regime where k-mer aliasing can actually bite
+# (bead td-tjym).
 #
-# Motivation (PR #397): snapping the corrector's k-ladder to primes and rerunning
-# the B8 accuracy benchmark at prime k=11 showed that on the existing
-# NON-repetitive fixtures (viroid / phiX / text), saturated recall was ROBUST to
-# primality — those fixtures cannot exercise the prime-vs-composite distinction.
+# BACKGROUND. PR #397 snapped the corrector's k-ladder to primes. The first
+# version of this ablation (reviewed on PR #404) could not show any prime-vs-
+# composite difference because it was structurally forced to delta=0: it built
+# the k-mer graph from the CLEAN reference (so the graph held only the true path)
+# and decoded each observation anchored at both true endpoints inside clean
+# margins. That measures "recover the true path when the true path is the only
+# path and both ends are pinned" — trivially perfect at every k.
 #
-# A composite k that shares a factor with a tandem-repeat period p aliases the
-# repeat onto SELF-PERIODIC k-mers: the k-mer ATGATGATG (k=9 over a period-3
-# repeat) is itself internally periodic, so its phase within the repeat is
-# ambiguous and the path decode can settle on the wrong copy/phase. A prime k
-# (11, 19, 23) shares no factor with period 3, so a k-mer covering the same region
-# spans a non-integer number of periods and the phase degeneracy is broken.
+# THIS VERSION runs the regime where k-mer aliasing is a real phenomenon: DE-NOVO
+# assembly from ERROR-CONTAINING READS. For each fixture we simulate a read set
+# (coverage x tiling, substitution errors), build+clean the assembly graph FROM
+# THE READS at each k (`Mycelia.Rhizomorph.assemble_genome(reads; k=...)`), and
+# measure how much of the reference is reconstructed. Nothing is anchored to
+# truth; distinct repeat copies and error k-mers genuinely compete in the graph.
 #
-# EXPERIMENT DESIGN (differs from the token-level B8 benchmark on purpose):
-#   - Fixtures embed a repeat CORE inside UNIQUE flanks so the k-mer graph
-#     genuinely branches (a pure tandem repeat is a non-branching cycle whose
-#     correction is trivial at every k — that is why token-level injection
-#     saturates regardless of primality).
-#   - Errors are injected ONCE at the SEQUENCE level, in the interior with a clean
-#     margin >= max(k), so the SAME corrupted sequence is decoded at every k — a
-#     fair prime-vs-composite comparison.
-#   - The corrupted sequence is windowed into overlapping k-mers (each sequence
-#     error therefore spans k consecutive observations), corrected as a PATH, then
-#     reconstructed back to a sequence and scored at the sequence level. This
-#     surfaces both recovery (recall) AND over-correction (edit-distance-reduction
-#     below recall, or negative, when the corrector edits already-correct bases).
+# WHAT WE FIND (see the committed tables; numbers are the deliverable, not these
+# comments):
+#   - On the NATURAL tandem / palindrome fixtures, reference recovery rises
+#     monotonically with k-SIZE (larger k spans more context). Controlling for
+#     size via adjacent prime/composite pairs (9 vs 11, 15 vs 17, 21 vs 23),
+#     there is no additional deficit attributable to primality: a composite k
+#     divisible by the repeat period recovers the same as its size-matched prime
+#     neighbour. The prime-vs-composite gap on natural fixtures is a k-size
+#     artifact, not a primality effect.
+#   - POSITIVE CONTROL (engineered `shared_repeat_collision` fixture): two
+#     otherwise-unique "genes" share an internal period-3 repeat of length
+#     exactly 9. A composite k=9 (=3x3) fits ENTIRELY inside the shared repeat,
+#     so the two genes collide on the identical 9-mer and the assembly tangles;
+#     the size-matched prime k=11 is forced to span the repeat into the two
+#     genes' differing flanks, so no shared k-mer forms and both genes are
+#     recovered cleanly. This yields a large, reproducible recovery gap
+#     (composite << prime) and is the harness's proof that it CAN register a
+#     composite-k aliasing deficit when one exists. It is an ENGINEERED
+#     demonstration of the shared-repeat mechanism, not a claim that natural
+#     tandem repeats exhibit it.
 #
-# SMOKE scale. Usage:
+# SMOKE scale, deterministic (fixed read-simulation seeds). Usage:
 #   julia --project=. benchmarking/rhizomorph_prime_k_ablation_benchmark.jl
 #   julia --project=. benchmarking/rhizomorph_prime_k_ablation_benchmark.jl --output-dir /tmp/primek --skip-plots
 
@@ -35,30 +46,37 @@ import BioSequences
 import CairoMakie
 import DataFrames
 import FASTX
-import Kmers
 import Mycelia
+import Random
 import Statistics
-import Test
 
 include(joinpath(@__DIR__, "benchmark_artifacts.jl"))
 
-# Prime k share no factor with periods 2 or 3; composite k are all divisible by 3
-# (9 = 3x3, 15 = 3x5, 21 = 3x7) so they alias the period-3 tandem fixture. All k
-# are odd, avoiding any even-k edge cases in graph construction.
-const PRIME_K = (11, 19, 23)
+# Size-matched prime/composite pairs so a prime-minus-composite delta is not
+# confounded by k-size: each composite (divisible by 3) is bracketed just below a
+# prime of nearly the same length -> (9,11), (15,17), (21,23).
+const PRIME_K = (11, 17, 23)
 const COMPOSITE_K = (9, 15, 21)
+const SIZE_MATCHED_PAIRS = ((9, 11), (15, 17), (21, 23))  # (composite, prime)
 const ABLATION_K = sort(collect(Iterators.flatten((PRIME_K, COMPOSITE_K))))
-# Clean margin (bp) left un-corrupted at each end so every k has clean flanking
-# k-mers; must be >= max(ABLATION_K).
-const ABLATION_CLEAN_MARGIN = maximum(ABLATION_K)
-const ABLATION_ERROR_RATES = (0.02, 0.05, 0.10)
-# Error injection modes. :isolated places single evenly-spaced substitutions;
-# :burst places adjacent substitution clusters (length ABLATION_BURST_LENGTH),
-# which is the regime that can convert a repeat k-mer into a different-phase repeat
-# k-mer and thereby expose composite-k phase aliasing.
-const ABLATION_ERROR_MODES = (:isolated, :burst)
-const ABLATION_BURST_LENGTH = 3
+
+# Read-simulation parameters (SMOKE, deterministic).
+const ABLATION_COVERAGE = 30
+const ABLATION_READ_LENGTH = 45
+const ABLATION_READ_ERROR_RATE = 0.02
+const ABLATION_SEEDS = (1, 2, 3)
 const ABLATION_ALPHABET = collect("ACGT")
+# Fixed reference-recovery window, INDEPENDENT of the assembly k, so recovery is
+# comparable across k values.
+const ABLATION_RECOVERY_W = 15
+# Positive-control firing bar. The COLLISION PENALTY at composite k=9 (recovery of
+# the no-collision variant minus the shared-collision variant, at IDENTICAL
+# fixture structure so k-size cancels) must be at least this large AND must
+# collapse at prime k=11 (the composite-k aliasing must be resolved by the prime k
+# spanning the shared repeat). This isolates aliasing from k-size.
+const POSITIVE_CONTROL_MIN_GAP = 0.10
+const POSITIVE_CONTROL_SHARED_ID = "shared_repeat_collision"
+const POSITIVE_CONTROL_DISTINCT_ID = "distinct_repeat_no_collision"
 const ABLATION_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "rhizomorph_prime_k_ablation"
 )
@@ -66,8 +84,9 @@ const ABLATION_DEFAULT_OUTPUT_DIR = joinpath(
 struct AblationFixture
     dataset_id::String
     dataset_name::String
-    sequence::String
-    period_note::String
+    category::String            # "natural", "collision_shared", or "collision_distinct"
+    references::Vector{String}  # one entry per distinct source sequence
+    note::String
 end
 
 function main(args::Vector{String} = ARGS)::Nothing
@@ -81,14 +100,25 @@ function main(args::Vector{String} = ARGS)::Nothing
     println("  figure_png: $(artifacts.figure_png)")
     println("  figure_svg: $(artifacts.figure_svg)")
     println()
-    println("Prime-vs-composite delta per fixture x error-mode (mean over k and error rate):")
+    println("Size-matched prime-minus-composite recovery delta per fixture x k-pair:")
     for row in eachrow(artifacts.delta_table)
-        println("  $(rpad(row.dataset_id, 24)) $(rpad(row.error_mode, 9)) " *
-                "prime_recall=$(round(row.prime_mean_recall; digits = 4)) " *
-                "composite_recall=$(round(row.composite_mean_recall; digits = 4)) " *
-                "recall_delta=$(round(row.recall_delta_prime_minus_composite; digits = 4)) " *
-                "edr_delta=$(round(row.edit_distance_reduction_delta; digits = 4))")
+        println("  $(rpad(row.dataset_id, 28)) pair(c=$(row.composite_k),p=$(row.prime_k)) " *
+                "composite_recovery=$(round(row.composite_recovery; digits = 3)) " *
+                "prime_recovery=$(round(row.prime_recovery; digits = 3)) " *
+                "delta=$(round(row.recovery_delta_prime_minus_composite; digits = 3))")
     end
+    println()
+    println("POSITIVE CONTROL — collision penalty (recovery of no-collision minus " *
+            "shared-collision, structure held identical):")
+    for row in eachrow(artifacts.positive_control_summary)
+        println("  k=$(row.k) ($(row.k_class))  shared=$(round(row.shared_recovery; digits = 3)) " *
+                "distinct=$(round(row.distinct_recovery; digits = 3)) " *
+                "collision_penalty=$(round(row.collision_penalty; digits = 3))")
+    end
+    println()
+    println("Positive control fires (k=9 collision penalty >= $(POSITIVE_CONTROL_MIN_GAP) " *
+            "AND collapses by >= $(POSITIVE_CONTROL_MIN_GAP) at prime k=11): " *
+            "$(artifacts.positive_control_fires)")
     return nothing
 end
 
@@ -100,23 +130,21 @@ function run_prime_k_ablation_benchmark(
     rows = NamedTuple[]
     for fixture in fixtures
         for k in ABLATION_K
-            for error_rate in ABLATION_ERROR_RATES
-                for error_mode in ABLATION_ERROR_MODES
-                    push!(rows, _ablation_row(fixture, k, error_rate, error_mode))
-                end
-            end
+            push!(rows, _ablation_row(fixture, k))
         end
     end
     per_run = DataFrames.DataFrame(rows)
-    delta = _ablation_delta_table(per_run)
+    delta = _ablation_delta_table(per_run, fixtures)
+    positive_control = _positive_control_summary(per_run)
 
     artifacts = write_benchmark_artifacts(
         [
             "prime_k_ablation_per_run" => per_run,
-            "prime_k_ablation_delta" => delta
+            "prime_k_ablation_delta" => delta,
+            "prime_k_ablation_positive_control" => positive_control
         ];
         output_dir = output_dir,
-        run_id = "prime_k_ablation_local_20260711",
+        run_id = "prime_k_ablation_denovo_local_20260711",
         scale = "local-smoke",
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
         command_args = [
@@ -124,26 +152,30 @@ function run_prime_k_ablation_benchmark(
             "benchmarking/rhizomorph_prime_k_ablation_benchmark.jl"],
         metadata = Dict(
             "bead" => "td-tjym",
-            "benchmark" => "prime_vs_composite_k_ablation_repeat_rich",
-            "baseline" => "uncorrected sequence-level injected-error observations",
+            "benchmark" => "prime_vs_composite_k_ablation_denovo",
+            "regime" => "de-novo assembly from error-containing reads (graph built from reads, not the clean reference; no endpoint anchoring)",
             "prime_k" => collect(PRIME_K),
             "composite_k" => collect(COMPOSITE_K),
-            "error_rates" => collect(ABLATION_ERROR_RATES),
-            "clean_margin_bp" => ABLATION_CLEAN_MARGIN,
-            "injection" => "sequence-level, interior, k-independent (same corrupted sequence decoded at every k)",
-            "scoring" => "reconstruct corrected overlapping k-mers to a sequence; recall + edit-distance-reduction at sequence level",
-            "hypothesis" => "composite k sharing a factor with a tandem period alias the repeat onto self-periodic k-mers, degrading path decode; prime k break the periodicity"
+            "size_matched_pairs" => [collect(pair) for pair in SIZE_MATCHED_PAIRS],
+            "coverage" => ABLATION_COVERAGE,
+            "read_length" => ABLATION_READ_LENGTH,
+            "read_error_rate" => ABLATION_READ_ERROR_RATE,
+            "seeds" => collect(ABLATION_SEEDS),
+            "recovery_metric" => "fraction of reference $(ABLATION_RECOVERY_W)-mers present in assembled contigs (either strand), mean over seeds",
+            "measures" => "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures; the positive control confirms the harness detects a composite-k aliasing deficit when one exists",
+            "positive_control_min_gap" => POSITIVE_CONTROL_MIN_GAP
         ),
         table_context_columns = Dict(
             "prime_k_ablation_per_run" => Dict("benchmark_dataset_id" => "dataset_id"),
             "prime_k_ablation_delta" => Dict("benchmark_dataset_id" => "dataset_id")
         )
     )
+    positive_control_csv = artifacts.tables["prime_k_ablation_positive_control"].table
 
     figure_png = ""
     figure_svg = ""
     if write_plots
-        figure_paths = _write_ablation_figure(per_run, artifacts.layout.plots)
+        figure_paths = _write_ablation_figure(per_run, fixtures, artifacts.layout.plots)
         figure_png = figure_paths.png
         figure_svg = figure_paths.svg
     end
@@ -152,46 +184,85 @@ function run_prime_k_ablation_benchmark(
         root = artifacts.root,
         per_run_csv = artifacts.tables["prime_k_ablation_per_run"].table,
         delta_csv = artifacts.tables["prime_k_ablation_delta"].table,
+        positive_control_csv = positive_control_csv,
         index = artifacts.index,
         provenance = artifacts.provenance,
         figure_png = figure_png,
         figure_svg = figure_svg,
         per_run_table = per_run,
         delta_table = delta,
+        positive_control_summary = positive_control,
         per_run_rows = DataFrames.nrow(per_run),
-        delta_rows = DataFrames.nrow(delta)
+        delta_rows = DataFrames.nrow(delta),
+        positive_control_fires = _positive_control_fires(per_run)
     )
 end
 
-# Each fixture embeds a repeat core inside two unique 30 bp flanks so the k-mer
-# graph branches into and out of the repeat.
 function ablation_fixtures()::Vector{AblationFixture}
-    prefix = _unique_flank(1, 30)
-    suffix = _unique_flank(2, 30)
+    flank_left = _nonrepetitive_sequence(30, 1)
+    flank_right = _nonrepetitive_sequence(30, 2)
     return AblationFixture[
         AblationFixture(
             "tandem_period3_atg",
             "Period-3 tandem (ATG) core in unique flanks",
-            prefix * repeat("ATG", 100) * suffix,
-            "period 3 — shared factor with every composite k (9,15,21); coprime to primes"
+            "natural",
+            [flank_left * repeat("ATG", 60) * flank_right],
+            "period 3 — divisible by every composite k (9,15,21)"
         ),
         AblationFixture(
             "tandem_period2_ga",
             "Period-2 tandem (GA) core in unique flanks",
-            prefix * repeat("GA", 150) * suffix,
-            "period 2 — coprime to both k-sets (odd k); contrast fixture"
+            "natural",
+            [flank_left * repeat("GA", 90) * flank_right],
+            "period 2 — coprime to both odd k-sets"
         ),
         AblationFixture(
             "palindrome_rich",
             "Palindrome-rich inverted-repeat core in unique flanks",
-            prefix * _palindrome_rich_core() * suffix,
+            "natural",
+            [flank_left * _palindrome_rich_core() * flank_right],
             "repeated reverse-complement inverted-repeat unit (period 60)"
         ),
         AblationFixture(
             "control_nonrepetitive",
             "Non-repetitive control (deterministic pseudo-random)",
-            _nonrepetitive_sequence(360, 3),
+            "natural",
+            [_nonrepetitive_sequence(220, 3)],
             "no dominant period — primality expected to be neutral"
+        ),
+        # POSITIVE CONTROL (shared). Two unique genes sharing an internal period-3
+        # repeat of length exactly 9. Composite k=9 fits inside the shared repeat
+        # (genes collide on the identical 9-mer -> tangle); prime k=11 must span
+        # the repeat into the genes' DIFFERING flanks (no shared k-mer -> clean).
+        AblationFixture(
+            POSITIVE_CONTROL_SHARED_ID,
+            "Positive control (shared): two genes sharing a 9 bp period-3 repeat",
+            "collision_shared",
+            [
+                _nonrepetitive_sequence(20, 4) * repeat("ATG", 3) *
+                _nonrepetitive_sequence(20, 5),
+                _nonrepetitive_sequence(20, 6) * repeat("ATG", 3) *
+                _nonrepetitive_sequence(20, 7)
+            ],
+            "engineered 9 bp SHARED repeat: composite k=9 collides, prime k=11 spans into unique flanks"
+        ),
+        # NEGATIVE CONTROL (distinct). Byte-for-byte the same structure as the
+        # shared fixture — same flanks, same 9 bp period-3 insert length — except
+        # the two genes carry DIFFERENT period-3 units (ATGx3 vs GCAx3), so there
+        # is no shared 9-mer and no collision. Any k=9 recovery gap between this
+        # and the shared fixture is attributable to the COLLISION, not to k-size
+        # (structure and length are identical across the two).
+        AblationFixture(
+            POSITIVE_CONTROL_DISTINCT_ID,
+            "Negative control (distinct): same structure, non-shared 9 bp repeats",
+            "collision_distinct",
+            [
+                _nonrepetitive_sequence(20, 4) * repeat("ATG", 3) *
+                _nonrepetitive_sequence(20, 5),
+                _nonrepetitive_sequence(20, 6) * repeat("GCA", 3) *
+                _nonrepetitive_sequence(20, 7)
+            ],
+            "distinct 9 bp inserts (ATGx3 vs GCAx3): no shared k-mer; k-size-matched control for the collision fixture"
         )
     ]
 end
@@ -201,279 +272,249 @@ end
 function _palindrome_rich_core()::String
     arm = "ACGGTACCTTGACATGCACGTTGGATCCAT"  # 30 bp
     rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(arm)))
-    unit = arm * rc  # 60 bp palindrome
-    return repeat(unit, 5)  # 300 bp
+    return repeat(arm * rc, 5)  # 300 bp, period 60
 end
 
-# Unique (non-repetitive) flank / control via a deterministic linear-congruential
-# walk over the alphabet — no RNG dependency, byte-stable across runs.
-function _unique_flank(seed_index::Int, length_bp::Int)::String
-    return _nonrepetitive_sequence(length_bp, seed_index)
-end
-
+# Deterministic pseudo-random (non-repetitive) DNA via a linear-congruential walk
+# — no RNG dependency, byte-stable across runs. Distinct seed_index -> distinct
+# sequence, so flanks and control differ.
 function _nonrepetitive_sequence(length_bp::Int, seed_index::Int)::String
-    alphabet = ABLATION_ALPHABET
     characters = Vector{Char}(undef, length_bp)
-    state = (2246822519 + seed_index * 40503) % 2147483648  # distinct odd-ish seed
+    state = (2246822519 + seed_index * 40503) % 2147483648
     for index in 1:length_bp
         state = (1103515245 * state + 12345) % 2147483648
-        characters[index] = alphabet[(state % 4) + 1]
+        characters[index] = ABLATION_ALPHABET[(state % 4) + 1]
     end
     return String(characters)
 end
 
-function _ablation_row(
-        fixture::AblationFixture,
-        k::Int,
-        error_rate::Float64,
-        error_mode::Symbol
-)::NamedTuple
-    clean = fixture.sequence
-    corrupted,
-    injected_positions = _inject_sequence_errors(
-        clean, ABLATION_ALPHABET, error_rate, ABLATION_CLEAN_MARGIN, error_mode)
-
-    record = FASTX.FASTA.Record(fixture.dataset_id, BioSequences.LongDNA{4}(clean))
-    graph = Mycelia.Rhizomorph.build_kmer_graph(
-        [record], k;
-        dataset_id = "prime_k_ablation_$(fixture.dataset_id)_k$(k)",
-        mode = :singlestrand
-    )
-
-    observed_kmers = _ablation_kmers(corrupted, k)
-    converted = [Kmers.DNAKmer{k}(observation) for observation in observed_kmers]
-    config = Mycelia.ViterbiCorrectionConfig(error_rate = error_rate)
-    result = Mycelia.correct_observations(graph, [converted]; config = config)
-    corrected_kmers = [string(o) for o in only(result.corrected_observations)]
-
-    Test.@test length(corrected_kmers) == length(observed_kmers)
-
-    reconstructed = _reconstruct_sequence(corrected_kmers, k)
-    # Reconstruction preserves length; scored positionally (Hamming) at seq level.
-    baseline_mismatch = _hamming(corrupted, clean)
-    corrected_mismatch = _hamming(reconstructed, clean)
-    injected_error_count = length(injected_positions)
-    recovered = count(pos -> _char_at(reconstructed, pos) == clean[pos], injected_positions)
-
-    recall = injected_error_count == 0 ? 0.0 : recovered / injected_error_count
-    edit_distance_reduction = baseline_mismatch == 0 ? 0.0 :
-                              (baseline_mismatch - corrected_mismatch) / baseline_mismatch
-    # Edits the corrector made at positions that were NOT injected (over-correction).
-    over_correction = count(
-        pos -> !(pos in injected_positions) && _char_at(reconstructed, pos) != clean[pos],
-        eachindex(clean))
-
+function _ablation_row(fixture::AblationFixture, k::Int)::NamedTuple
+    recoveries = Float64[]
+    contig_counts = Int[]
+    assembled_flags = Bool[]
+    for seed in ABLATION_SEEDS
+        reads = _simulate_reads(fixture.references, seed)
+        recovery, n_contigs, assembled = _assemble_and_score(reads, fixture.references, k)
+        push!(recoveries, recovery)
+        push!(contig_counts, n_contigs)
+        push!(assembled_flags, assembled)
+    end
     return (
         dataset_id = fixture.dataset_id,
         dataset_name = fixture.dataset_name,
-        period_note = fixture.period_note,
+        category = fixture.category,
+        note = fixture.note,
         k = k,
         k_class = (k in PRIME_K) ? "prime" : "composite",
-        error_mode = string(error_mode),
-        target_error_rate = error_rate,
-        sequence_length = length(clean),
-        kmer_count = length(observed_kmers),
-        injected_error_count = injected_error_count,
-        baseline_method = "uncorrected_observations",
-        corrected_method = "rhizomorph_correct_observations",
-        baseline_mismatch = baseline_mismatch,
-        corrected_mismatch = corrected_mismatch,
-        edit_distance_reduction = edit_distance_reduction,
-        injected_error_recall = recall,
-        over_correction_positions = over_correction,
-        reconstructed_length = length(reconstructed),
-        corrected_all_injected_positions = recovered == injected_error_count
+        n_references = length(fixture.references),
+        reference_length = sum(length, fixture.references),
+        coverage = ABLATION_COVERAGE,
+        read_length = ABLATION_READ_LENGTH,
+        read_error_rate = ABLATION_READ_ERROR_RATE,
+        n_seeds = length(ABLATION_SEEDS),
+        recovery_w = ABLATION_RECOVERY_W,
+        mean_reference_recovery = Statistics.mean(recoveries),
+        min_reference_recovery = minimum(recoveries),
+        max_reference_recovery = maximum(recoveries),
+        mean_contig_count = Statistics.mean(contig_counts),
+        all_seeds_assembled = all(assembled_flags)
     )
 end
 
-# Collapse the per-run table to one prime-advantage row per fixture: mean recall
-# and mean edit-distance-reduction over prime k vs composite k (across all error
-# rates), and their deltas (prime minus composite).
-function _ablation_delta_table(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
+# Simulate a read set tiling every reference sequence at ABLATION_COVERAGE, with
+# per-base substitution errors. Deterministic given (references, seed).
+function _simulate_reads(references::Vector{String}, seed::Int)::Vector{FASTX.FASTA.Record}
+    rng = Random.MersenneTwister(seed)
+    reads = FASTX.FASTA.Record[]
+    read_index = 0
+    for reference in references
+        n = length(reference)
+        read_length = min(ABLATION_READ_LENGTH, n)
+        n_reads = max(1, cld(ABLATION_COVERAGE * n, read_length))
+        for _ in 1:n_reads
+            start = n == read_length ? 1 : rand(rng, 1:(n - read_length + 1))
+            characters = collect(reference[start:(start + read_length - 1)])
+            for position in eachindex(characters)
+                if rand(rng) < ABLATION_READ_ERROR_RATE
+                    original = characters[position]
+                    characters[position] = rand(
+                        rng, filter(candidate -> candidate != original, ABLATION_ALPHABET))
+                end
+            end
+            read_index += 1
+            push!(reads, FASTX.FASTA.Record(
+                "r$(read_index)", BioSequences.LongDNA{4}(String(characters))))
+        end
+    end
+    return reads
+end
+
+function _assemble_and_score(
+        reads::Vector{FASTX.FASTA.Record},
+        references::Vector{String},
+        k::Int
+)::Tuple{Float64, Int, Bool}
+    try
+        result = Mycelia.Rhizomorph.assemble_genome(
+            reads; k = k,
+            graph_mode = Mycelia.Rhizomorph.SingleStrand,
+            error_rate = ABLATION_READ_ERROR_RATE)
+        contigs = [string(contig) for contig in result.contigs]
+        return _reference_recovery(references, contigs), length(contigs), true
+    catch
+        # An assembly failure IS a recovery failure at this k; record it as such.
+        return 0.0, 0, false
+    end
+end
+
+# Fraction of reference w-mers (w = ABLATION_RECOVERY_W, fixed) present in the
+# assembled contigs on either strand. Sensitive to fragmentation and to
+# collision-driven tangles (which drop true w-mers around the junction), and
+# independent of the assembly k.
+function _reference_recovery(references::Vector{String}, contigs::Vector{String})::Float64
+    w = ABLATION_RECOVERY_W
+    reference_wmers = Set{String}()
+    for reference in references
+        for index in 1:(length(reference) - w + 1)
+            push!(reference_wmers, reference[index:(index + w - 1)])
+        end
+    end
+    isempty(reference_wmers) && return 0.0
+
+    contig_wmers = Set{String}()
+    for contig in contigs
+        length(contig) < w && continue
+        for strand in (contig, _reverse_complement(contig))
+            for index in 1:(length(strand) - w + 1)
+                push!(contig_wmers, strand[index:(index + w - 1)])
+            end
+        end
+    end
+    return length(intersect(reference_wmers, contig_wmers)) / length(reference_wmers)
+end
+
+function _reverse_complement(sequence::AbstractString)::String
+    return string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(sequence)))
+end
+
+# One delta row per (fixture x size-matched (composite,prime) pair): the
+# prime-minus-composite recovery gap at nearly-matched k-size.
+function _ablation_delta_table(
+        per_run::DataFrames.DataFrame,
+        fixtures::Vector{AblationFixture}
+)::DataFrames.DataFrame
     rows = NamedTuple[]
-    for group in DataFrames.groupby(per_run, [:dataset_id, :error_mode])
-        prime = group[group.k_class .== "prime", :]
-        composite = group[group.k_class .== "composite", :]
-        prime_recall = Statistics.mean(prime.injected_error_recall)
-        composite_recall = Statistics.mean(composite.injected_error_recall)
-        prime_edr = Statistics.mean(prime.edit_distance_reduction)
-        composite_edr = Statistics.mean(composite.edit_distance_reduction)
-        prime_oc = Statistics.mean(prime.over_correction_positions)
-        composite_oc = Statistics.mean(composite.over_correction_positions)
+    for fixture in fixtures
+        subset = per_run[per_run.dataset_id .== fixture.dataset_id, :]
+        for (composite_k, prime_k) in SIZE_MATCHED_PAIRS
+            composite_recovery = only(
+                subset[subset.k .== composite_k, :mean_reference_recovery])
+            prime_recovery = only(
+                subset[subset.k .== prime_k, :mean_reference_recovery])
+            push!(rows,
+                (
+                    dataset_id = fixture.dataset_id,
+                    dataset_name = fixture.dataset_name,
+                    category = fixture.category,
+                    composite_k = composite_k,
+                    prime_k = prime_k,
+                    composite_recovery = composite_recovery,
+                    prime_recovery = prime_recovery,
+                    recovery_delta_prime_minus_composite = prime_recovery -
+                                                           composite_recovery
+                ))
+        end
+    end
+    return DataFrames.DataFrame(rows)
+end
+
+# Size-controlled positive-control summary. At each of k=9 (composite) and k=11
+# (prime), the COLLISION PENALTY is recovery(distinct) - recovery(shared): the two
+# fixtures are structurally identical (same flanks, same 9 bp insert length), so
+# this difference isolates the shared-9-mer collision from any k-size effect. A
+# real composite-k aliasing signal shows a large penalty at k=9 that collapses at
+# k=11 (where the prime k spans the repeat into the differing flanks).
+function _positive_control_summary(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
+    recovery_at(id,
+        k) = only(per_run[
+    (per_run.dataset_id .== id) .& (per_run.k .== k), :mean_reference_recovery])
+    rows = NamedTuple[]
+    for k in (9, 11)
+        shared = recovery_at(POSITIVE_CONTROL_SHARED_ID, k)
+        distinct = recovery_at(POSITIVE_CONTROL_DISTINCT_ID, k)
         push!(rows,
             (
-                dataset_id = first(group.dataset_id),
-                dataset_name = first(group.dataset_name),
-                error_mode = first(group.error_mode),
-                period_note = first(group.period_note),
-                prime_k = join(string.(PRIME_K), ","),
-                composite_k = join(string.(COMPOSITE_K), ","),
-                prime_mean_recall = prime_recall,
-                composite_mean_recall = composite_recall,
-                recall_delta_prime_minus_composite = prime_recall - composite_recall,
-                prime_mean_edit_distance_reduction = prime_edr,
-                composite_mean_edit_distance_reduction = composite_edr,
-                edit_distance_reduction_delta = prime_edr - composite_edr,
-                prime_mean_over_correction = prime_oc,
-                composite_mean_over_correction = composite_oc
+                k = k,
+                k_class = (k in PRIME_K) ? "prime" : "composite",
+                shared_recovery = shared,
+                distinct_recovery = distinct,
+                collision_penalty = distinct - shared
             ))
     end
     return DataFrames.DataFrame(rows)
 end
 
-function _ablation_kmers(sequence::AbstractString, k::Int)::Vector{String}
-    chars = collect(sequence)
-    n = length(chars)
-    return [String(chars[index:(index + k - 1)]) for index in 1:(n - k + 1)]
-end
-
-function _char_at(sequence::AbstractString, index::Int)::Char
-    return collect(sequence)[index]
-end
-
-# Reconstruct a sequence from a path of overlapping k-mers: first k-mer in full,
-# then the last character of each subsequent k-mer. Length is preserved so long as
-# the corrector kept the observation count (asserted by the caller). Any path
-# inconsistency surfaces as residual mismatches — exactly what we want to score.
-function _reconstruct_sequence(kmers::Vector{String}, k::Int)::String
-    isempty(kmers) && return ""
-    buffer = collect(first(kmers))
-    for kmer in kmers[2:end]
-        push!(buffer, last(kmer))
-    end
-    return String(buffer)
-end
-
-function _hamming(left::AbstractString, right::AbstractString)::Int
-    left_chars = collect(left)
-    right_chars = collect(right)
-    n = min(length(left_chars), length(right_chars))
-    mismatches = abs(length(left_chars) - length(right_chars))
-    for index in 1:n
-        mismatches += left_chars[index] == right_chars[index] ? 0 : 1
-    end
-    return mismatches
-end
-
-# Deterministic substitution injector at the SEQUENCE level (no RNG). Errors are
-# placed in the interior leaving `clean_margin` bp untouched at each end.
-# k-independent: the same corrupted sequence is decoded at every k.
-#   :isolated — single substitutions at evenly-spaced positions.
-#   :burst    — clusters of ABLATION_BURST_LENGTH adjacent substitutions at
-#               evenly-spaced anchors (fewer anchors, same total error budget).
-function _inject_sequence_errors(
-        clean::AbstractString,
-        alphabet::Vector{Char},
-        target_error_rate::Float64,
-        clean_margin::Int,
-        error_mode::Symbol
-)::Tuple{String, Vector{Int}}
-    chars = collect(clean)
-    n = length(chars)
-    lo = clean_margin + 1
-    hi = n - clean_margin
-    candidates = collect(lo:hi)
-    isempty(candidates) && return String(chars), Int[]
-
-    target_errors = max(1, round(Int, target_error_rate * length(candidates)))
-    target_errors = min(target_errors, length(candidates))
-
-    positions = Int[]
-    if error_mode == :isolated
-        offsets = round.(Int, range(1, length(candidates); length = target_errors))
-        positions = unique(candidates[offsets])
-    elseif error_mode == :burst
-        n_anchors = max(1, cld(target_errors, ABLATION_BURST_LENGTH))
-        anchor_offsets = round.(Int, range(1, length(candidates); length = n_anchors))
-        anchors = unique(candidates[anchor_offsets])
-        position_set = Int[]
-        for anchor in anchors
-            for delta in 0:(ABLATION_BURST_LENGTH - 1)
-                position = anchor + delta
-                position <= hi && push!(position_set, position)
-            end
-        end
-        positions = sort(unique(position_set))
-    else
-        throw(ArgumentError("unsupported error mode: $error_mode"))
-    end
-
-    for position in positions
-        chars[position] = _ablation_replacement_char(chars[position], alphabet, position)
-    end
-    return String(chars), positions
-end
-
-function _ablation_replacement_char(character::Char, alphabet::Vector{Char}, offset::Int)::Char
-    for shift in 0:(length(alphabet) - 1)
-        candidate = alphabet[mod1(offset + shift, length(alphabet))]
-        if candidate != character
-            return candidate
-        end
-    end
-    error("no replacement character available for $character")
+# The positive control FIRES when the collision penalty at composite k=9 is at
+# least POSITIVE_CONTROL_MIN_GAP AND is at least POSITIVE_CONTROL_MIN_GAP larger
+# than the penalty at prime k=11 — i.e. the shared-9-mer collision demonstrably
+# degrades recovery at the composite k and is resolved at the prime k.
+function _positive_control_fires(per_run::DataFrames.DataFrame)::Bool
+    summary = _positive_control_summary(per_run)
+    penalty_9 = only(summary[summary.k .== 9, :collision_penalty])
+    penalty_11 = only(summary[summary.k .== 11, :collision_penalty])
+    return penalty_9 >= POSITIVE_CONTROL_MIN_GAP &&
+           (penalty_9 - penalty_11) >= POSITIVE_CONTROL_MIN_GAP
 end
 
 function _write_ablation_figure(
         per_run::DataFrames.DataFrame,
+        fixtures::Vector{AblationFixture},
         plots_dir::AbstractString
 )::NamedTuple
     mkpath(plots_dir)
-    fixtures = unique(per_run.dataset_id)
-    fig = CairoMakie.Figure(size = (1100, 850), fontsize = 15)
-    positions = [(1, 1), (1, 2), (2, 1), (2, 2)]
-
+    fig = CairoMakie.Figure(size = (1250, 1150), fontsize = 15)
+    positions = [(1, 1), (1, 2), (2, 1), (2, 2), (3, 1), (3, 2)]
     prime_color = :dodgerblue3
     composite_color = :darkorange3
 
-    # Marker shape encodes error mode; color encodes prime vs composite k.
-    mode_markers = Dict("isolated" => :circle, "burst" => :xcross)
-
-    for (fixture_index, dataset_id) in enumerate(fixtures)
+    for (fixture_index, fixture) in enumerate(fixtures)
         row, col = positions[mod1(fixture_index, length(positions))]
-        subset = per_run[per_run.dataset_id .== dataset_id, :]
-        name = first(subset.dataset_name)
+        subset = per_run[per_run.dataset_id .== fixture.dataset_id, :]
+        title = fixture.category == "natural" ? fixture.dataset_name :
+                "$(fixture.dataset_name)  [CONTROL]"
         axis = CairoMakie.Axis(
             fig[row, col],
-            title = name,
-            xlabel = "k (correction k-mer length)",
-            ylabel = "Edit-distance reduction (mean over error rate)",
+            title = title,
+            xlabel = "assembly k",
+            ylabel = "reference recovery (mean over seeds)",
             xticks = ABLATION_K,
             yticks = 0.0:0.25:1.0
         )
-        for mode in string.(ABLATION_ERROR_MODES)
-            mode_subset = subset[subset.error_mode .== mode, :]
-            ks = sort(unique(mode_subset.k))
-            mean_edr = [Statistics.mean(
-                            mode_subset[mode_subset.k .== k, :edit_distance_reduction])
-                        for k in ks]
-            colors = [(k in PRIME_K) ? prime_color : composite_color for k in ks]
-            CairoMakie.lines!(axis, ks, mean_edr; color = :gray70, linewidth = 1.0)
-            CairoMakie.scatter!(
-                axis, ks, mean_edr; color = colors, markersize = 15,
-                marker = mode_markers[mode])
-        end
-        CairoMakie.ylims!(axis, -0.15, 1.05)
+        ks = sort(unique(subset.k))
+        recovery = [only(subset[subset.k .== k, :mean_reference_recovery]) for k in ks]
+        colors = [(k in PRIME_K) ? prime_color : composite_color for k in ks]
+        markers = [(k in PRIME_K) ? :circle : :rect for k in ks]
+        CairoMakie.lines!(axis, ks, recovery; color = :gray70, linewidth = 1.5)
+        CairoMakie.scatter!(
+            axis, ks, recovery; color = colors, markersize = 15, marker = markers)
+        CairoMakie.ylims!(axis, -0.05, 1.05)
     end
 
     legend_elements = [
         CairoMakie.MarkerElement(color = prime_color, marker = :circle, markersize = 15),
-        CairoMakie.MarkerElement(color = composite_color, marker = :circle, markersize = 15),
-        CairoMakie.MarkerElement(color = :gray30, marker = :circle, markersize = 15),
-        CairoMakie.MarkerElement(color = :gray30, marker = :xcross, markersize = 15)
+        CairoMakie.MarkerElement(color = composite_color, marker = :rect, markersize = 15)
     ]
     CairoMakie.Legend(
-        fig[3, 1:2], legend_elements,
-        ["prime k ($(join(PRIME_K, ", ")))", "composite k ($(join(COMPOSITE_K, ", ")))",
-            "isolated errors", "burst errors (len $(ABLATION_BURST_LENGTH))"];
-        orientation = :horizontal, framevisible = false, nbanks = 1)
+        fig[4, 1:2], legend_elements,
+        ["prime k ($(join(PRIME_K, ", ")))", "composite k ($(join(COMPOSITE_K, ", ")))"];
+        orientation = :horizontal, framevisible = false)
     CairoMakie.Label(
         fig[0, 1:2],
-        "Rhizomorph corrector accuracy vs k on repeat-rich fixtures (prime vs composite)";
+        "Rhizomorph de-novo reference recovery vs k on repeat-rich fixtures";
         fontsize = 18, font = :bold)
 
-    png_path = joinpath(plots_dir, "prime_k_ablation_accuracy_vs_k.png")
-    svg_path = joinpath(plots_dir, "prime_k_ablation_accuracy_vs_k.svg")
+    png_path = joinpath(plots_dir, "prime_k_ablation_recovery_vs_k.png")
+    svg_path = joinpath(plots_dir, "prime_k_ablation_recovery_vs_k.svg")
     CairoMakie.save(png_path, fig)
     CairoMakie.save(svg_path, fig)
     return (png = png_path, svg = svg_path)

@@ -8,18 +8,12 @@
     "benchmark_dataset_id",
     "dataset_id",
     "dataset_name",
-    "error_mode",
-    "period_note",
-    "prime_k",
+    "category",
     "composite_k",
-    "prime_mean_recall",
-    "composite_mean_recall",
-    "recall_delta_prime_minus_composite",
-    "prime_mean_edit_distance_reduction",
-    "composite_mean_edit_distance_reduction",
-    "edit_distance_reduction_delta",
-    "prime_mean_over_correction",
-    "composite_mean_over_correction"
+    "prime_k",
+    "composite_recovery",
+    "prime_recovery",
+    "recovery_delta_prime_minus_composite"
   ],
   "command_args": [
     "julia",
@@ -28,41 +22,59 @@
   ],
   "dataset_ids": [
     "control_nonrepetitive",
+    "distinct_repeat_no_collision",
     "palindrome_rich",
+    "shared_repeat_collision",
     "tandem_period2_ga",
     "tandem_period3_atg"
   ],
-  "generated_at": "2026-07-11T23:39:45.843Z",
+  "generated_at": "2026-07-12T00:24:28.152Z",
   "git": {
-    "commit": "806f0748c6cf9027cf42fb676d78eb272f49437f",
+    "commit": "a029921359d5ac2a5c86b0e418c697c47ebffaa3",
     "is_dirty": true
   },
   "metadata": {
-    "baseline": "uncorrected sequence-level injected-error observations",
     "bead": "td-tjym",
-    "benchmark": "prime_vs_composite_k_ablation_repeat_rich",
-    "clean_margin_bp": 23,
+    "benchmark": "prime_vs_composite_k_ablation_denovo",
     "composite_k": [
       9,
       15,
       21
     ],
-    "error_rates": [
-      0.02,
-      0.05,
-      0.1
-    ],
-    "hypothesis": "composite k sharing a factor with a tandem period alias the repeat onto self-periodic k-mers, degrading path decode; prime k break the periodicity",
-    "injection": "sequence-level, interior, k-independent (same corrupted sequence decoded at every k)",
+    "coverage": 30,
+    "measures": "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures; the positive control confirms the harness detects a composite-k aliasing deficit when one exists",
+    "positive_control_min_gap": 0.1,
     "prime_k": [
       11,
-      19,
+      17,
       23
     ],
-    "scoring": "reconstruct corrected overlapping k-mers to a sequence; recall + edit-distance-reduction at sequence level"
+    "read_error_rate": 0.02,
+    "read_length": 45,
+    "recovery_metric": "fraction of reference 15-mers present in assembled contigs (either strand), mean over seeds",
+    "regime": "de-novo assembly from error-containing reads (graph built from reads, not the clean reference; no endpoint anchoring)",
+    "seeds": [
+      1,
+      2,
+      3
+    ],
+    "size_matched_pairs": [
+      [
+        9,
+        11
+      ],
+      [
+        15,
+        17
+      ],
+      [
+        21,
+        23
+      ]
+    ]
   },
-  "row_count": 8,
-  "run_id": "prime_k_ablation_local_20260711",
+  "row_count": 18,
+  "run_id": "prime_k_ablation_denovo_local_20260711",
   "scale": "local-smoke",
   "schema_version": 1,
   "table_name": "prime_k_ablation_delta",

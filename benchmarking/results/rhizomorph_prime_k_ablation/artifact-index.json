@@ -5,7 +5,7 @@
     "provenance": "provenance",
     "tables": "tables"
   },
-  "run_id": "prime_k_ablation_local_20260711",
+  "run_id": "prime_k_ablation_denovo_local_20260711",
   "scale": "local-smoke",
   "schema_version": 1,
   "tables": {
@@ -19,21 +19,15 @@
         "benchmark_dataset_id",
         "dataset_id",
         "dataset_name",
-        "error_mode",
-        "period_note",
-        "prime_k",
+        "category",
         "composite_k",
-        "prime_mean_recall",
-        "composite_mean_recall",
-        "recall_delta_prime_minus_composite",
-        "prime_mean_edit_distance_reduction",
-        "composite_mean_edit_distance_reduction",
-        "edit_distance_reduction_delta",
-        "prime_mean_over_correction",
-        "composite_mean_over_correction"
+        "prime_k",
+        "composite_recovery",
+        "prime_recovery",
+        "recovery_delta_prime_minus_composite"
       ],
       "provenance": "provenance/prime_k_ablation_delta.provenance.json",
-      "rows": 8,
+      "rows": 18,
       "table": "tables/prime_k_ablation_delta.csv"
     },
     "prime_k_ablation_per_run": {
@@ -46,27 +40,43 @@
         "benchmark_dataset_id",
         "dataset_id",
         "dataset_name",
-        "period_note",
+        "category",
+        "note",
         "k",
         "k_class",
-        "error_mode",
-        "target_error_rate",
-        "sequence_length",
-        "kmer_count",
-        "injected_error_count",
-        "baseline_method",
-        "corrected_method",
-        "baseline_mismatch",
-        "corrected_mismatch",
-        "edit_distance_reduction",
-        "injected_error_recall",
-        "over_correction_positions",
-        "reconstructed_length",
-        "corrected_all_injected_positions"
+        "n_references",
+        "reference_length",
+        "coverage",
+        "read_length",
+        "read_error_rate",
+        "n_seeds",
+        "recovery_w",
+        "mean_reference_recovery",
+        "min_reference_recovery",
+        "max_reference_recovery",
+        "mean_contig_count",
+        "all_seeds_assembled"
       ],
       "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
-      "rows": 144,
+      "rows": 36,
       "table": "tables/prime_k_ablation_per_run.csv"
+    },
+    "prime_k_ablation_positive_control": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "k",
+        "k_class",
+        "shared_recovery",
+        "distinct_recovery",
+        "collision_penalty"
+      ],
+      "provenance": "provenance/prime_k_ablation_positive_control.provenance.json",
+      "rows": 2,
+      "table": "tables/prime_k_ablation_positive_control.csv"
     }
   }
 }
