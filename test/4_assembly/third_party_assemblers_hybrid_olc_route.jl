@@ -88,5 +88,34 @@ Test.@testset "hybrid-OLC route (a) end-to-end (td-yymj)" begin
                 Test.@test isdir(joinpath(outdir, "olc_megahit"))
             end
         end
+
+        # Long-read arm (td-wvto): corrected Nanopore reads -> Flye via :auto. Flye
+        # needs a larger genome + more coverage than the short-read toy, so use a
+        # fresh ~50 kb reference and 40x simulated Nanopore reads.
+        mktempdir() do lrdir
+            lrng = StableRNGs.StableRNG(7)
+            lr_genome = BioSequences.randdnaseq(lrng, 50_000)
+            lr_ref = joinpath(lrdir, "lr_ref.fasta")
+            Mycelia.write_fasta(outfile = lr_ref,
+                records = [FASTX.FASTA.Record("lr_ref", lr_genome)])
+            lr_gz = Mycelia.simulate_nanopore_reads(fasta = lr_ref,
+                quantity = "40x", quiet = true, seed = 7)
+            lr_reads = collect(Mycelia.open_fastx(lr_gz))
+            Test.@test !isempty(lr_reads)
+
+            Test.@testset "layout=:olc olc_tool=:auto (nanopore -> flye)" begin
+                config = R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, sequencing_tech = :nanopore,
+                    layout = :olc, olc_tool = :auto,  # :auto -> :flye for long-read
+                    olc_options = (; threads = threads))
+                asm = R.assemble_genome(lr_reads, config)
+                Test.@test asm isa R.AssemblyResult
+                Test.@test asm.gfa_compatible == false
+                Test.@test !isempty(asm.contigs)
+                Test.@test asm.assembly_stats["olc_tool"] == "flye"
+                Test.@test asm.assembly_stats["sequencing_tech"] == "nanopore"
+                Test.@test asm.assembly_stats["corrected_read_count"] > 0
+            end
+        end
     end
 end
