@@ -43,11 +43,33 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     # The decision boundary (P=0.5) lands near the true 2.5 threshold.
     Test.@test isapprox(logistic_gap_for_probability(lm, 0.5), 2.5; atol = 0.3)
 
-    # --- Guards -------------------------------------------------------------
-    Test.@test_throws ArgumentError fit_isotonic_map([0.1, Inf], [false, true])
-    Test.@test_throws ArgumentError fit_logistic_map(Float64[], Bool[])
-    Test.@test_throws ArgumentError fit_binned_map([0.1, 0.2], [true])   # length mismatch
-    Test.@test_throws ArgumentError logistic_gap_for_probability(lm, 1.0)  # p not in (0,1)
+    # --- Tied scores share one isotonic probability (PAVA tie-pooling) -------
+    # Repeated Viterbi gaps tie; all observations at an identical score must map
+    # to their shared empirical probability, not to a duplicate-threshold artifact.
+    tie_model = fit_isotonic_map([1.0, 1.0, 1.0, 1.0], [false, true, false, true])
+    Test.@test all(isapprox(0.5), predict_isotonic(tie_model, [1.0]))
+    # Mixed tied + separable: the two 2.0-scored obs (one T one F) pool to 0.5,
+    # strictly above the all-false 1.0 group and below the all-true 3.0 group.
+    mix = fit_isotonic_map([1.0, 1.0, 2.0, 2.0, 3.0, 3.0],
+        [false, false, false, true, true, true])
+    Test.@test predict_isotonic(mix, [1.0])[1] < predict_isotonic(mix, [2.0])[1] <
+               predict_isotonic(mix, [3.0])[1]
+    Test.@test isapprox(predict_isotonic(mix, [2.0])[1], 0.5)
+
+    # --- Guards (assert both the type AND an identifying message fragment) ----
+    throws_msg(f, frag) = begin
+        threw = false
+        try
+            f()
+        catch e
+            threw = e isa ArgumentError && occursin(frag, e.msg)
+        end
+        threw
+    end
+    Test.@test throws_msg(() -> fit_isotonic_map([0.1, Inf], [false, true]), "finite")
+    Test.@test throws_msg(() -> fit_logistic_map(Float64[], Bool[]), "non-empty")
+    Test.@test throws_msg(() -> fit_binned_map([0.1, 0.2], [true]), "equal length")
+    Test.@test throws_msg(() -> logistic_gap_for_probability(lm, 1.0), "open interval")
 
     # --- Degenerate range: all-equal scores ⇒ single-bin global mean --------
     flat = fill(1.0, 10)

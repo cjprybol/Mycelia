@@ -122,31 +122,46 @@ function fit_isotonic_map(scores::AbstractVector{<:Real},
     order = sortperm(scores)
     sorted_scores = Float64.(scores[order])
     sorted_labels = labels[order]
-    block_starts = Int[]
-    block_ends = Int[]
+    # Pool TIED scores into one point BEFORE PAVA. A calibration map is a function
+    # of the score, so all observations with an identical score must share one
+    # probability; without this, equal scores whose labels happen to be
+    # non-decreasing land in separate blocks with duplicate thresholds, and
+    # `searchsortedfirst` then maps a repeated score to the first block's
+    # probability instead of the shared empirical one (repeated Viterbi gaps
+    # tie routinely, so this is not a corner case).
+    point_scores = Float64[]
+    point_sums = Float64[]
+    point_counts = Int[]
+    for i in eachindex(sorted_scores)
+        if !isempty(point_scores) && sorted_scores[i] == point_scores[end]
+            point_sums[end] += sorted_labels[i] ? 1.0 : 0.0
+            point_counts[end] += 1
+        else
+            push!(point_scores, sorted_scores[i])
+            push!(point_sums, sorted_labels[i] ? 1.0 : 0.0)
+            push!(point_counts, 1)
+        end
+    end
+    # PAVA over the unique-score points → non-decreasing, unique-threshold blocks.
+    block_scores = Float64[]
     block_sums = Float64[]
     block_counts = Int[]
-    for i in eachindex(sorted_scores)
-        push!(block_starts, i)
-        push!(block_ends, i)
-        push!(block_sums, sorted_labels[i] ? 1.0 : 0.0)
-        push!(block_counts, 1)
+    for j in eachindex(point_scores)
+        push!(block_scores, point_scores[j])
+        push!(block_sums, point_sums[j])
+        push!(block_counts, point_counts[j])
         while length(block_sums) >= 2 &&
             block_sums[end - 1] / block_counts[end - 1] >
             block_sums[end] / block_counts[end]
-            block_ends[end - 1] = block_ends[end]
+            block_scores[end - 1] = block_scores[end]   # block threshold = its max score
             block_sums[end - 1] += block_sums[end]
             block_counts[end - 1] += block_counts[end]
-            pop!(block_starts)
-            pop!(block_ends)
+            pop!(block_scores)
             pop!(block_sums)
             pop!(block_counts)
         end
     end
-    return (
-        thresholds = [sorted_scores[i] for i in block_ends],
-        probabilities = block_sums ./ block_counts
-    )
+    return (thresholds = block_scores, probabilities = block_sums ./ block_counts)
 end
 
 """Map raw `scores` through a fitted isotonic probability map."""

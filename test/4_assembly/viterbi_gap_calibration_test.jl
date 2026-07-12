@@ -26,6 +26,9 @@ Test.@testset "Tier-2 gap calibration signal (AUROC > 0.5)" begin
     end
 
     Test.@test !isempty(rows)                       # class balance sufficient to fit
+    # BOTH requested error rates must yield results — otherwise a silently-skipped
+    # rate (insufficient class balance / regression) would pass unnoticed.
+    Test.@test Set(r.error_rate for r in rows) == Set([0.08, 0.10])
 
     # AUROC is shared across models per error rate (property of the raw gap ranking).
     for er in unique(r.error_rate for r in rows)

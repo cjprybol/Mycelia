@@ -187,9 +187,15 @@ function run_gap_calibration(;
             gt = try
                 collect_gap_truth(cov, FASTX.sequence(String, rec), clean; config = cfg)
             catch e
-                n_failed += 1
-                first_error === nothing && (first_error = e)   # keep the first for signal
-                continue   # skip a failed/contract-violating decode
+                # Skip ONLY the expected "no path" decode failure; a contract
+                # violation, BoundsError, or any other defect is a real bug that must
+                # surface, not be silently averaged out of the calibration sample.
+                if e isa ArgumentError && occursin("decode produced no path", e.msg)
+                    n_failed += 1
+                    first_error === nothing && (first_error = e)
+                    continue
+                end
+                rethrow()
             end
             append!(scores, gt.scores)
             append!(labels, gt.labels)
