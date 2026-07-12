@@ -106,8 +106,11 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
     Test.@testset "taxonomy single-source + adapter guard" begin
         tax = R._olc_taxonomy()
         wired = (tax.short_read_tools..., tax.long_read_tools...)
-        # :auto resolves to a WIRED tool for every valid tech (no drift between the
-        # taxonomy, the resolver, and the reject-list).
+        # This testset verifies what it can WITHOUT external tools: (1) :auto
+        # resolves to a member of the wired-tool set for every valid tech, and
+        # (2) _run_olc_tool rejects a tool not in the taxonomy. (A stronger check
+        # that every wired tool has a live _run_olc_tool branch needs a wrapper
+        # stub — a follow-up.)
         for tech in (tax.short_read_techs..., tax.long_read_techs...)
             cfg = R.AssemblyConfig(; k = 13, corrector = :iterative,
                 strategy = :scalable, layout = :olc, olc_tool = :auto,
@@ -120,6 +123,30 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
             strategy = :scalable, layout = :olc, sequencing_tech = :illumina)
         Test.@test_throws ErrorException R._run_olc_tool(:bogus_tool, "unused.fastq",
             mktempdir(), cfg)
+
+        # read-type mappers: pure functions, deterministic, cover the pacbio path
+        # the gated flye run never exercises. Fail loud on an unexpected tech.
+        Test.@test R._flye_read_type(:nanopore) == "nano-corr"
+        Test.@test R._flye_read_type(:pacbio) == "pacbio-corr"
+        Test.@test_throws ErrorException R._flye_read_type(:illumina)
+        Test.@test R._canu_read_type(:nanopore) == "nanopore"
+        Test.@test R._canu_read_type(:pacbio) == "pacbio"
+        Test.@test_throws ErrorException R._canu_read_type(:illumina)
+
+        # Partition invariant (single source of truth): the corrector's accepted
+        # techs are exactly the taxonomy's short ∪ long, so :auto can never see a
+        # tech the resolver/read-type maps don't classify.
+        Test.@test Set((tax.short_read_techs..., tax.long_read_techs...)) ==
+                   Set((:illumina, :ultima, :nanopore, :pacbio))
+    end
+
+    Test.@testset "read_type is a reserved olc_options key" begin
+        # read_type is route-managed (derived from sequencing_tech) — a caller
+        # cannot override it via olc_options.
+        Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
+            corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :flye, sequencing_tech = :nanopore,
+            olc_options = (; read_type = "nano-hq"))
     end
 
     Test.@testset "discoverability + incompatibility warnings" begin
