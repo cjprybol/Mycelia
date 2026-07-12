@@ -107,8 +107,12 @@ function _inject_substitutions(seq::AbstractString, rate::Float64, rng)::String
     chars = collect(seq)
     alts = Dict('A' => "CGT", 'C' => "AGT", 'G' => "ACT", 'T' => "ACG")
     for i in eachindex(chars)
+        # Only substitute ACGT bases, and always to a DIFFERENT base (the per-base
+        # `alts` string excludes the original), so a "substitution" is never a no-op
+        # that would mislabel an unchanged position as edited.
+        haskey(alts, chars[i]) || continue
         if rand(rng) < rate
-            opts = get(alts, chars[i], "ACGT")
+            opts = alts[chars[i]]
             chars[i] = opts[rand(rng, 1:lastindex(opts))]
         end
     end
@@ -177,14 +181,30 @@ function run_gap_calibration(;
         cfg = Mycelia.ViterbiCorrectionConfig(record_position_gaps = true, error_rate = er)
         scores = Float64[]
         labels = Bool[]
+        n_failed = 0
+        first_error = nothing
         for (rec, clean) in zip(reads, truths)
             gt = try
                 collect_gap_truth(cov, FASTX.sequence(String, rec), clean; config = cfg)
-            catch
+            catch e
+                n_failed += 1
+                first_error === nothing && (first_error = e)   # keep the first for signal
                 continue   # skip a failed/contract-violating decode
             end
             append!(scores, gt.scores)
             append!(labels, gt.labels)
+        end
+        # Distinguish systematic/partial DECODE FAILURE (a real bug or a biased
+        # survivor subset) from mere class imbalance — a bare `catch;continue` would
+        # otherwise misattribute an all-fail run to "insufficient class balance".
+        if n_failed > 0
+            @warn "gap calibration: $(n_failed)/$(length(reads)) reads failed to " *
+                  "decode at err=$(er) (calibration fit on the surviving subset — " *
+                  "possible bias)." first_error
+        end
+        if n_failed == length(reads)
+            println("err=$(er): ALL $(length(reads)) reads failed to decode — no signal, skipped")
+            continue
         end
         if isempty(scores) || all(labels) || !any(labels)
             println("err=$(er): insufficient class balance (n=$(length(scores))) — skipped")

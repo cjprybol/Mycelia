@@ -225,30 +225,44 @@ function run_pr_curve()
 end
 
 """
-    assess_frontier_dominance(rows; err=0.10, recall_eps=0.02, over_eps=0.01) -> NamedTuple
+    assess_frontier_dominance(rows; err=0.10, recall_eps=0.02) -> NamedTuple
 
 Programmatic frontier-dominance check (previously eyeballed from the CSV). At
 error rate `err`, decide whether any `calibrated-gap-*` operating point DOMINATES
-the `noskip+nogate` baseline: recall retained (>= baseline recall − `recall_eps`),
-over-correction pushed near zero (<= `over_eps`), and precision not below the
-baseline. Returns `(dominates, baseline, best, candidates)`. NaN metrics
-(zero-denominator rows) are treated as non-dominating.
+the `noskip+nogate` baseline. Dominance requires a STRICT up-and-right move, not a
+tie: recall retained (>= baseline recall − `recall_eps`), over-correction
+**strictly** below baseline, and precision not below baseline. The strict
+over-correction criterion is load-bearing — `calibrated-gap-0.0` is by definition
+the ungated baseline (threshold 0 reverts nothing), so it TIES every metric; a
+non-strict predicate would report it as "dominating" itself. Returns
+`(dominates, baseline, best, candidates)`. A non-finite baseline or non-finite
+candidate metrics (zero-denominator rows) are treated as non-dominating.
 """
 function assess_frontier_dominance(rows::DataFrames.DataFrame;
-        err::Float64 = 0.10, recall_eps::Float64 = 0.02, over_eps::Float64 = 0.01)
+        err::Float64 = 0.10, recall_eps::Float64 = 0.02)
     at = rows[[isapprox(r, err; atol = 1e-9) for r in rows.error_rate], :]
     base_idx = findfirst(==("noskip+nogate"), at.point)
     base_idx === nothing && return (dominates = false,
         reason = "no noskip+nogate baseline at err=$(err)",
         baseline = nothing, best = nothing, candidates = NamedTuple[])
     base = at[base_idx, :]
+    if !(isfinite(base.recall) && isfinite(base.precision) &&
+         isfinite(base.over_correction_rate))
+        return (dominates = false,
+            reason = "degenerate (non-finite) noskip+nogate baseline at err=$(err)",
+            baseline = (recall = base.recall, precision = base.precision,
+                over_rate = base.over_correction_rate),
+            best = nothing, candidates = NamedTuple[])
+    end
     winners = NamedTuple[]
     for row in DataFrames.eachrow(at)
         startswith(row.point, "calibrated-gap-") || continue
         (isfinite(row.recall) && isfinite(row.precision) &&
          isfinite(row.over_correction_rate)) || continue
+        # STRICT improvement: retain recall, strictly reduce over-correction, keep
+        # precision. The strict `<` on over-correction excludes the gap-0.0 tie.
         if row.recall >= base.recall - recall_eps &&
-           row.over_correction_rate <= over_eps &&
+           row.over_correction_rate < base.over_correction_rate &&
            row.precision >= base.precision
             push!(winners,
                 (point = row.point, recall = row.recall,

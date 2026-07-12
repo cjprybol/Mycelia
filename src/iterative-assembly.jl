@@ -1538,9 +1538,15 @@ parallel (`@threads`) read loop increments them race-free.
 mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
     unkmerizable_reads::Threads.Atomic{Int}
+    # Calibrated gate requested (threshold set, substitution mode) but a decode
+    # contract invariant was violated so gating silently fell open to the ungated
+    # decode. On a healthy substitution decode this is always 0; a nonzero value
+    # means the opt-in gate disabled itself — a regression signal, not data loss.
+    gate_skipped::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
-    CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+    CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -1734,6 +1740,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # when `diag` is a shared accumulator threaded across many passes.
     struct_before = diag.structural_errors[]
     unk_before = diag.unkmerizable_reads[]
+    gate_skipped_before = diag.gate_skipped[]
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
     improvements_made = 0
@@ -1993,6 +2000,17 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             "passed through uncorrected (not conflated with 'no likelihood gain')." total_reads structural_errors=struct_swallowed unkmerizable_reads=unk_swallowed fraction=round(
                 frac, digits = 3)
         end
+    end
+
+    # A requested calibrated gate that silently fell open on a substitution decode
+    # is a contract regression (the gate did nothing despite being opted in) — see
+    # CorrectorDiagnostics.gate_skipped. Surface it rather than let the frontier look
+    # like "the gate doesn't help."
+    gate_skipped_this_pass = diag.gate_skipped[] - gate_skipped_before
+    if gate_skipped_this_pass > 0
+        @warn "iterative corrector: calibrated gate fell open (ungated) on " *
+              "$(gate_skipped_this_pass) read(s) despite a substitution decode — the " *
+              "gap/path alignment contract was violated; the gate silently did nothing." total_reads gate_skipped = gate_skipped_this_pass
     end
 
     return updated_reads, improvements_made, skip_fraction, cheap_corrections,
@@ -3028,24 +3046,24 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         corrected_sequence_string = corrected_sequence isa AbstractString ?
                                     corrected_sequence :
                                     string(corrected_sequence)
-        if calibrated_gap_threshold !== nothing
+        # Calibrated gate is a SUBSTITUTION-ONLY tool: the positional revert
+        # `corrected_chars[i+k] = original_chars[i+k]` requires a stable base<->column
+        # map, which only a length-preserving substitution decode provides. Under
+        # `indel_moves` a BALANCED indel decode (one insertion + one deletion) is
+        # net-length-neutral — it would pass a length check yet shift the interior
+        # map — so we exclude indel mode entirely rather than trust `length` as a
+        # proxy for alignment (review: convergent finding, 3 reviewers).
+        if calibrated_gap_threshold !== nothing && indel_params === nothing
             path_result = only(correction.paths)
             decoded_path = path_result.path
             gaps = get(path_result.diagnostics, :position_gaps, nothing)
             original_chars = collect(sequence_string)
             corrected_chars = collect(corrected_sequence_string)
-            # Positional per-base gate (strand-safe): gaps[i] is the Viterbi margin
-            # INTO path.steps[i+1], i.e. read position i+k. Where the margin is below
-            # threshold the decode is ambiguous, so revert that base to the observed
-            # one — this is what pulls over-correction back down. `Inf` gaps (collapsed
-            # frontier ⇒ maximally confident) clear any finite threshold and are kept.
-            # Apply the gate ONLY when the decode gave us a path, its recorded gaps
-            # under the documented alignment contract (len == steps-1), and a
-            # length-preserving decode (a positional revert is undefined once an indel
-            # shifts the base<->position map). Any precondition unmet ⇒ fail OPEN to
-            # the ungated decode, never drop the read's correction. The err=0.10
-            # substitution frontier is always length-preserving, so the guards are a
-            # safety net, not a hot path.
+            # gaps[i] is the Viterbi margin INTO path.steps[i+1], i.e. read position
+            # i+k. Where the margin is below threshold the decode is ambiguous, so
+            # revert that base to the observed one — this is what pulls over-correction
+            # back down. `Inf` gaps (collapsed frontier ⇒ maximally confident) clear
+            # any finite threshold and are kept.
             if decoded_path !== nothing && gaps !== nothing &&
                length(gaps) == length(decoded_path.steps) - 1 &&
                length(corrected_chars) == length(original_chars)
@@ -3057,6 +3075,13 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                     end
                 end
                 corrected_sequence_string = String(corrected_chars)
+            elseif diagnostics !== nothing
+                # In substitution mode the decode contract (path present, gaps
+                # recorded, len == steps-1, length preserved) is ALWAYS satisfiable;
+                # a miss means the gate silently fell open to the ungated decode —
+                # count it so an opt-in gate that disabled itself is visible, not
+                # invisible (fail-open is the right data-safety choice; silence is not).
+                Threads.atomic_add!(diagnostics.gate_skipped, 1)
             end
         end
         improved_likelihood = Mycelia.calculate_sequence_likelihood(
