@@ -37,12 +37,10 @@
     "phix174_nc001422",
     "pstvd_nc002030"
   ],
-  "generated_at": "2026-06-25T22:41:39.230Z",
+  "generated_at": "2026-07-11T19:40:23.878Z",
   "git": {
-    "branch": "master",
-    "commit": "bc2f1fe2a15a755b26abaf8df256d1bc0be09ba0",
-    "is_dirty": true,
-    "remote_url": "git@github.com:cjprybol/Mycelia.git"
+    "commit": "b9537e3ee6c81225c2fe98b941b9d1f670cff61e",
+    "is_dirty": true
   },
   "metadata": {
     "baseline": "uncorrected injected-error observations",
@@ -54,7 +52,7 @@
       0.1
     ],
     "fixture_dir": "fixtures/viterbi_accuracy",
-    "unit": "fixed-length 9-mers/ngrams"
+    "unit": "fixed-length 11-mers/ngrams"
   },
   "row_count": 9,
   "run_id": "b8_viterbi_accuracy_local_20260625",

@@ -109,9 +109,22 @@ Compute the ordered set of k-mer sizes the iterative corrector should walk.
   for it. (In `n_k_rungs` mode the first rung is pinned to `initial_k`, so they
   coincide.)
 - Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
-  `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
-  rungs to odd values and pinning the first rung to `initial_k` and the last to
-  the largest odd `<= max_k`.
+  `initial_k` to `max_k` (LoRMA-style coarse progression). INTERMEDIATE rungs are
+  snapped to PRIME values (not merely odd): a composite k like 9=3x3 or 15=3x5
+  makes period-3/period-5 tandem repeats collapse to self-overlapping k-mers, the
+  worst case for de Bruijn correction — and period-p aliasing is a LOW-k
+  phenomenon, so it is exactly the mid-range auto-selected rungs that must avoid
+  it. The first rung is pinned to `initial_k` (which `find_initial_k` already
+  draws from `Primes.primes`) and the last to the largest ODD `<= max_k`.
+
+  The TOP rung is deliberately `max_k` (largest odd ≤ max_k), NOT `prevprime(max_k)`:
+  the final-pass graph-reuse optimization (td-04tb) requires the corrector's final
+  k to equal the re-assembly k (`config.k == max_k`), so topping below `max_k`
+  would silently disable reuse AND reduce the user's requested assembly resolution.
+  At the high k a top rung sits at, k-mers are long enough that a composite k
+  rarely spans a short-period repeat, so the aliasing cost there is negligible —
+  the win is in the mid-range intermediates, which ARE prime. (The single-k B8
+  accuracy benchmark, which has no re-assembly, does use a prime k.)
 - Else return `nothing`, signalling the caller to use the original prime-by-prime
   progression (`next_prime_k`) — this preserves legacy behavior.
 
@@ -131,6 +144,8 @@ function build_k_ladder(initial_k::Int, max_k::Int;
         return [initial_k]
     end
     n = max(2, n_k_rungs)
+    # Top rung stays at max_k (largest odd ≤ max_k) to preserve final-pass graph
+    # reuse (td-04tb): the reuse gate needs final_graph_k == reassembly_k == max_k.
     top = isodd(max_k) ? max_k : max_k - 1
     if top <= initial_k
         return [initial_k]
@@ -139,10 +154,12 @@ function build_k_ladder(initial_k::Int, max_k::Int;
     ks = Int[]
     for i in 1:n
         kv = round(Int, initial_k * ratio^(i - 1))
-        iseven(kv) && (kv += 1)          # prefer odd k
+        kv = Primes.nextprime(kv)        # snap intermediate rungs UP to a prime
         kv = clamp(kv, initial_k, top)
         push!(ks, kv)
     end
+    # First rung pinned to initial_k (prime in practice); last rung to the top
+    # (= max_k, kept composite-tolerant so re-assembly graph reuse still fires).
     ks[1] = initial_k
     ks[end] = top
     return sort(unique(ks))
@@ -419,7 +436,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                                      _DEFAULT_DECODE_GATE_DENSITY : decode_gate_density) :
                                     nothing
     if verbose && (effective_min_decode_k !== nothing ||
-                   effective_decode_gate_density !== nothing)
+        effective_decode_gate_density !== nothing)
         println("Low-k decode gating (td-9h5r): " *
                 (effective_min_decode_k !== nothing ?
                  "explicit floor min_decode_k=$(effective_min_decode_k); " : "") *
@@ -1418,7 +1435,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     cheap_corrections = 0
     work_reads = reads
     if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
-        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
+        work_reads,
+        cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
             graph_mode = graph_mode)
         improvements_made += cheap_corrections
         if verbose && cheap_corrections > 0
@@ -1437,10 +1455,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # `work_reads`), so this predicate sees the cheaply-corrected reads.
     _gate_skip = read -> begin
         (skip_solid && solid_kmers !== nothing &&
-             _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
+         _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
             return true
         (hard_vertices !== nothing &&
-             !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
+         !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
             return true
         return false
     end
@@ -2573,7 +2591,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             accumulate_competing_paths!(
                 soft_weights, read, graph, k; graph_mode = graph_mode,
                 walk_band = beam_is_exact ? typemax(Int) : _soft_em_walk_band(k),
-                successor_bound = beam_is_exact ? typemax(Int) : _SOFT_EM_ALT_SUCCESSOR_BOUND)
+                successor_bound = beam_is_exact ? typemax(Int) :
+                                  _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)

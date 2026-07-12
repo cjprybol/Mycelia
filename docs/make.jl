@@ -9,7 +9,7 @@ const PROJECT_ROOT = abspath(joinpath(DOCS_ROOT, ".."))
 # Bootstrap the docs environment so builds work in fresh clones and alternate worktrees.
 Pkg.activate(DOCS_ROOT)
 cd(DOCS_ROOT) do
-    Pkg.develop(path="..")
+    Pkg.develop(path = "..")
     Pkg.instantiate()
 end
 
@@ -20,12 +20,13 @@ import Literate
 const TUTORIALS_DIR = joinpath(PROJECT_ROOT, "tutorials")
 const LITERATE_SRC_DIR = joinpath(PROJECT_ROOT, "test")
 const GENERATED_DOCS_DIR = joinpath(@__DIR__, "src", "generated")
-const DOCS_EXECUTE_TUTORIALS = lowercase(get(ENV, "MYCELIA_DOCS_EXECUTE", "false")) == "true"
+const DOCS_EXECUTE_TUTORIALS = lowercase(get(ENV, "MYCELIA_DOCS_EXECUTE", "false")) ==
+                               "true"
 const DOCS_RUN_DOCTESTS = lowercase(get(ENV, "MYCELIA_DOCS_DOCTEST", "false")) == "true"
 
 # Drop any stale generated content so we don't ship orphaned pages
 if isdir(GENERATED_DOCS_DIR)
-    rm(GENERATED_DOCS_DIR; recursive=true, force=true)
+    rm(GENERATED_DOCS_DIR; recursive = true, force = true)
 end
 
 # Process tutorials from tutorials/ directory
@@ -44,14 +45,14 @@ if isdir(TUTORIALS_DIR)
             if isfile(file_path)
                 println("Processing tutorial: $file")
                 Literate.markdown(
-                    file_path, 
+                    file_path,
                     tutorials_output_dir;
                     credit = false,
                     flavor = Literate.DocumenterFlavor(),
                     # Keep execution opt-in until tutorial examples are stable
                     execute = DOCS_EXECUTE_TUTORIALS
                 )
-                
+
                 # Post-process the generated markdown to convert @example blocks to ```julia blocks
                 md_filename = replace(file, ".jl" => ".md")
                 md_path = joinpath(tutorials_output_dir, md_filename)
@@ -62,7 +63,7 @@ if isdir(TUTORIALS_DIR)
                     write(md_path, content)
                     println("  Disabled @example blocks in $md_filename")
                 end
-                
+
                 # Add to our list for the sidebar
                 push!(tutorial_files, joinpath("generated", "tutorials", md_filename))
             end
@@ -80,7 +81,7 @@ if isfile(joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"))
         # Keep execution opt-in until tutorial examples are stable
         execute = DOCS_EXECUTE_TUTORIALS
     )
-    
+
     # Post-process to disable @example blocks
     test_md_path = joinpath(GENERATED_DOCS_DIR, "test-driven-tutorial.md")
     if isfile(test_md_path)
@@ -89,7 +90,7 @@ if isfile(joinpath(LITERATE_SRC_DIR, "test-driven-tutorial.jl"))
         write(test_md_path, content)
         println("  Disabled @example blocks in test-driven-tutorial.md")
     end
-    
+
     push!(tutorial_files, joinpath("generated", "test-driven-tutorial.md"))
 end
 
@@ -122,17 +123,20 @@ tutorial_order = [
     ("Step 11: Reduced Amino Acid Alphabets", "11_reduced_amino_acid_alphabets.md"),
     ("Step 12: CoverM Coverage", "12_coverm_coverage.md"),
     ("Step 13: Rhizomorph Assembly", "13_rhizomorph_assembly.md"),
+    ("Step 13b: Rhizomorph Corrector", "13_rhizomorph_corrector.md"),
     ("Step 14a: Binning Workflow", "14_binning_workflow.md"),
     ("Step 14b: Mash Classification", "14_mash_classification.md"),
     ("Step 15: Round Trip Benchmarking", "15_round_trip_benchmarking.md"),
     ("Step 16: UN Corpus Ngram vs Token Graphs", "16_un_corpus_ngram_vs_token_graphs.md"),
     ("Step 17: Viroid Sketch Round Trip", "17_viroid_sketch_round_trip.md"),
-    ("Step 18: Advanced Assembly Theory and Practice", "18_advanced_assembly_theory_and_practice.md"),
+    ("Step 18: Advanced Assembly Theory and Practice",
+        "18_advanced_assembly_theory_and_practice.md"),
     ("Step 19: Relational Clustering", "19_relational_clustering.md"),
     ("Step 20: Microbiome Visualization", "20_microbiome_visualization.md"),
-    ("Step 21: Topological Assembly Optimization", "21_tda_topological_assembly_optimization.md"),
+    ("Step 21: Topological Assembly Optimization",
+        "21_tda_topological_assembly_optimization.md"),
     ("Step 22: Momentum Fork Resolution", "22_momentum_fork_resolution.md"),
-    ("Step 23: Variant Calling Workflow", "23_variant_calling_workflow.md"),
+    ("Step 23: Variant Calling Workflow", "23_variant_calling_workflow.md")
 ]
 
 # Add tutorials that exist in the specified order
@@ -188,7 +192,7 @@ Documenter.makedocs(
         "Microbiome Visualization" => "microbiome-visualization.md",
         "Tutorials" => vcat(
             ["Overview" => "tutorials.md"],
-            tutorial_pages,
+            tutorial_pages
         ),
         "API Reference" => [
             "Complete API Surface" => "api/all-functions.md",
@@ -196,7 +200,7 @@ Documenter.makedocs(
         "Benchmarks" => "benchmarks.md",
         "References" => "references.md",
         "Contributing" => "contributing.md",
-        "Related Projects" => "related-projects.md",
+        "Related Projects" => "related-projects.md"
     ]
 )
 
