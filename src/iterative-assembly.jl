@@ -109,9 +109,22 @@ Compute the ordered set of k-mer sizes the iterative corrector should walk.
   for it. (In `n_k_rungs` mode the first rung is pinned to `initial_k`, so they
   coincide.)
 - Else if `n_k_rungs` is given, build an ~`n_k_rungs`-rung geometric ladder from
-  `initial_k` to `max_k` (LoRMA-style coarse progression), snapping intermediate
-  rungs to odd values and pinning the first rung to `initial_k` and the last to
-  the largest odd `<= max_k`.
+  `initial_k` to `max_k` (LoRMA-style coarse progression). INTERMEDIATE rungs are
+  snapped to PRIME values (not merely odd): a composite k like 9=3x3 or 15=3x5
+  makes period-3/period-5 tandem repeats collapse to self-overlapping k-mers, the
+  worst case for de Bruijn correction — and period-p aliasing is a LOW-k
+  phenomenon, so it is exactly the mid-range auto-selected rungs that must avoid
+  it. The first rung is pinned to `initial_k` (which `find_initial_k` already
+  draws from `Primes.primes`) and the last to the largest ODD `<= max_k`.
+
+  The TOP rung is deliberately `max_k` (largest odd ≤ max_k), NOT `prevprime(max_k)`:
+  the final-pass graph-reuse optimization (td-04tb) requires the corrector's final
+  k to equal the re-assembly k (`config.k == max_k`), so topping below `max_k`
+  would silently disable reuse AND reduce the user's requested assembly resolution.
+  At the high k a top rung sits at, k-mers are long enough that a composite k
+  rarely spans a short-period repeat, so the aliasing cost there is negligible —
+  the win is in the mid-range intermediates, which ARE prime. (The single-k B8
+  accuracy benchmark, which has no re-assembly, does use a prime k.)
 - Else return `nothing`, signalling the caller to use the original prime-by-prime
   progression (`next_prime_k`) — this preserves legacy behavior.
 
@@ -131,6 +144,8 @@ function build_k_ladder(initial_k::Int, max_k::Int;
         return [initial_k]
     end
     n = max(2, n_k_rungs)
+    # Top rung stays at max_k (largest odd ≤ max_k) to preserve final-pass graph
+    # reuse (td-04tb): the reuse gate needs final_graph_k == reassembly_k == max_k.
     top = isodd(max_k) ? max_k : max_k - 1
     if top <= initial_k
         return [initial_k]
@@ -139,10 +154,12 @@ function build_k_ladder(initial_k::Int, max_k::Int;
     ks = Int[]
     for i in 1:n
         kv = round(Int, initial_k * ratio^(i - 1))
-        iseven(kv) && (kv += 1)          # prefer odd k
+        kv = Primes.nextprime(kv)        # snap intermediate rungs UP to a prime
         kv = clamp(kv, initial_k, top)
         push!(ks, kv)
     end
+    # First rung pinned to initial_k (prime in practice); last rung to the top
+    # (= max_k, kept composite-tolerant so re-assembly graph reuse still fires).
     ks[1] = initial_k
     ks[end] = top
     return sort(unique(ks))
@@ -164,6 +181,17 @@ function _next_k_in_progression(current_k::Int, max_k::Int,
     larger = filter(>(current_k), k_schedule)
     return isempty(larger) ? current_k : minimum(larger)
 end
+
+# Default ADAPTIVE low-k decode-gate density threshold (td-9h5r): if, at a given
+# k-rung, the post-Stage-0 hard-window gate would still send AT LEAST this fraction
+# of reads to the expensive per-read graph-Viterbi decode, the gate is judged
+# NON-DISCRIMINATING (it is not reducing decode volume) and the whole decode is
+# skipped for that pass — the reads fall back on Stage 0 cheap correction +
+# skip-solid, and the whole-read Viterbi is deferred to higher, selective rungs
+# where the gate actually filters. 0.90 leaves a genuinely selective low-k decode
+# (e.g. a gate that skips ~40-60% of reads) ON, and only gates the dense-graph
+# "decode almost everything" pathology the #370 profile flagged.
+const _DEFAULT_DECODE_GATE_DENSITY = 0.90
 
 """
 Estimate memory usage for a graph with a given number of k-mers.
@@ -211,6 +239,154 @@ function check_memory_limits(graph, memory_limit::Int)::Bool
 end
 
 # =============================================================================
+# Sequencing-technology error profiles (indel-aware correction, td-9q84 / 4a)
+# =============================================================================
+#
+# The merged indel pair-HMM decoder (`_viterbi_correct_observation_indel`) is
+# driven by an ERROR PROFILE rather than read length or a hardcoded technology:
+# correct with the profile you would simulate. Each profile carries BOTH the
+# technology's ABSOLUTE per-base error rate (`base_error_rate`, sourced from
+# `observe(...)` — illumina 0.005, nanopore 0.10, pacbio 0.11, ultima 1e-6) AND
+# the TRUE conditional insertion/deletion fractions (`P(insertion|error)` /
+# `P(deletion|error)`, mirroring `observe(...)`'s per-tech error-type split; see
+# `simulation.jl`, nanopore 0.30/0.30 and illumina/ultima 0.05/0.05 near line
+# 1928). The kernel consumes the fractions as gap-open partitions of the error
+# rate (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`; the remainder is the
+# substitution mass carried by the existing emission term), so the corrector must
+# thread the ABSOLUTE `base_error_rate` into `ViterbiCorrectionConfig.error_rate`
+# for the gap masses to be correctly scaled (a config left at the 0.01 default
+# would under-weight nanopore/pacbio gaps ~10×).
+#
+# Illumina/ultima keep their true (nonzero) conditional fractions, but their
+# ABSOLUTE per-base indel rate is negligible (Illumina ≈ 0.005 × 0.10 = 5e-4;
+# ultima ≈ 1e-6 × 0.05 = 5e-8), so the GATE (`profile_enables_indels`, keyed on
+# the absolute rate `base_error_rate × summed fractions`) returns `false` for them
+# and the corrector threads NO indel params. The substitution-only decode then
+# reproduces the pre-wiring corrector byte-for-byte, so the DEFAULT `:illumina`
+# profile is unchanged. Gating on the absolute rate (not the conditional
+# fractions) is why illumina/ultima need no hand-tuned zeroing: their arithmetic
+# decides `false` on its own, and a future tech's fractions cannot silently
+# misfire the gate.
+
+"""
+ABSOLUTE per-base indel-rate threshold above which a sequencing-technology profile
+enables the indel-aware pair-HMM decode (see [`profile_enables_indels`](@ref)).
+The gate compares `base_error_rate × (insertion_fraction + deletion_fraction)`
+against this value, so it keys on the absolute rate an indel actually occurs at,
+not the conditional (given-an-error) fractions. Chosen (0.02) to sit between the
+negligible absolute indel rates of substitution-dominated technologies (Illumina
+≈ 5e-4, Ultima ≈ 5e-8) and the substantial rates of single-molecule long reads
+(Nanopore ≈ 0.10×0.60 = 0.06, PacBio ≈ 0.11×0.80 = 0.088), with margin on both
+sides so all four technologies decide correctly.
+"""
+const INDEL_PROFILE_THRESHOLD = 0.02
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Per-technology error-profile preset for the indel-aware read corrector.
+
+Returns a `NamedTuple` with the technology's ABSOLUTE per-base `base_error_rate`
+(sourced from `observe(...)` in `simulation.jl`: illumina 0.005, nanopore 0.10,
+pacbio 0.11, ultima 1e-6), the TRUE CONDITIONAL `insertion_fraction` /
+`deletion_fraction` (P(insertion|error) / P(deletion|error), mirroring
+`observe(...)`'s per-tech error-type split), and the affine gap-EXTEND
+probabilities (`insertion_extend_probability` / `deletion_extend_probability`) —
+nanopore/PacBio indels cluster in homopolymer runs, so a one-time gap-open then a
+cheaper extend models the geometric run lengths.
+
+All four presets carry their real conditional fractions (no hand-zeroing). The
+DECODE gate ([`profile_enables_indels`](@ref)) multiplies `base_error_rate` by the
+summed fractions to decide, so substitution-dominated technologies (`:illumina`,
+`:ultima`) — whose ABSOLUTE indel rate is negligible — gate OFF and stay on the
+substitution-only oracle path, while `:nanopore`/`:pacbio` gate ON. The
+`base_error_rate` is threaded into `ViterbiCorrectionConfig.error_rate` so the
+kernel's gap-open masses (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are
+scaled to the real per-base rate.
+
+Supported: `:illumina`, `:nanopore`, `:pacbio`, `:ultima`.
+"""
+function indel_error_profile(tech::Symbol)
+    if tech == :illumina
+        # observe(): base 0.005, conditional insertion/deletion 0.05/0.05. Absolute
+        # indel rate ≈ 5e-4 (< INDEL_PROFILE_THRESHOLD) ⇒ gate OFF ⇒ the corrector
+        # threads no indel params and the decode collapses to the substitution
+        # oracle (speed + byte-identity). Extend probabilities unused (gate OFF).
+        return (base_error_rate = 0.005,
+            insertion_fraction = 0.05, deletion_fraction = 0.05,
+            insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
+    elseif tech == :nanopore
+        # observe(): base 0.10, split (mismatch 0.40 / insertion 0.30 / deletion
+        # 0.30). Absolute indel rate ≈ 0.10 × 0.60 = 0.06 ⇒ gate ON. Indels cluster
+        # in homopolymers ⇒ moderate extend.
+        return (base_error_rate = 0.10,
+            insertion_fraction = 0.30, deletion_fraction = 0.30,
+            insertion_extend_probability = 0.30, deletion_extend_probability = 0.30)
+    elseif tech == :pacbio
+        # observe(): base 0.11, split (mismatch 0.20 / insertion 0.40 / deletion
+        # 0.40). Absolute indel rate ≈ 0.11 × 0.80 = 0.088 ⇒ gate ON. Indel-
+        # dominated ⇒ stronger extend.
+        return (base_error_rate = 0.11,
+            insertion_fraction = 0.40, deletion_fraction = 0.40,
+            insertion_extend_probability = 0.40, deletion_extend_probability = 0.40)
+    elseif tech == :ultima
+        # observe(): base 1e-6, conditional insertion/deletion 0.025/0.025. Absolute
+        # indel rate ≈ 5e-8 (≪ threshold) ⇒ gate OFF ⇒ substitution-only. Extend
+        # probabilities unused (gate OFF).
+        return (base_error_rate = 1e-6,
+            insertion_fraction = 0.025, deletion_fraction = 0.025,
+            insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
+    else
+        error("unknown sequencing technology :$(tech); expected one of " *
+              ":illumina, :nanopore, :pacbio, :ultima")
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Decide whether a sequencing-technology profile enables the indel-aware decode:
+`true` iff the ABSOLUTE per-base indel rate — `base_error_rate ×
+(insertion_fraction + deletion_fraction)` — exceeds `threshold` (default
+[`INDEL_PROFILE_THRESHOLD`]). Keying on the absolute rate (not the conditional
+fractions) means `:illumina` (≈ 5e-4) and `:ultima` (≈ 5e-8) return `false` ⇒
+substitution-only, while `:nanopore` (≈ 0.06) and `:pacbio` (≈ 0.088) return
+`true` — each profile decides from its own arithmetic, with no hand-tuned zeroing.
+"""
+function profile_enables_indels(tech::Symbol;
+        threshold::Float64 = INDEL_PROFILE_THRESHOLD)
+    p = indel_error_profile(tech)
+    return p.base_error_rate * (p.insertion_fraction + p.deletion_fraction) > threshold
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Bundle of indel pair-HMM decode parameters threaded from the assembler down to
+the per-read `ViterbiCorrectionConfig`. Constructed ONLY when a profile enables
+indels (see [`profile_enables_indels`](@ref)); the substitution-only path threads
+`nothing`, which reproduces the pre-wiring `ViterbiCorrectionConfig` byte-for-byte
+(`indel_moves` stays `false`). `base_error_rate` is the technology's ABSOLUTE
+per-base error rate (from the error profile); it is threaded into
+`ViterbiCorrectionConfig.error_rate` so the kernel's gap-open masses
+(`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are scaled to the real rate
+instead of the 0.01 config default (which would under-weight nanopore/pacbio gaps
+~10×). The gap-open fractions + extend probabilities come from the error profile;
+the run caps + `band_width` come from the corrector tier knobs (`:scalable`
+bounded, `:exhaustive` unbounded).
+"""
+struct IndelDecodeParams
+    base_error_rate::Float64
+    insertion_fraction::Float64
+    deletion_fraction::Float64
+    insertion_extend_probability::Float64
+    deletion_extend_probability::Float64
+    deletion_max_run::Int
+    max_insertion_run::Int
+    band_width::Union{Nothing, Int}
+end
+
+# =============================================================================
 # Core Iterative Assembly Framework
 # =============================================================================
 
@@ -238,7 +414,10 @@ function mycelia_iterative_assemble(input_fastq::String;
         hard_window::Bool = false,
         soft_em::Bool = false,
         cheap_correct::Bool = false,
-        beam_width::Union{Int, Nothing} = nothing)
+        beam_width::Union{Int, Nothing} = nothing,
+        min_decode_k::Union{Int, Nothing} = nothing,
+        decode_gate_density::Union{Float64, Nothing} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -373,6 +552,51 @@ function mycelia_iterative_assemble(input_fastq::String;
         println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
+    # -- Low-k decode gating (td-9h5r) -----------------------------------------
+    # The finding (PR #370 profile): the per-read graph-Viterbi decode is 57-78% of
+    # every :scalable iteration — the dominant runtime term — yet at LOW k the graph
+    # is dense (nearly every k-mer sits on a bubble/repeat vertex), so the
+    # hard-window gate cannot discriminate and flags essentially EVERY read for a
+    # full whole-read decode. That is correction Stage 0's cheap linear pass already
+    # largely did. Two composable gates cut that wasted volume; BOTH still BUILD the
+    # graph and run Stage 0 cheap correction + skip-solid, deferring only the
+    # expensive whole-read Viterbi to higher, selective rungs:
+    #
+    #   (1) ADAPTIVE (default): at a rung whose post-Stage-0 hard-window decode
+    #       fraction would be >= `decode_gate_density`, the gate is non-
+    #       discriminating (it would decode ~everything → no volume reduction), so
+    #       the whole decode is skipped for that pass. This fires EXACTLY on the
+    #       dense-low-k pathology and is a NO-OP where the gate genuinely filters
+    #       (so a load-bearing selective low-k decode is preserved). Measured
+    #       post-Stage-0 inside improve_read_set_likelihood (raw-read density is
+    #       uninformative — Stage 0 clears most apparent hardness first).
+    #   (2) EXPLICIT floor: `min_decode_k` hard-gates every rung `k < min_decode_k`
+    #       (the LoRMA-style "start the graph-decode ladder higher" lever). Off by
+    #       default; deterministic, for tuning/tests.
+    #
+    # Both are gated behind the `:scalable` tier (only active when `hard_window` is
+    # true), so the `:exhaustive` tier (hard_window=false) is BYTE-IDENTICAL.
+    effective_min_decode_k = hard_window ? min_decode_k : nothing
+    # Adaptive-gate density threshold (fraction of reads the hard-window gate would
+    # still decode after Stage 0 above which the gate counts as non-discriminating).
+    # Default 0.90 on :scalable; `nothing` (or the exhaustive tier) disables it.
+    effective_decode_gate_density = hard_window ?
+                                    (decode_gate_density === nothing ?
+                                     _DEFAULT_DECODE_GATE_DENSITY : decode_gate_density) :
+                                    nothing
+    if verbose && (effective_min_decode_k !== nothing ||
+        effective_decode_gate_density !== nothing)
+        println("Low-k decode gating (td-9h5r): " *
+                (effective_min_decode_k !== nothing ?
+                 "explicit floor min_decode_k=$(effective_min_decode_k); " : "") *
+                (effective_decode_gate_density !== nothing ?
+                 "adaptive gate-off when post-Stage-0 decode fraction >= " *
+                 "$(effective_decode_gate_density). " : "") *
+                "Gated rungs rely on Stage 0 cheap correction + skip-solid.")
+    end
+    # Telemetry: the k-rungs whose per-read decode was gated OFF (low-k skip).
+    decode_gated_rungs = Int[]
+
     # Hard-window skip telemetry (td-nn6l): the fraction of reads the hard-window
     # gate passed through WITHOUT a decode, recorded PER PASS (across every k and
     # iteration) so the run metadata can surface min/mean/max, not just the last
@@ -383,6 +607,22 @@ function mycelia_iterative_assemble(input_fastq::String;
     # k-mer-spectrum pass, recorded PER PASS. Empty/zero when cheap_correct is off
     # (:exhaustive), so the exhaustive tier is unaffected.
     cheap_correction_counts = Int[]
+
+    # --- Final-pass graph reuse (td-04tb) -----------------------------------
+    # The corrector builds a qualmer graph FROM SCRATCH each pass; the LAST pass at
+    # the largest k builds the graph whose input reads become the final corrected
+    # read set — but ONLY when that pass makes 0 improvements (a converged, no-change
+    # pass). In that case the graph built from `current_reads` is byte-identical to
+    # the graph a downstream re-assembly would build from the corrected reads, so we
+    # hand it back and `_assemble_with_iterative_corrector` reuses it instead of
+    # rebuilding, saving the redundant build_qualmer_graph (~22-36% of the iterative
+    # arm). `final_pass_graph_reusable` is set true ONLY on a 0-improvement pass;
+    # when the last pass changed reads the graph is stale and the caller rebuilds.
+    # These are overwritten every pass, so after the loop they reflect the LAST
+    # pass at the LARGEST k processed (the pass that produced the final FASTQ).
+    final_pass_graph = nothing
+    final_pass_graph_k = 0
+    final_pass_graph_reusable = false
 
     # Main k-mer progression loop
     while k <= max_k
@@ -469,9 +709,22 @@ function mycelia_iterative_assemble(input_fastq::String;
             # orientation, so the gate works on both :canonical and :doublestrand
             # (:scalable now runs :doublestrand). Only :singlestrand — which has no
             # RC vertices and is not a corrector target — is excluded.
-            hard_vertices = (hard_window && graph_mode != :singlestrand) ?
+            # Low-k decode gating (td-9h5r) — EXPLICIT floor. Below
+            # `effective_min_decode_k` the per-read graph-Viterbi decode is skipped
+            # for EVERY read this pass. Stage 0 cheap correction + skip-solid still
+            # run below. Only active on the :scalable tier (hard_window=true), so
+            # :exhaustive is byte-identical. The ADAPTIVE gate (density-based) is
+            # decided inside improve_read_set_likelihood — it needs the post-Stage-0
+            # decode fraction — and is reported back via `pass_decode_gated`.
+            explicit_floor_gated = effective_min_decode_k !== nothing &&
+                                   k < effective_min_decode_k
+            # Building the hard-vertex set is pointless when the explicit floor
+            # already gates the decode off; the adaptive gate needs it, though, so
+            # build it whenever the floor is NOT gating and hard_window is on.
+            hard_vertices = (hard_window && !explicit_floor_gated &&
+                             graph_mode != :singlestrand) ?
                             _hard_vertex_set(graph, k) : nothing
-            if hard_window && graph_mode == :singlestrand
+            if hard_window && !explicit_floor_gated && graph_mode == :singlestrand
                 @warn "hard_window gating is not supported for graph_mode=:singlestrand; " *
                       "disabling (decoding all non-solid reads)." graph_mode maxlog = 1
             end
@@ -500,6 +753,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             improvements_made = 0
             pass_skip_fraction = 0.0
             pass_cheap_corrections = 0
+            pass_decode_gated = false
             try
                 if soft_em && prev_soft_weights !== nothing
                     Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
@@ -507,7 +761,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                 updated_reads,
                 improvements_made,
                 pass_skip_fraction,
-                pass_cheap_corrections = improve_read_set_likelihood(
+                pass_cheap_corrections,
+                pass_decode_gated = improve_read_set_likelihood(
                     current_reads, graph, k,
                     verbose = verbose,
                     batch_size = batch_size,
@@ -518,13 +773,22 @@ function mycelia_iterative_assemble(input_fastq::String;
                     beam_width = beam_width,
                     soft_weights = current_soft_weights,
                     hard_vertices = hard_vertices,
-                    diagnostics = corrector_diagnostics
+                    decode_enabled = !explicit_floor_gated,
+                    decode_gate_density = effective_decode_gate_density,
+                    diagnostics = corrector_diagnostics,
+                    indel_params = indel_params
                 )
             finally
                 Mycelia.Rhizomorph.clear_soft_edge_weights!()
             end
             push!(skip_fractions, pass_skip_fraction)
             push!(cheap_correction_counts, pass_cheap_corrections)
+            # Record a rung whose per-read decode was gated OFF (explicit floor OR
+            # adaptive density gate) — telemetry surfaced in the run metadata.
+            if (explicit_floor_gated || pass_decode_gated) &&
+               (isempty(decode_gated_rungs) || last(decode_gated_rungs) != k)
+                push!(decode_gated_rungs, k)
+            end
             # Carry this iteration's soft edge memory forward: it becomes the next
             # EM iteration's M-step input (registered onto the next graph). `nothing`
             # on :exhaustive (no soft-EM) so that tier stays byte-identical.
@@ -561,6 +825,17 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Wrote $(length(updated_reads)) reads to $output_file")
             end
+
+            # Capture this pass's graph for potential final-pass reuse (td-04tb).
+            # `graph` was built from `current_reads` this pass; `output_file`
+            # (== updated_reads) is this pass's corrected output. When the pass made
+            # 0 improvements, updated_reads == current_reads content, so `graph` is
+            # byte-identical to a rebuild from the corrected reads and is REUSABLE.
+            # Overwritten every pass ⇒ after the loop this holds the last pass at the
+            # largest k, i.e. the pass whose FASTQ finalize selects as the result.
+            final_pass_graph = graph
+            final_pass_graph_k = k
+            final_pass_graph_reusable = (improvements_made == 0)
 
             # Create checkpoint if enabled and at checkpoint interval
             if enable_checkpointing && iteration % checkpoint_interval == 0
@@ -672,7 +947,16 @@ function mycelia_iterative_assemble(input_fastq::String;
         verbose = verbose, diagnostics = corrector_diagnostics,
         skip_fractions = skip_fractions,
         cheap_correction_counts = cheap_correction_counts,
-        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct)
+        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct,
+        min_decode_k = effective_min_decode_k,
+        decode_gate_density = effective_decode_gate_density,
+        decode_gated_rungs = decode_gated_rungs,
+        # Final-pass graph reuse (td-04tb): hand the corrector's last-pass qualmer
+        # graph back so a converged run's re-assembly can skip a redundant rebuild.
+        final_pass_graph = final_pass_graph,
+        final_pass_graph_k = final_pass_graph_k,
+        final_pass_graph_mode = graph_mode,
+        final_pass_graph_reusable = final_pass_graph_reusable)
 end
 
 # =============================================================================
@@ -1102,6 +1386,33 @@ const _AUTO_BEAM_BOUNDED_WIDTH = 256
 # constant: it only trades exactness for tractability, and only ABOVE the line.
 const _AUTO_BEAM_EXACT_THRESHOLD = 1024
 
+# Candidate-GENERATION bounds applied alongside the finite width beam (td-plqi).
+# The width beam caps the RETAINED frontier at 256, but on a dense intermediate-k
+# graph nearly all 256 retained states are >20 log-prob below the best — improbable
+# junk that can never win the ML path yet still generates + emission-scores
+# successors at the next depth, so per-depth generation climbs toward the width cap
+# as the graph densifies (the empirically-measured residual super-linear term at
+# k=9; #386). These bound generation directly:
+#
+#   * _AUTO_SUCCESSOR_BOUND — top-B outgoing transitions per expanded state, ranked
+#     by edge weight before emission. A k-mer de Bruijn vertex has ≤ 4 structural
+#     successors, so 16 is a strict no-op on DNA (a robustness guard for pathological
+#     high-branching / non-DNA inputs), kept for correctness parity with the design.
+#
+#   * _AUTO_BEAM_SCORE_MARGIN — Δ log-prob "histogram" beam with an EMISSION
+#     exemption: prune a frontier state only when it is >Δ below the depth's best
+#     on BOTH the full score AND the cumulative emission (read-consistency). This
+#     linearizes the dense-rung decode — the read-INCONSISTENT junk (low on both
+#     axes) is discarded so the generating frontier stays O(1) in size — WITHOUT
+#     dropping a real-but-rare allele: a supported minor allele in a skewed pool
+#     has good emission but a coverage-driven transition penalty, and the emission
+#     clause exempts it from pruning (the margin removes WRONG paths, not merely
+#     RARE ones; PR #388 variation-safety review). Δ = 30 nats. Both engage ONLY
+#     where the width beam is already finite (approximate); exact-ML reads
+#     (beam_width == typemax) keep margin = Inf and stay byte-identical.
+const _AUTO_SUCCESSOR_BOUND = 16
+const _AUTO_BEAM_SCORE_MARGIN = 30.0
+
 """
     _auto_beam_width(n_observations) -> Int
 
@@ -1125,6 +1436,47 @@ function _auto_beam_width(n_observations::Integer)::Int
 end
 
 """
+    _auto_beam_width(n_observations, n_vertices) -> Int
+
+Graph-density-aware size-aware default beam width (td-35ux). The read-length-only
+[`_auto_beam_width`](@ref) keeps the exact/unbounded frontier for any read with
+`n_observations <= _AUTO_BEAM_EXACT_THRESHOLD` (typical short reads). That is
+correct on a sparse graph, but at a dense intermediate k-rung the EXACT retained
+(vertex, strand) frontier grows `O(n_vertices)` per decode depth — i.e.
+`O(genome)` per pass, `O(genome^2)` over the read set — even for a single short
+150 bp read (~15,723 frontier states at 5 kb / k=9, ~2.15 s per read). Long reads
+already dodge this because the read-length rule bounds them; short reads did not,
+which is why only short reads blew up (#376).
+
+This two-arg form bounds the beam to `_AUTO_BEAM_BOUNDED_WIDTH` whenever EITHER
+the read is large (read-length rule) OR the graph is dense
+(`n_vertices > _AUTO_BEAM_BOUNDED_WIDTH`), so a short read on a big graph is
+capped regardless of its length. On a small/sparse graph
+(`n_vertices <= _AUTO_BEAM_BOUNDED_WIDTH`) the exact frontier is already tiny, so
+a small read keeps the exact `typemax(Int)` (ML guarantee preserved). Callers can
+still FORCE exact by passing an explicit `beam_width = typemax(Int)`.
+"""
+function _auto_beam_width(n_observations::Integer, n_vertices::Integer)::Int
+    # Read-length rule first: a large read is bounded no matter the graph.
+    by_length = _auto_beam_width(n_observations)
+    if by_length != typemax(Int)
+        return by_length
+    end
+    # The read is small (exact by read length). If the graph is dense the exact
+    # frontier can still grow O(n_vertices) per depth → O(genome^2) per pass, so
+    # bound it. On a sparse graph the exact frontier is tiny; keep it exact.
+    if n_vertices > _AUTO_BEAM_BOUNDED_WIDTH
+        @info "iterative corrector: short read ($(n_observations) observations) on a " *
+              "dense graph ($(n_vertices) vertices > $(_AUTO_BEAM_BOUNDED_WIDTH)); " *
+              "bounding Viterbi beam_width=$(_AUTO_BEAM_BOUNDED_WIDTH) to keep the " *
+              "retained frontier O(1) instead of O(n_vertices) per depth (td-35ux). " *
+              "Pass beam_width=typemax(Int) to force exact." maxlog = 3
+        return _AUTO_BEAM_BOUNDED_WIDTH
+    end
+    return typemax(Int)
+end
+
+"""
 Improve likelihood of entire read set using current graph and k-mer size.
 Returns updated reads and count of improvements made.
 Uses memory-efficient batch processing for large datasets.
@@ -1143,6 +1495,25 @@ k-mers overlap the "hard" vertex set (bubbles / repeats / weak k-mers); every
 other read passes through untouched. Composes with `skip_solid` — a read is
 decoded only when it is NOT all-solid AND (no hard set, or it touches one).
 
+`decode_enabled` (td-9h5r): when `false`, the per-read graph-Viterbi decode is
+skipped for EVERY read this pass (skip_fraction == 1.0) — the EXPLICIT low-k decode
+floor. Stage 0 cheap correction still runs first (on `work_reads`), so simple
+errors are still fixed; only the expensive whole-read Viterbi is deferred to higher
+k-rungs. Defaults to `true`; the `:scalable` k-ladder sets it `false` below
+`min_decode_k`.
+
+`decode_gate_density` (td-9h5r): the ADAPTIVE low-k decode gate. When non-`nothing`
+and a hard-window gate is active, the pass measures the post-Stage-0 fraction of
+reads the gate would still decode; if that is `>= decode_gate_density` the gate is
+NON-DISCRIMINATING (the dense-low-k "gate skips nothing" pathology) and the whole
+decode is skipped for the pass. A genuinely selective low-k decode (gate skips a
+meaningful fraction) is left ON. `nothing` (default / `:exhaustive`) disables it.
+
+Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
+decode_gated)` where `decode_gated` is `true` iff the per-read decode was gated OFF
+for this pass (explicit floor OR adaptive density). Callers destructuring only the
+first two/three/four values are unaffected.
+
 `soft_weights` (td-e70t): when non-`nothing`, each decoded read's ML path
 accumulates edge responsibilities into it (the soft-EM E-step). Accumulation is
 NOT thread-safe, so supplying it forces sequential processing for this pass.
@@ -1154,13 +1525,15 @@ linear scan so the expensive graph Viterbi is reserved for genuine ambiguity
 (bubbles/repeats). The decode then operates on the cheaply-corrected reads. Only
 enabled on the :scalable tier.
 
-Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections)`
-where `skip_fraction` is the fraction of reads passed through WITHOUT a decode
-(solid + hard-window skips) and `cheap_corrections` is the number of bases fixed
-by the Stage 0 pass. The graph-Viterbi decode fraction is `1 - skip_fraction`.
-`improvements_made` counts BOTH cheap corrections and decode-accepted corrections
-so per-k convergence sees Stage 0 progress. Callers destructuring only the first
-two or three values are unaffected.
+Returns `(updated_reads, improvements_made, skip_fraction, cheap_corrections,
+decode_gated)` where `skip_fraction` is the fraction of reads passed through WITHOUT
+a decode (solid + hard-window skips, plus the whole set when the low-k decode gate
+fires) and `cheap_corrections` is the number of bases fixed by the Stage 0 pass. The
+graph-Viterbi decode fraction is `1 - skip_fraction`. `improvements_made` counts
+BOTH cheap corrections and decode-accepted corrections so per-k convergence sees
+Stage 0 progress. `decode_gated` is `true` iff the per-read decode was gated OFF for
+the whole pass (low-k gate, td-9h5r). Callers destructuring only the first
+two/three/four values are unaffected.
 """
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
@@ -1172,8 +1545,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
-        Vector{FASTX.FASTQ.Record}, Int, Float64, Int}
+        decode_enabled::Bool = true,
+        decode_gate_density::Union{Float64, Nothing} = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
+        Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool}
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
     # when `diag` is a shared accumulator threaded across many passes.
@@ -1210,7 +1586,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     cheap_corrections = 0
     work_reads = reads
     if cheap_correct && graph_mode != :singlestrand && solid_kmers !== nothing
-        work_reads, cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
+        work_reads,
+        cheap_corrections = _stage0_cheap_correct(reads, k, solid_kmers;
             graph_mode = graph_mode)
         improvements_made += cheap_corrections
         if verbose && cheap_corrections > 0
@@ -1225,16 +1602,55 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # hard vertex. Both are volume-reduction skips and both count toward the
     # reported skip fraction. `solid_kmers` may be populated for cheap correction
     # even when skip_solid is off, so the all-solid skip is gated on `skip_solid`
-    # explicitly. Returns true ⇒ skip.
-    _skip_this_read = read -> begin
+    # explicitly. Returns true ⇒ skip. Stage 0 has ALREADY run above (on
+    # `work_reads`), so this predicate sees the cheaply-corrected reads.
+    _gate_skip = read -> begin
         (skip_solid && solid_kmers !== nothing &&
-             _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
+         _read_is_all_solid(read, k, solid_kmers; graph_mode = graph_mode)) &&
             return true
         (hard_vertices !== nothing &&
-             !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
+         !should_decode_read(read, k, hard_vertices; graph_mode = graph_mode)) &&
             return true
         return false
     end
+
+    # Precompute per-read skip decisions ONCE (cheap k-mer-membership checks) so the
+    # adaptive low-k gate can measure the natural decode fraction and the decode loop
+    # can reuse the same flags (no double evaluation).
+    base_skip_flags = Vector{Bool}(undef, total_reads)
+    @inbounds for i in 1:total_reads
+        base_skip_flags[i] = _gate_skip(work_reads[i])
+    end
+    natural_decode_fraction = total_reads > 0 ?
+                              count(!, base_skip_flags) / total_reads : 0.0
+
+    # -- Low-k decode gating (td-9h5r) -----------------------------------------
+    # `decode_enabled == false` (EXPLICIT floor `min_decode_k`): skip the per-read
+    # graph-Viterbi decode for EVERY read this pass. Stage 0 cheap correction has
+    # already run (on `work_reads`), so error correction still happens; only the
+    # expensive whole-read Viterbi is deferred to higher, selective k-rungs.
+    #
+    # ADAPTIVE density gate: even with `decode_enabled`, if the hard-window gate
+    # would still send >= `decode_gate_density` of reads to the decode (i.e. it is
+    # NON-DISCRIMINATING — the dense-low-k pathology where "the gate skips nothing"),
+    # skip the whole decode too: the gate is not reducing volume, so the decode is
+    # ~pure waste Stage 0 + the selective higher rungs recover. Requires an active
+    # hard-window gate (`hard_vertices !== nothing`) — with no gate there is no
+    # discrimination signal to act on, so the decode runs as before.
+    adaptive_gated = decode_enabled && decode_gate_density !== nothing &&
+                     hard_vertices !== nothing &&
+                     natural_decode_fraction >= decode_gate_density
+    pass_decode_off = !decode_enabled || adaptive_gated
+    if verbose && adaptive_gated
+        println("  Low-k decode gate (td-9h5r): hard-window gate non-discriminating " *
+                "at k=$k (would decode $(round(natural_decode_fraction * 100, digits=1))% " *
+                ">= $(round(decode_gate_density * 100, digits=1))%); skipping decode " *
+                "this pass (Stage 0 + higher-k rungs recover).")
+    end
+
+    # Final per-read skip decision: all reads skip when the pass decode is gated off;
+    # otherwise use the precomputed gate flags.
+    _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
     # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
     # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
@@ -1246,6 +1662,18 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     if verbose
         println("  Processing $total_reads reads in batches of $batch_size")
     end
+
+    # Hoist the weighted-decode graph OUT of the per-read loop (td-y4oj). The
+    # per-read `correct_observations` previously rebuilt an O(V+E) weighted COPY
+    # of the whole graph ONCE PER READ; since n_reads ∝ genome and V ∝ genome,
+    # that made the decode O(genome^2) (the dominant #372 super-linear term,
+    # alpha≈2.14). Build it once here and thread the shared, read-only instance
+    # into every per-read decode so the rebuild cost is amortized across the pass
+    # (linear in n_reads). Returns `nothing` for graphs without a weighted-decode
+    # path (legacy / non-MetaGraph), which the callee handles by falling back to
+    # its unchanged per-read behavior. Skip the build entirely when the pass
+    # decode is gated off (no read decodes this pass).
+    pass_weighted_graph = pass_decode_off ? nothing : build_correction_weighted_graph(graph)
 
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
@@ -1266,14 +1694,15 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             skip_flags = fill(false, length(batch_reads))
             Threads.@threads for i in eachindex(batch_reads)
                 read = batch_reads[i]
-                if _skip_this_read(read)
+                if _skip_this_read_at(batch_start + i - 1)
                     batch_results[i] = (read, false)   # skip the decode
                     skip_flags[i] = true
                 else
                     improved_read,
                     was_improved = improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
-                        beam_width = beam_width, diagnostics = diag)
+                        beam_width = beam_width, weighted_graph = pass_weighted_graph,
+                        diagnostics = diag, indel_params = indel_params)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -1290,7 +1719,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             # Sequential processing (also the soft-EM path: accumulation into
             # `soft_weights` happens per-read inside improve_read_likelihood).
             for (i, read) in enumerate(batch_reads)
-                if _skip_this_read(read)
+                if _skip_this_read_at(batch_start + i - 1)
                     updated_reads[batch_start + i - 1] = read   # skip the decode
                     skipped_reads += 1
                     continue
@@ -1299,7 +1728,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 was_improved = improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
-                    diagnostics = diag)
+                    weighted_graph = pass_weighted_graph,
+                    diagnostics = diag, indel_params = indel_params)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -1328,10 +1758,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     if verbose
         total_improvement_rate = improvements_made / total_reads * 100
         println("  Total improvements: $improvements_made/$total_reads ($(round(total_improvement_rate, digits=1))%)")
-        if skip_solid || hard_vertices !== nothing
+        if skip_solid || hard_vertices !== nothing || pass_decode_off
             println("  Skipped (no decode): $skipped_reads/$total_reads ($(round(skip_fraction * 100, digits=1))%)")
             decode_fraction = 1.0 - skip_fraction
-            println("  Graph-Viterbi decode fraction: $(round(decode_fraction * 100, digits=1))%")
+            gated = pass_decode_off ? " [low-k decode gated OFF, td-9h5r]" : ""
+            println("  Graph-Viterbi decode fraction: $(round(decode_fraction * 100, digits=1))%$(gated)")
         end
         if cheap_correct
             println("  Stage 0 cheap corrections (this pass): $cheap_corrections")
@@ -1358,7 +1789,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
-    return updated_reads, improvements_made, skip_fraction, cheap_corrections
+    return updated_reads, improvements_made, skip_fraction, cheap_corrections,
+    pass_decode_off
 end
 
 """
@@ -1372,7 +1804,9 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        weighted_graph = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
@@ -1399,7 +1833,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
     likelihood_improvement = find_optimal_sequence_path(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
-        diagnostics = diagnostics)
+        weighted_graph = weighted_graph,
+        diagnostics = diagnostics, indel_params = indel_params)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -1433,7 +1868,9 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        weighted_graph = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
@@ -1464,7 +1901,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     viterbi_result = try_viterbi_path_improvement(
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
-        diagnostics = diagnostics)
+        weighted_graph = weighted_graph,
+        diagnostics = diagnostics, indel_params = indel_params)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
         # un-k-merizable read): report no improvement rather than falling back to a
@@ -1545,12 +1983,40 @@ function _resolve_qualmer_for_graph(graph, qmer::Qualmer; graph_mode::Symbol = :
     return Qualmer(resolved_kmer, qmer.qualities)
 end
 
+"""
+Resize a per-base quality vector to `target_len`, preserving the 1:1 position
+correspondence a k-mer likelihood walk assumes. Extra tail positions inherit the
+last observed quality (a neutral, information-preserving pad); surplus qualities
+are dropped. A no-op when the lengths already match. This reconciles the
+indel-aware corrector's output (an insertion lengthens the corrected sequence, a
+deletion shortens it, breaking the original read's base↔quality correspondence)
+with `calculate_sequence_likelihood`, which indexes `quality[pos:pos+k-1]` over
+the CORRECTED sequence. Mirrors the length-handling `adjust_quality_scores`
+already performs on the same corrected sequence.
+"""
+function _reconcile_quality_length(quality::AbstractVector{T}, target_len::Int) where {T}
+    n = length(quality)
+    n == target_len && return quality
+    n == 0 && return fill(zero(T), target_len)
+    reconciled = Vector{T}(undef, target_len)
+    @inbounds for i in 1:target_len
+        reconciled[i] = quality[clamp(i, 1, n)]
+    end
+    return reconciled
+end
+
 function calculate_sequence_likelihood(
         sequence::BioSequences.BioSequence, quality::Vector{Int8},
         graph, k::Int; graph_mode::Symbol = :canonical)::Float64
     if length(sequence) < k
         return 0.0
     end
+
+    # Indel-aware correction can hand us a corrected `sequence` whose length differs
+    # from the original read's `quality` vector, so the `quality[pos:pos+k-1]` slices
+    # below would read out of bounds. Reconcile the quality to the sequence length
+    # (no-op on the substitution-only path where they already match → byte-identical).
+    quality = _reconcile_quality_length(quality, length(sequence))
 
     total_log_likelihood = 0.0
 
@@ -1963,9 +2429,23 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         cheap_correction_counts::Vector{Int} = Int[],
         hard_window::Bool = false,
         soft_em::Bool = false,
-        cheap_correct::Bool = false)
+        cheap_correct::Bool = false,
+        min_decode_k::Union{Int, Nothing} = nothing,
+        decode_gate_density::Union{Float64, Nothing} = nothing,
+        decode_gated_rungs::Vector{Int} = Int[],
+        final_pass_graph = nothing,
+        final_pass_graph_k::Int = 0,
+        final_pass_graph_mode::Symbol = :canonical,
+        final_pass_graph_reusable::Bool = false)
     if verbose
         println("Finalizing iterative assembly results...")
+    end
+
+    # Only retain the (potentially large) final-pass graph when it is byte-identical-
+    # reusable (td-04tb); otherwise drop the reference so a fallback rebuild does not
+    # double-hold graph memory.
+    if !final_pass_graph_reusable
+        final_pass_graph = nothing
     end
 
     # Find the final output file (last iteration of largest k)
@@ -2049,6 +2529,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # iteration's graph, so unsupported error edges decay while supported
         # variation is retained. `false` on the exhaustive tier (soft-EM off there).
         :soft_em => (soft_em ? "v2-competing-paths-floor" : false),
+        # Low-k decode gating (td-9h5r): the explicit floor (if any), the adaptive
+        # density threshold, and the specific rungs whose per-read decode was gated
+        # OFF (explicit floor OR adaptive). `nothing`/empty on the exhaustive tier.
+        :min_decode_k => min_decode_k,
+        :decode_gate_density => decode_gate_density,
+        :decode_gated_rungs => decode_gated_rungs,
         :last_skip_fraction => last_skip_fraction,
         :skip_fraction_per_pass => skip_fractions,
         :skip_fraction_min => skip_min,
@@ -2065,7 +2551,15 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         # linear pass, per pass and in total. Zero/false on :exhaustive.
         :cheap_correct => cheap_correct,
         :cheap_corrections_per_pass => cheap_correction_counts,
-        :cheap_corrections_total => total_cheap_corrections
+        :cheap_corrections_total => total_cheap_corrections,
+        # Final-pass graph reuse provenance (td-04tb). `final_graph_reusable` is true
+        # only when the final pass at the largest k made 0 improvements, so the
+        # returned `:final_graph` is byte-identical to a from-scratch rebuild of the
+        # corrected reads at `final_graph_k` under `final_graph_mode`. The caller
+        # verifies k + mode match its re-assembly parameters before reusing.
+        :final_graph_k => final_pass_graph_k,
+        :final_graph_mode => final_pass_graph_mode,
+        :final_graph_reusable => final_pass_graph_reusable
     )
 
     if verbose
@@ -2079,7 +2573,10 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     return Dict(
         :final_assembly => final_assembly,
         :k_progression => k_progression,
-        :metadata => metadata
+        :metadata => metadata,
+        # The corrector's final-pass qualmer graph (td-04tb). `nothing` when no pass
+        # completed; only byte-identical-reusable when `metadata[:final_graph_reusable]`.
+        :final_graph => final_pass_graph
     )
 end
 
@@ -2176,7 +2673,9 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph_mode::Symbol = :canonical,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{
+        weighted_graph = nothing,
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Union{
         Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
@@ -2207,27 +2706,78 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             observations[i] = Mycelia.QualityObservation(kmer, window)
         end
 
-        # Trustworthy Viterbi (td-ak6w), reconciled with the td-63qy OOM crash:
-        # the decoder is EXACT where tractable and BOUNDED (with a log line) above
-        # a size threshold. `beam_width === nothing` (the default) resolves the
-        # frontier bound PER READ via `_auto_beam_width(length(observations))`:
-        # `typemax(Int)` (never pruned → global maximum-likelihood path) for small
-        # reads, the proven-tractable finite bound for large reads (the unbounded
-        # frontier grows ~unboundedly with read-length depth — 21B allocations on
-        # a 48 kb phage). An explicit `beam_width::Int` (including `typemax(Int)`)
-        # is an OPT-IN override that is honored verbatim — a caller/test can force
-        # exact decoding on every read. This trades the ML guarantee for
-        # tractability ONLY above the threshold, and only under the auto-default;
-        # it never silently changes correctness of an explicit request.
+        # Trustworthy Viterbi (td-ak6w), reconciled with the td-63qy OOM crash and
+        # the td-35ux short-read O(genome^2) frontier blowup: the decoder is EXACT
+        # where tractable and BOUNDED (with a log line) otherwise. `beam_width ===
+        # nothing` (the default) resolves the frontier bound PER READ via the
+        # GRAPH-DENSITY-AWARE `_auto_beam_width(length(observations), Graphs.nv(graph))`:
+        # `typemax(Int)` (never pruned → global maximum-likelihood path) only when
+        # BOTH the read is small AND the graph is sparse; the proven-tractable
+        # finite bound when the read is large (read-length rule, td-63qy) OR the
+        # graph is dense (density rule, td-35ux — a short read on a big graph
+        # otherwise retains an O(n_vertices) frontier at each decode depth). The
+        # graph threaded into this call is the one being decoded, so its vertex
+        # count is exactly the density the frontier can reach. An explicit
+        # `beam_width::Int` (including `typemax(Int)`) is an OPT-IN override honored
+        # verbatim — a caller/test can force exact decoding on every read. This
+        # trades the ML guarantee for tractability only under the auto-default; it
+        # never silently changes correctness of an explicit request.
         effective_beam_width = beam_width === nothing ?
-                               _auto_beam_width(length(observations)) : beam_width
-        config = Mycelia.ViterbiCorrectionConfig(
-            alphabet = alphabet,
-            strand_mode = graph_mode,
-            max_steps = length(observations) - 1,
-            beam_width = effective_beam_width
-        )
-        correction = Mycelia.correct_observations(graph, [observations]; config = config)
+                               _auto_beam_width(length(observations), Graphs.nv(graph)) :
+                               beam_width
+        # Candidate-generation bounds (td-plqi) engage ONLY where the width beam is
+        # already finite (i.e. the decode is already the bounded approximation, not
+        # exact ML). When the beam is exact (typemax — small read on a sparse graph,
+        # OR an explicit caller override forcing exact), the score margin stays Inf
+        # and the successor bound stays unbounded, so exact-ML reads are byte-
+        # identical. Where the beam is bounded (dense/large — the k=9-style rungs
+        # that carry the #386 super-linear residual) the margin holds the generating
+        # frontier O(1) in genome size.
+        beam_is_exact = effective_beam_width == typemax(Int)
+        effective_margin = beam_is_exact ? Inf : _AUTO_BEAM_SCORE_MARGIN
+        effective_successor_bound = beam_is_exact ? typemax(Int) : _AUTO_SUCCESSOR_BOUND
+        # Indel-aware wiring (td-9q84 / 4a): when the assembler's error profile
+        # enables indels it threads a non-nothing `indel_params`; the config then
+        # turns on the pair-HMM gap moves with the profile's gap-open fractions +
+        # extend probabilities and the tier's run caps + band. Crucially it also sets
+        # `error_rate` to the profile's ABSOLUTE per-base rate so the gap-open masses
+        # (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are scaled correctly —
+        # leaving it at the 0.01 default would under-weight nanopore/pacbio gaps ~10×
+        # (e.g. 0.01×0.30 = 0.003 instead of 0.10×0.30 = 0.03). `indel_params ===
+        # nothing` (the substitution-only default, e.g. :illumina) builds the config
+        # EXACTLY as the pre-wiring corrector did — `error_rate` stays at its 0.01
+        # default and `indel_moves` stays false, so the decode is byte-identical
+        # (oracle preservation).
+        config = if indel_params === nothing
+            Mycelia.ViterbiCorrectionConfig(
+                alphabet = alphabet,
+                strand_mode = graph_mode,
+                max_steps = length(observations) - 1,
+                beam_width = effective_beam_width,
+                max_successors_per_state = effective_successor_bound,
+                beam_score_margin = effective_margin
+            )
+        else
+            Mycelia.ViterbiCorrectionConfig(
+                alphabet = alphabet,
+                strand_mode = graph_mode,
+                max_steps = length(observations) - 1,
+                beam_width = effective_beam_width,
+                max_successors_per_state = effective_successor_bound,
+                beam_score_margin = effective_margin,
+                error_rate = indel_params.base_error_rate,
+                indel_moves = true,
+                insertion_fraction = indel_params.insertion_fraction,
+                deletion_fraction = indel_params.deletion_fraction,
+                insertion_extend_probability = indel_params.insertion_extend_probability,
+                deletion_extend_probability = indel_params.deletion_extend_probability,
+                deletion_max_run = indel_params.deletion_max_run,
+                max_insertion_run = indel_params.max_insertion_run,
+                band_width = indel_params.band_width
+            )
+        end
+        correction = Mycelia.correct_observations(
+            graph, [observations]; config = config, weighted_graph = weighted_graph)
         corrected_path = only(correction.corrected_observations)
         if corrected_path === nothing || isempty(corrected_path)
             return nothing
@@ -2246,8 +2796,17 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # alternative exists (a balanced variant, whose branches are retained
         # through their own reads).
         if soft_weights !== nothing
+            # Bound the competing-path GENERATION with the same discipline as the
+            # decode bounds above (td-e70t speed residual C5c): engage the walk band
+            # + successor cap ONLY where the width beam is already finite (the
+            # dense/large reads that carry the residual), so exact-ML reads keep the
+            # unbounded (byte-identical) generation. The rejoin test precedes the
+            # band cutoff, so no real variant's read-consistent competing path drops.
             accumulate_competing_paths!(
-                soft_weights, read, graph, k; graph_mode = graph_mode)
+                soft_weights, read, graph, k; graph_mode = graph_mode,
+                walk_band = beam_is_exact ? typemax(Int) : _soft_em_walk_band(k),
+                successor_bound = beam_is_exact ? typemax(Int) :
+                                  _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
@@ -2648,13 +3207,127 @@ function _path_transition_logscore(labels, graph)
     return total
 end
 
+# ----------------------------------------------------------------------------
+# Competing-path generation bounds (td-e70t speed residual C5c)
+# ----------------------------------------------------------------------------
+#
+# After the decode score-margin fix (#388) linearized per-read Viterbi decode,
+# the empirical profile's fastest-growing residual is the soft-EM competing-paths
+# E-step (C5c, alpha ~1.9 in isolation). The driver is the greedy re-route walk in
+# `_consensus_alternative`: it walks highest-weight edges until it rejoins the
+# read, bounded only by the read length `n`. In a large genome a k-mer de Bruijn
+# graph has many SPURIOUS k-mer repeats (chance collisions whose incident edges
+# are themselves well covered), so a greedy re-route increasingly wanders into
+# graph bulk and runs the full `n` steps WITHOUT rejoining — the per-read cost
+# climbs with graph density even though `n` is fixed, giving the super-linear
+# term. These bounds cap the generation with the SAME discipline as the decode
+# fix (top-B successors + a near-best band + a read-consistency exemption):
+#
+#   * `_soft_em_walk_band(k)` — a genome-INDEPENDENT cap on the re-route walk. A
+#     read-consistent single-variant bubble at rung k diverges for ~k k-mers
+#     before rejoining, so `_SOFT_EM_WALK_BAND_FACTOR * k` gives generous headroom
+#     for multi-base variants while never growing with genome. The rejoin test is
+#     applied BEFORE the band cutoff, so a real allele that returns to the read
+#     within the band is ALWAYS captured; the band prunes only NON-rejoining
+#     excursions, which yield no valid spliced alternative anyway. This is the
+#     term that removes the super-linearity — the analog of the decode
+#     `beam_score_margin`. A support-based test cannot substitute here: spurious-
+#     repeat edges in a large genome are themselves high-coverage, so only the
+#     rejoin-within-band criterion (read-consistency) separates a real competing
+#     allele from graph-bulk wandering. This is the emission-exemption analog:
+#     the bound removes WRONG (non-read-consistent) paths, never a real variant's
+#     read-consistent competing path.
+#
+#   * `_SOFT_EM_ALT_SUCCESSOR_BOUND` — caps the incident branches examined per step
+#     in EACH direction (out, in). A canonical DNA de Bruijn vertex has <= 4 out and
+#     <= 4 in neighbors, so both the default `typemax` and the :scalable value 8 are
+#     no-ops on DNA; it is a robustness guard bounding per-step work on pathological
+#     high-branching (non-DNA / reduced-alphabet) inputs, matching the intent of the
+#     decode `max_successors_per_state`.
+#
+# Both default to unbounded (`typemax(Int)`), reproducing the pre-td-e70t behavior
+# byte-for-byte — the default for direct/unit-test callers and the exact decode
+# tier. The `:scalable` corrector opts in ONLY where the width beam is already
+# finite (`!beam_is_exact` — the dense/large reads that carry the residual), so
+# exact-ML reads stay byte-identical, exactly like the #388 decode bounds.
+const _SOFT_EM_WALK_BAND_FACTOR = 4
+_soft_em_walk_band(k::Integer) = _SOFT_EM_WALK_BAND_FACTOR * Int(k)
+const _SOFT_EM_ALT_SUCCESSOR_BOUND = 8
+
+# Strictly-heavier sibling of the observed branch `a -> b` (excluding `b` and the
+# incoming `avoid` vertex), or `nothing` when no strictly-better sibling exists (a
+# linear region or a balanced variant — retained, not competed away). Iterates the
+# out- then in-neighbors DIRECTLY (no intermediate label vector): finding the
+# argmax is idempotent to a bidirectional neighbor appearing in both lists (same
+# label, same `_edge_weight_between` value), so no dedup pass is needed — this
+# removes the per-position allocation that dominated the C5c profile. `bound` caps
+# the neighbors examined in each direction (a per-step work guard; on a canonical
+# DNA vertex there are <= 4 each, so the default `typemax` and the :scalable 8 are
+# both no-ops), matching the decode `max_successors_per_state`.
+function _best_alternative_sibling(graph, a, b, avoid, w_ab::Float64, bound::Int)
+    best_x, best_w = nothing, w_ab
+    c = 0
+    for x in MetaGraphsNext.outneighbor_labels(graph, a)
+        c += 1
+        c > bound && break
+        (x == b || (avoid !== nothing && x == avoid)) && continue
+        w = _edge_weight_between(graph, a, x)
+        w === nothing && continue
+        w > best_w && ((best_w, best_x) = (w, x))
+    end
+    c = 0
+    for x in MetaGraphsNext.inneighbor_labels(graph, a)
+        c += 1
+        c > bound && break
+        (x == b || (avoid !== nothing && x == avoid)) && continue
+        w = _edge_weight_between(graph, a, x)
+        w === nothing && continue
+        w > best_w && ((best_w, best_x) = (w, x))
+    end
+    return best_x
+end
+
+# Highest-weight next vertex from `cur` (excluding the incoming `prev` and any
+# vertex already in `seen`), or `nothing` when the walk dead-ends. Same direct
+# out-then-in iteration (argmax idempotent to duplicates) and `bound` guard as
+# `_best_alternative_sibling`.
+function _best_next_step(graph, cur, prev, seen, bound::Int)
+    nxt, nxt_w = nothing, 0.0
+    c = 0
+    for y in MetaGraphsNext.outneighbor_labels(graph, cur)
+        c += 1
+        c > bound && break
+        (y == prev || y in seen) && continue
+        w = _edge_weight_between(graph, cur, y)
+        w === nothing && continue
+        w > nxt_w && ((nxt_w, nxt) = (w, y))
+    end
+    c = 0
+    for y in MetaGraphsNext.inneighbor_labels(graph, cur)
+        c += 1
+        c > bound && break
+        (y == prev || y in seen) && continue
+        w = _edge_weight_between(graph, cur, y)
+        w === nothing && continue
+        w > nxt_w && ((nxt_w, nxt) = (w, y))
+    end
+    return nxt
+end
+
 # Generate ONE competing alternative to `observed` by re-routing its first
 # clearly-weak branch through the highest-weight sibling and walking greedily
 # until rejoining `observed`. Returns the spliced label path, or `nothing` when
 # no weak branch exists (a linear region, or a balanced variant whose sibling is
-# not strictly better — which is retained, not competed away). Bounded by the
-# observed length so it always terminates.
-function _consensus_alternative(observed, graph)
+# not strictly better — which is retained, not competed away).
+#
+# `walk_band` caps a NON-rejoining re-route to a genome-independent number of steps
+# (see `_soft_em_walk_band`); `successor_bound` caps the incident branches examined
+# per step (see `_SOFT_EM_ALT_SUCCESSOR_BOUND`). Both default to `typemax(Int)`
+# (unbounded — the pre-td-e70t behavior). Always bounded by the observed length so
+# it terminates regardless.
+function _consensus_alternative(observed, graph;
+        walk_band::Int = typemax(Int),
+        successor_bound::Int = typemax(Int))
     n = length(observed)
     n < 3 && return nothing
     firstpos = Dict{Any, Int}()
@@ -2665,41 +3338,34 @@ function _consensus_alternative(observed, graph)
         a, b = observed[i], observed[i + 1]
         w_ab = _edge_weight_between(graph, a, b)
         w_ab === nothing && continue
-        best_x, best_w = nothing, w_ab
-        for x in _incident_labels(graph, a)
-            x == b && continue
-            (i > 1 && x == observed[i - 1]) && continue
-            wx = _edge_weight_between(graph, a, x)
-            wx === nothing && continue
-            if wx > best_w
-                best_w, best_x = wx, x
-            end
-        end
+        best_x = _best_alternative_sibling(
+            graph, a, b, i > 1 ? observed[i - 1] : nothing, w_ab, successor_bound)
         best_x === nothing && continue   # no strictly-better sibling ⇒ not weak
         # Greedy highest-weight walk from the sibling until we rejoin `observed`
-        # at or after position i+1.
+        # at or after position i+1. `seen` is a Set so the membership test is O(1)
+        # rather than O(length(mid)) (removes a hidden per-step super-linear term).
         mid = Any[best_x]
+        seen = Set{Any}(mid)
         prev, cur = a, best_x
         rejoin = get(firstpos, best_x, 0) >= i + 1 ? firstpos[best_x] : 0
         steps = 0
         while rejoin == 0 && steps < n
             steps += 1
-            nxt, nxt_w = nothing, 0.0
-            for y in _incident_labels(graph, cur)
-                y == prev && continue
-                y in mid && continue
-                wy = _edge_weight_between(graph, cur, y)
-                wy === nothing && continue
-                if wy > nxt_w
-                    nxt_w, nxt = wy, y
-                end
-            end
+            nxt = _best_next_step(graph, cur, prev, seen, successor_bound)
             nxt === nothing && break
+            # Rejoin is tested BEFORE the band cutoff: a read-consistent competing
+            # allele that returns to the observed path (at/after i+1) is always
+            # captured, so the band never drops a real variant's competing path.
             if get(firstpos, nxt, 0) >= i + 1
                 rejoin = firstpos[nxt]
                 break
             end
+            # Band cutoff (genome-independent): beyond `walk_band` non-rejoining
+            # steps the walk is threading spurious k-mer repeats / graph bulk, not a
+            # competing allele — abandon it (yields no valid rejoined splice anyway).
+            steps >= walk_band && break
             push!(mid, nxt)
+            push!(seen, nxt)
             prev, cur = cur, nxt
         end
         if rejoin >= i + 1
@@ -2710,7 +3376,8 @@ function _consensus_alternative(observed, graph)
 end
 
 """
-    accumulate_competing_paths!(accumulator, read, graph, k; graph_mode) -> accumulator
+    accumulate_competing_paths!(accumulator, read, graph, k; graph_mode,
+        walk_band, successor_bound) -> accumulator
 
 Soft-EM v2 competing-paths E-step for ONE read (td-e70t). Builds the read's
 COMPETING candidate paths — the observed read path and (when the observed path
@@ -2730,19 +3397,31 @@ supported edges are held at raw and only unsupported (error) edges decay. A
 balanced variant produces no strictly-better sibling, so no alternative is
 generated and the observed path keeps responsibility 1.0. Never throws (guarded),
 so the decode is always safe.
+
+`walk_band` / `successor_bound` bound the alternative GENERATION (td-e70t speed
+residual C5c): `walk_band` caps a non-rejoining re-route to a genome-independent
+number of steps and `successor_bound` caps the incident branches examined per step
+(see `_soft_em_walk_band` / `_SOFT_EM_ALT_SUCCESSOR_BOUND`). Both default to
+`typemax(Int)` (unbounded — byte-identical to the pre-bound behavior); the
+`:scalable` corrector passes finite bounds only where the width beam is already
+finite, so exact-ML reads are unchanged and no real variant's read-consistent
+competing path is dropped (the rejoin test precedes the band cutoff).
 """
 function accumulate_competing_paths!(
         accumulator::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
         read::FASTX.FASTQ.Record,
         graph,
         k::Int;
-        graph_mode::Symbol = :canonical
+        graph_mode::Symbol = :canonical,
+        walk_band::Int = typemax(Int),
+        successor_bound::Int = typemax(Int)
 )
     observed = _read_resolved_labels(read, graph, k; graph_mode = graph_mode)
     isempty(observed) && return accumulator
 
     alternative = try
-        _consensus_alternative(observed, graph)
+        _consensus_alternative(
+            observed, graph; walk_band = walk_band, successor_bound = successor_bound)
     catch
         nothing
     end

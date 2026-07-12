@@ -360,16 +360,20 @@ Test.@testset "Rhizomorph efficiency modes" begin
     end
 
     Test.@testset "FIX 2: efficiency flags on the quality/qualmer path warn" begin
-        # The efficiency modes are only honored on the non-quality k-mer path.
-        # When use_quality_scores=true (the default, and what FASTQ input auto-sets)
-        # AND an efficiency flag is requested, construction must warn UNCONDITIONALLY
-        # that the flag is a no-op on the quality path.
-        Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
-            k = 7, use_quality_scores = true, dedup_revcomp = true)
+        # compact_unitigs / memory_profile are still only honored on the non-quality
+        # k-mer path. When use_quality_scores=true (the default, and what FASTQ input
+        # auto-sets) AND one of those flags is requested, construction must warn
+        # UNCONDITIONALLY that the flag is a no-op on the quality path.
         Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
             k = 7, use_quality_scores = true, compact_unitigs = true)
         Test.@test_logs (:warn,) match_mode = :any Mycelia.Rhizomorph.AssemblyConfig(;
             k = 7, use_quality_scores = true, memory_profile = :lightweight)
+
+        # dedup_revcomp is now WIRED into the qualmer arm (td-47di) via rc_aware in
+        # find_contigs_next, so it is honored — NOT a no-op — on the quality path and
+        # must therefore NOT emit the "ignored on the quality path" warning.
+        Test.@test_logs min_level = Logging.Warn Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 7, use_quality_scores = true, dedup_revcomp = true)
 
         # And it must NOT warn for the default (no efficiency flag) quality config —
         # existing quality assemblies stay byte-for-byte unchanged with no noise.
