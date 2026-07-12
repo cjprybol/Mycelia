@@ -1637,9 +1637,27 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # ~pure waste Stage 0 + the selective higher rungs recover. Requires an active
     # hard-window gate (`hard_vertices !== nothing`) — with no gate there is no
     # discrimination signal to act on, so the decode runs as before.
+    #
+    # INDEL EXEMPTION (td-9q84): the "Stage 0 + higher rungs recover" premise holds
+    # ONLY for substitution errors — Stage 0 cheap-correct is substitution-only
+    # (`_stage0_correct_read` edits a base in place; it can NOT insert or delete a
+    # base), so on an indel-prone profile (`indel_params !== nothing`, e.g.
+    # nanopore/pacbio) gating the decode off leaves length-changing errors PERMANENTLY
+    # uncorrected — the pair-HMM graph-Viterbi decode is the ONLY stage that can fix
+    # them, so it is not "waste" even when the hard-window gate is non-discriminating.
+    # On error-laden long reads EVERY read touches a hard vertex, so
+    # natural_decode_fraction ≈ 1.0 >= 0.90 and the adaptive gate would otherwise skip
+    # 100% of the decode (measured: skip_fraction=1.0, decode_fraction=0.0 at
+    # 1000 bp/30x), collapsing the indel arm to a substitution-only Stage 0 that is
+    # byte-identical to :illumina. The exemption is gated on `indel_params !== nothing`
+    # so the substitution-only path (`:illumina`, indel_params === nothing) keeps the
+    # gate and stays byte-identical (oracle preservation). The per-read hard-window +
+    # skip-solid gates still discriminate WHICH reads decode; only the whole-pass
+    # density veto is lifted for indel-prone data.
     adaptive_gated = decode_enabled && decode_gate_density !== nothing &&
                      hard_vertices !== nothing &&
-                     natural_decode_fraction >= decode_gate_density
+                     natural_decode_fraction >= decode_gate_density &&
+                     indel_params === nothing
     pass_decode_off = !decode_enabled || adaptive_gated
     if verbose && adaptive_gated
         println("  Low-k decode gate (td-9h5r): hard-window gate non-discriminating " *

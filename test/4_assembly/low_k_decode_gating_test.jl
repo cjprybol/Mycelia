@@ -71,7 +71,10 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         hard = Mycelia._hard_vertex_set(graph, k)
 
         # decode_enabled=false ⇒ every read skips the decode; Stage 0 still runs.
-        _out, imp, skip, cheap, gated = Mycelia.improve_read_set_likelihood(
+        _out, imp,
+        skip,
+        cheap,
+        gated = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = true,
             cheap_correct = true, hard_vertices = hard, decode_enabled = false)
         Test.@test gated == true
@@ -80,7 +83,10 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         Test.@test imp == cheap                # all improvements are cheap-correction
 
         # decode_enabled=true (no adaptive threshold) ⇒ normal, decode runs.
-        _o2, _i2, skip2, _c2, gated2 = Mycelia.improve_read_set_likelihood(
+        _o2, _i2,
+        skip2,
+        _c2,
+        gated2 = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = true,
             cheap_correct = true, hard_vertices = hard, decode_enabled = true)
         Test.@test gated2 == false
@@ -99,7 +105,10 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         # k-mer would decode ⇒ natural decode fraction ~1.0. A density threshold
         # below that must gate the pass.
         hard_all = Set(all_labels)
-        _o, _i, skip_all, _c, gated_all = Mycelia.improve_read_set_likelihood(
+        _o, _i,
+        skip_all,
+        _c,
+        gated_all = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = false,
             cheap_correct = false, hard_vertices = hard_all,
             decode_gate_density = 0.90)
@@ -107,7 +116,10 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         Test.@test skip_all == 1.0
 
         # Same non-discriminating hard set but NO threshold ⇒ NOT gated (decodes).
-        _o2, _i2, skip_none, _c2, gated_none = Mycelia.improve_read_set_likelihood(
+        _o2, _i2,
+        skip_none,
+        _c2,
+        gated_none = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = false,
             cheap_correct = false, hard_vertices = hard_all,
             decode_gate_density = nothing)
@@ -118,12 +130,58 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         # ⇒ natural decode fraction is LOW ⇒ the adaptive gate must NOT fire even at
         # the same 0.90 threshold (a load-bearing selective decode is preserved).
         hard_few = Set(all_labels[1:min(2, length(all_labels))])
-        _o3, _i3, skip_few, _c3, gated_few = Mycelia.improve_read_set_likelihood(
+        _o3, _i3,
+        skip_few,
+        _c3,
+        gated_few = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = false,
             cheap_correct = false, hard_vertices = hard_few,
             decode_gate_density = 0.90)
         Test.@test gated_few == false
         Test.@test skip_few > 0.0              # most reads skipped (few are hard)
+    end
+
+    Test.@testset "adaptive gate is EXEMPTED on an indel-prone profile (td-9q84)" begin
+        # Stage 0 cheap-correct is substitution-only, so on a non-discriminating hard
+        # set the adaptive gate would skip 100% of the decode — the only stage that
+        # can fix indels. When indel_params is set (nanopore/pacbio), the gate must be
+        # EXEMPTED so the pair-HMM decode still runs; when it is nothing (illumina),
+        # the gate fires as before (oracle preservation). Same fixture as the
+        # non-discriminating-hard-set case above.
+        rng = Random.MersenneTwister(202)
+        ref = join(rand(rng, _LK_BASES, 800))
+        reads = _lk_reads(rng, ref; n_reads = 120)
+        k = 13
+        graph = R.build_qualmer_graph(reads, k; mode = :canonical)
+        hard_all = Set(collect(R.MetaGraphsNext.labels(graph)))
+
+        prof = Mycelia.indel_error_profile(:nanopore)
+        ip = Mycelia.IndelDecodeParams(
+            prof.base_error_rate, prof.insertion_fraction, prof.deletion_fraction,
+            prof.insertion_extend_probability, prof.deletion_extend_probability,
+            3, 3, 16)
+
+        # indel_params set ⇒ NON-discriminating hard set + 0.90 threshold does NOT gate.
+        _oi, _ii,
+        skip_indel,
+        _ci,
+        gated_indel = Mycelia.improve_read_set_likelihood(
+            reads, graph, k; graph_mode = :canonical, skip_solid = false,
+            cheap_correct = false, hard_vertices = hard_all,
+            decode_gate_density = 0.90, indel_params = ip)
+        Test.@test gated_indel == false
+        Test.@test skip_indel < 1.0            # the indel decode still runs
+
+        # indel_params nothing (illumina) ⇒ SAME inputs ⇒ gate fires (control).
+        _os, _is,
+        skip_sub,
+        _cs,
+        gated_sub = Mycelia.improve_read_set_likelihood(
+            reads, graph, k; graph_mode = :canonical, skip_solid = false,
+            cheap_correct = false, hard_vertices = hard_all,
+            decode_gate_density = 0.90, indel_params = nothing)
+        Test.@test gated_sub == true
+        Test.@test skip_sub == 1.0
     end
 
     Test.@testset "adaptive gate requires an active hard-window gate" begin
@@ -135,7 +193,10 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         reads = _lk_reads(rng, ref; n_reads = 100)
         k = 13
         graph = R.build_qualmer_graph(reads, k; mode = :canonical)
-        _o, _i, _skip, _c, gated = Mycelia.improve_read_set_likelihood(
+        _o, _i,
+        _skip,
+        _c,
+        gated = Mycelia.improve_read_set_likelihood(
             reads, graph, k; graph_mode = :canonical, skip_solid = false,
             cheap_correct = false, hard_vertices = nothing,
             decode_gate_density = 0.10)
@@ -178,23 +239,25 @@ Test.@testset "low-k decode gating (td-9h5r)" begin
         fq = joinpath(tmp, "in.fastq")
         Mycelia.write_fastq(records = reads, filename = fq)
 
-        run_corrector = (; min_decode_k, decode_gate_density, out) ->
-            Mycelia.mycelia_iterative_assemble(fq;
-                max_k = 17, skip_solid = false, graph_mode = :canonical,
-                n_k_rungs = 3, max_iterations_per_k = 2, hard_window = false,
-                soft_em = false, cheap_correct = false, beam_width = typemax(Int),
-                min_decode_k = min_decode_k, decode_gate_density = decode_gate_density,
-                verbose = false, enable_checkpointing = false, output_dir = out)
+        run_corrector = (; min_decode_k,
+            decode_gate_density,
+            out) -> Mycelia.mycelia_iterative_assemble(fq;
+            max_k = 17, skip_solid = false, graph_mode = :canonical,
+            n_k_rungs = 3, max_iterations_per_k = 2, hard_window = false,
+            soft_em = false, cheap_correct = false, beam_width = typemax(Int),
+            min_decode_k = min_decode_k, decode_gate_density = decode_gate_density,
+            verbose = false, enable_checkpointing = false, output_dir = out)
 
         r_plain = run_corrector(; min_decode_k = nothing, decode_gate_density = nothing,
             out = joinpath(tmp, "plain"))
         r_gated = run_corrector(; min_decode_k = 1000, decode_gate_density = 0.10,
             out = joinpath(tmp, "gated"))
 
-        seqs(res) = [FASTX.sequence(String, r) for r in
-                     open(FASTX.FASTQ.Reader, res[:metadata][:final_fastq_file]) do rd
-                         collect(rd)
-                     end]
+        seqs(res) = [FASTX.sequence(String, r)
+                     for r in
+                         open(FASTX.FASTQ.Reader, res[:metadata][:final_fastq_file]) do rd
+            collect(rd)
+        end]
         Test.@test seqs(r_plain) == seqs(r_gated)
         # And the exhaustive tier records NO gating (byte-identical passthrough).
         Test.@test r_gated[:metadata][:min_decode_k] === nothing
