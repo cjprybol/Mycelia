@@ -635,6 +635,14 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `k`: k-mer size (mutually exclusive with min_overlap)
 - `min_overlap`: Minimum overlap length (mutually exclusive with k)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
+- `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
+  (route through the iterative maximum-likelihood read corrector before assembly)
+- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
+  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
+  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
+  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
+  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
+  `:illumina` leaves their indels uncorrected.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -878,6 +886,17 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         "Routing assembly through iterative corrector " *
         "(corrector=:iterative, strategy=:$(config.strategy))")
 
+    # Discoverability nudge (PR #408 review, FIX 3): the corrector defaults to the
+    # substitution-only :illumina profile, so a user correcting long / indel-prone
+    # reads (nanopore/pacbio) without setting sequencing_tech silently gets NO indel
+    # correction. Surface it once (@info, not @warn — :illumina is a valid, common
+    # choice) so the off-by-default indel path is discoverable.
+    if config.sequencing_tech == :illumina
+        @info "corrector=:iterative is running with sequencing_tech=:illumina " *
+              "(substitution-only correction). For long / indel-prone reads set " *
+              "sequencing_tech=:nanopore or :pacbio to enable indel-aware correction." maxlog = 1
+    end
+
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
     # k-progression floors at 13 and min_overlap is not used — surface that rather
     # than silently drop the OLC intent (review Important #3).
@@ -911,15 +930,18 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         corrector_graph_mode = knobs.graph_mode === nothing ?
                                _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
         # Indel-aware correction wiring (td-9q84 / 4a): map the sequencing-tech error
-        # profile to indel fractions and gate on the summed-fraction threshold. Only
-        # indel-prone profiles (:nanopore, :pacbio) build a non-nothing IndelDecodeParams;
-        # the DEFAULT :illumina (and :ultima) resolve to `nothing`, so the corrector
-        # threads NO indel params and runs the substitution decode byte-for-byte
-        # (oracle preservation). The gap-open fractions + extend probabilities come
-        # from the profile; the run caps + band from the tier knobs above.
+        # profile to indel fractions and gate on the ABSOLUTE indel rate
+        # (base_error_rate × summed fractions). Only indel-prone profiles (:nanopore,
+        # :pacbio) build a non-nothing IndelDecodeParams; the DEFAULT :illumina (and
+        # :ultima) resolve to `nothing`, so the corrector threads NO indel params and
+        # runs the substitution decode byte-for-byte (oracle preservation). The
+        # base_error_rate (threaded into ViterbiCorrectionConfig.error_rate to scale
+        # the gap masses), gap-open fractions, and extend probabilities come from the
+        # profile; the run caps + band from the tier knobs above.
         indel_params = if Mycelia.profile_enables_indels(config.sequencing_tech)
             profile = Mycelia.indel_error_profile(config.sequencing_tech)
             Mycelia.IndelDecodeParams(
+                profile.base_error_rate,
                 profile.insertion_fraction,
                 profile.deletion_fraction,
                 profile.insertion_extend_probability,
