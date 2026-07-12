@@ -14,7 +14,8 @@ end
 One ranked Stage-2 haplotype candidate.
 """
 struct RankedVariant
-    rank::Int
+    likelihood_rank::Int
+    abundance_rank::Int
     role::Symbol
     id::String
     sequence::String
@@ -28,12 +29,39 @@ Persistent outputs from the Stage-2 metaFlye + Strainy route.
 """
 struct Stage2DeconvolutionResult
     primary_fasta::String
+    layout_assembly::String
     layout_gfa::String
-    ranked_variants_fasta::String
+    likelihood_ranked_variants_fasta::String
+    abundance_ranked_variants_fasta::String
     ranking_tsv::String
     corrected_fastq::String
     variants::Vector{RankedVariant}
     provenance::Dict{String, Any}
+end
+
+function _prepare_stage2_inputs(
+        reads::R,
+        config::AssemblyConfig
+)::NamedTuple where {R}
+    stage1 = _run_stage1_correction(
+        reads, config; materialize_corrected_reads = false)
+    graph = get(stage1.result_dict, :final_graph, nothing)
+    graph_k = get(stage1.result_dict[:metadata], :final_graph_k, stage1.max_k)
+    graph_k isa Int || (graph_k = stage1.max_k)
+    graph_source = "stage1-final"
+    if graph === nothing
+        graph_source = "corrected-fastq-rebuild"
+        graph = open(FASTX.FASTQ.Reader, stage1.corrected_fastq) do reader
+            build_kmer_graph(collect(reader), graph_k; mode = :doublestrand)
+        end
+    end
+    index = _transition_likelihood_index(graph, graph_k)
+    return (;
+        corrected_fastq = stage1.corrected_fastq,
+        corrected_read_count = stage1.corrected_read_count,
+        graph_source,
+        graph_k,
+        index)
 end
 
 function _transition_likelihood_index(
@@ -82,20 +110,31 @@ function _score_variant_sequence(
     return (mean_log2_probability = mean_score, scored_fraction = fraction)
 end
 
-function _read_gfa_segments(path::String)::Dict{String, String}
+function _read_gfa_records(path::String)::Dict{String, NamedTuple}
     isfile(path) || error("GFA file does not exist: $(path)")
-    segments = Dict{String, String}()
+    segments = Dict{String, NamedTuple}()
     open(path, "r") do io
         for line in eachline(io)
             fields = split(line, '\t')
             length(fields) >= 3 || continue
             fields[1] == "S" || continue
             fields[3] == "*" && continue
-            segments[String(fields[2])] = String(fields[3])
+            coverage = nothing
+            for tag in fields[4:end]
+                startswith(tag, "dp:") || continue
+                parsed = tryparse(Float64, split(tag, ':'; limit = 3)[3])
+                parsed === nothing || (coverage = parsed)
+            end
+            segments[String(fields[2])] = (;
+                sequence = String(fields[3]), coverage)
         end
     end
     isempty(segments) && error("GFA contains no sequence-bearing segments: $(path)")
     return segments
+end
+
+function _read_gfa_segments(path::String)::Dict{String, String}
+    return Dict(id => record.sequence for (id, record) in _read_gfa_records(path))
 end
 
 function _find_column(
@@ -128,6 +167,43 @@ function _strainy_coverages(path::String)::Dict{String, Float64}
     return coverages
 end
 
+function _read_support_coverages(
+        records::Dict{String, NamedTuple},
+        fastq::String,
+        threads::Int
+)::Dict{String, Float64}
+    isfile(fastq) || error("support FASTQ does not exist: $(fastq)")
+    mktempdir() do directory
+        candidates = joinpath(directory, "candidates.fasta")
+        open(candidates, "w") do io
+            for (id, record) in sort(collect(records); by = first)
+                println(io, ">$(id)")
+                println(io, record.sequence)
+            end
+        end
+        command = `$(Mycelia.CONDA_RUNNER) run -n strainy minimap2 -x map-ont -t $(threads) $(candidates) $(fastq)`
+        paf = read(command, String)
+        best = Dict{String, Tuple{Int, String, Int}}()
+        for line in eachline(IOBuffer(paf))
+            fields = split(line, '\t')
+            length(fields) >= 12 || continue
+            query = String(fields[1])
+            target = String(fields[6])
+            matches = something(tryparse(Int, fields[10]), 0)
+            aligned = something(tryparse(Int, fields[11]), 0)
+            current = get(best, query, (-1, "", 0))
+            (matches, aligned, target) > (current[1], current[3], current[2]) || continue
+            best[query] = (matches, target, aligned)
+        end
+        aligned_bases = Dict(id => 0.0 for id in keys(records))
+        for (_, target, aligned) in values(best)
+            aligned_bases[target] = get(aligned_bases, target, 0.0) + aligned
+        end
+        return Dict(id => aligned_bases[id] / length(record.sequence)
+            for (id, record) in records)
+    end
+end
+
 function _variant_role(rank::Int)::Symbol
     rank == 1 && return :primary
     rank == 2 && return :secondary
@@ -140,17 +216,24 @@ function _rank_stage2_variants(
         phased_unitig_info::String,
         index::TransitionLikelihoodIndex;
         max_variants::Int = 3,
-        min_scored_fraction::Float64 = 0.9
+        min_scored_fraction::Float64 = 0.9,
+        support_fastq::Union{Nothing, String} = nothing,
+        threads::Int = Mycelia.get_default_threads()
 )::Vector{RankedVariant}
     max_variants > 0 || throw(ArgumentError("max_variants must be positive"))
     0.0 <= min_scored_fraction <= 1.0 ||
         throw(ArgumentError("min_scored_fraction must be between 0 and 1"))
 
-    segments = _read_gfa_segments(strain_unitigs_gfa)
+    segments = _read_gfa_records(strain_unitigs_gfa)
     coverages = _strainy_coverages(phased_unitig_info)
+    support_coverages = support_fastq === nothing ? Dict{String, Float64}() :
+                        _read_support_coverages(segments, support_fastq, threads)
     candidates = NamedTuple[]
-    for (id, sequence) in segments
-        haskey(coverages, id) || continue
+    for (id, record) in segments
+        sequence = record.sequence
+        coverage = haskey(support_coverages, id) ? support_coverages[id] :
+                   something(record.coverage, get(coverages, id, nothing))
+        coverage === nothing && continue
         score = _score_variant_sequence(sequence, index)
         score.scored_fraction >= min_scored_fraction || continue
         isfinite(score.mean_log2_probability) || continue
@@ -159,43 +242,70 @@ function _rank_stage2_variants(
             sequence,
             graph_mean_log2_probability = score.mean_log2_probability,
             scored_transition_fraction = score.scored_fraction,
-            strainy_coverage = coverages[id]
+            strainy_coverage = Float64(coverage)
         ))
     end
-    sort!(candidates;
+    likelihood_order = sort(copy(candidates);
         by = candidate -> (-candidate.graph_mean_log2_probability,
             -candidate.strainy_coverage, -length(candidate.sequence), candidate.id))
-    length(candidates) >= max_variants ||
-        error("Stage-2 produced only $(length(candidates)) graph-supported variants; " *
+    abundance_order = sort(copy(candidates);
+        by = candidate -> (-candidate.strainy_coverage,
+            -candidate.graph_mean_log2_probability, -length(candidate.sequence), candidate.id))
+    length(likelihood_order) >= max_variants ||
+        error("Stage-2 produced only $(length(likelihood_order)) graph-supported variants; " *
               "$(max_variants) required")
-
-    return [RankedVariant(rank, _variant_role(rank), candidate.id,
+    likelihood_rank = Dict(candidate.id => rank
+        for (rank, candidate) in enumerate(likelihood_order))
+    abundance_rank = Dict(candidate.id => rank
+        for (rank, candidate) in enumerate(abundance_order))
+    selected_ids = union(
+        Set(candidate.id for candidate in likelihood_order[1:max_variants]),
+        Set(candidate.id for candidate in abundance_order[1:max_variants]))
+    selected = filter(candidate -> candidate.id in selected_ids, likelihood_order)
+    return [RankedVariant(likelihood_rank[candidate.id], abundance_rank[candidate.id],
+                _variant_role(likelihood_rank[candidate.id]), candidate.id,
                 candidate.sequence, candidate.graph_mean_log2_probability,
                 candidate.scored_transition_fraction, candidate.strainy_coverage)
-            for (rank, candidate) in enumerate(candidates[1:max_variants])]
+            for candidate in selected]
 end
 
 function _write_ranked_variants(
         variants::Vector{RankedVariant},
-        output_dir::String
-)::NamedTuple{(:primary, :fasta, :tsv), Tuple{String, String, String}}
+        output_dir::String,
+        max_variants::Int
+)::NamedTuple
     mkpath(output_dir)
+    likelihood_primary = only(filter(variant -> variant.likelihood_rank == 1, variants))
+    abundance_primary = only(filter(variant -> variant.abundance_rank == 1, variants))
+    likelihood_primary.id == abundance_primary.id ||
+        error("likelihood and abundance rankings disagree on primary: " *
+              "$(likelihood_primary.id) != $(abundance_primary.id)")
     primary = joinpath(output_dir, "primary_consensus.fasta")
-    fasta = joinpath(output_dir, "ranked_variants.fasta")
+    likelihood_fasta = joinpath(output_dir, "ranked_variants_likelihood.fasta")
+    abundance_fasta = joinpath(output_dir, "ranked_variants_abundance.fasta")
     tsv = joinpath(output_dir, "ranked_variants.tsv")
-    open(fasta, "w") do io
-        for variant in variants
-            println(io, ">rank=$(variant.rank)|role=$(variant.role)|id=$(variant.id)")
+    open(likelihood_fasta, "w") do io
+        for variant in filter(variant -> variant.likelihood_rank <= max_variants,
+                sort(variants; by = variant -> variant.likelihood_rank))
+            println(io, ">likelihood_rank=$(variant.likelihood_rank)|id=$(variant.id)")
+            println(io, variant.sequence)
+        end
+    end
+    open(abundance_fasta, "w") do io
+        for variant in filter(variant -> variant.abundance_rank <= max_variants,
+                sort(variants; by = variant -> variant.abundance_rank))
+            println(io, ">abundance_rank=$(variant.abundance_rank)|id=$(variant.id)")
             println(io, variant.sequence)
         end
     end
     open(primary, "w") do io
-        variant = first(variants)
+        variant = likelihood_primary
         println(io, ">primary|id=$(variant.id)")
         println(io, variant.sequence)
     end
     table = DataFrames.DataFrame(
-        rank = [variant.rank for variant in variants],
+        likelihood_rank = [variant.likelihood_rank for variant in variants],
+        abundance_rank = [variant.abundance_rank for variant in variants],
         role = [String(variant.role) for variant in variants],
         id = [variant.id for variant in variants],
         length = [length(variant.sequence) for variant in variants],
@@ -206,7 +316,7 @@ function _write_ranked_variants(
         strainy_coverage = [variant.strainy_coverage for variant in variants]
     )
     CSV.write(tsv, table; delim = '\t')
-    return (; primary, fasta, tsv)
+    return (; primary, likelihood_fasta, abundance_fasta, tsv)
 end
 
 """
@@ -219,8 +329,9 @@ haplotypes are ranked by normalized likelihood under the accurized graph.
 function deconvolve_stage2(
         reads::R,
         config::AssemblyConfig;
-        genome_size::Union{Nothing, String} = nothing,
+        genome_size::Union{Nothing, Integer, AbstractString} = nothing,
         min_overlap::Union{Nothing, Int} = nothing,
+        layout_iterations::Int = 0,
         max_variants::Int = 3,
         min_scored_fraction::Float64 = 0.9,
         threads::Int = Mycelia.get_default_threads()
@@ -231,6 +342,8 @@ function deconvolve_stage2(
         throw(ArgumentError("the first Stage-2 slice requires sequencing_tech=:nanopore"))
     config.output_dir === nothing &&
         throw(ArgumentError("Stage-2 requires a persistent AssemblyConfig.output_dir"))
+    layout_iterations >= 0 ||
+        throw(ArgumentError("layout_iterations must be nonnegative"))
 
     output_dir = config.output_dir
     layout_dir = joinpath(output_dir, "metaflye")
@@ -239,18 +352,8 @@ function deconvolve_stage2(
     any(isdir, (layout_dir, strainy_dir, ranked_dir)) &&
         error("Stage-2 output directory already contains a prior run: $(output_dir)")
 
-    stage1 = _run_stage1_correction(reads, config)
-    corrected_fastq = stage1.corrected_fastq
-    graph = get(stage1.result_dict, :final_graph, nothing)
-    graph === nothing && error("Stage-1 did not return a final accurized graph")
-    graph_k = get(stage1.result_dict[:metadata], :final_graph_k, nothing)
-    graph_k isa Int || error("Stage-1 metadata lacks an integer :final_graph_k")
-    index = _transition_likelihood_index(graph, graph_k)
-
-    # The external OLC/deconvolution tail needs only corrected reads plus the
-    # compact likelihood index. Drop the full evidence graph before launching it.
-    stage1.result_dict[:final_graph] = nothing
-    graph = nothing
+    prepared = _prepare_stage2_inputs(reads, config)
+    (; corrected_fastq, graph_k, index) = prepared
 
     layout = Mycelia.run_metaflye(;
         fastq = corrected_fastq,
@@ -259,7 +362,7 @@ function deconvolve_stage2(
         read_type = "nano-corr",
         meta = true,
         min_overlap = min_overlap,
-        iterations = 0,
+        iterations = layout_iterations,
         keep_haplotypes = true,
         no_alt_contigs = true,
         threads = threads)
@@ -278,8 +381,10 @@ function deconvolve_stage2(
     variants = _rank_stage2_variants(
         phased.strain_contigs_gfa, phased.phased_unitig_info, index;
         max_variants = max_variants,
-        min_scored_fraction = min_scored_fraction)
-    ranked = _write_ranked_variants(variants, ranked_dir)
+        min_scored_fraction = min_scored_fraction,
+        support_fastq = corrected_fastq,
+        threads = threads)
+    ranked = _write_ranked_variants(variants, ranked_dir, max_variants)
 
     provenance = Dict{String, Any}(
         "stage1_corrector" => "iterative",
@@ -287,15 +392,20 @@ function deconvolve_stage2(
         "sequencing_tech" => "nanopore",
         "layout_tool" => "metaflye",
         "layout_read_type" => "nano-corr",
+        "layout_iterations" => layout_iterations,
         "deconvolution_tool" => "strainy",
         "graph_k" => graph_k,
+        "graph_source" => prepared.graph_source,
+        "corrected_read_count" => prepared.corrected_read_count,
         "max_variants" => max_variants,
         "min_scored_fraction" => min_scored_fraction
     )
     return Stage2DeconvolutionResult(
         ranked.primary,
+        layout.assembly,
         layout.graph,
-        ranked.fasta,
+        ranked.likelihood_fasta,
+        ranked.abundance_fasta,
         ranked.tsv,
         corrected_fastq,
         variants,

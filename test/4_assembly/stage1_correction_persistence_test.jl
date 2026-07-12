@@ -122,6 +122,17 @@ Test.@testset "Stage-1 correction persistence (td-ohob)" begin
         Test.@test !isfile(res.corrected_fastq)
     end
 
+    Test.@testset "disk-only Stage-2 handoff avoids corrected-read materialization" begin
+        outdir = mktempdir()
+        config = R.AssemblyConfig(; k = 13, corrector = :iterative,
+            strategy = :scalable, output_dir = outdir)
+        res = R._run_stage1_correction(
+            reads, config; materialize_corrected_reads = false)
+        Test.@test res.corrected_reads === nothing
+        Test.@test res.corrected_read_count > 0
+        Test.@test isfile(res.corrected_fastq)
+    end
+
     Test.@testset "end-to-end corrector wiring intact" begin
         # The thin consumer (_assemble_with_iterative_corrector) still routes helper
         # output through the re-assembly tail and returns a real AssemblyResult with

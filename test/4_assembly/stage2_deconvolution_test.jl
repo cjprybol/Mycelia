@@ -38,24 +38,28 @@ Test.@testset "Stage-2 transition scoring and variant ranking" begin
             "S\trejected\tTTTTTT\n")
         write(info,
             "unitig,coverage\n" *
-            "primary,10\n" *
-            "secondary,30\n" *
-            "tertiary,20\n" *
+            "primary,30\n" *
+            "secondary,20\n" *
+            "tertiary,10\n" *
             "rejected,100\n")
 
         variants = Mycelia.Rhizomorph._rank_stage2_variants(
             gfa, info, index; max_variants = 3, min_scored_fraction = 0.9)
         Test.@test [variant.id for variant in variants] ==
                    ["primary", "secondary", "tertiary"]
+        Test.@test [variant.likelihood_rank for variant in variants] == [1, 2, 3]
+        Test.@test [variant.abundance_rank for variant in variants] == [1, 2, 3]
         Test.@test [variant.role for variant in variants] ==
                    [:primary, :secondary, :tertiary]
         Test.@test all(variant -> variant.scored_transition_fraction == 1.0, variants)
 
-        outputs = Mycelia.Rhizomorph._write_ranked_variants(variants, dir)
+        outputs = Mycelia.Rhizomorph._write_ranked_variants(variants, dir, 3)
         Test.@test isfile(outputs.primary)
-        Test.@test isfile(outputs.fasta)
+        Test.@test isfile(outputs.likelihood_fasta)
+        Test.@test isfile(outputs.abundance_fasta)
         Test.@test isfile(outputs.tsv)
-        Test.@test occursin("role=secondary", read(outputs.fasta, String))
+        Test.@test occursin(
+            "likelihood_rank=2", read(outputs.likelihood_fasta, String))
         Test.@test count(==('>'), read(outputs.primary, String)) == 1
         Test.@test countlines(outputs.tsv) == 4
 
@@ -67,6 +71,36 @@ Test.@testset "Stage-2 transition scoring and variant ranking" begin
             sprint(showerror, error)
         end
         Test.@test occursin("only 3 graph-supported variants", error_message)
+    end
+end
+
+Test.@testset "Stage-2 GFA coverage and primary agreement" begin
+    index = Mycelia.Rhizomorph.TransitionLikelihoodIndex(
+        2, Dict(("AA", "AC") => 0.0, ("AC", "CC") => 0.0))
+    mktempdir() do dir
+        gfa = joinpath(dir, "strain_contigs.gfa")
+        info = joinpath(dir, "phased_unitig_info_table.csv")
+        write(gfa,
+            "S\tlikelihood_primary\tAACC\tdp:i:10\n" *
+            "S\tabundance_primary\tAACC\tdp:i:20\n")
+        write(info, "unitig,coverage\n")
+        records = Mycelia.Rhizomorph._read_gfa_records(gfa)
+        Test.@test records["likelihood_primary"].coverage == 10.0
+        Test.@test records["abundance_primary"].coverage == 20.0
+
+        variants = [
+            Mycelia.Rhizomorph.RankedVariant(
+                1, 2, :primary, "likelihood_primary", "AACC", 0.0, 1.0, 10.0),
+            Mycelia.Rhizomorph.RankedVariant(
+                2, 1, :secondary, "abundance_primary", "AACC", -1.0, 1.0, 20.0)
+        ]
+        message = try
+            Mycelia.Rhizomorph._write_ranked_variants(variants, dir, 3)
+            ""
+        catch error
+            sprint(showerror, error)
+        end
+        Test.@test occursin("disagree on primary", message)
     end
 end
 

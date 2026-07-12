@@ -1017,10 +1017,10 @@ Run Stage-1 correction (`Mycelia.mycelia_iterative_assemble`, the iterative +
 skip-solid maximum-likelihood corrector) and PERSIST the corrected FASTQ to a
 caller-owned location so it outlives the corrector's internal temp dirs.
 
-This is the reusable "materialize corrected reads" half of the corrector route.
-Both the native re-assembly path (`_assemble_with_iterative_corrector`) and the
-hybrid-OLC route (Stage-2 route (a), `_assemble_hybrid_olc`, td-yymj) call it;
-they need only this materialized-reads half and differ solely in the tail.
+This is the reusable Stage-1 correction half of the corrector route. The native
+re-assembly path materializes corrected reads, while disk-backed OLC and Stage-2
+callers pass `materialize_corrected_reads = false` to retain only the validated
+read count and persistent FASTQ hand-off.
 The corrected FASTQ produced by the corrector normally lives in an `mktempdir`
 that is deleted here on return; this helper moves it OUT of that doomed directory
 to `corrected_fastq` before cleanup, so an external OLC assembler can consume it.
@@ -1033,16 +1033,19 @@ handoff (`ephemeral == false`). Because the basename is fixed, a caller reusing
 one `output_dir` across runs overwrites the prior corrected set — give each
 Stage-1 run its own `output_dir`.
 
-Returns a NamedTuple: the corrected reads in memory (`corrected_reads`), the
-persistent FASTQ path (`corrected_fastq`), whether the caller owns cleanup
-(`ephemeral`), and the corrector's `result_dict`, tier `knobs`, and `max_k` —
-everything the native re-assembly tail consumes with no recomputation. Callers
-should consume the returned `corrected_fastq`, not
+Returns a NamedTuple: optionally materialized `corrected_reads`, the validated
+`corrected_read_count`, persistent FASTQ path (`corrected_fastq`), whether the
+caller owns cleanup (`ephemeral`), and the corrector's `result_dict`, tier
+`knobs`, and `max_k`. Callers should consume the returned `corrected_fastq`, not
 `result_dict[:metadata][:final_fastq_file]` (both point at the same persisted
 path after this returns). Fails loud (never returns) on a missing/absent
 corrected FASTQ or a 0-read correction, guarding both callers.
 """
-function _run_stage1_correction(reads, config::AssemblyConfig)
+function _run_stage1_correction(
+        reads,
+        config::AssemblyConfig;
+        materialize_corrected_reads::Bool = true
+)
     _log_info(config,
         "Routing assembly through iterative corrector " *
         "(corrector=:iterative, strategy=:$(config.strategy))")
@@ -1173,10 +1176,13 @@ function _run_stage1_correction(reads, config::AssemblyConfig)
         # Eager `collect` inside a do-block: materializes ALL corrected reads into
         # memory AND closes the stream (no leaked fd across many assemblies, and
         # closes on a malformed-FASTQ throw too).
-        corrected_reads = open(FASTX.FASTQ.Reader, persistent_fastq) do reader
-            collect(reader)
+        corrected_reads, n_corrected = open(FASTX.FASTQ.Reader, persistent_fastq) do reader
+            if materialize_corrected_reads
+                records = collect(reader)
+                return records, length(records)
+            end
+            return nothing, count(_ -> true, reader)
         end
-        n_corrected = length(corrected_reads)
         # A corrector that silently ate every read (empty/header-only FASTQ) would
         # otherwise flow into assemble_genome([]) → a 0-contig "successful" assembly.
         # Fail loud instead of handing downstream a silently-empty assembly.
@@ -1184,7 +1190,8 @@ function _run_stage1_correction(reads, config::AssemblyConfig)
             error("iterative corrector produced 0 corrected reads (from $(persistent_fastq)); " *
                   "refusing to return an empty assembly")
         end
-        return (; corrected_reads, corrected_fastq = persistent_fastq,
+        return (; corrected_reads, corrected_read_count = n_corrected,
+            corrected_fastq = persistent_fastq,
             result_dict, knobs, max_k, ephemeral, indel_params)
     catch
         # Ownership of the persistent FASTQ only transfers to the caller on a clean
@@ -1960,7 +1967,7 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     tool = _resolve_olc_tool(config)
     _log_info(config,
         "Hybrid-OLC route (a): Stage-1 correction -> external assembler :$(tool)")
-    stage1 = _run_stage1_correction(reads, config)
+    stage1 = _run_stage1_correction(reads, config; materialize_corrected_reads = false)
     # The external assembler writes into its own output dir. Co-locate it with the
     # persisted corrected FASTQ when the caller owns output_dir; otherwise a temp
     # dir cleaned alongside the ephemeral corrected FASTQ.
@@ -2144,14 +2151,13 @@ function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
     # StringView, so wrap it — AssemblyResult requires Vector{String} for both.
     contigs = [FASTX.sequence(String, r) for r in records]
     contig_names = [String(FASTX.identifier(r)) for r in records]
-    n_corrected = length(stage1.corrected_reads)
     if isempty(contigs)
         # Fail loud, matching _run_stage1_correction's 0-reads guard: an empty
         # external assembly must not flow downstream as a "successful" 0-contig
         # result. (megahit errors upstream on empty input; metaspades can write an
         # empty contigs.fasta, so guard here for tool-agnostic parity.)
         error("hybrid-OLC: external assembler :$(tool) produced 0 contigs from the " *
-              "$(n_corrected) corrected reads (from $(contigs_fasta)); " *
+              "$(stage1.corrected_read_count) corrected reads (from $(contigs_fasta)); " *
               "refusing to return an empty assembly.")
     end
     stats = Dict{String, Any}(
@@ -2161,7 +2167,7 @@ function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         "layout" => "olc",
         "olc_tool" => String(tool),
         "sequencing_tech" => String(config.sequencing_tech),
-        "corrected_read_count" => n_corrected,
+        "corrected_read_count" => stage1.corrected_read_count,
         "corrected_fastq" => stage1.corrected_fastq,
         "num_contigs" => length(contigs),
         "assembly_date" => string(Mycelia.Dates.now())
