@@ -314,8 +314,11 @@ struct AssemblyConfig
 
         # Validation: sequencing_tech must be a recognized error profile (validate
         # unconditionally so a typo is caught at construction, even for
-        # corrector=:none where it is not consulted).
-        _valid_seq_techs = (:illumina, :nanopore, :pacbio, :ultima)
+        # corrector=:none where it is not consulted). Derived from the OLC taxonomy
+        # so the short/long partition `:auto` resolution depends on stays a single
+        # source of truth — adding a tech in one place can't silently mislabel it.
+        _seq_tax = _olc_taxonomy()
+        _valid_seq_techs = (_seq_tax.short_read_techs..., _seq_tax.long_read_techs...)
         if !(sequencing_tech in _valid_seq_techs)
             error("sequencing_tech must be one of $(_valid_seq_techs), got :$(sequencing_tech)")
         end
@@ -444,7 +447,8 @@ struct AssemblyConfig
             # that collides with a route-managed keyword would redirect the assembler
             # (wrong output dir → broken cleanup + megahit's recursive rm; wrong fastq
             # → bypasses the Stage-1 corrected handoff). Reject those keys up front.
-            _reserved_olc_keys = (:fastq1, :fastq2, :fastq, :outdir, :out_dir, :executor)
+            _reserved_olc_keys = (:fastq1, :fastq2, :fastq, :outdir, :out_dir,
+                :executor, :read_type)
             for _k in keys(olc_options)
                 _k in _reserved_olc_keys && error("olc_options key :$(_k) is managed by " *
                       "the hybrid-OLC route and cannot be overridden; drop it from olc_options.")
@@ -2000,11 +2004,13 @@ end
 
 Single source of truth for the hybrid-OLC tool taxonomy: which sequencing techs
 are short- vs long-read, and which external assemblers serve each class. The
-constructor validation, `:auto` resolution, and the per-tool adapter all read from
-THIS table so they cannot drift out of sync. (Drift is exactly what let a stale
-`:metaflye` branch masquerade as "wired" before td-yymj's review.) The consistency
-test in `hybrid_olc_config_test.jl` asserts every tool here is handled by
-`_run_olc_tool`.
+constructor validation (`_valid_seq_techs`, `:auto` resolution) and the per-tool
+adapter all read from THIS table so they cannot drift out of sync. (Drift is
+exactly what let a stale `:metaflye` branch masquerade as "wired" before td-yymj's
+review.) The "taxonomy single-source" test in `hybrid_olc_config_test.jl` asserts
+`:auto` resolves to a member of the wired-tool set for every valid tech, and that
+`_run_olc_tool` rejects a tool not in it. (A stronger test iterating every wired
+tool through `_run_olc_tool` needs an external-wrapper stub — a follow-up.)
 """
 function _olc_taxonomy()
     return (
@@ -2033,10 +2039,37 @@ end
     _flye_read_type(sequencing_tech::Symbol) -> String
 
 Map the corrector's read tech to a Flye/metaFlye `--read-type` flag. The reads are
-Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit.
+Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit. NOTE this
+means a native PacBio-HiFi set is assembled as `pacbio-corr`, not `pacbio-hifi` —
+`:pacbio` does not distinguish HiFi from CLR (finer tech granularity is a
+follow-up). Fails loud on an unexpected tech rather than silently defaulting.
 """
 function _flye_read_type(sequencing_tech::Symbol)
-    sequencing_tech == :nanopore ? "nano-corr" : "pacbio-corr"
+    if sequencing_tech == :nanopore
+        return "nano-corr"
+    elseif sequencing_tech == :pacbio
+        return "pacbio-corr"
+    else
+        error("_flye_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
+              "(expected :nanopore or :pacbio).")
+    end
+end
+
+"""
+    _canu_read_type(sequencing_tech::Symbol) -> String
+
+Canu's coarse read-type flag (`nanopore` | `pacbio`). Fails loud on an unexpected
+tech rather than silently defaulting to PacBio.
+"""
+function _canu_read_type(sequencing_tech::Symbol)
+    if sequencing_tech == :nanopore
+        return "nanopore"
+    elseif sequencing_tech == :pacbio
+        return "pacbio"
+    else
+        error("_canu_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
+              "(expected :nanopore or :pacbio).")
+    end
 end
 
 """
@@ -2051,45 +2084,39 @@ assemblers take a single `fastq` plus a read-type flag derived from
 than a return field; Flye/metaFlye/Canu return their assembly under `.assembly`.
 
 `config.olc_options` is splatted in FIRST so the route's managed keywords
-(`fastq1`/`fastq`/`outdir`) always win over a caller-supplied option — Julia
-resolves duplicate keywords rightmost-wins, so managed keys must come last. (The
-constructor also rejects reserved keys, but this ordering keeps the invariant even
-if that guard is ever relaxed.)
+(`fastq1`/`fastq`/`outdir`/`read_type`) always win over a caller-supplied option —
+Julia resolves duplicate keywords rightmost-wins, so managed keys must come last.
+(The constructor also rejects reserved keys — incl. `:read_type` — but this
+ordering keeps the invariant even if that guard is ever relaxed.)
 """
 function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
         outdir::AbstractString, config::AssemblyConfig)::String
+    fastq = String(corrected_fastq)
+    out = String(outdir)
     if tool == :megahit
-        result = Mycelia.run_megahit(; config.olc_options...,
-            fastq1 = corrected_fastq, outdir = outdir)
+        result = Mycelia.run_megahit(; config.olc_options..., fastq1 = fastq, outdir = out)
         return result.contigs
     elseif tool == :metaspades
-        result = Mycelia.run_metaspades(; config.olc_options...,
-            fastq1 = corrected_fastq, outdir = outdir)
+        result = Mycelia.run_metaspades(; config.olc_options..., fastq1 = fastq, outdir = out)
         return result.contigs
     elseif tool == :flye
-        result = Mycelia.run_flye(; config.olc_options...,
-            fastq = String(corrected_fastq), outdir = String(outdir),
+        result = Mycelia.run_flye(; config.olc_options..., fastq = fastq, outdir = out,
             read_type = _flye_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :metaflye
-        result = Mycelia.run_metaflye(; config.olc_options...,
-            fastq = String(corrected_fastq), outdir = String(outdir),
+        result = Mycelia.run_metaflye(; config.olc_options..., fastq = fastq, outdir = out,
             read_type = _flye_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :canu
-        # canu's read_type is coarse (pacbio|nanopore); genome_size comes from
-        # olc_options (required — the constructor validated its presence).
-        canu_read_type = config.sequencing_tech == :nanopore ? "nanopore" : "pacbio"
-        result = Mycelia.run_canu(; config.olc_options...,
-            fastq = String(corrected_fastq), outdir = String(outdir),
-            read_type = canu_read_type)
+        # genome_size comes from olc_options (required — constructor-validated).
+        result = Mycelia.run_canu(; config.olc_options..., fastq = fastq, outdir = out,
+            read_type = _canu_read_type(config.sequencing_tech))
         return result.assembly
     elseif tool == :hifiasm
-        result = Mycelia.run_hifiasm(; config.olc_options...,
-            fastq = String(corrected_fastq), outdir = String(outdir))
+        result = Mycelia.run_hifiasm(; config.olc_options..., fastq = fastq, outdir = out)
         contigs = Mycelia.hifiasm_primary_contigs(result)
         contigs === nothing && error("_run_olc_tool: hifiasm produced no primary " *
-              "contigs (.p_ctg.fa) in $(outdir)")
+              "contigs (.p_ctg.fa) in $(out)")
         return contigs
     else
         _tax = _olc_taxonomy()
