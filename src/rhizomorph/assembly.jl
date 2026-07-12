@@ -209,13 +209,16 @@ struct AssemblyConfig
     # picks by read type (sequencing_tech): short-read techs (:illumina, :ultima)
     # → a short-read layout assembler, long-read techs (:nanopore, :pacbio) → a
     # long-read assembler. An explicit tool must match the corrected read type.
-    # The first long-read Stage-2 slice wires :metaflye; short-read compatibility
-    # remains available through :megahit and :metaspades.
+    # This PR wires only the SHORT-read arm (:megahit, :metaspades); long-read tools
+    # (:hifiasm/:flye/:canu/:metaflye) and long-read :auto are validated-but-rejected
+    # at construction until the long-read arm lands (td-wvto).
     olc_tool::Symbol
 
     # Pass-through options forwarded to the external-assembler wrapper (e.g.
     # (; k_list = "21,33", threads = 8)). Empty by default; keys must match the
-    # chosen wrapper's keyword arguments.
+    # chosen wrapper's keyword arguments. Route-managed keys (fastq1/fastq2/fastq/
+    # outdir/out_dir/executor) are RESERVED and rejected at construction — they are
+    # set by the route and cannot be overridden here.
     olc_options::NamedTuple
 
     # Constructor with validation
@@ -431,6 +434,24 @@ struct AssemblyConfig
                 error("olc_tool=:$(olc_tool) (long-read assembler) is not yet wired in the " *
                       "OLC route; this PR (td-yymj) wires the short-read arm (:megahit, " *
                       ":metaspades). The long-read arm is tracked in td-wvto.")
+            end
+            # Reserved-key guard: olc_options is splatted into the wrapper, so a key
+            # that collides with a route-managed keyword would redirect the assembler
+            # (wrong output dir → broken cleanup + megahit's recursive rm; wrong fastq
+            # → bypasses the Stage-1 corrected handoff). Reject those keys up front.
+            _reserved_olc_keys = (:fastq1, :fastq2, :fastq, :outdir, :out_dir, :executor)
+            for _k in keys(olc_options)
+                _k in _reserved_olc_keys && error("olc_options key :$(_k) is managed by " *
+                      "the hybrid-OLC route and cannot be overridden; drop it from olc_options.")
+            end
+            # metaSPAdes targets PAIRED-END libraries; the hybrid-OLC route emits a
+            # SINGLE corrected FASTQ (single-end), which metaSPAdes rejects at runtime.
+            # Keep it selectable (paired-end support is a follow-on) but warn loudly —
+            # :megahit is the single-end-robust short-read default.
+            if olc_tool == :metaspades
+                @warn "olc_tool=:metaspades expects paired-end reads, but the hybrid-OLC " *
+                      "route feeds a single corrected FASTQ (single-end); metaSPAdes will " *
+                      "likely fail at runtime. Use :megahit for the single-end short-read arm."
             end
         elseif olc_tool != :auto || !isempty(olc_options)
             # Discoverability: olc_tool/olc_options are inert unless layout=:olc
@@ -988,9 +1009,9 @@ skip-solid maximum-likelihood corrector) and PERSIST the corrected FASTQ to a
 caller-owned location so it outlives the corrector's internal temp dirs.
 
 This is the reusable "materialize corrected reads" half of the corrector route.
-The native re-assembly path (`_assemble_with_iterative_corrector`) calls it today;
-the hybrid-OLC route (Stage-2 route (a), td-ohob) is not yet wired but will reuse
-it — both need only this materialized-reads half and differ solely in the tail.
+Both the native re-assembly path (`_assemble_with_iterative_corrector`) and the
+hybrid-OLC route (Stage-2 route (a), `_assemble_hybrid_olc`, td-yymj) call it;
+they need only this materialized-reads half and differ solely in the tail.
 The corrected FASTQ produced by the corrector normally lives in an `mktempdir`
 that is deleted here on return; this helper moves it OUT of that doomed directory
 to `corrected_fastq` before cleanup, so an external OLC assembler can consume it.
@@ -1893,8 +1914,8 @@ after reading the contigs; when the caller supplied `output_dir`, both are left 
 place under it. Dispatched only via `assemble_genome` when `config.layout == :olc`
 (the constructor guarantees that implies `corrector == :iterative`).
 
-The first long-read arm uses metaFlye; the existing short-read arm remains
-available for compatibility.
+Only the short-read arm (:megahit/:metaspades) is reachable in this PR; the
+long-read arm is gated off at construction until td-wvto.
 """
 function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     tool = _resolve_olc_tool(config)
@@ -1906,6 +1927,14 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     # dir cleaned alongside the ephemeral corrected FASTQ.
     olc_outdir = config.output_dir === nothing ?
                  mktempdir() : mkpath(joinpath(config.output_dir, "olc_$(tool)"))
+    # Stale-output guard: the external wrappers skip re-running when their contigs
+    # file already exists, so a reused (non-empty) output_dir would silently return
+    # a PRIOR run's assembly, ignoring THESE corrected reads. Warn loudly.
+    if config.output_dir !== nothing && !isempty(readdir(olc_outdir))
+        @warn "hybrid-OLC: assembler output dir is non-empty; the external tool may " *
+              "skip re-running and return a STALE prior assembly — use a fresh " *
+              "output_dir per run." olc_outdir
+    end
     try
         contigs_fasta = _run_olc_tool(tool, stage1.corrected_fastq, olc_outdir, config)
         if !isfile(contigs_fasta)
@@ -1917,9 +1946,16 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     finally
         # Ephemeral (output_dir unset): the corrected FASTQ and the assembler's temp
         # output dir are both ours to clean. A caller-supplied output_dir keeps them.
+        # Wrap cleanup so a failing rm (e.g. a locked file on an HPC/NFS mount) is
+        # WARNed rather than replacing the in-flight assembler exception — Julia's
+        # finally-throw discards the original error.
         if stage1.ephemeral
-            rm(stage1.corrected_fastq; force = true)
-            rm(olc_outdir; recursive = true, force = true)
+            try
+                rm(stage1.corrected_fastq; force = true)
+                rm(olc_outdir; recursive = true, force = true)
+            catch cleanup_err
+                @warn "hybrid-OLC: cleanup of ephemeral artifacts failed" cleanup_err
+            end
         end
     end
 end
@@ -1929,42 +1965,45 @@ end
 
 Resolve `config.olc_tool` to a concrete external assembler. An explicit tool is
 returned as-is (the constructor already validated it against `sequencing_tech`).
-`:auto` picks `:megahit` for Illumina/Ultima and `:metaflye` for Nanopore/PacBio.
+`:auto` picks by read type; the constructor guarantees `:auto` is only reachable
+for a short-read tech in this PR, so it resolves to `:megahit` (the single-end-
+robust short-read layout assembler). Long-read `:auto` resolution lands with the
+long-read arm (td-wvto).
 """
 function _resolve_olc_tool(config::AssemblyConfig)
     config.olc_tool == :auto || return config.olc_tool
-    return config.sequencing_tech in (:illumina, :ultima) ? :megahit : :metaflye
+    return :megahit
 end
 
 """
-    _run_olc_tool(tool, corrected_fastq, outdir, config) -> contigs_fasta_path
+    _run_olc_tool(tool, corrected_fastq, outdir, config) -> contigs_fasta_path::String
 
 Per-tool argument adapter: the external-assembler wrappers have non-uniform
-signatures, so map each supported `tool` onto its wrapper call and return the path
-to its primary-contigs FASTA. The corrector emits a SINGLE corrected FASTQ, so
-short-read assemblers run in single-end mode (`fastq1` only). `config.olc_options`
-is splatted through to the wrapper.
+signatures, so map each WIRED `tool` onto its wrapper call and return the path to
+its primary-contigs FASTA. This PR wires the short-read arm (`:megahit`,
+`:metaspades`); the long-read arm (metaFlye et al.) lands in td-wvto. The corrector
+emits a SINGLE corrected FASTQ, so short-read assemblers run in single-end mode
+(`fastq1` only).
+
+`config.olc_options` is splatted in FIRST so the route's managed keywords
+(`fastq1`/`outdir`) always win over a caller-supplied option — Julia resolves
+duplicate keywords rightmost-wins, so managed keys must come last. (The constructor
+also rejects reserved keys, but this ordering keeps the invariant even if that
+guard is ever relaxed.)
 """
 function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
-        outdir::AbstractString, config::AssemblyConfig)
+        outdir::AbstractString, config::AssemblyConfig)::String
     if tool == :megahit
-        result = Mycelia.run_megahit(; fastq1 = corrected_fastq, outdir = outdir,
-            config.olc_options...)
+        result = Mycelia.run_megahit(; config.olc_options...,
+            fastq1 = corrected_fastq, outdir = outdir)
         return result.contigs
     elseif tool == :metaspades
-        result = Mycelia.run_metaspades(; fastq1 = corrected_fastq, outdir = outdir,
-            config.olc_options...)
+        result = Mycelia.run_metaspades(; config.olc_options...,
+            fastq1 = corrected_fastq, outdir = outdir)
         return result.contigs
-    elseif tool == :metaflye
-        read_type = config.sequencing_tech == :nanopore ? "nano-corr" : "pacbio-corr"
-        result = Mycelia.run_metaflye(; fastq = String(corrected_fastq),
-            outdir = String(outdir), read_type = read_type, meta = true,
-            iterations = 0, keep_haplotypes = true, no_alt_contigs = true,
-            config.olc_options...)
-        return result.assembly
     else
-        error("_run_olc_tool: :$(tool) is not wired; expected :megahit, " *
-              ":metaspades, or :metaflye")
+        error("_run_olc_tool: :$(tool) is not wired; expected :megahit or " *
+              ":metaspades (the short-read arm). Long-read tools are tracked in td-wvto.")
     end
 end
 
@@ -1975,7 +2014,8 @@ Read an external assembler's primary-contigs FASTA and wrap it in an
 `AssemblyResult`. An external contig-only assembly has NO Mycelia graph, so
 `gfa_compatible` MUST be false (a GFA-compatible result requires a graph, enforced
 by `validate_assembly_structure`). Corrector + layout provenance is stamped into
-`assembly_stats`.
+`assembly_stats`. Fails loud on a 0-contig assembly (parity with Stage-1's
+0-corrected-reads guard) rather than returning a silently-empty result.
 """
 function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         config::AssemblyConfig, stage1)
@@ -1986,9 +2026,15 @@ function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
     # StringView, so wrap it — AssemblyResult requires Vector{String} for both.
     contigs = [FASTX.sequence(String, r) for r in records]
     contig_names = [String(FASTX.identifier(r)) for r in records]
+    n_corrected = length(stage1.corrected_reads)
     if isempty(contigs)
-        @warn "hybrid-OLC: external assembler :$(tool) produced 0 contigs from the " *
-              "$(length(stage1.corrected_reads)) corrected reads."
+        # Fail loud, matching _run_stage1_correction's 0-reads guard: an empty
+        # external assembly must not flow downstream as a "successful" 0-contig
+        # result. (megahit errors upstream on empty input; metaspades can write an
+        # empty contigs.fasta, so guard here for tool-agnostic parity.)
+        error("hybrid-OLC: external assembler :$(tool) produced 0 contigs from the " *
+              "$(n_corrected) corrected reads (from $(contigs_fasta)); " *
+              "refusing to return an empty assembly.")
     end
     stats = Dict{String, Any}(
         "method" => "HybridOLC",
@@ -1997,7 +2043,7 @@ function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         "layout" => "olc",
         "olc_tool" => String(tool),
         "sequencing_tech" => String(config.sequencing_tech),
-        "corrected_read_count" => length(stage1.corrected_reads),
+        "corrected_read_count" => n_corrected,
         "corrected_fastq" => stage1.corrected_fastq,
         "num_contigs" => length(contigs),
         "assembly_date" => string(Mycelia.Dates.now())
