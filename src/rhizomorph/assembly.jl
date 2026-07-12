@@ -178,6 +178,16 @@ struct AssemblyConfig
     # data-supported variant (td-h6w9), so it cannot lose real sequence.
     graph_cleanup::Union{Bool, Nothing}
 
+    # Persistent directory for the Stage-1 corrector handoff (hybrid-OLC route,
+    # td-ohob). Only consulted on the corrector=:iterative path. `nothing`
+    # (default) = ephemeral: Stage-1 moves the corrected FASTQ to a `tempname()`
+    # path the native re-assembly deletes after use, preserving the historical
+    # no-stray-file behavior. When set, the corrected FASTQ is persisted to the
+    # FIXED path `joinpath(output_dir, "corrected.fastq")` and left in place so an
+    # external OLC assembler (Stage-2 route (a)) can consume it; give each Stage-1
+    # run its own output_dir since the basename is fixed.
+    output_dir::Union{String, Nothing}
+
     # Sequencing-technology ERROR PROFILE driving the corrector's indel-aware decode
     # (td-9q84 / 4a). Only consulted when corrector=:iterative. The profile maps to
     # per-base indel fractions (see `Mycelia.indel_error_profile`); indel-prone
@@ -209,6 +219,7 @@ struct AssemblyConfig
             strategy::Union{Symbol, Nothing} = nothing,
             token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing,
             graph_cleanup::Union{Bool, Nothing} = nothing,
+            output_dir::Union{String, Nothing} = nothing,
             sequencing_tech::Symbol = :illumina
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
@@ -338,6 +349,22 @@ struct AssemblyConfig
                   "the quality/qualmer path. Set use_quality_scores=false to use them."
         end
 
+        # Validation: output_dir, when supplied, must be a non-empty path. An empty
+        # string is a footgun — it takes the persist branch (only `nothing` is
+        # ephemeral) and `joinpath("", "corrected.fastq")` silently writes into the
+        # process cwd, the exact stray-file behavior the ephemeral path avoids.
+        if output_dir !== nothing && isempty(output_dir)
+            error("output_dir must be a non-empty directory path (got \"\"); " *
+                  "pass nothing for the ephemeral tempfile behavior.")
+        end
+        # output_dir only affects the corrector=:iterative Stage-1 handoff; warn
+        # rather than silently ignore it on other paths (mirrors the skip_solid /
+        # efficiency-mode warnings above).
+        if output_dir !== nothing && corrector != :iterative
+            @warn "output_dir is only used by corrector=:iterative (the Stage-1 " *
+                  "corrected-FASTQ handoff) and is ignored for corrector=:$(corrector)."
+        end
+
         new(
             k,
             min_overlap,
@@ -359,6 +386,7 @@ struct AssemblyConfig
             effective_strategy,
             token_sequences,
             graph_cleanup,
+            output_dir,
             sequencing_tech
         )
     end
@@ -861,27 +889,40 @@ function _corrector_strategy_knobs(strategy::Symbol)
 end
 
 """
-Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
-skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
-into a real `AssemblyResult`.
+    _run_stage1_correction(reads, config::AssemblyConfig)
+        -> (; corrected_reads, corrected_fastq, result_dict, knobs, max_k,
+              ephemeral, indel_params)
 
-`mycelia_iterative_assemble` is a read CORRECTOR: its `:final_assembly` is the
-corrected READS (not contigs). This function reads the corrected FASTQ back and
-re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
-so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
-— NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
-td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
-`k_progression`, `corrected_read_count`) is stamped onto the re-assembly's
-`assembly_stats`.
+Run Stage-1 correction (`Mycelia.mycelia_iterative_assemble`, the iterative +
+skip-solid maximum-likelihood corrector) and PERSIST the corrected FASTQ to a
+caller-owned location so it outlives the corrector's internal temp dirs.
 
-The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
-(DoubleStrand for DNA) rather than inheriting `config.graph_mode`. Corrected
-reads are FASTQ, so the re-assembly runs the same
-quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
-i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
-apples.
+This is the reusable "materialize corrected reads" half of the corrector route.
+The native re-assembly path (`_assemble_with_iterative_corrector`) calls it today;
+the hybrid-OLC route (Stage-2 route (a), td-ohob) is not yet wired but will reuse
+it — both need only this materialized-reads half and differ solely in the tail.
+The corrected FASTQ produced by the corrector normally lives in an `mktempdir`
+that is deleted here on return; this helper moves it OUT of that doomed directory
+to `corrected_fastq` before cleanup, so an external OLC assembler can consume it.
+
+Destination: `config.output_dir === nothing` ⇒ a fresh `tempname()` path the
+CALLER owns and must delete (`ephemeral == true`; preserves the native path's
+historical no-stray-file behavior). Otherwise the FIXED path
+`joinpath(config.output_dir, "corrected.fastq")`, left in place for the Stage-2
+handoff (`ephemeral == false`). Because the basename is fixed, a caller reusing
+one `output_dir` across runs overwrites the prior corrected set — give each
+Stage-1 run its own `output_dir`.
+
+Returns a NamedTuple: the corrected reads in memory (`corrected_reads`), the
+persistent FASTQ path (`corrected_fastq`), whether the caller owns cleanup
+(`ephemeral`), and the corrector's `result_dict`, tier `knobs`, and `max_k` —
+everything the native re-assembly tail consumes with no recomputation. Callers
+should consume the returned `corrected_fastq`, not
+`result_dict[:metadata][:final_fastq_file]` (both point at the same persisted
+path after this returns). Fails loud (never returns) on a missing/absent
+corrected FASTQ or a 0-read correction, guarding both callers.
 """
-function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
+function _run_stage1_correction(reads, config::AssemblyConfig)
     _log_info(config,
         "Routing assembly through iterative corrector " *
         "(corrector=:iterative, strategy=:$(config.strategy))")
@@ -905,8 +946,23 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
     end
     max_k = config.k === nothing ? 13 : max(config.k, 13)
 
+    # Resolve the persistent corrected-FASTQ destination up front (td-ohob). When
+    # config.output_dir is nothing this is a fresh tempname() path the CALLER owns
+    # and must clean up (native re-assembly deletes it, preserving no-stray-file
+    # behavior); when set, the corrected reads persist at a FIXED basename for an
+    # external OLC assembler (hybrid route) to consume and are left in place.
+    ephemeral = config.output_dir === nothing
+    persistent_fastq = ephemeral ?
+                       tempname() * ".fastq" :
+                       joinpath(mkpath(config.output_dir), "corrected.fastq")
+
     input_dir = mktempdir()
-    output_dir = mktempdir()
+    corrector_output_dir = mktempdir()
+    # Did THIS call actually move the corrected FASTQ into persistent_fastq? The
+    # catch cleanup must delete only a file this call created — otherwise an early
+    # failure (before the mv) with a reused config.output_dir would delete a PRIOR
+    # run's good corrected.fastq (a data-loss footgun surfaced in review).
+    moved_here = false
     try
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
@@ -967,27 +1023,36 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             indel_params = indel_params,
             verbose = false,
             enable_checkpointing = false,
-            output_dir = output_dir
+            output_dir = corrector_output_dir
         )
 
         # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
-        # corrected READS, not an assembly. Re-assemble the corrected reads through
-        # the naive path so assemble_genome returns real contigs + a graph —
-        # otherwise downstream (QUAST, GFA) would treat raw corrected reads as an
-        # assembly, which is not an apples-to-apples assembly result (td-zru6).
+        # corrected READS, not an assembly. The caller re-assembles them (or hands
+        # them to an external assembler) — here we just materialize + persist them.
         corrected_fastq = get(result_dict[:metadata], :final_fastq_file, nothing)
         if corrected_fastq === nothing
             error("iterative corrector metadata is missing the :final_fastq_file key; " *
                   "keys=$(collect(keys(result_dict[:metadata])))")
         elseif !isfile(corrected_fastq)
             error("iterative corrector :final_fastq_file points at a nonexistent path: " *
-                  "$(corrected_fastq) (output_dir=$(output_dir))")
+                  "$(corrected_fastq) (output_dir=$(corrector_output_dir))")
         end
+        # Persist the corrected FASTQ OUT of the doomed corrector_output_dir before
+        # the finally block deletes it, so the corrected reads outlive corrector
+        # cleanup (the hybrid-OLC gap, td-ohob). `mv` (not cp) because
+        # corrector_output_dir is removed immediately after — no need to double-store.
+        Base.mv(corrected_fastq, persistent_fastq; force = true)
+        moved_here = true
+        # Keep the returned metadata honest: the corrector set :final_fastq_file to
+        # the now-moved original path (inside the deleted temp dir). Repoint it at
+        # persistent_fastq so a downstream consumer that reads the metadata key sees
+        # a live path, not a dangling one. (The native tail never reads this key, so
+        # this does not perturb the byte-identical re-assembly.)
+        result_dict[:metadata][:final_fastq_file] = persistent_fastq
         # Eager `collect` inside a do-block: materializes ALL corrected reads into
-        # memory (load-bearing — the finally-block rm's output_dir, so a lazy reader
-        # would hit a deleted file) AND closes the stream (no leaked fd across many
-        # assemblies, and closes on a malformed-FASTQ throw too).
-        corrected_reads = open(FASTX.FASTQ.Reader, corrected_fastq) do reader
+        # memory AND closes the stream (no leaked fd across many assemblies, and
+        # closes on a malformed-FASTQ throw too).
+        corrected_reads = open(FASTX.FASTQ.Reader, persistent_fastq) do reader
             collect(reader)
         end
         n_corrected = length(corrected_reads)
@@ -995,9 +1060,64 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # otherwise flow into assemble_genome([]) → a 0-contig "successful" assembly.
         # Fail loud instead of handing downstream a silently-empty assembly.
         if n_corrected == 0
-            error("iterative corrector produced 0 corrected reads (from $(corrected_fastq)); " *
+            error("iterative corrector produced 0 corrected reads (from $(persistent_fastq)); " *
                   "refusing to return an empty assembly")
         end
+        return (; corrected_reads, corrected_fastq = persistent_fastq,
+            result_dict, knobs, max_k, ephemeral, indel_params)
+    catch
+        # Ownership of the persistent FASTQ only transfers to the caller on a clean
+        # return. Delete ONLY a file this call created (moved_here) — never a
+        # pre-existing corrected.fastq a reused output_dir may already hold.
+        moved_here && rm(persistent_fastq; force = true)
+        rethrow()
+    finally
+        # Prompt cleanup so repeated assemblies in a long-lived process do not leak
+        # the input FASTQ + corrector output dirs until process exit (review #2).
+        rm(input_dir; recursive = true, force = true)
+        rm(corrector_output_dir; recursive = true, force = true)
+    end
+end
+
+"""
+Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
+skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
+into a real `AssemblyResult`.
+
+`mycelia_iterative_assemble` is a read CORRECTOR: its `:final_assembly` is the
+corrected READS (not contigs). This function reads the corrected FASTQ back and
+re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
+so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
+— NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
+td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
+`k_progression`, `corrected_read_count`) is stamped onto the re-assembly's
+`assembly_stats`.
+
+The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
+(DoubleStrand for DNA) rather than inheriting `config.graph_mode`. Corrected
+reads are FASTQ, so the re-assembly runs the same
+quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
+i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
+apples.
+"""
+function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
+    # Stage 1: materialize + persist the corrected reads (shared with the hybrid
+    # OLC route, td-ohob). The helper owns the corrector's temp dirs and returns
+    # the corrected reads in memory plus everything the re-assembly tail consumes
+    # (result_dict for graph reuse + stat stamps, tier knobs, max_k) with no
+    # recomputation — so the native output stays byte-identical.
+    stage1 = _run_stage1_correction(reads, config)
+    # `indel_params` is a correction-phase value the tail stamps into
+    # assembly_stats["indel_moves"] (merged from the sequencing_tech/indel work) —
+    # thread it through the helper's return so the extracted tail keeps that stamp.
+    (; corrected_reads, result_dict, knobs, max_k, indel_params) = stage1
+    n_corrected = length(corrected_reads)
+    try
+        # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
+        # corrected READS, not an assembly. Re-assemble the corrected reads through
+        # the naive path so assemble_genome returns real contigs + a graph —
+        # otherwise downstream (QUAST, GFA) would treat raw corrected reads as an
+        # assembly, which is not an apples-to-apples assembly result (td-zru6).
         _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
         reassembly_k = config.k === nothing ? max_k : config.k
         # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): match
@@ -1107,10 +1227,17 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         _log_info(config, "Re-assembled corrected reads into $(length(assembly.contigs)) contigs")
         return assembly
     finally
-        # Prompt cleanup so repeated assemblies in a long-lived process do not leak
-        # the input FASTQ + corrector output dirs until process exit (review #2).
-        rm(input_dir; recursive = true, force = true)
-        rm(output_dir; recursive = true, force = true)
+        # The persisted corrected FASTQ is an ephemeral tempfile ONLY when the
+        # helper minted one (config.output_dir unset); then it is ours to delete,
+        # preserving the historical no-stray-file behavior of the native
+        # re-assembly. A caller-supplied output_dir is the caller's to keep for the
+        # hybrid-OLC handoff (td-ohob). We branch on the helper's returned
+        # `ephemeral` flag rather than re-deriving the predicate from config, so the
+        # ownership decision lives at the single point that made it. The corrector's
+        # own temp dirs were already cleaned by _run_stage1_correction.
+        if stage1.ephemeral
+            rm(stage1.corrected_fastq; force = true)
+        end
     end
 end
 
