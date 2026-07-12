@@ -44,6 +44,16 @@ Test.@testset "calibration metrics" begin
     Test.@test brier_score([0.0, 1.0], [false, true]) == 0.0                    # perfect
     Test.@test brier_score([1.0, 0.0], [false, true]) == 1.0                    # worst
 
+    # --- isotonic probability map -------------------------------------------
+    raw = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+    truth = [false, false, true, false, true, true]
+    model = fit_isotonic_map(raw, truth)
+    calibrated = predict_isotonic(model, raw)
+    Test.@test issorted(calibrated)
+    Test.@test all(p -> 0.0 <= p <= 1.0, calibrated)
+    Test.@test calibrated[3] == calibrated[4]
+    Test.@test auroc(raw, truth) > 0.5
+
     # --- degenerate / empty inputs -------------------------------------------
     Test.@test isnan(expected_calibration_error(Float64[], Bool[]))
     Test.@test isnan(brier_score(Float64[], Bool[]))
@@ -53,4 +63,5 @@ Test.@testset "calibration metrics" begin
     # --- length-mismatch guards ----------------------------------------------
     Test.@test_throws ArgumentError auroc([0.1, 0.2], [true])
     Test.@test_throws ArgumentError reliability_bins([0.1], [true, false])
+    Test.@test_throws ArgumentError fit_isotonic_map([0.1, Inf], [false, true])
 end
