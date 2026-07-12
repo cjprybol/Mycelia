@@ -239,6 +239,154 @@ function check_memory_limits(graph, memory_limit::Int)::Bool
 end
 
 # =============================================================================
+# Sequencing-technology error profiles (indel-aware correction, td-9q84 / 4a)
+# =============================================================================
+#
+# The merged indel pair-HMM decoder (`_viterbi_correct_observation_indel`) is
+# driven by an ERROR PROFILE rather than read length or a hardcoded technology:
+# correct with the profile you would simulate. Each profile carries BOTH the
+# technology's ABSOLUTE per-base error rate (`base_error_rate`, sourced from
+# `observe(...)` — illumina 0.005, nanopore 0.10, pacbio 0.11, ultima 1e-6) AND
+# the TRUE conditional insertion/deletion fractions (`P(insertion|error)` /
+# `P(deletion|error)`, mirroring `observe(...)`'s per-tech error-type split; see
+# `simulation.jl`, nanopore 0.30/0.30 and illumina/ultima 0.05/0.05 near line
+# 1928). The kernel consumes the fractions as gap-open partitions of the error
+# rate (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`; the remainder is the
+# substitution mass carried by the existing emission term), so the corrector must
+# thread the ABSOLUTE `base_error_rate` into `ViterbiCorrectionConfig.error_rate`
+# for the gap masses to be correctly scaled (a config left at the 0.01 default
+# would under-weight nanopore/pacbio gaps ~10×).
+#
+# Illumina/ultima keep their true (nonzero) conditional fractions, but their
+# ABSOLUTE per-base indel rate is negligible (Illumina ≈ 0.005 × 0.10 = 5e-4;
+# ultima ≈ 1e-6 × 0.05 = 5e-8), so the GATE (`profile_enables_indels`, keyed on
+# the absolute rate `base_error_rate × summed fractions`) returns `false` for them
+# and the corrector threads NO indel params. The substitution-only decode then
+# reproduces the pre-wiring corrector byte-for-byte, so the DEFAULT `:illumina`
+# profile is unchanged. Gating on the absolute rate (not the conditional
+# fractions) is why illumina/ultima need no hand-tuned zeroing: their arithmetic
+# decides `false` on its own, and a future tech's fractions cannot silently
+# misfire the gate.
+
+"""
+ABSOLUTE per-base indel-rate threshold above which a sequencing-technology profile
+enables the indel-aware pair-HMM decode (see [`profile_enables_indels`](@ref)).
+The gate compares `base_error_rate × (insertion_fraction + deletion_fraction)`
+against this value, so it keys on the absolute rate an indel actually occurs at,
+not the conditional (given-an-error) fractions. Chosen (0.02) to sit between the
+negligible absolute indel rates of substitution-dominated technologies (Illumina
+≈ 5e-4, Ultima ≈ 5e-8) and the substantial rates of single-molecule long reads
+(Nanopore ≈ 0.10×0.60 = 0.06, PacBio ≈ 0.11×0.80 = 0.088), with margin on both
+sides so all four technologies decide correctly.
+"""
+const INDEL_PROFILE_THRESHOLD = 0.02
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Per-technology error-profile preset for the indel-aware read corrector.
+
+Returns a `NamedTuple` with the technology's ABSOLUTE per-base `base_error_rate`
+(sourced from `observe(...)` in `simulation.jl`: illumina 0.005, nanopore 0.10,
+pacbio 0.11, ultima 1e-6), the TRUE CONDITIONAL `insertion_fraction` /
+`deletion_fraction` (P(insertion|error) / P(deletion|error), mirroring
+`observe(...)`'s per-tech error-type split), and the affine gap-EXTEND
+probabilities (`insertion_extend_probability` / `deletion_extend_probability`) —
+nanopore/PacBio indels cluster in homopolymer runs, so a one-time gap-open then a
+cheaper extend models the geometric run lengths.
+
+All four presets carry their real conditional fractions (no hand-zeroing). The
+DECODE gate ([`profile_enables_indels`](@ref)) multiplies `base_error_rate` by the
+summed fractions to decide, so substitution-dominated technologies (`:illumina`,
+`:ultima`) — whose ABSOLUTE indel rate is negligible — gate OFF and stay on the
+substitution-only oracle path, while `:nanopore`/`:pacbio` gate ON. The
+`base_error_rate` is threaded into `ViterbiCorrectionConfig.error_rate` so the
+kernel's gap-open masses (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are
+scaled to the real per-base rate.
+
+Supported: `:illumina`, `:nanopore`, `:pacbio`, `:ultima`.
+"""
+function indel_error_profile(tech::Symbol)
+    if tech == :illumina
+        # observe(): base 0.005, conditional insertion/deletion 0.05/0.05. Absolute
+        # indel rate ≈ 5e-4 (< INDEL_PROFILE_THRESHOLD) ⇒ gate OFF ⇒ the corrector
+        # threads no indel params and the decode collapses to the substitution
+        # oracle (speed + byte-identity). Extend probabilities unused (gate OFF).
+        return (base_error_rate = 0.005,
+            insertion_fraction = 0.05, deletion_fraction = 0.05,
+            insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
+    elseif tech == :nanopore
+        # observe(): base 0.10, split (mismatch 0.40 / insertion 0.30 / deletion
+        # 0.30). Absolute indel rate ≈ 0.10 × 0.60 = 0.06 ⇒ gate ON. Indels cluster
+        # in homopolymers ⇒ moderate extend.
+        return (base_error_rate = 0.10,
+            insertion_fraction = 0.30, deletion_fraction = 0.30,
+            insertion_extend_probability = 0.30, deletion_extend_probability = 0.30)
+    elseif tech == :pacbio
+        # observe(): base 0.11, split (mismatch 0.20 / insertion 0.40 / deletion
+        # 0.40). Absolute indel rate ≈ 0.11 × 0.80 = 0.088 ⇒ gate ON. Indel-
+        # dominated ⇒ stronger extend.
+        return (base_error_rate = 0.11,
+            insertion_fraction = 0.40, deletion_fraction = 0.40,
+            insertion_extend_probability = 0.40, deletion_extend_probability = 0.40)
+    elseif tech == :ultima
+        # observe(): base 1e-6, conditional insertion/deletion 0.025/0.025. Absolute
+        # indel rate ≈ 5e-8 (≪ threshold) ⇒ gate OFF ⇒ substitution-only. Extend
+        # probabilities unused (gate OFF).
+        return (base_error_rate = 1e-6,
+            insertion_fraction = 0.025, deletion_fraction = 0.025,
+            insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
+    else
+        error("unknown sequencing technology :$(tech); expected one of " *
+              ":illumina, :nanopore, :pacbio, :ultima")
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Decide whether a sequencing-technology profile enables the indel-aware decode:
+`true` iff the ABSOLUTE per-base indel rate — `base_error_rate ×
+(insertion_fraction + deletion_fraction)` — exceeds `threshold` (default
+[`INDEL_PROFILE_THRESHOLD`]). Keying on the absolute rate (not the conditional
+fractions) means `:illumina` (≈ 5e-4) and `:ultima` (≈ 5e-8) return `false` ⇒
+substitution-only, while `:nanopore` (≈ 0.06) and `:pacbio` (≈ 0.088) return
+`true` — each profile decides from its own arithmetic, with no hand-tuned zeroing.
+"""
+function profile_enables_indels(tech::Symbol;
+        threshold::Float64 = INDEL_PROFILE_THRESHOLD)
+    p = indel_error_profile(tech)
+    return p.base_error_rate * (p.insertion_fraction + p.deletion_fraction) > threshold
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Bundle of indel pair-HMM decode parameters threaded from the assembler down to
+the per-read `ViterbiCorrectionConfig`. Constructed ONLY when a profile enables
+indels (see [`profile_enables_indels`](@ref)); the substitution-only path threads
+`nothing`, which reproduces the pre-wiring `ViterbiCorrectionConfig` byte-for-byte
+(`indel_moves` stays `false`). `base_error_rate` is the technology's ABSOLUTE
+per-base error rate (from the error profile); it is threaded into
+`ViterbiCorrectionConfig.error_rate` so the kernel's gap-open masses
+(`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are scaled to the real rate
+instead of the 0.01 config default (which would under-weight nanopore/pacbio gaps
+~10×). The gap-open fractions + extend probabilities come from the error profile;
+the run caps + `band_width` come from the corrector tier knobs (`:scalable`
+bounded, `:exhaustive` unbounded).
+"""
+struct IndelDecodeParams
+    base_error_rate::Float64
+    insertion_fraction::Float64
+    deletion_fraction::Float64
+    insertion_extend_probability::Float64
+    deletion_extend_probability::Float64
+    deletion_max_run::Int
+    max_insertion_run::Int
+    band_width::Union{Nothing, Int}
+end
+
+# =============================================================================
 # Core Iterative Assembly Framework
 # =============================================================================
 
@@ -268,7 +416,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
         min_decode_k::Union{Int, Nothing} = nothing,
-        decode_gate_density::Union{Float64, Nothing} = nothing)
+        decode_gate_density::Union{Float64, Nothing} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -626,7 +775,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                     hard_vertices = hard_vertices,
                     decode_enabled = !explicit_floor_gated,
                     decode_gate_density = effective_decode_gate_density,
-                    diagnostics = corrector_diagnostics
+                    diagnostics = corrector_diagnostics,
+                    indel_params = indel_params
                 )
             finally
                 Mycelia.Rhizomorph.clear_soft_edge_weights!()
@@ -1397,7 +1547,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
         decode_enabled::Bool = true,
         decode_gate_density::Union{Float64, Nothing} = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool}
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
@@ -1551,7 +1702,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     was_improved = improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
-                        diagnostics = diag)
+                        diagnostics = diag, indel_params = indel_params)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -1578,7 +1729,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag)
+                    diagnostics = diag, indel_params = indel_params)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -1654,7 +1805,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
@@ -1682,7 +1834,7 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
-        diagnostics = diagnostics)
+        diagnostics = diagnostics, indel_params = indel_params)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -1717,7 +1869,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Tuple{
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
@@ -1749,7 +1902,7 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
-        diagnostics = diagnostics)
+        diagnostics = diagnostics, indel_params = indel_params)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
         # un-k-merizable read): report no improvement rather than falling back to a
@@ -1830,12 +1983,40 @@ function _resolve_qualmer_for_graph(graph, qmer::Qualmer; graph_mode::Symbol = :
     return Qualmer(resolved_kmer, qmer.qualities)
 end
 
+"""
+Resize a per-base quality vector to `target_len`, preserving the 1:1 position
+correspondence a k-mer likelihood walk assumes. Extra tail positions inherit the
+last observed quality (a neutral, information-preserving pad); surplus qualities
+are dropped. A no-op when the lengths already match. This reconciles the
+indel-aware corrector's output (an insertion lengthens the corrected sequence, a
+deletion shortens it, breaking the original read's base↔quality correspondence)
+with `calculate_sequence_likelihood`, which indexes `quality[pos:pos+k-1]` over
+the CORRECTED sequence. Mirrors the length-handling `adjust_quality_scores`
+already performs on the same corrected sequence.
+"""
+function _reconcile_quality_length(quality::AbstractVector{T}, target_len::Int) where {T}
+    n = length(quality)
+    n == target_len && return quality
+    n == 0 && return fill(zero(T), target_len)
+    reconciled = Vector{T}(undef, target_len)
+    @inbounds for i in 1:target_len
+        reconciled[i] = quality[clamp(i, 1, n)]
+    end
+    return reconciled
+end
+
 function calculate_sequence_likelihood(
         sequence::BioSequences.BioSequence, quality::Vector{Int8},
         graph, k::Int; graph_mode::Symbol = :canonical)::Float64
     if length(sequence) < k
         return 0.0
     end
+
+    # Indel-aware correction can hand us a corrected `sequence` whose length differs
+    # from the original read's `quality` vector, so the `quality[pos:pos+k-1]` slices
+    # below would read out of bounds. Reconcile the quality to the sequence length
+    # (no-op on the substitution-only path where they already match → byte-identical).
+    quality = _reconcile_quality_length(quality, length(sequence))
 
     total_log_likelihood = 0.0
 
@@ -2493,7 +2674,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
-        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing)::Union{
+        diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Union{
         Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
@@ -2554,14 +2736,46 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         beam_is_exact = effective_beam_width == typemax(Int)
         effective_margin = beam_is_exact ? Inf : _AUTO_BEAM_SCORE_MARGIN
         effective_successor_bound = beam_is_exact ? typemax(Int) : _AUTO_SUCCESSOR_BOUND
-        config = Mycelia.ViterbiCorrectionConfig(
-            alphabet = alphabet,
-            strand_mode = graph_mode,
-            max_steps = length(observations) - 1,
-            beam_width = effective_beam_width,
-            max_successors_per_state = effective_successor_bound,
-            beam_score_margin = effective_margin
-        )
+        # Indel-aware wiring (td-9q84 / 4a): when the assembler's error profile
+        # enables indels it threads a non-nothing `indel_params`; the config then
+        # turns on the pair-HMM gap moves with the profile's gap-open fractions +
+        # extend probabilities and the tier's run caps + band. Crucially it also sets
+        # `error_rate` to the profile's ABSOLUTE per-base rate so the gap-open masses
+        # (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are scaled correctly —
+        # leaving it at the 0.01 default would under-weight nanopore/pacbio gaps ~10×
+        # (e.g. 0.01×0.30 = 0.003 instead of 0.10×0.30 = 0.03). `indel_params ===
+        # nothing` (the substitution-only default, e.g. :illumina) builds the config
+        # EXACTLY as the pre-wiring corrector did — `error_rate` stays at its 0.01
+        # default and `indel_moves` stays false, so the decode is byte-identical
+        # (oracle preservation).
+        config = if indel_params === nothing
+            Mycelia.ViterbiCorrectionConfig(
+                alphabet = alphabet,
+                strand_mode = graph_mode,
+                max_steps = length(observations) - 1,
+                beam_width = effective_beam_width,
+                max_successors_per_state = effective_successor_bound,
+                beam_score_margin = effective_margin
+            )
+        else
+            Mycelia.ViterbiCorrectionConfig(
+                alphabet = alphabet,
+                strand_mode = graph_mode,
+                max_steps = length(observations) - 1,
+                beam_width = effective_beam_width,
+                max_successors_per_state = effective_successor_bound,
+                beam_score_margin = effective_margin,
+                error_rate = indel_params.base_error_rate,
+                indel_moves = true,
+                insertion_fraction = indel_params.insertion_fraction,
+                deletion_fraction = indel_params.deletion_fraction,
+                insertion_extend_probability = indel_params.insertion_extend_probability,
+                deletion_extend_probability = indel_params.deletion_extend_probability,
+                deletion_max_run = indel_params.deletion_max_run,
+                max_insertion_run = indel_params.max_insertion_run,
+                band_width = indel_params.band_width
+            )
+        end
         correction = Mycelia.correct_observations(
             graph, [observations]; config = config, weighted_graph = weighted_graph)
         corrected_path = only(correction.corrected_observations)
