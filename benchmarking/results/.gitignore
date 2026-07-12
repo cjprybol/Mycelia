@@ -1,0 +1,5 @@
+# Stage 0 per-kmer router training tables are deterministically regenerable
+# from (harness, seed) — a cache, not durable knowledge. Only the summary
+# matrix (stage0_matrix_summary_*.json) is committed.
+*_perkmer_*.jsonl
+stage0_calibration_*.json
