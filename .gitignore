@@ -55,6 +55,12 @@ hpc-ci/coverage
 hpc-ci/logs
 hpc-ci/hpc-results.json
 
+# Track A baseline benchmark: ignore bulky regenerable artifacts (downloaded
+# references, simulated reads, per-cell contigs/QUAST/checkpoints). The small
+# knowledge tier (track_a_results.tsv, power_analysis_*, artifacts/) is committed.
+benchmarking/results/track_a_baseline/refs/
+benchmarking/results/track_a_baseline/cells/
+
 # Agent worktrees
 trees/
 
