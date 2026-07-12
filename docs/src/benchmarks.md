@@ -216,6 +216,71 @@ julia --project=. benchmarking/real_genome_benchmark.jl --tier 2
 Raw CSV results are archived under
 `benchmarking/results/real_genome_benchmark_*.csv`.
 
+## Rhizomorph Corrector Validation (Real Data)
+
+Rhizomorph ships an opt-in **read corrector** — a graph-structured hidden Markov
+model that decodes each read to its maximum-likelihood path before assembly (see
+`docs/design/2026-07-graph-as-hmm-corrector-methods.md` and
+[Tutorial 13b](generated/tutorials/13_rhizomorph_corrector.md)). This section validates the production
+`:scalable` tier on real genomes, contrasting two arms on identical reads:
+
+- **naive** — `assemble_genome(reads; corrector=:none, k=21)`
+- **scalable** — `assemble_genome(reads; corrector=:iterative, strategy=:scalable, k=21)`
+
+Both arms use the `DoubleStrand` graph mode.
+
+### Provenance
+
+- Reads are simulated **from the real reference** with ART's HS25 (HiSeq 2500)
+  empirical error model, 150 bp paired-end, 50× coverage. `sra-tools` is
+  unavailable in the build environment, so true SRA reads are not downloaded;
+  the reads carry realistic Illumina error/quality against real genome structure.
+- Reference-based metrics come from MUMmer `dnadiff` (genome fraction, identity,
+  mismatch/indel rates). QUAST's bioconda build does not solve on osx-arm64, so a
+  local `dnadiff` parser is used.
+
+### Results
+
+| Genome  | Arm      | Contigs | N50 (bp)   | Genome fraction | Avg identity | Mismatches/100 kb | Runtime (s) |
+| ------- | -------- | ------- | ---------- | --------------- | ------------ | ----------------- | ----------- |
+| phiX174 | naive    | 958     | 41         | 99.83 %         | 99.98 %      | 18.6              | 3.7         |
+| phiX174 | scalable | **1**   | **5,348**  | 99.29 %         | 100.0 %      | 0.0               | 18.1        |
+| lambda  | naive    | 8,937   | 41         | 99.99 %         | 100.0 %      | 0.0               | 36.1        |
+| lambda  | scalable | **1**   | **48,487** | 99.97 %         | 99.99 %      | 8.2               | 344.2       |
+
+![Corrector before/after metrics](assets/rhizomorph/corrector_before_after.png)
+
+The naive short-read assembly fragments each genome into hundreds to thousands of
+redundant contigs (N50 = 41 bp; total length roughly 9× the genome, since each
+strand and its error debris assemble separately). The `:scalable` corrector
+collapses these into a **single near-full-length contig** while holding genome
+fraction at 99.3–100 % and identity at 99.99–100 %.
+
+The same result viewed as assembly redundancy — total assembled length relative
+to the genome length. The naive arm carries ≈9× the genome (both strands plus
+error debris); the corrector returns to ≈1× (a single near-full-length contig).
+
+![Corrector assembly redundancy: naive ≈9× vs corrected ≈1× the genome length](assets/rhizomorph/corrector_graph.png)
+
+### Trade-offs and caveats
+
+- **Runtime.** Correction adds a per-read maximum-likelihood decode, so the
+  corrected arm is slower (≈5–10× here). The corrector's residual runtime scaling
+  is under active reduction, so these wall-clock figures are a current snapshot,
+  not an optimized ceiling.
+- These are real genomes (real repeat/GC structure) but simulated reads; treat
+  the numbers as engineering validation of the pipeline, not a head-to-head study
+  against external assemblers.
+
+To reproduce:
+
+```bash
+julia --project=. benchmarking/real_data_corrector_validation.jl
+```
+
+Raw CSV results are archived under
+`benchmarking/results/real_data_corrector_validation_*.csv`.
+
 ## Coming Soon
 
 - Assembler comparison results across Rhizomorph, MEGAHIT, and metaSPAdes on the

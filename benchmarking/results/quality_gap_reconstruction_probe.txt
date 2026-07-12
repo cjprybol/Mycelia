@@ -1,0 +1,4 @@
+Reads: 200  (1 kb genome, err=0.01, ~20.0x)
+Reconstruction-fallback warnings under :canonical    = 10175
+Reconstruction-fallback warnings under :doublestrand = 0
+PROBE_EXIT=0

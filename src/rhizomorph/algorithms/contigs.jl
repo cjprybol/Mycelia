@@ -33,6 +33,17 @@ struct ContigPath{T, S}
     end
 end
 
+# Reverse-complement partner of a vertex label, or `nothing` when the label has
+# no defined RC (string / BioSequence / amino-acid graphs). Only nucleotide
+# k-mer labels are RC-dedupable; the typed methods below give a zero-overhead,
+# type-stable dispatch (the generic fallback returns `nothing`). Defined above
+# the docstring so the docstring binds to `find_contigs_next`, not this helper.
+_rc_partner_label(::Any) = nothing
+function _rc_partner_label(
+        label::Kmers.Kmer{A}) where {A <: BioSequences.NucleicAcidAlphabet}
+    return BioSequences.reverse_complement(label)
+end
+
 """
     find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int=500)
 
@@ -51,7 +62,8 @@ sequence length is at least `min_contig_length`.
 contigs = Mycelia.Rhizomorph.find_contigs_next(graph; min_contig_length=1000)
 ```
 """
-function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int = 500)
+function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::Int = 500,
+        rc_aware::Bool = false)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
         return ContigPath{Any, Any}[]
@@ -77,6 +89,27 @@ function find_contigs_next(graph::MetaGraphsNext.MetaGraph; min_contig_length::I
 
             for vertex in path
                 push!(visited, vertex)
+                # rc_aware: on a DoubleStrand nucleotide k-mer graph, every vertex
+                # has a distinct reverse-complement vertex representing the SAME
+                # genomic locus read on the opposite strand. Marking that RC partner
+                # visited prevents the traversal from independently walking the
+                # reverse strand and emitting a second, redundant copy of every
+                # contig (the source of QUAST duplication ~2.0). This is a
+                # structural fix: unlike post-hoc whole-contig string dedup, it also
+                # removes RC twins whose fragment breakpoints are OFFSET between the
+                # two strands (which string dedup silently misses). Dispatch is
+                # type-based (nucleotide k-mer labels only), so it is inert on
+                # string / BioSequence / amino-acid graphs; on a nucleotide graph it
+                # is a true no-op only when no RC vertex is present. Caveat: like all
+                # RC-collapsing (canonical) de Bruijn assembly, a genuine inverted-
+                # repeat locus shares vertices with another locus's RC and collapses
+                # too — the standard de Bruijn RC ambiguity, not a regression.
+                if rc_aware
+                    rc = _rc_partner_label(vertex)
+                    if rc !== nothing
+                        push!(visited, rc)
+                    end
+                end
             end
         end
     end
@@ -111,10 +144,17 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
 
     path = [start_vertex]
     current = start_vertex
+    # `path`/`backward_path` remain ordered Vectors (needed to return the path in
+    # order), but membership tests against a Vector are an O(L) linear scan, so a
+    # contig of length L costs O(L^2) — the residual super-linear term that made
+    # 48kb reassembly quadratic (td-kokn). Maintain a parallel Set for O(1)
+    # membership; push to both the Vector (order) and the Set (membership) at each
+    # extension. `visited` is already a Set (O(1)).
+    path_set = Set{typeof(start_vertex)}((start_vertex,))
 
     while true
         out_neighbors = Rhizomorph.get_outgoing_neighbors(graph, current)
-        valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path)]
+        valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path_set)]
 
         next_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :out)
         if next_vertex === nothing
@@ -126,17 +166,19 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         end
 
         push!(path, next_vertex)
+        push!(path_set, next_vertex)
         current = next_vertex
     end
 
     current = start_vertex
     backward_path = Vector{typeof(start_vertex)}()
+    backward_set = Set{typeof(start_vertex)}()
 
     while true
         in_neighbors = Rhizomorph.get_incoming_neighbors(graph, current)
         valid_neighbors = [n
                            for n in in_neighbors
-                           if !(n in visited) && !(n in path) && !(n in backward_path)]
+                           if !(n in visited) && !(n in path_set) && !(n in backward_set)]
 
         prev_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :in)
         if prev_vertex === nothing
@@ -148,6 +190,7 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         end
 
         pushfirst!(backward_path, prev_vertex)
+        push!(backward_set, prev_vertex)
         current = prev_vertex
     end
 
@@ -258,6 +301,17 @@ function generate_contig_sequence(
     first_vertex_data = graph[path[1]]
 
     if hasfield(typeof(first_vertex_data), :Kmer)
+        # Canonical (undirected) nucleotide k-mer graphs merge each k-mer with its
+        # reverse complement onto one canonical vertex, so consecutive labels are
+        # not guaranteed to overlap in their stored orientation. assemble_path_sequence
+        # assumes a fixed forward orientation, which yields an invalid contig on a
+        # canonical graph. Recover each k-mer's orientation from the (k-1) overlap
+        # instead, so canonical contigs match the DoubleStrand reconstruction.
+        SequenceType = Rhizomorph._sequence_type_from_kmer_type(T)
+        if !Graphs.is_directed(graph) && Rhizomorph._label_has_reverse_complement(T) &&
+           SequenceType <: BioSequences.LongSequence
+            return Rhizomorph._reconstruct_oriented_kmer_path(path, SequenceType, graph)
+        end
         # K-mer graph: reconstruct using overlap logic without string conversion
         return Rhizomorph.assemble_path_sequence(path)
     elseif hasfield(typeof(first_vertex_data), :sequence)
