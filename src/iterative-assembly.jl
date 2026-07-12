@@ -416,6 +416,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         soft_em::Bool = false,
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)
@@ -772,6 +773,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                     skip_solid = skip_solid,
                     cheap_correct = cheap_correct,
                     beam_width = beam_width,
+                    calibrated_gap_threshold = calibrated_gap_threshold,
                     soft_weights = current_soft_weights,
                     hard_vertices = hard_vertices,
                     windowed_decode = windowed_decode,
@@ -1711,6 +1713,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         skip_solid::Bool = false,
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
         windowed_decode::Bool = false,
@@ -1887,7 +1890,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                                    improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
-                        diagnostics = diag, indel_params = indel_params)
+                        diagnostics = diag, indel_params = indel_params,
+                        calibrated_gap_threshold = calibrated_gap_threshold)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -1921,7 +1925,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag, indel_params = indel_params)
+                    diagnostics = diag, indel_params = indel_params,
+                    calibrated_gap_threshold = calibrated_gap_threshold)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -1998,7 +2003,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
-        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
@@ -2026,7 +2032,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
-        diagnostics = diagnostics, indel_params = indel_params)
+        diagnostics = diagnostics, indel_params = indel_params,
+        calibrated_gap_threshold = calibrated_gap_threshold)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -2062,7 +2069,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
-        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
@@ -2094,7 +2102,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         read, graph, k; graph_mode = graph_mode,
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
-        diagnostics = diagnostics, indel_params = indel_params)
+        diagnostics = diagnostics, indel_params = indel_params,
+        calibrated_gap_threshold = calibrated_gap_threshold)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
         # un-k-merizable read): report no improvement rather than falling back to a
@@ -2869,7 +2878,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
-        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Union{
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Union{
         Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
     try
         sequence_string = FASTX.sequence(String, read)
@@ -2949,7 +2959,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 max_steps = length(observations) - 1,
                 beam_width = effective_beam_width,
                 max_successors_per_state = effective_successor_bound,
-                beam_score_margin = effective_margin
+                beam_score_margin = effective_margin,
+                record_position_gaps = calibrated_gap_threshold !== nothing
             )
         else
             Mycelia.ViterbiCorrectionConfig(
@@ -2967,7 +2978,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 deletion_extend_probability = indel_params.deletion_extend_probability,
                 deletion_max_run = indel_params.deletion_max_run,
                 max_insertion_run = indel_params.max_insertion_run,
-                band_width = indel_params.band_width
+                band_width = indel_params.band_width,
+                record_position_gaps = calibrated_gap_threshold !== nothing
             )
         end
         correction = Mycelia.correct_observations(
@@ -3007,6 +3019,24 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         corrected_sequence_string = corrected_sequence isa AbstractString ?
                                     corrected_sequence :
                                     string(corrected_sequence)
+        if calibrated_gap_threshold !== nothing
+            path_result = only(correction.paths)
+            path = something(path_result.path,
+                throw(ArgumentError("calibrated gap gate requires a decoded path")))
+            gaps = path_result.diagnostics[:position_gaps]
+            length(gaps) == length(path.steps) - 1 ||
+                throw(ArgumentError("position-gap/path alignment contract violated"))
+            original_chars = collect(sequence_string)
+            corrected_chars = collect(corrected_sequence_string)
+            @inbounds for i in eachindex(gaps)
+                position = i + k
+                position > length(corrected_chars) && break
+                if gaps[i] < calibrated_gap_threshold
+                    corrected_chars[position] = original_chars[position]
+                end
+            end
+            corrected_sequence_string = String(corrected_chars)
+        end
         improved_likelihood = Mycelia.calculate_sequence_likelihood(
             corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)
         improved_quality = Mycelia.adjust_quality_scores(

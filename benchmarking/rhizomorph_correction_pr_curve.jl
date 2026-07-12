@@ -52,13 +52,27 @@ include(joinpath(@__DIR__, "rhizomorph_correction_accuracy_benchmark.jl"))
 # auto-bounded Viterbi beam (256) applies to every point, so these stay tractable.
 const PR_OPERATING_POINTS = [
     (name = "scalable", skip_solid = true, cheap_correct = true, hard_window = true,
-        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing),
+        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
+        calibrated_gap_threshold = nothing),
     (name = "noskip", skip_solid = false, cheap_correct = true, hard_window = true,
-        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing),
+        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
+        calibrated_gap_threshold = nothing),
     (name = "noskip+nogate", skip_solid = false,
         cheap_correct = true, hard_window = false,
-        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing)
+        soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
+        calibrated_gap_threshold = nothing)
 ]
+
+function calibrated_gap_points()
+    thresholds = _parse_float_list(
+        get(ENV, "MYCELIA_RPC_GAP_THRESHOLDS", "0.0,0.5,1.0,2.0,4.0"), Float64[])
+    return [(
+        name = "calibrated-gap-$(threshold)", skip_solid = false,
+        cheap_correct = true, hard_window = false, soft_em = true,
+        n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
+        calibrated_gap_threshold = threshold,
+    ) for threshold in thresholds]
+end
 
 """
 Correct `records` with an explicit knob preset `pt` (a PR_OPERATING_POINTS entry),
@@ -85,6 +99,7 @@ function correct_reads_at_point(records::Vector{FASTX.FASTQ.Record}, k::Int, pt)
         soft_em = pt.soft_em,
         cheap_correct = pt.cheap_correct,
         beam_width = pt.beam_width,
+        calibrated_gap_threshold = pt.calibrated_gap_threshold,
         verbose = false,
         enable_checkpointing = false,
         output_dir = output_dir
@@ -112,8 +127,9 @@ function run_pr_curve()
     assigned_q = parse(Int, get(ENV, "MYCELIA_RPC_ASSIGNED_Q", "20"))
     seed = parse(Int, get(ENV, "MYCELIA_RPC_SEED", "42"))
     want = strip(get(ENV, "MYCELIA_RPC_POINTS", ""))
-    points = isempty(want) ? PR_OPERATING_POINTS :
-             filter(p -> p.name in split(want, ","), PR_OPERATING_POINTS)
+    all_points = vcat(PR_OPERATING_POINTS, calibrated_gap_points())
+    points = isempty(want) ? all_points :
+             filter(p -> p.name in split(want, ","), all_points)
 
     println("=== Rhizomorph Correction Precision-Recall Frontier ===")
     println("Start: $(Dates.now())   error rates: $errs   coverage: $(coverage)x   k: $k")

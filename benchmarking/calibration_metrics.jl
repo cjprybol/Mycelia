@@ -104,3 +104,58 @@ function brier_score(confidences::AbstractVector{<:Real}, labels::AbstractVector
         throw(ArgumentError("confidences and labels must have equal length"))
     return sum((confidences[i] - (labels[i] ? 1.0 : 0.0))^2 for i in 1:n) / n
 end
+
+"""
+    fit_isotonic_map(scores, labels) -> NamedTuple
+
+Fit a non-decreasing, piecewise-constant probability map with the pooled
+adjacent violators algorithm. The returned `thresholds` are sorted score upper
+bounds and `probabilities` are the corresponding empirical probabilities.
+"""
+function fit_isotonic_map(scores::AbstractVector{<:Real},
+        labels::AbstractVector{Bool})::NamedTuple
+    length(scores) == length(labels) ||
+        throw(ArgumentError("scores and labels must have equal length"))
+    isempty(scores) && throw(ArgumentError("scores and labels must be non-empty"))
+    all(isfinite, scores) || throw(ArgumentError("scores must be finite"))
+
+    order = sortperm(scores)
+    sorted_scores = Float64.(scores[order])
+    sorted_labels = labels[order]
+    block_starts = Int[]
+    block_ends = Int[]
+    block_sums = Float64[]
+    block_counts = Int[]
+    for i in eachindex(sorted_scores)
+        push!(block_starts, i)
+        push!(block_ends, i)
+        push!(block_sums, sorted_labels[i] ? 1.0 : 0.0)
+        push!(block_counts, 1)
+        while length(block_sums) >= 2 &&
+              block_sums[end - 1] / block_counts[end - 1] >
+              block_sums[end] / block_counts[end]
+            block_ends[end - 1] = block_ends[end]
+            block_sums[end - 1] += block_sums[end]
+            block_counts[end - 1] += block_counts[end]
+            pop!(block_starts)
+            pop!(block_ends)
+            pop!(block_sums)
+            pop!(block_counts)
+        end
+    end
+    return (
+        thresholds = [sorted_scores[i] for i in block_ends],
+        probabilities = block_sums ./ block_counts,
+    )
+end
+
+"""Map raw `scores` through a fitted isotonic probability map."""
+function predict_isotonic(model::NamedTuple,
+        scores::AbstractVector{<:Real})::Vector{Float64}
+    isempty(model.thresholds) && throw(ArgumentError("isotonic model is empty"))
+    return [model.probabilities[clamp(
+                searchsortedfirst(model.thresholds, Float64(score)),
+                1,
+                length(model.thresholds),
+            )] for score in scores]
+end
