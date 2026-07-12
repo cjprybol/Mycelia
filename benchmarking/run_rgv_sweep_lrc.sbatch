@@ -24,6 +24,9 @@
 # Prereq (ONCE on a login node, in the same checkout):
 #   module load julia/1.10.2-11.4
 #   benchmarking/hpc-setup.sh          # resolve + instantiate + precompile
+# NOTE: keep `set -uo pipefail` WITHOUT `-e`. The green-but-empty guard below
+# relies on awk/grep non-zero exit codes NOT aborting the script; adding `set -e`
+# would abort before the guard can set rc and echo its failure reason.
 set -uo pipefail
 echo "=== Mycelia Rhizomorph correction-validation sweep (Lawrencium) ==="
 echo "Job: ${SLURM_JOB_ID}  Node: ${SLURM_NODELIST}  CPUs: ${SLURM_CPUS_PER_TASK}  Start: $(date)"
@@ -66,7 +69,11 @@ echo ""
 echo ">>> RUN rhizomorph_correction_validation_sweep.jl  $(date)"
 echo "    ERR=${MYCELIA_RGV_ERR}  READLEN=${MYCELIA_RGV_READLEN}  COVERAGE=${MYCELIA_RGV_COVERAGE}x  K=${MYCELIA_RGV_K}  QUAST=${MYCELIA_RUN_EXTERNAL}"
 
-if LD_LIBRARY_PATH="" "${JULIA}" --project=.. rhizomorph_correction_validation_sweep.jl; then
+# Capture julia stdout to a runlog while still streaming it to the job .out (tee),
+# so the guard can bind to THIS run's CSV by the path the .jl prints
+# ("CSV written: <path>") — not `ls -t` which can grab a concurrent/stale CSV.
+runlog="rgv_sweep_${SLURM_JOB_ID}.runlog"
+if LD_LIBRARY_PATH="" "${JULIA}" --project=.. rhizomorph_correction_validation_sweep.jl | tee "${runlog}"; then
   echo ">>> OK  sweep complete  $(date)"
   rc=0
 else
@@ -75,20 +82,46 @@ else
 fi
 
 echo ""
-# Post-check: a green exit with no ok=true VERDICT arm is a silent failure — the
-# .jl records a failed arm as ok=false and still writes the CSV + exits 0. Fail
-# loud so sacct shows FAILED rather than green-but-empty.
+# Post-check: a green exit is a silent failure UNLESS at least one
+# (error_rate, readlen) cell has BOTH the naive AND the iterative arm passing —
+# ok=true, mode=VERDICT, and n_contigs>0. The .jl records a failed/empty arm as
+# ok=false (or n_contigs=0) and still writes the CSV + exits 0; and the sweep's
+# whole purpose IS the naive-vs-iterative comparison, so one lone naive arm is
+# NOT a result. Fail loud so sacct shows FAILED rather than green-but-empty.
 if [[ "${rc}" -eq 0 ]]; then
-  newest="$(ls -t results/rhizomorph_correction_validation_sweep_*.csv 2>/dev/null | head -1)"
-  if [[ -z "${newest}" ]]; then
-    echo ">>> FAIL: sweep exited 0 but produced no results CSV" >&2; rc=1
+  # Bind to THIS job's CSV via the path the .jl printed; fail loud if absent.
+  csv_line="$(grep '^CSV written: ' "${runlog}" 2>/dev/null | tail -1)"
+  csv="${csv_line#CSV written: }"
+  if [[ -z "${csv}" ]]; then
+    echo ">>> FAIL: sweep exited 0 but printed no 'CSV written:' path" >&2; rc=1
+  elif [[ ! -f "${csv}" ]]; then
+    echo ">>> FAIL: printed CSV path does not exist: ${csv}" >&2; rc=1
+  # awk guard assumes comma-free CSV fields: CSV.jl quotes any embedded comma,
+  # which would shift these -F, column positions. Safe for the current schema
+  # (only numeric + bare-word columns: reference/regime/tech/arm/mode).
   elif ! awk -F, '
-      NR==1 { for (i=1;i<=NF;i++) { if ($i=="ok") ok=i; if ($i=="mode") m=i }; next }
-      ($ok=="true") && ($m=="VERDICT") { found=1 }
-      END { exit found ? 0 : 1 }' "${newest}"; then
-    echo ">>> FAIL: newest CSV (${newest}) has no ok=true VERDICT arm — green-but-empty" >&2; rc=1
+      NR==1 {
+        for (i=1;i<=NF;i++) {
+          if ($i=="arm")        a=i
+          if ($i=="error_rate") er=i
+          if ($i=="readlen")    rl=i
+          if ($i=="ok")         ok=i
+          if ($i=="mode")       m=i
+          if ($i=="n_contigs")  nc=i
+        }
+        if (!a || !er || !rl || !ok || !m || !nc) exit 2
+        next
+      }
+      ($ok=="true") && ($m=="VERDICT") && (($nc+0)>0) {
+        key = $er SUBSEP $rl
+        if ($a=="naive")          naive[key]=1
+        else if ($a=="iterative") iter[key]=1
+      }
+      END { for (key in naive) if (key in iter) found=1; exit found ? 0 : 1 }
+    ' "${csv}"; then
+    echo ">>> FAIL: ${csv} has no cell with BOTH naive and iterative ok=true VERDICT arms (n_contigs>0) — green-but-empty" >&2; rc=1
   else
-    echo ">>> OK: verified >=1 ok=true VERDICT arm in ${newest}"
+    echo ">>> OK: verified >=1 cell with BOTH naive+iterative ok=true VERDICT n_contigs>0 arms in ${csv}"
   fi
 fi
 
