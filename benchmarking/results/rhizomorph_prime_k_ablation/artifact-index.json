@@ -55,7 +55,8 @@
         "min_reference_recovery",
         "max_reference_recovery",
         "mean_contig_count",
-        "all_seeds_assembled"
+        "all_seeds_assembled",
+        "assembly_errors"
       ],
       "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
       "rows": 36,

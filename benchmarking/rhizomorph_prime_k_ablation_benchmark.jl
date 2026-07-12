@@ -19,24 +19,41 @@
 #
 # WHAT WE FIND (see the committed tables; numbers are the deliverable, not these
 # comments):
-#   - On the NATURAL tandem / palindrome fixtures, reference recovery rises
-#     monotonically with k-SIZE (larger k spans more context). Controlling for
-#     size via adjacent prime/composite pairs (9 vs 11, 15 vs 17, 21 vs 23),
-#     there is no additional deficit attributable to primality: a composite k
-#     divisible by the repeat period recovers the same as its size-matched prime
-#     neighbour. The prime-vs-composite gap on natural fixtures is a k-size
-#     artifact, not a primality effect.
-#   - POSITIVE CONTROL (engineered `shared_repeat_collision` fixture): two
-#     otherwise-unique "genes" share an internal period-3 repeat of length
-#     exactly 9. A composite k=9 (=3x3) fits ENTIRELY inside the shared repeat,
-#     so the two genes collide on the identical 9-mer and the assembly tangles;
-#     the size-matched prime k=11 is forced to span the repeat into the two
-#     genes' differing flanks, so no shared k-mer forms and both genes are
-#     recovered cleanly. This yields a large, reproducible recovery gap
-#     (composite << prime) and is the harness's proof that it CAN register a
-#     composite-k aliasing deficit when one exists. It is an ENGINEERED
-#     demonstration of the shared-repeat mechanism, not a claim that natural
-#     tandem repeats exhibit it.
+#
+#   - HEADLINE / STRONG RESULT — POSITIVE CONTROL (`shared_repeat_collision` +
+#     `distinct_repeat_no_collision`): the harness is DEMONSTRABLY SENSITIVE to a
+#     k-mer collision and is not blind. Two otherwise-unique "genes" share an
+#     internal period-3 repeat of length exactly 9. At k=9 the shared 9-mer
+#     collides and the assembly tangles: comparing the shared fixture against a
+#     structurally-identical, base-composition-matched fixture whose two genes
+#     carry DIFFERENT (non-shared) 9 bp inserts isolates a large collision
+#     penalty at fixed k=9 — this is a clean, size-free measurement of the
+#     collision.
+#
+#     IMPORTANT — what the positive control does NOT show. The collision is
+#     RESOLVED at k=11 purely because 11 > 9 = the shared-repeat length, so an
+#     11-mer must SPAN the repeat into the genes' differing flanks. ANY k >= 10
+#     (prime OR composite) would resolve it the same way. The k=11 resolution is
+#     a k-vs-repeat-length spanning effect, NOT a primality mechanism. The
+#     positive control proves SENSITIVITY TO A COLLISION; it is not evidence that
+#     primality per se helps.
+#
+#   - CORROBORATING / WEAKLY-IDENTIFIED — NATURAL tandem / palindrome fixtures:
+#     reference recovery rises monotonically with k-SIZE, and at usable k (>= 15)
+#     every fixture saturates at recovery = 1.0, so the size-matched
+#     prime-minus-composite delta is ~0. This null is only weakly identified and
+#     should NOT be read as "primality is neutral":
+#       (a) The size-matched pairs (9,11), (15,17), (21,23) always put the
+#           composite k 2 bp SMALLER than the prime k, so a "prime - composite"
+#           delta conflates primality with a +2 k-size step.
+#       (b) At k >= 15 recovery is saturated at 1.0, so delta = 0 is
+#           uninformative — saturation masks any effect that might exist.
+#       (c) The only sub-saturation pair, (9,11), is dominated by the low-k size
+#           collapse that the NON-REPETITIVE control also exhibits (it too drops
+#           to ~0 at k = 9, 11), i.e. that gap is a k-size artifact, not primality.
+#     Net: the positive control is the load-bearing result (sensitivity proven);
+#     the natural-fixture null corroborates "no strong primality effect at this
+#     scale" but is not a tight identification of primality.
 #
 # SMOKE scale, deterministic (fixed read-simulation seeds). Usage:
 #   julia --project=. benchmarking/rhizomorph_prime_k_ablation_benchmark.jl
@@ -69,11 +86,14 @@ const ABLATION_ALPHABET = collect("ACGT")
 # Fixed reference-recovery window, INDEPENDENT of the assembly k, so recovery is
 # comparable across k values.
 const ABLATION_RECOVERY_W = 15
-# Positive-control firing bar. The COLLISION PENALTY at composite k=9 (recovery of
-# the no-collision variant minus the shared-collision variant, at IDENTICAL
-# fixture structure so k-size cancels) must be at least this large AND must
-# collapse at prime k=11 (the composite-k aliasing must be resolved by the prime k
-# spanning the shared repeat). This isolates aliasing from k-size.
+# Positive-control firing bar. The COLLISION PENALTY at k=9 (recovery of the
+# no-collision variant minus the shared-collision variant, at IDENTICAL and
+# composition-matched fixture structure so k-size and GC cancel) must be at least
+# this large AND must collapse at k=11. NB the k=11 collapse is a SPANNING effect
+# (11 > 9 = the shared-repeat length, so an 11-mer bridges into the differing
+# flanks) — it would happen at any k>=10, prime or composite; it is NOT a
+# primality mechanism. The check isolates the collision (from k-size and GC) and
+# confirms the harness is sensitive to it.
 const POSITIVE_CONTROL_MIN_GAP = 0.10
 const POSITIVE_CONTROL_SHARED_ID = "shared_repeat_collision"
 const POSITIVE_CONTROL_DISTINCT_ID = "distinct_repeat_no_collision"
@@ -117,8 +137,8 @@ function main(args::Vector{String} = ARGS)::Nothing
     end
     println()
     println("Positive control fires (k=9 collision penalty >= $(POSITIVE_CONTROL_MIN_GAP) " *
-            "AND collapses by >= $(POSITIVE_CONTROL_MIN_GAP) at prime k=11): " *
-            "$(artifacts.positive_control_fires)")
+            "AND collapses by >= $(POSITIVE_CONTROL_MIN_GAP) once k spans the repeat at k=11 " *
+            "— a spanning effect, not primality): $(artifacts.positive_control_fires)")
     return nothing
 end
 
@@ -162,7 +182,9 @@ function run_prime_k_ablation_benchmark(
             "read_error_rate" => ABLATION_READ_ERROR_RATE,
             "seeds" => collect(ABLATION_SEEDS),
             "recovery_metric" => "fraction of reference $(ABLATION_RECOVERY_W)-mers present in assembled contigs (either strand), mean over seeds",
-            "measures" => "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures; the positive control confirms the harness detects a composite-k aliasing deficit when one exists",
+            "measures" => "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures. STRONG result = the positive control: the harness is demonstrably SENSITIVE to a k-mer collision (not blind). It does NOT show a primality mechanism — the k=9 collision is resolved at any k>=10 by spanning the 9 bp repeat (k-vs-repeat-length), independent of primality.",
+            "natural_fixture_null_caveat" => "WEAKLY IDENTIFIED: size-matched pairs put composite k 2bp below prime (conflates primality with a +2 size step); at k>=15 recovery saturates at 1.0 so delta=0 is uninformative; the only sub-saturation pair (9,11) is dominated by the low-k size collapse the non-repetitive control also shows. The null corroborates 'no strong primality effect at this scale' but does not tightly identify primality.",
+            "positive_control_note" => "shared vs composition-matched distinct (TGAx3, a permutation of ATGx3 with identical GC and no shared 9-mer) at fixed k=9 isolates the collision from GC/size; the k=11 resolution is a spanning effect, not primality",
             "positive_control_min_gap" => POSITIVE_CONTROL_MIN_GAP
         ),
         table_context_columns = Dict(
@@ -228,12 +250,15 @@ function ablation_fixtures()::Vector{AblationFixture}
             "Non-repetitive control (deterministic pseudo-random)",
             "natural",
             [_nonrepetitive_sequence(220, 3)],
-            "no dominant period — primality expected to be neutral"
+            "no dominant period; also shows the low-k recovery collapse is a k-size effect"
         ),
-        # POSITIVE CONTROL (shared). Two unique genes sharing an internal period-3
-        # repeat of length exactly 9. Composite k=9 fits inside the shared repeat
-        # (genes collide on the identical 9-mer -> tangle); prime k=11 must span
-        # the repeat into the genes' DIFFERING flanks (no shared k-mer -> clean).
+        # POSITIVE CONTROL (shared). Two unique genes share an internal period-3
+        # repeat of length exactly 9. At k=9 the shared 9-mer collides and the
+        # assembly tangles; comparing against the composition-matched no-collision
+        # fixture below isolates that collision penalty at fixed k=9. NOTE: the
+        # collision is resolved at k>=10 purely because such a k SPANS the 9 bp
+        # repeat into the genes' differing flanks — this is a k-vs-repeat-length
+        # effect, NOT a primality mechanism (any k>=10, prime or composite, works).
         AblationFixture(
             POSITIVE_CONTROL_SHARED_ID,
             "Positive control (shared): two genes sharing a 9 bp period-3 repeat",
@@ -244,25 +269,27 @@ function ablation_fixtures()::Vector{AblationFixture}
                 _nonrepetitive_sequence(20, 6) * repeat("ATG", 3) *
                 _nonrepetitive_sequence(20, 7)
             ],
-            "engineered 9 bp SHARED repeat: composite k=9 collides, prime k=11 spans into unique flanks"
+            "engineered 9 bp SHARED repeat; k=9 collides, any k>=10 spans it (k-vs-repeat-length, not primality)"
         ),
         # NEGATIVE CONTROL (distinct). Byte-for-byte the same structure as the
-        # shared fixture — same flanks, same 9 bp period-3 insert length — except
-        # the two genes carry DIFFERENT period-3 units (ATGx3 vs GCAx3), so there
-        # is no shared 9-mer and no collision. Any k=9 recovery gap between this
-        # and the shared fixture is attributable to the COLLISION, not to k-size
-        # (structure and length are identical across the two).
+        # shared fixture — same flanks (nonrep 4/5/6/7), same gene1 insert, same
+        # 9 bp insert length — except gene2 carries TGAx3 instead of ATGx3. TGA is
+        # a PERMUTATION of ATG: identical base composition (1A/1T/1G) but a
+        # different sequence that shares NO 9-mer with ATGx3. So the ONLY
+        # difference from the shared fixture is the shared-vs-distinct property
+        # (not GC content, not length, not structure); the k=9 recovery gap
+        # between shared and distinct isolates the COLLISION alone.
         AblationFixture(
             POSITIVE_CONTROL_DISTINCT_ID,
-            "Negative control (distinct): same structure, non-shared 9 bp repeats",
+            "Negative control (distinct): same structure, composition-matched non-shared repeat",
             "collision_distinct",
             [
                 _nonrepetitive_sequence(20, 4) * repeat("ATG", 3) *
                 _nonrepetitive_sequence(20, 5),
-                _nonrepetitive_sequence(20, 6) * repeat("GCA", 3) *
+                _nonrepetitive_sequence(20, 6) * repeat("TGA", 3) *
                 _nonrepetitive_sequence(20, 7)
             ],
-            "distinct 9 bp inserts (ATGx3 vs GCAx3): no shared k-mer; k-size-matched control for the collision fixture"
+            "gene2 uses TGAx3 (a permutation of ATG: same composition, no shared 9-mer); isolates collision from GC/size"
         )
     ]
 end
@@ -292,12 +319,14 @@ function _ablation_row(fixture::AblationFixture, k::Int)::NamedTuple
     recoveries = Float64[]
     contig_counts = Int[]
     assembled_flags = Bool[]
+    errors = String[]
     for seed in ABLATION_SEEDS
         reads = _simulate_reads(fixture.references, seed)
-        recovery, n_contigs, assembled = _assemble_and_score(reads, fixture.references, k)
-        push!(recoveries, recovery)
-        push!(contig_counts, n_contigs)
-        push!(assembled_flags, assembled)
+        outcome = _assemble_and_score(reads, fixture.references, k)
+        push!(recoveries, outcome.recovery)
+        push!(contig_counts, outcome.n_contigs)
+        push!(assembled_flags, outcome.assembled)
+        isempty(outcome.error) || push!(errors, "seed $(seed): $(outcome.error)")
     end
     return (
         dataset_id = fixture.dataset_id,
@@ -317,7 +346,8 @@ function _ablation_row(fixture::AblationFixture, k::Int)::NamedTuple
         min_reference_recovery = minimum(recoveries),
         max_reference_recovery = maximum(recoveries),
         mean_contig_count = Statistics.mean(contig_counts),
-        all_seeds_assembled = all(assembled_flags)
+        all_seeds_assembled = all(assembled_flags),
+        assembly_errors = isempty(errors) ? "" : join(errors, " | ")
     )
 end
 
@@ -353,17 +383,23 @@ function _assemble_and_score(
         reads::Vector{FASTX.FASTA.Record},
         references::Vector{String},
         k::Int
-)::Tuple{Float64, Int, Bool}
+)::NamedTuple
     try
         result = Mycelia.Rhizomorph.assemble_genome(
             reads; k = k,
             graph_mode = Mycelia.Rhizomorph.SingleStrand,
             error_rate = ABLATION_READ_ERROR_RATE)
         contigs = [string(contig) for contig in result.contigs]
-        return _reference_recovery(references, contigs), length(contigs), true
-    catch
-        # An assembly failure IS a recovery failure at this k; record it as such.
-        return 0.0, 0, false
+        return (recovery = _reference_recovery(references, contigs),
+            n_contigs = length(contigs), assembled = true, error = "")
+    catch exception
+        # Never swallow interrupts. A genuine assembly failure IS a recovery
+        # failure at this k, but it must be VISIBLE: capture the message so a
+        # partial per-(fixture,k) failure surfaces in the row + a warning.
+        exception isa InterruptException && rethrow()
+        message = sprint(showerror, exception)
+        @warn "assemble_genome failed" k=k error=first(message, 200)
+        return (recovery = 0.0, n_contigs = 0, assembled = false, error = message)
     end
 end
 
@@ -428,12 +464,14 @@ function _ablation_delta_table(
     return DataFrames.DataFrame(rows)
 end
 
-# Size-controlled positive-control summary. At each of k=9 (composite) and k=11
-# (prime), the COLLISION PENALTY is recovery(distinct) - recovery(shared): the two
-# fixtures are structurally identical (same flanks, same 9 bp insert length), so
-# this difference isolates the shared-9-mer collision from any k-size effect. A
-# real composite-k aliasing signal shows a large penalty at k=9 that collapses at
-# k=11 (where the prime k spans the repeat into the differing flanks).
+# Size-controlled positive-control summary. At each of k=9 and k=11 the COLLISION
+# PENALTY is recovery(distinct) - recovery(shared): the two fixtures are
+# structurally identical AND base-composition-matched (same flanks, same 9 bp
+# insert length, gene2 uses TGAx3 vs ATGx3 — a permutation, same GC), so this
+# difference isolates the shared-9-mer collision from k-size and GC. The penalty
+# is large at k=9 (collision) and collapses at k=11 because an 11-mer SPANS the
+# 9 bp repeat into the differing flanks — a k-vs-repeat-length effect that any
+# k>=10 would produce, NOT a primality mechanism.
 function _positive_control_summary(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
     recovery_at(id,
         k) = only(per_run[
@@ -454,10 +492,11 @@ function _positive_control_summary(per_run::DataFrames.DataFrame)::DataFrames.Da
     return DataFrames.DataFrame(rows)
 end
 
-# The positive control FIRES when the collision penalty at composite k=9 is at
-# least POSITIVE_CONTROL_MIN_GAP AND is at least POSITIVE_CONTROL_MIN_GAP larger
-# than the penalty at prime k=11 — i.e. the shared-9-mer collision demonstrably
-# degrades recovery at the composite k and is resolved at the prime k.
+# The positive control FIRES when the collision penalty at k=9 is at least
+# POSITIVE_CONTROL_MIN_GAP AND is at least POSITIVE_CONTROL_MIN_GAP larger than the
+# penalty at k=11 — i.e. the shared-9-mer collision demonstrably degrades recovery
+# at k=9 and is resolved once k spans the repeat (k=11). This proves the harness
+# detects the collision; it is not a test of primality.
 function _positive_control_fires(per_run::DataFrames.DataFrame)::Bool
     summary = _positive_control_summary(per_run)
     penalty_9 = only(summary[summary.k .== 9, :collision_penalty])

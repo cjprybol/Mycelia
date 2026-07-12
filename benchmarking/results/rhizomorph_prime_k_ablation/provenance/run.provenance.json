@@ -12,9 +12,9 @@
     "tandem_period2_ga",
     "tandem_period3_atg"
   ],
-  "generated_at": "2026-07-12T00:24:28.152Z",
+  "generated_at": "2026-07-12T00:46:04.530Z",
   "git": {
-    "commit": "a029921359d5ac2a5c86b0e418c697c47ebffaa3",
+    "commit": "ef6768f0c23bca1c66a2d3c105f5eccda2f7a9a1",
     "is_dirty": true
   },
   "metadata": {
@@ -26,8 +26,10 @@
       21
     ],
     "coverage": 30,
-    "measures": "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures; the positive control confirms the harness detects a composite-k aliasing deficit when one exists",
+    "measures": "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures. STRONG result = the positive control: the harness is demonstrably SENSITIVE to a k-mer collision (not blind). It does NOT show a primality mechanism — the k=9 collision is resolved at any k>=10 by spanning the 9 bp repeat (k-vs-repeat-length), independent of primality.",
+    "natural_fixture_null_caveat": "WEAKLY IDENTIFIED: size-matched pairs put composite k 2bp below prime (conflates primality with a +2 size step); at k>=15 recovery saturates at 1.0 so delta=0 is uninformative; the only sub-saturation pair (9,11) is dominated by the low-k size collapse the non-repetitive control also shows. The null corroborates 'no strong primality effect at this scale' but does not tightly identify primality.",
     "positive_control_min_gap": 0.1,
+    "positive_control_note": "shared vs composition-matched distinct (TGAx3, a permutation of ATGx3 with identical GC and no shared 9-mer) at fixed k=9 isolates the collision from GC/size; the k=11 resolution is a spanning effect, not primality",
     "prime_k": [
       11,
       17,
