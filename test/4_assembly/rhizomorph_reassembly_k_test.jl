@@ -115,4 +115,24 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         e_lo = Mycelia.Rhizomorph.estimate_residual_error(lo_q)
         Test.@test e_lo > e_hi
     end
+
+    Test.@testset "genome-size-aware uniqueness floor (td-jt7r)" begin
+        R = Mycelia.Rhizomorph
+        # A multi-kb genome's distinct k-mer set exceeds the 7-mer space (4^7=16384),
+        # so the drop-down floor must rise above 7 to keep genomic k-mers ~unique.
+        f_multi = R._genome_size_floor_k(_rk_clean, 7, 21)
+        Test.@test 7 < f_multi <= 21
+        # A tiny genome (~150 bp) fits comfortably in the 7-mer space ⇒ floor stays 7.
+        tiny = [FASTX.FASTQ.Record("t$i", _rk_ref[1:150], repeat("I", 150)) for i in 1:30]
+        Test.@test R._genome_size_floor_k(tiny, 7, 21) == 7
+        # Never exceeds the ceiling.
+        Test.@test R._genome_size_floor_k(_rk_clean, 7, 11) <= 11
+        # ORACLE: clean reads still honor the ceiling — the floor is inert on the
+        # no-drop path, byte-identical with the floor on or off.
+        Test.@test R.select_reassembly_k(_rk_clean, 21) == 21
+        Test.@test R.select_reassembly_k(_rk_clean, 21; genome_size_floor = false) == 21
+        # Shattered reads never drop BELOW the genome-size floor (no k=7 collapse).
+        Test.@test R.select_reassembly_k(_rk_n10, 21) >=
+                   R._genome_size_floor_k(_rk_n10, 7, 21)
+    end
 end

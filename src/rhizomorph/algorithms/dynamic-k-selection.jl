@@ -490,6 +490,34 @@ function effective_kmer_coverage(reads, k::Int)::Float64
 end
 
 """
+    _genome_size_floor_k(reads, floor_k, ceiling_k; size_ref_k=17, solid_min=2,
+                         occupancy_target=0.01) -> Int
+
+Genome-size-aware UNIQUENESS floor (td-jt7r). The connectivity drop-down can, on a
+very shattered read set, fall all the way back to `floor_k` (7); but `4^7 = 16384`
+k-mer slots is SMALLER than a multi-kb genome, so its distinct genomic k-mers collide
+and the de Bruijn graph tangles into k-mer-sized fragments. Raise the floor to the
+smallest `k` whose k-mer space keeps genomic k-mers ~unique — `4^k >= genome_size /
+occupancy_target` (default 1% occupancy ⇒ `4^k >= 100·G`). Genome size `G` is estimated
+as the number of distinct SOLID canonical k-mers at `size_ref_k` (the genomic backbone;
+singleton error k-mers, occurrence `< solid_min`, are excluded). Returns `floor_k` when
+the estimate is empty/degenerate, and never exceeds `ceiling_k`.
+
+Only the drop-down / fallback path is affected: on clean reads the connectivity
+criterion returns the ceiling directly, so this floor is inert and the illumina path
+stays byte-identical (oracle preservation).
+"""
+function _genome_size_floor_k(reads, floor_k::Int, ceiling_k::Int;
+        size_ref_k::Int = 17, solid_min::Int = 2, occupancy_target::Float64 = 0.01)::Int
+    ref_k = clamp(size_ref_k, floor_k, ceiling_k)
+    counts = _kmer_count_spectrum(reads, ref_k; canonical = true)
+    genome_size = count(>=(solid_min), values(counts))
+    genome_size <= 0 && return floor_k
+    k_unique = ceil(Int, log(genome_size / occupancy_target) / log(4))
+    return clamp(k_unique, floor_k, ceiling_k)
+end
+
+"""
     select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
 
 Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`,
@@ -526,9 +554,22 @@ function select_reassembly_k(
         reads,
         ceiling_k::Int;
         floor_k::Int = 7,
-        connectivity_floor::Float64 = 6.0
+        connectivity_floor::Float64 = 6.0,
+        genome_size_floor::Bool = true,
+        size_ref_k::Int = 17
 )::Int
     effective_floor = min(floor_k, ceiling_k)
+    # Genome-size-aware uniqueness floor (td-jt7r): never let the drop-down fall below
+    # the k whose k-mer space keeps genomic k-mers unique, so a multi-kb genome cannot
+    # collapse to k-mer-sized fragments at the k=7 fallback. Inert on clean reads (the
+    # ceiling is returned before any fallback), so the illumina path is byte-identical.
+    if genome_size_floor
+        effective_floor = min(
+            max(effective_floor,
+                _genome_size_floor_k(reads, effective_floor, ceiling_k;
+                    size_ref_k = size_ref_k)),
+            ceiling_k)
+    end
     # The ceiling is the caller's explicit k (may be non-prime, e.g. 21) and is the
     # top candidate — honored UNCHANGED when clean/high-coverage reads keep it
     # connected, so clean/Illumina behavior stays byte-identical and graph-reuse
