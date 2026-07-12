@@ -96,9 +96,12 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
                 orig = FASTX.sequence(String, r)
                 wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
 
-                rec_w, imp_w = Mycelia.improve_read_likelihood(
+                rec_w,
+                imp_w = Mycelia.improve_read_likelihood(
                     r, graph, k; graph_mode = mode, beam_width = typemax(Int))
-                rec_win, imp_win, ndec, ndiv = Mycelia.improve_read_likelihood_windowed_detail(
+                rec_win, imp_win,
+                ndec,
+                ndiv = Mycelia.improve_read_likelihood_windowed_detail(
                     r, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
 
                 sw = FASTX.sequence(String, rec_w)
@@ -155,9 +158,9 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
                     r, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
             end
             n = length(fx.err_reads)
-            @info "windowed-decode per-hard-read time" readlen = length(FASTX.sequence(probe)) whole_per_read_ms = round(
-                t_whole / n * 1000, digits = 1) windowed_per_read_ms = round(
-                t_win / n * 1000, digits = 1) speedup = round(t_whole / t_win, digits = 2)
+            @info "windowed-decode per-hard-read time" readlen=length(FASTX.sequence(probe)) whole_per_read_ms=round(
+                t_whole/n*1000, digits = 1) windowed_per_read_ms=round(
+                t_win/n*1000, digits = 1) speedup=round(t_whole/t_win, digits = 2)
             # Bounding a ~3 kb read's decode to its <=500 bp hard windows is a large,
             # robust margin (~4-5x here); assert strict improvement.
             Test.@test t_win < t_whole
@@ -170,7 +173,8 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
         clean_probe = FASTX.FASTQ.Record(
             "clean_probe", fx.ref[100:(100 + 199)], String(fill('I', 200)))
         Test.@test Mycelia.should_decode_read(clean_probe, k, hard) == false
-        rec, improved = Mycelia.improve_read_likelihood_windowed(
+        rec,
+        improved = Mycelia.improve_read_likelihood_windowed(
             clean_probe, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
         Test.@test improved == false
         Test.@test FASTX.sequence(String, rec) == fx.ref[100:(100 + 199)]
@@ -187,5 +191,69 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
         Test.@test res.assembly_stats["hard_window"] == true
         skip = res.assembly_stats["skip_fraction"]
         Test.@test 0.0 < skip <= 1.0
+    end
+end
+
+# Composition plumbing for the INDEL pair-HMM through the windowed decode (td-jt7r).
+# The windowed decode now threads `indel_params` into each per-window sub-read decode
+# (so a hard window is corrected by the indel kernel, not substitution-only) and the
+# splice is generalized to a length-changing (indel) correction. This testset asserts
+# the PLUMBING is correct and oracle-preserving; it does NOT assert an end-to-end
+# nanopore correction WIN — that is gated on staging the (dense-graph-expensive) indel
+# decode to sparse rungs, tracked separately under td-jt7r.
+Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
+    R = Mycelia.Rhizomorph
+    k = 13
+    mode = :doublestrand
+    fx = _wd_long_read_fixture()
+    graph = R.build_qualmer_graph(fx.reads, k; mode = mode)
+    hard = Mycelia._hard_vertex_set(graph, k)
+    Test.@test !isempty(hard)
+
+    profile = Mycelia.indel_error_profile(:nanopore)
+    ip = Mycelia.IndelDecodeParams(
+        profile.base_error_rate, profile.insertion_fraction, profile.deletion_fraction,
+        profile.insertion_extend_probability, profile.deletion_extend_probability,
+        3, 3, 16)
+
+    Logging.with_logger(Logging.NullLogger()) do
+        for r in fx.err_reads
+            # (1) ORACLE: passing indel_params=nothing is byte-identical to the default
+            # (no-kwarg) windowed decode — the substitution path is untouched.
+            rec_def, imp_def,
+            ndec_def,
+            ndiv_def = Mycelia.improve_read_likelihood_windowed_detail(
+                r, graph, k, hard; graph_mode = mode, beam_width = 64)
+            rec_nil, imp_nil,
+            ndec_nil,
+            ndiv_nil = Mycelia.improve_read_likelihood_windowed_detail(
+                r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = nothing)
+            Test.@test FASTX.sequence(String, rec_nil) == FASTX.sequence(String, rec_def)
+            Test.@test FASTX.quality(rec_nil) == FASTX.quality(rec_def)
+            Test.@test (imp_nil, ndec_nil, ndiv_nil) == (imp_def, ndec_def, ndiv_def)
+
+            # (2) INDEL PLUMBING: the indel path reaches the kernel and returns a
+            # WELL-FORMED record (sequence and quality lengths agree, valid DNA), and
+            # the splice does not corrupt the read. The corrected length MAY differ
+            # from the input (a spliced indel correction) — that is allowed, unlike the
+            # substitution path which is length-preserving.
+            rec_ind, imp_ind,
+            ndec_ind,
+            ndiv_ind = Mycelia.improve_read_likelihood_windowed_detail(
+                r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = ip)
+            sind = FASTX.sequence(String, rec_ind)
+            Test.@test length(sind) == length(FASTX.quality(rec_ind))
+            Test.@test all(c -> c in ('A', 'C', 'G', 'T'), sind)
+            Test.@test ndec_ind >= 1                       # at least one hard window decoded
+
+            # (3) LOCALITY: the solid prefix before the first hard window is copied
+            # verbatim from the original read (windowing only rewrites hard windows).
+            wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
+            if !isempty(wins)
+                lo1 = first(first(wins))
+                orig = FASTX.sequence(String, r)
+                Test.@test sind[1:(lo1 - 1)] == orig[1:(lo1 - 1)]
+            end
+        end
     end
 end
