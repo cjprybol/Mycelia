@@ -12,8 +12,14 @@
 #       (gcd(k,period)>1) robustly dips below the coprime-k envelope (interpolated
 #       between coprime k below & above) AND below the lower-size coprime k, across
 #       all classes incl. the immune-VDJ and SINE internal-period wildcards; and
-#   (4) the HARNESS-SENSITIVITY collision control fires — the metric CAN detect an
-#       aliasing deficit, so the factor-sharing null is real.
+#   (4) the HARNESS-SENSITIVITY collision control fires (RECOVERY detector) — the
+#       metric CAN detect an aliasing deficit, so the factor-sharing null is real;
+#       and
+#   (5) an INJECTED positive control fires on the SAME resolution/gcd detector that
+#       produces the headline null — a stipulated resolution dip at a factor-sharing
+#       k trips robust_striking, proving that detector is sensitive on the
+#       gcd/factor-sharing axis (not just k-size) and so the real-data null is a true
+#       negative, not detector blindness.
 
 import DataFrames
 import Test
@@ -112,6 +118,26 @@ Test.@testset "rhizomorph prime(coprime)-vs-composite(factor-sharing) degree+cla
         Test.@test penalty_9 >= COLLISION_MIN_GAP
         Test.@test (penalty_9 - penalty_11) >= COLLISION_MIN_GAP
         Test.@test artifacts.collision_control_fires
+    end
+
+    Test.@testset "injected resolution/gcd positive control fires (detector not blind)" begin
+        # SAME-detector positive control for the RESOLUTION/gcd axis: the collision
+        # control above proves the RECOVERY detector is sensitive, but the headline
+        # null comes from the RESOLUTION metric + factor-sharing penalty guard, which
+        # saturates on the collision fixtures and so is never exercised on a positive
+        # by the real data. No REAL assembled factor-alignment case can dip the
+        # resolution metric (p-cycle argument), so we inject a stipulated dip and feed
+        # it through the identical detector logic; it MUST fire.
+        control = injected_resolution_gcd_positive_control()
+        Test.@test control.fires
+        Test.@test any(control.table.robust_striking)
+        fired = control.table[control.table.robust_striking, :]
+        Test.@test all(fired.composite_gcd .> 1)                     # the dip is at a factor-sharing k
+        Test.@test all(fired.factor_sharing_penalty .>= STRIKING_PRIME_ADVANTAGE)
+        Test.@test all(fired.dips_below_lower_coprime)               # a genuine dip, not an envelope artifact
+        # The real benchmark, through the same detector, fires on NO cell -> the null
+        # is a true negative, not detector blindness.
+        Test.@test artifacts.striking_prime_regime_found == false
     end
 
     # Report the largest factor-sharing penalty and the verdict (informational).

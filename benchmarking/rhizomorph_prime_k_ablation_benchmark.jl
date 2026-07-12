@@ -45,18 +45,40 @@
 #   - Across periods, degrees, and repeat classes, a factor-sharing composite k
 #     recovers within seed NOISE of its size-matched coprime prime k. Apparent
 #     dips at prime-power composites (k=9=3^2, 27=3^3, 25=5^2) seen at low seed
-#     count DISSOLVE with more seeds (std ~0.1-0.19); no isolated deltas approach a
-#     STRIKING margin. The dominant axis is k-SIZE (resolution rises with k) and,
-#     for interspersed elements, k-vs-element-length spanning.
+#     count DISSOLVE over the 6 seeds (per-cell resolution std reaches ~0.4; the
+#     summed per-arm seed-noise guard reaches ~0.6-0.7); the largest surviving
+#     factor-sharing penalty is 0.190, still BELOW the 0.20 striking margin, so no
+#     isolated delta clears the bar. The dominant axis is k-SIZE (resolution rises
+#     with k) and, for interspersed elements, k-vs-element-length spanning.
 #   - This matches the math: a period-p tandem yields exactly p distinct k-mers (a
 #     p-cycle) at ANY k, so its copy number is unresolvable independent of k's
 #     factorization; de-novo cleaning removes error k-mers regardless of gcd(k,p).
 #
-# HARNESS SENSITIVITY (so the null is real, not blindness). A separate engineered
-# 9 bp shared-repeat COLLISION control (composition-matched: gene2 uses TGAx3, a
-# permutation of ATGx3 with identical GC and no shared 9-mer) DOES fire: a large
-# w-mer-recovery deficit at k=9 that collapses once k spans the repeat. This is a
-# k-vs-repeat-length (collision/spanning) effect, NOT primality.
+# HARNESS SENSITIVITY (so the null is real, not blindness). There are TWO detectors,
+# and BOTH are shown sensitive.
+#   (i) RECOVERY (w-mer) detector: a separate engineered 9 bp shared-repeat COLLISION
+#       control (composition-matched: gene2 uses TGAx3, a permutation of ATGx3 with
+#       identical GC and no shared 9-mer) DOES fire — a large w-mer-recovery deficit
+#       (penalty ~0.29 at k=9 collapsing to ~-0.02 at k=11 once k spans the repeat).
+#       This is a k-vs-repeat-length (collision/spanning) effect, NOT primality.
+#   (ii) RESOLUTION/gcd detector: the HEADLINE null is produced by a DIFFERENT
+#       detector — the resolution metric + coprime-interpolation envelope + the
+#       factor-sharing-penalty guard (robust_striking). On the collision fixtures the
+#       resolution metric SATURATES, so this detector is never exercised on a positive
+#       by the real data. Crucially, the p-cycle argument means NO real assembled
+#       factor-alignment case CAN dip the resolution metric — a period-p tandem is a
+#       p-cycle (exactly p distinct k-mers) at ANY k, gcd-independent — so a
+#       BIOLOGICAL positive on the gcd/factor-sharing axis cannot exist to exhibit.
+#       We therefore add an INJECTED positive control
+#       (`injected_resolution_gcd_positive_control`): it STIPULATES a resolution dip
+#       at a factor-sharing k (k=15, gcd 3) below its coprime neighbours (k=13,17)
+#       with low per-arm noise and feeds it through the IDENTICAL detector logic. It
+#       fires (robust_striking = true), proving the resolution/gcd detector is
+#       sensitive to a factor-alignment deficit and not merely to k-size. The dip is
+#       stipulated, not assembled. The real-data null therefore rests on (a) the
+#       analytic p-cycle structure, (b) the recovery-metric collision control, and
+#       (c) this injected resolution/gcd detector-sensitivity control; the largest
+#       real factor-sharing penalty observed is 0.190, below the 0.20 margin.
 #
 # VERDICT: there is NO biological highly-repetitive local regime, across the swept
 # degree of repetition and repeat architectures, where a prime k strikingly beats
@@ -119,12 +141,18 @@ const ABLATION_RECOVERY_W = 15
 const ABLATION_SIZE_THRESHOLD_RECOVERY = 0.90
 # A coprime prime k "strikingly" beats a size-matched factor-sharing composite only
 # if it out-resolves it by at least this margin AND the gap exceeds the summed
-# per-arm seed noise (a robustness guard). The resolution metric is noisy
-# (std ~0.1-0.18): at low seed count a factor-sharing composite can appear ~0.25
-# below a coprime prime purely by chance (e.g. k=27=3^3 for period 3), but with
-# more seeds it sits WITHIN its coprime neighbours (k=25 coprime is often lower).
-# The noise guard prevents such small-sample flukes from being reported as a real
-# primality benefit; observed, NO cell clears both bars.
+# per-arm seed noise (a robustness guard). The resolution metric is noisy over the
+# 6 seeds — per-cell resolution std reaches ~0.4 and the summed per-arm seed-noise
+# guard reaches ~0.6-0.7: at low seed count a factor-sharing composite can appear
+# ~0.25 below a coprime prime purely by chance (e.g. k=27=3^3 for period 3), but
+# over the 6 seeds it sits WITHIN its coprime neighbours (k=25 coprime is often
+# lower). The noise guard prevents such small-sample flukes from being reported as
+# a real primality benefit; observed, NO cell clears all bars. The LARGEST observed
+# factor-sharing penalty is 0.190 (SINE k=15) — below this 0.20 margin — and that
+# near-miss is TRIPLY rejected: below the margin AND below its ~0.23 seed noise AND
+# its resolution (0.293) EXCEEDS the nearest lower-size coprime k (k=13, ~0.25), so
+# it is not even a dip. The negative therefore BOUNDS any factor-sharing penalty
+# below the 0.20 margin; it does not exclude an arbitrarily small effect.
 const STRIKING_PRIME_ADVANTAGE = 0.20
 # Harness-sensitivity collision control bar (w-mer-recovery penalty).
 const COLLISION_MIN_GAP = 0.10
@@ -263,8 +291,9 @@ function run_prime_k_ablation_benchmark(
             "seeds" => collect(ABLATION_SEEDS),
             "observed_result" => "no robust prime-k advantage isolated from k-size, even with the non-saturated resolution metric and hard/biological regimes; factor-sharing composite k recover within seed noise of size-matched coprime primes; prime-power dips dissolve with more seeds.",
             "harness_sensitivity" => "engineered 9 bp shared-repeat collision control (composition-matched) fires (large k=9 w-mer deficit collapsing once k spans the repeat) -> the metric detects aliasing when it exists; a spanning effect, not primality.",
+            "resolution_gcd_detector_positive_control" => "the RESOLUTION/gcd detector (resolution + coprime-envelope + factor-sharing penalty guard) is a DIFFERENT detector from the recovery collision control and saturates on the collision fixtures, so it is never exercised on a positive by the real data. NO real assembled factor-alignment case can dip the resolution metric because a period-p tandem is a p-cycle (p distinct k-mers) at ANY k, gcd-independent, so a biological positive on the gcd axis cannot exist. An INJECTED synthetic positive control (injected_resolution_gcd_positive_control) stipulates a resolution dip at a factor-sharing k and, through the identical detector logic, fires robust_striking -> the detector is sensitive on the gcd axis, not blind. The null rests on the p-cycle structure + the recovery collision control + this injected detector-sensitivity control.",
             "reverse_complement_odd_k_note" => "the ladder samples ODD k because an even-length DNA/RNA k-mer can equal its own reverse complement (a palindrome), collapsing RC pairs / creating self-loops; odd k forbids palindromic k-mers. Among odd k, primes additionally avoid factor-alignment with odd periods. Even k acceptable for amino-acid / natural-language alphabets (no reverse complement); DNA fixtures stay on odd k.",
-            "known_limitations" => "recovery unions both strands though assembly is SingleStrand (harmless); resolution metric is noisy (std ~0.1) hence 4 seeds and a conservative STRIKING margin of $(STRIKING_PRIME_ADVANTAGE).",
+            "known_limitations" => "recovery unions both strands though assembly is SingleStrand (harmless); the resolution metric is noisy (per-cell std reaches ~0.4 over the 6 seeds; summed per-arm seed-noise guard reaches ~0.6-0.7) hence 6 seeds and a conservative STRIKING margin of $(STRIKING_PRIME_ADVANTAGE); the largest observed factor-sharing penalty is 0.190 (< the 0.20 margin), so the negative BOUNDS a factor-sharing penalty below 0.20 rather than excluding an arbitrarily small effect.",
             "striking_prime_advantage_margin" => STRIKING_PRIME_ADVANTAGE
         ),
         table_context_columns = Dict(
@@ -904,6 +933,47 @@ end
 function _striking_prime_regime_found(factor_sharing::DataFrames.DataFrame)::Bool
     DataFrames.nrow(factor_sharing) == 0 && return false
     return any(factor_sharing.robust_striking)
+end
+
+# INJECTED positive control for the RESOLUTION/gcd detector. The review flagged that
+# this detector — resolution metric + coprime-interpolation envelope + the
+# factor-sharing-penalty guard — is NEVER shown to fire on a positive (it saturates
+# on the collision fixtures, so it is only ever proven sensitive to k-SIZE, not to
+# the gcd/factor-sharing axis). The p-cycle argument means no REAL assembled
+# factor-alignment case can dip the resolution metric (a period-p tandem is a
+# p-cycle at ANY k, gcd-independent), so a biological positive cannot exist to
+# exhibit. To prove the detector is nonetheless SENSITIVE on the gcd axis, we inject
+# a synthetic period-3 fixture whose resolution profile is STIPULATED so the
+# factor-sharing k=15 (gcd 3) sits well below its coprime neighbours (k=13, k=17)
+# with near-zero per-arm noise. Fed through the IDENTICAL `_factor_sharing_table` /
+# robust_striking logic, this MUST fire — confirming that had any real
+# factor-alignment deficit existed, the detector would have caught it. The dip is
+# stipulated, not assembled; nothing here enters `ablation_fixtures()` or the
+# committed benchmark tables.
+function injected_resolution_gcd_positive_control()::NamedTuple
+    period = 3
+    fixture = AblationFixture(
+        "injected_resolution_gcd_positive",
+        "Injected resolution/gcd positive control (stipulated dip at factor-sharing k=15)",
+        "tandem", "injected_resolution_gcd_positive", period, 1.0, 1, 0.0,
+        ["INJECTED"],
+        "synthetic gcd-axis resolution dip; proves the resolution detector is not blind")
+    # Coprime baseline rises gently with k-size; the factor-sharing k=15 alone is
+    # slammed to a low resolution with near-zero noise (a clean, isolated dip).
+    resolution_at(k) = k == 15 ? 0.10 : clamp(0.50 + 0.01 * (k - 11), 0.0, 1.0)
+    rows = NamedTuple[]
+    for k in ABLATION_K
+        push!(rows,
+            (
+                dataset_id = fixture.dataset_id,
+                k = k,
+                largest_correct_contig_fraction = resolution_at(k),
+                resolution_std = 0.01
+            ))
+    end
+    per_run = DataFrames.DataFrame(rows)
+    table = _factor_sharing_table(per_run, [fixture])
+    return (fixture = fixture, table = table, fires = _striking_prime_regime_found(table))
 end
 
 # One row per fixture: evidence that the RESOLUTION metric sits BELOW its ceiling

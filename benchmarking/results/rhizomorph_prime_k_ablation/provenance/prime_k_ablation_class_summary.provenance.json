@@ -55,9 +55,9 @@
     "tandem_period6",
     "tandem_period7"
   ],
-  "generated_at": "2026-07-12T13:51:56.056Z",
+  "generated_at": "2026-07-12T14:35:39.699Z",
   "git": {
-    "commit": "c72118463d9121ff66cdc9b3ca9ba28244452ffa",
+    "commit": "b4eda53b4a1b05b2af0b28d09bac8abf2dfd5927",
     "is_dirty": true
   },
   "metadata": {
@@ -78,7 +78,7 @@
     "degree_of_repetition_axes": "repeat content fraction; copy number; per-copy divergence",
     "factor_sharing_definition": "gcd(k, period) > 1 (superset of divisibility p|k); coprime = gcd == 1",
     "harness_sensitivity": "engineered 9 bp shared-repeat collision control (composition-matched) fires (large k=9 w-mer deficit collapsing once k spans the repeat) -> the metric detects aliasing when it exists; a spanning effect, not primality.",
-    "known_limitations": "recovery unions both strands though assembly is SingleStrand (harmless); resolution metric is noisy (std ~0.1) hence 4 seeds and a conservative STRIKING margin of 0.2.",
+    "known_limitations": "recovery unions both strands though assembly is SingleStrand (harmless); the resolution metric is noisy (per-cell std reaches ~0.4 over the 6 seeds; summed per-arm seed-noise guard reaches ~0.6-0.7) hence 6 seeds and a conservative STRIKING margin of 0.2; the largest observed factor-sharing penalty is 0.190 (< the 0.20 margin), so the negative BOUNDS a factor-sharing penalty below 0.20 rather than excluding an arbitrarily small effect.",
     "metrics": "PRIMARY resolution = largest correct contig / reference length (NGA50-style, copy-number/contiguity-sensitive, NOT saturated); SECONDARY w-mer recovery (fraction of reference 15-mers present, saturates); plus contig count",
     "observed_result": "no robust prime-k advantage isolated from k-size, even with the non-saturated resolution metric and hard/biological regimes; factor-sharing composite k recover within seed noise of size-matched coprime primes; prime-power dips dissolve with more seeds.",
     "periods": [
@@ -102,6 +102,7 @@
     "read_error_rate": 0.02,
     "read_length": 45,
     "regime": "de-novo assembly from error-containing reads; no endpoint anchoring",
+    "resolution_gcd_detector_positive_control": "the RESOLUTION/gcd detector (resolution + coprime-envelope + factor-sharing penalty guard) is a DIFFERENT detector from the recovery collision control and saturates on the collision fixtures, so it is never exercised on a positive by the real data. NO real assembled factor-alignment case can dip the resolution metric because a period-p tandem is a p-cycle (p distinct k-mers) at ANY k, gcd-independent, so a biological positive on the gcd axis cannot exist. An INJECTED synthetic positive control (injected_resolution_gcd_positive_control) stipulates a resolution dip at a factor-sharing k and, through the identical detector logic, fires robust_striking -> the detector is sensitive on the gcd axis, not blind. The null rests on the p-cycle structure + the recovery collision control + this injected detector-sensitivity control.",
     "reverse_complement_odd_k_note": "the ladder samples ODD k because an even-length DNA/RNA k-mer can equal its own reverse complement (a palindrome), collapsing RC pairs / creating self-loops; odd k forbids palindromic k-mers. Among odd k, primes additionally avoid factor-alignment with odd periods. Even k acceptable for amino-acid / natural-language alphabets (no reverse complement); DNA fixtures stay on odd k.",
     "seeds": [
       1,
