@@ -5,11 +5,21 @@
     "benchmark_scale",
     "benchmark_dataset_ids",
     "benchmark_git_commit",
-    "k",
-    "k_class",
-    "shared_recovery",
-    "distinct_recovery",
-    "collision_penalty"
+    "dataset_id",
+    "category",
+    "repeat_class",
+    "period",
+    "content_fraction",
+    "copy_number",
+    "divergence",
+    "reference_length",
+    "factor_sharing_tested",
+    "min_resolution",
+    "max_resolution",
+    "resolution_at_max_k",
+    "wmer_recovery_at_max_k",
+    "contig_count_at_max_k",
+    "below_resolution_ceiling"
   ],
   "command_args": [
     "julia",
@@ -103,12 +113,12 @@
     ],
     "striking_prime_advantage_margin": 0.2
   },
-  "row_count": 2,
+  "row_count": 27,
   "run_id": "prime_k_ablation_denovo_degree_repeatclass_20260712",
   "scale": "local-smoke",
   "schema_version": 1,
-  "table_name": "prime_k_ablation_collision_control",
-  "table_path": "tables/prime_k_ablation_collision_control.csv",
+  "table_name": "prime_k_ablation_class_summary",
+  "table_path": "tables/prime_k_ablation_class_summary.csv",
   "tool_versions": {
     "Mycelia": "0.1.0",
     "julia": "1.10.10"

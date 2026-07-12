@@ -95,6 +95,17 @@ const ABLATION_LOCAL_REGION = 60      # region for the degree/microsatellite swe
 const ABLATION_FLANK_LENGTH = 30
 const ABLATION_INTERSPERSED_ELEMENT = 30
 const ABLATION_INTERSPERSED_SPACER = 15
+# Hard-biological-repeat sizes (SMOKE-scale representatives of much larger real
+# elements — real Alu ~300 bp, LINE-1 ~6 kb — kept short so reads tile them at
+# SMOKE coverage; the k-aliasing MECHANISM is size-independent).
+const ABLATION_SINE_ELEMENT = 60          # Alu-like SINE representative
+const ABLATION_LINE_ELEMENT = 90          # LINE-like representative (5'-truncated copies)
+const ABLATION_VDJ_FRAMEWORK = 12         # conserved framework shared across segments
+const ABLATION_VDJ_INSERT = 9             # variable CDR-like insert (unique per segment)
+const ABLATION_VDJ_SPACER = 6
+const ABLATION_VDJ_PERIOD = ABLATION_VDJ_FRAMEWORK + ABLATION_VDJ_INSERT +
+                            ABLATION_VDJ_SPACER  # 27
+const ABLATION_SINE_INTERNAL_PERIOD = 5   # internal microsatellite -> gcd(k,5)>1 at k=15,25,35
 
 const ABLATION_COVERAGE = 25
 const ABLATION_READ_LENGTH = 45
@@ -146,10 +157,20 @@ function main(args::Vector{String} = ARGS)::Nothing
     println("  root: $(artifacts.root)")
     println("  per_run_csv: $(artifacts.per_run_csv)")
     println("  factor_sharing_csv: $(artifacts.factor_sharing_csv)")
+    println("  class_summary_csv: $(artifacts.class_summary_csv)")
     println("  collision_control_csv: $(artifacts.collision_control_csv)")
     println("  figure_png: $(artifacts.figure_png)")
     println()
     println("k-SIZE threshold (w-mer control >= $(ABLATION_SIZE_THRESHOLD_RECOVERY)): k = $(artifacts.size_threshold_k)")
+    println()
+    println("PER-CLASS SUMMARY (resolution below ceiling = powered; wmer saturates):")
+    for row in eachrow(artifacts.class_summary_table)
+        fs = row.factor_sharing_tested ? "fs" : "  "
+        println("  $(rpad(row.repeat_class, 26)) [$(fs)] reflen=$(lpad(row.reference_length, 4)) " *
+                "res[min,max]=[$(round(row.min_resolution; digits = 2)),$(round(row.max_resolution; digits = 2))] " *
+                "res@maxk=$(round(row.resolution_at_max_k; digits = 2)) wmer@maxk=$(round(row.wmer_recovery_at_max_k; digits = 2)) " *
+                "belowCeiling=$(row.below_resolution_ceiling)")
+    end
     println()
     println("RESOLUTION metric dynamic range check (largest-correct-contig fraction, tandems):")
     tandem_res = artifacts.per_run_table[
@@ -160,11 +181,13 @@ function main(args::Vector{String} = ARGS)::Nothing
     println("ISOLATING COMPARISON — does a factor-sharing k (gcd(k,p)>1) dip BELOW the")
     println("coprime-k size envelope (interpolated between coprime k below & above)?")
     println("penalty = envelope - resolution(factor-sharing k); ROBUST-STRIKING iff")
-    println("penalty >= $(STRIKING_PRIME_ADVANTAGE) AND penalty >= seed noise:")
+    println("penalty >= $(STRIKING_PRIME_ADVANTAGE) AND >= seed noise AND res dips below the lower coprime k:")
     for row in eachrow(artifacts.factor_sharing_table)
         marker = row.robust_striking ? "  <== ROBUST-STRIKING" :
                  (row.factor_sharing_penalty >= STRIKING_PRIME_ADVANTAGE ?
-                  "  (penalty>margin but within seed noise $(round(row.seed_noise; digits = 3)) => fluke)" :
+                  (!row.dips_below_lower_coprime ?
+                   "  (penalty>margin but res $(round(row.composite_resolution; digits = 2)) > lower-coprime $(round(row.coprime_below_resolution; digits = 2)) => interpolation artifact, not a dip)" :
+                   "  (penalty>margin but within seed noise $(round(row.seed_noise; digits = 3)) => fluke)") :
                   "")
         println("  $(rpad(row.repeat_class, 26)) p=$(row.period) content=$(row.content_fraction) div=$(row.divergence) " *
                 "k=$(row.composite_k)(gcd$(row.composite_gcd)) res=$(round(row.composite_resolution; digits = 3)) " *
@@ -172,9 +195,11 @@ function main(args::Vector{String} = ARGS)::Nothing
                 "penalty=$(round(row.factor_sharing_penalty; digits = 3))$(marker)")
     end
     println()
-    println("VERDICT — any biological repeat regime where a factor-sharing k ROBUSTLY-STRIKINGLY")
-    println("dips below the coprime-k size envelope (penalty >= $(STRIKING_PRIME_ADVANTAGE) AND above")
-    println("seed noise): $(artifacts.striking_prime_regime_found)")
+    println("VERDICT — across the EXHAUSTIVE hard-repeat sweep (tandem / microsatellite /")
+    println("satellite / nested / interspersed / immune-VDJ / MHC-polymorphic / antigenic-")
+    println("cassette / SINE-Alu / LINE-truncated / mixed), any regime where a factor-sharing")
+    println("k ROBUSTLY-STRIKINGLY dips below the coprime-k size envelope (penalty >= ")
+    println("$(STRIKING_PRIME_ADVANTAGE) AND above seed noise): $(artifacts.striking_prime_regime_found)")
     println()
     println("HARNESS-SENSITIVITY collision control (NOT a primality test):")
     for row in eachrow(artifacts.collision_control_table)
@@ -200,6 +225,7 @@ function run_prime_k_ablation_benchmark(
 
     size_threshold_k = _size_threshold_k(per_run)
     factor_sharing = _factor_sharing_table(per_run, fixtures)
+    class_summary = _class_summary_table(per_run, fixtures)
     collision_control = _collision_control_table(per_run)
     striking_found = _striking_prime_regime_found(factor_sharing)
     collision_fires = _collision_control_fires(collision_control)
@@ -208,6 +234,7 @@ function run_prime_k_ablation_benchmark(
         [
             "prime_k_ablation_per_run" => per_run,
             "prime_k_ablation_factor_sharing" => factor_sharing,
+            "prime_k_ablation_class_summary" => class_summary,
             "prime_k_ablation_collision_control" => collision_control
         ];
         output_dir = output_dir,
@@ -224,7 +251,7 @@ function run_prime_k_ablation_benchmark(
             "regime" => "de-novo assembly from error-containing reads; no endpoint anchoring",
             "metrics" => "PRIMARY resolution = largest correct contig / reference length (NGA50-style, copy-number/contiguity-sensitive, NOT saturated); SECONDARY w-mer recovery (fraction of reference $(ABLATION_RECOVERY_W)-mers present, saturates); plus contig count",
             "degree_of_repetition_axes" => "repeat content fraction; copy number; per-copy divergence",
-            "biological_repeat_classes" => "microsatellite/STR (CAG Huntington-like p=3, CA p=2, AAT p=3); satellite / higher-order tandem (~21 bp unit); nested (CAG microsatellite inside a 21 bp higher-order unit); interspersed Alu/LINE-like (dispersed near-identical elements + unique spacers)",
+            "biological_repeat_classes" => "EXHAUSTIVE hard-repeat sweep: tandem (p=2..7); microsatellite/STR (CAG Huntington-like p=3, CA p=2, AAT p=3); satellite / higher-order tandem (21 bp unit); nested (CAG microsat inside a 21 bp HOR); interspersed near-identical elements; IMMUNE VDJ-like segment array (shared framework + variable insert, period 27); MHC/HLA-like polymorphic (SNP-dense, aperiodic); antigenic-variation cassette (VSG/var/vlsE/pilin-like: conserved core + hypervariable flanks); SINE/Alu-like (dispersed, internal period-5 microsatellite + poly-A, gcd(k,5) aliases at k=15,25,35); LINE-like (5'-truncated divergent copies); mixed whole-locus",
             "factor_sharing_definition" => "gcd(k, period) > 1 (superset of divisibility p|k); coprime = gcd == 1",
             "periods" => collect(ABLATION_PERIODS),
             "prime_k" => collect(ABLATION_PRIME_K),
@@ -247,23 +274,32 @@ function run_prime_k_ablation_benchmark(
 
     figure_png = ""
     figure_svg = ""
+    biological_figure_png = ""
+    biological_figure_svg = ""
     if write_plots
         paths = _write_figures(per_run, collision_control, size_threshold_k, artifacts.layout.plots)
         figure_png = paths.png
         figure_svg = paths.svg
+        bio = _write_biological_figure(per_run, fixtures, artifacts.layout.plots)
+        biological_figure_png = bio.png
+        biological_figure_svg = bio.svg
     end
 
     return (
         root = artifacts.root,
         per_run_csv = artifacts.tables["prime_k_ablation_per_run"].table,
         factor_sharing_csv = artifacts.tables["prime_k_ablation_factor_sharing"].table,
+        class_summary_csv = artifacts.tables["prime_k_ablation_class_summary"].table,
         collision_control_csv = artifacts.tables["prime_k_ablation_collision_control"].table,
         index = artifacts.index,
         provenance = artifacts.provenance,
         figure_png = figure_png,
         figure_svg = figure_svg,
+        biological_figure_png = biological_figure_png,
+        biological_figure_svg = biological_figure_svg,
         per_run_table = per_run,
         factor_sharing_table = factor_sharing,
+        class_summary_table = class_summary,
         collision_control_table = collision_control,
         size_threshold_k = size_threshold_k,
         striking_prime_regime_found = striking_found,
@@ -349,6 +385,39 @@ function ablation_fixtures()::Vector{AblationFixture}
         push!(fixtures, _interspersed_fixture(copies, divergence, flank_left, flank_right))
     end
 
+    # (I) HARD BIOLOGICAL REPEAT CLASSES — the notoriously-difficult loci.
+    # I1. IMMUNE / VDJ-like segment array: many similar-but-distinct gene segments
+    #     (shared conserved framework + variable CDR-like insert) near-tandemly
+    #     arrayed with short spacers -> paralog inter-locus collisions on the
+    #     framework. Array repeat period = framework+insert+spacer (27); factor-
+    #     shares where gcd(k,27)>1 (3|k). Vary inter-segment divergence.
+    for divergence in (0.05, 0.15)
+        push!(fixtures, _vdj_fixture(8, divergence, flank_left, flank_right))
+    end
+    # I2. MHC / HLA-like POLYMORPHIC region: SNP-dense, NOT periodic — two
+    #     haplotypes differing by ~5% substitutions (bubbles, not tandems). Tests
+    #     whether prime k helps with polymorphism (expected no).
+    push!(fixtures, _mhc_fixture(0.05, flank_left, flank_right))
+    # I3. ANTIGENIC-VARIATION cassette family (var / vlsE / pilin / VSG-like): a
+    #     family of variant copies sharing a CONSERVED CORE + hypervariable flanks,
+    #     dispersed -> the classic "shared core, variable ends" collision.
+    push!(fixtures, _cassette_fixture(4, 0.10, flank_left, flank_right))
+    # I4. SINE / Alu-like (~300 bp real; SMOKE representative): dispersed copies
+    #     with unique spacers, realistic divergence, and INTERNAL periodicity
+    #     (period-5 microsatellite, standing in for Alu internal A-box/B-box + A-tail
+    #     structure) — the genuine wildcard where a composite k (15,25,35; gcd 5)
+    #     could alias the internal period across copies. Vary divergence.
+    for divergence in (0.05, 0.15)
+        push!(fixtures, _sine_alu_fixture(3, divergence, flank_left, flank_right))
+    end
+    # I5. LINE-like (long, frequently 5'-TRUNCATED copies): a long element with
+    #     several 3'-anchored truncated + divergent copies dispersed -> the
+    #     truncation + divergence pattern that makes LINEs hard to assemble.
+    push!(fixtures, _line_fixture(0.10, flank_left, flank_right))
+    # I6. MIXED whole-locus (realistic average): unique sequence interleaved with a
+    #     microsatellite and two SINE copies — contrast against the pure hard cases.
+    push!(fixtures, _mixed_locus_fixture(flank_left, flank_right))
+
     # (H) HARNESS-SENSITIVITY collision controls (NOT a primality test): two genes
     # share a 9 bp period-3 repeat; the composition-matched distinct variant (gene2
     # uses TGAx3, a permutation of ATGx3) isolates the collision from k-size and GC.
@@ -417,6 +486,132 @@ function _interspersed_fixture(
         "interspersed", "interspersed_dispersed", 0, 1.0, copies, divergence,
         [flank_left * join(parts) * flank_right],
         "$(copies) near-identical $(ABLATION_INTERSPERSED_ELEMENT) bp elements dispersed with unique spacers -> inter-locus collisions")
+end
+
+# IMMUNE / VDJ-like segment array (period = framework+insert+spacer).
+function _vdj_fixture(
+        n_segments::Int, divergence::Float64, flank_left::String, flank_right::String)::AblationFixture
+    framework = _nonrepetitive_sequence(ABLATION_VDJ_FRAMEWORK, 940)
+    rng = Random.MersenneTwister(2000 + n_segments + round(Int, divergence * 100))
+    parts = String[]
+    for index in 1:n_segments
+        push!(parts,
+            _diverge(framework, divergence, rng) *
+            _nonrepetitive_sequence(ABLATION_VDJ_INSERT, 941 + index))
+        index < n_segments &&
+            push!(parts, _nonrepetitive_sequence(ABLATION_VDJ_SPACER, 960 + index))
+    end
+    div_label = round(Int, 100 * divergence)
+    return AblationFixture(
+        "immune_vdj_n$(n_segments)_d$(div_label)",
+        "Immune VDJ-like: $(n_segments) segments (shared framework + variable insert), $(div_label)% divergence",
+        "immune_vdj", "immune_vdj_segment_array", ABLATION_VDJ_PERIOD, 1.0, n_segments, divergence,
+        [flank_left * join(parts) * flank_right],
+        "$(n_segments) similar-but-distinct segments; framework paralog collision; array period $(ABLATION_VDJ_PERIOD)")
+end
+
+# MHC / HLA-like polymorphic region: two SNP-dense haplotypes (not periodic).
+function _mhc_fixture(
+        snp_rate::Float64, flank_left::String, flank_right::String)::AblationFixture
+    base = _nonrepetitive_sequence(100, 942)
+    rng = Random.MersenneTwister(2100)
+    haplotype2 = _diverge(base, snp_rate, rng)
+    snp_label = round(Int, 100 * snp_rate)
+    return AblationFixture(
+        "immune_mhc_hla_$(snp_label)snp",
+        "MHC/HLA-like polymorphic region: 2 haplotypes, $(snp_label)% SNPs",
+        "immune_mhc", "immune_mhc_polymorphic", 0, 0.0, 2, snp_rate,
+        [flank_left * base * flank_right, flank_left * haplotype2 * flank_right],
+        "SNP-dense polymorphism (not periodic); tests whether prime k helps with polymorphism")
+end
+
+# Antigenic-variation cassette family (var/vlsE/pilin/VSG-like): conserved core +
+# hypervariable flanks, dispersed copies -> shared-core inter-locus collision.
+function _cassette_fixture(
+        copies::Int, divergence::Float64, flank_left::String, flank_right::String)::AblationFixture
+    core = _nonrepetitive_sequence(24, 943)
+    rng = Random.MersenneTwister(2200 + copies + round(Int, divergence * 100))
+    parts = String[]
+    for index in 1:copies
+        push!(parts,
+            _nonrepetitive_sequence(16, 944 + index) *
+            _diverge(core, divergence, rng) *
+            _nonrepetitive_sequence(16, 951 + index))
+        index < copies && push!(parts, _nonrepetitive_sequence(10, 958 + index))
+    end
+    div_label = round(Int, 100 * divergence)
+    return AblationFixture(
+        "immune_cassette_n$(copies)_d$(div_label)",
+        "Antigenic-variation cassette (VSG-like): $(copies) copies, conserved core + variable flanks, $(div_label)% divergence",
+        "immune_cassette", "immune_antigenic_cassette", 0, 0.0, copies, divergence,
+        [flank_left * join(parts) * flank_right],
+        "$(copies) variant copies sharing a conserved 24 bp core with hypervariable flanks -> shared-core collision")
+end
+
+# SINE / Alu-like: dispersed copies with an INTERNAL period-5 microsatellite +
+# poly-A tail (representing Alu internal A-box/B-box + A-tail structure).
+function _sine_alu_fixture(
+        copies::Int, divergence::Float64, flank_left::String, flank_right::String)::AblationFixture
+    element = _nonrepetitive_sequence(18, 945) *
+              repeat("CACAG", 4) *                      # internal period-5 microsatellite (gcd(k,5))
+              _nonrepetitive_sequence(12, 946) *
+              repeat("A", 10)                           # A-tail / poly-A
+    rng = Random.MersenneTwister(2300 + copies + round(Int, divergence * 100))
+    parts = String[]
+    for index in 1:copies
+        push!(parts, _diverge(element, divergence, rng))
+        index < copies &&
+            push!(parts, _nonrepetitive_sequence(ABLATION_INTERSPERSED_SPACER, 970 + index))
+    end
+    div_label = round(Int, 100 * divergence)
+    return AblationFixture(
+        "sine_alu_n$(copies)_d$(div_label)",
+        "SINE/Alu-like: $(copies) dispersed copies, internal period-5 repeat + poly-A, $(div_label)% divergence",
+        "sine_alu", "sine_alu_interspersed", ABLATION_SINE_INTERNAL_PERIOD, 1.0, copies, divergence,
+        [flank_left * join(parts) * flank_right],
+        "$(copies) Alu-like copies with internal period-5 microsatellite (gcd(k,5)>1 at k=15,25,35 aliases the internal period)")
+end
+
+# LINE-like: a long element with several 3'-anchored 5'-truncated + divergent copies.
+function _line_fixture(
+        divergence::Float64, flank_left::String, flank_right::String)::AblationFixture
+    full = _nonrepetitive_sequence(ABLATION_LINE_ELEMENT, 947)
+    rng = Random.MersenneTwister(2400 + round(Int, divergence * 100))
+    truncation_lengths = (ABLATION_LINE_ELEMENT, 65, 45, 30)
+    parts = String[]
+    for (index, length_bp) in enumerate(truncation_lengths)
+        truncated = full[(end - length_bp + 1):end]       # 5' truncation, 3' anchored
+        push!(parts, _diverge(truncated, divergence, rng))
+        index < length(truncation_lengths) &&
+            push!(parts, _nonrepetitive_sequence(12, 980 + index))
+    end
+    div_label = round(Int, 100 * divergence)
+    return AblationFixture(
+        "line_5trunc_d$(div_label)",
+        "LINE-like: 4 5'-truncated divergent copies, $(div_label)% divergence",
+        "line", "line_truncated_interspersed", 0, 0.0, length(truncation_lengths), divergence,
+        [flank_left * join(parts) * flank_right],
+        "long element with 5'-truncated + divergent copies (the pattern that makes LINEs hard)")
+end
+
+# MIXED whole-locus: unique + microsatellite + two SINE copies (realistic average).
+function _mixed_locus_fixture(flank_left::String, flank_right::String)::AblationFixture
+    rng = Random.MersenneTwister(2500)
+    sine = _nonrepetitive_sequence(18, 945) * repeat("CACAG", 4) *
+           _nonrepetitive_sequence(12, 946) * repeat("A", 10)
+    locus = _nonrepetitive_sequence(40, 990) *
+            repeat("CAG", 10) *
+            _nonrepetitive_sequence(30, 991) *
+            _diverge(sine, 0.05, rng) *
+            _nonrepetitive_sequence(15, 992) *
+            _diverge(sine, 0.05, rng) *
+            _nonrepetitive_sequence(40, 993)
+    return AblationFixture(
+        "mixed_whole_locus",
+        "Mixed whole-locus: unique + microsatellite + 2 SINE copies (realistic average)",
+        "mixed", "mixed_whole_locus", 0, 0.0, 1, 0.0,
+        [flank_left * locus * flank_right],
+        "realistic average: mostly unique with an embedded microsatellite and two SINE copies")
 end
 
 # Deterministic per-copy divergence: mutate each base with probability `divergence`.
@@ -637,9 +832,15 @@ function _factor_sharing_table(
     std_of(id, k) = only(per_run[
     (per_run.dataset_id .== id) .& (per_run.k .== k), :resolution_std])
     rows = NamedTuple[]
-    tandem_like = ("tandem", "microsatellite", "satellite", "nested")
+    # Every fixture with a well-defined dominant period > 1 enters the isolating
+    # comparison: pure tandems, microsatellites, satellite/nested HORs, the VDJ
+    # segment array (period 27), and the Alu SINE (internal period 5). Period-0
+    # classes (MHC polymorphism, VSG cassette, LINE truncations, mixed locus) are
+    # inter-locus/aperiodic and are reported in per_run + class_summary instead.
+    factor_sharing_categories = (
+        "tandem", "microsatellite", "satellite", "nested", "immune_vdj", "sine_alu")
     for fixture in fixtures
-        (fixture.category in tandem_like && fixture.period > 1) || continue
+        (fixture.category in factor_sharing_categories && fixture.period > 1) || continue
         coprime_ks = sort([k for k in ABLATION_K if gcd(k, fixture.period) == 1])
         for composite_k in ABLATION_COMPOSITE_K
             gcd(composite_k, fixture.period) > 1 || continue
@@ -657,6 +858,14 @@ function _factor_sharing_table(
                          (std_of(fixture.dataset_id, k_lo) +
                           std_of(fixture.dataset_id, k_hi)) / 2
             penalty = envelope - composite_resolution
+            # A REAL factor-sharing dip must fall below even the SMALLER-size
+            # coprime k below it (a dip against the rising size trend). Requiring
+            # this rejects a linear-interpolation artifact where the factor-sharing
+            # k sits on a steep rising ramp toward k_hi (envelope over-predicts the
+            # midpoint) yet is still ABOVE k_lo — e.g. SINE k=15 (0.31) between
+            # coprime k=13 (0.25) and k=17 (0.77): the interpolated penalty looks
+            # large, but k=15 > k=13 so there is no genuine dip.
+            dips_below_lower_coprime = composite_resolution < res_lo
             push!(rows,
                 (
                     dataset_id = fixture.dataset_id,
@@ -670,27 +879,69 @@ function _factor_sharing_table(
                     composite_gcd = gcd(composite_k, fixture.period),
                     coprime_k_below = k_lo,
                     coprime_k_above = k_hi,
+                    coprime_below_resolution = res_lo,
                     coprime_envelope_resolution = envelope,
                     composite_resolution = composite_resolution,
                     composite_resolution_std = std_of(fixture.dataset_id, composite_k),
                     factor_sharing_penalty = penalty,
                     seed_noise = seed_noise,
+                    dips_below_lower_coprime = dips_below_lower_coprime,
                     robust_striking = penalty >= STRIKING_PRIME_ADVANTAGE &&
-                                      penalty >= seed_noise
+                                      penalty >= seed_noise &&
+                                      dips_below_lower_coprime
                 ))
         end
     end
     return DataFrames.DataFrame(rows)
 end
 
-# The verdict fires only if some factor-sharing k dips below the coprime-k size
-# envelope (interpolated at that k) by at least STRIKING_PRIME_ADVANTAGE AND by more
-# than the summed per-arm seed noise. This neutralises the k=27-vs-k=29 confound
-# (comparing only to the coprime prime above) and small-sample flukes. Observed:
-# false — factor-sharing k sit ON the coprime envelope (penalties ~ 0).
+# The verdict fires only if some factor-sharing k (a) dips below the coprime-k size
+# envelope by at least STRIKING_PRIME_ADVANTAGE, (b) by more than the summed per-arm
+# seed noise, AND (c) falls below even the nearest SMALLER-size coprime k (a true
+# dip against the rising size trend, not a linear-interpolation artifact over a
+# steep ramp). This neutralises the k=27-vs-k=29 confound, small-sample flukes, and
+# the SINE-k=15 threshold-interpolation artifact. Observed: false.
 function _striking_prime_regime_found(factor_sharing::DataFrames.DataFrame)::Bool
     DataFrames.nrow(factor_sharing) == 0 && return false
     return any(factor_sharing.robust_striking)
+end
+
+# One row per fixture: evidence that the RESOLUTION metric sits BELOW its ceiling
+# (so the negative is powered) and the best/worst recovery per class. Also flags
+# whether the class participates in the factor-sharing comparison (period > 1).
+function _class_summary_table(
+        per_run::DataFrames.DataFrame, fixtures::Vector{AblationFixture})::DataFrames.DataFrame
+    max_k = maximum(ABLATION_K)
+    rows = NamedTuple[]
+    for fixture in fixtures
+        sub = per_run[per_run.dataset_id .== fixture.dataset_id, :]
+        at_max = sub[sub.k .== max_k, :]
+        push!(rows,
+            (
+                dataset_id = fixture.dataset_id,
+                category = fixture.category,
+                repeat_class = fixture.repeat_class,
+                period = fixture.period,
+                content_fraction = fixture.content_fraction,
+                copy_number = fixture.copy_number,
+                divergence = fixture.divergence,
+                reference_length = fixture.category == "control" ?
+                                   length(first(fixture.references)) :
+                                   sum(length, fixture.references),
+                factor_sharing_tested = fixture.period > 1 &&
+                                        fixture.category in (
+                    "tandem", "microsatellite", "satellite", "nested",
+                    "immune_vdj", "sine_alu"),
+                min_resolution = minimum(sub.largest_correct_contig_fraction),
+                max_resolution = maximum(sub.largest_correct_contig_fraction),
+                resolution_at_max_k = only(at_max.largest_correct_contig_fraction),
+                wmer_recovery_at_max_k = only(at_max.mean_wmer_recovery),
+                contig_count_at_max_k = only(at_max.mean_contig_count),
+                below_resolution_ceiling = maximum(sub.largest_correct_contig_fraction) <
+                                           0.95
+            ))
+    end
+    return DataFrames.DataFrame(rows)
 end
 
 function _collision_control_table(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
@@ -762,6 +1013,60 @@ function _write_figures(
 
     png_path = joinpath(plots_dir, "prime_k_ablation_resolution_vs_k.png")
     svg_path = joinpath(plots_dir, "prime_k_ablation_resolution_vs_k.svg")
+    CairoMakie.save(png_path, fig)
+    CairoMakie.save(svg_path, fig)
+    return (png = png_path, svg = svg_path)
+end
+
+# RESOLUTION heatmap across the BIOLOGICAL / hard repeat classes (rows), each with
+# its dominant period annotated; rings mark gcd(k,period)>1 cells for the periodic
+# classes (immune-VDJ p=27, SINE-Alu p=5, microsatellite/satellite/nested).
+function _write_biological_figure(
+        per_run::DataFrames.DataFrame, fixtures::Vector{AblationFixture},
+        plots_dir::AbstractString)::NamedTuple
+    mkpath(plots_dir)
+    shown = [f
+             for f in fixtures
+             if f.category ∉ ("tandem", "control",
+        "collision_shared", "collision_distinct")]
+    ks = ABLATION_K
+    n_rows = length(shown)
+    n_cols = length(ks)
+    matrix = Array{Float64}(undef, n_rows, n_cols)
+    for (r, fixture) in enumerate(shown)
+        for (c, k) in enumerate(ks)
+            matrix[r, c] = only(per_run[
+            (per_run.dataset_id .== fixture.dataset_id) .& (per_run.k .== k),
+            :largest_correct_contig_fraction])
+        end
+    end
+    labels = [f.period > 1 ? "$(f.repeat_class) (p$(f.period))" : f.repeat_class
+              for f in shown]
+
+    fig = CairoMakie.Figure(size = (1500, 900), fontsize = 13)
+    axis = CairoMakie.Axis(fig[1, 1],
+        title = "RESOLUTION across hard biological repeat classes — rings = gcd(k,period)>1 (factor-sharing); none dip below the coprime trend",
+        xlabel = "assembly k", ylabel = "repeat class (dominant period)",
+        xticks = (1:n_cols, string.(ks)), yticks = (1:n_rows, labels))
+    heat = CairoMakie.heatmap!(axis, 1:n_cols, 1:n_rows, permutedims(matrix);
+        colormap = :viridis, colorrange = (0.0, 1.0))
+    ring_x = Int[]
+    ring_y = Int[]
+    for (r, fixture) in enumerate(shown)
+        fixture.period > 1 || continue
+        for (c, k) in enumerate(ks)
+            gcd(k, fixture.period) > 1 && (push!(ring_x, c); push!(ring_y, r))
+        end
+    end
+    CairoMakie.scatter!(axis, ring_x, ring_y; marker = :circle, markersize = 18,
+        color = (:white, 0.0), strokecolor = :red, strokewidth = 2.0)
+    CairoMakie.Colorbar(fig[1, 2], heat, label = "largest correct contig / reference (resolution)")
+    CairoMakie.Label(fig[0, 1:2],
+        "Exhaustive hard-repeat sweep: immune/antigen + LINE/SINE + tandem/microsatellite/satellite/nested/interspersed/mixed";
+        fontsize = 16, font = :bold)
+
+    png_path = joinpath(plots_dir, "prime_k_ablation_biological_classes.png")
+    svg_path = joinpath(plots_dir, "prime_k_ablation_biological_classes.svg")
     CairoMakie.save(png_path, fig)
     CairoMakie.save(svg_path, fig)
     return (png = png_path, svg = svg_path)

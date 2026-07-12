@@ -9,6 +9,33 @@
   "scale": "local-smoke",
   "schema_version": 1,
   "tables": {
+    "prime_k_ablation_class_summary": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "dataset_id",
+        "category",
+        "repeat_class",
+        "period",
+        "content_fraction",
+        "copy_number",
+        "divergence",
+        "reference_length",
+        "factor_sharing_tested",
+        "min_resolution",
+        "max_resolution",
+        "resolution_at_max_k",
+        "wmer_recovery_at_max_k",
+        "contig_count_at_max_k",
+        "below_resolution_ceiling"
+      ],
+      "provenance": "provenance/prime_k_ablation_class_summary.provenance.json",
+      "rows": 27,
+      "table": "tables/prime_k_ablation_class_summary.csv"
+    },
     "prime_k_ablation_collision_control": {
       "columns": [
         "benchmark_schema_version",
@@ -44,15 +71,17 @@
         "composite_gcd",
         "coprime_k_below",
         "coprime_k_above",
+        "coprime_below_resolution",
         "coprime_envelope_resolution",
         "composite_resolution",
         "composite_resolution_std",
         "factor_sharing_penalty",
         "seed_noise",
+        "dips_below_lower_coprime",
         "robust_striking"
       ],
       "provenance": "provenance/prime_k_ablation_factor_sharing.provenance.json",
-      "rows": 37,
+      "rows": 49,
       "table": "tables/prime_k_ablation_factor_sharing.csv"
     },
     "prime_k_ablation_per_run": {
@@ -89,7 +118,7 @@
         "assembly_errors"
       ],
       "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
-      "rows": 266,
+      "rows": 378,
       "table": "tables/prime_k_ablation_per_run.csv"
     }
   }
