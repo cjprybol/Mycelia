@@ -1366,13 +1366,14 @@ to `n_window_obs - 1` (the window's `graph_states` are bounded to the window; se
 hard-window size (`O(max_window)`) rather than the read length (`O(read_length)`)
 — the dominant super-linear per-read term for long reads (#375).
 
-The window Viterbi is length-preserving (the corrected ML path has one vertex per
-window k-mer, so `path_to_sequence` reconstructs the same base count), so each
-accepted window is spliced in as a same-length substitution. As a defensive guard,
-a window whose corrected length differs from the original is DROPPED (left
-uncorrected) rather than shifting the read's coordinates; the returned
-`divergent_windows` count surfaces any such case. Windows shorter than `k` (which
-cannot be k-merized) are skipped.
+With `indel_params === nothing`, the window Viterbi is length-preserving (the
+corrected ML path has one vertex per window k-mer), so each accepted window is
+spliced in as a same-length substitution. A length mismatch on that path is
+dropped defensively and counted in `divergent_windows`. With non-`nothing`
+`indel_params`, the pair-HMM may emit insertions or deletions; those intentional
+length changes are accepted and spliced by rebuilding the read from original
+window coordinates. Windows shorter than `k` (which cannot be k-merized) are
+skipped.
 
 A read with no hard window (empty ranges) returns unchanged (`false`) — this only
 occurs for reads the caller's gate already classified as skip, so the whole-read
