@@ -5,11 +5,11 @@
 # overlap a hard vertex, and (c) an end-to-end scalable assemble reports a
 # non-trivial skip fraction (reads passed through without a decode).
 #
-# CAVEAT: Stage 3c (per-hard-region WINDOWED decode with start/target boundary
-# constraints) is scaffolded but not yet wired — a hard read is currently decoded
-# WHOLE. The windowing primitive `_hard_window_ranges` is implemented + tested
-# here; the correct_observations-with-boundaries call + splice is deferred. See
-# the scaffold note in src/iterative-assembly.jl and the PR description.
+# Stage 3c (per-hard-region WINDOWED decode with start/target boundary
+# constraints) is now WIRED (td-nn6l): under `windowed_decode=true` a hard read is
+# decoded window-by-window via `improve_read_likelihood_windowed`, not whole. The
+# windowing primitive `_hard_window_ranges` is tested here; the boundary-
+# constrained decode + splice is tested in windowed_decode_test.jl.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/scalable_corrector_hard_window_test.jl")'
@@ -104,7 +104,7 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         Test.@test Mycelia.should_decode_read(clean_probe, k, hard) == false
     end
 
-    Test.@testset "_hard_window_ranges scaffold (Stage 3c primitive)" begin
+    Test.@testset "_hard_window_ranges (Stage 3c primitive)" begin
         rng = Random.MersenneTwister(24)
         ref = join(rand(rng, _BASES, 300))
         clean = _clean_reads(rng, ref; n_reads = 150, readlen = 80)

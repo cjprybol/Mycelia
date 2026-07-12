@@ -70,6 +70,7 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test ex.max_iterations_per_k == 10
         Test.@test ex.skip_solid == false
         Test.@test ex.hard_window == false
+        Test.@test ex.windowed_decode == false
         Test.@test ex.soft_em == false
         Test.@test ex.beam_width == typemax(Int)
         # td-nt69: :exhaustive derives its corrector graph_mode from
@@ -86,6 +87,8 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test sc.max_iterations_per_k == 2
         Test.@test sc.skip_solid == true
         Test.@test sc.hard_window == true
+        # Stage 3c (td-nn6l): :scalable now decodes hard reads window-by-window.
+        Test.@test sc.windowed_decode == true
         Test.@test sc.soft_em == true
         Test.@test sc.beam_width === nothing
         # td-nt69: :scalable runs the corrector on a :doublestrand graph. Forcing
@@ -113,9 +116,9 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test sc.assembly_stats["strategy"] == "scalable"
         Test.@test sc.assembly_stats["hard_window"] == true
         Test.@test sc.assembly_stats["hard_read_gate"] == true
-        # Per-hard-region windowed decode is scaffolded (hard reads decoded WHOLE),
-        # so the honest flag is false even on :scalable (FIX 5).
-        Test.@test sc.assembly_stats["windowed_decode"] == false
+        # Per-hard-region windowed decode (td-nn6l Stage 3c) is now ACTIVE on
+        # :scalable — hard reads are decoded window-by-window (bounded), not whole.
+        Test.@test sc.assembly_stats["windowed_decode"] == true
         # soft-EM v2 is ACTIVE (E-step enumerates competing paths, M-step registers
         # the support-floored soft weights), so the surfaced provenance is the v2
         # marker, never a bare `true`.

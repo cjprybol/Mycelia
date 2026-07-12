@@ -412,6 +412,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         checkpoint_interval::Int = 5,
         skip_solid::Bool = false,
         hard_window::Bool = false,
+        windowed_decode::Bool = false,
         soft_em::Bool = false,
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
@@ -773,6 +774,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                     beam_width = beam_width,
                     soft_weights = current_soft_weights,
                     hard_vertices = hard_vertices,
+                    windowed_decode = windowed_decode,
                     decode_enabled = !explicit_floor_gated,
                     decode_gate_density = effective_decode_gate_density,
                     diagnostics = corrector_diagnostics,
@@ -947,7 +949,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         verbose = verbose, diagnostics = corrector_diagnostics,
         skip_fractions = skip_fractions,
         cheap_correction_counts = cheap_correction_counts,
-        hard_window = hard_window, soft_em = soft_em, cheap_correct = cheap_correct,
+        hard_window = hard_window, windowed_decode = windowed_decode,
+        soft_em = soft_em, cheap_correct = cheap_correct,
         min_decode_k = effective_min_decode_k,
         decode_gate_density = effective_decode_gate_density,
         decode_gated_rungs = decode_gated_rungs,
@@ -1284,22 +1287,24 @@ function _hard_vertex_set(graph, k::Int)
 end
 
 # ------------------------------------------------------------------------------
-# Stage 3c SCAFFOLD (td-nn6l): per-hard-region WINDOWED decode.
+# Stage 3c (td-nn6l): per-hard-region WINDOWED decode — WIRED.
 #
-# STATUS: NOT wired into the gate. Stage 3 currently decodes each hard read
-# WHOLE (the skip-gate part of Stage 3 is fully delivered — easy reads are
-# skipped, hard reads are decoded). The windowed variant below is the primitive
-# for the remaining 3c work: instead of decoding a hard read end-to-end, extract
-# the k-mer sub-window (<=500 bp) around each hard region and decode ONLY that
-# window with start_vertex/target_vertex boundary constraints (which
-# `Mycelia.correct_observations` supports via the observation's first/last vertex
-# and `ViterbiCorrectionConfig.target_vertex`), then splice the corrected window
-# back into the read. Windowing bounds decode cost to the hard neighborhood
-# rather than the whole read.
+# STATUS: ACTIVE under `windowed_decode=true` (the :scalable tier). Instead of
+# decoding a hard read end-to-end, `improve_read_likelihood_windowed` extracts the
+# k-mer sub-window(s) (<=500 bp) around each hard region (`_hard_window_ranges`)
+# and decodes ONLY those windows with start_vertex/target_vertex boundary
+# constraints — `Mycelia.correct_observations` derives the start from the first
+# window observation's vertex and the target from the last (via
+# `_decode_observation_bounds`), and `max_steps = n_window_obs - 1` bounds the
+# graph_states to the window — then splices each corrected window back into the
+# read. Windowing bounds decode cost to the hard neighborhood (O(max_window))
+# rather than the whole read (O(read_length)), which is the #375 super-linear
+# per-read term for long reads. Whole-read decode (`improve_read_likelihood`)
+# remains the fallback when `windowed_decode=false`.
 #
-# `_hard_window_ranges` (the read-coordinate ranges to decode) is implemented and
-# unit-tested; the correct_observations-with-boundaries call + splice is the
-# deferred wiring. See the PR description for the 3c caveat.
+# `_hard_window_ranges` (the read-coordinate ranges to decode) is the primitive;
+# `improve_read_likelihood_windowed` (below) does the boundary-constrained decode
+# + splice. Both are unit-tested.
 # ------------------------------------------------------------------------------
 
 """
@@ -1342,6 +1347,161 @@ function _hard_window_ranges(read::FASTX.FASTQ.Record, k::Int, hard_vertices::Ab
     end
     push!(merged, cur)
     return [first(r):min(last(r), first(r) + max_window - 1) for r in merged]
+end
+
+"""
+    improve_read_likelihood_windowed(read, graph, k, hard_vertices; ...) -> (FASTX.FASTQ.Record, Bool)
+
+Stage 3c WINDOWED decode (td-nn6l). Instead of decoding a hard read end-to-end,
+decode ONLY the hard sub-window(s) — the k-mer span(s) around the read's hard
+vertices from `_hard_window_ranges` (each `<= max_window` bases) — with
+start/target boundary constraints, then splice each corrected window back into the
+read. Each window is decoded as its own `improve_read_likelihood` sub-read, so
+`correct_observations` derives the decode's `start_vertex` from the window's first
+k-mer, its `target_vertex` from the window's last k-mer, and bounds `max_steps`
+to `n_window_obs - 1` (the window's `graph_states` are bounded to the window; see
+`_decode_observation_bounds`). This makes the per-read decode cost scale with the
+hard-window size (`O(max_window)`) rather than the read length (`O(read_length)`)
+— the dominant super-linear per-read term for long reads (#375).
+
+The window Viterbi is length-preserving (the corrected ML path has one vertex per
+window k-mer, so `path_to_sequence` reconstructs the same base count), so each
+accepted window is spliced in as a same-length substitution. As a defensive guard,
+a window whose corrected length differs from the original is DROPPED (left
+uncorrected) rather than shifting the read's coordinates; the returned
+`divergent_windows` count surfaces any such case. Windows shorter than `k` (which
+cannot be k-merized) are skipped.
+
+A read with no hard window (empty ranges) returns unchanged (`false`) — this only
+occurs for reads the caller's gate already classified as skip, so the whole-read
+fallback (`windowed_decode=false`) is the caller's, not this function's.
+
+Each window is anchored with a solid k-mer flank (`pad === nothing` ⇒ `k` bases)
+so its boundary start/target vertices are solid and the hard vertices sit in the
+window interior. This function windows unconditionally; the caller decides WHEN to
+window (`_windowed_decode_read_is_long` gates it to long reads, where whole-read
+decode is expensive/bounded — short reads keep the cheap, exact whole-read decode).
+
+Returns `(record, improved)` where `improved` is `true` iff `>= 1` window was
+corrected and spliced. The lower-level `improve_read_likelihood_windowed_detail`
+additionally returns the per-read decoded-window count and divergent-window count
+for correctness/telemetry checks.
+"""
+function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::Int,
+        hard_vertices::AbstractSet;
+        graph_mode::Symbol = :canonical,
+        beam_width::Union{Int, Nothing} = nothing,
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        weighted_graph = nothing,
+        diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
+        pad::Union{Int, Nothing} = nothing,
+        max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool}
+    record, improved, _decoded, _divergent = improve_read_likelihood_windowed_detail(
+        read, graph, k, hard_vertices;
+        graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
+        weighted_graph = weighted_graph, diagnostics = diagnostics,
+        pad = pad, max_window = max_window)
+    return record, improved
+end
+
+"""
+    improve_read_likelihood_windowed_detail(read, graph, k, hard_vertices; ...)
+        -> (FASTX.FASTQ.Record, Bool, Int, Int)
+
+Windowed-decode core (see `improve_read_likelihood_windowed`). Returns
+`(record, improved, decoded_windows, divergent_windows)` where `decoded_windows`
+is the number of hard windows that reached a Viterbi decode and `divergent_windows`
+is the number dropped for a length mismatch (defensive guard; expected 0 since the
+window decode is length-preserving). Exposed for the windowed-decode correctness
+test, which compares the spliced windows against a whole-read decode on the same
+hard region.
+"""
+function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph, k::Int,
+        hard_vertices::AbstractSet;
+        graph_mode::Symbol = :canonical,
+        beam_width::Union{Int, Nothing} = nothing,
+        soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
+        weighted_graph = nothing,
+        diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
+        pad::Union{Int, Nothing} = nothing,
+        max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool, Int, Int}
+    # Anchor each window with a full solid k-mer flank by default (`pad === nothing`
+    # ⇒ `k`): a pad of `k` bases guarantees the window's first/last k-mer clears the
+    # hard k-mer's span, so the boundary start/target vertices are SOLID anchors and
+    # the hard vertices sit in the window INTERIOR where the ML decode can re-route
+    # them (a 1-base pad can pin the decode to an error k-mer at the boundary).
+    effective_pad = pad === nothing ? k : pad
+    windows = _hard_window_ranges(read, k, hard_vertices; pad = effective_pad, max_window = max_window)
+    isempty(windows) && return read, false, 0, 0
+
+    seq_chars = collect(FASTX.sequence(String, read))
+    qual_chars = collect(FASTX.quality(read))   # ASCII quality string, one char/base
+    id = FASTX.identifier(read)
+    any_improved = false
+    decoded_windows = 0
+    divergent_windows = 0
+
+    for w in windows
+        lo = first(w)
+        hi = last(w)
+        win_len = hi - lo + 1
+        # A window shorter than k cannot be k-merized (no observations) — skip.
+        win_len < k && continue
+        sub_seq = String(seq_chars[lo:hi])
+        sub_qual = String(qual_chars[lo:hi])
+        sub_read = FASTX.FASTQ.Record("$(id)_win$(lo)_$(hi)", sub_seq, sub_qual)
+        decoded_windows += 1
+        # Decode ONLY this window. `improve_read_likelihood` runs the boundary-
+        # constrained Viterbi (window first/last k-mer ⇒ start/target vertex,
+        # max_steps = n_window_obs - 1) over the bounded window graph_states.
+        decoded_sub,
+        improved = improve_read_likelihood(
+            sub_read, graph, k; graph_mode = graph_mode,
+            beam_width = beam_width, soft_weights = soft_weights,
+            weighted_graph = weighted_graph, diagnostics = diagnostics)
+        improved || continue
+        dseq = FASTX.sequence(String, decoded_sub)
+        dqual = FASTX.quality(decoded_sub)
+        # Length-preserving splice: the window ML path has one vertex per window
+        # k-mer, so a well-formed decode reconstructs exactly `win_len` bases. A
+        # divergent length would corrupt downstream read coordinates, so drop it.
+        if length(dseq) == win_len && length(dqual) == win_len
+            dseq_chars = collect(dseq)
+            dqual_chars = collect(dqual)
+            @inbounds for (j, p) in enumerate(lo:hi)
+                seq_chars[p] = dseq_chars[j]
+                qual_chars[p] = dqual_chars[j]
+            end
+            any_improved = true
+        else
+            divergent_windows += 1
+        end
+    end
+
+    any_improved ||
+        return read, false, decoded_windows, divergent_windows
+    corrected = FASTX.FASTQ.Record(id, String(seq_chars), String(qual_chars))
+    return corrected, true, decoded_windows, divergent_windows
+end
+
+"""
+    _windowed_decode_read_is_long(read, k) -> Bool
+
+Gate for WHEN to use windowed decode (td-nn6l Stage 3c). Returns `true` only for a
+read long enough that whole-read decode is EXPENSIVE — i.e. its observation count
+exceeds `_AUTO_BEAM_EXACT_THRESHOLD`, the same line above which the whole-read
+Viterbi is bounded (beam-pruned, hence inexact) to stay tractable. For such long
+reads, windowing to `<=max_window` sub-windows is BOTH cheaper (the #375 long-read
+term) AND more accurate (each window is exactly decodable again). At/below the
+threshold whole-read decode is exact and cheap, so windowing — which decodes only
+a small hard sub-span and thus discards the read's broader context — would only
+LOSE quality (a short read's hard window is tiny). Those reads keep whole-read
+decode as the fallback. This is why the :scalable quality gate (100 bp reads)
+never regresses: those reads are below the threshold and are decoded whole.
+"""
+function _windowed_decode_read_is_long(read::FASTX.FASTQ.Record, k::Int)::Bool
+    n_obs = length(FASTX.sequence(read)) - k + 1
+    return n_obs > _AUTO_BEAM_EXACT_THRESHOLD
 end
 
 # ------------------------------------------------------------------------------
@@ -1495,6 +1655,14 @@ k-mers overlap the "hard" vertex set (bubbles / repeats / weak k-mers); every
 other read passes through untouched. Composes with `skip_solid` — a read is
 decoded only when it is NOT all-solid AND (no hard set, or it touches one).
 
+`windowed_decode` (td-nn6l, Stage 3c): when `true` AND a hard-window gate is
+active (`hard_vertices !== nothing`), a read selected for decode is corrected
+WINDOW-BY-WINDOW (`improve_read_likelihood_windowed`) — only the boundary-
+constrained hard sub-window(s) around its hard vertices (each `<=500` bp) are
+decoded and spliced back, instead of a whole-read Viterbi. This bounds each hard
+read's decode to `O(max_window)` rather than `O(read_length)` (the #375 long-read
+super-linear term). `false` (default) keeps whole-read decode as the fallback.
+
 `decode_enabled` (td-9h5r): when `false`, the per-read graph-Viterbi decode is
 skipped for EVERY read this pass (skip_fraction == 1.0) — the EXPLICIT low-k decode
 floor. Stage 0 cheap correction still runs first (on `work_reads`), so simple
@@ -1545,6 +1713,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         beam_width::Union{Int, Nothing} = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
+        windowed_decode::Bool = false,
         decode_enabled::Bool = true,
         decode_gate_density::Union{Float64, Nothing} = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
@@ -1675,6 +1844,16 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # decode is gated off (no read decodes this pass).
     pass_weighted_graph = pass_decode_off ? nothing : build_correction_weighted_graph(graph)
 
+    # Stage 3c windowed decode (td-nn6l): when enabled AND a hard-window gate is
+    # active, a LONG read selected for decode is corrected WINDOW-BY-WINDOW (only
+    # the hard sub-window(s) around its hard vertices, each boundary-constrained and
+    # <=500 bp) instead of whole-read. Requires `hard_vertices` — without the gate
+    # there are no hard windows to target. The per-read `_windowed_decode_read_is_long`
+    # check restricts windowing to reads long enough that whole-read decode is
+    # expensive/bounded; short reads keep the cheap, exact whole-read decode
+    # (so the :scalable short-read quality gate never regresses).
+    use_windowed = windowed_decode && hard_vertices !== nothing
+
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
     # decode operates on already-simplified reads.
@@ -1699,7 +1878,13 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     skip_flags[i] = true
                 else
                     improved_read,
-                    was_improved = improve_read_likelihood(
+                    was_improved = (use_windowed &&
+                                    _windowed_decode_read_is_long(read, k)) ?
+                                   improve_read_likelihood_windowed(
+                        read, graph, k, hard_vertices; graph_mode = graph_mode,
+                        beam_width = beam_width, weighted_graph = pass_weighted_graph,
+                        diagnostics = diag) :
+                                   improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
                         diagnostics = diag, indel_params = indel_params)
@@ -1725,7 +1910,14 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     continue
                 end
                 improved_read,
-                was_improved = improve_read_likelihood(
+                was_improved = (use_windowed &&
+                                _windowed_decode_read_is_long(read, k)) ?
+                               improve_read_likelihood_windowed(
+                    read, graph, k, hard_vertices; graph_mode = graph_mode,
+                    beam_width = beam_width, soft_weights = soft_weights,
+                    weighted_graph = pass_weighted_graph,
+                    diagnostics = diag) :
+                               improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
@@ -2428,6 +2620,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         skip_fractions::Vector{Float64} = Float64[],
         cheap_correction_counts::Vector{Int} = Int[],
         hard_window::Bool = false,
+        windowed_decode::Bool = false,
         soft_em::Bool = false,
         cheap_correct::Bool = false,
         min_decode_k::Union{Int, Nothing} = nothing,
@@ -2517,13 +2710,14 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         #
         # Honest gate provenance (FIX 5): `hard_read_gate` is the SKIP gate
         # (easy reads pass through untouched) — that IS active on :scalable.
-        # `windowed_decode` is the per-hard-region WINDOWED decode, which is
-        # scaffolded (hard reads are decoded WHOLE), so it is always false in v1;
-        # surfaced separately so `hard_window` can't be misread as "windowed
-        # decode active". `hard_window` is kept as a back-compat alias.
+        # `windowed_decode` (td-nn6l Stage 3c) is the per-hard-region WINDOWED
+        # decode: when `true`, a hard read is decoded window-by-window (only the
+        # boundary-constrained hard sub-window(s), <=500 bp) instead of whole-read.
+        # Surfaced separately from `hard_window` (the SKIP gate) so the two are not
+        # conflated. `hard_window` is kept as a back-compat alias for the skip gate.
         :hard_window => hard_window,
         :hard_read_gate => hard_window,
-        :windowed_decode => false,
+        :windowed_decode => windowed_decode,
         # Soft-EM v2 ACTIVE: the E-step enumerates competing paths and the M-step
         # registers the support-floored soft edge weights onto the next EM
         # iteration's graph, so unsupported error edges decay while supported

@@ -813,6 +813,11 @@ function _corrector_strategy_knobs(strategy::Symbol)
             max_iterations_per_k = 2,
             skip_solid = true,
             hard_window = true,
+            # Stage 3c (td-nn6l): decode each hard read WINDOW-BY-WINDOW (only the
+            # boundary-constrained hard sub-window(s), <=500 bp) instead of
+            # whole-read, bounding a long read's decode to O(window) not
+            # O(read_length) — the #375 long-read super-linear term.
+            windowed_decode = true,
             soft_em = true,
             cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
             beam_width = nothing,  # size-aware auto-beam (bounded on huge reads)
@@ -842,6 +847,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             max_iterations_per_k = 10,
             skip_solid = false,
             hard_window = false,
+            windowed_decode = false,
             soft_em = false,
             cheap_correct = false,  # exact-ML tier: no cheap pre-correction
             beam_width = typemax(Int),  # exact ML decode
@@ -961,6 +967,7 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             n_k_rungs = knobs.n_k_rungs,
             max_iterations_per_k = knobs.max_iterations_per_k,
             hard_window = knobs.hard_window,
+            windowed_decode = knobs.windowed_decode,
             soft_em = knobs.soft_em,
             cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
@@ -1080,8 +1087,9 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Scalable-tier telemetry (hard-read skip fraction + honest gate flags).
         _corr_meta = result_dict[:metadata]
         # `hard_window`/`hard_read_gate` = the skip gate (active on :scalable);
-        # `windowed_decode` = per-hard-region windowed decode, scaffolded ⇒ false
-        # (hard reads decoded WHOLE). Kept distinct so the surfaced flag is honest.
+        # `windowed_decode` = per-hard-region windowed decode (td-nn6l Stage 3c),
+        # now ACTIVE on :scalable ⇒ hard reads decoded window-by-window (bounded),
+        # not whole. Kept distinct from the skip gate so the surfaced flag is honest.
         assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
         assembly.assembly_stats["hard_read_gate"] = get(_corr_meta, :hard_read_gate, false)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
