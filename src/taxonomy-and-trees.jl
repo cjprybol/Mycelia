@@ -1673,6 +1673,54 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Load an NCBI `merged.dmp` into a `Dict{Int,Int}` mapping each retired (merged)
+taxid to the current taxid it was merged into.
+
+`merged.dmp` lines are `old_tax_id\t|\tnew_tax_id\t|`. Unparseable lines are
+skipped. Pair with [`harmonize_taxids`](@ref) to reconcile taxids produced
+against different NCBI taxonomy snapshots.
+"""
+function load_merged_taxid_map(merged_dmp::AbstractString)::Dict{Int, Int}
+    isfile(merged_dmp) || error("merged.dmp not found: $(merged_dmp)")
+    mapping = Dict{Int, Int}()
+    for line in eachline(merged_dmp)
+        parts = split(line, '|')
+        length(parts) >= 2 || continue
+        old_id = tryparse(Int, strip(parts[1]))
+        new_id = tryparse(Int, strip(parts[2]))
+        (old_id === nothing || new_id === nothing) && continue
+        mapping[old_id] = new_id
+    end
+    return mapping
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remap taxids through a merged-taxid map (retired -> current), leaving taxids that
+are absent from the map unchanged.
+
+Use this to reconcile taxids drawn from an OLDER NCBI taxonomy snapshot (e.g. the
+CAMI gold-standard profiles, keyed to the taxonomy in effect at challenge time)
+with the CURRENT namespace emitted by classifiers, so that exact-taxid comparisons
+(as in the CAMI precision/recall scorer, which does no lineage climbing) are valid
+rather than spuriously mismatched by taxid merges. Apply the *current* `merged.dmp`
+to the older taxids. The string-path method loads the map via
+[`load_merged_taxid_map`](@ref).
+"""
+function harmonize_taxids(taxids::AbstractVector{<:Integer},
+        merged_map::AbstractDict{<:Integer, <:Integer})::Vector{Int}
+    return [get(merged_map, Int(t), Int(t)) for t in taxids]
+end
+
+function harmonize_taxids(taxids::AbstractVector{<:Integer},
+        merged_dmp::AbstractString)::Vector{Int}
+    return harmonize_taxids(taxids, load_merged_taxid_map(merged_dmp))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Convert a vector of species/taxon names to their corresponding NCBI taxonomy IDs.
 
 # Arguments
