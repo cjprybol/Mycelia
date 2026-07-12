@@ -1679,18 +1679,43 @@ taxid to the current taxid it was merged into.
 `merged.dmp` lines are `old_tax_id\t|\tnew_tax_id\t|`. Unparseable lines are
 skipped. Pair with [`harmonize_taxids`](@ref) to reconcile taxids produced
 against different NCBI taxonomy snapshots.
+
+Errors (rather than returning a silently empty map) if zero mappings parse — the
+mechanism by which a wrong-but-present input (a gzipped `merged.dmp.gz`, a
+truncated file, or the wrong dmp such as `nodes.dmp`) would otherwise turn
+[`harmonize_taxids`](@ref) into a silent identity function and spuriously deflate
+downstream exact-taxid metrics with no signal. Warns if more lines were skipped
+than parsed.
 """
 function load_merged_taxid_map(merged_dmp::AbstractString)::Dict{Int, Int}
     isfile(merged_dmp) || error("merged.dmp not found: $(merged_dmp)")
     mapping = Dict{Int, Int}()
+    skipped = 0
     for line in eachline(merged_dmp)
+        isempty(strip(line)) && continue
         parts = split(line, '|')
-        length(parts) >= 2 || continue
+        if length(parts) < 2
+            skipped += 1
+            continue
+        end
         old_id = tryparse(Int, strip(parts[1]))
         new_id = tryparse(Int, strip(parts[2]))
-        (old_id === nothing || new_id === nothing) && continue
+        if old_id === nothing || new_id === nothing
+            skipped += 1
+            continue
+        end
         mapping[old_id] = new_id
     end
+    # A real NCBI merged.dmp has tens of thousands of rows; zero parsed mappings
+    # means the input is not a plaintext merged.dmp (gzipped / truncated / wrong
+    # file). Fail loud instead of degrading harmonize_taxids to identity.
+    isempty(mapping) && error("load_merged_taxid_map parsed 0 mappings from " *
+          "$(merged_dmp) ($(skipped) lines skipped) — expected a plaintext NCBI " *
+          "merged.dmp (`old \\t | \\t new \\t |`). A gzipped or wrong-file input " *
+          "parses to an empty map.")
+    skipped > length(mapping) &&
+        @warn "load_merged_taxid_map: skipped ($(skipped)) exceeds parsed " *
+              "($(length(mapping)))" merged_dmp
     return mapping
 end
 

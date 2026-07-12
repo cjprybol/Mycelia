@@ -1974,8 +1974,8 @@ function qc_filter_short_reads_fastp_interleaved(;
                        ".fastp_report.json",
         enable_dedup::Bool = false
 )
-    Mycelia.add_bioconda_env("fastp")
     if !(isfile(out_forward) && isfile(out_reverse) && isfile(json) && isfile(html))
+        Mycelia.add_bioconda_env("fastp")
         dedup_args = enable_dedup ? ["--dedup"] : String[]
         cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp
                 --in1 $(interleaved_reads)
@@ -1987,6 +1987,8 @@ function qc_filter_short_reads_fastp_interleaved(;
                 --report_title $(report_title)
                 $(dedup_args)`
         run(cmd)
+    else
+        @info "reusing existing fastp interleaved-split outputs" out_forward out_reverse
     end
     return (
         out_forward = String(out_forward),
