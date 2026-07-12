@@ -1,0 +1,56 @@
+e2e_phase_profile.jl — representative runs (td-9q84)
+Machine: MacBook (laptop), Julia via juliaup, LD_LIBRARY_PATH=''
+Harness: benchmarking/e2e_phase_profile.jl (reconstructs the sweep's iterative arm
+from its parts and times each phase with plain @elapsed around the real library call).
+
+Phases:
+  d1 sim_reads  — read simulation (shared)
+  d2 naive_arm  — assemble_genome(reads; corrector=:none) (shared baseline)
+  a  correction — mycelia_iterative_assemble(...) with strategy=:scalable knobs  [CORRECTOR]
+  b  reassembly — assemble_genome(corrected_reads; corrector=:none)              [scaffold]
+  c  scoring    — write contigs FASTA + assembly_metrics + genome_fraction        [scaffold]
+iterative-arm wall (== sweep-reported iterative runtime_s) = a + b.
+
+Cross-check: the actual sweep (SMOKE, 2kb, err=0.05, readlen=150) gives
+  naive     contigs=935 frac=2464.5% 3.515s
+  iterative contigs=851 frac=2191.9% 5.028s
+i.e. the harness's small-scale fragmentation (frac >> 100%) is faithful to the
+sweep's own SMOKE-ONLY behavior below the 1e6-base scale floor, not a harness bug.
+
+==================================================================================
+SHORT-read regime (readlen=150, illumina, err=0.05, cov=30x, k=21)
+  glen   sim    naive  correct  reassemb  score   corr%arm
+  1000   0.00   0.31   1.01     0.24      0.01    80.8%
+
+LONG-read / CLAMPED regime (readlen=5000 -> clamps to glen, nanopore, err=0.10, cov=30x, k=21)
+  glen   sim    naive  correct  reassemb  score   corr%arm
+  1000   0.00   0.76   1.17     0.34      0.00    77.7%
+  2000   0.00   0.72   2.64     1.34      0.00    66.3%
+  3000   0.00   1.86   4.09     1.63      0.00    71.6%
+
+LONG-read / UNCLAMPED regime (readlen=5000 full long reads, glen>readlen, nanopore, err=0.10)
+  glen   sim    naive  correct  reassemb  score   corr%arm
+  6000   0.01   3.93   16.27    8.95      0.01    64.5%
+  10000  0.01  11.29   51.18    19.08     0.02    72.8%
+
+==================================================================================
+DOMINANT PHASE (all regimes/sizes):
+  * CORRECTION dominates the iterative arm: 64.5-80.8% of (correction+re-assembly),
+    and its share GROWS with scale (6kb 64.5% -> 10kb 72.8%).
+  * Correction scales super-linearly: 6kb 16.3s -> 10kb 51.2s (3.1x for 1.67x genome).
+    Extrapolating O(~n^1.9) to Lambda phage (~48.5kb) lands near the reported ~1345s.
+  * RE-ASSEMBLY (naive assemble_genome on corrected reads) is the secondary cost:
+    ~22-36% of the arm.
+  * SCORING (assembly_metrics + genome_fraction) is 0.0-0.5% — NOT a bottleneck.
+    (QUAST/minimap is off by default; it only runs with MYCELIA_RUN_EXTERNAL=true,
+     and even then is per-cell scoring outside the sweep's iterative runtime_s.)
+  * READ SIMULATION is ~0%.
+
+=> The corrector is still the right optimization target. The "slowness" is NOT
+   measurement/scoring overhead. Within correction, the growth term is the
+   per-read Viterbi decode (scales with n_reads x read_length); bubble detection
+   (td-x0k0) and per-read decode (td-y4oj) were already linearized, so the next
+   lever is decoding LESS per long read — windowed decode of only the hard
+   regions (the `windowed_decode` flag is scaffolded false; hard reads are
+   currently decoded WHOLE) and/or the batched GPU frontier kernel (td-qoo3).
+   Secondary: the re-assembly pass rebuilds a graph the corrector already had.

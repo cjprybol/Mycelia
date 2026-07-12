@@ -1,0 +1,123 @@
+{
+  "config": {
+    "k": 21,
+    "readlen": 100,
+    "reflen": 10000,
+    "coverage": 30,
+    "seed": 42,
+    "error_rate": 0.005
+  },
+  "matrix": {
+    "BayesianMixture": {
+      "bal_acc": 0.9970918572001605,
+      "spec": 1.0,
+      "tp": 9914,
+      "tn": 24020,
+      "fn": 58,
+      "auc": 0.999742196551677,
+      "sens": 0.9941837144003209,
+      "prec": 1.0,
+      "params": {
+        "prior_real": 0.5,
+        "genomic_mean_coverage": 30.0,
+        "decision_threshold": 0.5,
+        "error_mean_coverage": 1.0
+      },
+      "fp": 0
+    },
+    "FixedCoverageThreshold": {
+      "bal_acc": 0.9923123713926054,
+      "spec": 0.9859283930058285,
+      "tp": 9959,
+      "tn": 23682,
+      "fn": 13,
+      "auc": 0.9993326526597537,
+      "sens": 0.9986963497793823,
+      "prec": 0.9671749053122268,
+      "params": {
+        "min_count": 2
+      },
+      "fp": 338
+    },
+    "QualityThreshold": {
+      "bal_acc": 0.5,
+      "spec": 0.0,
+      "tp": 9972,
+      "tn": 0,
+      "fn": 0,
+      "auc": 0.8052696467678192,
+      "sens": 1.0,
+      "prec": 0.2933631442692398,
+      "params": {
+        "min_mean_phred": 20.0
+      },
+      "fp": 24020
+    },
+    "BloomFilter": {
+      "bal_acc": 0.9051359293114809,
+      "spec": 0.8110741049125728,
+      "tp": 9964,
+      "tn": 19482,
+      "fn": 8,
+      "auc": 0.9993326526597537,
+      "sens": 0.9991977537103891,
+      "prec": 0.6870776444628327,
+      "params": {
+        "nbits": 65536,
+        "min_count": 2,
+        "nhashes": 4
+      },
+      "fp": 4538
+    },
+    "MixtureModel": {
+      "bal_acc": 0.9986462093862816,
+      "spec": 1.0,
+      "tp": 9945,
+      "tn": 24020,
+      "fn": 27,
+      "auc": 0.9993326526597537,
+      "sens": 0.9972924187725631,
+      "prec": 1.0,
+      "params": {
+        "min_valley": 2,
+        "valley": 3,
+        "steepness": 1.0
+      },
+      "fp": 0
+    },
+    "EffectiveCoverage": {
+      "bal_acc": 0.9965904532691536,
+      "spec": 1.0,
+      "tp": 9904,
+      "tn": 24020,
+      "fn": 68,
+      "auc": 0.9993326526597537,
+      "sens": 0.9931809065383073,
+      "prec": 1.0,
+      "params": {
+        "prior_real": 0.5,
+        "genomic_mean_coverage": 30.0,
+        "decision_threshold": 0.5,
+        "error_mean_coverage": 1.0
+      },
+      "fp": 0
+    },
+    "LogisticFusion": {
+      "bal_acc": 0.9949859606899318,
+      "spec": 1.0,
+      "tp": 9872,
+      "tn": 24020,
+      "fn": 100,
+      "auc": 0.9995398356029689,
+      "sens": 0.9899719213798637,
+      "prec": 1.0,
+      "params": {
+        "w_cov": 0.2831998831151272,
+        "decision_threshold": 0.5,
+        "w_phred": 0.7736654812575665,
+        "w0": -29.924651075241158
+      },
+      "fp": 0
+    }
+  }
+}

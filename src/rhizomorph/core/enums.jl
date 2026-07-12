@@ -29,6 +29,7 @@ Graph mode for handling strand representation.
 # Values
 - `SingleStrand`: Graph contains one strand orientation
 - `DoubleStrand`: Graph contains both forward and reverse-complement strands
+- `Canonical`: RC pairs merged onto a single canonical vertex (undirected)
 
 # Details
 This enum defines the structural representation of the graph:
@@ -48,5 +49,10 @@ This enum defines the structural representation of the graph:
 This is **orthogonal** to strand specificity (whether evidence is merged across RC pairs).
 Strand representation (SingleStrand/DoubleStrand) is about graph structure.
 Strand specificity is about evidence tracking methodology.
+
+**Canonical**: Each k-mer and its reverse complement are merged onto one
+canonical vertex (lexicographically-minimal orientation). Produces the most
+compact (≈1x) representation but yields an **undirected** graph — additive,
+non-default; the default remains `DoubleStrand`.
 """
-@enum GraphMode SingleStrand DoubleStrand
+@enum GraphMode SingleStrand DoubleStrand Canonical
