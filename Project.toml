@@ -53,6 +53,7 @@ LsqFit = "2fda8390-95c7-5789-9bda-21331edee243"
 Luxor = "ae8d54c2-7ccd-5906-9d76-62fc9837b5bc"
 MD5 = "6ac74813-4b46-53a4-afec-0b5dc9d7885c"
 Makie = "ee78f7c6-11fb-53f2-987a-cfe4a2b5a57a"
+MetaGraphs = "626554b9-1ddb-594c-aa3c-2596fe9399a5"
 MetaGraphsNext = "fa8bd995-216d-47f1-8a91-f3b68fbeb377"
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
 MultivariateStats = "6f286f6a-111f-5878-ab1e-185364afe411"
@@ -83,8 +84,19 @@ XLSX = "fdbf4ff8-1666-58a4-91e7-1b58723a45e0"
 XMLDict = "228000da-037f-5747-90a9-8195ccbf91a5"
 uCSV = "e0b4c2ea-889f-54df-a5e0-fe74b3c892fd"
 
+[weakdeps]
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+
+[extensions]
+# Backend-agnostic (CPU + CUDA/GPU) batched Viterbi corrector kernel — the
+# Phase B GPU kernel built on the merged CPU array-frontier PoC (bead td-qoo3).
+# KernelAbstractions is a weakdep so the base package carries no GPU dependency;
+# the extension loads only when the user imports KernelAbstractions.
+MyceliaKernelAbstractionsExt = "KernelAbstractions"
+
 [compat]
 Aqua = "0.8"
+KernelAbstractions = "0.9"
 UMAP = "0.1.11"
 julia = "1.10"
 
@@ -96,6 +108,7 @@ Coverage = "a2441757-f6aa-5fb2-8edb-039e3f45d037"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
 ExplicitImports = "7d51a73a-1435-4ff3-83d9-f097790105c7"
 JET = "c3a54625-cd67-489e-a8e7-0a5a0ff4e31b"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Literate = "98b081ad-f1c9-55d3-8b20-4c87d4299306"
 PackageCompiler = "9b87118b-4619-50d2-8e1e-99f35a4d4d9d"
 Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
@@ -103,4 +116,4 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Aqua", "ExplicitImports", "JET", "Test", "Coverage", "Sockets"]
+test = ["Aqua", "ExplicitImports", "JET", "Test", "Coverage", "Sockets", "KernelAbstractions"]

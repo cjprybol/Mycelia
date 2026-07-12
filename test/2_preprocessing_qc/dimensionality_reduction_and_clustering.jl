@@ -184,7 +184,7 @@ Test.@testset "Binary Matrix Processing" begin
         binary_distance_matrix = Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(binary_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -204,7 +204,7 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + KMedoids" begin
         test_println("[Binary] Testing: Jaccard Distance + KMedoids")
         binary_distance_matrix = Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix)
-        kmedoids_result = Clustering.kmedoids(binary_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(binary_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, kmedoids_labels)
@@ -249,7 +249,7 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + KMeans" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + KMeans")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
-        pcoa_fit_binary_labels = Clustering.kmeans(pcoa_binary_result.coordinates, n_distributions).assignments
+        pcoa_fit_binary_labels = Clustering.kmeans(pcoa_binary_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_binary_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_fit_binary_labels)
         plt = Mycelia.plot_embeddings(pcoa_binary_result.coordinates;
@@ -279,7 +279,7 @@ Test.@testset "Binary Matrix Processing" begin
         ## Compute distance matrix from PCoA coordinates (e.g., Euclidean)
         embedding = pcoa_binary_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_binary_labels = kmedoids_result.assignments
         pcoa_fit_binary_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_fit_binary_labels)
@@ -345,10 +345,13 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + KMeans" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + KMeans")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
-        pcoa_binary_umap_fit_labels = Clustering.kmeans(pcoa_binary_umap_model.embedding, n_distributions).assignments
+        pcoa_binary_umap_fit_labels = Clustering.kmeans(pcoa_binary_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_binary_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_binary_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_binary_umap_model.embedding;
@@ -375,13 +378,16 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + KMedoids")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = pcoa_binary_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_binary_umap_fit_labels = kmedoids_result.assignments
         pcoa_binary_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binary_labels, pcoa_binary_umap_fit_labels)
@@ -410,6 +416,9 @@ Test.@testset "Binary Matrix Processing" begin
     Test.@testset "Jaccard Distance + PCoA + UMAP + Hierarchical Clustering (fixed k)" begin
         test_println("[Binary] Testing: Jaccard Distance + PCoA + UMAP + Hierarchical Clustering (fixed k)")
         pcoa_binary_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jaccard_distance_matrix(shuffled_binary_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binary_umap_model = Mycelia.umap_embed(pcoa_binary_result.coordinates)
         Test.@test size(pcoa_binary_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -447,7 +456,7 @@ Test.@testset "Binary Matrix Processing" begin
         Test.@testset "logisticPCA-EPCA + KMeans" begin
             test_println("[Binary] Testing: logisticPCA-EPCA + KMeans")
             logistic_pca_result = Mycelia.logistic_pca_epca(shuffled_binary_matrix, k=5)
-            fit_labels = Clustering.kmeans(logistic_pca_result.scores, n_distributions).assignments
+            fit_labels = Clustering.kmeans(logistic_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
             fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
             plt = Mycelia.plot_embeddings(logistic_pca_result.scores;
                            title="logisticPCA-EPCA + KMeans",
@@ -474,7 +483,7 @@ Test.@testset "Binary Matrix Processing" begin
             logistic_pca_result = Mycelia.logistic_pca_epca(shuffled_binary_matrix, k=5)
             ## Compute distance matrix from logistic PCA scores (Euclidean)
             dist_matrix = Distances.pairwise(Distances.Euclidean(), logistic_pca_result.scores; dims=2)
-            kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+            kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
             fit_labels = kmedoids_result.assignments
             fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
             plt = Mycelia.plot_embeddings(logistic_pca_result.scores;
@@ -529,7 +538,7 @@ Test.@testset "Binary Matrix Processing" begin
             test_println("[Binary] Testing: logisticPCA-EPCA + UMAP + KMeans")
             logistic_pca_result = Mycelia.logistic_pca_epca(shuffled_binary_matrix, k=5)
             umap_model = Mycelia.umap_embed(logistic_pca_result.scores)
-            fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+            fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
             fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
             plt = Mycelia.plot_embeddings(umap_model.embedding;
                            title="logisticPCA-EPCA + UMAP + KMeans",
@@ -558,7 +567,7 @@ Test.@testset "Binary Matrix Processing" begin
             ## Compute distance matrix from UMAP embedding (Euclidean)
             embedding = umap_model.embedding
             dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-            kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+            kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
             fit_labels = kmedoids_result.assignments
             fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binary_labels, fit_labels)
             plt = Mycelia.plot_embeddings(embedding;
@@ -679,7 +688,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         poisson_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(poisson_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -699,7 +708,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + KMedoids" begin
         test_println("[Poisson] Testing: Bray-Curtis Distance + KMedoids")
         poisson_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix)
-        kmedoids_result = Clustering.kmedoids(poisson_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(poisson_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, kmedoids_labels)
@@ -744,7 +753,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + KMeans" begin
         test_println("[Poisson] Testing: Bray-Curtis Distance + PCoA + KMeans")
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
-        pcoa_fit_poisson_labels = Clustering.kmeans(pcoa_poisson_result.coordinates, n_distributions).assignments
+        pcoa_fit_poisson_labels = Clustering.kmeans(pcoa_poisson_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_poisson_labels,
         mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, pcoa_fit_poisson_labels)
         plt = Mycelia.plot_embeddings(pcoa_poisson_result.coordinates;
@@ -776,7 +785,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         embedding = pcoa_poisson_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_poisson_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_fit_poisson_labels,
@@ -845,10 +854,13 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[Poisson] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
-        pcoa_poisson_umap_fit_labels = Clustering.kmeans(pcoa_poisson_umap_model.embedding, n_distributions).assignments
+        pcoa_poisson_umap_fit_labels = Clustering.kmeans(pcoa_poisson_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_poisson_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, pcoa_poisson_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_poisson_umap_model.embedding;
@@ -878,6 +890,9 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         ## Compute Bray-Curtis distance matrix and perform PCoA
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
         ## UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -885,7 +900,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         embedding = pcoa_poisson_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_poisson_umap_fit_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_poisson_umap_fit_labels,
@@ -919,6 +934,9 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
         ## Compute Bray-Curtis distance matrix and perform PCoA
         pcoa_poisson_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_poisson_matrix))
         ## UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_poisson_umap_model = Mycelia.umap_embed(pcoa_poisson_result.coordinates)
         Test.@test size(pcoa_poisson_umap_model.embedding) ==
                    (2, n_samples * n_distributions)
@@ -959,7 +977,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     # Test.@testset "PoissonPCA-EPCA + KMeans" begin
     #     test_println("[Poisson] Testing: PoissonPCA-EPCA + KMeans")
     #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
-    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
+    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
     #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
     #                    title="PoissonPCA-EPCA + KMeans",
@@ -1042,7 +1060,7 @@ Test.@testset "Poisson (counts) Matrix Processing" begin
     #     test_println("[Poisson] Testing: PoissonPCA-EPCA + UMAP + KMeans")
     #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_poisson_matrix, k=5)
     #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_poisson_labels, fit_labels)
     #     plt = Mycelia.plot_embeddings(umap_model.embedding;
     #                    title="PoissonPCA-EPCA + UMAP + KMeans",
@@ -1198,7 +1216,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         nb_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(nb_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -1218,7 +1236,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + KMedoids" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + KMedoids")
         nb_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix)
-        kmedoids_result = Clustering.kmedoids(nb_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(nb_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, kmedoids_labels)
@@ -1263,7 +1281,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + KMeans" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + KMeans")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
-        pcoa_fit_nb_labels = Clustering.kmeans(pcoa_nb_result.coordinates, n_distributions).assignments
+        pcoa_fit_nb_labels = Clustering.kmeans(pcoa_nb_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_nb_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, pcoa_fit_nb_labels)
         plt = Mycelia.plot_embeddings(pcoa_nb_result.coordinates;
@@ -1296,7 +1314,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
         embedding = pcoa_nb_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_nb_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_fit_nb_labels,
@@ -1365,9 +1383,12 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
-        pcoa_nb_umap_fit_labels = Clustering.kmeans(pcoa_nb_umap_model.embedding, n_distributions).assignments
+        pcoa_nb_umap_fit_labels = Clustering.kmeans(pcoa_nb_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_nb_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, pcoa_nb_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_nb_umap_model.embedding;
@@ -1395,12 +1416,15 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMedoids" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + KMedoids")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = pcoa_nb_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_nb_umap_fit_labels = kmedoids_result.assignments
         pcoa_nb_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_nb_labels, pcoa_nb_umap_fit_labels)
@@ -1429,6 +1453,9 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)" begin
         test_println("[NegBin] Testing: Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         pcoa_nb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_nb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_nb_umap_model = Mycelia.umap_embed(pcoa_nb_result.coordinates)
         Test.@test size(pcoa_nb_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_nb_umap_model.embedding
@@ -1464,7 +1491,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     ## # NegBinPCA-EPCA + KMeans
     ## Test.@testset "NegBinPCA-EPCA + KMeans" begin
     ##     negbin_pca_result = Mycelia.negbin_pca_epca(shuffled_nb_matrix, k=5)
-    ##     fit_labels = Clustering.kmeans(negbin_pca_result.scores, n_distributions).assignments
+    ##     fit_labels = Clustering.kmeans(negbin_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     ##     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, fit_labels)
     ##     plt = Mycelia.plot_embeddings(negbin_pca_result.scores;
     ##                    title="Negative Binomial PCA-EPCA - Negative Binomial Matrix",
@@ -1488,7 +1515,7 @@ Test.@testset "Negative Binomial (overdispersed counts) Matrix Processing" begin
     ## Test.@testset "NegBinPCA-EPCA + UMAP + KMeans" begin
     ##     negbin_pca_result = Mycelia.negbin_pca_epca(shuffled_nb_matrix, k=5)
     ##     umap_model = Mycelia.umap_embed(negbin_pca_result.scores)
-    ##     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    ##     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     ##     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_nb_labels, fit_labels)
     ##     plt = Mycelia.plot_embeddings(umap_model.embedding;
     ##                    title="UMAP - Negative Binomial PCA-EPCA - Negative Binomial Matrix",
@@ -1584,7 +1611,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         binom_distance_matrix = Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(binom_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binom_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -1649,7 +1676,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + KMeans" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + KMeans")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
-        pcoa_fit_binom_labels = Clustering.kmeans(pcoa_binom_result.coordinates, n_distributions).assignments
+        pcoa_fit_binom_labels = Clustering.kmeans(pcoa_binom_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_binom_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binom_labels, pcoa_fit_binom_labels)
         plt = Mycelia.plot_embeddings(pcoa_binom_result.coordinates;
@@ -1682,7 +1709,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
         embedding = pcoa_binom_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_binom_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_fit_binom_labels,
@@ -1752,9 +1779,12 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMeans" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + KMeans")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
-        pcoa_binom_umap_fit_labels = Clustering.kmeans(pcoa_binom_umap_model.embedding, n_distributions).assignments
+        pcoa_binom_umap_fit_labels = Clustering.kmeans(pcoa_binom_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_binom_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binom_labels, pcoa_binom_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_binom_umap_model.embedding;
@@ -1782,12 +1812,15 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + KMedoids")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = pcoa_binom_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_binom_umap_fit_labels = kmedoids_result.assignments
         pcoa_binom_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_binom_labels, pcoa_binom_umap_fit_labels)
@@ -1816,6 +1849,9 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     Test.@testset "Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)" begin
         test_println("[Binom] Testing: Bray-Curtis Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         pcoa_binom_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_bray_curtis_distance_matrix(shuffled_binom_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_binom_umap_model = Mycelia.umap_embed(pcoa_binom_result.coordinates)
         Test.@test size(pcoa_binom_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_binom_umap_model.embedding
@@ -1852,7 +1888,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     # Test.@testset "PoissonPCA-EPCA + KMeans" begin
     #     test_println("[Binom] Testing: PoissonPCA-EPCA + KMeans")
     #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
-    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions).assignments
+    #     fit_labels = Clustering.kmeans(poisson_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
     #     plt = Mycelia.plot_embeddings(poisson_pca_result.scores;
     #                    title="PoissonPCA-EPCA + KMeans",
@@ -1935,7 +1971,7 @@ Test.@testset "Binomial (counts in 0:ntrials) Matrix Processing" begin
     #     test_println("[Binom] Testing: PoissonPCA-EPCA + UMAP + KMeans")
     #     poisson_pca_result = Mycelia.poisson_pca_epca(shuffled_binom_matrix, k=5)
     #     umap_model = Mycelia.umap_embed(poisson_pca_result.scores)
-    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    #     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     #     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_binom_labels, fit_labels)
     #     plt = Mycelia.plot_embeddings(umap_model.embedding;
     #                    title="PoissonPCA-EPCA + UMAP + KMeans",
@@ -2096,7 +2132,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         contb_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(contb_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -2117,7 +2153,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + KMedoids" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + KMedoids")
         contb_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix)
-        kmedoids_result = Clustering.kmedoids(contb_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(contb_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_contb_labels, kmedoids_labels)
@@ -2163,7 +2199,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + KMeans" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + KMeans")
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
-        pcoa_fit_contb_labels = Clustering.kmeans(pcoa_contb_result.coordinates, n_distributions).assignments
+        pcoa_fit_contb_labels = Clustering.kmeans(pcoa_contb_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_contb_labels,
         mapping = Mycelia.best_label_mapping(shuffled_contb_labels, pcoa_fit_contb_labels)
         plt = Mycelia.plot_embeddings(pcoa_contb_result.coordinates;
@@ -2196,7 +2232,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         embedding = pcoa_contb_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_contb_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_fit_contb_labels,
@@ -2266,9 +2302,12 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMeans" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + KMeans")
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
-        pcoa_contb_umap_fit_labels = Clustering.kmeans(pcoa_contb_umap_model.embedding, n_distributions).assignments
+        pcoa_contb_umap_fit_labels = Clustering.kmeans(pcoa_contb_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_contb_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_contb_labels, pcoa_contb_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_contb_umap_model.embedding;
@@ -2296,12 +2335,15 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMedoids" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + KMedoids")
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = pcoa_contb_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_contb_umap_fit_labels = kmedoids_result.assignments
         pcoa_contb_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_contb_labels, pcoa_contb_umap_fit_labels)
@@ -2331,6 +2373,9 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         test_println("[ContBernoulli] Testing: Cosine Distance + PCoA + UMAP + Hierarchical Clustering (Ward linkage)")
         ## Data generation and preprocessing as in original test
         pcoa_contb_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_contb_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_contb_umap_model = Mycelia.umap_embed(pcoa_contb_result.coordinates)
         Test.@test size(pcoa_contb_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_contb_umap_model.embedding
@@ -2368,7 +2413,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
     Test.@testset "ContBernoulliPCA-EPCA + KMeans" begin
         test_println("[ContBernoulli] Testing: ContBernoulliPCA-EPCA + KMeans")
         contb_pca_result = Mycelia.contbernoulli_pca_epca(clipped_contb_matrix, k=5)
-        fit_labels = Clustering.kmeans(contb_pca_result.scores, n_distributions).assignments
+        fit_labels = Clustering.kmeans(contb_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, fit_labels)
         plt = Mycelia.plot_embeddings(contb_pca_result.scores;
                        title="ContBernoulliPCA-EPCA + KMeans",
@@ -2395,7 +2440,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         contb_pca_result = Mycelia.contbernoulli_pca_epca(clipped_contb_matrix, k=5)
         ## Compute distance matrix from ContBernoulli PCA scores (Euclidean)
         dist_matrix = Distances.pairwise(Distances.Euclidean(), contb_pca_result.scores; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         fit_labels = kmedoids_result.assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, fit_labels)
         plt = Mycelia.plot_embeddings(contb_pca_result.scores;
@@ -2451,7 +2496,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         test_println("[ContBernoulli] Testing: ContBernoulliPCA-EPCA + UMAP + KMeans")
         contb_pca_result = Mycelia.contbernoulli_pca_epca(clipped_contb_matrix, k=5)
         umap_model = Mycelia.umap_embed(contb_pca_result.scores)
-        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, fit_labels)
         plt = Mycelia.plot_embeddings(umap_model.embedding;
                        title="ContBernoulliPCA-EPCA + UMAP + KMeans",
@@ -2480,7 +2525,7 @@ Test.@testset "Continuous Bernoulli (values in (0,1)) Matrix Processing" begin
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         fit_labels = kmedoids_result.assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_contb_labels, fit_labels)
         plt = Mycelia.plot_embeddings(embedding;
@@ -2614,7 +2659,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         gamma_distance_matrix = Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(gamma_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -2681,7 +2726,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + KMeans" begin
         test_println("[Gamma] Testing: Cosine Distance + PCoA + KMeans")
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
-        pcoa_fit_gamma_labels = Clustering.kmeans(pcoa_gamma_result.coordinates, n_distributions).assignments
+        pcoa_fit_gamma_labels = Clustering.kmeans(pcoa_gamma_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_gamma_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, pcoa_fit_gamma_labels)
         plt = Mycelia.plot_embeddings(pcoa_gamma_result.coordinates;
@@ -2712,7 +2757,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         ## Compute distance matrix from PCoA coordinates (Euclidean)
         embedding = pcoa_gamma_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_gamma_labels = kmedoids_result.assignments
         pcoa_fit_gamma_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, pcoa_fit_gamma_labels)
@@ -2779,9 +2824,12 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMeans" begin
         test_println("[Gamma] Testing: Cosine Distance + PCoA + UMAP + KMeans")
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
-        pcoa_gamma_umap_fit_labels = Clustering.kmeans(pcoa_gamma_umap_model.embedding, n_distributions).assignments
+        pcoa_gamma_umap_fit_labels = Clustering.kmeans(pcoa_gamma_umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_gamma_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels)
         plt = Mycelia.plot_embeddings(pcoa_gamma_umap_model.embedding;
@@ -2809,12 +2857,15 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     Test.@testset "Cosine Distance + PCoA + UMAP + KMedoids" begin
         test_println("[Gamma] Testing: Cosine Distance + PCoA + UMAP + KMedoids")
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = pcoa_gamma_umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_gamma_umap_fit_labels = kmedoids_result.assignments
         pcoa_gamma_umap_fit_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, pcoa_gamma_umap_fit_labels)
@@ -2845,6 +2896,9 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
         ## Step 1: Compute Cosine distance matrix and perform PCoA
         pcoa_gamma_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_cosine_distance_matrix(clipped_gamma_matrix))
         ## Step 2: UMAP embedding on PCoA coordinates
+        # UMAP optimization uses Julia's global RNG. Seed it so this
+        # exploratory clustering check is reproducible on Julia LTS.
+        Random.seed!(42)
         pcoa_gamma_umap_model = Mycelia.umap_embed(pcoa_gamma_result.coordinates)
         Test.@test size(pcoa_gamma_umap_model.embedding) == (2, n_samples * n_distributions)
         embedding = pcoa_gamma_umap_model.embedding
@@ -2884,7 +2938,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     ## Test.@testset "GammaPCA-EPCA + KMeans" begin
     ##     test_println("[Gamma] Testing: GammaPCA-EPCA + KMeans")
     ##     gamma_pca_result = Mycelia.gamma_pca_epca(clipped_gamma_matrix, k=5)
-    ##     fit_labels = Clustering.kmeans(gamma_pca_result.scores, n_distributions).assignments
+    ##     fit_labels = Clustering.kmeans(gamma_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     ##     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, fit_labels)
     ##     plt = Mycelia.plot_embeddings(gamma_pca_result.scores;
     ##                    title="GammaPCA-EPCA + KMeans",
@@ -2910,7 +2964,7 @@ Test.@testset "Gamma (strictly positive) Matrix Processing" begin
     ##     test_println("[Gamma] Testing: GammaPCA-EPCA + UMAP + KMeans")
     ##     gamma_pca_result = Mycelia.gamma_pca_epca(clipped_gamma_matrix, k=5)
     ##     umap_model = Mycelia.umap_embed(gamma_pca_result.scores)
-    ##     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+    ##     fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
     ##     fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gamma_labels, fit_labels)
     ##     plt = Mycelia.plot_embeddings(umap_model.embedding;
     ##                    title="GammaPCA-EPCA + UMAP + KMeans",
@@ -3010,7 +3064,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         gauss_distance_matrix = Mycelia.frequency_matrix_to_euclidean_distance_matrix(shuffled_gauss_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(gauss_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -3031,7 +3085,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
     Test.@testset "Euclidean Distance + KMedoids" begin
         test_println("[Gaussian] Testing: Euclidean Distance + KMedoids")
         gauss_distance_matrix = Mycelia.frequency_matrix_to_euclidean_distance_matrix(shuffled_gauss_matrix)
-        kmedoids_result = Clustering.kmedoids(gauss_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(gauss_distance_matrix, n_distributions, 3)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, kmedoids_labels)
@@ -3081,7 +3135,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
     Test.@testset "Euclidean Distance + PCoA + KMeans" begin
         test_println("[Gaussian] Testing: Euclidean Distance + PCoA + KMeans")
         pcoa_gauss_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_euclidean_distance_matrix(shuffled_gauss_matrix))
-        pcoa_fit_gauss_labels = Clustering.kmeans(pcoa_gauss_result.coordinates, n_distributions).assignments
+        pcoa_fit_gauss_labels = Clustering.kmeans(pcoa_gauss_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_gauss_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, pcoa_fit_gauss_labels)
         plt = Mycelia.plot_embeddings(pcoa_gauss_result.coordinates;
@@ -3112,7 +3166,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         ## Compute distance matrix from PCoA coordinates (Euclidean)
         embedding = pcoa_gauss_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_gauss_labels = kmedoids_result.assignments
         pcoa_fit_gauss_labels,
         mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, pcoa_fit_gauss_labels)
@@ -3299,7 +3353,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
     Test.@testset "GaussianPCA-EPCA + KMeans" begin
         test_println("[Gaussian] Testing: GaussianPCA-EPCA + KMeans")
         gauss_pca_result = Mycelia.gaussian_pca_epca(shuffled_gauss_matrix, k=5)
-        fit_labels = Clustering.kmeans(gauss_pca_result.scores, n_distributions).assignments
+        fit_labels = Clustering.kmeans(gauss_pca_result.scores, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, fit_labels)
         plt = Mycelia.plot_embeddings(gauss_pca_result.scores;
                        title="GaussianPCA-EPCA + KMeans",
@@ -3326,7 +3380,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         gauss_pca_result = Mycelia.gaussian_pca_epca(shuffled_gauss_matrix, k=5)
         ## Compute distance matrix from Gaussian PCA scores (Euclidean)
         dist_matrix = Distances.pairwise(Distances.Euclidean(), gauss_pca_result.scores; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         fit_labels = kmedoids_result.assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, fit_labels)
         plt = Mycelia.plot_embeddings(gauss_pca_result.scores;
@@ -3382,7 +3436,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         test_println("[Gaussian] Testing: GaussianPCA-EPCA + UMAP + KMeans")
         gauss_pca_result = Mycelia.gaussian_pca_epca(shuffled_gauss_matrix, k=5)
         umap_model = Mycelia.umap_embed(gauss_pca_result.scores)
-        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions).assignments
+        fit_labels = Clustering.kmeans(umap_model.embedding, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, fit_labels)
         plt = Mycelia.plot_embeddings(umap_model.embedding;
                        title="GaussianPCA-EPCA + UMAP + KMeans",
@@ -3411,7 +3465,7 @@ Test.@testset "Gaussian (centered, real-valued) Matrix Processing" begin
         ## Compute distance matrix from UMAP embedding (Euclidean)
         embedding = umap_model.embedding
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims=2)
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         fit_labels = kmedoids_result.assignments
         fit_labels, mapping = Mycelia.best_label_mapping(shuffled_gauss_labels, fit_labels)
         plt = Mycelia.plot_embeddings(embedding;
@@ -3543,7 +3597,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         probvec_distance_matrix = Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(shuffled_dirichlet_matrix)
         ## Classical MDS/PCoA to get coordinates from distance matrix
         pcoa_result = Mycelia.pcoa_from_dist(probvec_distance_matrix)
-        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions).assignments
+        kmeans_labels = Clustering.kmeans(pcoa_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmeans_labels)
         evaluation_result = Mycelia.evaluate_classification(
@@ -3563,7 +3617,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
     Test.@testset "Jensen-Shannon Divergence + KMedoids" begin
         test_println("[ProbVec] Testing: Jensen-Shannon Divergence + KMedoids")
         probvec_distance_matrix = Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(shuffled_dirichlet_matrix)
-        kmedoids_result = Clustering.kmedoids(probvec_distance_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(probvec_distance_matrix, n_distributions, 1)
         kmedoids_labels = kmedoids_result.assignments
         remapped_pred_labels,
         mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, kmedoids_labels)
@@ -3614,7 +3668,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
     Test.@testset "Jensen-Shannon Divergence + PCoA + KMeans" begin
         test_println("[ProbVec] Testing: Jensen-Shannon Divergence + PCoA + KMeans")
         pcoa_probvec_result = Mycelia.pcoa_from_dist(Mycelia.frequency_matrix_to_jensen_shannon_distance_matrix(shuffled_dirichlet_matrix))
-        pcoa_fit_probvec_labels = Clustering.kmeans(pcoa_probvec_result.coordinates, n_distributions).assignments
+        pcoa_fit_probvec_labels = Clustering.kmeans(pcoa_probvec_result.coordinates, n_distributions; rng = StableRNGs.StableRNG(42)).assignments
         pcoa_fit_probvec_labels,
         mapping = Mycelia.best_label_mapping(shuffled_dirichlet_labels, pcoa_fit_probvec_labels)
         plt = Mycelia.plot_embeddings(pcoa_probvec_result.coordinates;
@@ -3647,7 +3701,7 @@ Test.@testset "Probability Vector (Compositional) Matrix Processing" begin
         embedding = pcoa_probvec_result.coordinates
         dist_matrix = Distances.pairwise(Distances.Euclidean(), embedding; dims = 2)
         ## Apply k-medoids clustering
-        kmedoids_result = Clustering.kmedoids(dist_matrix, n_distributions)
+        kmedoids_result = deterministic_kmedoids(dist_matrix, n_distributions, 1)
         pcoa_fit_probvec_labels = kmedoids_result.assignments
         ## Remap predicted labels to best match true labels
         pcoa_fit_probvec_labels,

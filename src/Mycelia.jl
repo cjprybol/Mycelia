@@ -64,6 +64,7 @@ import LsqFit
 import Luxor
 import Makie
 import MD5
+import MetaGraphs
 import MetaGraphsNext
 import Mmap
 import MultivariateStats
@@ -131,6 +132,20 @@ include("iterative-assembly.jl")
 # Advanced algorithms (depend on core graph types)
 include("viterbi-next.jl")
 
+# Batched array-frontier corrector — CPU proof-of-concept (bead td-qoo3).
+# Included AFTER viterbi-next.jl: it reuses that file's decode helpers + config
+# type at the Mycelia top level. GPU/SIMD acceleration foundation; see
+# docs/design/2026-07-06-gpu-simd-corrector-acceleration.md.
+include("rhizomorph/algorithms/batched-viterbi-poc.jl")
+
+# Phase B: backend-agnostic (CPU + CUDA/GPU) frontier kernel for the batched
+# corrector, built on the CPU PoC above. Declares the public entry points here;
+# the KernelAbstractions kernel + decoder + oracle + benchmark live in the
+# package extension `ext/MyceliaKernelAbstractionsExt.jl` (loaded lazily on
+# `import KernelAbstractions`). The base package carries NO GPU dependency; see
+# docs/design/2026-07-06-gpu-simd-corrector-acceleration.md (bead td-qoo3).
+include("rhizomorph/algorithms/batched-viterbi-kernel.jl")
+
 # # Cross-validation pipeline (depends on both intelligent and iterative assembly)
 # include("cross-validation.jl")
 
@@ -180,6 +195,7 @@ include("reference-databases.jl")
 include("relational-matrices.jl")
 include("sentencepiece.jl")
 include("sequence-comparison.jl")
+include("sequence-graphs.jl")
 include("simulation.jl")
 include("slurm-templates.jl")
 include("execution.jl")

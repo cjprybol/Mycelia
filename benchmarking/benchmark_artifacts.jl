@@ -251,8 +251,6 @@ end
 function _benchmark_git_metadata(repo_root::AbstractString)
     return OrderedCollections.OrderedDict{String, Any}(
         "commit" => _git_output(repo_root, ["rev-parse", "HEAD"]),
-        "branch" => _git_output(repo_root, ["rev-parse", "--abbrev-ref", "HEAD"]),
-        "remote_url" => _git_output(repo_root, ["config", "--get", "remote.origin.url"]),
         "is_dirty" => _git_dirty(repo_root)
     )
 end
@@ -272,9 +270,12 @@ function _git_output(repo_root::AbstractString, args::Vector{String})
 end
 
 function _write_benchmark_json(path::AbstractString, data)
+    buffer = IOBuffer()
+    JSON.print(buffer, _ordered_benchmark_json(data), 2)
+    content = String(take!(buffer))
     open(path, "w") do io
-        JSON.print(io, _ordered_benchmark_json(data), 2)
-        println(io)
+        print(io, chomp(content))
+        print(io, "\n")
     end
     return path
 end

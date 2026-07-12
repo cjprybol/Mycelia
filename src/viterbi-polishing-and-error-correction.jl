@@ -825,7 +825,10 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Process and error-correct a FASTQ record by walking a Rhizomorph graph.
 """
 function process_fastq_record(;
-        record, graph, weighted_graph, traversal::Symbol = :probabilistic,
+        record, graph, weighted_graph, traversal::Symbol = :viterbi,
+        graph_mode::Symbol = :singlestrand,
+        edge_weight::Function = Mycelia.Rhizomorph.edge_data_weight,
+        error_rate::Float64 = 0.01,
         max_steps::Union{Int, Nothing} = nothing, seed::Union{Int, Nothing} = nothing)
     labels = collect(MetaGraphsNext.labels(graph))
     if isempty(labels)
@@ -870,15 +873,39 @@ function process_fastq_record(;
         end
     end
 
-    path = if traversal == :probabilistic
-        Mycelia.Rhizomorph.probabilistic_walk_next(weighted_graph, start_vertex, max_steps; seed = seed)
+    if traversal == :viterbi
+        observations = record_kmers === nothing ? [record_sequence] : record_kmers
+        config = Mycelia.ViterbiCorrectionConfig(
+            error_rate = error_rate,
+            strand_mode = graph_mode,
+            max_steps = max_steps,
+            edge_weight = edge_weight
+        )
+        correction = Mycelia.correct_observations(graph, [observations]; config = config)
+        corrected_path = only(correction.corrected_observations)
+        if corrected_path === nothing || isempty(corrected_path)
+            return (
+                record = record,
+                polished_record = record,
+                traversal = traversal,
+                max_steps = max_steps,
+                status = :viterbi_no_path,
+                diagnostics = correction.diagnostics
+            )
+        end
+        polished_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
+    elseif traversal == :probabilistic
+        path = Mycelia.Rhizomorph.probabilistic_walk_next(
+            weighted_graph, start_vertex, max_steps; seed = seed
+        )
+        polished_sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted_graph)
     elseif traversal == :greedy
-        Mycelia.Rhizomorph.maximum_weight_walk_next(weighted_graph, start_vertex, max_steps)
+        path = Mycelia.Rhizomorph.maximum_weight_walk_next(weighted_graph, start_vertex, max_steps)
+        polished_sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted_graph)
     else
         throw(ArgumentError("Unsupported traversal: $(traversal)"))
     end
 
-    polished_sequence = Mycelia.Rhizomorph.path_to_sequence(path, weighted_graph)
     polished_sequence_str = polished_sequence isa AbstractString ? polished_sequence :
                             string(polished_sequence)
 
@@ -902,7 +929,7 @@ function process_fastq_record(;
     )
 
     return (record = record, polished_record = polished_record,
-        traversal = traversal, max_steps = max_steps)
+        traversal = traversal, max_steps = max_steps, status = :ok)
 end
 
 """
@@ -911,13 +938,19 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Compatibility wrapper for process_fastq_record using the Rhizomorph traversal.
 """
 function process_fastq_record_with_polishing(;
-        record, graph, weighted_graph, traversal::Symbol = :probabilistic,
+        record, graph, weighted_graph, traversal::Symbol = :viterbi,
+        graph_mode::Symbol = :singlestrand,
+        edge_weight::Function = Mycelia.Rhizomorph.edge_data_weight,
+        error_rate::Float64 = 0.01,
         max_steps::Union{Int, Nothing} = nothing, seed::Union{Int, Nothing} = nothing)
     return process_fastq_record(
         record = record,
         graph = graph,
         weighted_graph = weighted_graph,
         traversal = traversal,
+        graph_mode = graph_mode,
+        edge_weight = edge_weight,
+        error_rate = error_rate,
         max_steps = max_steps,
         seed = seed
     )
@@ -932,7 +965,7 @@ function polish_fastq(;
         fastq,
         k = 1,
         graph_mode::Symbol = :singlestrand,
-        traversal::Symbol = :probabilistic,
+        traversal::Symbol = :viterbi,
         weighting::Symbol = :quality,
         seed::Union{Int, Nothing} = nothing,
         max_steps::Union{Int, Nothing} = nothing,
@@ -944,7 +977,7 @@ function polish_fastq(;
     if !(graph_mode in (:singlestrand, :doublestrand, :canonical))
         throw(ArgumentError("Invalid graph_mode: $(graph_mode)"))
     end
-    if !(traversal in (:probabilistic, :greedy))
+    if !(traversal in (:viterbi, :probabilistic, :greedy))
         throw(ArgumentError("Unsupported traversal: $(traversal)"))
     end
     if !(weighting in (:evidence, :quality))
@@ -979,6 +1012,8 @@ function polish_fastq(;
             graph = graph,
             weighted_graph = weighted_graph,
             traversal = traversal,
+            graph_mode = graph_mode,
+            edge_weight = edge_weight,
             max_steps = max_steps,
             seed = seed
         )
@@ -1006,7 +1041,7 @@ function iterative_polishing(
         fastq,
         max_k = 53;
         graph_mode::Symbol = :singlestrand,
-        traversal::Symbol = :probabilistic,
+        traversal::Symbol = :viterbi,
         weighting::Symbol = :quality,
         seed::Union{Int, Nothing} = nothing,
         max_steps::Union{Int, Nothing} = nothing
@@ -1038,16 +1073,9 @@ function iterative_polishing(
     return polishing_results
 end
 
-# """
-# $(DocStringExtensions.TYPEDSIGNATURES)
-
-# Description
-
-# ```jldoctest
-# julia> 1 + 1
-# 2
-# ```
-# """
+# Retired legacy `simple_polish_fastq` stub: production polishing now routes through
+# `process_fastq_record(...; traversal = :viterbi)` and the public generalized
+# `correct_observations(...)` interface.
 # function simple_polish_fastq(simple_kmer_graph, fastq_file; min_depth=3)
 #     solid_vertices = filter(v -> simple_kmer_graph.vprops[v][:weight] >= min_depth, Graphs.vertices(simple_kmer_graph))
 #     filtered_simple_kmer_graph, vertex_map = Graphs.induced_subgraph(simple_kmer_graph, solid_vertices)

@@ -1,0 +1,6 @@
+>truth_1
+ACGTACGTACGT
+>truth_2
+ACGTACGTACGT
+>error_substitution
+ACGTTCGTACGT
