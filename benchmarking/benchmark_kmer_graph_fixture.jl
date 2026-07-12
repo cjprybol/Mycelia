@@ -1,7 +1,7 @@
 # Reusable decoder-benchmark k-mer/n-gram graph fixture.
 # ======================================================
 #
-# ONE vetted graph-build + observation-conversion path, extracted from
+# ONE graph-build + observation-conversion path, adapted from
 # viterbi_accuracy_benchmark.jl (B8), so the Tier-2 gap calibration (td-4osf) and
 # future decoder benchmarks stop each re-deriving how to build a correction graph
 # from a truth sequence and how to convert reads into the label-observation form
@@ -29,8 +29,9 @@ end
 """
     benchmark_kmer_graph_fixture(sequence, k; moltype=:DNA, dataset_id="benchmark")
 
-Build a decoder-benchmark correction graph from a single truth `sequence`, plus a
-matching sequence -> observation converter. Returns a NamedTuple:
+Build a decoder-benchmark correction graph from a single ASCII truth `sequence`,
+plus a matching sequence -> observation converter. `k` must satisfy
+`1 <= k <= length(sequence)`. Returns a NamedTuple:
 
   * `graph`             — the k-mer (DNA/RNA, singlestrand) or n-gram (text)
                           correction graph, ready for `Mycelia.correct_observations`.
@@ -40,21 +41,26 @@ matching sequence -> observation converter. Returns a NamedTuple:
                           runs. Pass the truth to get the clean observation, or an
                           errored read to get one for correction.
 
-This is the extraction of B8's `build_kmer_graph`/`build_ngram_graph` +
-`_sequence_kmers` + `_convert_observations` into a single vetted entry point.
+This adapts B8's graph-construction and observation-conversion pattern into a
+self-contained truth-only fixture.
 """
 function benchmark_kmer_graph_fixture(sequence::AbstractString, k::Int;
         moltype::Symbol = :DNA, dataset_id::AbstractString = "benchmark")
+    isascii(sequence) || throw(ArgumentError("sequence must contain ASCII characters only"))
+    1 <= k <= length(sequence) ||
+        throw(ArgumentError("k must satisfy 1 <= k <= length(sequence)"))
+    dataset_id_string = String(dataset_id)
     graph = if moltype === :DNA
         Mycelia.Rhizomorph.build_kmer_graph(
-            [FASTX.FASTA.Record(dataset_id, sequence)], k;
-            dataset_id = dataset_id, mode = :singlestrand)
+            [FASTX.FASTA.Record(dataset_id_string, sequence)], k;
+            dataset_id = dataset_id_string, mode = :singlestrand)
     elseif moltype === :RNA
         Mycelia.Rhizomorph.build_kmer_graph(
-            [FASTX.FASTA.Record(dataset_id, sequence)], k;
-            dataset_id = dataset_id, mode = :singlestrand, type_hint = :RNA)
+            [FASTX.FASTA.Record(dataset_id_string, sequence)], k;
+            dataset_id = dataset_id_string, mode = :singlestrand, type_hint = :RNA)
     elseif moltype === :text
-        Mycelia.Rhizomorph.build_ngram_graph([String(sequence)], k; dataset_id = dataset_id)
+        Mycelia.Rhizomorph.build_ngram_graph(
+            [String(sequence)], k; dataset_id = dataset_id_string)
     else
         throw(ArgumentError("unsupported moltype $moltype (expected :DNA, :RNA, :text)"))
     end
