@@ -11,6 +11,10 @@
 #     benchmarking/rhizomorph_correction_validation_sweep_test.jl
 
 import Test
+# DataFrames is a direct dep of the Mycelia project and loads WITHOUT importing
+# Mycelia, so this test stays dependency-free (no Mycelia, no network, no QUAST)
+# while still exercising the production DataFrame push! schema.
+import DataFrames
 
 include(joinpath(@__DIR__, "rhizomorph_scale_guard.jl"))
 # Dependency-free QUAST parser + per-arm attribution helper (same file the sweep
@@ -90,4 +94,60 @@ Test.@testset "QUAST report parsing + per-arm metric wiring" begin
         Test.@test f.quast_num_misassemblies === missing
         Test.@test f.quast_duplication_ratio === missing
     end
+end
+
+Test.@testset "DataFrame schema push! guards column-name drift" begin
+    # This test constructs the EXACT production DataFrame schema from the sweep
+    # (run_sweep's `rows`) and push!es the QUAST helper NamedTuples into it. It
+    # catches drift between the helper's field names and the DataFrame columns —
+    # a mismatch that would only surface at full-run time otherwise. Kept
+    # Mycelia-free: only DataFrames (a Mycelia-project dep) is needed.
+    df = DataFrames.DataFrame(
+        reference = String[], genome_len = Int[], error_rate = Float64[],
+        regime = String[], readlen = Int[], tech = String[], target_coverage = Float64[],
+        effective_coverage = Float64[], k = Int[], arm = String[], ok = Bool[],
+        n_contigs = Int[], total_length = Int[], largest_contig = Int[], n50 = Int[],
+        genome_fraction = Float64[], runtime_s = Float64[],
+        quast_genome_fraction = Union{Missing, Float64}[],
+        quast_nga50 = Union{Missing, Float64}[],
+        quast_num_misassemblies = Union{Missing, Float64}[],
+        quast_duplication_ratio = Union{Missing, Float64}[],
+        metric_source = String[]
+    )
+
+    # Non-QUAST columns for a row (mirrors what run_arm + the loop supply).
+    base = (
+        reference = "synthetic_2000bp", genome_len = 2_000, error_rate = 0.01,
+        regime = "short-low-error", readlen = 150, tech = "illumina",
+        target_coverage = 30.0, effective_coverage = 29.5, k = 21, arm = "naive",
+        ok = true, n_contigs = 5, total_length = 1_980, largest_contig = 620,
+        n50 = 410, genome_fraction = 99.0, runtime_s = 1.234
+    )
+
+    mktempdir() do dir
+        # QUAST-present fixture (same shape as the parsing testset above).
+        report_tsv = joinpath(dir, "report.tsv")
+        open(report_tsv, "w") do io
+            println(io, "Assembly\tnaive_contigs")
+            println(io, "Genome fraction (%)\t94.37")
+            println(io, "Duplication ratio\t1.02")
+            println(io, "NGA50\t8421")
+            println(io, "# misassemblies\t3")
+        end
+
+        # Row 1: a QUAST-scored arm. merge(base, quast) must slot cleanly into df.
+        q = quast_metrics_for_report(report_tsv)
+        Test.@test_nowarn push!(df, merge(base, q))
+
+        # Row 2: an internal-fallback arm via the shared helper.
+        e = empty_quast_metrics("internal:quast-disabled")
+        Test.@test_nowarn push!(df, merge(base, e))
+    end
+
+    # Both pushes succeeded with no field-name mismatch, and provenance labels
+    # landed in the metric_source column exactly as the helpers set them.
+    Test.@test DataFrames.nrow(df) == 2
+    Test.@test df.metric_source == ["quast", "internal:quast-disabled"]
+    Test.@test df.quast_nga50[1] == 8421.0
+    Test.@test df.quast_genome_fraction[2] === missing
 end

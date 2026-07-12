@@ -309,25 +309,54 @@ function run_sweep()
 
                 # Optional QUAST validation for THIS arm (per-arm attribution:
                 # one assembly per invocation so the alignment-based metrics land
-                # on the correct row). Defaults to the internal-metric fallback;
-                # a QUAST failure is non-fatal and NEVER flips `res.ok`.
-                quast = (metric_source = "internal", quast_genome_fraction = missing,
-                    quast_nga50 = missing, quast_num_misassemblies = missing,
-                    quast_duplication_ratio = missing)
-                if run_external && res.ok && !isempty(res.contigs_path) &&
-                   isfile(res.contigs_path) && filesize(res.contigs_path) > 0
+                # on the correct row). A QUAST failure is non-fatal and NEVER
+                # flips `res.ok`. The internal fallback's metric_source records
+                # WHY QUAST didn't score this arm so the CSV is auditable.
+                has_contigs = res.ok && !isempty(res.contigs_path) &&
+                              isfile(res.contigs_path) && filesize(res.contigs_path) > 0
+                quast = if !res.ok
+                    empty_quast_metrics("internal:arm-failed")
+                elseif !run_external
+                    empty_quast_metrics("internal:quast-disabled")
+                elseif !has_contigs
+                    empty_quast_metrics("internal:quast-skipped-empty")
+                else
+                    # QUAST was attempted; label as failed until run_quast succeeds.
+                    empty_quast_metrics("internal:quast-failed")
+                end
+                if run_external && has_contigs
                     quast_dir = joinpath(cell_dir, "quast_$(arm_name)")
+                    # Narrow try/catch: only the external tool invocation is
+                    # guarded. A parser/wiring bug in quast_metrics_for_report is
+                    # a real defect and MUST propagate loudly, not be mislabeled
+                    # "QUAST unavailable".
+                    ran = false
                     try
                         Mycelia.run_quast(res.contigs_path;
                             outdir = quast_dir,
                             reference = ref_path,
                             min_contig = max(50, glen ÷ 10))
+                        ran = true
+                    catch e
+                        @warn "QUAST external tool unavailable/failed — falling back to internal metrics" arm_name exception = (
+                            e, catch_backtrace())
+                    end
+                    if ran
+                        # Parse OUTSIDE the try — a parse bug is a real defect.
                         quast = quast_metrics_for_report(joinpath(quast_dir, "report.tsv"))
                         println("  QUAST[$arm_name]: gf=$(quast.quast_genome_fraction)% " *
                                 "nga50=$(quast.quast_nga50) misasm=$(quast.quast_num_misassemblies) " *
                                 "dup=$(quast.quast_duplication_ratio) ($quast_dir)")
-                    catch e
-                        @warn "QUAST unavailable / failed for this arm — falling back to internal metrics" arm_name exception = e
+                        # Label-drift smoke: QUAST claims to have scored this arm
+                        # yet every metric parsed as missing => report.tsv metric
+                        # names likely drifted from what we query.
+                        if quast.metric_source == "quast" &&
+                           ismissing(quast.quast_genome_fraction) &&
+                           ismissing(quast.quast_nga50) &&
+                           ismissing(quast.quast_num_misassemblies) &&
+                           ismissing(quast.quast_duplication_ratio)
+                            @warn "QUAST label-drift: metric_source==\"quast\" but all four quast_* metrics are missing (report.tsv metric-name mismatch?)" arm_name quast_dir
+                        end
                     end
                 end
 
@@ -382,12 +411,26 @@ function run_sweep()
     CSV.write(csv_path, rows)
     println("\nCSV written: $csv_path")
 
+    # Systematic-QUAST-failure alarm: if the operator ASKED for external
+    # validation but not a single arm ended up alignment-validated, the QUAST
+    # path is broken/unavailable for the whole run — surface it loudly rather
+    # than silently reporting only internal proxies.
+    any_quast = any(==("quast"), rows.metric_source)
+    if run_external && !any_quast
+        @warn "MYCELIA_RUN_EXTERNAL was requested but NO arm achieved metric_source==\"quast\" — QUAST appears unavailable/failed for the entire run; every row below is an internal size-ratio proxy only."
+    end
+
     if verdict_allowed
         println("\n=== VERDICT (scale metric $(round(metric; digits=0)) bases >= floor $(scale_floor)) ===")
-        println("Sweep meets the scale floor; the naive-vs-iterative comparison above is a")
-        println("validation-grade result. Compare `iterative` against `naive` per cell:")
-        println("  - genome_fraction / n50 higher for iterative => correction core helps at that (err, regime)")
-        println("  - lower or equal => correction core neutral or harmful at that (err, regime)")
+        println("Sweep meets the scale floor. Read the metrics by provenance (metric_source):")
+        println("  - rows with metric_source==\"quast\" are ALIGNMENT-VALIDATED — compare")
+        println("    quast_genome_fraction / quast_nga50 (and quast_num_misassemblies) for")
+        println("    iterative vs naive per cell; higher fraction/NGA50 with fewer")
+        println("    misassemblies => correction core helps at that (err, regime).")
+        println("  - rows with metric_source starting \"internal\" are INTERNAL size-ratio")
+        println("    proxies (total_length/glen and length-sorted n50). They are BLIND to")
+        println("    misassembly and mis-alignment and are NOT validation-grade; treat them")
+        println("    as a sanity gauge only, never as evidence the correction core works.")
     else
         println("\n=== SMOKE-ONLY (scale metric $(round(metric; digits=0)) bases < floor $(scale_floor)) ===")
         println("This run is BELOW the scale floor and MUST NOT be quoted as validation.")

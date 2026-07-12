@@ -6,9 +6,10 @@
 # Kept dependency-free so the unit test can exercise the parse/attribution
 # logic in milliseconds without loading Mycelia or running QUAST.
 #
-# `parse_quast_metric` was lifted verbatim from mode_comparison.jl (the two
-# benchmarking scripts previously each carried their own copy); it now lives
-# here as the single shared definition that both `include`.
+# `parse_quast_metric` was extracted from mode_comparison.jl's inline parser.
+# mode_comparison.jl still carries its own copy and does NOT yet include this
+# file — consolidating the two is a clean follow-up. For now this file is the
+# shared definition used by the correction-validation sweep and its unit test.
 
 """
     parse_quast_metric(report_tsv, metric) -> Union{Missing, Float64}
@@ -35,6 +36,26 @@ function parse_quast_metric(report_tsv::String, metric::String)::Union{Missing, 
 end
 
 """
+    empty_quast_metrics(metric_source="internal") -> NamedTuple
+
+Single source of truth for the "no QUAST metrics" NamedTuple shape: the four
+`quast_*` fields are all `missing` and `metric_source` records WHY QUAST is
+absent (e.g. "internal", "internal:quast-disabled", "internal:quast-failed",
+"internal:quast-skipped-empty", "internal:arm-failed"). Both this file's
+absent-report branch and the sweep's inline fallback defaults call it, so the
+fallback shape is defined exactly once.
+"""
+function empty_quast_metrics(metric_source::String = "internal")
+    return (
+        metric_source = metric_source,
+        quast_genome_fraction = missing,
+        quast_nga50 = missing,
+        quast_num_misassemblies = missing,
+        quast_duplication_ratio = missing
+    )
+end
+
+"""
     quast_metrics_for_report(report_tsv) -> NamedTuple
 
 Extract the alignment-validated assembly metrics for ONE assembly arm from its
@@ -56,13 +77,7 @@ populated regardless.
 """
 function quast_metrics_for_report(report_tsv::String)
     if !isfile(report_tsv)
-        return (
-            metric_source = "internal",
-            quast_genome_fraction = missing,
-            quast_nga50 = missing,
-            quast_num_misassemblies = missing,
-            quast_duplication_ratio = missing
-        )
+        return empty_quast_metrics("internal")
     end
     return (
         metric_source = "quast",
