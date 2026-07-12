@@ -1374,11 +1374,12 @@ A read with no hard window (empty ranges) returns unchanged (`false`) — this o
 occurs for reads the caller's gate already classified as skip, so the whole-read
 fallback (`windowed_decode=false`) is the caller's, not this function's.
 
-Each window includes a solid k-mer flank (`pad === nothing` ⇒ `k` bases), keeping
-hard vertices in the window interior and providing solid boundary context. The
-quality-aware decoder may use the first k-mer as its start but deliberately leaves
-the target endpoint free so the last k-mer remains correctable. This function
-windows unconditionally; the caller decides WHEN to window.
+Each window requests a k-mer-width flank (`pad === nothing` ⇒ `k` bases), keeping
+hard vertices away from a boundary when read ends and `max_window` permit. Padding
+is contextual rather than a solidity guarantee. The quality-aware decoder may use
+the first k-mer as its start but deliberately leaves the target endpoint free so
+the last k-mer remains correctable. This function windows unconditionally; the
+caller decides WHEN to window.
 
 Returns `(record, improved)` where `improved` is `true` iff `>= 1` window was
 corrected and spliced. The lower-level `improve_read_likelihood_windowed_detail`
@@ -1442,10 +1443,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool, Int, Int}
     # Anchor each window with a full solid k-mer flank by default (`pad === nothing`
-    # ⇒ `k`): a pad of `k` bases guarantees the window's first/last k-mer clears the
-    # hard k-mer's span, providing solid boundary context while hard vertices remain
-    # in the interior. Quality-aware decoding leaves the target endpoint free so the
-    # last k-mer remains correctable.
+    # ⇒ `k`): request a k-mer-width flank around the hard span when read boundaries
+    # and `max_window` allow it. This is contextual padding, not a guarantee that a
+    # boundary k-mer is solid. Quality-aware decoding leaves the target endpoint free
+    # so the last k-mer remains correctable.
     effective_pad = pad === nothing ? k : pad
     windows = _hard_window_ranges(
         read, k, hard_vertices; pad = effective_pad, max_window = max_window)
@@ -1575,7 +1576,7 @@ Gate for WHEN to use windowed decode (td-nn6l Stage 3c). Returns `true` only whe
 the read's observation count exceeds `_AUTO_BEAM_EXACT_THRESHOLD`, bounding the
 read-length axis by decoding `<=max_window` sub-windows. Exactness still depends on
 graph density and any explicit beam override: a short window on a graph with more
-than `_AUTO_BEAM_EXACT_GRAPH_VERTICES` vertices remains beam-bounded. Reads below
+than `_AUTO_BEAM_BOUNDED_WIDTH` vertices remains beam-bounded. Reads below
 the length threshold keep whole-read context unless another caller policy (such as
 staged indel decoding, td-2rxh) explicitly forces windowing.
 """
@@ -2665,30 +2666,36 @@ function _quality_from_indel_trace(
     quality_chars = collect(original_quality)
     n_quality = length(quality_chars)
     if k <= 0 || n_quality < k || isempty(move_trace) ||
-       length(move_trace) != length(read_index_trace) || first(move_trace) != :M
+       length(move_trace) != length(read_index_trace) || first(move_trace) != :M ||
+       first(read_index_trace) != 1
         return nothing
     end
 
     corrected_quality = copy(quality_chars[1:k])
+    n_observations = n_quality - k + 1
+    previous_read_index = 1
     @inbounds for trace_index in 2:length(move_trace)
         phase = move_trace[trace_index]
         read_index = read_index_trace[trace_index]
+        expected_read_index = phase == :D ? previous_read_index : previous_read_index + 1
+        if phase ∉ (:M, :I, :D) || read_index != expected_read_index ||
+           !(1 <= read_index <= n_observations)
+            return nothing
+        end
         observed_position = read_index + k - 1
         if phase == :M
-            1 <= observed_position <= n_quality || return nothing
             push!(corrected_quality, quality_chars[observed_position])
         elseif phase == :I
             # The read consumed an extra observed base without advancing the graph;
             # the corrected latent sequence therefore emits no base or quality.
             continue
         elseif phase == :D
-            left_position = clamp(observed_position, 1, n_quality)
-            right_position = clamp(observed_position + 1, 1, n_quality)
+            left_position = observed_position
+            right_position = min(observed_position + 1, n_quality)
             push!(corrected_quality,
                 min(quality_chars[left_position], quality_chars[right_position]))
-        else
-            return nothing
         end
+        previous_read_index = read_index
     end
     length(corrected_quality) == corrected_length || return nothing
     return String(corrected_quality)

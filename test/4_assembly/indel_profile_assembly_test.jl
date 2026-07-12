@@ -166,6 +166,8 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # The provenance stamp proves the indel decode path was engaged.
         Test.@test np.assembly_stats["indel_moves"] == true
         Test.@test np.assembly_stats["sequencing_tech"] == "nanopore"
+        Test.@test np.assembly_stats["indel_decodes"] >= 0
+        Test.@test np.assembly_stats["window_divergences"] >= 0
     end
 
     # -- END-TO-END correction proof (PR #408 review, FIX 2) -------------------
@@ -190,6 +192,7 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         id_np = Float64[]
         id_il = Float64[]
         np_indel_moves = Bool[]
+        np_indel_decodes = Int[]
         np_nonempty = Bool[]
         for seed in seeds
             reads,
@@ -202,6 +205,7 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             push!(id_np, _best_identity_to_ref(np.contigs, refseq))
             push!(id_il, _best_identity_to_ref(il.contigs, refseq))
             push!(np_indel_moves, np.assembly_stats["indel_moves"] == true)
+            push!(np_indel_decodes, np.assembly_stats["indel_decodes"])
             push!(np_nonempty, !isempty(np.contigs))
         end
         mean_np = Statistics.mean(id_np)
@@ -211,6 +215,7 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
 
         # The nanopore arm actually engaged the indel decode and produced contigs.
         Test.@test all(np_indel_moves)
+        Test.@test all(>(0), np_indel_decodes)
         Test.@test all(np_nonempty)
         # DIFFERENTIAL (the PR's value): indel-aware correction lands closer to the
         # truth than substitution-only on the SAME nanopore reads, on average.

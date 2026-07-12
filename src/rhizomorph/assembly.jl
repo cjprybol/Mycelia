@@ -1337,6 +1337,12 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
         assembly.assembly_stats["hard_read_gate"] = get(_corr_meta, :hard_read_gate, false)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
+        corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
+        assembly.assembly_stats["corrector_errors"] = corrector_errors
+        assembly.assembly_stats["indel_decodes"] =
+            get(corrector_errors, :indel_decodes, 0)
+        assembly.assembly_stats["window_divergences"] =
+            get(corrector_errors, :window_divergences, 0)
         # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
         # :exhaustive), never a bare `true` (FIX 1/5).
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
