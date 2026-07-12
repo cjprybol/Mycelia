@@ -200,11 +200,19 @@ end
 # splice is generalized to a length-changing (indel) correction. This testset asserts
 # the PLUMBING is correct and oracle-preserving; it does NOT assert an end-to-end
 # nanopore correction WIN — that is gated on staging the (dense-graph-expensive) indel
-# decode to sparse rungs, tracked separately under td-jt7r.
+# decode to sparse rungs, tracked separately under td-2rxh.
 Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
     R = Mycelia.Rhizomorph
     k = 13
     mode = :doublestrand
+
+    Test.@testset "indel quality alignment preserves base coordinates" begin
+        align_quality = Mycelia._align_corrected_quality
+        Test.@test align_quality("ACGT", "BCDE", "ACGT") == "BCDE"
+        Test.@test align_quality("ACGT", "BCDE", "AGT") == "BDE"
+        Test.@test align_quality("ACGT", "BCDE", "ACGAT") == "BCDDE"
+        Test.@test_throws ArgumentError align_quality("ACGT", "BCD", "ACGT")
+    end
 
     # (A) POSITIVE CONTROL — the ORIGINAL-COORDINATE segment rebuild (the risky new
     # length-changing code) tested DIRECTLY against hand-computed expectations, so an
@@ -245,6 +253,7 @@ Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
         graph = R.build_qualmer_graph(fx.reads, k; mode = mode)
         hard = Mycelia._hard_vertex_set(graph, k)
         Test.@test !isempty(hard)
+        diagnostics = Mycelia.CorrectorDiagnostics()
         profile = Mycelia.indel_error_profile(:nanopore)
         ip = Mycelia.IndelDecodeParams(
             profile.base_error_rate, profile.insertion_fraction, profile.deletion_fraction,
@@ -255,7 +264,8 @@ Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
                 rec_ind, _imp,
                 ndec_ind,
                 _ndiv = Mycelia.improve_read_likelihood_windowed_detail(
-                    r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = ip)
+                    r, graph, k, hard; graph_mode = mode, beam_width = 64,
+                    diagnostics = diagnostics, indel_params = ip)
                 sind = FASTX.sequence(String, rec_ind)
                 Test.@test length(sind) == length(FASTX.quality(rec_ind))   # well-formed
                 Test.@test all(c -> c in ('A', 'C', 'G', 'T'), sind)
@@ -268,5 +278,9 @@ Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
                 end
             end
         end
+        # This counter is stamped from the decoder result's algorithm diagnostic,
+        # so the smoke fails if `indel_params` is dropped and the substitution
+        # kernel runs instead.
+        Test.@test diagnostics.indel_decodes[] >= 1
     end
 end

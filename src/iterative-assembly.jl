@@ -1356,15 +1356,13 @@ end
 
 Stage 3c WINDOWED decode (td-nn6l). Instead of decoding a hard read end-to-end,
 decode ONLY the hard sub-window(s) — the k-mer span(s) around the read's hard
-vertices from `_hard_window_ranges` (each `<= max_window` bases) — with
-start/target boundary constraints, then splice each corrected window back into the
-read. Each window is decoded as its own `improve_read_likelihood` sub-read, so
-`correct_observations` derives the decode's `start_vertex` from the window's first
-k-mer, its `target_vertex` from the window's last k-mer, and bounds `max_steps`
-to `n_window_obs - 1` (the window's `graph_states` are bounded to the window; see
-`_decode_observation_bounds`). This makes the per-read decode cost scale with the
-hard-window size (`O(max_window)`) rather than the read length (`O(read_length)`)
-— the dominant super-linear per-read term for long reads (#375).
+vertices from `_hard_window_ranges` (each `<= max_window` bases) — then splice
+each corrected window back into the read. Each window is decoded as its own
+`improve_read_likelihood` sub-read. Quality-wrapped observations leave the target
+vertex free so the decoder can correct the window's last k-mer; the window bounds
+the observation-length axis of the decode, not the full graph frontier. This makes
+the read-length contribution scale with the hard-window size rather than the full
+read length, but graph density remains a separate cost driver (#375, td-2rxh).
 
 With `indel_params === nothing`, the window Viterbi is length-preserving (the
 corrected ML path has one vertex per window k-mer), so each accepted window is
@@ -1476,11 +1474,10 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         sub_qual = String(qual_chars[lo:hi])
         sub_read = FASTX.FASTQ.Record("$(id)_win$(lo)_$(hi)", sub_seq, sub_qual)
         decoded_windows += 1
-        # Decode ONLY this window. `improve_read_likelihood` runs the boundary-
-        # constrained Viterbi (window first/last k-mer ⇒ start/target vertex,
-        # max_steps = n_window_obs - 1) over the bounded window graph_states. The
-        # indel pair-HMM (indel_params !== nothing) runs on the SHORT window, so its
-        # cost scales with the window size, not the read length (the whole point).
+        # Decode ONLY this window. Quality-wrapped observations keep the target
+        # endpoint free; the window bounds observation length, while graph density
+        # remains an independent frontier-cost driver (td-2rxh). The pair-HMM runs
+        # on the short window rather than the full read.
         decoded_sub,
         improved = improve_read_likelihood(
             sub_read, graph, k; graph_mode = graph_mode,
@@ -1498,18 +1495,15 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 push!(accepted, (w, dseq, dqual))
             else
                 divergent_windows += 1
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.window_divergences, 1)
             end
         else
-            # Indel decode changes length by design. Reconcile the quality vector to
-            # the corrected sequence length defensively (the decode already returns a
-            # matched record; this guards a malformed one), then accept unconditionally.
-            # An EMPTY corrected quality is handled explicitly: _reconcile_quality_length
-            # would take its `n == 0` branch and evaluate `zero(Char)` (undefined), so a
-            # malformed empty-quality window is padded with a neutral Q40 ('I') instead.
-            if length(dqual) != length(dseq)
-                dqual = isempty(dqual) ? repeat("I", length(dseq)) :
-                        String(_reconcile_quality_length(collect(dqual), length(dseq)))
-            end
+            # Indel decode changes length by design. Rebuild quality coordinates from
+            # a deterministic minimum-edit alignment so an internal insertion or
+            # deletion cannot shift every downstream base-quality pair in the window.
+            # This also defends against a malformed quality returned by a lower layer.
+            dqual = _align_corrected_quality(sub_seq, sub_qual, dseq)
             push!(accepted, (w, dseq, dqual))
         end
     end
@@ -1615,6 +1609,9 @@ parallel (`@threads`) read loop increments them race-free.
 - `unkmerizable_reads` : `BioSequences.EncodeError` — a read carrying an
   ambiguous base (e.g. `N`) that the 2-bit k-mer iterator cannot encode. The
   read is SKIPPED (passes through uncorrected), never crashed on.
+- `indel_decodes`      : successful decodes stamped by the pair-HMM kernel.
+- `window_divergences` : substitution windows rejected for violating the
+  length-preserving splice contract.
 """
 mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
@@ -1624,10 +1621,12 @@ mutable struct CorrectorDiagnostics
     # decode. On a healthy substitution decode this is always 0; a nonzero value
     # means the opt-in gate disabled itself — a regression signal, not data loss.
     gate_skipped::Threads.Atomic{Int}
+    indel_decodes::Threads.Atomic{Int}
+    window_divergences::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -2640,6 +2639,91 @@ function adjust_quality_scores(
     end
 end
 
+"""
+    _align_corrected_quality(original_sequence, original_quality, corrected_sequence)
+
+Map the original per-base FASTQ qualities onto a length-changing corrected
+sequence with a deterministic minimum-edit alignment. Diagonal match/substitution
+steps inherit the corresponding observed quality, deletion steps drop the deleted
+base's quality, and insertion steps receive the lower-quality adjacent observation
+(`'!'` when no observation exists). Match diagonals win ties, followed by other
+diagonals, insertions, and deletions, making repeated-sequence ambiguity
+deterministic. The helper is a no-op for an unchanged sequence.
+"""
+function _align_corrected_quality(
+        original_sequence::AbstractString,
+        original_quality::AbstractString,
+        corrected_sequence::AbstractString
+)::String
+    original_chars = collect(original_sequence)
+    quality_chars = collect(original_quality)
+    corrected_chars = collect(corrected_sequence)
+    length(original_chars) == length(quality_chars) ||
+        throw(ArgumentError("original sequence and quality lengths must match"))
+    original_chars == corrected_chars && return String(quality_chars)
+
+    n_original = length(original_chars)
+    n_corrected = length(corrected_chars)
+    costs = Matrix{Int}(undef, n_original + 1, n_corrected + 1)
+    @inbounds for i in 0:n_original
+        costs[i + 1, 1] = i
+    end
+    @inbounds for j in 0:n_corrected
+        costs[1, j + 1] = j
+    end
+    @inbounds for i in 1:n_original
+        for j in 1:n_corrected
+            substitution = costs[i, j] + (original_chars[i] == corrected_chars[j] ? 0 : 1)
+            deletion = costs[i, j + 1] + 1
+            insertion = costs[i + 1, j] + 1
+            costs[i + 1, j + 1] = min(substitution, deletion, insertion)
+        end
+    end
+
+    aligned_reversed = Char[]
+    i = n_original
+    j = n_corrected
+    while i > 0 || j > 0
+        current = costs[i + 1, j + 1]
+        diagonal = i > 0 && j > 0 &&
+                   current == costs[i, j] +
+                              (original_chars[i] == corrected_chars[j] ? 0 : 1)
+        matching_diagonal = diagonal && original_chars[i] == corrected_chars[j]
+        insertion = j > 0 && current == costs[i + 1, j] + 1
+        deletion = i > 0 && current == costs[i, j + 1] + 1
+
+        if matching_diagonal || (diagonal && !insertion && !deletion)
+            push!(aligned_reversed, quality_chars[i])
+            i -= 1
+            j -= 1
+        elseif insertion
+            left_quality = i > 0 ? quality_chars[i] : nothing
+            right_quality = i < n_original ? quality_chars[i + 1] : nothing
+            inserted_quality = if left_quality === nothing && right_quality === nothing
+                '!'
+            elseif left_quality === nothing
+                right_quality
+            elseif right_quality === nothing
+                left_quality
+            else
+                min(left_quality, right_quality)
+            end
+            push!(aligned_reversed, inserted_quality)
+            j -= 1
+        elseif deletion
+            i -= 1
+        else
+            # A non-matching diagonal can tie an insertion/deletion pair. Prefer it
+            # only after the gap moves so an internal indel retains flanking matches.
+            push!(aligned_reversed, quality_chars[i])
+            i -= 1
+            j -= 1
+        end
+    end
+    reverse!(aligned_reversed)
+    return String(aligned_reversed)
+end
+
 # =============================================================================
 # Decision Making and Termination Conditions
 # =============================================================================
@@ -3098,6 +3182,11 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         if corrected_path === nothing || isempty(corrected_path)
             return nothing
         end
+        if indel_params !== nothing && diagnostics !== nothing
+            path_diagnostics = only(correction.paths).diagnostics
+            get(path_diagnostics, :algorithm, nothing) == :viterbi_indel_pair_hmm &&
+                Threads.atomic_add!(diagnostics.indel_decodes, 1)
+        end
 
         # Soft-EM E-step (td-e70t v2): build this read's COMPETING candidate paths
         # (the observed read path + a consensus alternative re-routed through the
@@ -3167,10 +3256,21 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.gate_skipped, 1)
             end
         end
-        improved_likelihood = Mycelia.calculate_sequence_likelihood(
-            corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)
-        improved_quality = Mycelia.adjust_quality_scores(
-            FASTX.quality(read), corrected_sequence_string, improved_likelihood)
+        improved_quality, improved_likelihood = if indel_params === nothing
+            likelihood = Mycelia.calculate_sequence_likelihood(
+                corrected_sequence_string, quality_scores, graph, k;
+                graph_mode = graph_mode)
+            quality = Mycelia.adjust_quality_scores(
+                FASTX.quality(read), corrected_sequence_string, likelihood)
+            quality, likelihood
+        else
+            quality = Mycelia._align_corrected_quality(
+                sequence_string, String(FASTX.quality(read)), corrected_sequence_string)
+            scores = Int8.(Int.(collect(codeunits(quality))) .- 33)
+            likelihood = Mycelia.calculate_sequence_likelihood(
+                corrected_sequence_string, scores, graph, k; graph_mode = graph_mode)
+            quality, likelihood
+        end
         improved_record = FASTX.FASTQ.Record(
             FASTX.identifier(read), corrected_sequence_string, improved_quality)
         return (improved_record, improved_likelihood)
