@@ -1774,6 +1774,12 @@ function _viterbi_correct_observation_indel(
     end
     _relax_deletions!(1, match_scores, match_net, del_scores, del_net, del_run)
 
+    # The read index of the layer currently held in match/ins/del_scores. If a noisy
+    # read kills the whole frontier mid-decode we KEEP the last non-empty layer (its
+    # index) and select the best-so-far endpoint from it, rather than mislabeling the
+    # surviving cells with the full read length `n`.
+    last_index = 1
+
     for read_index in 2:n
         observed_unit = observation[read_index]
         new_match = Dict{State, Float64}()
@@ -1863,13 +1869,16 @@ function _viterbi_correct_observation_indel(
             _beam_prune_layer!(new_del, config.beam_width)
         end
 
+        # If the whole frontier died this column, KEEP the previous (non-empty) layer
+        # as the decode result and stop — do not swap in the empty layer.
+        if isempty(new_match) && isempty(new_ins) && isempty(new_del)
+            break
+        end
+
         match_scores, ins_scores, del_scores = new_match, new_ins, new_del
         match_net, ins_net, del_net = new_match_net, new_ins_net, new_del_net
         ins_run, del_run = new_ins_run, new_del_run
-
-        if isempty(match_scores) && isempty(ins_scores) && isempty(del_scores)
-            break
-        end
+        last_index = read_index
     end
 
     # Endpoint: the best-scoring (state, phase) at the final read index. When a
@@ -1885,7 +1894,7 @@ function _viterbi_correct_observation_indel(
             if best_cell === nothing || score > best_score ||
                (score == best_score && key < best_key)
                 best_score = score
-                best_cell = (n, state, phase)
+                best_cell = (last_index, state, phase)
                 best_key = key
             end
         end
@@ -1918,6 +1927,7 @@ function _viterbi_correct_observation_indel(
 
     path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
     diagnostics[:path_length] = length(path.steps)
+    diagnostics[:decoded_read_index] = last_index
     if target_vertex !== nothing
         diagnostics[:reached_target] = true
     end

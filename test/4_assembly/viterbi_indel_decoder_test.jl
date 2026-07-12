@@ -147,4 +147,131 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test indel_decoded_label_strings(result_indel) ==
                    ["ATGCG", "GCGTA", "GTACC"]
     end
+
+    Test.@testset "Milestone C: the decode is routed through the indel kernel" begin
+        graph = _indel_olc_graph()
+        del_result = Mycelia.correct_observations(
+            graph, [[BioSequences.dna"ATGCG", BioSequences.dna"GTACC"]];
+            config = _indel_config())
+        diag = only(del_result.paths).diagnostics
+        # A mis-wire to the substitution-only path would NOT stamp this algorithm.
+        Test.@test diag[:algorithm] == :viterbi_indel_pair_hmm
+        Test.@test diag[:indel_moves] == true
+        # The deletion was bridged by >=1 D-move.
+        Test.@test diag[:move_counts][:D] >= 1
+
+        ins_result = Mycelia.correct_observations(
+            graph,
+            [[BioSequences.dna"ATGCG", BioSequences.dna"AAAAA",
+                BioSequences.dna"GCGTA", BioSequences.dna"GTACA"]];
+            config = _indel_config())
+        ins_diag = only(ins_result.paths).diagnostics
+        Test.@test ins_diag[:move_counts][:I] >= 1
+    end
+
+    Test.@testset "Milestone C: bounding knobs actually bite" begin
+        graph = _indel_olc_graph()
+        deletion_observed = [BioSequences.dna"ATGCG", BioSequences.dna"GTACC"]
+        insertion_observed = [
+            BioSequences.dna"ATGCG", BioSequences.dna"AAAAA",
+            BioSequences.dna"GCGTA", BioSequences.dna"GTACA"
+        ]
+
+        function _cfg(; kwargs...)
+            base = (
+                error_rate = 0.10,
+                indel_moves = true,
+                insertion_fraction = 0.30,
+                deletion_fraction = 0.30,
+                insertion_extend_probability = 0.10,
+                deletion_extend_probability = 0.10,
+                deletion_max_run = 3,
+                max_insertion_run = 3,
+                beam_width = typemax(Int)
+            )
+            return Mycelia.ViterbiCorrectionConfig(; base..., kwargs...)
+        end
+
+        # deletion_max_run = 0 forbids the D-move, so the anchored target GTACC
+        # becomes unreachable and the decode returns no corrected path.
+        no_del = Mycelia.correct_observations(
+            graph, [deletion_observed]; config = _cfg(deletion_max_run = 0))
+        Test.@test only(no_del.corrected_observations) === nothing
+        # deletion_max_run >= 1 recovers it.
+        yes_del = Mycelia.correct_observations(
+            graph, [deletion_observed]; config = _cfg(deletion_max_run = 2))
+        Test.@test indel_decoded_label_strings(yes_del) == ["ATGCG", "GCGTA", "GTACC"]
+
+        # band_width = 0 forbids any net gap (|#deletions - #insertions| > 0), so the
+        # deletion (net gap +1) is pruned and the target is unreachable.
+        banded_out = Mycelia.correct_observations(
+            graph, [deletion_observed]; config = _cfg(band_width = 0))
+        Test.@test only(banded_out.corrected_observations) === nothing
+        # A band wide enough to admit the single deletion recovers the reference.
+        banded_in = Mycelia.correct_observations(
+            graph, [deletion_observed]; config = _cfg(band_width = 4))
+        Test.@test indel_decoded_label_strings(banded_in) == ["ATGCG", "GCGTA", "GTACC"]
+
+        # max_insertion_run = 0 forbids the I-move, so the insertion cannot be
+        # absorbed and the free-endpoint decode no longer lands the 3-vertex walk.
+        no_ins = Mycelia.correct_observations(
+            graph, [insertion_observed]; config = _cfg(max_insertion_run = 0))
+        Test.@test indel_decoded_label_strings(no_ins) != ["ATGCG", "GCGTA", "GTACC"]
+    end
+
+    Test.@testset "Milestone C: nanopore-style read decodes through the kernel" begin
+        # A real nanopore error process (indels + homopolymer boost) on a small
+        # reference, threaded as k-mer observations through the clean-reference
+        # k-mer graph. The point is that the indel kernel RUNS (decode-diagnostic
+        # proves it, catching a silent mis-wire to the substitution-only path) and
+        # completes quickly; correction quality at scale is a separate HPC concern.
+        reference = Mycelia.random_fasta_record(moltype = :DNA, seed = 7, L = 60)
+        k = 7
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand([reference], k)
+
+        refseq = FASTX.sequence(BioSequences.LongDNA{4}, reference)
+        # observe returns a (sequence, quality) TUPLE — take [1] for the sequence.
+        obs_seq, obs_quals = Mycelia.observe(refseq; error_rate = 0.05, tech = :nanopore)
+        Test.@test obs_seq isa BioSequences.LongSequence
+
+        qstr = String([Char(q + 33) for q in obs_quals])
+        read = FASTX.FASTQ.Record("obs", string(obs_seq), qstr)
+        sequence_string = FASTX.sequence(String, read)
+        alphabet = Mycelia.detect_alphabet(sequence_string)
+        sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
+        sequence = Mycelia.extract_typed_sequence(read, sequence_type)
+        kmers = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
+        Test.@test !isempty(kmers)
+        quality_scores = collect(FASTX.quality_scores(read))
+        n_qual = length(quality_scores)
+        observations = [Mycelia.QualityObservation(
+                            kmer,
+                            UInt8.(quality_scores[clamp(i, 1, n_qual):clamp(i + k - 1, 1, n_qual)]))
+                        for (i, kmer) in enumerate(kmers)]
+
+        config = Mycelia.ViterbiCorrectionConfig(
+            error_rate = 0.05,
+            strand_mode = :singlestrand,
+            indel_moves = true,
+            insertion_fraction = 0.30,
+            deletion_fraction = 0.30,
+            insertion_extend_probability = 0.10,
+            deletion_extend_probability = 0.10,
+            deletion_max_run = 3,
+            max_insertion_run = 3,
+            band_width = 12,
+            beam_width = 256
+        )
+
+        elapsed = @elapsed result = Mycelia.correct_observations(
+            graph, [observations]; config = config)
+        Test.@test elapsed < 60
+        diag = only(result.paths).diagnostics
+        Test.@test diag[:algorithm] == :viterbi_indel_pair_hmm
+        Test.@test diag[:indel_moves] == true
+        # A path was decoded and it consumed match moves (i.e. the kernel actually
+        # walked the graph, not a degenerate empty result).
+        Test.@test only(result.paths).path !== nothing
+        Test.@test diag[:move_counts][:M] >= 1
+    end
 end
