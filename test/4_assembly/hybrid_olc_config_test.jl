@@ -57,25 +57,44 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
             corrector = :iterative, strategy = :scalable, layout = :olc,
             olc_tool = :megahit, sequencing_tech = :nanopore)
 
-        # Long-read tools are not wired in this PR (td-wvto): rejected at construction.
-        for tool in (:hifiasm, :flye, :canu, :metaflye)
-            Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
-                corrector = :iterative, strategy = :scalable, layout = :olc,
-                olc_tool = tool, sequencing_tech = :pacbio)
+        # Long-read tools (td-wvto) are accepted with a compatible long-read tech.
+        for (tool, tech, opts) in ((:flye, :nanopore, (;)), (:flye, :pacbio, (;)),
+            (:metaflye, :nanopore, (;)), (:hifiasm, :pacbio, (;)),
+            (:canu, :pacbio, (; genome_size = "5m")))
+            cfg = R.AssemblyConfig(; k = 13, corrector = :iterative,
+                strategy = :scalable, layout = :olc, olc_tool = tool,
+                sequencing_tech = tech, olc_options = opts)
+            Test.@test cfg.olc_tool == tool
         end
 
-        # :auto with a long-read tech resolves to a not-yet-wired long-read assembler.
+        # Long-read tool with a short-read tech is a mismatch.
         Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
             corrector = :iterative, strategy = :scalable, layout = :olc,
-            olc_tool = :auto, sequencing_tech = :nanopore)
+            olc_tool = :flye, sequencing_tech = :illumina)
+
+        # hifiasm is PacBio-HiFi-specific: a Nanopore tech is rejected.
+        Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
+            corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :hifiasm, sequencing_tech = :nanopore)
+
+        # canu requires an estimated genome_size in olc_options.
+        Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
+            corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :canu, sequencing_tech = :pacbio)  # no genome_size → error
     end
 
     Test.@testset ":auto tool resolution" begin
-        # :auto resolves to :megahit for a short-read tech.
-        cfg_auto = R.AssemblyConfig(; k = 13, corrector = :iterative,
+        # :auto resolves to :megahit for a short-read tech, :flye for a long-read tech.
+        cfg_short = R.AssemblyConfig(; k = 13, corrector = :iterative,
             strategy = :scalable, layout = :olc, olc_tool = :auto,
             sequencing_tech = :illumina)
-        Test.@test R._resolve_olc_tool(cfg_auto) == :megahit
+        Test.@test R._resolve_olc_tool(cfg_short) == :megahit
+        for tech in (:nanopore, :pacbio)
+            cfg_long = R.AssemblyConfig(; k = 13, corrector = :iterative,
+                strategy = :scalable, layout = :olc, olc_tool = :auto,
+                sequencing_tech = tech)
+            Test.@test R._resolve_olc_tool(cfg_long) == :flye
+        end
 
         # An explicit tool passes through unchanged.
         cfg_ms = R.AssemblyConfig(; k = 13, corrector = :iterative,
@@ -84,13 +103,22 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
         Test.@test R._resolve_olc_tool(cfg_ms) == :metaspades
     end
 
-    Test.@testset "adapter guard for unwired tools" begin
+    Test.@testset "taxonomy single-source + adapter guard" begin
+        tax = R._olc_taxonomy()
+        wired = (tax.short_read_tools..., tax.long_read_tools...)
+        # :auto resolves to a WIRED tool for every valid tech (no drift between the
+        # taxonomy, the resolver, and the reject-list).
+        for tech in (tax.short_read_techs..., tax.long_read_techs...)
+            cfg = R.AssemblyConfig(; k = 13, corrector = :iterative,
+                strategy = :scalable, layout = :olc, olc_tool = :auto,
+                sequencing_tech = tech)
+            Test.@test R._resolve_olc_tool(cfg) in wired
+        end
+        # An unknown tool fails loud in the adapter (guards a routing bug reaching
+        # _run_olc_tool with a tool that has no wrapper branch).
         cfg = R.AssemblyConfig(; k = 13, corrector = :iterative,
             strategy = :scalable, layout = :olc, sequencing_tech = :illumina)
-        # _run_olc_tool only wires :megahit / :metaspades; anything else fails loud
-        # rather than silently doing nothing (guards against a future routing bug
-        # reaching the adapter with a long-read tool before td-wvto lands).
-        Test.@test_throws ErrorException R._run_olc_tool(:flye, "unused.fastq",
+        Test.@test_throws ErrorException R._run_olc_tool(:bogus_tool, "unused.fastq",
             mktempdir(), cfg)
     end
 

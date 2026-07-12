@@ -207,11 +207,10 @@ struct AssemblyConfig
 
     # Which external assembler the `:olc` layout dispatches to. `:auto` (default)
     # picks by read type (sequencing_tech): short-read techs (:illumina, :ultima)
-    # → a short-read layout assembler, long-read techs (:nanopore, :pacbio) → a
-    # long-read assembler. An explicit tool must match the corrected read type.
-    # This PR wires only the SHORT-read arm (:megahit, :metaspades); long-read tools
-    # (:hifiasm/:flye/:canu/:metaflye) and long-read :auto are validated-but-rejected
-    # at construction until the long-read arm lands (td-wvto).
+    # → :megahit, long-read techs (:nanopore, :pacbio) → :flye. Explicit tools:
+    # short-read :megahit/:metaspades (td-yymj), long-read :flye/:metaflye/:canu/
+    # :hifiasm (td-wvto). An explicit tool must match the corrected read type
+    # (hifiasm is PacBio-HiFi only; canu also needs an olc_options genome_size).
     olc_tool::Symbol
 
     # Pass-through options forwarded to the external-assembler wrapper (e.g.
@@ -396,13 +395,13 @@ struct AssemblyConfig
         if !(layout in (:native, :olc))
             error("layout must be :native or :olc, got :$(layout)")
         end
-        # Read-type <-> tool taxonomy. sequencing_tech is the read-type proxy:
-        # short-read techs run short-read layout assemblers, long-read techs run
-        # long-read assemblers (design doc "Read-type mapping").
-        _short_read_techs = (:illumina, :ultima)
-        _short_read_tools = (:megahit, :metaspades)
-        _long_read_tools = (:hifiasm, :flye, :canu, :metaflye)
-        _valid_olc_tools = (:auto, _short_read_tools..., _long_read_tools...)
+        # Read-type <-> tool taxonomy from the SINGLE source of truth (_olc_taxonomy).
+        # sequencing_tech is the read-type proxy: short-read techs run short-read
+        # layout assemblers, long-read techs run long-read assemblers (design doc
+        # "Read-type mapping"). Both arms are wired (short-read td-yymj, long-read
+        # td-wvto).
+        _tax = _olc_taxonomy()
+        _valid_olc_tools = (:auto, _tax.short_read_tools..., _tax.long_read_tools...)
         if layout == :olc
             # An OLC layout with no correction is just the plain external assembler,
             # reachable via the wrapper directly — the route exists to compose Stage-1
@@ -415,25 +414,31 @@ struct AssemblyConfig
             if !(olc_tool in _valid_olc_tools)
                 error("olc_tool must be one of $(_valid_olc_tools), got :$(olc_tool)")
             end
-            is_short = sequencing_tech in _short_read_techs
+            is_short = sequencing_tech in _tax.short_read_techs
             if olc_tool == :auto
-                # :auto resolves by read type; only the short-read resolution is wired
-                # in this PR (td-yymj). A long-read tech would resolve to a long-read
-                # assembler (td-wvto), so reject it up front.
-                is_short ||
-                    error("olc_tool=:auto with sequencing_tech=:$(sequencing_tech) " *
-                          "resolves to a long-read assembler, which is not yet wired in the OLC " *
-                          "route (see td-wvto). Use a short-read sequencing_tech (:illumina/:ultima) " *
-                          "or await the long-read arm.")
-            elseif olc_tool in _short_read_tools
+                # :auto always resolves to a WIRED tool (short-read tech → :megahit,
+                # long-read tech → :flye), so no rejection is needed here.
+                nothing
+            elseif olc_tool in _tax.short_read_tools
                 is_short || error("olc_tool=:$(olc_tool) is a short-read assembler but " *
                       "sequencing_tech=:$(sequencing_tech) is a long-read tech; pair a short-read " *
                       "tool with a short-read tech.")
-            elseif olc_tool in _long_read_tools
-                # Long-read tools are validated as known but NOT yet wired here.
-                error("olc_tool=:$(olc_tool) (long-read assembler) is not yet wired in the " *
-                      "OLC route; this PR (td-yymj) wires the short-read arm (:megahit, " *
-                      ":metaspades). The long-read arm is tracked in td-wvto.")
+            elseif olc_tool in _tax.long_read_tools
+                sequencing_tech in _tax.long_read_techs ||
+                    error("olc_tool=:$(olc_tool) is a " *
+                          "long-read assembler but sequencing_tech=:$(sequencing_tech) is a short-read " *
+                          "tech; pair a long-read tool with :nanopore or :pacbio.")
+                # hifiasm assembles PacBio HiFi reads specifically — not Nanopore.
+                if olc_tool == :hifiasm && sequencing_tech != :pacbio
+                    error("olc_tool=:hifiasm assembles PacBio HiFi reads; " *
+                          "sequencing_tech=:$(sequencing_tech) is not HiFi. Use :flye or :canu " *
+                          "for :nanopore.")
+                end
+                # canu requires an estimated genome size (the wrapper has no default).
+                if olc_tool == :canu && !haskey(olc_options, :genome_size)
+                    error("olc_tool=:canu requires an estimated genome size; pass it via " *
+                          "olc_options=(; genome_size=\"5m\").")
+                end
             end
             # Reserved-key guard: olc_options is splatted into the wrapper, so a key
             # that collides with a route-managed keyword would redirect the assembler
@@ -1943,8 +1948,9 @@ after reading the contigs; when the caller supplied `output_dir`, both are left 
 place under it. Dispatched only via `assemble_genome` when `config.layout == :olc`
 (the constructor guarantees that implies `corrector == :iterative`).
 
-Only the short-read arm (:megahit/:metaspades) is reachable in this PR; the
-long-read arm is gated off at construction until td-wvto.
+Both arms are wired: short-read (:megahit/:metaspades, td-yymj) and long-read
+(:flye/:metaflye/:canu/:hifiasm, td-wvto), routed by sequencing_tech. The
+two-read-set hybrid arm (short+long combined) is td-06er.
 """
 function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     tool = _resolve_olc_tool(config)
@@ -1990,35 +1996,65 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
 end
 
 """
+    _olc_taxonomy() -> NamedTuple
+
+Single source of truth for the hybrid-OLC tool taxonomy: which sequencing techs
+are short- vs long-read, and which external assemblers serve each class. The
+constructor validation, `:auto` resolution, and the per-tool adapter all read from
+THIS table so they cannot drift out of sync. (Drift is exactly what let a stale
+`:metaflye` branch masquerade as "wired" before td-yymj's review.) The consistency
+test in `hybrid_olc_config_test.jl` asserts every tool here is handled by
+`_run_olc_tool`.
+"""
+function _olc_taxonomy()
+    return (
+        short_read_techs = (:illumina, :ultima),
+        long_read_techs = (:nanopore, :pacbio),
+        short_read_tools = (:megahit, :metaspades),
+        long_read_tools = (:flye, :metaflye, :canu, :hifiasm)
+    )
+end
+
+"""
     _resolve_olc_tool(config::AssemblyConfig) -> Symbol
 
 Resolve `config.olc_tool` to a concrete external assembler. An explicit tool is
 returned as-is (the constructor already validated it against `sequencing_tech`).
-`:auto` picks by read type; the constructor guarantees `:auto` is only reachable
-for a short-read tech in this PR, so it resolves to `:megahit` (the single-end-
-robust short-read layout assembler). Long-read `:auto` resolution lands with the
-long-read arm (td-wvto).
+`:auto` picks by read type: a short-read tech → `:megahit` (single-end-robust
+short-read layout), a long-read tech → `:flye` (general long-read assembler that
+handles both Nanopore and PacBio via its read-type flag).
 """
 function _resolve_olc_tool(config::AssemblyConfig)
     config.olc_tool == :auto || return config.olc_tool
-    return :megahit
+    return config.sequencing_tech in _olc_taxonomy().short_read_techs ? :megahit : :flye
+end
+
+"""
+    _flye_read_type(sequencing_tech::Symbol) -> String
+
+Map the corrector's read tech to a Flye/metaFlye `--read-type` flag. The reads are
+Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit.
+"""
+function _flye_read_type(sequencing_tech::Symbol)
+    sequencing_tech == :nanopore ? "nano-corr" : "pacbio-corr"
 end
 
 """
     _run_olc_tool(tool, corrected_fastq, outdir, config) -> contigs_fasta_path::String
 
 Per-tool argument adapter: the external-assembler wrappers have non-uniform
-signatures, so map each WIRED `tool` onto its wrapper call and return the path to
-its primary-contigs FASTA. This PR wires the short-read arm (`:megahit`,
-`:metaspades`); the long-read arm (metaFlye et al.) lands in td-wvto. The corrector
-emits a SINGLE corrected FASTQ, so short-read assemblers run in single-end mode
-(`fastq1` only).
+signatures, so map each wired `tool` onto its wrapper call and return the path to
+its primary-contigs FASTA. Short-read assemblers (`:megahit`, `:metaspades`) take
+`fastq1` (single-end — the corrector emits ONE corrected FASTQ); long-read
+assemblers take a single `fastq` plus a read-type flag derived from
+`sequencing_tech`. hifiasm exposes contigs via `hifiasm_primary_contigs` rather
+than a return field; Flye/metaFlye/Canu return their assembly under `.assembly`.
 
 `config.olc_options` is splatted in FIRST so the route's managed keywords
-(`fastq1`/`outdir`) always win over a caller-supplied option — Julia resolves
-duplicate keywords rightmost-wins, so managed keys must come last. (The constructor
-also rejects reserved keys, but this ordering keeps the invariant even if that
-guard is ever relaxed.)
+(`fastq1`/`fastq`/`outdir`) always win over a caller-supplied option — Julia
+resolves duplicate keywords rightmost-wins, so managed keys must come last. (The
+constructor also rejects reserved keys, but this ordering keeps the invariant even
+if that guard is ever relaxed.)
 """
 function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
         outdir::AbstractString, config::AssemblyConfig)::String
@@ -2030,9 +2066,35 @@ function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
         result = Mycelia.run_metaspades(; config.olc_options...,
             fastq1 = corrected_fastq, outdir = outdir)
         return result.contigs
+    elseif tool == :flye
+        result = Mycelia.run_flye(; config.olc_options...,
+            fastq = String(corrected_fastq), outdir = String(outdir),
+            read_type = _flye_read_type(config.sequencing_tech))
+        return result.assembly
+    elseif tool == :metaflye
+        result = Mycelia.run_metaflye(; config.olc_options...,
+            fastq = String(corrected_fastq), outdir = String(outdir),
+            read_type = _flye_read_type(config.sequencing_tech))
+        return result.assembly
+    elseif tool == :canu
+        # canu's read_type is coarse (pacbio|nanopore); genome_size comes from
+        # olc_options (required — the constructor validated its presence).
+        canu_read_type = config.sequencing_tech == :nanopore ? "nanopore" : "pacbio"
+        result = Mycelia.run_canu(; config.olc_options...,
+            fastq = String(corrected_fastq), outdir = String(outdir),
+            read_type = canu_read_type)
+        return result.assembly
+    elseif tool == :hifiasm
+        result = Mycelia.run_hifiasm(; config.olc_options...,
+            fastq = String(corrected_fastq), outdir = String(outdir))
+        contigs = Mycelia.hifiasm_primary_contigs(result)
+        contigs === nothing && error("_run_olc_tool: hifiasm produced no primary " *
+              "contigs (.p_ctg.fa) in $(outdir)")
+        return contigs
     else
-        error("_run_olc_tool: :$(tool) is not wired; expected :megahit or " *
-              ":metaspades (the short-read arm). Long-read tools are tracked in td-wvto.")
+        _tax = _olc_taxonomy()
+        error("_run_olc_tool: :$(tool) is not a wired OLC tool; expected one of " *
+              "$((_tax.short_read_tools..., _tax.long_read_tools...)).")
     end
 end
 
