@@ -178,6 +178,15 @@ struct AssemblyConfig
     # data-supported variant (td-h6w9), so it cannot lose real sequence.
     graph_cleanup::Union{Bool, Nothing}
 
+    # Sequencing-technology ERROR PROFILE driving the corrector's indel-aware decode
+    # (td-9q84 / 4a). Only consulted when corrector=:iterative. The profile maps to
+    # per-base indel fractions (see `Mycelia.indel_error_profile`); indel-prone
+    # technologies (:nanopore, :pacbio) enable the pair-HMM gap moves, while the
+    # DEFAULT :illumina (and :ultima) carry ~0 indel fractions and stay on the
+    # substitution-only path byte-for-byte. Wiring the profile — not read length or
+    # a hardcoded tech — keeps "correct with the profile you'd simulate".
+    sequencing_tech::Symbol
+
     # Constructor with validation
     function AssemblyConfig(;
             k::Union{Int, Nothing} = nothing,
@@ -199,7 +208,8 @@ struct AssemblyConfig
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
             token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing,
-            graph_cleanup::Union{Bool, Nothing} = nothing
+            graph_cleanup::Union{Bool, Nothing} = nothing,
+            sequencing_tech::Symbol = :illumina
     )
         # Sentinel `nothing` defaults let us DETECT whether the caller set
         # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
@@ -263,6 +273,14 @@ struct AssemblyConfig
         _valid_strategies = (:scalable, :exhaustive)
         if !(effective_strategy in _valid_strategies)
             error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
+        end
+
+        # Validation: sequencing_tech must be a recognized error profile (validate
+        # unconditionally so a typo is caught at construction, even for
+        # corrector=:none where it is not consulted).
+        _valid_seq_techs = (:illumina, :nanopore, :pacbio, :ultima)
+        if !(sequencing_tech in _valid_seq_techs)
+            error("sequencing_tech must be one of $(_valid_seq_techs), got :$(sequencing_tech)")
         end
 
         # FIX 4 (silent-default + skip_solid-override provenance). corrector=:iterative
@@ -340,7 +358,8 @@ struct AssemblyConfig
             effective_skip_solid,
             effective_strategy,
             token_sequences,
-            graph_cleanup
+            graph_cleanup,
+            sequencing_tech
         )
     end
 end
@@ -616,6 +635,14 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `k`: k-mer size (mutually exclusive with min_overlap)
 - `min_overlap`: Minimum overlap length (mutually exclusive with k)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
+- `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
+  (route through the iterative maximum-likelihood read corrector before assembly)
+- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
+  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
+  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
+  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
+  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
+  `:illumina` leaves their indels uncorrected.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -798,7 +825,16 @@ function _corrector_strategy_knobs(strategy::Symbol)
             # (each vertex + its RC are separate doublestrand vertices, still
             # separable by coverage), so skip_solid + hard_window work under
             # :doublestrand too — the naive contig path stays valid.
-            graph_mode = :doublestrand
+            graph_mode = :doublestrand,
+            # Indel-decode bounds (td-9q84 / 4a), consulted ONLY when the error
+            # profile enables indels (nanopore/pacbio). :scalable keeps the pair-HMM
+            # tractable at scale: a bounded diagonal band on the net gap + small run
+            # caps (the bounded Bellman-Ford relaxation replacing the O(V³)
+            # Floyd-Warshall). Ignored on substitution-only profiles (:illumina),
+            # whose decode threads no indel params at all.
+            band_width = 16,
+            deletion_max_run = 3,
+            max_insertion_run = 3
         )
     elseif strategy == :exhaustive
         return (
@@ -811,7 +847,13 @@ function _corrector_strategy_knobs(strategy::Symbol)
             beam_width = typemax(Int),  # exact ML decode
             # nothing ⇒ derive the corrector graph_mode from config.graph_mode below,
             # keeping :exhaustive a byte-identical passthrough of prior behavior.
-            graph_mode = nothing
+            graph_mode = nothing,
+            # Indel-decode bounds (td-9q84 / 4a): maximum-sensitivity tier ⇒ UNBOUNDED
+            # band (`band_width=nothing`, the exact/oracle setting) + larger run caps.
+            # Consulted only when the error profile enables indels.
+            band_width = nothing,
+            deletion_max_run = 10,
+            max_insertion_run = 10
         )
     else
         error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
@@ -843,6 +885,17 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
     _log_info(config,
         "Routing assembly through iterative corrector " *
         "(corrector=:iterative, strategy=:$(config.strategy))")
+
+    # Discoverability nudge (PR #408 review, FIX 3): the corrector defaults to the
+    # substitution-only :illumina profile, so a user correcting long / indel-prone
+    # reads (nanopore/pacbio) without setting sequencing_tech silently gets NO indel
+    # correction. Surface it once (@info, not @warn — :illumina is a valid, common
+    # choice) so the off-by-default indel path is discoverable.
+    if config.sequencing_tech == :illumina
+        @info "corrector=:iterative is running with sequencing_tech=:illumina " *
+              "(substitution-only correction). For long / indel-prone reads set " *
+              "sequencing_tech=:nanopore or :pacbio to enable indel-aware correction." maxlog = 1
+    end
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
     # k-progression floors at 13 and min_overlap is not used — surface that rather
@@ -876,6 +929,30 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # ⇒ derive from config.graph_mode, a byte-identical passthrough.
         corrector_graph_mode = knobs.graph_mode === nothing ?
                                _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
+        # Indel-aware correction wiring (td-9q84 / 4a): map the sequencing-tech error
+        # profile to indel fractions and gate on the ABSOLUTE indel rate
+        # (base_error_rate × summed fractions). Only indel-prone profiles (:nanopore,
+        # :pacbio) build a non-nothing IndelDecodeParams; the DEFAULT :illumina (and
+        # :ultima) resolve to `nothing`, so the corrector threads NO indel params and
+        # runs the substitution decode byte-for-byte (oracle preservation). The
+        # base_error_rate (threaded into ViterbiCorrectionConfig.error_rate to scale
+        # the gap masses), gap-open fractions, and extend probabilities come from the
+        # profile; the run caps + band from the tier knobs above.
+        indel_params = if Mycelia.profile_enables_indels(config.sequencing_tech)
+            profile = Mycelia.indel_error_profile(config.sequencing_tech)
+            Mycelia.IndelDecodeParams(
+                profile.base_error_rate,
+                profile.insertion_fraction,
+                profile.deletion_fraction,
+                profile.insertion_extend_probability,
+                profile.deletion_extend_probability,
+                knobs.deletion_max_run,
+                knobs.max_insertion_run,
+                knobs.band_width
+            )
+        else
+            nothing
+        end
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
@@ -887,6 +964,7 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             soft_em = knobs.soft_em,
             cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
+            indel_params = indel_params,
             verbose = false,
             enable_checkpointing = false,
             output_dir = output_dir
@@ -959,7 +1037,7 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
                           get(_rmeta, :final_graph_reusable, false) === true &&
                           get(_rmeta, :final_graph_k, nothing) == reassembly_config.k &&
                           get(_rmeta, :final_graph_mode, nothing) ==
-                              _graph_mode_symbol(reassembly_config.graph_mode) &&
+                          _graph_mode_symbol(reassembly_config.graph_mode) &&
                           reassembly_config.k !== nothing &&
                           reassembly_config.use_quality_scores &&
                           reassembly_config.sequence_type <: BioSequences.BioSequence
@@ -981,6 +1059,11 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
         assembly.assembly_stats["strategy"] = String(config.strategy)
+        # Indel-aware correction provenance (td-9q84 / 4a): the driving error profile
+        # and whether it engaged the pair-HMM gap moves. `indel_moves=false` (the
+        # :illumina default) marks the substitution-only oracle path.
+        assembly.assembly_stats["sequencing_tech"] = String(config.sequencing_tech)
+        assembly.assembly_stats["indel_moves"] = indel_params !== nothing
         # Final-pass graph reuse provenance (td-04tb): true when the re-assembly
         # reused the corrector's already-built final-pass graph (converged run),
         # false when it rebuilt from scratch. Pure telemetry — does not affect the
@@ -1006,20 +1089,17 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # :exhaustive), never a bare `true` (FIX 1/5).
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
-        assembly.assembly_stats["skip_fraction_per_pass"] =
-            get(_corr_meta, :skip_fraction_per_pass, Float64[])
+        assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])
         # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode
         # fraction is the critical-path win metric (reads that reached graph
         # Viterbi); Stage 0 + hard-set narrowing drive it toward the true ~5-15%.
         assembly.assembly_stats["cheap_correct"] = get(_corr_meta, :cheap_correct, false)
-        assembly.assembly_stats["cheap_corrections_total"] =
-            get(_corr_meta, :cheap_corrections_total, 0)
-        assembly.assembly_stats["cheap_corrections_per_pass"] =
-            get(_corr_meta, :cheap_corrections_per_pass, Int[])
-        assembly.assembly_stats["decode_fraction"] =
-            get(_corr_meta, :decode_fraction_mean, 0.0)
-        assembly.assembly_stats["decode_fraction_per_pass"] =
-            get(_corr_meta, :decode_fraction_per_pass, Float64[])
+        assembly.assembly_stats["cheap_corrections_total"] = get(_corr_meta, :cheap_corrections_total, 0)
+        assembly.assembly_stats["cheap_corrections_per_pass"] = get(
+            _corr_meta, :cheap_corrections_per_pass, Int[])
+        assembly.assembly_stats["decode_fraction"] = get(_corr_meta, :decode_fraction_mean, 0.0)
+        assembly.assembly_stats["decode_fraction_per_pass"] = get(
+            _corr_meta, :decode_fraction_per_pass, Float64[])
         if isempty(assembly.contigs)
             @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
                   "contigs — the corrected read set did not assemble."
@@ -1471,8 +1551,8 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
             [contig_path.vertices
              for contig_path in
                  Rhizomorph.find_contigs_next(
-                     graph; min_contig_length = config.k + 1,
-                     rc_aware = config.dedup_revcomp)]
+                graph; min_contig_length = config.k + 1,
+                rc_aware = config.dedup_revcomp)]
         else
             eulerian_paths
         end
@@ -1480,8 +1560,8 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         [contig_path.vertices
          for contig_path in
              Rhizomorph.find_contigs_next(
-                 graph; min_contig_length = config.k + 1,
-                 rc_aware = config.dedup_revcomp)]
+            graph; min_contig_length = config.k + 1,
+            rc_aware = config.dedup_revcomp)]
     end
 
     # Convert paths to FASTQ records with quality propagation
