@@ -742,12 +742,15 @@ Named tuple containing:
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
 function run_metaflye(;
-        fastq,
-        outdir = "metaflye_output",
-        genome_size = nothing,
-        read_type = "pacbio-hifi",
-        meta = true,
-        min_overlap = nothing,
+        fastq::String,
+        outdir::String = "metaflye_output",
+        genome_size::Union{Nothing, Integer, AbstractString} = nothing,
+        read_type::String = "pacbio-hifi",
+        meta::Bool = true,
+        min_overlap::Union{Nothing, Int} = nothing,
+        iterations::Int = 1,
+        keep_haplotypes::Bool = false,
+        no_alt_contigs::Bool = false,
         threads::Int = min(get_default_threads(), FLYE_MAX_THREADS),
         executor = nothing,
         site::Symbol = :local,
@@ -763,13 +766,15 @@ function run_metaflye(;
 
     if executor !== nothing
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
-            outdir, "--threads", string(threads)]
+            outdir, "--threads", string(threads), "--iterations", string(iterations)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
         if meta
             push!(cmd_args, "--meta")
         end
+        keep_haplotypes && push!(cmd_args, "--keep-haplotypes")
+        no_alt_contigs && push!(cmd_args, "--no-alt-contigs")
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
@@ -802,7 +807,7 @@ function run_metaflye(;
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
-            outdir, "--threads", string(threads)]
+            outdir, "--threads", string(threads), "--iterations", string(iterations)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
@@ -810,6 +815,8 @@ function run_metaflye(;
         if meta
             push!(cmd_args, "--meta")
         end
+        keep_haplotypes && push!(cmd_args, "--keep-haplotypes")
+        no_alt_contigs && push!(cmd_args, "--no-alt-contigs")
 
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
@@ -2886,8 +2893,14 @@ Named tuple containing:
 - Skips analysis if output files already exist
 """
 function run_strainy(
-        assembly_file::String, long_reads::String; outdir::String = "strainy_output",
-        mode::String = "phase",
+        ; gfa_ref::Union{Nothing, String} = nothing,
+        fasta_ref::Union{Nothing, String} = nothing,
+        fastq::String,
+        outdir::String = "strainy_output",
+        read_mode::Symbol = :nano,
+        stage::Symbol = :e2e,
+        min_unitig_coverage::Int = 3,
+        unitig_split_length::Int = 0,
         threads::Int = get_default_threads(),
         executor = nothing,
         site::Symbol = :local,
@@ -2898,32 +2911,39 @@ function run_strainy(
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing)
+    (gfa_ref === nothing) == (fasta_ref === nothing) &&
+        throw(ArgumentError("exactly one of gfa_ref or fasta_ref must be provided"))
+    read_mode in (:nano, :hifi) ||
+        throw(ArgumentError("read_mode must be :nano or :hifi, got :$(read_mode)"))
+    stage in (:phase, :transform, :e2e) ||
+        throw(ArgumentError("stage must be :phase, :transform, or :e2e, got :$(stage)"))
+    min_unitig_coverage > 0 ||
+        throw(ArgumentError("min_unitig_coverage must be positive"))
+    unitig_split_length >= 0 ||
+        throw(ArgumentError("unitig_split_length must be nonnegative"))
+
     Mycelia.add_bioconda_env("strainy")
     mkpath(outdir)
 
-    strain_assemblies = joinpath(outdir, "strain_assemblies.fasta")
+    strain_unitigs_gfa = joinpath(outdir, "strain_unitigs.gfa")
+    strain_contigs_gfa = joinpath(outdir, "strain_contigs.gfa")
+    strain_variants_vcf = joinpath(outdir, "strain_variants.vcf")
+    phased_unitig_info = joinpath(outdir, "phased_unitig_info_table.csv")
+    multiplicity_stats = joinpath(outdir, "multiplicity_stats.txt")
+    ref_flag = gfa_ref === nothing ? "--fasta_ref" : "--gfa_ref"
+    ref_path = something(gfa_ref, fasta_ref)
+    cmd_args = ["strainy", ref_flag, ref_path, "--fastq", fastq,
+        "--output", outdir, "--mode", String(read_mode), "--stage", String(stage),
+        "--threads", string(threads), "--min-unitig-coverage",
+        string(min_unitig_coverage), "--unitig-split-length", string(unitig_split_length)]
     if executor !== nothing
-        bam_file = joinpath(outdir, "mapped_reads.bam")
-        minimap_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`
-        )
-        sort_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`
-        )
-        index_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`
-        )
         strainy_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy $(cmd_args)`
         )
         script = join([
             "set -euo pipefail",
             "mkdir -p \"$(outdir)\"",
-            "if [ ! -f \"$(strain_assemblies)\" ]; then",
-            "  if [ ! -f \"$(bam_file)\" ]; then",
-            "    $(minimap_cmd) | $(sort_cmd)",
-            "    $(index_cmd)",
-            "  fi",
+            "if [ ! -f \"$(strain_contigs_gfa)\" ]; then",
             "  $(strainy_cmd)",
             "fi"
         ], "\n")
@@ -2940,22 +2960,39 @@ function run_strainy(
             mail_user = mail_user
         )
         Mycelia.execute(job, Mycelia.resolve_executor(executor))
-        return (; outdir, strain_assemblies)
+        return (; outdir, strain_unitigs_gfa, strain_contigs_gfa,
+            strain_variants_vcf, phased_unitig_info, multiplicity_stats)
     end
 
-    if !isfile(strain_assemblies)
-        # First map reads to assembly
-        bam_file = joinpath(outdir, "mapped_reads.bam")
-        if !isfile(bam_file)
-            run(pipeline(
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`,
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`))
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`)
-        end
-
-        # Run Strainy
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`)
+    if !isfile(strain_contigs_gfa)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy $(cmd_args)`)
     end
 
-    return (; outdir, strain_assemblies)
+    required = (strain_unitigs_gfa, strain_contigs_gfa, strain_variants_vcf,
+        phased_unitig_info, multiplicity_stats)
+    missing_outputs = filter(path -> !isfile(path), required)
+    isempty(missing_outputs) ||
+        error("Strainy did not produce required outputs: $(join(missing_outputs, ", "))")
+    return (; outdir, strain_unitigs_gfa, strain_contigs_gfa,
+        strain_variants_vcf, phased_unitig_info, multiplicity_stats)
+end
+
+function run_strainy(
+        assembly_file::String,
+        long_reads::String;
+        outdir::String = "strainy_output",
+        mode::String = "phase",
+        read_mode::Symbol = :nano,
+        kwargs...)
+    Base.depwarn(
+        "run_strainy(assembly_file, reads; mode=...) is deprecated; use " *
+        "run_strainy(; fasta_ref=..., fastq=..., read_mode=..., stage=...)",
+        :run_strainy)
+    return run_strainy(;
+        fasta_ref = assembly_file,
+        fastq = long_reads,
+        outdir = outdir,
+        read_mode = read_mode,
+        stage = Symbol(mode),
+        kwargs...)
 end
