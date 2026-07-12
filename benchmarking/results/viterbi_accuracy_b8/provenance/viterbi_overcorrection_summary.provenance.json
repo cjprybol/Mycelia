@@ -1,4 +1,25 @@
 {
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "dataset_id",
+    "dataset_name",
+    "domain",
+    "source",
+    "assumed_error_rate",
+    "observation_count",
+    "correct_positions",
+    "injected_error_count",
+    "control",
+    "corrected_method",
+    "changed_observations",
+    "over_correction_edit_distance",
+    "over_correction_rate"
+  ],
   "command_args": [
     "julia",
     "--project=.",
@@ -31,9 +52,12 @@
     "fixture_dir": "fixtures/viterbi_accuracy",
     "unit": "fixed-length 11-mers/ngrams"
   },
+  "row_count": 9,
   "run_id": "b8_viterbi_accuracy_local_20260625",
   "scale": "local-smoke",
   "schema_version": 1,
+  "table_name": "viterbi_overcorrection_summary",
+  "table_path": "tables/viterbi_overcorrection_summary.csv",
   "tool_versions": {
     "Mycelia": "0.1.0",
     "julia": "1.10.10"

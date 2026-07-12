@@ -1,0 +1,5 @@
+name,arm,ok,runtime_s,n_contigs,total_length,largest_contig,n50,genome_fraction,avg_identity,mismatches_per_100kbp,indels_per_100kbp
+phix174,naive,true,3.7,958,48276,5225,41,99.83,99.98,18.6,0.0
+phix174,scalable,true,18.1,1,5348,5348,5348,99.29,100.0,0.0,0.0
+lambda,naive,true,36.12,8937,450931,48495,41,99.99,100.0,0.0,0.0
+lambda,scalable,true,344.21,1,48487,48487,48487,99.97,99.99,8.2,0.0

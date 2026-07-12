@@ -12,7 +12,8 @@ function default_viterbi_emission_logp(
         node::Any,
         alphabet::Symbol;
         quality = nothing,
-        error_rate::Float64 = 0.01
+        error_rate::Float64 = 0.01,
+        count_length_penalty::Bool = true
 )::Float64
     if error_rate <= 0.0 || error_rate >= 1.0
         throw(ArgumentError("error_rate must be in (0, 1), got $error_rate"))
@@ -26,7 +27,15 @@ function default_viterbi_emission_logp(
 
     quality_scores = _normalize_viterbi_quality_scores(quality)
     alphabet_size = _viterbi_alphabet_size(resolved_alphabet)
-    shared = min(length(observed), length(expected))
+    # Compare by CHARACTER, not byte. `length`/`getindex` on a String count
+    # characters vs. address bytes respectively, so `observed[index]` throws a
+    # `StringIndexError` on any multibyte UTF-8 unit (e.g. the SentencePiece
+    # U+2581 word-boundary marker, accented letters, emoji). Materializing to
+    # `Vector{Char}` makes positional indexing character-aware for arbitrary
+    # Unicode tokens while keeping the O(n) scan.
+    observed_chars = collect(observed)
+    expected_chars = collect(expected)
+    shared = min(length(observed_chars), length(expected_chars))
 
     logp = 0.0
     for index in 1:shared
@@ -35,20 +44,29 @@ function default_viterbi_emission_logp(
             index,
             error_rate
         )
-        if observed[index] == expected[index]
+        if observed_chars[index] == expected_chars[index]
             logp += log1p(-position_error_rate)
         else
             logp += log(position_error_rate / (alphabet_size - 1))
         end
     end
 
-    for index in (shared + 1):max(length(observed), length(expected))
-        position_error_rate = _viterbi_position_error_rate(
-            quality_scores,
-            index,
-            error_rate
-        )
-        logp += log(position_error_rate / alphabet_size)
+    # Flat trailing length penalty for a length mismatch between observed and
+    # expected. This is a FRAMESHIFT charge, not an indel model — with the
+    # indel-aware pair-HMM active, insertion/deletion MOVES score the length change
+    # explicitly, so keeping this term would DOUBLE-COUNT it and bias the MAP path.
+    # The indel kernel passes `count_length_penalty=false` to drop it; the
+    # substitution decoder keeps it (default true), where it is score-neutral on the
+    # equal-length correct-back-to-reference fixtures anyway.
+    if count_length_penalty
+        for index in (shared + 1):max(length(observed_chars), length(expected_chars))
+            position_error_rate = _viterbi_position_error_rate(
+                quality_scores,
+                index,
+                error_rate
+            )
+            logp += log(position_error_rate / alphabet_size)
+        end
     end
     return logp
 end
@@ -65,6 +83,37 @@ keeps the default simple so the legacy B0 oracle remains the behavioral anchor.
 `:doublestrand`, `:canonical`, or `:auto`). BioSequences empirically preserves
 RNA type and U-aware complements (`AUGC` reverse-complements to `GCAU`), while
 AA/text alphabets remain reverse-complement naive singlestrand paths.
+
+Two candidate-generation bounds (both default to exact / no-op; opted into by the
+:scalable corrector alongside the size-aware `beam_width`) keep the per-depth
+frontier expansion O(1) in graph size instead of growing toward the width beam as
+the graph densifies (td-plqi):
+
+  * `max_successors_per_state` — per expanded state, only the top-B outgoing
+    transitions by edge weight are materialized before emission scoring, so
+    generation per state is O(B) not O(out-degree). On a k-mer de Bruijn graph the
+    structural out-degree is ≤ 4 (the four next bases), so any `B ≥ 4` is a strict
+    no-op here; it is a robustness guard for pathological high-branching inputs
+    (collapsed-repeat multigraphs, non-DNA alphabets). Default `typemax(Int)`.
+
+  * `beam_score_margin` — Δ log-probability threshold ("histogram" beam pruning)
+    with an EMISSION exemption. After the width beam, a state is dropped only when
+    it is BOTH >Δ below the depth's best FULL score AND >Δ below the depth's best
+    cumulative EMISSION (read-consistency, excluding the coverage/transition term).
+    This is the term that actually bounds generation at scale: on a dense
+    intermediate-k graph the width-256 frontier is ~99% read-INCONSISTENT states
+    (low on both axes) that can never win the ML path yet still generate +
+    emission-score successors each depth; pruning them holds the generating
+    frontier to a few states independent of genome size. The emission clause
+    protects variation: a real-but-rare minor allele (skewed-coverage / viral
+    quasispecies) has GOOD emission but a coverage-driven transition penalty, so
+    the emission exemption keeps it even when its full score trails the dominant
+    haplotype — the margin prunes WRONG paths (bad emission), never merely RARE
+    ones. It does not weaken error correction (an uncorrected error path has high
+    emission → exempt → still available for the full-score ML choice). Default
+    `Inf` (no threshold = exact). Only engages where the width beam is already
+    finite (approximate), so exact-ML reads (`beam_width == typemax`) stay
+    byte-identical.
 """
 struct ViterbiCorrectionConfig{F <: Function}
     error_rate::Float64
@@ -77,6 +126,39 @@ struct ViterbiCorrectionConfig{F <: Function}
     start_strand::Rhizomorph.StrandOrientation
     edge_weight::Function
     beam_width::Int
+    max_successors_per_state::Int
+    beam_score_margin::Float64
+    # OPT-IN telemetry (td-4osf / Tier-2 calibration): when true, the decoder
+    # records a per-position best-vs-2nd-best log-prob GAP (the Viterbi margin at
+    # each depth) into its diagnostics. Default false => the decode is byte-
+    # identical AND perf-neutral (no top-2 scan on the hot path).
+    record_position_gaps::Bool
+    # Indel-aware pair-HMM extension (nanopore correction). All fields DEFAULT to
+    # the substitution-collapse values, so the constructor default reproduces the
+    # substitution-only decoder byte-for-byte: `indel_moves=false` short-circuits
+    # before the gap kernel is ever entered, and every gap mass is 0 (⇒ gap
+    # transitions score `log(0) = -Inf` ⇒ dropped by the `isfinite` guard even if
+    # the kernel is entered with these zero fractions). `insertion_fraction` and
+    # `deletion_fraction` partition the per-base error rate into gap-open masses
+    # (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`); the remainder is the
+    # substitution mass that rides inside the existing emission term. The
+    # `*_extend_probability` fields are the affine gap-EXTEND probabilities
+    # (`γ_I`, `γ_D`) — one-time open then cheaper extend, because nanopore indels
+    # cluster in homopolymer runs (geometric run lengths). `deletion_max_run`
+    # (`D_max`) bounds consecutive deletions (the bounded Bellman-Ford relaxation
+    # replacing the legacy O(V³) Floyd-Warshall; also guards graph-cycle
+    # no-progress loops). `max_insertion_run` bounds consecutive insertions.
+    # `band_width` is the adaptive diagonal-band half-width on the net gap
+    # (graph-steps − read-index); `nothing` = unbounded (the exact/oracle setting).
+    indel_moves::Bool
+    insertion_fraction::Float64
+    deletion_fraction::Float64
+    insertion_extend_probability::Float64
+    deletion_extend_probability::Float64
+    deletion_max_run::Int
+    max_insertion_run::Int
+    band_width::Union{Nothing, Int}
+    insertion_emission_logp::Union{Nothing, Function}
 
     function ViterbiCorrectionConfig{F}(;
             error_rate::Float64 = 0.01,
@@ -88,10 +170,46 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex = nothing,
             start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
             edge_weight::Function = Rhizomorph.edge_data_weight,
-            beam_width::Int = typemax(Int)
+            beam_width::Int = typemax(Int),
+            max_successors_per_state::Int = typemax(Int),
+            beam_score_margin::Float64 = Inf,
+            record_position_gaps::Bool = false,
+            indel_moves::Bool = false,
+            insertion_fraction::Float64 = 0.0,
+            deletion_fraction::Float64 = 0.0,
+            insertion_extend_probability::Float64 = 0.0,
+            deletion_extend_probability::Float64 = 0.0,
+            deletion_max_run::Int = 0,
+            max_insertion_run::Int = 0,
+            band_width::Union{Nothing, Int} = nothing,
+            insertion_emission_logp::Union{Nothing, Function} = nothing
     ) where {F <: Function}
         if error_rate <= 0.0 || error_rate >= 0.5
             throw(ArgumentError("error_rate must be in (0, 0.5), got $error_rate"))
+        end
+        if insertion_fraction < 0.0 || deletion_fraction < 0.0 ||
+           insertion_fraction + deletion_fraction >= 1.0
+            throw(ArgumentError(
+                "insertion_fraction/deletion_fraction must be non-negative and sum " *
+                "to < 1 (the remainder is substitution mass), got " *
+                "$insertion_fraction / $deletion_fraction"))
+        end
+        for (name, value) in (
+            (:insertion_extend_probability, insertion_extend_probability),
+            (:deletion_extend_probability, deletion_extend_probability)
+        )
+            if value < 0.0 || value >= 1.0
+                throw(ArgumentError("$name must be in [0, 1), got $value"))
+            end
+        end
+        if deletion_max_run < 0
+            throw(ArgumentError("deletion_max_run must be non-negative, got $deletion_max_run"))
+        end
+        if max_insertion_run < 0
+            throw(ArgumentError("max_insertion_run must be non-negative, got $max_insertion_run"))
+        end
+        if band_width !== nothing && band_width < 0
+            throw(ArgumentError("band_width must be non-negative or nothing, got $band_width"))
         end
         if !(verbosity in ("debug", "reads", "dataset", "silent"))
             throw(ArgumentError("unsupported verbosity: $verbosity"))
@@ -101,6 +219,32 @@ struct ViterbiCorrectionConfig{F <: Function}
         end
         if beam_width <= 0
             throw(ArgumentError("beam_width must be positive, got $beam_width"))
+        end
+        if max_successors_per_state <= 0
+            throw(ArgumentError(
+                "max_successors_per_state must be positive, got $max_successors_per_state"))
+        end
+        if isnan(beam_score_margin) || beam_score_margin <= 0.0
+            throw(ArgumentError(
+                "beam_score_margin must be a positive number or Inf, got $beam_score_margin"))
+        end
+        # Silent-no-op guard (PR #407 review, silent-failure I2): `indel_moves=true`
+        # with NO indel capacity — either both gap masses zero
+        # (`insertion_fraction == deletion_fraction == 0`) or both run caps zero
+        # (`deletion_max_run == max_insertion_run == 0`) — sends every gap
+        # transition to `log(0) = -Inf`, so the "indel-aware" decode silently
+        # collapses to substitution-only. This is a legitimate configuration (it is
+        # exactly how the collapse/oracle test proves byte-identity), so we WARN
+        # rather than error, but we surface it so an operator does not believe they
+        # enabled indel correction when they did not.
+        if indel_moves && (
+            (insertion_fraction == 0.0 && deletion_fraction == 0.0) ||
+            (deletion_max_run == 0 && max_insertion_run == 0)
+        )
+            @warn "indel_moves=true but no indel capacity is configured " *
+                  "(insertion_fraction/deletion_fraction both 0, or " *
+                  "deletion_max_run/max_insertion_run both 0); the decode is " *
+                  "effectively substitution-only."
         end
         return new{F}(
             error_rate,
@@ -112,7 +256,19 @@ struct ViterbiCorrectionConfig{F <: Function}
             target_vertex,
             start_strand,
             edge_weight,
-            beam_width
+            beam_width,
+            max_successors_per_state,
+            beam_score_margin,
+            record_position_gaps,
+            indel_moves,
+            insertion_fraction,
+            deletion_fraction,
+            insertion_extend_probability,
+            deletion_extend_probability,
+            deletion_max_run,
+            max_insertion_run,
+            band_width,
+            insertion_emission_logp
         )
     end
 end
@@ -127,7 +283,19 @@ function ViterbiCorrectionConfig(;
         target_vertex = nothing,
         start_strand::Rhizomorph.StrandOrientation = Rhizomorph.Forward,
         edge_weight::Function = Rhizomorph.edge_data_weight,
-        beam_width::Int = typemax(Int)
+        beam_width::Int = typemax(Int),
+        max_successors_per_state::Int = typemax(Int),
+        beam_score_margin::Float64 = Inf,
+        record_position_gaps::Bool = false,
+        indel_moves::Bool = false,
+        insertion_fraction::Float64 = 0.0,
+        deletion_fraction::Float64 = 0.0,
+        insertion_extend_probability::Float64 = 0.0,
+        deletion_extend_probability::Float64 = 0.0,
+        deletion_max_run::Int = 0,
+        max_insertion_run::Int = 0,
+        band_width::Union{Nothing, Int} = nothing,
+        insertion_emission_logp::Union{Nothing, Function} = nothing
 )::ViterbiCorrectionConfig{F} where {F <: Function}
     return ViterbiCorrectionConfig{F}(
         error_rate = error_rate,
@@ -139,7 +307,19 @@ function ViterbiCorrectionConfig(;
         target_vertex = target_vertex,
         start_strand = start_strand,
         edge_weight = edge_weight,
-        beam_width = beam_width
+        beam_width = beam_width,
+        max_successors_per_state = max_successors_per_state,
+        beam_score_margin = beam_score_margin,
+        record_position_gaps = record_position_gaps,
+        indel_moves = indel_moves,
+        insertion_fraction = insertion_fraction,
+        deletion_fraction = deletion_fraction,
+        insertion_extend_probability = insertion_extend_probability,
+        deletion_extend_probability = deletion_extend_probability,
+        deletion_max_run = deletion_max_run,
+        max_insertion_run = max_insertion_run,
+        band_width = band_width,
+        insertion_emission_logp = insertion_emission_logp
     )
 end
 
@@ -344,7 +524,8 @@ end
 # precomputed outgoing-weight table's keys — does NOT touch the decode's own
 # state dicts, so it cannot affect decode determinism).
 function _viterbi_graph_label_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL}
+        graph::MetaGraphsNext.MetaGraph{
+        CODE, GRAPH, LABEL}
 )::Type where {CODE, GRAPH, LABEL}
     return LABEL
 end
@@ -375,7 +556,9 @@ function build_correction_weighted_graph(
         graph; edge_weight = transition_edge_weight)
 end
 
-build_correction_weighted_graph(graph; config::ViterbiCorrectionConfig = ViterbiCorrectionConfig()) = nothing
+function build_correction_weighted_graph(graph; config::ViterbiCorrectionConfig = ViterbiCorrectionConfig())
+    nothing
+end
 
 function _correct_metagraphs_next_observations(
         graph::MetaGraphsNext.MetaGraph,
@@ -408,7 +591,8 @@ function _correct_metagraphs_next_observations(
                 transition_scoring = _viterbi_transition_scoring(graph, transition_edge_weight)
             )
         else
-            start_vertex, target_vertex, max_steps = _decode_observation_bounds(
+            start_vertex, target_vertex,
+            max_steps = _decode_observation_bounds(
                 observation,
                 config
             )
@@ -441,13 +625,15 @@ function _correct_metagraphs_next_observations(
 end
 
 function _correction_vertex_data_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA}
+        graph::MetaGraphsNext.MetaGraph{
+        CODE, GRAPH, LABEL, VERTEX_DATA}
 )::Type where {CODE, GRAPH, LABEL, VERTEX_DATA}
     return VERTEX_DATA
 end
 
 function _correction_edge_data_type(
-        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA, EDGE_DATA}
+        graph::MetaGraphsNext.MetaGraph{CODE, GRAPH, LABEL, VERTEX_DATA,
+        EDGE_DATA}
 )::Type where {CODE, GRAPH, LABEL, VERTEX_DATA, EDGE_DATA}
     return EDGE_DATA
 end
@@ -536,8 +722,10 @@ function _decode_observation_bounds(
             throw(ArgumentError("empty observation path"))
         end
         start_vertex = first(observation)
-        target_vertex = config.target_vertex === nothing ? last(observation) : config.target_vertex
-        max_steps = config.max_steps === nothing ? length(observation) - 1 : config.max_steps
+        target_vertex = config.target_vertex === nothing ? last(observation) :
+                        config.target_vertex
+        max_steps = config.max_steps === nothing ? length(observation) - 1 :
+                    config.max_steps
         return start_vertex, target_vertex, max_steps
     end
 
@@ -547,7 +735,6 @@ function _decode_observation_bounds(
     return start_vertex, target_vertex, max_steps
 end
 
-
 function _normalize_viterbi_alphabet(alphabet::Symbol)::Symbol
     normalized = Symbol(uppercase(String(alphabet)))
     if !(normalized in (:DNA, :RNA, :AA, :TEXT))
@@ -555,7 +742,6 @@ function _normalize_viterbi_alphabet(alphabet::Symbol)::Symbol
     end
     return normalized
 end
-
 
 function _normalize_viterbi_strand_mode(strand_mode::Symbol)::Symbol
     normalized = Symbol(lowercase(String(strand_mode)))
@@ -959,8 +1145,23 @@ function _call_viterbi_emission_logp(
         observed_unit::Any,
         node::Any,
         alphabet::Symbol;
-        quality = nothing
+        quality = nothing,
+        count_length_penalty::Bool = true
 )::Float64
+    # The `count_length_penalty=false` request (indel kernel dropping the flat
+    # frameshift charge) is only meaningful for the built-in emission; a custom
+    # callback need not accept the keyword, so route it explicitly only for the
+    # default and leave every other caller/callback byte-identical.
+    if !count_length_penalty && config.emission_logp === default_viterbi_emission_logp
+        return default_viterbi_emission_logp(
+            observed_unit,
+            node,
+            alphabet;
+            quality = quality,
+            error_rate = config.error_rate,
+            count_length_penalty = false
+        )
+    end
     try
         return config.emission_logp(
             observed_unit,
@@ -999,6 +1200,81 @@ function _prune_correction_beam(
     return kept, kept_predecessors
 end
 
+# Bound successor GENERATION per expanded state (td-plqi): keep only the top-B
+# outgoing transitions ranked by edge weight BEFORE any emission is scored, so the
+# per-state candidate set is O(B) rather than O(out-degree). Ranking is by
+# `_edge_transition_weight` descending; ties are broken by target-vertex string for
+# a deterministic (run-reproducible) selection. Returns `transitions` unchanged when
+# it already fits within `b` (the common case: a k-mer de Bruijn vertex has ≤ 4
+# structural successors, so any `b ≥ 4` is a no-op). Only bites on pathological
+# high-branching vertices, where the low-weight tail is the least-probable
+# (error/spurious) edges — the true, well-supported branch is high-weight and
+# always survives.
+function _top_b_transitions(transitions, b::Int)
+    length(transitions) <= b && return transitions
+    ordered = sort(
+        transitions;
+        by = t -> (Rhizomorph._edge_transition_weight(t[:edge_data]),
+            string(t[:target_vertex])),
+        rev = true
+    )
+    return ordered[1:b]
+end
+
+# Score-margin ("histogram") beam pruning with an EMISSION EXEMPTION (td-plqi,
+# variation-safety hardening from PR #388 review). Applied AFTER the width beam, in
+# lockstep on the score / predecessor / emission dicts so path reconstruction stays
+# consistent.
+#
+# A state is pruned only when it is BOTH:
+#   (1) more than `margin` log-prob below the frontier's best FULL score
+#       (`state + log(transition_prob) + emission`), AND
+#   (2) more than `margin` below the frontier's best cumulative EMISSION
+#       (read-consistency: `sum(emission)`, EXCLUDING the coverage/transition term).
+#
+# Rationale — why the AND-gate rather than a full-score-only threshold: the full
+# score carries a `log(transition_prob) = log(cov_edge / cov_total)` term that
+# penalizes a path for being RARE, not for being WRONG. A real-but-rare minor
+# allele (viral quasispecies / skewed pool) has GOOD emission (reads genuinely
+# support it) but a coverage-driven transition penalty; a full-score-only margin
+# could prune it for rarity. The emission clause EXEMPTS any read-consistent path
+# from pruning regardless of how rare its coverage is, so a supported variant is
+# never dropped as "improbable." It does NOT weaken error correction: an
+# uncorrected error path has HIGH emission (matches the observed read) so it is
+# exempt and stays available, but the corrected path still wins the full-score ML
+# selection. Genuine junk (read-INCONSISTENT paths threaded through wrong regions)
+# is low on BOTH axes and is still pruned, so the O(1)-frontier speed win holds.
+# `margin === Inf` (default) is a no-op, preserving exact decoding.
+function _prune_correction_beam_by_margin(
+        scores::Dict{S, Float64},
+        predecessors::Dict{S, S},
+        emissions::Dict{S, Float64},
+        best_score::Float64,
+        best_emission::Float64,
+        margin::Float64
+)::Tuple{Dict{S, Float64}, Dict{S, S}, Dict{S, Float64}} where {S}
+    (isinf(margin) || isempty(scores)) && return scores, predecessors, emissions
+    score_threshold = best_score - margin
+    emission_threshold = best_emission - margin
+    kept = Dict{S, Float64}()
+    kept_predecessors = Dict{S, S}()
+    kept_emissions = Dict{S, Float64}()
+    for (state, score) in scores
+        # Keep unless below BOTH thresholds (emission clause exempts read-consistent
+        # paths — including rare-but-supported alleles — from coverage-driven pruning).
+        emission = get(emissions, state, -Inf)
+        if score < score_threshold && emission < emission_threshold
+            continue
+        end
+        kept[state] = score
+        kept_emissions[state] = emission
+        if haskey(predecessors, state)
+            kept_predecessors[state] = predecessors[state]
+        end
+    end
+    return kept, kept_predecessors, kept_emissions
+end
+
 function _viterbi_correct_observation(
         graph::MetaGraphsNext.MetaGraph,
         observation::AbstractVector,
@@ -1010,6 +1286,22 @@ function _viterbi_correct_observation(
 )::Rhizomorph.ViterbiDecodingResult
     if isempty(observation)
         throw(ArgumentError("empty observation path"))
+    end
+
+    # Indel-aware pair-HMM branch (nanopore correction). When gap MOVES are enabled
+    # the decode is a 2D DP over (read-index, graph-state) with an M/I/D phase
+    # layer; when disabled (the DEFAULT) we fall straight through to the untouched
+    # substitution lock-step decoder below, so it stays byte-identical.
+    if config.indel_moves
+        return _viterbi_correct_observation_indel(
+            graph,
+            observation,
+            alphabet;
+            config = config,
+            strand_mode = strand_mode,
+            quality_graph = quality_graph,
+            transition_scoring = transition_scoring
+        )
     end
 
     # Per-read decode hot path (td-y4oj): resolve the label type and emptiness in
@@ -1026,7 +1318,8 @@ function _viterbi_correct_observation(
 
     label_type = _viterbi_graph_label_type(graph)
     start_observed = first(observation)
-    target_vertex = _emission_target_vertex(graph, observation, config, alphabet, strand_mode)
+    target_vertex = _emission_target_vertex(
+        graph, observation, config, alphabet, strand_mode)
     start_candidates = _viterbi_start_candidates(
         graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
 
@@ -1054,8 +1347,14 @@ function _viterbi_correct_observation(
     )
 
     active_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
+    # Cumulative EMISSION (read-consistency) per state, tracked in lockstep with the
+    # full score so the score-margin prune can exempt read-consistent paths from
+    # coverage-driven pruning (td-plqi variation-safety). At the start there is no
+    # transition term, so the start emission == the start score.
+    active_emissions = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
     for vertex in start_candidates
-        for strand in _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
+        for strand in
+            _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
             state = (vertex, strand)
             score = _call_viterbi_state_emission_logp(
                 quality_graph,
@@ -1065,8 +1364,10 @@ function _viterbi_correct_observation(
                 alphabet,
                 strand_mode
             )
-            if isfinite(score) && (!haskey(active_scores, state) || score > active_scores[state])
+            if isfinite(score) &&
+               (!haskey(active_scores, state) || score > active_scores[state])
                 active_scores[state] = score
+                active_emissions[state] = score
             end
         end
     end
@@ -1083,7 +1384,8 @@ function _viterbi_correct_observation(
     best_depth = 0
     if target_vertex !== nothing
         if length(observation) == 1
-            target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
+            target_state,
+            target_score = _best_correction_target_state(active_scores, target_vertex)
             if target_state !== nothing
                 best_state = target_state
                 best_score = target_score
@@ -1098,11 +1400,14 @@ function _viterbi_correct_observation(
 
     predecessors_by_depth = Vector{
         Dict{
-            Tuple{label_type, Rhizomorph.StrandOrientation},
-            Tuple{label_type, Rhizomorph.StrandOrientation}
-        }
+        Tuple{label_type, Rhizomorph.StrandOrientation},
+        Tuple{label_type, Rhizomorph.StrandOrientation}
+    }
     }()
 
+    # Opt-in Tier-2 telemetry: per-depth Viterbi margin (best - 2nd-best surviving
+    # log-prob). Empty + untouched unless config.record_position_gaps is set.
+    position_gaps = Float64[]
     for depth in 1:(length(observation) - 1)
         observed_unit = observation[depth + 1]
         next_scores = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
@@ -1110,6 +1415,7 @@ function _viterbi_correct_observation(
             Tuple{label_type, Rhizomorph.StrandOrientation},
             Tuple{label_type, Rhizomorph.StrandOrientation}
         }()
+        next_emissions = Dict{Tuple{label_type, Rhizomorph.StrandOrientation}, Float64}()
 
         for (state, state_score) in active_scores
             current_vertex, current_strand = state
@@ -1123,6 +1429,17 @@ function _viterbi_correct_observation(
             if !isfinite(total_out) || total_out <= 0.0
                 diagnostics[:skipped_transitions] += length(transitions)
                 continue
+            end
+
+            # Bound successor generation to the top-B highest-weight transitions
+            # BEFORE emission scoring (td-plqi). No-op when B >= out-degree (the
+            # de Bruijn common case, out-degree <= 4). `total_out` is unchanged —
+            # transition probabilities stay normalized against the FULL outgoing
+            # mass, so a bounded expansion is a strict subset of the exact frontier.
+            if length(transitions) > config.max_successors_per_state
+                diagnostics[:successor_bounded] = get(diagnostics, :successor_bounded, 0) +
+                                                  1
+                transitions = _top_b_transitions(transitions, config.max_successors_per_state)
             end
 
             for transition in transitions
@@ -1153,6 +1470,10 @@ function _viterbi_correct_observation(
                 if !haskey(next_scores, next_state) || next_score > next_scores[next_state]
                     next_scores[next_state] = next_score
                     next_predecessors[next_state] = state
+                    # Carry the emission (read-consistency) component of THIS path
+                    # in lockstep with the Viterbi (max full-score) choice.
+                    next_emissions[next_state] = get(active_emissions, state, 0.0) +
+                                                 emission_score
                 end
             end
         end
@@ -1169,13 +1490,46 @@ function _viterbi_correct_observation(
         # beam_width = typemax(Int) the guard never fires and the decoder stays
         # exact (B8 correction fixtures are byte-identical).
         if length(next_scores) > config.beam_width
-            next_scores, next_predecessors = _prune_correction_beam(
+            next_scores,
+            next_predecessors = _prune_correction_beam(
                 next_scores, next_predecessors, config.beam_width)
+            # Keep the emission dict aligned to the width-beam survivors.
+            next_emissions = Dict(
+                state => next_emissions[state] for state in keys(next_scores))
             diagnostics[:beam_pruned] = get(diagnostics, :beam_pruned, 0) + 1
+        end
+
+        # Score-margin ("histogram") prune with emission exemption: keep a state
+        # unless it is BOTH >Δ below the best full score AND >Δ below the best
+        # cumulative emission (td-plqi). This bounds the GENERATING frontier to O(1)
+        # in genome size on dense intermediate-k graphs (the improbable, read-
+        # INCONSISTENT junk is pruned), while never dropping a read-consistent path —
+        # so a real-but-rare (skewed-coverage) allele is protected from coverage-
+        # driven pruning. A no-op under the default Inf margin (exact ML).
+        if isfinite(config.beam_score_margin) && !isempty(next_scores)
+            depth_best = maximum(values(next_scores))
+            depth_best_emission = maximum(values(next_emissions))
+            pre_margin = length(next_scores)
+            next_scores, next_predecessors,
+            next_emissions = _prune_correction_beam_by_margin(
+                next_scores, next_predecessors, next_emissions,
+                depth_best, depth_best_emission, config.beam_score_margin)
+            if length(next_scores) < pre_margin
+                diagnostics[:margin_pruned] = get(diagnostics, :margin_pruned, 0) + 1
+            end
+        end
+
+        # Tier-2 opt-in: record this position's Viterbi margin (best - 2nd-best
+        # surviving log-prob). Small margin => an ambiguous decode here; large =>
+        # a confident call. Pure telemetry: it reads next_scores but never mutates
+        # it or the chosen path, so the decode stays byte-identical when off.
+        if config.record_position_gaps
+            push!(position_gaps, _top2_score_gap(next_scores))
         end
 
         push!(predecessors_by_depth, next_predecessors)
         active_scores = next_scores
+        active_emissions = next_emissions
         retained_count = length(active_scores)
         diagnostics[:retained_states] = retained_count
         diagnostics[:cumulative_retained_states] += retained_count
@@ -1186,7 +1540,8 @@ function _viterbi_correct_observation(
             best_state, best_score = _best_correction_state(active_scores)
             best_depth = depth
         else
-            target_state, target_score = _best_correction_target_state(active_scores, target_vertex)
+            target_state,
+            target_score = _best_correction_target_state(active_scores, target_vertex)
             if target_state !== nothing
                 best_state = target_state
                 best_score = target_score
@@ -1198,11 +1553,415 @@ function _viterbi_correct_observation(
 
     if target_vertex !== nothing && !isfinite(best_score)
         diagnostics[:reason] = :target_unreachable
+        # position_gaps is intentionally NOT stashed on a failed decode: there is no
+        # path to align it to. `path === nothing` (+ diagnostics[:reason]) is the
+        # failure discriminant — a consumer must not read absence of :position_gaps
+        # as "flag was off".
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
 
     path = _reconstruct_correction_path(graph, best_state, best_depth, predecessors_by_depth)
     diagnostics[:path_length] = length(path.steps)
+    if config.record_position_gaps
+        # CONSUMPTION CONTRACT (per PR #400 review). `position_gaps[i]` is the
+        # Viterbi margin (best − 2nd-best surviving log-prob) at the transition INTO
+        # `path.steps[i+1]`; the start position `path.steps[1]` has no gap. Truncate
+        # to `best_depth` so `length(position_gaps) == length(path.steps) - 1` in ALL
+        # cases — under target anchoring the loop can run PAST the last on-path depth,
+        # leaving trailing gaps for abandoned frontiers. TWO caveats for consumers:
+        #   • An entry of `Inf` means "no surviving competitor at that depth" — a
+        #     ROUTINE value on a collapsed/beam-pruned frontier — so consumers MUST
+        #     `filter(isfinite, _)` (or clip) BEFORE any sum-based calibration metric
+        #     (reliability/ECE/Brier); a raw `Inf` silently poisons those to Inf/NaN.
+        #   • Under a finite `beam_width`/`beam_score_margin` this is a SURVIVOR
+        #     margin (2nd-best among survivors), not the exact Viterbi margin.
+        diagnostics[:position_gaps] = position_gaps[1:min(best_depth, length(position_gaps))]
+    end
+    return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
+end
+
+# Keep only the top-`beam_width` states (by score, hash tie-break) of a
+# state->score layer dict, IN PLACE. No-op when the dict already fits. Mirrors
+# `_prune_correction_beam` but for a single phase layer of the pair-HMM.
+function _beam_prune_layer!(scores::Dict{S, Float64}, beam_width::Int) where {S}
+    length(scores) <= beam_width && return scores
+    ordered = sort!(collect(scores); by = kv -> (last(kv), hash(first(kv))), rev = true)
+    keep = Set{S}(first(kv) for kv in Iterators.take(ordered, beam_width))
+    for state in collect(keys(scores))
+        state in keep || delete!(scores, state)
+    end
+    return scores
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Indel-aware pair-HMM decode of one observation against a Rhizomorph weighted
+graph. This is the gap-move counterpart of `_viterbi_correct_observation`,
+selected when `config.indel_moves` is set.
+
+The DP promotes the read index `i` AND an alignment phase `φ ∈ {M, I, D}` into the
+state key `(vertex, strand, φ)` (the substitution decoder carries `i` implicitly
+in its depth loop and has no phase), so length changes between the read and the
+graph walk are scored by TRUE moves rather than a flat frameshift penalty:
+
+  * **M** (match/mismatch) consumes one read unit AND advances one graph edge,
+    scoring the existing Phred-aware emission `e_M`.
+  * **I** (insertion) consumes one read unit and STAYS on the vertex (`e_I`,
+    default `log(1/|alphabet|)`), bounded by `max_insertion_run`.
+  * **D** (deletion) advances one graph edge and consumes NO read unit (`e_D = 0`),
+    computed as a bounded Bellman-Ford relaxation of up to `deletion_max_run` hops
+    within a read column (the scalable replacement for the legacy O(V³)
+    Floyd-Warshall).
+
+Affine transition masses come from the error model: `δ_I = ε·f_ins`,
+`δ_D = ε·f_del` (substitution mass rides inside `e_M`), with geometric gap-extend
+`γ_I`, `γ_D`. Setting the indel fractions to 0 sends every gap transition to
+`log(0) = -Inf`, so the reachable frontier collapses to the pure-M substitution
+path — Illumina falls out as the special case.
+"""
+function _viterbi_correct_observation_indel(
+        graph::MetaGraphsNext.MetaGraph,
+        observation::AbstractVector,
+        alphabet::Symbol;
+        config::ViterbiCorrectionConfig,
+        strand_mode::Symbol,
+        quality_graph::MetaGraphsNext.MetaGraph = graph,
+        transition_scoring::Symbol = :normalized_edge_weight
+)::Rhizomorph.ViterbiDecodingResult
+    if Graphs.nv(graph.graph) == 0
+        throw(ArgumentError("cannot correct observations against an empty graph"))
+    end
+
+    label_type = _viterbi_graph_label_type(graph)
+    State = Tuple{label_type, Rhizomorph.StrandOrientation}
+    Cell = Tuple{Int, State, Symbol}
+    n = length(observation)
+
+    start_observed = first(observation)
+    target_vertex = _emission_target_vertex(
+        graph, observation, config, alphabet, strand_mode)
+    start_candidates = _viterbi_start_candidates(
+        graph, label_type, _viterbi_label_unit(start_observed), alphabet, strand_mode)
+
+    alphabet_size = _viterbi_alphabet_size(alphabet)
+    insertion_emission = function (observed_unit)
+        if config.insertion_emission_logp === nothing
+            return -log(alphabet_size)
+        end
+        return config.insertion_emission_logp(observed_unit, alphabet)
+    end
+
+    # Affine transition masses from the error model. δ_I/δ_D = 0 ⇒ log(0) = -Inf,
+    # which drops the gap moves and collapses the DP to the substitution path.
+    error_rate = config.error_rate
+    delta_I = error_rate * config.insertion_fraction
+    delta_D = error_rate * config.deletion_fraction
+    gamma_I = config.insertion_extend_probability
+    gamma_D = config.deletion_extend_probability
+    T_MM = log(1.0 - delta_I - delta_D)
+    T_MI = log(delta_I)
+    T_MD = log(delta_D)
+    T_II = log(gamma_I)
+    T_IM = log1p(-gamma_I)
+    T_DD = log(gamma_D)
+    T_DM = log1p(-gamma_D)
+
+    deletion_max_run = config.deletion_max_run
+    max_insertion_run = config.max_insertion_run
+    band = config.band_width
+    finite_beam = config.beam_width != typemax(Int)
+
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => :viterbi_indel_pair_hmm,
+        :indel_moves => true,
+        :exact => (!finite_beam && band === nothing),
+        :alphabet => alphabet,
+        :strand_mode => strand_mode,
+        :reverse_complement_support => _viterbi_supports_reverse_complement(alphabet),
+        :read_length => n,
+        :target_vertex => target_vertex,
+        :start_strand => Rhizomorph._normalize_strand(config.start_strand),
+        :score_domain => :log_probability,
+        :transition_scoring => transition_scoring,
+        :emission_scoring => _viterbi_graph_has_quality(quality_graph) ?
+                             :quality_aware : :alphabet_parameterized,
+        :move_counts => Dict{Symbol, Int}(:M => 0, :I => 0, :D => 0),
+        :reached_target => target_vertex === nothing ? nothing : false
+    )
+
+    # Global backpointer: (read_index, state, phase) -> predecessor cell or nothing.
+    backpointers = Dict{Cell, Union{Nothing, Cell}}()
+
+    # Outgoing (target-state, logE) expansion for one state, matching the
+    # substitution decoder's normalization (log of edge_weight / total_out).
+    # NOTE: these nested helpers are closures, so their signatures/locals must not
+    # annotate with the enclosing `State`/`label_type` locals (Julia forbids a local
+    # variable in a closure type position). Untyped collections are correctness-
+    # equivalent here.
+    function _expand(state)
+        vertex, strand = state
+        transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
+        out = Tuple{Any, Float64}[]
+        isempty(transitions) && return out
+        total_out = Rhizomorph._total_outgoing_weight(graph, vertex, strand)
+        (!isfinite(total_out) || total_out <= 0.0) && return out
+        for transition in transitions
+            next_vertex = convert(label_type, transition[:target_vertex])
+            next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
+            edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
+            edge_w <= 0.0 && continue
+            push!(out, ((next_vertex, next_strand), log(edge_w / total_out)))
+        end
+        return out
+    end
+
+    # Bounded Bellman-Ford deletion relaxation WITHIN one read column: open a
+    # deletion from every M-state (run 1) then extend along graph edges up to
+    # `deletion_max_run` hops. `deletion_max_run` + negative `log γ_D` guard against
+    # unbounded no-progress loops on graph cycles.
+    function _relax_deletions!(
+            read_index,
+            match_scores,
+            match_net,
+            del_scores,
+            del_net,
+            del_run
+    )
+        deletion_max_run <= 0 && return
+        for (state, score) in match_scores
+            for (next_state, logE) in _expand(state)
+                cand = score + T_MD + logE
+                isfinite(cand) || continue
+                if !haskey(del_scores, next_state) || cand > del_scores[next_state]
+                    del_scores[next_state] = cand
+                    del_run[next_state] = 1
+                    del_net[next_state] = match_net[state] + 1
+                    backpointers[(read_index, next_state, :D)] = (read_index, state, :M)
+                end
+            end
+        end
+        for hop in 2:deletion_max_run
+            frontier = [state for (state, run) in del_run if run == hop - 1]
+            for state in frontier
+                score = del_scores[state]
+                for (next_state, logE) in _expand(state)
+                    cand = score + T_DD + logE
+                    isfinite(cand) || continue
+                    if !haskey(del_scores, next_state) || cand > del_scores[next_state]
+                        del_scores[next_state] = cand
+                        del_run[next_state] = hop
+                        del_net[next_state] = del_net[state] + 1
+                        backpointers[(read_index, next_state, :D)] = (read_index, state, :D)
+                    end
+                end
+            end
+        end
+    end
+
+    # Layer 1: seed the match phase from the start candidates (no gap at the very
+    # start — the read is anchored, matching the substitution decoder's seed), then
+    # relax deletions within the column.
+    match_scores = Dict{State, Float64}()
+    ins_scores = Dict{State, Float64}()
+    del_scores = Dict{State, Float64}()
+    match_net = Dict{State, Int}()
+    ins_net = Dict{State, Int}()
+    del_net = Dict{State, Int}()
+    ins_run = Dict{State, Int}()
+    del_run = Dict{State, Int}()
+
+    for vertex in start_candidates
+        for strand in
+            _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
+            state = (vertex, strand)
+            score = _call_viterbi_state_emission_logp(
+                quality_graph, config, start_observed, vertex, alphabet, strand_mode;
+                count_length_penalty = false)
+            if isfinite(score) &&
+               (!haskey(match_scores, state) || score > match_scores[state])
+                match_scores[state] = score
+                match_net[state] = 0
+                backpointers[(1, state, :M)] = nothing
+            end
+        end
+    end
+    if isempty(match_scores)
+        diagnostics[:reason] = :no_finite_start_emission
+        return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+    _relax_deletions!(1, match_scores, match_net, del_scores, del_net, del_run)
+
+    # The read index of the layer currently held in match/ins/del_scores. If a noisy
+    # read kills the whole frontier mid-decode we KEEP the last non-empty layer (its
+    # index) and select the best-so-far endpoint from it, rather than mislabeling the
+    # surviving cells with the full read length `n`.
+    last_index = 1
+
+    for read_index in 2:n
+        observed_unit = observation[read_index]
+        new_match = Dict{State, Float64}()
+        new_ins = Dict{State, Float64}()
+        new_del = Dict{State, Float64}()
+        new_match_net = Dict{State, Int}()
+        new_ins_net = Dict{State, Int}()
+        new_del_net = Dict{State, Int}()
+        new_ins_run = Dict{State, Int}()
+        new_del_run = Dict{State, Int}()
+
+        # M into (i, v): consume a read unit AND advance an edge, from any phase of
+        # the previous column.
+        for (phase, prev_scores, prev_net, trans) in (
+            (:M, match_scores, match_net, T_MM),
+            (:I, ins_scores, ins_net, T_IM),
+            (:D, del_scores, del_net, T_DM)
+        )
+            for (state, score) in prev_scores
+                base = score + trans
+                isfinite(base) || continue
+                for (next_state, logE) in _expand(state)
+                    emission = _call_viterbi_state_emission_logp(
+                        quality_graph, config, observed_unit, next_state[1],
+                        alphabet, strand_mode; count_length_penalty = false)
+                    cand = base + logE + emission
+                    isfinite(cand) || continue
+                    if !haskey(new_match, next_state) || cand > new_match[next_state]
+                        new_match[next_state] = cand
+                        new_match_net[next_state] = prev_net[state]
+                        backpointers[(read_index, next_state, :M)] = (
+                            read_index - 1, state, phase)
+                    end
+                end
+            end
+        end
+
+        # I into (i, v): consume a read unit and STAY on v, from previous M or I,
+        # bounded by the insertion-run cap.
+        emission_ins = insertion_emission(observed_unit)
+        if max_insertion_run >= 1 && isfinite(emission_ins)
+            for (state, score) in match_scores
+                cand = score + T_MI + emission_ins
+                isfinite(cand) || continue
+                if !haskey(new_ins, state) || cand > new_ins[state]
+                    new_ins[state] = cand
+                    new_ins_net[state] = match_net[state] - 1
+                    new_ins_run[state] = 1
+                    backpointers[(read_index, state, :I)] = (read_index - 1, state, :M)
+                end
+            end
+            for (state, score) in ins_scores
+                ins_run[state] >= max_insertion_run && continue
+                cand = score + T_II + emission_ins
+                isfinite(cand) || continue
+                if !haskey(new_ins, state) || cand > new_ins[state]
+                    new_ins[state] = cand
+                    new_ins_net[state] = ins_net[state] - 1
+                    new_ins_run[state] = ins_run[state] + 1
+                    backpointers[(read_index, state, :I)] = (read_index - 1, state, :I)
+                end
+            end
+        end
+
+        # D within (i, v): relax deletions from the freshly-built match layer.
+        _relax_deletions!(
+            read_index, new_match, new_match_net, new_del, new_del_net, new_del_run)
+
+        # Adaptive band: drop states whose net gap (graph-steps − read-index =
+        # #deletions − #insertions) exceeds the half-width. `nothing` = unbounded
+        # (exact). Applied AFTER the deletion relaxation so a banded state cannot
+        # seed a new column.
+        if band !== nothing
+            for (scores, nets) in (
+                (new_match, new_match_net), (new_ins, new_ins_net), (new_del, new_del_net))
+                for state in collect(keys(scores))
+                    if abs(nets[state]) > band
+                        delete!(scores, state)
+                    end
+                end
+            end
+        end
+
+        if finite_beam
+            _beam_prune_layer!(new_match, config.beam_width)
+            _beam_prune_layer!(new_ins, config.beam_width)
+            _beam_prune_layer!(new_del, config.beam_width)
+        end
+
+        # If the whole frontier died this column, KEEP the previous (non-empty) layer
+        # as the decode result and stop — do not swap in the empty layer.
+        if isempty(new_match) && isempty(new_ins) && isempty(new_del)
+            break
+        end
+
+        match_scores, ins_scores, del_scores = new_match, new_ins, new_del
+        match_net, ins_net, del_net = new_match_net, new_ins_net, new_del_net
+        ins_run, del_run = new_ins_run, new_del_run
+        last_index = read_index
+    end
+
+    # Endpoint: the best-scoring (state, phase) at the final read index. When a
+    # target vertex is pinned, restrict to states on it. Deterministic tie-break by
+    # (score, vertex string, phase) so a beam tie is reproducible.
+    best_score = -Inf
+    best_cell::Union{Nothing, Cell} = nothing
+    best_key = (-Inf, "", "")
+    for (phase, scores) in ((:M, match_scores), (:I, ins_scores), (:D, del_scores))
+        for (state, score) in scores
+            (target_vertex !== nothing && state[1] != target_vertex) && continue
+            key = (score, string(state[1]), string(phase))
+            if best_cell === nothing || score > best_score ||
+               (score == best_score && key < best_key)
+                best_score = score
+                best_cell = (last_index, state, phase)
+                best_key = key
+            end
+        end
+    end
+
+    if best_cell === nothing
+        diagnostics[:reason] = target_vertex === nothing ? :no_surviving_path :
+                               :target_unreachable
+        return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
+    end
+
+    # Reconstruct the graph walk: follow backpointers to the start, then keep the
+    # vertex of every M and D move (both traverse a real edge); an I move stays on
+    # its vertex and contributes NO new vertex.
+    chain = Cell[]
+    cursor::Union{Nothing, Cell} = best_cell
+    while cursor !== nothing
+        push!(chain, cursor)
+        cursor = backpointers[cursor]
+    end
+    reverse!(chain)
+
+    path_states = State[]
+    for (index, (_, state, phase)) in enumerate(chain)
+        diagnostics[:move_counts][phase] += 1
+        if index == 1 || phase != :I
+            push!(path_states, state)
+        end
+    end
+
+    path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
+    diagnostics[:path_length] = length(path.steps)
+    diagnostics[:decoded_read_index] = last_index
+    # Truncation is a first-class diagnostic (PR #407 review, silent-failure I1). On
+    # the free-endpoint decode a noisy read can kill the whole frontier before the
+    # last read unit; we KEEP the best-so-far prefix as the result, but stamp
+    # `:truncated` so callers do not have to INFER truncation by diffing
+    # `:decoded_read_index` against the read length. A verbosity-gated `@warn` makes
+    # a partial decode visible to an operator watching the reads/debug streams.
+    truncated = last_index < n
+    diagnostics[:truncated] = truncated
+    if truncated && target_vertex === nothing && config.verbosity in ("debug", "reads")
+        @warn "indel-aware decode truncated: the read frontier died at unit " *
+              "$(last_index) of $(n); the returned path covers only the decoded " *
+              "prefix (see diagnostics[:decoded_read_index])."
+    end
+    if target_vertex !== nothing
+        diagnostics[:reached_target] = true
+    end
     return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
 end
 
@@ -1323,7 +2082,8 @@ function _call_viterbi_state_emission_logp(
         observed_unit::Any,
         node::Any,
         alphabet::Symbol,
-        strand_mode::Symbol
+        strand_mode::Symbol;
+        count_length_penalty::Bool = true
 )::Float64
     quality = _viterbi_emission_quality(graph, observed_unit)
     direct = _call_viterbi_emission_logp(
@@ -1331,7 +2091,8 @@ function _call_viterbi_state_emission_logp(
         observed_unit,
         node,
         alphabet;
-        quality = quality
+        quality = quality,
+        count_length_penalty = count_length_penalty
     )
     if strand_mode == :canonical && _viterbi_supports_reverse_complement(alphabet)
         rc_node = _viterbi_reverse_complement_unit(node, alphabet)
@@ -1340,7 +2101,8 @@ function _call_viterbi_state_emission_logp(
             observed_unit,
             rc_node,
             alphabet;
-            quality = quality
+            quality = quality,
+            count_length_penalty = count_length_penalty
         )
         return max(direct, rc)
     end
@@ -1424,15 +2186,35 @@ function _best_correction_target_state(
     return _best_correction_state(target_scores)
 end
 
+# Best-minus-second-best of a state->score Dict's values (the per-position Viterbi
+# margin, td-4osf / Tier-2 calibration). Single pass, no allocation. Returns Inf
+# when fewer than two states survive (no competitor => maximally confident). NOTE:
+# Inf is a ROUTINE value (any collapsed frontier), so downstream calibration must
+# filter/clip it before averaging — see the consumption contract at the
+# diagnostics[:position_gaps] stash site.
+function _top2_score_gap(scores)::Float64
+    best = -Inf
+    second = -Inf
+    for v in values(scores)
+        if v > best
+            second = best
+            best = v
+        elseif v > second
+            second = v
+        end
+    end
+    return isfinite(second) ? best - second : Inf
+end
+
 function _reconstruct_correction_path(
         graph::MetaGraphsNext.MetaGraph,
         end_state::Tuple{T, Rhizomorph.StrandOrientation},
         depth::Int,
         predecessors_by_depth::Vector{
             Dict{
-                Tuple{T, Rhizomorph.StrandOrientation},
-                Tuple{T, Rhizomorph.StrandOrientation}
-            }
+            Tuple{T, Rhizomorph.StrandOrientation},
+            Tuple{T, Rhizomorph.StrandOrientation}
+        }
         }
 ) where {T}
     path_states = Vector{Tuple{T, Rhizomorph.StrandOrientation}}(undef, depth + 1)
@@ -1455,10 +2237,15 @@ function _decoded_path_labels(
 end
 
 function _hamming_like_distance(left::AbstractString, right::AbstractString)::Int
-    shared = min(length(left), length(right))
-    distance = abs(length(left) - length(right))
+    # Character-aware indexing (see `default_viterbi_emission_logp`): byte offsets
+    # into a multibyte UTF-8 string throw `StringIndexError`, so iterate the
+    # decoded `Char`s to keep the distance well-defined for arbitrary Unicode.
+    left_chars = collect(left)
+    right_chars = collect(right)
+    shared = min(length(left_chars), length(right_chars))
+    distance = abs(length(left_chars) - length(right_chars))
     for index in 1:shared
-        distance += left[index] == right[index] ? 0 : 1
+        distance += left_chars[index] == right_chars[index] ? 0 : 1
     end
     return distance
 end
