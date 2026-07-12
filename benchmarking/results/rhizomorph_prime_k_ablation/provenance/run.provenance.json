@@ -5,61 +5,69 @@
     "benchmarking/rhizomorph_prime_k_ablation_benchmark.jl"
   ],
   "dataset_ids": [
+    "collision_distinct_9bp",
+    "collision_shared_9bp",
     "control_nonrepetitive",
-    "distinct_repeat_no_collision",
-    "palindrome_rich",
-    "shared_repeat_collision",
-    "tandem_period2_ga",
-    "tandem_period3_atg"
+    "tandem_period2",
+    "tandem_period3",
+    "tandem_period4",
+    "tandem_period5",
+    "tandem_period6",
+    "tandem_period7"
   ],
-  "generated_at": "2026-07-12T00:46:04.530Z",
+  "generated_at": "2026-07-12T11:11:14.543Z",
   "git": {
-    "commit": "ef6768f0c23bca1c66a2d3c105f5eccda2f7a9a1",
+    "commit": "e1e5395b4e159aa54c12342c34a642767dbe6381",
     "is_dirty": true
   },
   "metadata": {
     "bead": "td-tjym",
-    "benchmark": "prime_vs_composite_k_ablation_denovo",
+    "benchmark": "prime_coprime_vs_composite_factor_alignment_denovo_multiperiod",
+    "claim_under_test": "a prime k is coprime to every period p<k so it cannot factor-align with a repeat of any period; a composite k=p*q aliases period-p and period-q repeats. Value of prime k is coprimality, not spanning (k>repeat length).",
     "composite_k": [
       9,
       15,
-      21
+      21,
+      25,
+      27,
+      33,
+      35
     ],
     "coverage": 30,
-    "measures": "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures. STRONG result = the positive control: the harness is demonstrably SENSITIVE to a k-mer collision (not blind). It does NOT show a primality mechanism — the k=9 collision is resolved at any k>=10 by spanning the 9 bp repeat (k-vs-repeat-length), independent of primality.",
-    "natural_fixture_null_caveat": "WEAKLY IDENTIFIED: size-matched pairs put composite k 2bp below prime (conflates primality with a +2 size step); at k>=15 recovery saturates at 1.0 so delta=0 is uninformative; the only sub-saturation pair (9,11) is dominated by the low-k size collapse the non-repetitive control also shows. The null corroborates 'no strong primality effect at this scale' but does not tightly identify primality.",
-    "positive_control_min_gap": 0.1,
-    "positive_control_note": "shared vs composition-matched distinct (TGAx3, a permutation of ATGx3 with identical GC and no shared 9-mer) at fixed k=9 isolates the collision from GC/size; the k=11 resolution is a spanning effect, not primality",
+    "factor_alignment_min_delta": 0.1,
+    "harness_sensitivity": "a separate engineered 9 bp shared-repeat collision control (composition-matched) DOES produce a large isolated deficit at k=9 that collapses once k spans the repeat — proving the metric detects aliasing when it exists; this is a k-vs-repeat-length effect, NOT primality.",
+    "isolating_comparison": "for each odd period p, ABOVE the k-size threshold, recovery(size-matched coprime prime k) - recovery(factor-sharing composite k with p|k)",
+    "observed_result": "factor-alignment produces NO recovery deficit isolated from k-size: above the threshold, factor-sharing composite k recovers the same as size-matched coprime prime k (deltas ~0); a period-p tandem is a p-cycle at any k, so single-tandem recovery is primality-independent and de-novo cleaning washes out aliasing.",
+    "periods": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
     "prime_k": [
       11,
+      13,
       17,
-      23
+      19,
+      23,
+      29,
+      31
     ],
     "read_error_rate": 0.02,
     "read_length": 45,
     "recovery_metric": "fraction of reference 15-mers present in assembled contigs (either strand), mean over seeds",
-    "regime": "de-novo assembly from error-containing reads (graph built from reads, not the clean reference; no endpoint anchoring)",
+    "regime": "de-novo assembly from error-containing reads (graph built from reads; no endpoint anchoring)",
+    "reverse_complement_odd_k_note": "the ladder samples ODD k because an even-length DNA/RNA k-mer can equal its own reverse complement (a palindrome), collapsing RC pairs and creating self-loops; odd k forbids palindromic k-mers. Among odd k, primes additionally avoid factor-alignment with odd periods. Even k are acceptable for amino-acid / natural-language alphabets (no reverse complement); DNA fixtures here stay on odd k.",
     "seeds": [
       1,
       2,
       3
     ],
-    "size_matched_pairs": [
-      [
-        9,
-        11
-      ],
-      [
-        15,
-        17
-      ],
-      [
-        21,
-        23
-      ]
-    ]
+    "size_threshold_recovery": 0.9
   },
-  "run_id": "prime_k_ablation_denovo_local_20260711",
+  "run_id": "prime_k_ablation_denovo_multiperiod_20260712",
   "scale": "local-smoke",
   "schema_version": 1,
   "tool_versions": {

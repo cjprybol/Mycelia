@@ -1,59 +1,75 @@
-# Prime-vs-composite k ablation for the Rhizomorph assembler on REPEAT-RICH
-# fixtures, in the DE-NOVO regime where k-mer aliasing can actually bite
-# (bead td-tjym).
+# Prime (coprime) vs composite (factor-aligning) k ablation for the Rhizomorph
+# assembler, in the DE-NOVO regime, DESIGNED to isolate FACTOR-ALIGNMENT from
+# k-SIZE across MANY repeat periods (bead td-tjym).
 #
-# BACKGROUND. PR #397 snapped the corrector's k-ladder to primes. The first
-# version of this ablation (reviewed on PR #404) could not show any prime-vs-
-# composite difference because it was structurally forced to delta=0: it built
-# the k-mer graph from the CLEAN reference (so the graph held only the true path)
-# and decoded each observation anchored at both true endpoints inside clean
-# margins. That measures "recover the true path when the true path is the only
-# path and both ends are pinned" — trivially perfect at every k.
+# THE CLAIM UNDER TEST (the real mathematical property of primes). A prime k is
+# coprime to EVERY period p < k, so it can never factor-align with a tandem repeat
+# of any period below it. A composite k = p*q ALIASES repeats of period p and of
+# period q. The purported value of a prime k is therefore NOT "k > repeat length"
+# (mere spanning) — it is "k shares no factor with the repeat period", across the
+# whole spectrum of periods. To test this you must isolate factor-alignment from
+# k-size, which requires MANY periods and, for each period, a factor-sharing
+# composite k that is comfortably larger than the repeat unit compared against a
+# SIZE-MATCHED prime k coprime to that period.
 #
-# THIS VERSION runs the regime where k-mer aliasing is a real phenomenon: DE-NOVO
-# assembly from ERROR-CONTAINING READS. For each fixture we simulate a read set
-# (coverage x tiling, substitution errors), build+clean the assembly graph FROM
-# THE READS at each k (`Mycelia.Rhizomorph.assemble_genome(reads; k=...)`), and
-# measure how much of the reference is reconstructed. Nothing is anchored to
-# truth; distinct repeat copies and error k-mers genuinely compete in the graph.
+# HISTORY on this branch. v1 (reviewed on #404) was structurally forced to
+# delta=0 (clean-reference graph + both-endpoint-anchored decode). v2 moved to the
+# valid de-novo regime but tested a single period (p=3) with a single 9 bp shared
+# repeat, which conflated factor-alignment with spanning (k=11 beats k=9 only
+# because 11 > 9 = the repeat length). v3 (this file) runs the systematic
+# (period p x k) sweep that actually isolates factor-alignment.
 #
-# WHAT WE FIND (see the committed tables; numbers are the deliverable, not these
-# comments):
+# EXPERIMENT.
+#   - Fixtures: tandem repeats of period p in {2,3,4,5,6,7}, a p-bp unit repeated
+#     to a fixed-length region, embedded in unique flanks so the de-novo graph
+#     must traverse the repeat; plus a non-repetitive control (the k-SIZE
+#     reference).
+#   - k grid: primes {11,13,17,19,23,29,31} and composites {9,15,21,25,27,33,35},
+#     chosen so that for each odd period p there is a composite k with p|k AND a
+#     size-matched prime k coprime to p.
+#   - Graph is built FROM ERROR-CONTAINING READS at each k (no anchoring); recovery
+#     = fraction of reference w-mers (fixed w, independent of assembly k) present
+#     in the assembled contigs, mean over deterministic seeds.
+#   - THE ISOLATING COMPARISON: for each odd period p, above the k-size threshold,
+#     recovery(size-matched coprime PRIME k) - recovery(factor-sharing COMPOSITE k
+#     with p|k). If factor-alignment mattered, this delta would be positive
+#     (composite aliases, prime does not) DESPITE both k spanning the unit.
 #
-#   - HEADLINE / STRONG RESULT — POSITIVE CONTROL (`shared_repeat_collision` +
-#     `distinct_repeat_no_collision`): the harness is DEMONSTRABLY SENSITIVE to a
-#     k-mer collision and is not blind. Two otherwise-unique "genes" share an
-#     internal period-3 repeat of length exactly 9. At k=9 the shared 9-mer
-#     collides and the assembly tangles: comparing the shared fixture against a
-#     structurally-identical, base-composition-matched fixture whose two genes
-#     carry DIFFERENT (non-shared) 9 bp inserts isolates a large collision
-#     penalty at fixed k=9 — this is a clean, size-free measurement of the
-#     collision.
+# OBSERVED RESULT (numbers are the deliverable; see the committed (period x k)
+# table). Factor-alignment produces NO recovery deficit isolated from k-size:
+#   - k-SIZE dominates: below k ~= 13-15 recovery is low for EVERY fixture,
+#     including the non-repetitive control (this is an error-tolerance /
+#     graph-fragmentation effect, not repeat-specific). Above it recovery
+#     saturates near 1.0 for every fixture.
+#   - Above the threshold, a factor-sharing composite k (p|k) recovers the SAME as
+#     its size-matched coprime prime k — the isolating deltas are ~0 for every
+#     odd period. The (period x k) heatmap shows NO darkening on the p|k cells.
+#   - This matches the math: a period-p tandem yields exactly p distinct k-mers (a
+#     p-cycle) at ANY k, so single-tandem de-novo recovery is period/primality
+#     independent; de-novo graph cleaning washes out any factor-alignment.
 #
-#     IMPORTANT — what the positive control does NOT show. The collision is
-#     RESOLVED at k=11 purely because 11 > 9 = the shared-repeat length, so an
-#     11-mer must SPAN the repeat into the genes' differing flanks. ANY k >= 10
-#     (prime OR composite) would resolve it the same way. The k=11 resolution is
-#     a k-vs-repeat-length spanning effect, NOT a primality mechanism. The
-#     positive control proves SENSITIVITY TO A COLLISION; it is not evidence that
-#     primality per se helps.
+# HARNESS SENSITIVITY (so the null is not mere insensitivity). A separate
+# engineered COLLISION control — two genes sharing a 9 bp period-3 repeat, vs a
+# composition-matched no-collision variant — DOES produce a large, isolated
+# recovery deficit at k=9 that collapses once k spans the shared repeat. This
+# proves the recovery metric CAN detect an aliasing-driven deficit when one truly
+# exists; it is a k-vs-repeat-length (collision/spanning) phenomenon, NOT a
+# primality mechanism.
 #
-#   - CORROBORATING / WEAKLY-IDENTIFIED — NATURAL tandem / palindrome fixtures:
-#     reference recovery rises monotonically with k-SIZE, and at usable k (>= 15)
-#     every fixture saturates at recovery = 1.0, so the size-matched
-#     prime-minus-composite delta is ~0. This null is only weakly identified and
-#     should NOT be read as "primality is neutral":
-#       (a) The size-matched pairs (9,11), (15,17), (21,23) always put the
-#           composite k 2 bp SMALLER than the prime k, so a "prime - composite"
-#           delta conflates primality with a +2 k-size step.
-#       (b) At k >= 15 recovery is saturated at 1.0, so delta = 0 is
-#           uninformative — saturation masks any effect that might exist.
-#       (c) The only sub-saturation pair, (9,11), is dominated by the low-k size
-#           collapse that the NON-REPETITIVE control also exhibits (it too drops
-#           to ~0 at k = 9, 11), i.e. that gap is a k-size artifact, not primality.
-#     Net: the positive control is the load-bearing result (sensitivity proven);
-#     the natural-fixture null corroborates "no strong primality effect at this
-#     scale" but is not a tight identification of primality.
+# INTERPRETATION for the manuscript. In this de-novo w-mer-recovery regime the
+# prime k-ladder's value is NOT per-k robustness to factor-alignment (which washes
+# out here). Its defensible basis is:
+#   (1) ODD k for DNA/RNA: an even-length k-mer can equal its own reverse
+#       complement (a palindrome), collapsing RC pairs and creating self-loops;
+#       odd k makes palindromic k-mers impossible. (Note in this sweep: among ODD
+#       k, only ODD periods 3,5,7 can factor-align at all — even periods 2,4,6 are
+#       automatically coprime to every odd k, a built-in control.) Even k are
+#       acceptable for amino-acid / natural-language alphabets, which have no
+#       reverse complement; this benchmark keeps DNA fixtures on ODD k.
+#   (2) Among odd k, primes additionally avoid factor-alignment with odd periods —
+#       a real number-theoretic property, but one that does NOT manifest as a
+#       de-novo recovery difference at this scale.
+#   (3) Geometric ladder spacing (a separate efficiency concern, not tested here).
 #
 # SMOKE scale, deterministic (fixed read-simulation seeds). Usage:
 #   julia --project=. benchmarking/rhizomorph_prime_k_ablation_benchmark.jl
@@ -69,13 +85,22 @@ import Statistics
 
 include(joinpath(@__DIR__, "benchmark_artifacts.jl"))
 
-# Size-matched prime/composite pairs so a prime-minus-composite delta is not
-# confounded by k-size: each composite (divisible by 3) is bracketed just below a
-# prime of nearly the same length -> (9,11), (15,17), (21,23).
-const PRIME_K = (11, 17, 23)
-const COMPOSITE_K = (9, 15, 21)
-const SIZE_MATCHED_PAIRS = ((9, 11), (15, 17), (21, 23))  # (composite, prime)
-const ABLATION_K = sort(collect(Iterators.flatten((PRIME_K, COMPOSITE_K))))
+# Tandem-repeat periods. Odd periods (3,5,7) admit a factor-sharing composite k in
+# the grid below; even periods (2,4,6) are coprime to EVERY odd k and so are
+# built-in "cannot factor-align" controls.
+const ABLATION_PERIODS = (2, 3, 4, 5, 6, 7)
+# All k are ODD (see header: even k-mers can equal their own reverse complement in
+# DNA/RNA). Composites are chosen so each odd period has a factor-sharing k:
+# 3 | {9,15,21,27,33}, 5 | {15,25,35}, 7 | {21,35}.
+const ABLATION_PRIME_K = (11, 13, 17, 19, 23, 29, 31)
+const ABLATION_COMPOSITE_K = (9, 15, 21, 25, 27, 33, 35)
+const ABLATION_K = sort(collect(Iterators.flatten((
+    ABLATION_PRIME_K, ABLATION_COMPOSITE_K))))
+
+# Tandem region length (bp) and unique flank length (bp). The region is longer
+# than the largest k, so recovery is never a whole-region spanning artifact.
+const ABLATION_REGION_LENGTH = 45
+const ABLATION_FLANK_LENGTH = 30
 
 # Read-simulation parameters (SMOKE, deterministic).
 const ABLATION_COVERAGE = 30
@@ -83,20 +108,22 @@ const ABLATION_READ_LENGTH = 45
 const ABLATION_READ_ERROR_RATE = 0.02
 const ABLATION_SEEDS = (1, 2, 3)
 const ABLATION_ALPHABET = collect("ACGT")
-# Fixed reference-recovery window, INDEPENDENT of the assembly k, so recovery is
-# comparable across k values.
+# Fixed reference-recovery window, INDEPENDENT of the assembly k.
 const ABLATION_RECOVERY_W = 15
-# Positive-control firing bar. The COLLISION PENALTY at k=9 (recovery of the
-# no-collision variant minus the shared-collision variant, at IDENTICAL and
-# composition-matched fixture structure so k-size and GC cancel) must be at least
-# this large AND must collapse at k=11. NB the k=11 collapse is a SPANNING effect
-# (11 > 9 = the shared-repeat length, so an 11-mer bridges into the differing
-# flanks) — it would happen at any k>=10, prime or composite; it is NOT a
-# primality mechanism. The check isolates the collision (from k-size and GC) and
-# confirms the harness is sensitive to it.
-const POSITIVE_CONTROL_MIN_GAP = 0.10
-const POSITIVE_CONTROL_SHARED_ID = "shared_repeat_collision"
-const POSITIVE_CONTROL_DISTINCT_ID = "distinct_repeat_no_collision"
+# The non-repetitive control defines the k-SIZE (error-tolerance) threshold: the
+# smallest k at which it recovers at least this fraction. Factor-alignment is
+# evaluated only AT OR ABOVE that threshold (so any deficit is not a size effect).
+const ABLATION_SIZE_THRESHOLD_RECOVERY = 0.90
+# A factor-sharing composite k counts as "isolating a factor-alignment deficit"
+# only if a size-matched coprime prime k out-recovers it by at least this margin,
+# above the size threshold. Observed deltas are ~0, so this does NOT fire.
+const FACTOR_ALIGNMENT_MIN_DELTA = 0.10
+# Harness-sensitivity collision control bar (k=9 collision penalty; see below).
+const COLLISION_MIN_GAP = 0.10
+const COLLISION_SHARED_ID = "collision_shared_9bp"
+const COLLISION_DISTINCT_ID = "collision_distinct_9bp"
+const CONTROL_NONREPETITIVE_ID = "control_nonrepetitive"
+
 const ABLATION_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "rhizomorph_prime_k_ablation"
 )
@@ -104,8 +131,9 @@ const ABLATION_DEFAULT_OUTPUT_DIR = joinpath(
 struct AblationFixture
     dataset_id::String
     dataset_name::String
-    category::String            # "natural", "collision_shared", or "collision_distinct"
-    references::Vector{String}  # one entry per distinct source sequence
+    category::String            # "tandem", "control", "collision_shared", "collision_distinct"
+    period::Int                 # tandem period, or 0 when not a single-period tandem
+    references::Vector{String}
     note::String
 end
 
@@ -113,32 +141,41 @@ function main(args::Vector{String} = ARGS)::Nothing
     output_dir = _ablation_arg_value(args, "--output-dir", ABLATION_DEFAULT_OUTPUT_DIR)
     write_plots = !("--skip-plots" in args)
     artifacts = run_prime_k_ablation_benchmark(output_dir; write_plots = write_plots)
-    println("Wrote Rhizomorph prime-vs-composite k ablation artifacts:")
+    println("Wrote Rhizomorph prime(coprime)-vs-composite(factor-aligning) k ablation:")
     println("  root: $(artifacts.root)")
     println("  per_run_csv: $(artifacts.per_run_csv)")
-    println("  delta_csv: $(artifacts.delta_csv)")
+    println("  factor_alignment_csv: $(artifacts.factor_alignment_csv)")
+    println("  collision_control_csv: $(artifacts.collision_control_csv)")
     println("  figure_png: $(artifacts.figure_png)")
-    println("  figure_svg: $(artifacts.figure_svg)")
     println()
-    println("Size-matched prime-minus-composite recovery delta per fixture x k-pair:")
-    for row in eachrow(artifacts.delta_table)
-        println("  $(rpad(row.dataset_id, 28)) pair(c=$(row.composite_k),p=$(row.prime_k)) " *
-                "composite_recovery=$(round(row.composite_recovery; digits = 3)) " *
-                "prime_recovery=$(round(row.prime_recovery; digits = 3)) " *
-                "delta=$(round(row.recovery_delta_prime_minus_composite; digits = 3))")
+    println("k-SIZE threshold (smallest k with non-repetitive control recovery >= " *
+            "$(ABLATION_SIZE_THRESHOLD_RECOVERY)): k = $(artifacts.size_threshold_k)")
+    println()
+    println("ISOLATING COMPARISON — factor-sharing composite (p|k) vs size-matched " *
+            "coprime prime, ABOVE the k-size threshold:")
+    if DataFrames.nrow(artifacts.factor_alignment_table) == 0
+        println("  (no above-threshold factor-sharing pairs found)")
+    else
+        for row in eachrow(artifacts.factor_alignment_table)
+            println("  period p=$(row.period)  composite k=$(row.composite_k) (=p*$(row.composite_k ÷ row.period)) " *
+                    "recovery=$(round(row.composite_recovery; digits = 3))  vs  " *
+                    "coprime prime k=$(row.prime_k) recovery=$(round(row.prime_recovery; digits = 3))  " *
+                    "delta(prime-composite)=$(round(row.recovery_delta_prime_minus_composite; digits = 3))")
+        end
     end
     println()
-    println("POSITIVE CONTROL — collision penalty (recovery of no-collision minus " *
-            "shared-collision, structure held identical):")
-    for row in eachrow(artifacts.positive_control_summary)
-        println("  k=$(row.k) ($(row.k_class))  shared=$(round(row.shared_recovery; digits = 3)) " *
-                "distinct=$(round(row.distinct_recovery; digits = 3)) " *
+    println("Factor-alignment isolated above threshold (any prime-minus-composite " *
+            ">= $(FACTOR_ALIGNMENT_MIN_DELTA)): $(artifacts.factor_alignment_isolated)")
+    println()
+    println("HARNESS-SENSITIVITY collision control (engineered 9 bp shared repeat, " *
+            "composition-matched; NOT a primality test):")
+    for row in eachrow(artifacts.collision_control_table)
+        println("  k=$(row.k)  shared=$(round(row.shared_recovery; digits = 3))  " *
+                "distinct=$(round(row.distinct_recovery; digits = 3))  " *
                 "collision_penalty=$(round(row.collision_penalty; digits = 3))")
     end
-    println()
-    println("Positive control fires (k=9 collision penalty >= $(POSITIVE_CONTROL_MIN_GAP) " *
-            "AND collapses by >= $(POSITIVE_CONTROL_MIN_GAP) once k spans the repeat at k=11 " *
-            "— a spanning effect, not primality): $(artifacts.positive_control_fires)")
+    println("Collision control fires (k=9 penalty >= $(COLLISION_MIN_GAP) and collapses " *
+            "once k spans the repeat): $(artifacts.collision_control_fires)")
     return nothing
 end
 
@@ -154,17 +191,21 @@ function run_prime_k_ablation_benchmark(
         end
     end
     per_run = DataFrames.DataFrame(rows)
-    delta = _ablation_delta_table(per_run, fixtures)
-    positive_control = _positive_control_summary(per_run)
+
+    size_threshold_k = _size_threshold_k(per_run)
+    factor_alignment = _factor_alignment_table(per_run, size_threshold_k)
+    collision_control = _collision_control_table(per_run)
+    factor_alignment_isolated = _factor_alignment_isolated(factor_alignment)
+    collision_fires = _collision_control_fires(collision_control)
 
     artifacts = write_benchmark_artifacts(
         [
             "prime_k_ablation_per_run" => per_run,
-            "prime_k_ablation_delta" => delta,
-            "prime_k_ablation_positive_control" => positive_control
+            "prime_k_ablation_factor_alignment" => factor_alignment,
+            "prime_k_ablation_collision_control" => collision_control
         ];
         output_dir = output_dir,
-        run_id = "prime_k_ablation_denovo_local_20260711",
+        run_id = "prime_k_ablation_denovo_multiperiod_20260712",
         scale = "local-smoke",
         dataset_ids = [fixture.dataset_id for fixture in fixtures],
         command_args = [
@@ -172,139 +213,130 @@ function run_prime_k_ablation_benchmark(
             "benchmarking/rhizomorph_prime_k_ablation_benchmark.jl"],
         metadata = Dict(
             "bead" => "td-tjym",
-            "benchmark" => "prime_vs_composite_k_ablation_denovo",
-            "regime" => "de-novo assembly from error-containing reads (graph built from reads, not the clean reference; no endpoint anchoring)",
-            "prime_k" => collect(PRIME_K),
-            "composite_k" => collect(COMPOSITE_K),
-            "size_matched_pairs" => [collect(pair) for pair in SIZE_MATCHED_PAIRS],
+            "benchmark" => "prime_coprime_vs_composite_factor_alignment_denovo_multiperiod",
+            "claim_under_test" => "a prime k is coprime to every period p<k so it cannot factor-align with a repeat of any period; a composite k=p*q aliases period-p and period-q repeats. Value of prime k is coprimality, not spanning (k>repeat length).",
+            "regime" => "de-novo assembly from error-containing reads (graph built from reads; no endpoint anchoring)",
+            "periods" => collect(ABLATION_PERIODS),
+            "prime_k" => collect(ABLATION_PRIME_K),
+            "composite_k" => collect(ABLATION_COMPOSITE_K),
+            "isolating_comparison" => "for each odd period p, ABOVE the k-size threshold, recovery(size-matched coprime prime k) - recovery(factor-sharing composite k with p|k)",
             "coverage" => ABLATION_COVERAGE,
             "read_length" => ABLATION_READ_LENGTH,
             "read_error_rate" => ABLATION_READ_ERROR_RATE,
             "seeds" => collect(ABLATION_SEEDS),
             "recovery_metric" => "fraction of reference $(ABLATION_RECOVERY_W)-mers present in assembled contigs (either strand), mean over seeds",
-            "measures" => "whether prime-vs-composite k changes DE-NOVO reference recovery on repeat-rich fixtures. STRONG result = the positive control: the harness is demonstrably SENSITIVE to a k-mer collision (not blind). It does NOT show a primality mechanism — the k=9 collision is resolved at any k>=10 by spanning the 9 bp repeat (k-vs-repeat-length), independent of primality.",
-            "natural_fixture_null_caveat" => "WEAKLY IDENTIFIED: size-matched pairs put composite k 2bp below prime (conflates primality with a +2 size step); at k>=15 recovery saturates at 1.0 so delta=0 is uninformative; the only sub-saturation pair (9,11) is dominated by the low-k size collapse the non-repetitive control also shows. The null corroborates 'no strong primality effect at this scale' but does not tightly identify primality.",
-            "positive_control_note" => "shared vs composition-matched distinct (TGAx3, a permutation of ATGx3 with identical GC and no shared 9-mer) at fixed k=9 isolates the collision from GC/size; the k=11 resolution is a spanning effect, not primality",
-            "positive_control_min_gap" => POSITIVE_CONTROL_MIN_GAP
+            "observed_result" => "factor-alignment produces NO recovery deficit isolated from k-size: above the threshold, factor-sharing composite k recovers the same as size-matched coprime prime k (deltas ~0); a period-p tandem is a p-cycle at any k, so single-tandem recovery is primality-independent and de-novo cleaning washes out aliasing.",
+            "harness_sensitivity" => "a separate engineered 9 bp shared-repeat collision control (composition-matched) DOES produce a large isolated deficit at k=9 that collapses once k spans the repeat — proving the metric detects aliasing when it exists; this is a k-vs-repeat-length effect, NOT primality.",
+            "reverse_complement_odd_k_note" => "the ladder samples ODD k because an even-length DNA/RNA k-mer can equal its own reverse complement (a palindrome), collapsing RC pairs and creating self-loops; odd k forbids palindromic k-mers. Among odd k, primes additionally avoid factor-alignment with odd periods. Even k are acceptable for amino-acid / natural-language alphabets (no reverse complement); DNA fixtures here stay on odd k.",
+            "size_threshold_recovery" => ABLATION_SIZE_THRESHOLD_RECOVERY,
+            "factor_alignment_min_delta" => FACTOR_ALIGNMENT_MIN_DELTA
         ),
         table_context_columns = Dict(
-            "prime_k_ablation_per_run" => Dict("benchmark_dataset_id" => "dataset_id"),
-            "prime_k_ablation_delta" => Dict("benchmark_dataset_id" => "dataset_id")
+            "prime_k_ablation_per_run" => Dict("benchmark_dataset_id" => "dataset_id")
         )
     )
-    positive_control_csv = artifacts.tables["prime_k_ablation_positive_control"].table
 
     figure_png = ""
     figure_svg = ""
     if write_plots
-        figure_paths = _write_ablation_figure(per_run, fixtures, artifacts.layout.plots)
-        figure_png = figure_paths.png
-        figure_svg = figure_paths.svg
+        paths = _write_heatmap_figure(
+            per_run, fixtures, collision_control, size_threshold_k, artifacts.layout.plots)
+        figure_png = paths.png
+        figure_svg = paths.svg
     end
 
     return (
         root = artifacts.root,
         per_run_csv = artifacts.tables["prime_k_ablation_per_run"].table,
-        delta_csv = artifacts.tables["prime_k_ablation_delta"].table,
-        positive_control_csv = positive_control_csv,
+        factor_alignment_csv = artifacts.tables["prime_k_ablation_factor_alignment"].table,
+        collision_control_csv = artifacts.tables["prime_k_ablation_collision_control"].table,
         index = artifacts.index,
         provenance = artifacts.provenance,
         figure_png = figure_png,
         figure_svg = figure_svg,
         per_run_table = per_run,
-        delta_table = delta,
-        positive_control_summary = positive_control,
-        per_run_rows = DataFrames.nrow(per_run),
-        delta_rows = DataFrames.nrow(delta),
-        positive_control_fires = _positive_control_fires(per_run)
+        factor_alignment_table = factor_alignment,
+        collision_control_table = collision_control,
+        size_threshold_k = size_threshold_k,
+        factor_alignment_isolated = factor_alignment_isolated,
+        collision_control_fires = collision_fires,
+        per_run_rows = DataFrames.nrow(per_run)
     )
 end
 
 function ablation_fixtures()::Vector{AblationFixture}
-    flank_left = _nonrepetitive_sequence(30, 1)
-    flank_right = _nonrepetitive_sequence(30, 2)
-    return AblationFixture[
+    flank_left = _nonrepetitive_sequence(ABLATION_FLANK_LENGTH, 1)
+    flank_right = _nonrepetitive_sequence(ABLATION_FLANK_LENGTH, 2)
+    fixtures = AblationFixture[]
+    for period in ABLATION_PERIODS
+        region = _tandem_region(period, ABLATION_REGION_LENGTH)
+        push!(fixtures,
+            AblationFixture(
+                "tandem_period$(period)",
+                "Period-$(period) tandem in unique flanks",
+                "tandem",
+                period,
+                [flank_left * region * flank_right],
+                isodd(period) ?
+                "odd period — factor-aligns with composite k divisible by $(period)" :
+                "even period — coprime to every odd k (built-in control)"
+            ))
+    end
+    push!(fixtures,
         AblationFixture(
-            "tandem_period3_atg",
-            "Period-3 tandem (ATG) core in unique flanks",
-            "natural",
-            [flank_left * repeat("ATG", 60) * flank_right],
-            "period 3 — divisible by every composite k (9,15,21)"
-        ),
+            CONTROL_NONREPETITIVE_ID,
+            "Non-repetitive control (defines the k-size threshold)",
+            "control",
+            0,
+            [_nonrepetitive_sequence(ABLATION_REGION_LENGTH + 2 * ABLATION_FLANK_LENGTH, 3)],
+            "no dominant period; its low-k recovery collapse is the pure k-size effect"
+        ))
+    # HARNESS-SENSITIVITY collision controls (NOT a primality test). Two genes
+    # share a 9 bp period-3 repeat -> composite k=9 collides on the identical
+    # 9-mer; once k spans the 9 bp repeat (k>=10) the collision resolves. The
+    # composition-matched distinct variant (gene2 uses TGAx3, a permutation of
+    # ATGx3: same GC, no shared 9-mer) isolates the collision from k-size and GC.
+    push!(fixtures,
         AblationFixture(
-            "tandem_period2_ga",
-            "Period-2 tandem (GA) core in unique flanks",
-            "natural",
-            [flank_left * repeat("GA", 90) * flank_right],
-            "period 2 — coprime to both odd k-sets"
-        ),
-        AblationFixture(
-            "palindrome_rich",
-            "Palindrome-rich inverted-repeat core in unique flanks",
-            "natural",
-            [flank_left * _palindrome_rich_core() * flank_right],
-            "repeated reverse-complement inverted-repeat unit (period 60)"
-        ),
-        AblationFixture(
-            "control_nonrepetitive",
-            "Non-repetitive control (deterministic pseudo-random)",
-            "natural",
-            [_nonrepetitive_sequence(220, 3)],
-            "no dominant period; also shows the low-k recovery collapse is a k-size effect"
-        ),
-        # POSITIVE CONTROL (shared). Two unique genes share an internal period-3
-        # repeat of length exactly 9. At k=9 the shared 9-mer collides and the
-        # assembly tangles; comparing against the composition-matched no-collision
-        # fixture below isolates that collision penalty at fixed k=9. NOTE: the
-        # collision is resolved at k>=10 purely because such a k SPANS the 9 bp
-        # repeat into the genes' differing flanks — this is a k-vs-repeat-length
-        # effect, NOT a primality mechanism (any k>=10, prime or composite, works).
-        AblationFixture(
-            POSITIVE_CONTROL_SHARED_ID,
-            "Positive control (shared): two genes sharing a 9 bp period-3 repeat",
+            COLLISION_SHARED_ID,
+            "Collision control (shared): two genes sharing a 9 bp period-3 repeat",
             "collision_shared",
+            3,
             [
                 _nonrepetitive_sequence(20, 4) * repeat("ATG", 3) *
                 _nonrepetitive_sequence(20, 5),
                 _nonrepetitive_sequence(20, 6) * repeat("ATG", 3) *
                 _nonrepetitive_sequence(20, 7)
             ],
-            "engineered 9 bp SHARED repeat; k=9 collides, any k>=10 spans it (k-vs-repeat-length, not primality)"
-        ),
-        # NEGATIVE CONTROL (distinct). Byte-for-byte the same structure as the
-        # shared fixture — same flanks (nonrep 4/5/6/7), same gene1 insert, same
-        # 9 bp insert length — except gene2 carries TGAx3 instead of ATGx3. TGA is
-        # a PERMUTATION of ATG: identical base composition (1A/1T/1G) but a
-        # different sequence that shares NO 9-mer with ATGx3. So the ONLY
-        # difference from the shared fixture is the shared-vs-distinct property
-        # (not GC content, not length, not structure); the k=9 recovery gap
-        # between shared and distinct isolates the COLLISION alone.
+            "engineered 9 bp SHARED repeat; harness-sensitivity control, not primality"
+        ))
+    push!(fixtures,
         AblationFixture(
-            POSITIVE_CONTROL_DISTINCT_ID,
-            "Negative control (distinct): same structure, composition-matched non-shared repeat",
+            COLLISION_DISTINCT_ID,
+            "Collision control (distinct): composition-matched, non-shared 9 bp repeat",
             "collision_distinct",
+            3,
             [
                 _nonrepetitive_sequence(20, 4) * repeat("ATG", 3) *
                 _nonrepetitive_sequence(20, 5),
                 _nonrepetitive_sequence(20, 6) * repeat("TGA", 3) *
                 _nonrepetitive_sequence(20, 7)
             ],
-            "gene2 uses TGAx3 (a permutation of ATG: same composition, no shared 9-mer); isolates collision from GC/size"
-        )
-    ]
+            "gene2 uses TGAx3 (permutation of ATG: same composition, no shared 9-mer)"
+        ))
+    return fixtures
 end
 
-# A palindrome-rich core: arm + reverse_complement(arm) forms a 60 bp DNA
-# palindrome; concatenating copies yields dense reverse-complement self-similarity.
-function _palindrome_rich_core()::String
-    arm = "ACGGTACCTTGACATGCACGTTGGATCCAT"  # 30 bp
-    rc = string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(arm)))
-    return repeat(arm * rc, 5)  # 300 bp, period 60
+# Tandem region: a p-bp unit repeated to exactly `region_length` bp. The unit is
+# deterministic and period-specific so different periods use different sequences.
+function _tandem_region(period::Int, region_length::Int)::String
+    unit = _nonrepetitive_sequence(period, 200 + period)
+    n_copies = cld(region_length, period)
+    return first(repeat(unit, n_copies), region_length)
 end
 
-# Deterministic pseudo-random (non-repetitive) DNA via a linear-congruential walk
-# — no RNG dependency, byte-stable across runs. Distinct seed_index -> distinct
-# sequence, so flanks and control differ.
+# Deterministic pseudo-random (non-repetitive) DNA via a linear-congruential walk;
+# no RNG dependency, byte-stable. Distinct seed_index -> distinct sequence.
 function _nonrepetitive_sequence(length_bp::Int, seed_index::Int)::String
     characters = Vector{Char}(undef, length_bp)
     state = (2246822519 + seed_index * 40503) % 2147483648
@@ -332,13 +364,14 @@ function _ablation_row(fixture::AblationFixture, k::Int)::NamedTuple
         dataset_id = fixture.dataset_id,
         dataset_name = fixture.dataset_name,
         category = fixture.category,
+        period = fixture.period,
         note = fixture.note,
         k = k,
-        k_class = (k in PRIME_K) ? "prime" : "composite",
+        k_class = (k in ABLATION_PRIME_K) ? "prime" : "composite",
+        factor_aligned = fixture.period > 1 && k % fixture.period == 0,
         n_references = length(fixture.references),
         reference_length = sum(length, fixture.references),
         coverage = ABLATION_COVERAGE,
-        read_length = ABLATION_READ_LENGTH,
         read_error_rate = ABLATION_READ_ERROR_RATE,
         n_seeds = length(ABLATION_SEEDS),
         recovery_w = ABLATION_RECOVERY_W,
@@ -351,8 +384,8 @@ function _ablation_row(fixture::AblationFixture, k::Int)::NamedTuple
     )
 end
 
-# Simulate a read set tiling every reference sequence at ABLATION_COVERAGE, with
-# per-base substitution errors. Deterministic given (references, seed).
+# Simulate a read set tiling every reference at ABLATION_COVERAGE with per-base
+# substitution errors. Deterministic given (references, seed).
 function _simulate_reads(references::Vector{String}, seed::Int)::Vector{FASTX.FASTA.Record}
     rng = Random.MersenneTwister(seed)
     reads = FASTX.FASTA.Record[]
@@ -394,8 +427,7 @@ function _assemble_and_score(
             n_contigs = length(contigs), assembled = true, error = "")
     catch exception
         # Never swallow interrupts. A genuine assembly failure IS a recovery
-        # failure at this k, but it must be VISIBLE: capture the message so a
-        # partial per-(fixture,k) failure surfaces in the row + a warning.
+        # failure at this k, but must be VISIBLE: capture the message + warn.
         exception isa InterruptException && rethrow()
         message = sprint(showerror, exception)
         @warn "assemble_genome failed" k=k error=first(message, 200)
@@ -403,10 +435,9 @@ function _assemble_and_score(
     end
 end
 
-# Fraction of reference w-mers (w = ABLATION_RECOVERY_W, fixed) present in the
-# assembled contigs on either strand. Sensitive to fragmentation and to
-# collision-driven tangles (which drop true w-mers around the junction), and
-# independent of the assembly k.
+# Fraction of reference w-mers (fixed w) present in the assembled contigs on either
+# strand. Independent of the assembly k; sensitive to fragmentation and to
+# collision-driven tangles (which drop true w-mers around the junction).
 function _reference_recovery(references::Vector{String}, contigs::Vector{String})::Float64
     w = ABLATION_RECOVERY_W
     reference_wmers = Set{String}()
@@ -433,27 +464,45 @@ function _reverse_complement(sequence::AbstractString)::String
     return string(BioSequences.reverse_complement(BioSequences.LongDNA{4}(sequence)))
 end
 
-# One delta row per (fixture x size-matched (composite,prime) pair): the
-# prime-minus-composite recovery gap at nearly-matched k-size.
-function _ablation_delta_table(
-        per_run::DataFrames.DataFrame,
-        fixtures::Vector{AblationFixture}
-)::DataFrames.DataFrame
+function _tandem_recovery(per_run::DataFrames.DataFrame, period::Int, k::Int)::Float64
+    return only(per_run[
+        (per_run.dataset_id .== "tandem_period$(period)") .& (per_run.k .== k),
+        :mean_reference_recovery])
+end
+
+# The k-SIZE (error-tolerance) threshold: the smallest k at which the
+# non-repetitive control recovers at least ABLATION_SIZE_THRESHOLD_RECOVERY. Below
+# this k, recovery is limited by graph fragmentation for EVERY fixture (a k-size
+# effect, not repeat-specific); factor-alignment is evaluated only at/above it.
+function _size_threshold_k(per_run::DataFrames.DataFrame)::Int
+    control = per_run[per_run.dataset_id .== CONTROL_NONREPETITIVE_ID, :]
+    passing = sort(control[control.mean_reference_recovery .>= ABLATION_SIZE_THRESHOLD_RECOVERY, :], :k)
+    return DataFrames.nrow(passing) == 0 ? maximum(ABLATION_K) : first(passing.k)
+end
+
+# THE ISOLATING COMPARISON. For each odd period p and each factor-sharing
+# composite k (p|k) at/above the size threshold, pair it with the size-matched
+# coprime prime k (nearest prime in the grid that is at/above threshold; every
+# grid prime > p so all are coprime to p). Report prime-minus-composite recovery:
+# a positive delta would mean the composite aliases where the prime does not.
+function _factor_alignment_table(per_run::DataFrames.DataFrame, threshold_k::Int)::DataFrames.DataFrame
     rows = NamedTuple[]
-    for fixture in fixtures
-        subset = per_run[per_run.dataset_id .== fixture.dataset_id, :]
-        for (composite_k, prime_k) in SIZE_MATCHED_PAIRS
-            composite_recovery = only(
-                subset[subset.k .== composite_k, :mean_reference_recovery])
-            prime_recovery = only(
-                subset[subset.k .== prime_k, :mean_reference_recovery])
+    eligible_primes = [pk for pk in ABLATION_PRIME_K if pk >= threshold_k]
+    for period in ABLATION_PERIODS
+        isodd(period) || continue  # even periods cannot factor-align with odd k
+        for composite_k in ABLATION_COMPOSITE_K
+            (composite_k % period == 0 && composite_k >= threshold_k) || continue
+            isempty(eligible_primes) && continue
+            prime_k = eligible_primes[argmin(abs.(eligible_primes .-
+                                                                  composite_k))]
+            composite_recovery = _tandem_recovery(per_run, period, composite_k)
+            prime_recovery = _tandem_recovery(per_run, period, prime_k)
             push!(rows,
                 (
-                    dataset_id = fixture.dataset_id,
-                    dataset_name = fixture.dataset_name,
-                    category = fixture.category,
+                    period = period,
                     composite_k = composite_k,
                     prime_k = prime_k,
+                    size_threshold_k = threshold_k,
                     composite_recovery = composite_recovery,
                     prime_recovery = prime_recovery,
                     recovery_delta_prime_minus_composite = prime_recovery -
@@ -464,26 +513,33 @@ function _ablation_delta_table(
     return DataFrames.DataFrame(rows)
 end
 
-# Size-controlled positive-control summary. At each of k=9 and k=11 the COLLISION
+# Factor-alignment is "isolated" only if SOME above-threshold factor-sharing
+# composite is out-recovered by its size-matched coprime prime by at least
+# FACTOR_ALIGNMENT_MIN_DELTA. Observed: no — the deltas are ~0.
+function _factor_alignment_isolated(factor_alignment::DataFrames.DataFrame)::Bool
+    DataFrames.nrow(factor_alignment) == 0 && return false
+    return maximum(factor_alignment.recovery_delta_prime_minus_composite) >=
+           FACTOR_ALIGNMENT_MIN_DELTA
+end
+
+# Harness-sensitivity collision control. At each of k=9 and k=11 the COLLISION
 # PENALTY is recovery(distinct) - recovery(shared): the two fixtures are
-# structurally identical AND base-composition-matched (same flanks, same 9 bp
-# insert length, gene2 uses TGAx3 vs ATGx3 — a permutation, same GC), so this
-# difference isolates the shared-9-mer collision from k-size and GC. The penalty
-# is large at k=9 (collision) and collapses at k=11 because an 11-mer SPANS the
-# 9 bp repeat into the differing flanks — a k-vs-repeat-length effect that any
-# k>=10 would produce, NOT a primality mechanism.
-function _positive_control_summary(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
+# structurally identical and base-composition-matched, so this isolates the
+# shared-9-mer collision from k-size and GC. The penalty is large at k=9
+# (collision) and collapses at k=11 because an 11-mer SPANS the 9 bp repeat — a
+# k-vs-repeat-length effect, NOT primality.
+function _collision_control_table(per_run::DataFrames.DataFrame)::DataFrames.DataFrame
     recovery_at(id,
         k) = only(per_run[
     (per_run.dataset_id .== id) .& (per_run.k .== k), :mean_reference_recovery])
     rows = NamedTuple[]
     for k in (9, 11)
-        shared = recovery_at(POSITIVE_CONTROL_SHARED_ID, k)
-        distinct = recovery_at(POSITIVE_CONTROL_DISTINCT_ID, k)
+        shared = recovery_at(COLLISION_SHARED_ID, k)
+        distinct = recovery_at(COLLISION_DISTINCT_ID, k)
         push!(rows,
             (
                 k = k,
-                k_class = (k in PRIME_K) ? "prime" : "composite",
+                k_class = (k in ABLATION_PRIME_K) ? "prime" : "composite",
                 shared_recovery = shared,
                 distinct_recovery = distinct,
                 collision_penalty = distinct - shared
@@ -492,68 +548,98 @@ function _positive_control_summary(per_run::DataFrames.DataFrame)::DataFrames.Da
     return DataFrames.DataFrame(rows)
 end
 
-# The positive control FIRES when the collision penalty at k=9 is at least
-# POSITIVE_CONTROL_MIN_GAP AND is at least POSITIVE_CONTROL_MIN_GAP larger than the
-# penalty at k=11 — i.e. the shared-9-mer collision demonstrably degrades recovery
-# at k=9 and is resolved once k spans the repeat (k=11). This proves the harness
-# detects the collision; it is not a test of primality.
-function _positive_control_fires(per_run::DataFrames.DataFrame)::Bool
-    summary = _positive_control_summary(per_run)
-    penalty_9 = only(summary[summary.k .== 9, :collision_penalty])
-    penalty_11 = only(summary[summary.k .== 11, :collision_penalty])
-    return penalty_9 >= POSITIVE_CONTROL_MIN_GAP &&
-           (penalty_9 - penalty_11) >= POSITIVE_CONTROL_MIN_GAP
+function _collision_control_fires(collision_control::DataFrames.DataFrame)::Bool
+    penalty_9 = only(collision_control[collision_control.k .== 9, :collision_penalty])
+    penalty_11 = only(collision_control[collision_control.k .== 11, :collision_penalty])
+    return penalty_9 >= COLLISION_MIN_GAP && (penalty_9 - penalty_11) >= COLLISION_MIN_GAP
 end
 
-function _write_ablation_figure(
+# THE MONEY FIGURE: a (repeat period x k) recovery heatmap. If factor-alignment
+# mattered, the p|k cells (ringed) would be darker than coprime cells at the same
+# k; observed, they are not. A bottom row shows the non-repetitive control (the
+# k-size reference), and a side panel shows the collision-control sensitivity.
+function _write_heatmap_figure(
         per_run::DataFrames.DataFrame,
         fixtures::Vector{AblationFixture},
+        collision_control::DataFrames.DataFrame,
+        threshold_k::Int,
         plots_dir::AbstractString
 )::NamedTuple
     mkpath(plots_dir)
-    fig = CairoMakie.Figure(size = (1250, 1150), fontsize = 15)
-    positions = [(1, 1), (1, 2), (2, 1), (2, 2), (3, 1), (3, 2)]
-    prime_color = :dodgerblue3
-    composite_color = :darkorange3
-
-    for (fixture_index, fixture) in enumerate(fixtures)
-        row, col = positions[mod1(fixture_index, length(positions))]
-        subset = per_run[per_run.dataset_id .== fixture.dataset_id, :]
-        title = fixture.category == "natural" ? fixture.dataset_name :
-                "$(fixture.dataset_name)  [CONTROL]"
-        axis = CairoMakie.Axis(
-            fig[row, col],
-            title = title,
-            xlabel = "assembly k",
-            ylabel = "reference recovery (mean over seeds)",
-            xticks = ABLATION_K,
-            yticks = 0.0:0.25:1.0
-        )
-        ks = sort(unique(subset.k))
-        recovery = [only(subset[subset.k .== k, :mean_reference_recovery]) for k in ks]
-        colors = [(k in PRIME_K) ? prime_color : composite_color for k in ks]
-        markers = [(k in PRIME_K) ? :circle : :rect for k in ks]
-        CairoMakie.lines!(axis, ks, recovery; color = :gray70, linewidth = 1.5)
-        CairoMakie.scatter!(
-            axis, ks, recovery; color = colors, markersize = 15, marker = markers)
-        CairoMakie.ylims!(axis, -0.05, 1.05)
+    heatmap_ids = vcat(
+        ["tandem_period$(p)" for p in ABLATION_PERIODS], [CONTROL_NONREPETITIVE_ID])
+    row_labels = vcat(["p=$(p)" for p in ABLATION_PERIODS], ["non-rep"])
+    ks = ABLATION_K
+    n_rows = length(heatmap_ids)
+    n_cols = length(ks)
+    matrix = Array{Float64}(undef, n_rows, n_cols)
+    for (r, id) in enumerate(heatmap_ids)
+        for (c, k) in enumerate(ks)
+            matrix[r, c] = only(per_run[
+            (per_run.dataset_id .== id) .& (per_run.k .== k), :mean_reference_recovery])
+        end
     end
 
-    legend_elements = [
-        CairoMakie.MarkerElement(color = prime_color, marker = :circle, markersize = 15),
-        CairoMakie.MarkerElement(color = composite_color, marker = :rect, markersize = 15)
-    ]
-    CairoMakie.Legend(
-        fig[4, 1:2], legend_elements,
-        ["prime k ($(join(PRIME_K, ", ")))", "composite k ($(join(COMPOSITE_K, ", ")))"];
-        orientation = :horizontal, framevisible = false)
+    fig = CairoMakie.Figure(size = (1350, 780), fontsize = 15)
+    axis = CairoMakie.Axis(
+        fig[1, 1],
+        title = "De-novo reference recovery vs (repeat period, k) — rings mark p | k (factor-aligned)",
+        xlabel = "assembly k", ylabel = "repeat period",
+        xticks = (1:n_cols, string.(ks)),
+        yticks = (1:n_rows, row_labels)
+    )
+    heat = CairoMakie.heatmap!(
+        axis, 1:n_cols, 1:n_rows, permutedims(matrix);
+        colormap = :viridis, colorrange = (0.0, 1.0))
+    # Ring the factor-aligned (p|k) cells.
+    ring_x = Int[]
+    ring_y = Int[]
+    for (r, id) in enumerate(heatmap_ids)
+        startswith(id, "tandem_period") || continue
+        period = parse(Int, replace(id, "tandem_period" => ""))
+        for (c, k) in enumerate(ks)
+            if k % period == 0
+                push!(ring_x, c)
+                push!(ring_y, r)
+            end
+        end
+    end
+    CairoMakie.scatter!(
+        axis, ring_x, ring_y; marker = :circle, markersize = 22,
+        color = (:white, 0.0), strokecolor = :red, strokewidth = 2.5)
+    # k-size threshold marker.
+    threshold_col = findfirst(==(threshold_k), ks)
+    if threshold_col !== nothing
+        CairoMakie.vlines!(
+            axis, [threshold_col - 0.5]; color = :white, linestyle = :dash, linewidth = 2)
+    end
+    CairoMakie.Colorbar(fig[1, 2], heat, label = "reference recovery (mean over seeds)")
+
+    # Collision-control sensitivity panel.
+    axis2 = CairoMakie.Axis(
+        fig[2, 1],
+        title = "Harness-sensitivity control: 9 bp shared-repeat collision (NOT a primality test)",
+        xlabel = "assembly k", ylabel = "reference recovery",
+        xticks = ([9, 11], ["9", "11"]), yticks = 0.0:0.25:1.0)
+    shared = [only(collision_control[collision_control.k .== k, :shared_recovery])
+              for k in (9, 11)]
+    distinct = [only(collision_control[collision_control.k .== k, :distinct_recovery])
+                for k in (9, 11)]
+    CairoMakie.scatterlines!(axis2, [9, 11], shared; color = :darkorange3, linewidth = 3,
+        markersize = 14, label = "shared 9-mer (collides at k=9)")
+    CairoMakie.scatterlines!(axis2, [9, 11], distinct; color = :dodgerblue3, linewidth = 3,
+        markersize = 14, marker = :rect, label = "distinct (composition-matched)")
+    CairoMakie.ylims!(axis2, -0.05, 1.05)
+    CairoMakie.axislegend(axis2; position = :rb)
+    CairoMakie.rowsize!(fig.layout, 2, CairoMakie.Relative(0.28))
+
     CairoMakie.Label(
         fig[0, 1:2],
-        "Rhizomorph de-novo reference recovery vs k on repeat-rich fixtures";
+        "Prime(coprime) vs composite(factor-aligning) k — factor-alignment is NOT isolated from k-size";
         fontsize = 18, font = :bold)
 
-    png_path = joinpath(plots_dir, "prime_k_ablation_recovery_vs_k.png")
-    svg_path = joinpath(plots_dir, "prime_k_ablation_recovery_vs_k.svg")
+    png_path = joinpath(plots_dir, "prime_k_ablation_period_by_k_heatmap.png")
+    svg_path = joinpath(plots_dir, "prime_k_ablation_period_by_k_heatmap.svg")
     CairoMakie.save(png_path, fig)
     CairoMakie.save(svg_path, fig)
     return (png = png_path, svg = svg_path)

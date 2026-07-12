@@ -5,64 +5,11 @@
     "provenance": "provenance",
     "tables": "tables"
   },
-  "run_id": "prime_k_ablation_denovo_local_20260711",
+  "run_id": "prime_k_ablation_denovo_multiperiod_20260712",
   "scale": "local-smoke",
   "schema_version": 1,
   "tables": {
-    "prime_k_ablation_delta": {
-      "columns": [
-        "benchmark_schema_version",
-        "benchmark_run_id",
-        "benchmark_scale",
-        "benchmark_dataset_ids",
-        "benchmark_git_commit",
-        "benchmark_dataset_id",
-        "dataset_id",
-        "dataset_name",
-        "category",
-        "composite_k",
-        "prime_k",
-        "composite_recovery",
-        "prime_recovery",
-        "recovery_delta_prime_minus_composite"
-      ],
-      "provenance": "provenance/prime_k_ablation_delta.provenance.json",
-      "rows": 18,
-      "table": "tables/prime_k_ablation_delta.csv"
-    },
-    "prime_k_ablation_per_run": {
-      "columns": [
-        "benchmark_schema_version",
-        "benchmark_run_id",
-        "benchmark_scale",
-        "benchmark_dataset_ids",
-        "benchmark_git_commit",
-        "benchmark_dataset_id",
-        "dataset_id",
-        "dataset_name",
-        "category",
-        "note",
-        "k",
-        "k_class",
-        "n_references",
-        "reference_length",
-        "coverage",
-        "read_length",
-        "read_error_rate",
-        "n_seeds",
-        "recovery_w",
-        "mean_reference_recovery",
-        "min_reference_recovery",
-        "max_reference_recovery",
-        "mean_contig_count",
-        "all_seeds_assembled",
-        "assembly_errors"
-      ],
-      "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
-      "rows": 36,
-      "table": "tables/prime_k_ablation_per_run.csv"
-    },
-    "prime_k_ablation_positive_control": {
+    "prime_k_ablation_collision_control": {
       "columns": [
         "benchmark_schema_version",
         "benchmark_run_id",
@@ -75,9 +22,61 @@
         "distinct_recovery",
         "collision_penalty"
       ],
-      "provenance": "provenance/prime_k_ablation_positive_control.provenance.json",
+      "provenance": "provenance/prime_k_ablation_collision_control.provenance.json",
       "rows": 2,
-      "table": "tables/prime_k_ablation_positive_control.csv"
+      "table": "tables/prime_k_ablation_collision_control.csv"
+    },
+    "prime_k_ablation_factor_alignment": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "period",
+        "composite_k",
+        "prime_k",
+        "size_threshold_k",
+        "composite_recovery",
+        "prime_recovery",
+        "recovery_delta_prime_minus_composite"
+      ],
+      "provenance": "provenance/prime_k_ablation_factor_alignment.provenance.json",
+      "rows": 9,
+      "table": "tables/prime_k_ablation_factor_alignment.csv"
+    },
+    "prime_k_ablation_per_run": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_dataset_id",
+        "dataset_id",
+        "dataset_name",
+        "category",
+        "period",
+        "note",
+        "k",
+        "k_class",
+        "factor_aligned",
+        "n_references",
+        "reference_length",
+        "coverage",
+        "read_error_rate",
+        "n_seeds",
+        "recovery_w",
+        "mean_reference_recovery",
+        "min_reference_recovery",
+        "max_reference_recovery",
+        "mean_contig_count",
+        "all_seeds_assembled",
+        "assembly_errors"
+      ],
+      "provenance": "provenance/prime_k_ablation_per_run.provenance.json",
+      "rows": 126,
+      "table": "tables/prime_k_ablation_per_run.csv"
     }
   }
 }
