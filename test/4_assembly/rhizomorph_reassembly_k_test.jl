@@ -3,9 +3,12 @@
 # k-mer spectrum at high k, so the re-assembly k must drop to keep the contig graph
 # connected; clean (Illumina) corrected reads keep a high k for specificity.
 #
-# Residual error is inferred reference-free from the corrected reads via the k-mer
-# spectrum (genomic k-mers recur ~coverage; errors are singletons) and/or per-base
-# Q-values, then mapped to a PRIME k via the survival model k <= log(0.5)/log(1-e).
+# The criterion is COVERAGE-AWARE CONNECTIVITY (not a residual-error → survival
+# chain): median_solid_kmer_multiplicity(reads, k) measures C·(1-e)^k directly (the
+# median count of k-mers that recur >= 2x, i.e. the genomic peak). select_reassembly_k
+# returns the LARGEST prime k (ceiling honored as-is) whose solid median stays above
+# connectivity_floor. Clean 30x reads keep the ceiling; high-error nanopore reads
+# see the solid median collapse at high k and drop to a lower prime.
 import Test
 import BioSequences
 import FASTX
@@ -71,6 +74,35 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
     Test.@testset "never exceeds the requested ceiling" begin
         Test.@test Mycelia.Rhizomorph.select_reassembly_k(_rk_clean, 11) <= 11
         Test.@test Mycelia.Rhizomorph.select_reassembly_k(_rk_n10, 13) <= 13
+    end
+
+    Test.@testset "connectivity signal: solid-backbone median separates clean vs shattered" begin
+        # The criterion driving select_reassembly_k is median_solid_kmer_multiplicity:
+        # the median count of the SOLID (count>=2) canonical k-mers = backbone coverage
+        # C·(1-e)^k. A well-covered backbone stays high; a shattered one sits low. The
+        # 6.0 connectivity floor lives between the two clusters (calibration finding).
+        ms(reads, k) = Mycelia.Rhizomorph.median_solid_kmer_multiplicity(reads, k)
+        # Clean backbone recurs ~coverage even at high k — safely above the floor.
+        Test.@test ms(_rk_clean, 21) >= 6.0
+        Test.@test ms(_rk_clean, 21) > 10.0
+        # Shattered (raw high-error) backbone barely survives — below the floor at the
+        # ceiling, which is exactly what forces the k drop.
+        Test.@test ms(_rk_n05, 21) < 6.0
+        Test.@test ms(_rk_n10, 21) < 6.0
+        # Clean dominates noisy by a wide margin (drives the keep-vs-drop split).
+        Test.@test ms(_rk_clean, 21) > ms(_rk_n05, 21)
+    end
+
+    Test.@testset "effective_kmer_coverage (secondary diagnostic) shows error-driven decay" begin
+        # effective_kmer_coverage (mean over ALL distinct canonical k-mers, singletons
+        # included) is retained as an interpretable cross-check: it decays smoothly with
+        # k as errors fragment long windows. NOT the primary signal — its clean-vs-
+        # shattered range is too narrow for a byte-identical oracle (see docstring).
+        eff(reads, k) = Mycelia.Rhizomorph.effective_kmer_coverage(reads, k)
+        Test.@test eff(_rk_clean, 21) > eff(_rk_n05, 21)
+        Test.@test eff(_rk_n10, 7) > eff(_rk_n10, 13)
+        Test.@test eff(_rk_n10, 13) > eff(_rk_n10, 21)
+        Test.@test eff(_rk_n05, 7) > eff(_rk_n05, 21)
     end
 
     Test.@testset "Q-values inform residual error when present (FASTQ)" begin
