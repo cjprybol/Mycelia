@@ -2688,6 +2688,7 @@ function _quality_from_indel_trace(
         elseif phase == :I
             # The read consumed an extra observed base without advancing the graph;
             # the corrected latent sequence therefore emits no base or quality.
+            previous_read_index = read_index
             continue
         elseif phase == :D
             left_position = observed_position
