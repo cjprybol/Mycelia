@@ -20,8 +20,12 @@ Test.@testset "Rhizomorph Assembly Helpers" begin
     Test.@testset "Observation preparation" begin
         fastq_reads = [FASTX.FASTQ.Record("read1", "ATCG", "IIII")]
         observations = Mycelia.Rhizomorph._prepare_observations(fastq_reads)
-        Test.@test observations[1] isa FASTX.FASTA.Record
-        Test.@test FASTX.FASTA.sequence(observations[1]) == "ATCG"
+        # In-memory FASTQ is PRESERVED (not stripped to FASTA): FASTQ input routes to
+        # the quality-aware paths, which consume per-base quality (td-tps5). Stripping
+        # here previously forced a placeholder-Q40 re-injection downstream.
+        Test.@test observations[1] isa FASTX.FASTQ.Record
+        Test.@test FASTX.sequence(String, observations[1]) == "ATCG"
+        Test.@test collect(FASTX.quality_scores(observations[1])) == fill(UInt8(40), 4)  # 'I' == Q40, quality retained
 
         mktempdir() do dir
             fasta_path = joinpath(dir, "reads.fasta")

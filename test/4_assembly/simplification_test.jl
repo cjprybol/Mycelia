@@ -1554,4 +1554,119 @@ Test.@testset "Graph Simplification Helper Coverage" begin
         Test.@test Mycelia.Rhizomorph._suffix_after_overlap("ABC", 2) == "C"
         Test.@test Mycelia.Rhizomorph._suffix_after_overlap("ABC", 5) == ""
     end
+
+    Test.@testset "Indexed bubble detection == naive edge-scan reference" begin
+        # Guards the O(V*E) -> O(V+E) out-adjacency-index optimization: the
+        # indexed detect_bubbles_next MUST return byte-for-byte identical bubbles
+        # to a from-scratch reference that re-scans the edge set per lookup
+        # (get_out_neighbors, unchanged). This is a pure performance fix, so the
+        # detected bubbles/hard vertices must not change.
+
+        # Independent reference implementation using ONLY the O(E)-per-call
+        # get_out_neighbors scan (mirrors the pre-index algorithm exactly).
+        naive_limited_path = function (graph, start_vertex, max_length)
+            path = [start_vertex]
+            current = start_vertex
+            for _ in 1:max_length
+                ns = Mycelia.Rhizomorph.get_out_neighbors(graph, current)
+                if length(ns) == 1
+                    nxt = ns[1]
+                    nxt in path && break
+                    push!(path, nxt)
+                    current = nxt
+                else
+                    break
+                end
+            end
+            return path
+        end
+
+        naive_detect = function (graph; min_bubble_length = 2, max_bubble_length = 100)
+            verts = collect(MetaGraphsNext.labels(graph))
+            T = eltype(verts)
+            bubbles = Mycelia.Rhizomorph.BubbleStructure{T}[]
+            for entry in verts
+                outs = Mycelia.Rhizomorph.get_out_neighbors(graph, entry)
+                length(outs) >= 2 || continue
+                for i in 1:length(outs)
+                    for j in (i + 1):length(outs)
+                        p1 = naive_limited_path(graph, outs[i], max_bubble_length)
+                        p2 = naive_limited_path(graph, outs[j], max_bubble_length)
+                        conv = Mycelia.Rhizomorph.find_path_convergence(p1, p2)
+                        if conv !== nothing &&
+                           length(p1) >= min_bubble_length && length(p2) >= min_bubble_length
+                            ci1 = findfirst(v -> v == conv, p1)
+                            ci2 = findfirst(v -> v == conv, p2)
+                            if ci1 !== nothing && ci2 !== nothing
+                                bp1 = p1[1:ci1]
+                                bp2 = p2[1:ci2]
+                                s1 = Mycelia.Rhizomorph.calculate_path_support(graph, bp1)
+                                s2 = Mycelia.Rhizomorph.calculate_path_support(graph, bp2)
+                                cx = Mycelia.Rhizomorph.calculate_bubble_complexity(bp1, bp2)
+                                b = Mycelia.Rhizomorph.BubbleStructure(
+                                    entry, conv, bp1, bp2, s1, s2, cx)
+                                Mycelia.Rhizomorph.is_valid_bubble(graph, b) && push!(bubbles, b)
+                            end
+                        end
+                    end
+                end
+            end
+            return Mycelia.Rhizomorph.remove_duplicate_bubbles(bubbles)
+        end
+
+        bubble_fields = b -> (b.entry_vertex, b.exit_vertex, b.path1, b.path2,
+            b.path1_support, b.path2_support, b.complexity_score)
+
+        # A collection of small graphs exercising distinct topologies.
+        make_graph = function (verts, edges)
+            g = MetaGraphsNext.MetaGraph(
+                Graphs.DiGraph();
+                label_type = String,
+                vertex_data_type = Mycelia.Rhizomorph.StringVertexData,
+                edge_data_type = Mycelia.Rhizomorph.StringEdgeData
+            )
+            for v in verts
+                g[v] = Mycelia.Rhizomorph.StringVertexData(v)
+            end
+            for (s, d) in edges
+                g[s, d] = Mycelia.Rhizomorph.StringEdgeData(1)
+            end
+            return g
+        end
+
+        graphs = [
+            # simple SNP bubble
+            make_graph(["A", "B", "C", "D"],
+                [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D")]),
+            # asymmetric-length bubble
+            make_graph(["A", "B", "C", "D", "E"],
+                [("A", "B"), ("B", "C"), ("C", "E"), ("A", "D"), ("D", "E")]),
+            # 3-way split
+            make_graph(["A", "B", "C", "D", "E"],
+                [("A", "B"), ("A", "C"), ("A", "D"),
+                    ("B", "E"), ("C", "E"), ("D", "E")]),
+            # linear (no bubble)
+            make_graph(["A", "B", "C", "D"],
+                [("A", "B"), ("B", "C"), ("C", "D")]),
+            # two independent bubbles chained
+            make_graph(["A", "B", "C", "D", "E", "F", "G"],
+                [("A", "B"), ("A", "C"), ("B", "D"), ("C", "D"),
+                    ("D", "E"), ("D", "F"), ("E", "G"), ("F", "G")]),
+        ]
+
+        for g in graphs
+            indexed = Mycelia.Rhizomorph.detect_bubbles_next(
+                g; min_bubble_length = 1, max_bubble_length = 10)
+            reference = naive_detect(g; min_bubble_length = 1, max_bubble_length = 10)
+            Test.@test map(bubble_fields, indexed) == map(bubble_fields, reference)
+        end
+
+        # Also confirm the out-adjacency index reproduces get_out_neighbors exactly.
+        g = graphs[5]
+        idx = Mycelia.Rhizomorph._build_out_adjacency_index(g, String)
+        for v in MetaGraphsNext.labels(g)
+            Test.@test Mycelia.Rhizomorph._indexed_out_neighbors(idx, v) ==
+                       Mycelia.Rhizomorph.get_out_neighbors(g, v)
+        end
+    end
 end

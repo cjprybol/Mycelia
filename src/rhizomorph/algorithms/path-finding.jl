@@ -763,16 +763,37 @@ function _total_outgoing_weight(
         strand::StrandOrientation
 )
     total = 0.0
-    for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        if src != vertex
-            continue
+    haskey(graph, vertex) || return max(total, _KSP_MIN_WEIGHT)
+    if Graphs.is_directed(graph.graph)
+        # Directed graphs (the production decode path: the weighted graph is a
+        # DiGraph from weighted_graph_from_rhizomorph) — sum out-edge mass from
+        # the adjacency in O(out-degree) instead of scanning every edge label
+        # (O(E)). This runs once per active state per depth inside the per-read
+        # Viterbi decode, so with n_reads ∝ genome and E ∝ genome the old full
+        # scan made the decode O(genome^2). This is the dominant super-linear term
+        # (td-y4oj); the sibling `_get_valid_transitions` was already converted to
+        # this pattern. For a DiGraph, `outneighbors` enumerates exactly the edges
+        # whose stored source is `vertex`, in the same (ascending dst-code) order
+        # as `edge_labels`, so the strand-filtered sum is bit-identical to the full
+        # scan (verified: 0 bit-differences over 48,844 (vertex,strand) pairs).
+        src_code = MetaGraphsNext.code_for(graph, vertex)
+        for dst_code in Graphs.outneighbors(graph.graph, src_code)
+            dst = MetaGraphsNext.label_for(graph, dst_code)
+            edge_data = graph[vertex, dst]
+            if _normalize_strand(edge_data.src_strand) == strand
+                total += _edge_transition_weight(edge_data)
+            end
         end
-        edge_data = graph[src, dst]
-        edge_src_strand = _normalize_strand(edge_data.src_strand)
-        if edge_src_strand != strand
-            continue
+    else
+        # Undirected graphs store each edge once with a fixed orientation; their
+        # symmetric adjacency would over-count via outneighbors, so preserve the
+        # original semantics by scanning edge labels and keeping stored sources.
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            src == vertex || continue
+            edge_data = graph[src, dst]
+            _normalize_strand(edge_data.src_strand) == strand || continue
+            total += _edge_transition_weight(edge_data)
         end
-        total += _edge_transition_weight(edge_data)
     end
     return max(total, _KSP_MIN_WEIGHT)
 end
@@ -1974,6 +1995,18 @@ function find_eulerian_paths_next(graph::MetaGraphsNext.MetaGraph{
         return Vector{Vector{T}}()
     end
 
+    # NOTE on canonical (undirected) graphs: even though the graph is undirected,
+    # the canonical builder stores each edge in the (src, dst) orientation of the
+    # observed read, so MetaGraphsNext.edge_labels yields a directionally-usable
+    # edge set and Hierholzer over it recovers the read traversal order. (A strict
+    # undirected degree-parity test would wrongly reject these graphs: an RC self-
+    # overlap fold can raise one vertex to odd undirected degree while its stored
+    # directed in/out-degrees stay balanced.) The single remaining problem for
+    # canonical mode is that adjacent CANONICAL labels are stored in their
+    # lexicographically-minimal orientation and therefore need not overlap as
+    # stored; path_to_sequence resolves that below by recovering each k-mer's
+    # orientation from the (k-1) overlap with its predecessor.
+
     adj_list = Dict{T, Vector{T}}()
     in_degrees = Dict{T, Int}()
     out_degrees = Dict{T, Int}()
@@ -2159,6 +2192,188 @@ end
 # Sequence Reconstruction from Paths
 # ============================================================================
 
+# ----------------------------------------------------------------------------
+# Orientation-aware reconstruction for undirected (canonical) k-mer paths
+# ----------------------------------------------------------------------------
+
+"""
+    _label_has_reverse_complement(::Type{T}) -> Bool
+
+True when a label type `T` is a nucleotide k-mer that has a defined reverse
+complement (so orientation-aware canonical reconstruction applies). False for
+amino-acid k-mers, strings, and everything else.
+"""
+_label_has_reverse_complement(::Type) = false
+function _label_has_reverse_complement(
+        ::Type{<:Kmers.Kmer{A}}) where {A <: BioSequences.NucleicAcidAlphabet}
+    return true
+end
+
+"""
+    _oriented_label(kmer, forward::Bool)
+
+Return `kmer` as-is when `forward`, else its reverse complement.
+"""
+function _oriented_label(kmer, forward::Bool)
+    return forward ? kmer : BioSequences.reverse_complement(kmer)
+end
+
+# True when the trailing (k-1) of `a` equals the leading (k-1) of `b` — i.e. `a`
+# and `b` overlap as a valid k-mer transition a→b.
+function _kmers_overlap(a, b, k::Int)
+    a_str = string(a)
+    b_str = string(b)
+    return @views a_str[2:k] == b_str[1:(k - 1)]
+end
+
+"""
+    _vertex_forward_pref(graph, label) -> Union{Bool, Missing}
+
+Recover a canonical vertex's authoritative orientation from the STORED strand
+evidence the builder recorded (the observed-read strand, carried on each
+`EvidenceEntry` and flipped into canonical frame by `convert_to_canonical`).
+
+`convert_to_canonical` stores each observation's strand relative to the canonical
+label: `Forward` means the k-mer was observed as the canonical label itself,
+`Reverse` means it was observed as the label's reverse complement. So:
+
+- all evidence `Forward`  → `true`    (emit the label as-is)
+- all evidence `Reverse`  → `false`   (emit the reverse complement)
+- mixed / no strand data  → `missing` (orientation genuinely ambiguous here, e.g.
+  an inverted-repeat vertex that was observed in both orientations)
+
+This is the same strand signal the DoubleStrand arm keeps as separate oriented
+vertices; here it is the tie-breaker used to disambiguate reverse-complement
+overlaps that pure sequence-derivation cannot resolve.
+"""
+function _vertex_forward_pref(graph, label)::Union{Bool, Missing}
+    haskey(graph, label) || return missing
+    vdata = graph[label]
+    hasproperty(vdata, :evidence) || return missing
+    strands = collect_evidence_strands(vdata.evidence)
+    isempty(strands) && return missing
+    all(==(Forward), strands) && return true
+    all(==(Reverse), strands) && return false
+    return missing
+end
+
+# Score an orientation choice against a stored-strand preference: reward a match,
+# stay neutral when the preference is missing (ambiguous vertex).
+function _orientation_pref_score(pref::Union{Bool, Missing}, forward::Bool)::Int
+    ismissing(pref) && return 0
+    return pref == forward ? 1 : 0
+end
+
+"""
+    _resolve_path_orientations(path::Vector{T}, graph) where {T} -> Vector{Bool}
+
+Return, for each vertex on an UNDIRECTED (canonical) k-mer path, whether it
+should be emitted in its stored (forward) orientation (`true`) or reverse-
+complemented (`false`).
+
+Canonical labels are stored in lexicographically-minimal orientation, so adjacent
+labels need not overlap as stored. Relative orientation is propagated by the
+(k-1) overlap with the previously-oriented k-mer, which is unique at ordinary
+junctions. At reverse-complement-symmetric junctions BOTH orientations of the
+next k-mer overlap the predecessor (this is exactly where naive sequence-
+derivation silently picks the wrong strand and corrupts the contig); there the
+tie is broken by the vertex's STORED strand evidence via `_vertex_forward_pref`.
+Overlap remains authoritative for contiguity — the stored strand is consulted
+only to break a genuine overlap tie — so the emitted contig is always a valid
+k-1-overlapping walk.
+"""
+function _resolve_path_orientations(path::Vector{T}, graph) where {T}
+    n = length(path)
+    flags = Vector{Bool}(undef, n)
+    n == 0 && return flags
+    k = length(path[1])
+
+    prefs = Union{Bool, Missing}[_vertex_forward_pref(graph, path[i]) for i in 1:n]
+
+    if n == 1
+        flags[1] = coalesce(prefs[1], true)
+        return flags
+    end
+
+    # Orient the first pair by overlap; when several (orientation-a, orientation-b)
+    # combinations overlap, prefer the one that best matches the stored strands.
+    best = nothing
+    best_score = -1
+    for a_fwd in (true, false), b_fwd in (true, false)
+        if _kmers_overlap(_oriented_label(path[1], a_fwd),
+                _oriented_label(path[2], b_fwd), k)
+            score = _orientation_pref_score(prefs[1], a_fwd) +
+                    _orientation_pref_score(prefs[2], b_fwd)
+            if score > best_score
+                best_score = score
+                best = a_fwd
+            end
+        end
+    end
+    flags[1] = best === nothing ? coalesce(prefs[1], true) : best
+
+    prev = _oriented_label(path[1], flags[1])
+    for i in 2:n
+        candidates = Bool[]
+        for fwd in (true, false)
+            if _kmers_overlap(prev, _oriented_label(path[i], fwd), k)
+                push!(candidates, fwd)
+            end
+        end
+        chosen = if isempty(candidates)
+            # No overlap on a supposedly-valid path: the traversal is broken. Keep
+            # the stored orientation (or forward) and surface it rather than
+            # silently emitting a garbage join.
+            @warn "path_to_sequence: no (k-1) overlap for canonical k-mer at " *
+                  "step $(i)/$(n); falling back to stored/forward orientation " *
+                  "(reconstruction may be incomplete)."
+            coalesce(prefs[i], true)
+        elseif length(candidates) == 1
+            candidates[1]
+        elseif ismissing(prefs[i]) || !(prefs[i] in candidates)
+            candidates[1]
+        else
+            prefs[i]
+        end
+        flags[i] = chosen
+        prev = _oriented_label(path[i], chosen)
+    end
+
+    return flags
+end
+
+"""
+    _reconstruct_oriented_kmer_path(path::Vector{T}, SequenceType, graph) where {T}
+
+Reconstruct a contig from an UNDIRECTED (canonical) k-mer label path, consuming
+the builder-recorded strand orientation. `_resolve_path_orientations` walks the
+path resolving each k-mer's orientation from the (k-1) overlap with its
+predecessor and, at reverse-complement-symmetric junctions where the overlap is
+ambiguous, from the STORED strand evidence on the vertex (the observed-read
+strand the canonical builder recorded). Each k-mer is emitted in the resolved
+orientation (reverse-complementing where required), so canonical reconstruction
+matches DoubleStrand even across repeats / RC-overlaps that defeat pure
+sequence-derivation.
+"""
+function _reconstruct_oriented_kmer_path(path::Vector{T}, SequenceType, graph) where {T}
+    n = length(path)
+    if n == 0
+        return SequenceType()
+    end
+    if n == 1
+        return SequenceType(string(_oriented_label(path[1],
+            coalesce(_vertex_forward_pref(graph, path[1]), true))))
+    end
+
+    flags = _resolve_path_orientations(path, graph)
+    result = SequenceType(string(_oriented_label(path[1], flags[1])))
+    for i in 2:n
+        oriented = _oriented_label(path[i], flags[i])
+        result = result * SequenceType(string(oriented)[end:end])
+    end
+    return result
+end
+
 """
     path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) where T
 
@@ -2187,6 +2402,18 @@ function path_to_sequence(path::Vector{T}, graph::MetaGraphsNext.MetaGraph) wher
 
     # Determine the sequence type from the first k-mer
     SequenceType = _sequence_type_from_kmer_type(T)
+
+    # Undirected (canonical) nucleotide graphs merge each k-mer with its reverse
+    # complement onto one canonical vertex, so consecutive labels do NOT
+    # necessarily overlap in their as-stored (canonical) orientation. Naive
+    # trailing-base concatenation would emit an invalid contig. Recover each
+    # k-mer's orientation from the k-1 overlap with its predecessor and emit the
+    # oriented k-mer (reverse-complementing where the overlap is on the reverse
+    # strand). This makes canonical reconstruction match DoubleStrand.
+    if !Graphs.is_directed(graph) && _label_has_reverse_complement(T) &&
+       SequenceType <: BioSequences.LongSequence
+        return _reconstruct_oriented_kmer_path(path, SequenceType, graph)
+    end
 
     # For k-mer paths: first k-mer in full, then add last base of each subsequent k-mer
     if SequenceType <: BioSequences.LongSequence

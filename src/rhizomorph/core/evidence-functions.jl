@@ -587,6 +587,14 @@ weight = compute_edge_weight(edge)
 ```
 """
 function compute_edge_weight(edge)
+    # Soft-EM consumption (td-e70t): when this edge was registered with a soft
+    # (probability-weighted) weight for the current pass, return it. The registry
+    # is empty on every non-soft-EM path, so this is a single `isempty` check and
+    # the raw-count behavior is byte-for-byte unchanged elsewhere.
+    if !isempty(_SOFT_EDGE_WEIGHT_REGISTRY)
+        soft = get(_SOFT_EDGE_WEIGHT_REGISTRY, edge, nothing)
+        soft === nothing || return soft::Float64
+    end
     # Simple weight: count of unique observations
     return Float64(count_total_observations(edge))
 end
@@ -603,6 +611,225 @@ coverage = compute_edge_coverage(edge)
 """
 function compute_edge_coverage(edge)
     return count_total_observations(edge)
+end
+
+# ============================================================================
+# Soft-EM edge weighting (SCAFFOLD, td-e70t)
+# ============================================================================
+#
+# Design note (graph-as-HMM correction redesign). Today the M-step is a HARD
+# assignment: `compute_edge_weight` returns `count_total_observations(edge)` — a
+# raw integer coverage count — and each EM iteration rebuilds the graph from the
+# corrected *sequences*. The graph keeps no path-probability memory, so cleaning
+# only happens because corrected reads stop emitting error k-mers, not because
+# low-probability edges decay on their own.
+#
+# The soft-EM thesis replaces the hard count with probability-weighted evidence:
+# after Viterbi returns a path + likelihood, the path's RESPONSIBILITY (posterior
+# probability, normalized against competing paths) is accumulated onto each edge
+# it traverses. Summing responsibilities over all reads gives a soft, real-valued
+# edge weight that the M-step registers back onto the graph
+# (`register_soft_edge_weights!`), so the next iteration's `compute_edge_weight`
+# — and therefore the Viterbi TRANSITION scoring (`edge_data_weight`) and the
+# competing-path enumeration — sees the decayed weight. An error edge, traversed
+# only by low-probability paths, accrues little soft weight; the next iteration's
+# decode is biased against it and rebuilding from the corrected reads drops it —
+# so cleaning is an emergent property of the EM, not a bolted-on heuristic. NOTE:
+# the decay acts through `compute_edge_weight` / the Viterbi transition score, NOT
+# through the vertex `weight > 0.01` gate in `generate_alternative_qualmer_paths`
+# (that gate filters vertex candidates; the soft weights govern edge/transition
+# scoring). Variation is preserved by the SUPPORT FLOOR in
+# `register_soft_edge_weights!`: an edge with >= `SOFT_EM_MIN_SUPPORT` reads is
+# clamped to at least its raw coverage, so a real skewed minority allele never
+# decays, while only near-zero-support (error) edges fall toward zero.
+#
+# This block is the ACCUMULATION HOOK (the primitive + math); the M-step
+# consumption is wired in `mycelia_iterative_assemble` (register the prior
+# iteration's accumulator onto the freshly-built graph, decode, clear).
+
+"""
+    SoftEdgeWeightAccumulator
+
+Probability-weighted (soft) edge-evidence accumulator for soft-EM correction
+(td-e70t scaffold). Maps an edge identity (e.g. an ordered `(src_label,
+dst_label)` tuple) to the sum of the responsibilities of the decoded paths that
+traversed it. Unlike `count_total_observations` (a hard integer count), the
+accumulated value is a real-valued soft weight in which a low-probability error
+edge contributes proportionally little.
+"""
+struct SoftEdgeWeightAccumulator
+    weights::Dict{Any, Float64}
+end
+
+SoftEdgeWeightAccumulator() = SoftEdgeWeightAccumulator(Dict{Any, Float64}())
+
+"""
+    accumulate_path_probability!(acc, path_edges, probability)
+
+Accumulate a single decoded path's `probability` (its responsibility / posterior
+weight, in `[0, 1]`) onto every edge in `path_edges` (the soft E->M update). Edges
+shared by many high-probability paths accrue large weight; edges visited only by
+rare, low-probability (error) paths accrue little, so they decay relative to the
+true consensus edges across EM iterations. Returns `acc`.
+"""
+function accumulate_path_probability!(
+        acc::SoftEdgeWeightAccumulator,
+        path_edges,
+        probability::Real
+)
+    p = Float64(probability)
+    for edge_id in path_edges
+        acc.weights[edge_id] = get(acc.weights, edge_id, 0.0) + p
+    end
+    return acc
+end
+
+"""
+    soft_edge_weight(acc, edge_id; prior=0.0)
+
+The soft (probability-weighted) weight for `edge_id`: the accumulated path
+responsibility, or `prior` when no soft evidence exists yet. This is the
+probability-weighted replacement for `compute_edge_weight`'s raw coverage count;
+the M-step consumes it so that emergent cleaning (low-weight error edges falling
+below the `generate_alternative_qualmer_paths` gate) replaces heuristic
+tip-clipping.
+"""
+function soft_edge_weight(
+        acc::SoftEdgeWeightAccumulator,
+        edge_id;
+        prior::Real = 0.0
+)::Float64
+    return get(acc.weights, edge_id, Float64(prior))
+end
+
+"""
+    path_responsibility(path_logp, competing_logps)
+
+Convert a decoded path's log-likelihood into a responsibility (posterior weight)
+by normalizing against the log-likelihoods of the competing paths for the same
+read, via a numerically-stable softmax:
+`exp(path_logp - logsumexp(competing_logps))`. When a read yields a single
+decoded path this is `1.0`; when several paths compete the mass splits by
+relative likelihood — the soft assignment that distinguishes soft-EM from the
+current hard argmax rebuild.
+
+# Precondition
+`path_logp` MUST itself be one of `competing_logps` (the softmax normalizer is the
+full competing set INCLUDING the decoded path). If `path_logp` is omitted from the
+denominator the numerator can exceed the denominator and the "responsibility"
+returns `> 1.0`, which is not a posterior weight. The assertion below enforces
+this rather than silently returning an out-of-range value.
+"""
+function path_responsibility(
+        path_logp::Real,
+        competing_logps::AbstractVector{<:Real}
+)::Float64
+    isempty(competing_logps) && return 1.0
+    m = maximum(competing_logps)
+    isfinite(m) || return 0.0
+    # Precondition: the decoded path is part of the competing set it is normalized
+    # against (see docstring). Guard with a tolerance for float round-trips.
+    @assert any(lp -> isapprox(Float64(lp), Float64(path_logp); atol = 1e-9), competing_logps) (
+        "path_responsibility: path_logp=$(path_logp) must be included in competing_logps " *
+        "(the softmax denominator); otherwise the responsibility can exceed 1.0.")
+    denom = sum(exp(Float64(lp) - m) for lp in competing_logps)
+    return exp(Float64(path_logp) - m) / denom
+end
+
+# ----------------------------------------------------------------------------
+# Soft-EM M-step consumption: identity-keyed edge-weight registry (td-e70t)
+# ----------------------------------------------------------------------------
+#
+# `compute_edge_weight(edge)` (the graph `weight_function`, and the Viterbi
+# transition weight via `edge_data_weight`) receives ONLY the edge payload — not
+# its `(src, dst)` vertex labels — so it cannot look up a soft weight keyed by
+# label pair directly. This registry bridges that gap: after a graph is built,
+# the corrector registers each edge-data OBJECT (by identity) -> the soft weight
+# computed from the accumulator's `(src, dst)` key (see
+# `register_soft_edge_weights!`). `compute_edge_weight` then consults the registry
+# by object identity, falling back to the raw coverage count for any edge absent
+# from it.
+#
+# Invariant preserved: the registry is EMPTY except during a soft-EM `:scalable`
+# pass (populated between decode passes, cleared after), so every other code path
+# — and the whole `:exhaustive` tier — computes raw counts, byte-for-byte
+# unchanged.
+#
+# CAVEAT: this is process-global state. In the shipped scalable route it is
+# written single-threaded between decode passes and only READ during the soft-EM
+# (⇒ sequential) decode, so there is no read/write race. A lock-free / scoped
+# design is a tracked follow-on before enabling parallel soft-EM.
+
+const _SOFT_EDGE_WEIGHT_REGISTRY = Base.IdDict{Any, Float64}()
+
+# ----------------------------------------------------------------------------
+# Soft-EM SUPPORT FLOOR (variation preservation, td-h6w9)
+# ----------------------------------------------------------------------------
+#
+# The v2 competing-paths responsibility split alone decays a real but SKEWED
+# minority allele toward zero: whenever a strictly-heavier sibling exists, the
+# minority read's observed path shares its responsibility with the majority
+# alternative, so the minority edge accumulates < its raw coverage; the M-step
+# registers that decayed weight, the next iteration's transition scoring is
+# biased further against the minority edge, and the recurrence
+# `W_min' = N * W / (W_maj + W_min)` contracts geometrically to zero — the same
+# form as an error, with a balanced 50/50 as the only stable fixed point. That
+# is variation collapse (bead td-h6w9 / PR #363 review C1).
+#
+# The FIX ties the floor to an edge's OWN raw support, not to whether a sibling
+# is heavier. An edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is REAL and is
+# clamped so its soft weight never falls below its raw coverage, no matter how
+# heavy a sibling branch is — so a 10x minority in a 20x/10x bubble (and a 15x
+# in a 30x/15x bubble) survives every EM iteration. Only edges with near-zero
+# support (coverage < `SOFT_EM_MIN_SUPPORT`, e.g. a coverage-1 error) keep a
+# floor of 0 and are allowed to decay toward zero via the responsibility weight,
+# so an unsupported error edge still falls below the emergent-cleaning gate. The
+# decay is thus UNSUPPORTED-based, not less-than-sibling.
+const SOFT_EM_MIN_SUPPORT = 3
+
+"""
+    register_soft_edge_weights!(graph, acc; min_support = SOFT_EM_MIN_SUPPORT) -> graph
+
+Register each of `graph`'s edges (by edge-data object identity) with its soft
+weight from `acc`, so a subsequent `compute_edge_weight(edge_data)` returns the
+probability-weighted value instead of the raw coverage count. Edges NOT visited
+by any decoded path in `acc` are left unregistered and keep their raw count.
+
+Applies the SUPPORT FLOOR (td-h6w9): the registered weight is
+`max(responsibility_weighted_value, floor)` where `floor == raw_coverage` for an
+edge backed by `>= min_support` reads and `0.0` otherwise. A well-supported edge
+therefore never decays below its own raw coverage — a real skewed minority allele
+(coverage >= `min_support`) is retained across EM iterations regardless of a
+heavier sibling — while a near-zero-support (error) edge keeps a floor of 0 and is
+free to decay toward zero via its responsibility weight. This decouples variation
+preservation (supported edges held at raw) from error decay (unsupported edges
+allowed to fall below the cleaning gate).
+"""
+function register_soft_edge_weights!(graph, acc::SoftEdgeWeightAccumulator;
+        min_support::Integer = SOFT_EM_MIN_SUPPORT)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        w = soft_edge_weight(acc, (src, dst); prior = NaN)
+        isnan(w) && continue   # edge unvisited by any decoded path ⇒ keep raw count
+        edge = graph[src, dst]
+        raw = Float64(count_total_observations(edge))
+        # Support floor: raw for a well-supported edge (never decays below its own
+        # coverage), 0 for a near-zero-support edge (free to decay to zero).
+        floor = raw >= min_support ? raw : 0.0
+        _SOFT_EDGE_WEIGHT_REGISTRY[edge] = max(w, floor)
+    end
+    return graph
+end
+
+"""
+    clear_soft_edge_weights!() -> nothing
+
+Empty the soft-edge-weight registry so `compute_edge_weight` reverts to raw
+coverage counts. Called after each soft-EM decode pass so no unrelated caller
+(or the `:exhaustive` tier) ever sees registered soft weights.
+"""
+function clear_soft_edge_weights!()
+    empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
+    return nothing
 end
 
 # ============================================================================
