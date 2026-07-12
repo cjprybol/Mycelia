@@ -1,0 +1,102 @@
+{
+  "command_args": [
+    "julia",
+    "--project=.",
+    "benchmarking/rhizomorph_prime_k_ablation_benchmark.jl"
+  ],
+  "dataset_ids": [
+    "collision_distinct_9bp",
+    "collision_shared_9bp",
+    "control_nonrepetitive",
+    "immune_cassette_n4_d10",
+    "immune_mhc_hla_5snp",
+    "immune_vdj_n8_d15",
+    "immune_vdj_n8_d5",
+    "interspersed_n4_d0",
+    "interspersed_n4_d3",
+    "line_5trunc_d10",
+    "microsatellite_AAT_trinucleotide_c100_d0",
+    "microsatellite_CAG_huntington_c100_d0",
+    "microsatellite_CAG_huntington_c100_d3",
+    "microsatellite_CAG_huntington_c50_d0",
+    "microsatellite_CAG_huntington_c50_d3",
+    "microsatellite_CA_dinucleotide_c100_d0",
+    "mixed_whole_locus",
+    "nested_cag_in_satellite",
+    "satellite_21bp",
+    "sine_alu_n3_d15",
+    "sine_alu_n3_d5",
+    "tandem_period2",
+    "tandem_period3",
+    "tandem_period4",
+    "tandem_period5",
+    "tandem_period6",
+    "tandem_period7"
+  ],
+  "generated_at": "2026-07-12T14:35:39.699Z",
+  "git": {
+    "commit": "b4eda53b4a1b05b2af0b28d09bac8abf2dfd5927",
+    "is_dirty": true
+  },
+  "metadata": {
+    "bead": "td-tjym",
+    "benchmark": "prime_coprime_vs_composite_factor_sharing_denovo_degree_repeatclass",
+    "biological_repeat_classes": "EXHAUSTIVE hard-repeat sweep: tandem (p=2..7); microsatellite/STR (CAG Huntington-like p=3, CA p=2, AAT p=3); satellite / higher-order tandem (21 bp unit); nested (CAG microsat inside a 21 bp HOR); interspersed near-identical elements; IMMUNE VDJ-like segment array (shared framework + variable insert, period 27); MHC/HLA-like polymorphic (SNP-dense, aperiodic); antigenic-variation cassette (VSG/var/vlsE/pilin-like: conserved core + hypervariable flanks); SINE/Alu-like (dispersed, internal period-5 microsatellite + poly-A, gcd(k,5) aliases at k=15,25,35); LINE-like (5'-truncated divergent copies); mixed whole-locus",
+    "claim_under_test": "a prime k is coprime to every period p<k (gcd=1) so it cannot factor-align; a composite k shares a factor with (aliases) repeats where gcd(k,period)>1. Value of prime k is coprimality, not spanning.",
+    "composite_k": [
+      9,
+      15,
+      21,
+      25,
+      27,
+      33,
+      35
+    ],
+    "coverage": 25,
+    "degree_of_repetition_axes": "repeat content fraction; copy number; per-copy divergence",
+    "factor_sharing_definition": "gcd(k, period) > 1 (superset of divisibility p|k); coprime = gcd == 1",
+    "harness_sensitivity": "engineered 9 bp shared-repeat collision control (composition-matched) fires (large k=9 w-mer deficit collapsing once k spans the repeat) -> the metric detects aliasing when it exists; a spanning effect, not primality.",
+    "known_limitations": "recovery unions both strands though assembly is SingleStrand (harmless); the resolution metric is noisy (per-cell std reaches ~0.4 over the 6 seeds; summed per-arm seed-noise guard reaches ~0.6-0.7) hence 6 seeds and a conservative STRIKING margin of 0.2; the largest observed factor-sharing penalty is 0.190 (< the 0.20 margin), so the negative BOUNDS a factor-sharing penalty below 0.20 rather than excluding an arbitrarily small effect.",
+    "metrics": "PRIMARY resolution = largest correct contig / reference length (NGA50-style, copy-number/contiguity-sensitive, NOT saturated); SECONDARY w-mer recovery (fraction of reference 15-mers present, saturates); plus contig count",
+    "observed_result": "no robust prime-k advantage isolated from k-size, even with the non-saturated resolution metric and hard/biological regimes; factor-sharing composite k recover within seed noise of size-matched coprime primes; prime-power dips dissolve with more seeds.",
+    "periods": [
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "prime_k": [
+      11,
+      13,
+      17,
+      19,
+      23,
+      29,
+      31
+    ],
+    "prime_powers_included": "9=3^2, 25=5^2, 27=3^3 (maximal factor-alignment)",
+    "read_error_rate": 0.02,
+    "read_length": 45,
+    "regime": "de-novo assembly from error-containing reads; no endpoint anchoring",
+    "resolution_gcd_detector_positive_control": "the RESOLUTION/gcd detector (resolution + coprime-envelope + factor-sharing penalty guard) is a DIFFERENT detector from the recovery collision control and saturates on the collision fixtures, so it is never exercised on a positive by the real data. NO real assembled factor-alignment case can dip the resolution metric because a period-p tandem is a p-cycle (p distinct k-mers) at ANY k, gcd-independent, so a biological positive on the gcd axis cannot exist. An INJECTED synthetic positive control (injected_resolution_gcd_positive_control) stipulates a resolution dip at a factor-sharing k and, through the identical detector logic, fires robust_striking -> the detector is sensitive on the gcd axis, not blind. The null rests on the p-cycle structure + the recovery collision control + this injected detector-sensitivity control.",
+    "reverse_complement_odd_k_note": "the ladder samples ODD k because an even-length DNA/RNA k-mer can equal its own reverse complement (a palindrome), collapsing RC pairs / creating self-loops; odd k forbids palindromic k-mers. Among odd k, primes additionally avoid factor-alignment with odd periods. Even k acceptable for amino-acid / natural-language alphabets (no reverse complement); DNA fixtures stay on odd k.",
+    "seeds": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "striking_prime_advantage_margin": 0.2
+  },
+  "run_id": "prime_k_ablation_denovo_degree_repeatclass_20260712",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}
