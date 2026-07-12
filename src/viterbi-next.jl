@@ -228,6 +228,24 @@ struct ViterbiCorrectionConfig{F <: Function}
             throw(ArgumentError(
                 "beam_score_margin must be a positive number or Inf, got $beam_score_margin"))
         end
+        # Silent-no-op guard (PR #407 review, silent-failure I2): `indel_moves=true`
+        # with NO indel capacity — either both gap masses zero
+        # (`insertion_fraction == deletion_fraction == 0`) or both run caps zero
+        # (`deletion_max_run == max_insertion_run == 0`) — sends every gap
+        # transition to `log(0) = -Inf`, so the "indel-aware" decode silently
+        # collapses to substitution-only. This is a legitimate configuration (it is
+        # exactly how the collapse/oracle test proves byte-identity), so we WARN
+        # rather than error, but we surface it so an operator does not believe they
+        # enabled indel correction when they did not.
+        if indel_moves && (
+            (insertion_fraction == 0.0 && deletion_fraction == 0.0) ||
+            (deletion_max_run == 0 && max_insertion_run == 0)
+        )
+            @warn "indel_moves=true but no indel capacity is configured " *
+                  "(insertion_fraction/deletion_fraction both 0, or " *
+                  "deletion_max_run/max_insertion_run both 0); the decode is " *
+                  "effectively substitution-only."
+        end
         return new{F}(
             error_rate,
             verbosity,
@@ -1928,6 +1946,19 @@ function _viterbi_correct_observation_indel(
     path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
     diagnostics[:path_length] = length(path.steps)
     diagnostics[:decoded_read_index] = last_index
+    # Truncation is a first-class diagnostic (PR #407 review, silent-failure I1). On
+    # the free-endpoint decode a noisy read can kill the whole frontier before the
+    # last read unit; we KEEP the best-so-far prefix as the result, but stamp
+    # `:truncated` so callers do not have to INFER truncation by diffing
+    # `:decoded_read_index` against the read length. A verbosity-gated `@warn` makes
+    # a partial decode visible to an operator watching the reads/debug streams.
+    truncated = last_index < n
+    diagnostics[:truncated] = truncated
+    if truncated && target_vertex === nothing && config.verbosity in ("debug", "reads")
+        @warn "indel-aware decode truncated: the read frontier died at unit " *
+              "$(last_index) of $(n); the returned path covers only the decoded " *
+              "prefix (see diagnostics[:decoded_read_index])."
+    end
     if target_vertex !== nothing
         diagnostics[:reached_target] = true
     end

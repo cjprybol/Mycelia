@@ -15,6 +15,7 @@
 
 import BioSequences
 import FASTX
+import Logging
 import MetaGraphsNext
 import Mycelia
 import Test
@@ -24,6 +25,33 @@ function indel_decoded_label_strings(
 )::Vector{String}
     decoded = only(result.corrected_observations)
     return [string(label) for label in decoded]
+end
+
+# A read-quality observation wrapper for the quality-aware oracle case (mirrors the
+# struct used by viterbi_variable_length_graph_correction_test.jl).
+struct IndelQualityObservation{S}
+    sequence::S
+    quality_scores::Vector{UInt8}
+end
+
+function indel_quality_record(
+        identifier::AbstractString,
+        sequence::AbstractString,
+        phred::AbstractVector{<:Integer}
+)::FASTX.FASTQ.Record
+    quality = String([Char(score + 33) for score in phred])
+    return FASTX.FASTQ.Record(identifier, sequence, quality)
+end
+
+# Bare-k-mer observation vector for a DNA string, threaded through the SAME
+# decomposition the k-mer-graph corrector consumes (detect_alphabet ->
+# typed-sequence -> record k-mer iterator). Used by the C1 base-level indel test.
+function indel_string_kmer_units(seq_string::AbstractString, k::Int)
+    record = FASTX.FASTA.Record("obs", seq_string)
+    alphabet = Mycelia.detect_alphabet(seq_string)
+    sequence_type = Mycelia.alphabet_to_biosequence_type(alphabet)
+    sequence = Mycelia.extract_typed_sequence(record, sequence_type)
+    return collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
 end
 
 Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
@@ -78,7 +106,11 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         return Mycelia.Rhizomorph.build_fasta_graph_olc(records; min_overlap = 3)
     end
 
-    function _indel_config(; indel_moves = true)
+    function _indel_config(;
+            indel_moves = true,
+            deletion_max_run = 3,
+            max_insertion_run = 3
+    )
         return Mycelia.ViterbiCorrectionConfig(
             error_rate = 0.10,
             indel_moves = indel_moves,
@@ -86,8 +118,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             deletion_fraction = 0.30,
             insertion_extend_probability = 0.10,
             deletion_extend_probability = 0.10,
-            deletion_max_run = 3,
-            max_insertion_run = 3,
+            deletion_max_run = deletion_max_run,
+            max_insertion_run = max_insertion_run,
             beam_width = typemax(Int)
         )
     end
@@ -213,10 +245,18 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test indel_decoded_label_strings(banded_in) == ["ATGCG", "GCGTA", "GTACC"]
 
         # max_insertion_run = 0 forbids the I-move, so the insertion cannot be
-        # absorbed and the free-endpoint decode no longer lands the 3-vertex walk.
+        # absorbed and the free-endpoint decode frame-shifts one vertex too far onto
+        # the spurious downstream vertex ACCGT. Assert the EXACT over-walk (not just
+        # "not the reference") so a compensating error that happened to differ from
+        # the reference could not pass — mirroring the two-directional deletion knobs.
         no_ins = Mycelia.correct_observations(
             graph, [insertion_observed]; config = _cfg(max_insertion_run = 0))
-        Test.@test indel_decoded_label_strings(no_ins) != ["ATGCG", "GCGTA", "GTACC"]
+        Test.@test indel_decoded_label_strings(no_ins) ==
+                   ["ATGCG", "GCGTA", "GTACC", "ACCGT"]
+        # max_insertion_run >= 1 admits the single I-move and recovers the reference.
+        yes_ins = Mycelia.correct_observations(
+            graph, [insertion_observed]; config = _cfg(max_insertion_run = 1))
+        Test.@test indel_decoded_label_strings(yes_ins) == ["ATGCG", "GCGTA", "GTACC"]
     end
 
     Test.@testset "Milestone C: nanopore-style read decodes through the kernel" begin
@@ -273,5 +313,190 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         # walked the graph, not a degenerate empty result).
         Test.@test only(result.paths).path !== nothing
         Test.@test diag[:move_counts][:M] >= 1
+    end
+
+    Test.@testset "C1: real single-BASE indel corrects back to the reference path" begin
+        # The PIVOTAL correctness test. The Milestone-B fixtures are UNIT-level
+        # (whole k-mer inserted/deleted) and the nanopore smoke asserts only routing.
+        # This asserts the ACTUAL nanopore failure mode: a single BASE indel in the
+        # read corrupts the k k-mer windows spanning it (an indel + a local
+        # substitution burst), and the decode must recover the clean reference's
+        # k-mer walk EXACTLY. Start and end sit on clean k-mers (indel placed mid-
+        # read) so both endpoints anchor; the indel kernel bridges the frame shift
+        # with a single gap move and tolerates the corrupted-window mismatches.
+        k = 7
+        reference = Mycelia.random_fasta_record(moltype = :DNA, seed = 1, L = 40)
+        reference_string = FASTX.sequence(String, reference)
+        reference_units = indel_string_kmer_units(reference_string, k)
+        # Non-repetitive reference => the graph is a simple path, so the true k-mer
+        # walk is unambiguous and equality against it is a well-posed assertion.
+        Test.@test length(unique(string.(reference_units))) == length(reference_units)
+
+        graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand([reference], k)
+        expected = [string(unit) for unit in reference_units]
+
+        indel_position = 20
+        deleted_string = reference_string[1:(indel_position - 1)] *
+                         reference_string[(indel_position + 1):end]
+        inserted_string = reference_string[1:indel_position] * "A" *
+                          reference_string[(indel_position + 1):end]
+        Test.@test length(deleted_string) == length(reference_string) - 1
+        Test.@test length(inserted_string) == length(reference_string) + 1
+
+        deleted_units = indel_string_kmer_units(deleted_string, k)
+        inserted_units = indel_string_kmer_units(inserted_string, k)
+
+        config = Mycelia.ViterbiCorrectionConfig(
+            error_rate = 0.10,
+            strand_mode = :singlestrand,
+            indel_moves = true,
+            insertion_fraction = 0.30,
+            deletion_fraction = 0.30,
+            insertion_extend_probability = 0.10,
+            deletion_extend_probability = 0.10,
+            deletion_max_run = 3,
+            max_insertion_run = 3,
+            beam_width = typemax(Int),
+            band_width = nothing
+        )
+
+        deleted_result = Mycelia.correct_observations(
+            graph, [deleted_units]; config = config)
+        Test.@test indel_decoded_label_strings(deleted_result) == expected
+
+        inserted_result = Mycelia.correct_observations(
+            graph, [inserted_units]; config = config)
+        Test.@test indel_decoded_label_strings(inserted_result) == expected
+    end
+
+    Test.@testset "over-correction guard: clean read takes ZERO gap moves" begin
+        # A clean, error-free, equal-length read through an indel-ENABLED config
+        # (with full gap capacity) must decode with NO gap moves. The Milestone-B
+        # clean-read assertion checks the labels but not the gap counts, so a
+        # compensating insertion+deletion pair could sneak past it; asserting zero I
+        # AND zero D closes that hole.
+        graph = _indel_olc_graph()
+        observed = [
+            BioSequences.dna"ATGCG",
+            BioSequences.dna"GCGTA",
+            BioSequences.dna"GTACC"
+        ]
+        result = Mycelia.correct_observations(graph, [observed]; config = _indel_config())
+        move_counts = only(result.paths).diagnostics[:move_counts]
+        Test.@test move_counts[:I] == 0
+        Test.@test move_counts[:D] == 0
+        Test.@test indel_decoded_label_strings(result) == ["ATGCG", "GCGTA", "GTACC"]
+    end
+
+    Test.@testset "oracle battery: substitution inputs preserved byte-for-byte" begin
+        # Strengthen oracle preservation from a single fixture to a battery of
+        # DIFFERENT substitution inputs, asserting each decodes IDENTICALLY under
+        # (a) the DEFAULT substitution decoder, (b) the indel config with moves OFF,
+        # and (c) the indel KERNEL run with all gap mass ZERO (the mathematical
+        # collapse). Equality is asserted against the substitution decoder's ACTUAL
+        # output, not a hand-written answer, so the collapse cannot silently diverge.
+        function _assert_oracle_equivalent(graph, observation)
+            substitution = Mycelia.correct_observations(
+                graph, [observation];
+                config = Mycelia.ViterbiCorrectionConfig(error_rate = 0.10))
+            substitution_labels = indel_decoded_label_strings(substitution)
+
+            moves_off = Mycelia.correct_observations(
+                graph, [observation]; config = _indel_config(indel_moves = false))
+            Test.@test indel_decoded_label_strings(moves_off) == substitution_labels
+
+            # indel_moves=true with every gap mass 0 routes through the indel kernel
+            # but collapses to the substitution path. The zero-capacity config trips
+            # the new silent-no-op @warn (FIX code-1), so absorb it — the collapse is
+            # a deliberate, byte-identity-proving configuration, not a misconfig.
+            collapsed = Logging.with_logger(Logging.NullLogger()) do
+                Mycelia.correct_observations(
+                    graph, [observation];
+                    config = Mycelia.ViterbiCorrectionConfig(
+                        error_rate = 0.10,
+                        indel_moves = true,
+                        insertion_fraction = 0.0,
+                        deletion_fraction = 0.0,
+                        deletion_max_run = 0,
+                        max_insertion_run = 0,
+                        beam_width = typemax(Int)))
+            end
+            Test.@test indel_decoded_label_strings(collapsed) == substitution_labels
+            return substitution_labels
+        end
+
+        graph = _indel_olc_graph()
+        # Multi-vertex substitution (middle unit corrupted; endpoint anchored).
+        _assert_oracle_equivalent(graph,
+            [BioSequences.dna"ATGCG", BioSequences.dna"GCGTT", BioSequences.dna"GTACC"])
+        # Free-endpoint case (last unit GTACG is not a graph vertex => endpoint free).
+        _assert_oracle_equivalent(graph,
+            [BioSequences.dna"ATGCG", BioSequences.dna"GCGTA", BioSequences.dna"GTACG"])
+
+        # Quality-aware case: a FASTQ OLC graph with a read-quality observation, so
+        # the emission model is :quality_aware rather than :alphabet_parameterized.
+        quality_records = [
+            indel_quality_record("read_1", "ATGCG", [40, 40, 40, 40, 40]),
+            indel_quality_record("read_2", "GCGTA", [40, 40, 40, 40, 40]),
+            indel_quality_record("read_3", "GTACC", [40, 40, 40, 40, 40])
+        ]
+        quality_graph = Mycelia.Rhizomorph.build_fastq_graph_olc(
+            quality_records; min_overlap = 3)
+        _assert_oracle_equivalent(quality_graph,
+            [
+                BioSequences.dna"ATGCG",
+                IndelQualityObservation(BioSequences.dna"GCGTT", UInt8[2, 2, 2, 2, 2]),
+                BioSequences.dna"GTACC"
+            ])
+    end
+
+    Test.@testset "D_max: a deletion run exceeding the cap fails gracefully" begin
+        # A read that skips THREE vertices ([ATGCG, CGTAA] on ATGCG->GCGTA->GTACC->
+        # ACCGT->CGTAA) needs a deletion RUN of 2 within a read column to bridge to
+        # the anchored terminal CGTAA. deletion_max_run = 1 caps the run below that,
+        # so the target is unreachable and the decode returns `nothing` GRACEFULLY
+        # (no crash); deletion_max_run >= 2 recovers the full 5-vertex walk.
+        graph = _indel_olc_graph()
+        observed = [BioSequences.dna"ATGCG", BioSequences.dna"CGTAA"]
+        capped = Mycelia.correct_observations(
+            graph, [observed];
+            config = _indel_config(deletion_max_run = 1))
+        Test.@test only(capped.corrected_observations) === nothing
+        recovered = Mycelia.correct_observations(
+            graph, [observed];
+            config = _indel_config(deletion_max_run = 2))
+        Test.@test indel_decoded_label_strings(recovered) ==
+                   ["ATGCG", "GCGTA", "GTACC", "ACCGT", "CGTAA"]
+    end
+
+    Test.@testset "truncation is a first-class diagnostic" begin
+        # A free-endpoint read whose frontier DIES mid-decode returns the best-so-far
+        # prefix; `diagnostics[:truncated]` must make that explicit (FIX code-2). The
+        # read starts on the terminal vertex CGTAA (no outgoing edges) then presents a
+        # junk unit TTTTT; with insertion disabled there is no M, I, or D move, so the
+        # frontier dies at read unit 1 and the decode is truncated but still returns a
+        # path (the CGTAA prefix).
+        graph = _indel_olc_graph()
+        truncated_observed = [BioSequences.dna"CGTAA", BioSequences.dna"TTTTT"]
+        truncated = Mycelia.correct_observations(
+            graph, [truncated_observed];
+            config = _indel_config(max_insertion_run = 0))
+        truncated_diag = only(truncated.paths).diagnostics
+        Test.@test only(truncated.corrected_observations) !== nothing
+        Test.@test truncated_diag[:truncated] == true
+        Test.@test truncated_diag[:decoded_read_index] < length(truncated_observed)
+
+        # A normal full decode consumes every read unit => not truncated.
+        full_observed = [
+            BioSequences.dna"ATGCG",
+            BioSequences.dna"AAAAA",
+            BioSequences.dna"GCGTA",
+            BioSequences.dna"GTACA"
+        ]
+        full = Mycelia.correct_observations(
+            graph, [full_observed]; config = _indel_config())
+        full_diag = only(full.paths).diagnostics
+        Test.@test full_diag[:truncated] == false
+        Test.@test full_diag[:decoded_read_index] == length(full_observed)
     end
 end
