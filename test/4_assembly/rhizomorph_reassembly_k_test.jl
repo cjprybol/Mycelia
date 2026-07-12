@@ -131,8 +131,16 @@ Test.@testset "Rhizomorph Re-assembly K Selection" begin
         # no-drop path, byte-identical with the floor on or off.
         Test.@test R.select_reassembly_k(_rk_clean, 21) == 21
         Test.@test R.select_reassembly_k(_rk_clean, 21; genome_size_floor = false) == 21
-        # Shattered reads never drop BELOW the genome-size floor (no k=7 collapse).
-        Test.@test R.select_reassembly_k(_rk_n10, 21) >=
-                   R._genome_size_floor_k(_rk_n10, 7, 21)
+        # ACTIVE-PATH (non-tautological): on a shattered multi-kb read set the floor
+        # RAISES the drop-down vs floor-off, and the genome never collapses to the k=7
+        # fallback. (The genome-size estimate is most reliable at moderate error, where
+        # the backbone still yields solid k_ref-mers; _rk_n10 is that regime.)
+        gfloor = R._genome_size_floor_k(_rk_n10, 7, 21)
+        k_on = R.select_reassembly_k(_rk_n10, 21; genome_size_floor = true)
+        k_off = R.select_reassembly_k(_rk_n10, 21; genome_size_floor = false)
+        Test.@test gfloor > 7        # multi-kb genome: the uniqueness floor is non-trivial
+        Test.@test k_on >= k_off     # the floor can only RAISE the drop-down, never lower it
+        Test.@test k_on > 7          # never collapses to the k=7 fallback
+        Test.@test k_on >= gfloor    # select_reassembly_k actually applies the floor (wiring)
     end
 end

@@ -303,8 +303,11 @@ end
 # re-assembly of corrected reads needs a k that keeps the contig graph connected:
 # high k for clean (Illumina) corrected reads, but a LOWER k for high-error long
 # reads (nanopore) whose residual errors — substitutions and, dominantly, indels —
-# shatter a high-k de Bruijn graph. The functions below estimate the residual error
-# reference-free and map it to a prime k via the k-mer survival model.
+# shatter a high-k de Bruijn graph. `estimate_residual_error` (below) estimates that
+# residual error reference-free via the k-mer survival model, but it is a DIAGNOSTIC
+# / secondary signal only: the production chooser `select_reassembly_k` keys off the
+# COVERAGE-AWARE connectivity criterion (`median_solid_kmer_multiplicity`) instead,
+# which measures backbone coverage directly (see its docstring for why).
 
 _read_quality_scores(::Any) = nothing
 function _read_quality_scores(record::FASTX.FASTQ.Record)
@@ -365,9 +368,12 @@ end
 """
     estimate_residual_error(reads; k_ref = 13, solid_min = 2) -> Float64
 
-Reference-free estimate of the per-base residual error rate of `reads`, used to
-choose a re-assembly k that keeps the corrected-read graph connected. Combines two
-signals and returns the more conservative (higher-error) one, clamped to `[0, 0.5)`:
+Reference-free estimate of the per-base residual error rate of `reads`. A DIAGNOSTIC
+/ secondary signal — the production re-assembly-k chooser `select_reassembly_k` keys
+off the coverage-aware connectivity criterion (`median_solid_kmer_multiplicity`), not
+this estimate; this remains as an interpretable, reference-free error readout (and for
+direct callers/tests). Combines two signals and returns the more conservative
+(higher-error) one, clamped to `[0, 0.5)`:
 
 - **k-mer spectrum** (always available): solid-fraction of k-mer occurrences at
   `k_ref` inverted through the survival model `(1-e)^k_ref`.
