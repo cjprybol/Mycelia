@@ -1,0 +1,6 @@
+config,ok,corrected_reads,contigs,n50,largest,total_length,runtime_s
+naive (no correction),true,200,458,41,907,19928,7.8
+"scalable (canonical, all gates)",true,200,197,43,950,8866,49.43
+scalable but DoubleStrand,true,200,16,891,891,2200,82.75
+"scalable, skip_solid OFF",true,200,197,43,950,8866,97.26
+"scalable, stage0 gates OFF",true,200,458,41,907,19928,88.98

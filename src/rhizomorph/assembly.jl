@@ -15,6 +15,7 @@ Assembly method enumeration for unified interface.
     StringGraph      # String graph assembly (simplified from N-gram graphs)
     BioSequenceGraph # BioSequence graph assembly (simplified from K-mer graphs)
     QualityBioSequenceGraph # Quality-aware BioSequence graph assembly (simplified from Qualmer graphs)
+    TokenGraph       # Token graph assembly (SentencePiece/word-token sequences, SingleStrand only)
 
     # Hybrid approaches
     HybridOLC        # Hybrid OLC + qualmer graph approach
@@ -135,8 +136,11 @@ struct AssemblyConfig
     # Additive efficiency modes (all default to today's behavior, so existing
     # assemblies are byte-for-byte unchanged unless a caller opts in).
     # NOTE: with dedup_revcomp on, a reported contig may be the reverse-complement
-    # (canonical) orientation of the sequence that was actually assembled.
-    dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep (post-assembly)
+    # (canonical) orientation of the sequence that was actually assembled. Wired into
+    # BOTH the k-mer and qualmer arms (td-47di): structural rc_aware traversal in
+    # find_contigs_next plus a post-hoc canonical collapse. Defaults ON for the
+    # corrector=:iterative route, OFF otherwise (see constructor).
+    dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
 
@@ -144,6 +148,44 @@ struct AssemblyConfig
     # single-k-from-uncorrected-reads behavior byte-for-byte).
     corrector::Symbol                       # :none (default) or :iterative (mycelia_iterative_assemble)
     skip_solid::Bool                        # When corrector=:iterative, skip already-solid/clean reads
+
+    # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
+    # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
+    #   hard-read gating + soft-EM edge memory (record-only v1). Built for
+    #   real-scale inputs.
+    # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
+    #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
+    #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
+    #   default: master's corrector route used the size-aware auto-beam
+    #   (beam_width=nothing, bounded on large reads), so forcing an exact unbounded
+    #   beam here can OOM above the auto-beam threshold (the td-63qy regime). Use
+    #   :exhaustive for small-scale / high-sensitivity inputs; use :scalable at
+    #   scale. None of the :scalable-gated behavior perturbs :exhaustive.
+    strategy::Symbol
+
+    # Optional pre-tokenized input (opt-in; default `nothing` preserves the
+    # read-driven pipeline). When supplied, assemble_genome routes to the token
+    # graph and IGNORES `reads` — the tokens ARE the input. SingleStrand only
+    # (reverse complement is undefined for general string tokens).
+    token_sequences::Union{Nothing, Vector{Vector{String}}}
+
+    # Linear-time defragmentation of the (qualmer) assembly graph BEFORE contig
+    # extraction (td-969e): coverage-1 dead-end tip clipping + guarded low-coverage
+    # bubble collapse. Three-state sentinel so the DEFAULT can differ by context
+    # (see _qualmer_graph_to_assembly): `nothing` = context default (ON for the
+    # iterative corrector's re-assembly, OFF for a plain qualmer assembly), `true`
+    # / `false` = force. Removes only unambiguous errors; never collapses a
+    # data-supported variant (td-h6w9), so it cannot lose real sequence.
+    graph_cleanup::Union{Bool, Nothing}
+
+    # Sequencing-technology ERROR PROFILE driving the corrector's indel-aware decode
+    # (td-9q84 / 4a). Only consulted when corrector=:iterative. The profile maps to
+    # per-base indel fractions (see `Mycelia.indel_error_profile`); indel-prone
+    # technologies (:nanopore, :pacbio) enable the pair-HMM gap moves, while the
+    # DEFAULT :illumina (and :ultima) carry ~0 indel fractions and stay on the
+    # substitution-only path byte-for-byte. Wiring the profile — not read length or
+    # a hardcoded tech — keeps "correct with the profile you'd simulate".
+    sequencing_tech::Symbol
 
     # Constructor with validation
     function AssemblyConfig(;
@@ -159,12 +201,34 @@ struct AssemblyConfig
             repeat_resolution::Bool = true,
             verbose::Bool = false,
             tda::Union{Nothing, Mycelia.TDAConfig} = nothing,
-            dedup_revcomp::Bool = false,
+            dedup_revcomp::Union{Bool, Nothing} = nothing,
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
             corrector::Symbol = :none,
-            skip_solid::Bool = false
+            skip_solid::Union{Bool, Nothing} = nothing,
+            strategy::Union{Symbol, Nothing} = nothing,
+            token_sequences::Union{Nothing, Vector{Vector{String}}} = nothing,
+            graph_cleanup::Union{Bool, Nothing} = nothing,
+            sequencing_tech::Symbol = :illumina
     )
+        # Sentinel `nothing` defaults let us DETECT whether the caller set
+        # strategy/skip_solid explicitly (FIX 4) so we can warn on the silent
+        # :scalable default and on a skip_solid the tier will override, without
+        # changing the stored field types. Resolve to concrete values here.
+        strategy_explicit = strategy !== nothing
+        skip_solid_explicit = skip_solid !== nothing
+        effective_strategy = strategy === nothing ? :scalable : strategy
+        effective_skip_solid = skip_solid === nothing ? false : skip_solid
+        # Default decision (td-47di): a DoubleStrand assembly emits BOTH strands of
+        # every contig, so on that path canonical (RC-deduped) output — one contig
+        # per genomic locus rather than a forward/reverse twin pair — is the sensible
+        # default. The iterative corrector always re-assembles DNA on a DoubleStrand
+        # graph, so dedup_revcomp defaults ON for corrector=:iterative. It stays OFF
+        # for the plain (corrector=:none) k-mer/qualmer route, preserving the existing
+        # both-strands behavior that current tests assert. Either default can be
+        # overridden by passing an explicit dedup_revcomp=true/false.
+        effective_dedup_revcomp = dedup_revcomp === nothing ?
+                                  (corrector == :iterative) : dedup_revcomp
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -175,15 +239,25 @@ struct AssemblyConfig
         # Validation: Check strand compatibility with sequence types.
         # DoubleStrand and Canonical both require a defined reverse complement,
         # so both are rejected for amino acids and general strings.
-        if sequence_type <: BioSequences.LongAA && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type <: BioSequences.LongAA &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("Amino acid sequences can only use SingleStrand mode (reverse complement undefined for proteins)")
         end
-        if sequence_type == String && (graph_mode == DoubleStrand || graph_mode == Canonical)
+        if sequence_type == String &&
+           (graph_mode == DoubleStrand || graph_mode == Canonical)
             error("String sequences can only use SingleStrand mode (reverse complement undefined for general strings)")
         end
 
+        # Validation: token-graph input is SingleStrand only. Tokens are opaque
+        # strings (SentencePiece pieces / words) with no defined reverse
+        # complement, so DoubleStrand/Canonical are meaningless for them.
+        if token_sequences !== nothing && graph_mode != SingleStrand
+            error("token_sequences requires SingleStrand mode (reverse complement undefined for string tokens)")
+        end
+
         # Validation: memory_profile must be one recognized by build_kmer_graph
-        _valid_memory_profiles = (:full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
+        _valid_memory_profiles = (
+            :full, :lightweight, :ultralight, :lightweight_quality, :ultralight_quality)
         if !(memory_profile in _valid_memory_profiles)
             error("memory_profile must be one of $(_valid_memory_profiles), got :$(memory_profile)")
         end
@@ -192,6 +266,46 @@ struct AssemblyConfig
         _valid_correctors = (:none, :iterative)
         if !(corrector in _valid_correctors)
             error("corrector must be one of $(_valid_correctors), got :$(corrector)")
+        end
+
+        # Validation: corrector tier (only meaningful when corrector=:iterative,
+        # but validate unconditionally so a typo is caught at construction time).
+        _valid_strategies = (:scalable, :exhaustive)
+        if !(effective_strategy in _valid_strategies)
+            error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
+        end
+
+        # Validation: sequencing_tech must be a recognized error profile (validate
+        # unconditionally so a typo is caught at construction, even for
+        # corrector=:none where it is not consulted).
+        _valid_seq_techs = (:illumina, :nanopore, :pacbio, :ultima)
+        if !(sequencing_tech in _valid_seq_techs)
+            error("sequencing_tech must be one of $(_valid_seq_techs), got :$(sequencing_tech)")
+        end
+
+        # FIX 4 (silent-default + skip_solid-override provenance). corrector=:iterative
+        # now DEFAULTS to strategy=:scalable, which is a materially different engine
+        # than the prior corrector route (coarse ladder / low iteration cap /
+        # skip-solid / doublestrand graph mode / hard-read gate). Announce the default
+        # once so a caller relying on old behavior is not silently switched.
+        if corrector == :iterative && !strategy_explicit
+            @warn "corrector=:iterative now defaults to strategy=:scalable — a coarse " *
+                  "k-ladder + low iteration cap with skip-solid, doublestrand graph mode, " *
+                  "and hard-read gating enabled. This is NOT the prior corrector " *
+                  "behavior; pass strategy=:exhaustive for the maximum-sensitivity " *
+                  "exact-ML engine, or strategy=:scalable to silence this warning." maxlog = 1
+        end
+        # The tier fully determines skip_solid (see _corrector_strategy_knobs):
+        # :scalable ⇒ true, :exhaustive ⇒ false. An explicit config.skip_solid that
+        # disagrees is silently overridden by the corrector route; warn so the
+        # override is visible.
+        if corrector == :iterative && skip_solid_explicit
+            _tier_skip_solid = effective_strategy == :scalable
+            if effective_skip_solid != _tier_skip_solid
+                @warn "strategy=:$(effective_strategy) forces skip_solid=$(_tier_skip_solid); " *
+                      "your explicit skip_solid=$(effective_skip_solid) is overridden by the " *
+                      "corrector tier. assembly_stats records both requested and effective." maxlog = 1
+            end
         end
 
         # Validation: Parameter ranges
@@ -208,19 +322,20 @@ struct AssemblyConfig
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
         end
 
-        # The additive efficiency modes (dedup_revcomp / compact_unitigs /
-        # memory_profile) are only implemented on the non-quality k-mer path
-        # (_assemble_kmer_graph). FASTQ input auto-sets use_quality_scores=true,
-        # which dispatches to the qualmer arm and silently ignores these flags.
-        # Warn unconditionally so a caller opting in on quality data is not left
-        # believing the flag took effect. (Default config sets no flags, so this
-        # never fires for existing assemblies.)
+        # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
+        # quality-aware find_contigs_next calls in _qualmer_graph_to_assembly pass
+        # rc_aware=config.dedup_revcomp, matching the k-mer arm, so it is NO LONGER
+        # ignored on the quality path. The remaining efficiency modes
+        # (compact_unitigs / memory_profile) are still only implemented on the
+        # non-quality k-mer path (_assemble_kmer_graph); FASTQ input auto-sets
+        # use_quality_scores=true, which dispatches to the qualmer arm and silently
+        # ignores them. Warn so a caller opting in on quality data is not left
+        # believing those flags took effect.
         if use_quality_scores &&
-           (dedup_revcomp || compact_unitigs || memory_profile != :full)
-            @warn "Efficiency modes (dedup_revcomp / compact_unitigs / " *
-                  "memory_profile) are only implemented on the non-quality " *
-                  "k-mer path and are ignored on the quality/qualmer path. " *
-                  "Set use_quality_scores=false to use them."
+           (compact_unitigs || memory_profile != :full)
+            @warn "Efficiency modes (compact_unitigs / memory_profile) are only " *
+                  "implemented on the non-quality k-mer path and are ignored on " *
+                  "the quality/qualmer path. Set use_quality_scores=false to use them."
         end
 
         new(
@@ -236,11 +351,15 @@ struct AssemblyConfig
             repeat_resolution,
             verbose,
             tda,
-            dedup_revcomp,
+            effective_dedup_revcomp,
             compact_unitigs,
             memory_profile,
             corrector,
-            skip_solid
+            effective_skip_solid,
+            effective_strategy,
+            token_sequences,
+            graph_cleanup,
+            sequencing_tech
         )
     end
 end
@@ -516,6 +635,14 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `k`: k-mer size (mutually exclusive with min_overlap)
 - `min_overlap`: Minimum overlap length (mutually exclusive with k)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
+- `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
+  (route through the iterative maximum-likelihood read corrector before assembly)
+- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
+  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
+  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
+  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
+  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
+  `:illumina` leaves their indels uncorrected.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -551,6 +678,15 @@ function assemble_genome(reads, config::AssemblyConfig)
     # corrector=:iterative diverts to the iterative+skip corrector.
     if config.corrector == :iterative
         return _assemble_with_iterative_corrector(reads, config)
+    end
+
+    # Token-graph route. When the caller supplies pre-tokenized sequences, the
+    # tokens ARE the input and `reads` is ignored — token assembly is driven by
+    # config.token_sequences, not by loaded read observations. SingleStrand only
+    # (enforced in the AssemblyConfig constructor).
+    if config.token_sequences !== nothing
+        _log_info(config, "Routing to token graph assembly (token_sequences supplied)")
+        return _assemble_token_graph(config.token_sequences, config)
     end
 
     _log_info(config, "Starting unified genome assembly", config.sequence_type,
@@ -613,8 +749,9 @@ function _write_reads_to_fastq(reads, path::String)
                         for record in reader
                             seq = FASTX.FASTA.sequence(String, record)
                             placeholder_used[] = true
-                            write(writer, FASTX.FASTQ.Record(
-                                FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                            write(writer,
+                                FASTX.FASTQ.Record(
+                                    FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                         end
                     end
                 end
@@ -626,8 +763,9 @@ function _write_reads_to_fastq(reads, path::String)
                 elseif record isa FASTX.FASTA.Record
                     seq = FASTX.FASTA.sequence(String, record)
                     placeholder_used[] = true
-                    write(writer, FASTX.FASTQ.Record(
-                        FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                    write(writer,
+                        FASTX.FASTQ.Record(
+                            FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
                 else
                     error("Unsupported read type for iterative corrector: $(typeof(record))")
                 end
@@ -644,6 +782,85 @@ function _write_reads_to_fastq(reads, path::String)
 end
 
 """
+    _corrector_strategy_knobs(strategy::Symbol) -> NamedTuple
+
+Map a corrector `strategy` tier onto the concrete engine knobs threaded into
+`Mycelia.mycelia_iterative_assemble` (td-fuo8). Pure + side-effect-free so the
+routing can be unit-tested without running the (slow) corrector.
+
+- `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
+  skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
+  linear single-substitution fix before the decode), hard-read gating (Stage 3,
+  now narrowed to bubble/repeat vertices only), soft-EM edge memory (Stage 2,
+  record-only v1), the size-aware auto-beam (`beam_width=nothing`), and
+  `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
+  machinery and was the cause of the quality gap; the skip/classification is
+  coverage-based and mode-agnostic).
+- `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
+  (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  `graph_mode=nothing` (derive from `config.graph_mode`, byte-identical
+  passthrough), and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
+  of the prior corrector default: master's corrector route used the size-aware
+  auto-beam (`beam_width=nothing`, bounded on large reads), so forcing an exact
+  unbounded beam here reintroduces the td-63qy OOM ABOVE the auto-beam threshold.
+  Intended for SMALL-SCALE / high-sensitivity inputs; the exact beam can OOM on
+  very large reads — use `:scalable` at scale.
+"""
+function _corrector_strategy_knobs(strategy::Symbol)
+    if strategy == :scalable
+        return (
+            n_k_rungs = 3,
+            max_iterations_per_k = 2,
+            skip_solid = true,
+            hard_window = true,
+            soft_em = true,
+            cheap_correct = true,  # Stage 0 linear k-mer-spectrum correction (td-bjnt)
+            beam_width = nothing,  # size-aware auto-beam (bounded on huge reads)
+            # graph_mode=:doublestrand (td-nt69): forcing :canonical was THE cause of
+            # the :scalable quality gap. On a controlled 1kb fixture, flipping ONLY
+            # canonical→doublestrand (all other knobs held) collapses 197→16 contigs
+            # and lifts N50 43→891 — the historical near-complete regime. Canonical
+            # was forced only because the skip machinery was (wrongly) wired to
+            # require it; the k-mer classification is coverage-based and mode-agnostic
+            # (each vertex + its RC are separate doublestrand vertices, still
+            # separable by coverage), so skip_solid + hard_window work under
+            # :doublestrand too — the naive contig path stays valid.
+            graph_mode = :doublestrand,
+            # Indel-decode bounds (td-9q84 / 4a), consulted ONLY when the error
+            # profile enables indels (nanopore/pacbio). :scalable keeps the pair-HMM
+            # tractable at scale: a bounded diagonal band on the net gap + small run
+            # caps (the bounded Bellman-Ford relaxation replacing the O(V³)
+            # Floyd-Warshall). Ignored on substitution-only profiles (:illumina),
+            # whose decode threads no indel params at all.
+            band_width = 16,
+            deletion_max_run = 3,
+            max_insertion_run = 3
+        )
+    elseif strategy == :exhaustive
+        return (
+            n_k_rungs = nothing,    # prime-by-prime hyper-sensitive walk
+            max_iterations_per_k = 10,
+            skip_solid = false,
+            hard_window = false,
+            soft_em = false,
+            cheap_correct = false,  # exact-ML tier: no cheap pre-correction
+            beam_width = typemax(Int),  # exact ML decode
+            # nothing ⇒ derive the corrector graph_mode from config.graph_mode below,
+            # keeping :exhaustive a byte-identical passthrough of prior behavior.
+            graph_mode = nothing,
+            # Indel-decode bounds (td-9q84 / 4a): maximum-sensitivity tier ⇒ UNBOUNDED
+            # band (`band_width=nothing`, the exact/oracle setting) + larger run caps.
+            # Consulted only when the error profile enables indels.
+            band_width = nothing,
+            deletion_max_run = 10,
+            max_insertion_run = 10
+        )
+    else
+        error("unknown corrector strategy :$(strategy); expected :scalable or :exhaustive")
+    end
+end
+
+"""
 Route assembly through `Mycelia.mycelia_iterative_assemble` (the iterative +
 skip-solid maximum-likelihood corrector), then RE-ASSEMBLE the corrected reads
 into a real `AssemblyResult`.
@@ -653,19 +870,32 @@ corrected READS (not contigs). This function reads the corrected FASTQ back and
 re-assembles it through the naive path (`assemble_genome(...; corrector=:none)`),
 so the returned `AssemblyResult` has real contigs + graph (`gfa_compatible=true`)
 — NOT raw corrected reads (that v0 shortcut made QUAST comparisons invalid,
-td-zru6). Corrector provenance (`corrector`, `skip_solid`, `k_progression`,
-`corrected_read_count`) is stamped onto the re-assembly's `assembly_stats`.
+td-zru6). Corrector provenance (`corrector`, `strategy`, `skip_solid`,
+`k_progression`, `corrected_read_count`) is stamped onto the re-assembly's
+`assembly_stats`.
 
 The re-assembly deliberately lets `assemble_genome` auto-detect its graph mode
-(DoubleStrand for DNA) rather than inheriting `config.graph_mode`: the corrector
-needs `:canonical` for skip-solid, but the naive contig path is invalid under
-`:canonical`. Corrected reads are FASTQ, so the re-assembly runs the same
+(DoubleStrand for DNA) rather than inheriting `config.graph_mode`. Corrected
+reads are FASTQ, so the re-assembly runs the same
 quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
 i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
 apples.
 """
 function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
-    _log_info(config, "Routing assembly through iterative corrector (corrector=:iterative)")
+    _log_info(config,
+        "Routing assembly through iterative corrector " *
+        "(corrector=:iterative, strategy=:$(config.strategy))")
+
+    # Discoverability nudge (PR #408 review, FIX 3): the corrector defaults to the
+    # substitution-only :illumina profile, so a user correcting long / indel-prone
+    # reads (nanopore/pacbio) without setting sequencing_tech silently gets NO indel
+    # correction. Surface it once (@info, not @warn — :illumina is a valid, common
+    # choice) so the off-by-default indel path is discoverable.
+    if config.sequencing_tech == :illumina
+        @info "corrector=:iterative is running with sequencing_tech=:illumina " *
+              "(substitution-only correction). For long / indel-prone reads set " *
+              "sequencing_tech=:nanopore or :pacbio to enable indel-aware correction." maxlog = 1
+    end
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
     # k-progression floors at 13 and min_overlap is not used — surface that rather
@@ -681,17 +911,60 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
 
+        # Fork the engine knobs by tier (td-fuo8). :exhaustive is the
+        # maximum-sensitivity exact-ML engine (n_k_rungs=nothing / 10 iters /
+        # exact UNBOUNDED beam / no skip / no hard-window / no soft-EM) — NOT a
+        # byte-for-byte reproduction of the prior corrector default (which used the
+        # bounded auto-beam), so it can OOM on very large reads; :scalable opts into
+        # the coarse ladder + low iteration cap + skip-solid + hard-read gate +
+        # soft-EM. The per-tier knobs live in _corrector_strategy_knobs so the
+        # routing is unit-testable without running the corrector.
+        knobs = _corrector_strategy_knobs(config.strategy)
+        # td-nt69: :scalable now runs the corrector on a :doublestrand graph
+        # (`knobs.graph_mode == :doublestrand`). Forcing :canonical was THE cause of
+        # the quality gap — the skip machinery was over-constrained to require it,
+        # but skip-solid + hard-window classification is coverage-based and
+        # mode-agnostic, so both gates stay ACTIVE under :doublestrand and the naive
+        # contig path stays valid. :exhaustive threads `knobs.graph_mode === nothing`
+        # ⇒ derive from config.graph_mode, a byte-identical passthrough.
+        corrector_graph_mode = knobs.graph_mode === nothing ?
+                               _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
+        # Indel-aware correction wiring (td-9q84 / 4a): map the sequencing-tech error
+        # profile to indel fractions and gate on the ABSOLUTE indel rate
+        # (base_error_rate × summed fractions). Only indel-prone profiles (:nanopore,
+        # :pacbio) build a non-nothing IndelDecodeParams; the DEFAULT :illumina (and
+        # :ultima) resolve to `nothing`, so the corrector threads NO indel params and
+        # runs the substitution decode byte-for-byte (oracle preservation). The
+        # base_error_rate (threaded into ViterbiCorrectionConfig.error_rate to scale
+        # the gap masses), gap-open fractions, and extend probabilities come from the
+        # profile; the run caps + band from the tier knobs above.
+        indel_params = if Mycelia.profile_enables_indels(config.sequencing_tech)
+            profile = Mycelia.indel_error_profile(config.sequencing_tech)
+            Mycelia.IndelDecodeParams(
+                profile.base_error_rate,
+                profile.insertion_fraction,
+                profile.deletion_fraction,
+                profile.insertion_extend_probability,
+                profile.deletion_extend_probability,
+                knobs.deletion_max_run,
+                knobs.max_insertion_run,
+                knobs.band_width
+            )
+        else
+            nothing
+        end
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
-            skip_solid = config.skip_solid,
-            graph_mode = _graph_mode_symbol(config.graph_mode),
-            # Opt into the tuned fast settings (td-q70n) explicitly on this route:
-            # a coarse ~3-rung k-ladder + a low iteration cap. Kept out of the
-            # mycelia_iterative_assemble DEFAULTS (which stay 10 / prime-walk) so
-            # other callers are unchanged until the accuracy tradeoff is validated.
-            n_k_rungs = 3,
-            max_iterations_per_k = 2,
+            skip_solid = knobs.skip_solid,
+            graph_mode = corrector_graph_mode,
+            n_k_rungs = knobs.n_k_rungs,
+            max_iterations_per_k = knobs.max_iterations_per_k,
+            hard_window = knobs.hard_window,
+            soft_em = knobs.soft_em,
+            cheap_correct = knobs.cheap_correct,
+            beam_width = knobs.beam_width,
+            indel_params = indel_params,
             verbose = false,
             enable_checkpointing = false,
             output_dir = output_dir
@@ -727,17 +1000,106 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         end
         _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
         reassembly_k = config.k === nothing ? max_k : config.k
-        # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): the
-        # corrector needs :canonical for skip_solid, but the naive graph path emits
-        # invalid contigs under :canonical, so the re-assembly must use the mode the
-        # naive baseline uses (DoubleStrand for DNA), which auto-config selects.
-        assembly = assemble_genome(corrected_reads;
-            k = reassembly_k, corrector = :none)
+        # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): match
+        # the mode the naive baseline uses (DoubleStrand for DNA), which auto-config
+        # selects, so the corrected-read re-assembly is apples-to-apples.
+        #
+        # Final-pass graph reuse (td-04tb). The corrector already built a qualmer
+        # graph in its final pass; when that pass converged (0 improvements), the
+        # graph is byte-identical to the one a from-scratch re-assembly would build
+        # from the corrected reads. Resolve the re-assembly config exactly as
+        # `assemble_genome(corrected_reads; k=reassembly_k, corrector=:none)` would
+        # (same auto-detected sequence type / graph mode / quality flag), then reuse
+        # the corrector's graph ONLY when every parameter matches AND the corrector
+        # marked it reusable. Otherwise fall back to a full rebuild. The reuse path
+        # calls the SAME downstream contig extraction the rebuild would, so contigs /
+        # N50 / sequences are identical — this is a pure-performance change.
+        # The re-assembly config is built with corrector=:none, so two additive
+        # corrector behaviors must be threaded through explicitly (both default ON
+        # for corrector=:iterative; a caller can force either off):
+        #   * dedup_revcomp (td-47di): forward the OUTER config's resolved value so
+        #     the corrected re-assembly emits the canonical (RC-deduped) contig set
+        #     instead of re-inflating with both-strand twins.
+        #   * graph_cleanup (td-969e): the corrector's final graph retains error-
+        #     induced branch points that fragment the re-assembly; clean it BEFORE
+        #     contig extraction. nothing = context default ON for the corrector.
+        # Ordering inside _qualmer_graph_to_assembly is cleanup -> extract -> dedup:
+        # clean_corrector_graph! runs first on the graph, find_contigs_next then
+        # extracts, and the RC-dedup collapses strands last.
+        corrector_cleanup = config.graph_cleanup === nothing ? true : config.graph_cleanup
+        reassembly_config = _auto_configure_assembly(corrected_reads;
+            k = reassembly_k, corrector = :none,
+            dedup_revcomp = config.dedup_revcomp,
+            graph_cleanup = corrector_cleanup)
+        reused_graph = get(result_dict, :final_graph, nothing)
+        _rmeta = result_dict[:metadata]
+        can_reuse_graph = reused_graph !== nothing &&
+                          get(_rmeta, :final_graph_reusable, false) === true &&
+                          get(_rmeta, :final_graph_k, nothing) == reassembly_config.k &&
+                          get(_rmeta, :final_graph_mode, nothing) ==
+                          _graph_mode_symbol(reassembly_config.graph_mode) &&
+                          reassembly_config.k !== nothing &&
+                          reassembly_config.use_quality_scores &&
+                          reassembly_config.sequence_type <: BioSequences.BioSequence
+        assembly = if can_reuse_graph
+            _log_info(config,
+                "Reusing corrector final-pass qualmer graph (k=$(reassembly_config.k), " *
+                "mode=$(_graph_mode_symbol(reassembly_config.graph_mode))); " *
+                "skipping redundant from-scratch build_qualmer_graph (td-04tb)")
+            _qualmer_graph_to_assembly(reused_graph, n_corrected, reassembly_config;
+                graph_cleanup = corrector_cleanup)
+        else
+            _log_info(config,
+                "Corrector final-pass graph not reusable " *
+                "(reusable=$(get(_rmeta, :final_graph_reusable, false)), " *
+                "graph_k=$(get(_rmeta, :final_graph_k, nothing)) vs reassembly_k=$(reassembly_config.k)); " *
+                "rebuilding from corrected reads")
+            assemble_genome(corrected_reads, reassembly_config)
+        end
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
-        assembly.assembly_stats["skip_solid"] = config.skip_solid
+        assembly.assembly_stats["strategy"] = String(config.strategy)
+        # Indel-aware correction provenance (td-9q84 / 4a): the driving error profile
+        # and whether it engaged the pair-HMM gap moves. `indel_moves=false` (the
+        # :illumina default) marks the substitution-only oracle path.
+        assembly.assembly_stats["sequencing_tech"] = String(config.sequencing_tech)
+        assembly.assembly_stats["indel_moves"] = indel_params !== nothing
+        # Final-pass graph reuse provenance (td-04tb): true when the re-assembly
+        # reused the corrector's already-built final-pass graph (converged run),
+        # false when it rebuilt from scratch. Pure telemetry — does not affect the
+        # contigs/N50/sequences (identical either way).
+        assembly.assembly_stats["reassembly_graph_reused"] = can_reuse_graph
+        # Provenance (FIX 4): stamp BOTH the caller's requested skip_solid and the
+        # value the tier actually used, so the tier's silent override cannot hide.
+        # `skip_solid` is retained as the EFFECTIVE value for back-compat.
+        assembly.assembly_stats["skip_solid_requested"] = config.skip_solid
+        assembly.assembly_stats["skip_solid_effective"] = knobs.skip_solid
+        assembly.assembly_stats["skip_solid"] = knobs.skip_solid
         assembly.assembly_stats["k_progression"] = result_dict[:k_progression]
         assembly.assembly_stats["corrected_read_count"] = n_corrected
+        # Scalable-tier telemetry (hard-read skip fraction + honest gate flags).
+        _corr_meta = result_dict[:metadata]
+        # `hard_window`/`hard_read_gate` = the skip gate (active on :scalable);
+        # `windowed_decode` = per-hard-region windowed decode, scaffolded ⇒ false
+        # (hard reads decoded WHOLE). Kept distinct so the surfaced flag is honest.
+        assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
+        assembly.assembly_stats["hard_read_gate"] = get(_corr_meta, :hard_read_gate, false)
+        assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
+        # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
+        # :exhaustive), never a bare `true` (FIX 1/5).
+        assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
+        assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
+        assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])
+        # Stage 0 cheap correction + graph-decode fraction (td-bjnt). The decode
+        # fraction is the critical-path win metric (reads that reached graph
+        # Viterbi); Stage 0 + hard-set narrowing drive it toward the true ~5-15%.
+        assembly.assembly_stats["cheap_correct"] = get(_corr_meta, :cheap_correct, false)
+        assembly.assembly_stats["cheap_corrections_total"] = get(_corr_meta, :cheap_corrections_total, 0)
+        assembly.assembly_stats["cheap_corrections_per_pass"] = get(
+            _corr_meta, :cheap_corrections_per_pass, Int[])
+        assembly.assembly_stats["decode_fraction"] = get(_corr_meta, :decode_fraction_mean, 0.0)
+        assembly.assembly_stats["decode_fraction_per_pass"] = get(
+            _corr_meta, :decode_fraction_per_pass, Float64[])
         if isempty(assembly.contigs)
             @warn "corrector=:iterative re-assembled $(n_corrected) corrected reads into 0 " *
                   "contigs — the corrected read set did not assemble."
@@ -862,6 +1224,20 @@ end
 
 """
 Prepare observations from various input formats (FASTA/FASTQ records or file paths).
+
+Quality note (graph-as-HMM correction redesign,
+`docs/design/2026-07-06-graph-as-hmm-correction-redesign.md`): this helper
+normalizes to FASTA records, which DROPS per-base quality. That is intentional
+for the naive k-mer / string / n-gram graph builders, which do not consume
+quality. The iterative CORRECTOR does NOT use this path — it preserves real
+FASTQ quality end-to-end via `_write_reads_to_fastq` (FASTQ written verbatim;
+FASTA flagged quality-absent with a warning, never silently Q40) and the per-read
+per-base emission wrapping in `try_viterbi_path_improvement`. The remaining gap is
+the qualmer GRAPH builder (`_assemble_qualmer_graph`), which currently receives
+these quality-stripped observations and then re-injects a Q40 placeholder in
+`_prepare_fastq_observations`; giving it real FASTQ quality requires routing raw
+reads through the `assemble_genome` dispatch (a separate track) rather than this
+FASTA-normalizing helper.
 """
 function _prepare_observations(reads)
     if reads isa Vector{String}
@@ -890,9 +1266,12 @@ function _prepare_observations(reads)
     elseif reads isa Vector{<:FASTX.FASTA.Record}
         return reads
     elseif reads isa Vector{<:FASTX.FASTQ.Record}
-        # Convert FASTQ to FASTA records
-        return [FASTX.FASTA.Record(FASTX.FASTQ.identifier(record), FASTX.FASTQ.sequence(record))
-                for record in reads]
+        # PRESERVE FASTQ records (do NOT strip quality). FASTQ input always routes to
+        # the quality-aware paths (use_quality_scores=true → qualmer / quality-biosequence),
+        # which consume per-base quality; stripping to FASTA here forced the downstream
+        # _prepare_fastq_observations to re-inject placeholder Q40 (td-tps5). FASTA input
+        # (which legitimately lacks quality) still flows through the FASTA branch above.
+        return reads
     else
         throw(ArgumentError("Unsupported reads format: $(typeof(reads))"))
     end
@@ -937,21 +1316,16 @@ K-mer graph assembly implementation (fixed-length k-mer foundation).
 function _assemble_kmer_graph(observations, config)
     _log_info(config, "Using k-mer graph assembly strategy (fixed-length k-mer foundation)")
     mode = _graph_mode_symbol(config.graph_mode)
-    # Canonical graph_mode does not yet support correct contig reconstruction:
-    # undirected canonical traversal is not orientation-aware, so adjacent
-    # canonical labels do not carry which strand their (k-1)-overlap is on and
-    # the reconstructed contigs are INVALID (see the Canonical @test_broken in
-    # test/4_assembly/rhizomorph_efficiency_modes_test.jl). Warn UNCONDITIONALLY
-    # (matching the codebase's warn-on-incomplete-path convention) and flag the
-    # result; do NOT hard-error, so the mode stays runnable for the benchmark and
-    # to track the keystone fix.
-    reconstruction_valid = config.graph_mode != Canonical
-    if config.graph_mode == Canonical
-        @warn "Canonical graph_mode does not yet support correct contig " *
-              "reconstruction (undirected canonical traversal is not " *
-              "orientation-aware); emitted contigs are INVALID. Use " *
-              "graph_mode=DoubleStrand for correct assembly."
-    end
+    # Canonical graph_mode now supports correct contig reconstruction. The
+    # undirected canonical graph merges each k-mer with its reverse complement
+    # onto one vertex; find_eulerian_paths_next handles undirected graphs
+    # (degree-parity feasibility + symmetric Hierholzer) and path_to_sequence /
+    # generate_contig_sequence recover each k-mer's orientation from the (k-1)
+    # overlap, reverse-complementing where the overlap is on the reverse strand.
+    # Canonical reconstruction therefore matches DoubleStrand (verified in
+    # test/4_assembly/rhizomorph_efficiency_modes_test.jl Mode 2), so the result
+    # is flagged valid and no warning is emitted.
+    reconstruction_valid = true
     # Mode 3a (opt-in): memory_profile selects the k-mer graph's evidence footprint
     # (:full default, or :lightweight / :ultralight / *_quality). This is an internal
     # representation change; the assembled contigs are expected to be identical.
@@ -1058,8 +1432,8 @@ function _assemble_kmer_graph(observations, config)
         "graph_cleaning_applied" => false,
         "unitig_compaction_requested" => config.compact_unitigs,
         "unitig_compaction_effective" => unitig_compaction_effective,
-        # false for Canonical graph_mode: undirected canonical traversal is not
-        # orientation-aware, so the emitted contigs are not a valid reconstruction.
+        # Always true here: canonical (undirected) traversal is now orientation-
+        # aware, so its contigs are a valid reconstruction (matching DoubleStrand).
         "reconstruction_valid" => reconstruction_valid,
         "assembly_date" => string(Mycelia.Dates.now())
     )
@@ -1079,17 +1453,42 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    # See _assemble_kmer_graph: Canonical graph_mode does not yet support correct
-    # contig reconstruction (undirected canonical traversal is not orientation-
-    # aware). Warn UNCONDITIONALLY and flag the result; do NOT hard-error.
-    reconstruction_valid = config.graph_mode != Canonical
-    if config.graph_mode == Canonical
-        @warn "Canonical graph_mode does not yet support correct contig " *
-              "reconstruction (undirected canonical traversal is not " *
-              "orientation-aware); emitted contigs are INVALID. Use " *
-              "graph_mode=DoubleStrand for correct assembly."
-    end
     graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+
+    # Contig extraction + AssemblyResult assembly is factored into
+    # `_qualmer_graph_to_assembly` so the iterative corrector can REUSE its already-
+    # built final-pass qualmer graph (td-04tb) and skip the redundant from-scratch
+    # build_qualmer_graph here — the two paths share this exact downstream code, so
+    # the reused-graph assembly is byte-identical to a from-scratch re-assembly.
+    # A plain qualmer assembly cleans only when the caller explicitly opts in
+    # (config.graph_cleanup === true). The corrector's re-assembly path opts in
+    # via the reuse call in the :iterative branch and via reassembly_config below.
+    return _qualmer_graph_to_assembly(graph, length(observations), config;
+        graph_cleanup = config.graph_cleanup === true)
+end
+
+"""
+    _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config) -> AssemblyResult
+
+Extract contigs from an already-built qualmer `graph` and assemble the
+`AssemblyResult` (paths -> consensus FASTQ contigs -> stats). Split out of
+`_assemble_qualmer_graph` (td-04tb) so the iterative corrector's re-assembly can
+REUSE the corrector's final-pass qualmer graph instead of rebuilding an identical
+one from scratch. Given the same `graph`, `num_input_sequences`, and `config`
+this is a pure function of the graph structure, so a reused graph yields
+byte-identical contigs/N50/sequences.
+"""
+function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
+        graph_cleanup::Bool = false)
+    # Canonical graph_mode now supports correct contig reconstruction on the qualmer
+    # arm as well. Contigs are reconstructed by the SAME orientation-aware path used
+    # by the k-mer arm (_qualmer_path_to_consensus_fastq -> path_to_sequence ->
+    # _reconstruct_oriented_kmer_path), and per-base quality is oriented to match
+    # (reverse-oriented k-mers take reversed / [1]-indexed quality). Canonical
+    # reconstruction therefore matches DoubleStrand for both sequence AND quality,
+    # so the result is flagged valid and no warning is emitted (see
+    # _assemble_kmer_graph for the sequence-side rationale).
+    reconstruction_valid = true
 
     # Apply Phase 2 graph algorithms if enabled
     if config.bubble_resolution
@@ -1102,6 +1501,28 @@ function _assemble_qualmer_graph(observations, config)
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
+    # Linear-time graph defragmentation BEFORE contig extraction (td-969e). The
+    # scalable corrector's final graph keeps error-induced branch points (dead-end
+    # tips + coverage-1 bubbles); find_contigs_next breaks a unitig at every branch
+    # vertex, so each residual branch point is a contig boundary. clean_corrector_
+    # graph! removes ONLY unambiguous errors (coverage-1 dead-end tips + guarded
+    # low-coverage bubble collapse) in O(V+E), never collapsing a data-supported
+    # variant (the td-h6w9 invariant). Operate on a deepcopy so a REUSED corrector
+    # final-pass graph (td-04tb) is not mutated for other consumers; the cleaned
+    # copy is what we both extract contigs from AND return in the AssemblyResult.
+    cleanup_stats = nothing
+    if graph_cleanup
+        graph = deepcopy(graph)
+        cleanup_stats = Rhizomorph.clean_corrector_graph!(
+            graph; k = config.k === nothing ? 21 : config.k)
+        _log_info(config,
+            "Graph cleanup (td-969e): $(cleanup_stats["graph_cleanup_vertices_before"]) -> " *
+            "$(cleanup_stats["graph_cleanup_vertices_after"]) vertices " *
+            "($(cleanup_stats["graph_cleanup_tips_removed"]) tips clipped, " *
+            "$(cleanup_stats["graph_cleanup_bubbles_collapsed"]) error bubbles collapsed, " *
+            "$(get(cleanup_stats, "graph_cleanup_components_pruned", 0)) error components pruned)")
+    end
+
     # Find contigs by extracting maximal unitigs (non-branching paths), mirroring
     # the k-mer arm. The prior heaviest-path / iterative-Viterbi heuristics found
     # no substantial paths on branchy read graphs and fell to a placeholder walk
@@ -1109,9 +1530,39 @@ function _assemble_qualmer_graph(observations, config)
     # far below the genome length. find_contigs_next returns the vertex path
     # (ContigPath.vertices); per-base quality is then propagated by
     # _qualmer_path_to_consensus_fastq below.
-    paths = [contig_path.vertices
+    #
+    # Canonical exception: on the UNDIRECTED canonical qualmer graph, unitig
+    # extraction does not yield an overlap-ordered traversal (adjacent canonical
+    # labels are stored lexicographically-minimal, so a non-branching-path walk
+    # fragments and its reconstruction is invalid). Mirror the k-mer arm and prefer
+    # the Eulerian traversal, which IS orientation-reconstructable by
+    # _qualmer_path_to_consensus_fastq -> path_to_sequence. Fall back to unitig
+    # extraction only when no Eulerian path exists (branchy/error-laden real inputs),
+    # preserving the existing behavior for single/doublestrand and hard cases.
+    # rc_aware=config.dedup_revcomp (td-47di): on a DoubleStrand qualmer graph the
+    # unitig walk otherwise emits BOTH strands of every contig (forward + reverse-
+    # complement twin), ~2x-inflating the assembly. Passing rc_aware marks each walked
+    # vertex's RC partner visited so the reverse strand is never independently
+    # traversed — the same structural dedup the k-mer arm uses via
+    # _generate_contigs_probabilistic.
+    paths = if config.graph_mode == Canonical
+        eulerian_paths = Rhizomorph.find_eulerian_paths_next(graph)
+        if isempty(eulerian_paths)
+            [contig_path.vertices
              for contig_path in
-                 Rhizomorph.find_contigs_next(graph; min_contig_length = config.k + 1)]
+                 Rhizomorph.find_contigs_next(
+                graph; min_contig_length = config.k + 1,
+                rc_aware = config.dedup_revcomp)]
+        else
+            eulerian_paths
+        end
+    else
+        [contig_path.vertices
+         for contig_path in
+             Rhizomorph.find_contigs_next(
+            graph; min_contig_length = config.k + 1,
+            rc_aware = config.dedup_revcomp)]
+    end
 
     # Convert paths to FASTQ records with quality propagation
     contig_records = FASTX.FASTQ.Record[]
@@ -1132,6 +1583,40 @@ function _assemble_qualmer_graph(observations, config)
         contig_records = _generate_fastq_contigs_from_qualmer_graph(graph, config)
     end
 
+    # Belt-and-suspenders RC dedup (td-47di): the structural rc_aware traversal above
+    # removes twins that share a breakpoint, but RC twins with OFFSET fragment
+    # breakpoints (or the probabilistic-walk fallback, which does not honor rc_aware)
+    # can still slip through — the same case the k-mer arm covers with a post-hoc
+    # _dedup_reverse_complements. We dedup by canonical key AND emit each survivor in
+    # its CANONICAL orientation (min(seq, reverse_complement(seq))), reversing the
+    # per-base quality when the reverse complement is canonical so quality stays
+    # registered against the emitted sequence. Emitting the canonical orientation
+    # (rather than keeping whichever strand was traversed) makes the output
+    # ORDER-INDEPENDENT: rc_aware picks one strand per pair based on graph iteration
+    # order, so the corrector's REUSED final-pass graph and a from-scratch REBUILD
+    # could otherwise emit opposite strands for the same locus and diverge. Canonical
+    # emission keeps them byte-identical (reassembly_graph_reuse_test invariant).
+    # Gated on config.dedup_revcomp (default ON for the corrector route), so plain
+    # both-strands assemblies are unchanged.
+    if config.dedup_revcomp && length(contig_records) > 1
+        seen = Set{String}()
+        deduped = FASTX.FASTQ.Record[]
+        for record in contig_records
+            canonical_record = _canonical_fastq_record(record)
+            canonical_seq = String(FASTX.sequence(canonical_record))
+            if !(canonical_seq in seen)
+                push!(seen, canonical_seq)
+                push!(deduped, canonical_record)
+            end
+        end
+        if length(deduped) < length(contig_records)
+            _log_info(config,
+                "Reverse-complement dedup (qualmer): $(length(contig_records)) -> " *
+                "$(length(deduped)) contig records")
+        end
+        contig_records = deduped
+    end
+
     # Convert FASTQ records to strings for backward compatibility with existing code
     contigs = [String(FASTX.sequence(record)) for record in contig_records]
     contig_names = [String(FASTX.identifier(record)) for record in contig_records]
@@ -1145,11 +1630,12 @@ function _assemble_qualmer_graph(observations, config)
         "graph_mode" => string(config.graph_mode),
         "num_vertices" => length(MetaGraphsNext.labels(graph)),
         "quality_preserved" => true,  # Mark that quality information is preserved
-        # false for Canonical graph_mode (undirected traversal is not orientation-aware).
+        # Always true: canonical (undirected) qualmer reconstruction is now
+        # orientation-aware for both sequence and per-base quality.
         "reconstruction_valid" => reconstruction_valid,
         "num_fastq_contigs" => length(contig_records),
         "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
-        "num_input_sequences" => length(observations),
+        "num_input_sequences" => num_input_sequences,
         "assembly_date" => string(Mycelia.Dates.now())
     )
 
@@ -1158,6 +1644,14 @@ function _assemble_qualmer_graph(observations, config)
         qualmer_stats = Rhizomorph.get_qualmer_statistics(graph)
         for (key, value) in qualmer_stats
             stats[string(key)] = value
+        end
+    end
+
+    # Graph-cleanup provenance (td-969e). Present only when the defrag pass ran.
+    stats["graph_cleanup_applied"] = graph_cleanup
+    if cleanup_stats !== nothing
+        for (key, value) in cleanup_stats
+            stats[key] = value
         end
     end
 
@@ -1237,6 +1731,28 @@ function _canonical_string(seq::AbstractString)::String
         return fwd
     end
     return min(fwd, rc)
+end
+
+"""
+    _canonical_fastq_record(record::FASTX.FASTQ.Record) -> FASTX.FASTQ.Record
+
+Return `record` re-oriented to its canonical strand: if the reverse complement of
+the sequence is lexicographically smaller than the forward sequence, emit a new
+record holding the reverse-complemented sequence with its per-base quality REVERSED
+(Phred values are strand-invariant; only their order flips under reverse-complement),
+otherwise return `record` unchanged. Sequences that are not valid DNA (no defined
+reverse complement) are passed through unchanged. Used by the qualmer RC-dedup so a
+contig's emitted orientation is a deterministic function of its content, not of the
+graph-traversal order — keeping the corrector's reused-graph and from-scratch-rebuild
+assemblies byte-identical under dedup.
+"""
+function _canonical_fastq_record(record::FASTX.FASTQ.Record)::FASTX.FASTQ.Record
+    seq = String(FASTX.sequence(record))
+    canonical = _canonical_string(seq)
+    canonical == seq && return record
+    id = String(FASTX.identifier(record))
+    quality = reverse(collect(FASTX.quality_scores(record)))
+    return FASTX.FASTQ.Record(id, canonical, quality)
 end
 
 """
@@ -1370,34 +1886,48 @@ Convert observations to FASTQ records for quality processing.
 """
 function _prepare_fastq_observations(observations)
     fastq_records = FASTX.FASTQ.Record[]
+    # Mirror `_write_reads_to_fastq`: any FASTA (quality-less) input that gets a
+    # placeholder Q40 must be SURFACED once per call, never silently substituted.
+    # A degenerate uniform-Q40 model makes the corrector's decisions
+    # coverage-driven only, so a silent substitution masks that the quality model
+    # is inert (review: silent Q40).
+    placeholder_used = false
 
     for (i, obs) in enumerate(observations)
         # Handle different observation formats
         if obs isa FASTX.FASTQ.Record
             push!(fastq_records, obs)
         elseif obs isa FASTX.FASTA.Record
-            # Convert FASTA to FASTQ with default quality (assume high quality)
+            # Convert FASTA to FASTQ with placeholder quality (Q40).
             seq = FASTX.FASTA.sequence(obs)
-            qual = repeat('I', length(seq))  # Quality score 40 (high quality)
+            qual = repeat('I', length(seq))  # Phred+33 'I' == Q40 placeholder
             record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(obs), seq, qual)
             push!(fastq_records, record)
+            placeholder_used = true
         elseif obs isa Tuple && length(obs) >= 1
             # Handle tuple format like (record, index) or (record, other_data)
             record = obs[1]
             if record isa FASTX.FASTQ.Record
                 push!(fastq_records, record)
             elseif record isa FASTX.FASTA.Record
-                # Convert FASTA to FASTQ with default quality
+                # Convert FASTA to FASTQ with placeholder quality (Q40).
                 seq = FASTX.FASTA.sequence(record)
-                qual = repeat('I', length(seq))  # Quality score 40 (high quality)
+                qual = repeat('I', length(seq))  # Phred+33 'I' == Q40 placeholder
                 fastq_record = FASTX.FASTQ.Record(FASTX.FASTA.identifier(record), seq, qual)
                 push!(fastq_records, fastq_record)
+                placeholder_used = true
             else
                 @warn "Unsupported record type in tuple: $(typeof(record))"
             end
         else
             @warn "Unsupported observation type: $(typeof(obs))"
         end
+    end
+
+    if placeholder_used
+        @warn "corrector: observation input lacked per-base quality (FASTA / quality-less); " *
+              "assigned placeholder Q40. The corrector's quality model is degenerate (uniform) " *
+              "for these reads — its decisions become coverage-driven only."
     end
 
     return fastq_records
@@ -1422,28 +1952,58 @@ function _qualmer_path_to_consensus_fastq(path, graph, contig_name::String)
     end
 
     sequence = Rhizomorph.path_to_sequence(path, graph)
+
+    # Per-vertex orientation for the emitted contig. On an undirected (canonical)
+    # nucleotide graph, path_to_sequence reverse-complements reverse-oriented
+    # k-mers; the per-base quality vector MUST follow the same orientation or the
+    # quality string will be mis-registered against the (corrected) sequence. The
+    # stored quality vector is aligned to the canonical label, so for a reverse-
+    # oriented k-mer the emitted base at position j is label[k+1-j] complemented and
+    # its quality is quality[k+1-j] (i.e. reverse the vector; the emitted LAST base
+    # takes quality[1], not quality[end]). Directed (single/doublestrand) graphs and
+    # non-nucleotide labels keep the plain forward orientation.
+    T = eltype(path)
+    orientation_aware = !Graphs.is_directed(graph) &&
+                        Rhizomorph._label_has_reverse_complement(T) &&
+                        Rhizomorph._sequence_type_from_kmer_type(T) <:
+                        BioSequences.LongSequence
+    forward_flags = orientation_aware ? Rhizomorph._resolve_path_orientations(path, graph) :
+                    trues(length(path))
+
     quality_scores = UInt8[]
 
     for (idx, vertex) in enumerate(path)
         vertex_quality = _qualmer_vertex_quality_scores(graph[vertex])
         kmer_len = length(string(vertex))
+        forward = forward_flags[idx]
 
         if idx == 1
             if length(vertex_quality) == kmer_len
-                append!(quality_scores, vertex_quality)
+                # Full first k-mer: reverse the quality vector when the k-mer is
+                # emitted reverse-complemented so quality[j] tracks the emitted base.
+                append!(quality_scores, forward ? vertex_quality : reverse(vertex_quality))
             else
                 append!(quality_scores, fill(UInt8(2), kmer_len))
             end
         else
+            # Only the last emitted base of this k-mer is appended. Forward: that is
+            # label[end] -> quality[end]. Reverse: it is complement(label[1]) ->
+            # quality[1].
             if isempty(vertex_quality)
                 push!(quality_scores, UInt8(2))
             else
-                push!(quality_scores, vertex_quality[end])
+                push!(quality_scores, forward ? vertex_quality[end] : vertex_quality[1])
             end
         end
     end
 
+    # Sequence and quality are both length (k + (n-1)) by construction, so this
+    # guard is defensive and should not fire; it must never silently SHORTEN a
+    # correctly-reconstructed contig, so surface a mismatch if one ever occurs.
     if length(quality_scores) != length(sequence)
+        @warn "qualmer consensus: quality/sequence length mismatch " *
+              "($(length(quality_scores)) vs $(length(sequence))) for $(contig_name); " *
+              "clamping to the shorter length."
         min_len = min(length(quality_scores), length(sequence))
         quality_scores = quality_scores[1:min_len]
         sequence = sequence[1:min_len]
@@ -1644,6 +2204,70 @@ function _assemble_ngram_graph(observations, config)
         "vertex_type" => "unicode_character_vectors",
         "k" => config.k,
         "num_input_sequences" => length(observations),
+        "assembly_date" => string(Mycelia.Dates.now())
+    )
+
+    return AssemblyResult(contigs, contig_names; graph = graph, assembly_stats = stats)
+end
+
+"""
+Token graph assembly implementation (variable-length SentencePiece/word-token
+analysis).
+
+Assembles pre-tokenized sequences (e.g. SentencePiece pieces or whitespace
+tokens) into contigs. It builds a token graph over the String token labels,
+finds an Eulerian path when one exists (or, when it does not, the maximal linear
+contigs), and reconstructs each contig by joining that path's token labels with
+`token_separator`.
+
+Modeled on `_assemble_ngram_graph`, with one deliberate difference: token
+vertices are whole opaque strings, not fixed-length character windows, so the
+character-overlap reconstruction used by `path_to_sequence` /
+`generate_contig_sequence` (append only the last char of each subsequent vertex)
+is wrong here. Instead the ordered token labels are joined directly. Tokens are
+SingleStrand only — reverse complement is undefined for general string tokens —
+so no reverse-complement handling is performed.
+"""
+function _assemble_token_graph(
+        token_sequences::Vector{Vector{String}}, config;
+        token_separator::AbstractString = " "
+)
+    _log_info(config, "Using token graph assembly strategy (variable-length token analysis)")
+
+    graph = Rhizomorph.build_token_graph(token_sequences)
+
+    # Fast path: a single Eulerian traversal covering every edge, if one exists.
+    paths = Rhizomorph.find_eulerian_paths_next(graph)
+    contigs = String[]
+    for path in paths
+        if length(path) > 1
+            push!(contigs, join(path, token_separator))
+        end
+    end
+
+    # Fallback: emit maximal linear contigs (token label paths). `min_contig_length`
+    # is measured against find_contigs_next's character-overlap string, so use 1
+    # to keep short token contigs (single-token paths included).
+    if isempty(contigs)
+        contig_paths = Rhizomorph.find_contigs_next(graph; min_contig_length = 1)
+        for contig in contig_paths
+            if !isempty(contig.vertices)
+                push!(contigs, join(contig.vertices, token_separator))
+            end
+        end
+    end
+
+    contig_names = ["token_contig_$i" for i in 1:length(contigs)]
+
+    stats = Dict{String, Any}(
+        "method" => "TokenGraph",
+        "graph_type" => "variable_length",
+        "vertex_type" => "string_tokens",
+        "token_separator" => String(token_separator),
+        "graph_mode" => string(config.graph_mode),
+        "num_vertices" => length(MetaGraphsNext.labels(graph)),
+        "num_edges" => length(MetaGraphsNext.edge_labels(graph)),
+        "num_input_sequences" => length(token_sequences),
         "assembly_date" => string(Mycelia.Dates.now())
     )
 

@@ -1,0 +1,71 @@
+{
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "dataset_id",
+    "dataset_name",
+    "domain",
+    "source",
+    "target_error_rate",
+    "injected_error_count",
+    "baseline_edit_distance",
+    "null_seed",
+    "real_injected_error_recall",
+    "weight_null_injected_error_recall",
+    "rewire_null_injected_error_recall",
+    "real_edit_distance_reduction",
+    "weight_null_edit_distance_reduction",
+    "rewire_null_edit_distance_reduction",
+    "real_decoded",
+    "weight_null_decoded",
+    "rewire_null_decoded",
+    "recall_gap_real_minus_weight_null",
+    "recall_gap_real_minus_rewire_null"
+  ],
+  "command_args": [
+    "julia",
+    "--project=.",
+    "benchmarking/viterbi_accuracy_benchmark.jl"
+  ],
+  "dataset_ids": [
+    "austen_pride_prejudice_excerpt",
+    "phix174_nc001422",
+    "pstvd_nc002030"
+  ],
+  "generated_at": "2026-07-11T23:14:35.689Z",
+  "git": {
+    "commit": "806f0748c6cf9027cf42fb676d78eb272f49437f",
+    "is_dirty": true
+  },
+  "metadata": {
+    "baseline": "uncorrected injected-error observations",
+    "bead": "td-he0z.9",
+    "benchmark": "generalized_viterbi_accuracy_vs_error_rate",
+    "controls": {
+      "over_correction_uncorrupted": "corrector run on uncorrupted truth; any edit is a false positive",
+      "random_rewire_null": "edges rewired to random vertex pairs (seed 20260711); vertices/edge-count/weight-multiset held fixed; destroys true adjacency",
+      "shuffled_weight_null": "edge weights permuted (seed 20260711); topology/emission held fixed"
+    },
+    "error_rates": [
+      0.01,
+      0.05,
+      0.1
+    ],
+    "fixture_dir": "fixtures/viterbi_accuracy",
+    "unit": "fixed-length 11-mers/ngrams"
+  },
+  "row_count": 9,
+  "run_id": "b8_viterbi_accuracy_local_20260625",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "table_name": "viterbi_null_control_summary",
+  "table_path": "tables/viterbi_null_control_summary.csv",
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.10"
+  }
+}

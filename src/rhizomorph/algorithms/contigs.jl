@@ -144,10 +144,17 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
 
     path = [start_vertex]
     current = start_vertex
+    # `path`/`backward_path` remain ordered Vectors (needed to return the path in
+    # order), but membership tests against a Vector are an O(L) linear scan, so a
+    # contig of length L costs O(L^2) — the residual super-linear term that made
+    # 48kb reassembly quadratic (td-kokn). Maintain a parallel Set for O(1)
+    # membership; push to both the Vector (order) and the Set (membership) at each
+    # extension. `visited` is already a Set (O(1)).
+    path_set = Set{typeof(start_vertex)}((start_vertex,))
 
     while true
         out_neighbors = Rhizomorph.get_outgoing_neighbors(graph, current)
-        valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path)]
+        valid_neighbors = [n for n in out_neighbors if !(n in visited) && !(n in path_set)]
 
         next_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :out)
         if next_vertex === nothing
@@ -159,17 +166,19 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         end
 
         push!(path, next_vertex)
+        push!(path_set, next_vertex)
         current = next_vertex
     end
 
     current = start_vertex
     backward_path = Vector{typeof(start_vertex)}()
+    backward_set = Set{typeof(start_vertex)}()
 
     while true
         in_neighbors = Rhizomorph.get_incoming_neighbors(graph, current)
         valid_neighbors = [n
                            for n in in_neighbors
-                           if !(n in visited) && !(n in path) && !(n in backward_path)]
+                           if !(n in visited) && !(n in path_set) && !(n in backward_set)]
 
         prev_vertex = _select_linear_neighbor(graph, current, valid_neighbors; direction = :in)
         if prev_vertex === nothing
@@ -181,6 +190,7 @@ function find_linear_path(graph::MetaGraphsNext.MetaGraph, start_vertex, visited
         end
 
         pushfirst!(backward_path, prev_vertex)
+        push!(backward_set, prev_vertex)
         current = prev_vertex
     end
 
@@ -291,6 +301,17 @@ function generate_contig_sequence(
     first_vertex_data = graph[path[1]]
 
     if hasfield(typeof(first_vertex_data), :Kmer)
+        # Canonical (undirected) nucleotide k-mer graphs merge each k-mer with its
+        # reverse complement onto one canonical vertex, so consecutive labels are
+        # not guaranteed to overlap in their stored orientation. assemble_path_sequence
+        # assumes a fixed forward orientation, which yields an invalid contig on a
+        # canonical graph. Recover each k-mer's orientation from the (k-1) overlap
+        # instead, so canonical contigs match the DoubleStrand reconstruction.
+        SequenceType = Rhizomorph._sequence_type_from_kmer_type(T)
+        if !Graphs.is_directed(graph) && Rhizomorph._label_has_reverse_complement(T) &&
+           SequenceType <: BioSequences.LongSequence
+            return Rhizomorph._reconstruct_oriented_kmer_path(path, SequenceType, graph)
+        end
         # K-mer graph: reconstruct using overlap logic without string conversion
         return Rhizomorph.assemble_path_sequence(path)
     elseif hasfield(typeof(first_vertex_data), :sequence)
