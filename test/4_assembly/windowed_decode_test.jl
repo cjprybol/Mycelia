@@ -205,54 +205,67 @@ Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
     R = Mycelia.Rhizomorph
     k = 13
     mode = :doublestrand
-    fx = _wd_long_read_fixture()
-    graph = R.build_qualmer_graph(fx.reads, k; mode = mode)
-    hard = Mycelia._hard_vertex_set(graph, k)
-    Test.@test !isempty(hard)
 
-    profile = Mycelia.indel_error_profile(:nanopore)
-    ip = Mycelia.IndelDecodeParams(
-        profile.base_error_rate, profile.insertion_fraction, profile.deletion_fraction,
-        profile.insertion_extend_probability, profile.deletion_extend_probability,
-        3, 3, 16)
+    # (A) POSITIVE CONTROL — the ORIGINAL-COORDINATE segment rebuild (the risky new
+    # length-changing code) tested DIRECTLY against hand-computed expectations, so an
+    # off-by-one / dropped / duplicated base is caught independent of the decoder.
+    # Each `accepted` triple is (original-window-range, corrected-seq, corrected-qual);
+    # gaps between windows + the trailing span must be copied verbatim from the
+    # ORIGINAL, and a window's length change must NOT shift a later window's range.
+    Test.@testset "segment rebuild: length-changing / multi-window / edges" begin
+        splice = Mycelia._splice_indel_windows
+        # single INSERTION (window 5:8 "CCCC" -> "CCACC", +1) + trailing span preserved
+        r1 = splice("r", collect("AAAACCCCGGGGTTTT"), collect(repeat("I", 16)),
+            [(5:8, "CCACC", "IIIII")])
+        Test.@test FASTX.sequence(String, r1) == "AAAACCACCGGGGTTTT"
+        Test.@test FASTX.quality(r1) == repeat("I", 17)
+        # two windows, DELETION then INSERTION, empty prefix + interior gap + trailing.
+        # w2=9:12 uses ORIGINAL coords even though w1 shortened the read (the invariant).
+        r2 = splice("r", collect("AAAACCCCGGGGTTTT"), collect(repeat("I", 16)),
+            [(1:4, "AA", "II"), (9:12, "GGAGG", "IIIII")])
+        Test.@test FASTX.sequence(String, r2) == "AACCCCGGAGGTTTT"   # AA|CCCC|GGAGG|TTTT
+        Test.@test FASTX.quality(r2) == repeat("I", 15)
+        # whole-read window (no gaps, no trailing), shortened
+        r3 = splice("r", collect("AAAACCCC"), collect(repeat("I", 8)), [(
+            1:8, "AAACCC", "IIIIII")])
+        Test.@test FASTX.sequence(String, r3) == "AAACCC"
+        # adjacent windows separated by a single original base (the minimum post-merge gap)
+        r4 = splice("r", collect("ACGTACGT"), collect(repeat("I", 8)),
+            [(1:3, "AC", "II"), (5:7, "ACGT", "IIII")])
+        Test.@test FASTX.sequence(String, r4) == "ACTACGTT"          # AC|T|ACGT|T
+        Test.@test FASTX.quality(r4) == repeat("I", 8)
+    end
 
-    Logging.with_logger(Logging.NullLogger()) do
-        for r in fx.err_reads
-            # (1) ORACLE: passing indel_params=nothing is byte-identical to the default
-            # (no-kwarg) windowed decode — the substitution path is untouched.
-            rec_def, imp_def,
-            ndec_def,
-            ndiv_def = Mycelia.improve_read_likelihood_windowed_detail(
-                r, graph, k, hard; graph_mode = mode, beam_width = 64)
-            rec_nil, imp_nil,
-            ndec_nil,
-            ndiv_nil = Mycelia.improve_read_likelihood_windowed_detail(
-                r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = nothing)
-            Test.@test FASTX.sequence(String, rec_nil) == FASTX.sequence(String, rec_def)
-            Test.@test FASTX.quality(rec_nil) == FASTX.quality(rec_def)
-            Test.@test (imp_nil, ndec_nil, ndiv_nil) == (imp_def, ndec_def, ndiv_def)
-
-            # (2) INDEL PLUMBING: the indel path reaches the kernel and returns a
-            # WELL-FORMED record (sequence and quality lengths agree, valid DNA), and
-            # the splice does not corrupt the read. The corrected length MAY differ
-            # from the input (a spliced indel correction) — that is allowed, unlike the
-            # substitution path which is length-preserving.
-            rec_ind, imp_ind,
-            ndec_ind,
-            ndiv_ind = Mycelia.improve_read_likelihood_windowed_detail(
-                r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = ip)
-            sind = FASTX.sequence(String, rec_ind)
-            Test.@test length(sind) == length(FASTX.quality(rec_ind))
-            Test.@test all(c -> c in ('A', 'C', 'G', 'T'), sind)
-            Test.@test ndec_ind >= 1                       # at least one hard window decoded
-
-            # (3) LOCALITY: the solid prefix before the first hard window is copied
-            # verbatim from the original read (windowing only rewrites hard windows).
-            wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
-            if !isempty(wins)
-                lo1 = first(first(wins))
-                orig = FASTX.sequence(String, r)
-                Test.@test sind[1:(lo1 - 1)] == orig[1:(lo1 - 1)]
+    # (B) INTEGRATION SMOKE — the indel path threads through the real decoder,
+    # returns a well-formed record, and only rewrites hard windows. (Substitution
+    # byte-identity is covered by the td-nn6l testset above; the E2E correction WIN
+    # is gated on staging the dense-graph-expensive decode to sparse rungs, td-2rxh.)
+    Test.@testset "indel path threads through the real decoder (well-formed + local)" begin
+        fx = _wd_long_read_fixture()
+        graph = R.build_qualmer_graph(fx.reads, k; mode = mode)
+        hard = Mycelia._hard_vertex_set(graph, k)
+        Test.@test !isempty(hard)
+        profile = Mycelia.indel_error_profile(:nanopore)
+        ip = Mycelia.IndelDecodeParams(
+            profile.base_error_rate, profile.insertion_fraction, profile.deletion_fraction,
+            profile.insertion_extend_probability, profile.deletion_extend_probability,
+            3, 3, 16)
+        Logging.with_logger(Logging.NullLogger()) do
+            for r in fx.err_reads
+                rec_ind, _imp,
+                ndec_ind,
+                _ndiv = Mycelia.improve_read_likelihood_windowed_detail(
+                    r, graph, k, hard; graph_mode = mode, beam_width = 64, indel_params = ip)
+                sind = FASTX.sequence(String, rec_ind)
+                Test.@test length(sind) == length(FASTX.quality(rec_ind))   # well-formed
+                Test.@test all(c -> c in ('A', 'C', 'G', 'T'), sind)
+                Test.@test ndec_ind >= 1                                    # a window reached decode
+                wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
+                if !isempty(wins)
+                    lo1 = first(first(wins))
+                    orig = FASTX.sequence(String, r)
+                    Test.@test sind[1:(lo1 - 1)] == orig[1:(lo1 - 1)]       # locality
+                end
             end
         end
     end

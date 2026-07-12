@@ -1496,8 +1496,12 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             # Indel decode changes length by design. Reconcile the quality vector to
             # the corrected sequence length defensively (the decode already returns a
             # matched record; this guards a malformed one), then accept unconditionally.
+            # An EMPTY corrected quality is handled explicitly: _reconcile_quality_length
+            # would take its `n == 0` branch and evaluate `zero(Char)` (undefined), so a
+            # malformed empty-quality window is padded with a neutral Q40 ('I') instead.
             if length(dqual) != length(dseq)
-                dqual = String(_reconcile_quality_length(collect(dqual), length(dseq)))
+                dqual = isempty(dqual) ? repeat("I", length(dseq)) :
+                        String(_reconcile_quality_length(collect(dqual), length(dseq)))
             end
             push!(accepted, (w, dseq, dqual))
         end
@@ -1521,10 +1525,31 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         return corrected, true, decoded_windows, divergent_windows
     end
 
-    # Indel: rebuild the read from ORIGINAL-coordinate segments — solid gap, corrected
-    # window (possibly a different length), solid gap, … — so a window's length change
-    # cannot shift a later window's range. `accepted` is in window order (windows are
-    # sorted, non-overlapping after the _hard_window_ranges merge).
+    # Indel: rebuild the read from ORIGINAL-coordinate segments (see
+    # `_splice_indel_windows`) so a window's length change cannot shift a later
+    # window's range.
+    corrected = _splice_indel_windows(id, seq_chars, qual_chars, accepted)
+    return corrected, true, decoded_windows, divergent_windows
+end
+
+"""
+    _splice_indel_windows(id, seq_chars, qual_chars, accepted) -> FASTX.FASTQ.Record
+
+Rebuild a read from ORIGINAL-coordinate segments for the indel (length-changing)
+windowed decode. `seq_chars` / `qual_chars` are the ORIGINAL read's characters;
+`accepted` is a vector of `(window_range, corrected_seq, corrected_qual)` triples in
+window order (windows sorted and non-overlapping — see `_hard_window_ranges`). Each
+window's original span is replaced by its (possibly different-length) corrected
+sequence; the solid gaps BETWEEN windows and the trailing span are copied verbatim
+from the original. Because segments are cut at ORIGINAL coordinates (not a running
+offset), an earlier window's length change cannot shift a later window's range.
+Exposed for a deterministic unit test of the coordinate math (adjacent / gap /
+trailing / length-changing windows) independent of the decoder.
+"""
+function _splice_indel_windows(id::AbstractString,
+        seq_chars::Vector{Char}, qual_chars::Vector{Char},
+        accepted::AbstractVector{<:Tuple{
+            UnitRange{Int}, <:AbstractString, <:AbstractString}})
     out_seq = IOBuffer()
     out_qual = IOBuffer()
     prev = 0
@@ -1539,8 +1564,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     end
     print(out_seq, String(seq_chars[(prev + 1):end]))            # trailing solid span
     print(out_qual, String(qual_chars[(prev + 1):end]))
-    corrected = FASTX.FASTQ.Record(id, String(take!(out_seq)), String(take!(out_qual)))
-    return corrected, true, decoded_windows, divergent_windows
+    return FASTX.FASTQ.Record(id, String(take!(out_seq)), String(take!(out_qual)))
 end
 
 """
