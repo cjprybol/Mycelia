@@ -67,11 +67,11 @@ function calibrated_gap_points()
     thresholds = _parse_float_list(
         get(ENV, "MYCELIA_RPC_GAP_THRESHOLDS", "0.0,0.5,1.0,2.0,4.0"), Float64[])
     return [(
-        name = "calibrated-gap-$(threshold)", skip_solid = false,
-        cheap_correct = true, hard_window = false, soft_em = true,
-        n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
-        calibrated_gap_threshold = threshold,
-    ) for threshold in thresholds]
+                name = "calibrated-gap-$(threshold)", skip_solid = false,
+                cheap_correct = true, hard_window = false, soft_em = true,
+                n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
+                calibrated_gap_threshold = threshold
+            ) for threshold in thresholds]
 end
 
 """
@@ -195,11 +195,72 @@ function run_pr_curve()
     csv = joinpath(results_dir, "rhizomorph_correction_pr_curve_$(ts).csv")
     CSV.write(csv, rows)
     println("\nCSV: $csv")
+
+    # Programmatic dominance verdict at the high-error rate (if the sweep covered
+    # it AND included calibrated points), replacing the eyeball read of the CSV.
+    if 0.10 in errs && any(startswith(p.name, "calibrated-gap-") for p in points)
+        dom = assess_frontier_dominance(rows; err = 0.10)
+        if dom.baseline === nothing
+            println("\n[dominance] $(dom.reason)")
+        elseif dom.dominates
+            println("\n[dominance] err=0.10 CALIBRATED GATE DOMINATES noskip+nogate: " *
+                    "$(dom.best.point) recall=$(round(dom.best.recall; digits = 4)) " *
+                    "precision=$(round(dom.best.precision; digits = 4)) " *
+                    "over_rate=$(round(dom.best.over_rate; digits = 6)) " *
+                    "(baseline recall=$(round(dom.baseline.recall; digits = 4)) " *
+                    "precision=$(round(dom.baseline.precision; digits = 4)) " *
+                    "over_rate=$(round(dom.baseline.over_rate; digits = 6)))")
+        else
+            println("\n[dominance] err=0.10 NO calibrated point dominates noskip+nogate " *
+                    "(baseline recall=$(round(dom.baseline.recall; digits = 4)) " *
+                    "precision=$(round(dom.baseline.precision; digits = 4)) " *
+                    "over_rate=$(round(dom.baseline.over_rate; digits = 6))) — widen thresholds.")
+        end
+    end
     println("\nRead the frontier per error rate: a point with HIGHER recall at ~equal precision")
     println("+ ~zero over_correction is a strict improvement (the corrector was over-conservative).")
     println("A point that trades precision/over-correction for recall exposes the real tradeoff.")
     println("=== done: $(Dates.now()) ===")
     return (; csv, rows)
+end
+
+"""
+    assess_frontier_dominance(rows; err=0.10, recall_eps=0.02, over_eps=0.01) -> NamedTuple
+
+Programmatic frontier-dominance check (previously eyeballed from the CSV). At
+error rate `err`, decide whether any `calibrated-gap-*` operating point DOMINATES
+the `noskip+nogate` baseline: recall retained (>= baseline recall − `recall_eps`),
+over-correction pushed near zero (<= `over_eps`), and precision not below the
+baseline. Returns `(dominates, baseline, best, candidates)`. NaN metrics
+(zero-denominator rows) are treated as non-dominating.
+"""
+function assess_frontier_dominance(rows::DataFrames.DataFrame;
+        err::Float64 = 0.10, recall_eps::Float64 = 0.02, over_eps::Float64 = 0.01)
+    at = rows[[isapprox(r, err; atol = 1e-9) for r in rows.error_rate], :]
+    base_idx = findfirst(==("noskip+nogate"), at.point)
+    base_idx === nothing && return (dominates = false,
+        reason = "no noskip+nogate baseline at err=$(err)",
+        baseline = nothing, best = nothing, candidates = NamedTuple[])
+    base = at[base_idx, :]
+    winners = NamedTuple[]
+    for row in DataFrames.eachrow(at)
+        startswith(row.point, "calibrated-gap-") || continue
+        (isfinite(row.recall) && isfinite(row.precision) &&
+         isfinite(row.over_correction_rate)) || continue
+        if row.recall >= base.recall - recall_eps &&
+           row.over_correction_rate <= over_eps &&
+           row.precision >= base.precision
+            push!(winners,
+                (point = row.point, recall = row.recall,
+                    precision = row.precision, over_rate = row.over_correction_rate))
+        end
+    end
+    best = isempty(winners) ? nothing :
+           sort(winners; by = w -> (w.over_rate, -w.recall))[1]
+    return (dominates = !isempty(winners),
+        baseline = (recall = base.recall, precision = base.precision,
+            over_rate = base.over_correction_rate),
+        best = best, candidates = winners)
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

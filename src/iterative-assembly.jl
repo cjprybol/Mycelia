@@ -1397,12 +1397,16 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         weighted_graph = nothing,
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool}
-    record, improved, _decoded, _divergent = improve_read_likelihood_windowed_detail(
+    record, improved,
+    _decoded,
+    _divergent = improve_read_likelihood_windowed_detail(
         read, graph, k, hard_vertices;
         graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph, diagnostics = diagnostics,
-        pad = pad, max_window = max_window)
+        pad = pad, calibrated_gap_threshold = calibrated_gap_threshold,
+        max_window = max_window)
     return record, improved
 end
 
@@ -1426,6 +1430,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         weighted_graph = nothing,
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool, Int, Int}
     # Anchor each window with a full solid k-mer flank by default (`pad === nothing`
     # ⇒ `k`): a pad of `k` bases guarantees the window's first/last k-mer clears the
@@ -1433,7 +1438,8 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     # the hard vertices sit in the window INTERIOR where the ML decode can re-route
     # them (a 1-base pad can pin the decode to an error k-mer at the boundary).
     effective_pad = pad === nothing ? k : pad
-    windows = _hard_window_ranges(read, k, hard_vertices; pad = effective_pad, max_window = max_window)
+    windows = _hard_window_ranges(
+        read, k, hard_vertices; pad = effective_pad, max_window = max_window)
     isempty(windows) && return read, false, 0, 0
 
     seq_chars = collect(FASTX.sequence(String, read))
@@ -1460,7 +1466,8 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         improved = improve_read_likelihood(
             sub_read, graph, k; graph_mode = graph_mode,
             beam_width = beam_width, soft_weights = soft_weights,
-            weighted_graph = weighted_graph, diagnostics = diagnostics)
+            weighted_graph = weighted_graph, diagnostics = diagnostics,
+            calibrated_gap_threshold = calibrated_gap_threshold)
         improved || continue
         dseq = FASTX.sequence(String, decoded_sub)
         dqual = FASTX.quality(decoded_sub)
@@ -1886,7 +1893,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                                    improve_read_likelihood_windowed(
                         read, graph, k, hard_vertices; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
-                        diagnostics = diag) :
+                        diagnostics = diag,
+                        calibrated_gap_threshold = calibrated_gap_threshold) :
                                    improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
@@ -1920,7 +1928,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     read, graph, k, hard_vertices; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag) :
+                    diagnostics = diag,
+                    calibrated_gap_threshold = calibrated_gap_threshold) :
                                improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
@@ -3021,21 +3030,34 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                                     string(corrected_sequence)
         if calibrated_gap_threshold !== nothing
             path_result = only(correction.paths)
-            path = something(path_result.path,
-                throw(ArgumentError("calibrated gap gate requires a decoded path")))
-            gaps = path_result.diagnostics[:position_gaps]
-            length(gaps) == length(path.steps) - 1 ||
-                throw(ArgumentError("position-gap/path alignment contract violated"))
+            decoded_path = path_result.path
+            gaps = get(path_result.diagnostics, :position_gaps, nothing)
             original_chars = collect(sequence_string)
             corrected_chars = collect(corrected_sequence_string)
-            @inbounds for i in eachindex(gaps)
-                position = i + k
-                position > length(corrected_chars) && break
-                if gaps[i] < calibrated_gap_threshold
-                    corrected_chars[position] = original_chars[position]
+            # Positional per-base gate (strand-safe): gaps[i] is the Viterbi margin
+            # INTO path.steps[i+1], i.e. read position i+k. Where the margin is below
+            # threshold the decode is ambiguous, so revert that base to the observed
+            # one — this is what pulls over-correction back down. `Inf` gaps (collapsed
+            # frontier ⇒ maximally confident) clear any finite threshold and are kept.
+            # Apply the gate ONLY when the decode gave us a path, its recorded gaps
+            # under the documented alignment contract (len == steps-1), and a
+            # length-preserving decode (a positional revert is undefined once an indel
+            # shifts the base<->position map). Any precondition unmet ⇒ fail OPEN to
+            # the ungated decode, never drop the read's correction. The err=0.10
+            # substitution frontier is always length-preserving, so the guards are a
+            # safety net, not a hot path.
+            if decoded_path !== nothing && gaps !== nothing &&
+               length(gaps) == length(decoded_path.steps) - 1 &&
+               length(corrected_chars) == length(original_chars)
+                @inbounds for i in eachindex(gaps)
+                    position = i + k
+                    position > length(corrected_chars) && break
+                    if gaps[i] < calibrated_gap_threshold
+                        corrected_chars[position] = original_chars[position]
+                    end
                 end
+                corrected_sequence_string = String(corrected_chars)
             end
-            corrected_sequence_string = String(corrected_chars)
         end
         improved_likelihood = Mycelia.calculate_sequence_likelihood(
             corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)
