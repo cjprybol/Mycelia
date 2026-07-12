@@ -1231,7 +1231,20 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # otherwise downstream (QUAST, GFA) would treat raw corrected reads as an
         # assembly, which is not an apples-to-apples assembly result (td-zru6).
         _log_info(config, "Corrected $(n_corrected) reads; re-assembling them (corrector=:none)")
-        reassembly_k = config.k === nothing ? max_k : config.k
+        # Coverage-aware re-assembly k (td-jt7r). Pinning re-assembly to the
+        # corrector's k CEILING shatters the de Bruijn graph on high-error long
+        # reads (nanopore/pacbio), fragmenting the assembly and MASKING the
+        # correction gain. select_reassembly_k measures solid-k-mer connectivity
+        # directly and drops k to the largest prime that keeps the corrected-read
+        # graph connected; clean / high-coverage (Illumina) reads keep the ceiling
+        # UNCHANGED (byte-identical, graph-reuse stays eligible).
+        reassembly_ceiling = config.k === nothing ? max_k : config.k
+        reassembly_k = select_reassembly_k(corrected_reads, reassembly_ceiling)
+        if reassembly_k != reassembly_ceiling
+            _log_info(config,
+                "Re-assembly k adapted $(reassembly_ceiling) -> $(reassembly_k) " *
+                "(coverage-aware connectivity floor) to keep the corrected-read graph connected")
+        end
         # Re-assemble with AUTO-DETECTED graph_mode (not config.graph_mode): match
         # the mode the naive baseline uses (DoubleStrand for DNA), which auto-config
         # selects, so the corrected-read re-assembly is apples-to-apples.
@@ -1301,6 +1314,12 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # false when it rebuilt from scratch. Pure telemetry — does not affect the
         # contigs/N50/sequences (identical either way).
         assembly.assembly_stats["reassembly_graph_reused"] = can_reuse_graph
+        # Coverage-aware re-assembly k provenance (td-jt7r): the ceiling requested
+        # (corrector k) and the k actually used after the connectivity criterion.
+        # When they differ the corrected-read graph was adapted DOWN to stay
+        # connected (the un-shatter fix for high-error long reads).
+        assembly.assembly_stats["reassembly_k_ceiling"] = reassembly_ceiling
+        assembly.assembly_stats["reassembly_k"] = reassembly_k
         # Provenance (FIX 4): stamp BOTH the caller's requested skip_solid and the
         # value the tier actually used, so the tier's silent override cannot hide.
         # `skip_solid` is retained as the EFFECTIVE value for back-compat.

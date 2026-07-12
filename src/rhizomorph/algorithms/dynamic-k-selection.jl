@@ -390,31 +390,160 @@ function _largest_prime_at_most(n::Int)::Int
     return max(candidate, 2)
 end
 
-"""
-    select_reassembly_k(reads, ceiling_k; floor_k = 7) -> Int
+# --- k-mer count spectrum over reads (shared by both connectivity measures) -----
+_dna_complement_char(c::Char)::Char = c == 'A' ? 'T' :
+                                      c == 'T' ? 'A' :
+                                      c == 'C' ? 'G' :
+                                      c == 'G' ? 'C' :
+                                      c == 'a' ? 't' :
+                                      c == 't' ? 'a' : c == 'c' ? 'g' : c == 'g' ? 'c' : c
 
-Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`.
-The residual error `e = estimate_residual_error(reads)` is mapped to the largest k
-whose expected k-mer survival stays above 0.5 via `k <= log(0.5)/log(1-e)`.
+# Canonical hash of a k-length window: min(hash(window), hash(revcomp(window))). The
+# corrected-read RE-ASSEMBLY runs on a DOUBLESTRAND (canonical) de Bruijn graph, so
+# the connectivity measure must ALSO be canonical — otherwise a forward read and the
+# reverse-complement read of the SAME locus are counted as two different k-mers,
+# HALVING the measured coverage on both-strand read sets and spuriously triggering
+# k-adaptation on well-covered reads (the reuse-oracle regime).
+function _dynamic_k_canonical_window_hash(
+        characters::AbstractVector{Char}, start_index::Int, k::Int)::UInt64
+    forward_hash = _dynamic_k_window_hash(characters, start_index, k)
+    revcomp = Vector{Char}(undef, k)
+    for offset in 0:(k - 1)
+        revcomp[k - offset] = _dna_complement_char(uppercase(characters[start_index + offset]))
+    end
+    reverse_hash = UInt64(hash(revcomp))
+    return min(forward_hash, reverse_hash)
+end
 
-When the requested `ceiling_k` already survives (clean / low-error reads), it is
-returned UNCHANGED — this keeps clean/Illumina behavior byte-identical and
-preserves the corrector's final-pass graph-reuse eligibility (which requires
-`reassembly_k == final_graph_k`). Only when residual error forces a lower k is the
-adapted value snapped down to the nearest prime (the `:scalable` k-ladder is prime,
-so an adaptively-chosen re-assembly k stays on primes too). High-error long reads
-drop toward `floor_k`. Never exceeds `ceiling_k`.
+function _kmer_count_spectrum(reads, k::Int; canonical::Bool = true)::Dict{UInt64, Int}
+    counts = Dict{UInt64, Int}()
+    k < 1 && return counts
+    sequences = _collect_dynamic_k_sequences(reads)
+    isempty(sequences) && return counts
+    character_sequences = _dynamic_k_character_sequences(sequences)
+    for characters in character_sequences
+        if length(characters) >= k
+            for start_index in 1:(length(characters) - k + 1)
+                kmer_hash = canonical ?
+                            _dynamic_k_canonical_window_hash(characters, start_index, k) :
+                            _dynamic_k_window_hash(characters, start_index, k)
+                counts[kmer_hash] = get(counts, kmer_hash, 0) + 1
+            end
+        end
+    end
+    return counts
+end
+
 """
-function select_reassembly_k(reads, ceiling_k::Int; floor_k::Int = 7)::Int
-    error_rate = estimate_residual_error(reads)
-    # Low residual error: the requested ceiling survives — honor it unchanged
-    # (identical clean/Illumina behavior; preserves graph-reuse eligibility).
-    error_rate <= 1.0e-6 && return ceiling_k
-    survival_k = Int(floor(log(0.5) / log(1.0 - error_rate)))
-    survival_k >= ceiling_k && return ceiling_k
-    # Residual error forces a lower k: drop to the largest prime that keeps the
-    # graph connected, floored (but never above the ceiling).
+    median_solid_kmer_multiplicity(reads, k; solid_min = 2) -> Float64
+
+Coverage-aware connectivity measure at size `k`, and the signal `select_reassembly_k`
+uses. Counts every length-`k` CANONICAL window over all `reads`, keeps the "solid"
+k-mers (occurrence count `>= solid_min`, i.e. the genomic backbone; singleton error
+k-mers are dropped), and returns the MEDIAN count over that solid set — a robust
+estimate of the backbone coverage `C·(1-e)^k`.
+
+Canonical (both-strand) counting is REQUIRED: the corrected-read re-assembly runs on
+a DOUBLESTRAND de Bruijn graph, so a forward read and the reverse-complement read of
+the same locus must count as ONE k-mer; a raw-string count would halve the measured
+coverage on both-strand read sets and spuriously trigger adaptation on well-covered
+reads (the reuse-oracle regime).
+
+Discriminates well-covered from shattered backbones (empirical, 30x corrected reads):
+
+- clean / well-corrected backbone (reuse-oracle, 5% Illumina, k 11–21): ~12–15 —
+  the backbone recurs ~coverage, comfortably above the connectivity floor, so the
+  ceiling is honored.
+- shattered backbone (raw / poorly-corrected high-error long reads): ~2–4 at every
+  k — the backbone barely survives, so median-solid sits below the floor and `k`
+  drops.
+
+Returns `0.0` when no k-mer is solid. NOTE: this is a per-k backbone-coverage floor;
+its absolute scale tracks read coverage (a ~6 floor assumes non-trivial, ~≥10x
+coverage — the regime the corrector targets).
+"""
+function median_solid_kmer_multiplicity(reads, k::Int; solid_min::Int = 2)::Float64
+    counts = _kmer_count_spectrum(reads, k; canonical = true)
+    solid_counts = Int[c for c in values(counts) if c >= solid_min]
+    isempty(solid_counts) && return 0.0
+    return Float64(Statistics.median(solid_counts))
+end
+
+"""
+    effective_kmer_coverage(reads, k) -> Float64
+
+DIAGNOSTIC / SECONDARY signal: the MEAN occurrence count over ALL distinct canonical
+k-mers (`total_kmer_occurrences / distinct_kmers`). Unlike `median_solid_...` it
+INCLUDES singleton error k-mers, so residual error deflates it toward 1.0; it decays
+smoothly with `k` but its dynamic range between a well-covered backbone (reuse-oracle
+~1.6 at k21) and a shattered one (~1.1) is too NARROW for a robust byte-identical
+oracle. Retained as an interpretable cross-check (it cleanly shows the error-driven
+decay) — but `select_reassembly_k` keys off the solid-backbone median, whose range
+(~12 vs ~3) separates the regimes with margin. Returns `0.0` on empty input.
+"""
+function effective_kmer_coverage(reads, k::Int)::Float64
+    counts = _kmer_count_spectrum(reads, k; canonical = true)
+    isempty(counts) && return 0.0
+    total_occurrences = sum(values(counts))
+    distinct_kmers = length(counts)
+    return total_occurrences / distinct_kmers
+end
+
+"""
+    select_reassembly_k(reads, ceiling_k; floor_k = 7, connectivity_floor = 6.0) -> Int
+
+Choose a re-assembly k for corrected `reads`, bounded by `[floor_k, ceiling_k]`,
+using a COVERAGE-AWARE CONNECTIVITY criterion. Iterating candidates DESCENDING from
+`ceiling_k`, return the LARGEST candidate whose
+`median_solid_kmer_multiplicity(reads, k) >= connectivity_floor` — the highest
+specificity whose genomic backbone still recurs enough to keep the corrected-read de
+Bruijn graph connected. If none qualifies, fall back to the smallest prime `>= floor_k`.
+
+This measures backbone coverage `C·(1-e)^k` DIRECTLY (median of the solid k-mer peak)
+rather than estimating `C` and `e` separately (avoids the circularity in a
+residual-error → survival-model chain):
+
+- Clean / well-corrected reads (Illumina): the solid backbone recurs ~coverage even
+  at the ceiling (median-solid ~12 ≫ floor), so the ceiling is honored — byte-identical
+  to legacy behavior, preserving the corrector's final-pass graph-reuse eligibility
+  (which requires `reassembly_k == final_graph_k`).
+- Shattered high-error long reads (nanopore): the backbone barely survives at high
+  `k` (median-solid ~3 < floor), so `k` DROPS to a lower prime that stays connected.
+
+The ceiling is the caller's explicit k (kept as-is even if non-prime, e.g. 21);
+drop-down targets are primes (the `:scalable` k-ladder is prime), so the chosen k is
+prime whenever it adapts and always lies in `[floor_k, ceiling_k]`.
+
+CALIBRATION (td-jt7r): the connectivity floor is 6.0, NOT the 2.0 first proposed.
+Measured backbone coverage sits at ~12 for a well-covered corrected regime and at
+~3–4 for a shattered one; a floor of 2.0 fails to trip on the shattered regime (3 > 2)
+so it never adapts, and a floor near ~12 would clip the well-covered regime. 6.0 sits
+between the two clusters with margin on both sides (well-covered ÷2, shattered ×2).
+Separately, the measure MUST be canonical (see `median_solid_kmer_multiplicity`) or
+both-strand read sets spuriously adapt.
+"""
+function select_reassembly_k(
+        reads,
+        ceiling_k::Int;
+        floor_k::Int = 7,
+        connectivity_floor::Float64 = 6.0
+)::Int
     effective_floor = min(floor_k, ceiling_k)
-    target_k = clamp(survival_k, effective_floor, ceiling_k)
-    return clamp(_largest_prime_at_most(target_k), min(effective_floor, target_k), ceiling_k)
+    # The ceiling is the caller's explicit k (may be non-prime, e.g. 21) and is the
+    # top candidate — honored UNCHANGED when clean/high-coverage reads keep it
+    # connected, so clean/Illumina behavior stays byte-identical and graph-reuse
+    # (which needs reassembly_k == final_graph_k) stays eligible. DROP-DOWN targets
+    # are primes strictly below the ceiling (the :scalable k-ladder is prime).
+    lower_primes = filter(<(ceiling_k), _dynamic_k_search_space(effective_floor, ceiling_k))
+    candidates = vcat(lower_primes, ceiling_k)   # ascending; ceiling is the largest
+    # Descend from the ceiling: the LARGEST candidate whose solid backbone still meets
+    # the connectivity floor is the most specific k that keeps the graph joined.
+    for k in Iterators.reverse(candidates)
+        if median_solid_kmer_multiplicity(reads, k) >= connectivity_floor
+            return k
+        end
+    end
+    # Nothing qualifies (very low coverage / very high error): the smallest prime
+    # >= floor stays maximally connected.
+    return first(candidates)
 end
