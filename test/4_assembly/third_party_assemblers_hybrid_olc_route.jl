@@ -64,6 +64,28 @@ Test.@testset "hybrid-OLC route (a) end-to-end (td-yymj)" begin
                 Test.@test asm.assembly_stats["layout"] == "olc"
                 Test.@test asm.assembly_stats["olc_tool"] == "megahit"
                 Test.@test asm.assembly_stats["corrected_read_count"] > 0
+                # Ephemeral contract (output_dir unset): the corrected FASTQ the
+                # route persisted (stamped into stats) must be CLEANED after the run.
+                Test.@test !isfile(asm.assembly_stats["corrected_fastq"])
+            end
+
+            Test.@testset "layout=:olc output_dir persists artifacts" begin
+                # Caller-owned output_dir: the corrected FASTQ + the assembler output
+                # dir must SURVIVE the run for the Stage-2 handoff (not cleaned).
+                outdir = mktempdir()
+                config = R.AssemblyConfig(; k = 13, corrector = :iterative,
+                    strategy = :scalable, sequencing_tech = :illumina,
+                    layout = :olc, olc_tool = :megahit, output_dir = outdir,
+                    olc_options = (; k_list = "21", threads = threads))
+                asm = R.assemble_genome(reads, config)
+                Test.@test asm isa R.AssemblyResult
+                Test.@test !isempty(asm.contigs)
+                # Corrected FASTQ persisted at the fixed path, left in place.
+                Test.@test isfile(joinpath(outdir, "corrected.fastq"))
+                Test.@test asm.assembly_stats["corrected_fastq"] ==
+                           joinpath(outdir, "corrected.fastq")
+                # Assembler output dir survives too.
+                Test.@test isdir(joinpath(outdir, "olc_megahit"))
             end
         end
     end

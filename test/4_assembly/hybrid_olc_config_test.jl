@@ -93,4 +93,34 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
         Test.@test_throws ErrorException R._run_olc_tool(:flye, "unused.fastq",
             mktempdir(), cfg)
     end
+
+    Test.@testset "discoverability + incompatibility warnings" begin
+        # olc_tool/olc_options are inert unless layout=:olc → warn (mirrors the
+        # output_dir/skip_solid inert-field warnings). match_mode=:any tolerates
+        # other construction-time logs.
+        Test.@test_logs (:warn, r"only used when layout=:olc") R.AssemblyConfig(;
+            k = 13, olc_tool = :megahit)  # layout defaults to :native → inert → warn
+        Test.@test_logs (:warn, r"only used when layout=:olc") R.AssemblyConfig(;
+            k = 13, olc_options = (; threads = 4))  # non-empty olc_options under :native → warn
+        # metaspades needs paired-end; the single-end corrected handoff will fail →
+        # warn at construction (kept selectable, per follow-on paired-end support).
+        Test.@test_logs (:warn, r"expects paired-end") R.AssemblyConfig(;
+            k = 13, corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :metaspades, sequencing_tech = :illumina)
+    end
+
+    Test.@testset "olc_options reserved-key rejection" begin
+        # Route-managed keys cannot be overridden via olc_options (they would
+        # redirect the assembler / break cleanup / bypass the corrected handoff).
+        for k in (:fastq1, :fastq2, :fastq, :outdir, :out_dir, :executor)
+            Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
+                corrector = :iterative, strategy = :scalable, layout = :olc,
+                sequencing_tech = :illumina,
+                olc_options = NamedTuple{(k,)}(("x",)))
+        end
+        # A non-reserved key is accepted.
+        Test.@test R.AssemblyConfig(; k = 13, corrector = :iterative,
+            strategy = :scalable, layout = :olc, sequencing_tech = :illumina,
+            olc_options = (; k_list = "21")) isa R.AssemblyConfig
+    end
 end
