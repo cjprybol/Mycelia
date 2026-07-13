@@ -34,6 +34,47 @@ Test.@testset "Stage-2 frozen seed partitions" begin
     )
 end
 
+Test.@testset "Stage-2 owner-aware ledger locks" begin
+    mktempdir() do directory
+        stale_lock_path = joinpath(directory, "stale.lock")
+        write(stale_lock_path, "0 $(Base.gethostname())")
+        Base.sleep(0.02)
+        reclaimed = _acquire_stage2_ledger_lock(
+            stale_lock_path,
+            joinpath(directory, "ledger.tsv"),
+            "attempt ledger is locked";
+            stale_age_seconds = 0.001,
+        )
+        Test.@test isfile(stale_lock_path)
+        Base.close(reclaimed)
+        Test.@test !ispath(stale_lock_path)
+
+        live_lock_path = joinpath(directory, "live.lock")
+        live = _acquire_stage2_ledger_lock(
+            live_lock_path,
+            joinpath(directory, "ledger.tsv"),
+            "attempt ledger is locked";
+            stale_age_seconds = 60.0,
+        )
+        try
+            _test_stage2_forensics_error(
+                ErrorException,
+                "attempt ledger is locked:",
+            ) do
+                _acquire_stage2_ledger_lock(
+                    live_lock_path,
+                    joinpath(directory, "ledger.tsv"),
+                    "attempt ledger is locked";
+                    stale_age_seconds = 60.0,
+                )
+            end
+        finally
+            Base.close(live)
+        end
+        Test.@test !ispath(live_lock_path)
+    end
+end
+
 Test.@testset "Stage-2 FASTA and FASTQ length summaries" begin
     mktempdir() do directory
         fasta_path = joinpath(directory, "records.fasta")

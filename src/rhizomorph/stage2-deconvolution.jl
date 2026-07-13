@@ -294,6 +294,18 @@ function _release_unreusable_stage2_graph!(
     return nothing
 end
 
+function _stage2_transition_index_and_release_graph!(
+        result_dict::AbstractDict,
+        graph::MetaGraphsNext.MetaGraph,
+        k::Int
+)::TransitionLikelihoodIndex
+    try
+        return _transition_likelihood_index(graph, k)
+    finally
+        _release_unreusable_stage2_graph!(result_dict)
+    end
+end
+
 function _merge_stage2_graph_chunk(
         graph::Union{Nothing, MetaGraphsNext.MetaGraph},
         records::Vector{FASTX.FASTQ.Record},
@@ -388,7 +400,13 @@ function _prepare_stage2_inputs(
         graph = _build_stage2_graph_from_fastq(
             stage1.corrected_fastq, graph_k)
     end
-    index = _transition_likelihood_index(graph, graph_k)
+    index = _stage2_transition_index_and_release_graph!(
+        stage1.result_dict, graph, graph_k)
+    # The compact transition index is the only graph-derived state Stage-2
+    # needs after preparation. Release both reusable and rebuilt full graphs
+    # before launching memory-intensive external layout/phasing processes.
+    graph = nothing
+    GC.gc()
     return (;
         corrected_fastq = stage1.corrected_fastq,
         corrected_read_count = stage1.corrected_read_count,
@@ -684,6 +702,30 @@ function _stage2_support_coverages(
     return coverages
 end
 
+function _validate_unique_stage2_fastq_identifiers(
+        fastq_path::AbstractString
+)::Int
+    isfile(fastq_path) || error(
+        "support FASTQ does not exist: $(fastq_path)")
+    identifiers = Set{String}()
+    n_records = open(FASTX.FASTQ.Reader, fastq_path) do reader
+        count = 0
+        for record in reader
+            identifier = String(FASTX.identifier(record))
+            isempty(identifier) && error(
+                "support FASTQ contains an empty read identifier")
+            identifier in identifiers && error(
+                "support FASTQ contains duplicate read identifier: " *
+                identifier)
+            push!(identifiers, identifier)
+            count += 1
+        end
+        return count
+    end
+    n_records > 0 || error("support FASTQ contains no reads: $(fastq_path)")
+    return n_records
+end
+
 """
 Legacy first-slice best-hit support used by the existing production route.
 
@@ -698,6 +740,8 @@ function _read_support_coverages(
 )::Dict{String, Float64}
     isfile(fastq) || error("support FASTQ does not exist: $(fastq)")
     threads > 0 || throw(ArgumentError("threads must be positive"))
+    _validate_unique_stage2_fastq_identifiers(fastq)
+    GC.gc()
     mktempdir() do directory
         candidates = joinpath(directory, "candidates.fasta")
         open(candidates, "w") do io
@@ -992,6 +1036,8 @@ function deconvolve_stage2(
         "path_grouping_status" => "not-implemented",
         "strain_count_inference_status" => "not-implemented",
         "abundance_method" => "legacy-best-hit-minimap2",
+        "support_read_identifier_contract" =>
+            "unique-fastq-identifiers-validated",
         "probabilistic_abundance_status" => "available-requires-calibrated-likelihoods",
         "graph_k" => graph_k,
         "graph_source" => prepared.graph_source,

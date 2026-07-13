@@ -86,6 +86,12 @@ Test.@testset "Stage-2 transition scoring and segment-candidate ranking" begin
         "AACCGG", graph_index)
     Test.@test graph_score.scored_fraction == 1.0
     Test.@test isfinite(graph_score.mean_log2_probability)
+    retained_graph = Dict{Symbol, Any}(:final_graph => graph)
+    released_index =
+        Mycelia.Rhizomorph._stage2_transition_index_and_release_graph!(
+            retained_graph, graph, 2)
+    Test.@test released_index.log2_probability == graph_index.log2_probability
+    Test.@test !haskey(retained_graph, :final_graph)
 
     mktempdir() do dir
         fastq = joinpath(dir, "reads.fastq")
@@ -205,9 +211,6 @@ Test.@testset "Stage-2 transition scoring and segment-candidate ranking" begin
         Test.@test read(
             joinpath(first_attempt.attempt_output_dir, "marker"), String) == "first"
 
-        retained_graph = Dict{Symbol, Any}(:final_graph => first_attempt)
-        Mycelia.Rhizomorph._release_unreusable_stage2_graph!(retained_graph)
-        Test.@test !haskey(retained_graph, :final_graph)
     end
 
     mktempdir() do dir
@@ -368,6 +371,27 @@ Test.@testset "Stage-2 GFA and PAF validation" begin
             sprint(showerror, exception)
         end
         Test.@test occursin("zero total mapped support", zero_message)
+
+        unique_fastq = joinpath(directory, "unique.fastq")
+        write(
+            unique_fastq,
+            "@read1\nAACC\n+\nIIII\n@read2\nAATC\n+\nIIII\n",
+        )
+        Test.@test Mycelia.Rhizomorph._validate_unique_stage2_fastq_identifiers(
+            unique_fastq) == 2
+        duplicate_fastq = joinpath(directory, "duplicate.fastq")
+        write(
+            duplicate_fastq,
+            "@duplicate lane1\nAACC\n+\nIIII\n" *
+            "@duplicate lane2\nAATC\n+\nIIII\n",
+        )
+        _test_stage2_deconvolution_error(
+            ErrorException,
+            "support FASTQ contains duplicate read identifier: duplicate",
+        ) do
+            Mycelia.Rhizomorph._validate_unique_stage2_fastq_identifiers(
+                duplicate_fastq)
+        end
     end
 end
 

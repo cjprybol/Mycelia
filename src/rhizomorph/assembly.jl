@@ -151,8 +151,8 @@ struct AssemblyConfig
 
     # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
     # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
-    #   hard-read gating + soft-EM edge memory (record-only v1). Built for
-    #   real-scale inputs.
+    #   hard-read gating + soft-EM v2 competing-path responsibilities and an
+    #   M-step support floor. Built for real-scale inputs.
     # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
     #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
     #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
@@ -933,8 +933,9 @@ routing can be unit-tested without running the (slow) corrector.
 - `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
   skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
   linear single-substitution fix before the decode), hard-read gating (Stage 3,
-  now narrowed to bubble/repeat vertices only), soft-EM edge memory (Stage 2,
-  record-only v1), the size-aware auto-beam (`beam_width=nothing`), and
+  now narrowed to bubble/repeat vertices only), soft-EM v2 competing-path
+  responsibilities plus an M-step support floor (Stage 2), the size-aware
+  auto-beam (`beam_width=nothing`), and
   `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
   machinery and was the cause of the quality gap; the skip/classification is
   coverage-based and mode-agnostic).
@@ -1420,8 +1421,9 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             get(corrector_errors, :trace_contract_errors, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
-        # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
-        # :exhaustive), never a bare `true` (FIX 1/5).
+        # soft-EM v2 runs competing-path E- and support-floored M-steps, so the
+        # stamped value is "v2-competing-paths-floor" (or false on
+        # :exhaustive), never a bare `true`.
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])

@@ -1,6 +1,7 @@
 import CodecZlib
 import Dates
 import FASTX
+import FileWatching
 import Random
 import SHA
 import Statistics
@@ -46,6 +47,10 @@ const STAGE2_TERMINAL_ATTEMPT_STATUSES = (:passed, :failed, :error)
 const STAGE2_ATTEMPT_STATUSES = (:reserved, STAGE2_TERMINAL_ATTEMPT_STATUSES...)
 const STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_ATTEMPTS = 500
 const STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_DELAY_SECONDS = 0.01
+# Live owners refresh every 15 minutes. A dead same-host owner becomes
+# reclaimable after 30 minutes; FileWatching conservatively waits up to 5x
+# longer when it cannot disprove a remote-host owner.
+const STAGE2_LEDGER_LOCK_STALE_SECONDS = 30 * 60
 const STAGE2_MODALITIES = (
     :long_noisy,
     :long_accurate,
@@ -54,6 +59,20 @@ const STAGE2_MODALITIES = (
     :hybrid_ont_short,
     :hybrid_hifi_ont,
 )
+
+function _acquire_stage2_ledger_lock(
+        lock_path::AbstractString,
+        ledger_path::AbstractString,
+        lock_error_prefix::AbstractString;
+        stale_age_seconds::Real = STAGE2_LEDGER_LOCK_STALE_SECONDS,
+)::FileWatching.Pidfile.LockMonitor
+    isfinite(stale_age_seconds) && stale_age_seconds > 0 || throw(
+        ArgumentError("stale_age_seconds must be finite and positive"))
+    lock = FileWatching.Pidfile.trymkpidlock(
+        String(lock_path); stale_age = Float64(stale_age_seconds))
+    lock === false && error("$(lock_error_prefix): $(ledger_path)")
+    return lock
+end
 
 """Length-only summary of the records in one FASTA or FASTQ file."""
 struct RecordLengthSummary
@@ -1687,11 +1706,8 @@ function seal_stage2_development_ledger!(
     canonical_fixture_path = abspath(normpath(String(fixture_path)))
     output = stage2_development_freeze_path(ledger_path)
     lock_path = ledger_path * ".lock"
-    try
-        mkdir(lock_path)
-    catch
-        error("development ledger is locked: $(ledger_path)")
-    end
+    ledger_lock = _acquire_stage2_ledger_lock(
+        lock_path, ledger_path, "development ledger is locked")
     try
         for (artifact_path, expected_sha256, label) in (
                 (canonical_manifest_path, manifest_sha256, "manifest"),
@@ -1777,7 +1793,7 @@ function seal_stage2_development_ledger!(
             stage2_file_sha256(output),
         )
     finally
-        rm(lock_path; force = true, recursive = true)
+        Base.close(ledger_lock)
     end
 end
 
@@ -2200,11 +2216,11 @@ function evaluate_stage2_release_gate(;
     development_path = abspath(normpath(String(development_ledger_path)))
     confirmation_path = stage2_confirmation_ledger_path(development_path)
     development_lock = development_path * ".lock"
-    try
-        mkdir(development_lock)
-    catch
-        error("development ledger is locked: $(development_path)")
-    end
+    development_lock_monitor = _acquire_stage2_ledger_lock(
+        development_lock,
+        development_path,
+        "development ledger is locked",
+    )
     try
         freeze_path = stage2_development_freeze_path(development_path)
         freeze = load_stage2_development_freeze(freeze_path)
@@ -2247,11 +2263,11 @@ function evaluate_stage2_release_gate(;
             development_path, last(development_rows), manifest_file)
 
         confirmation_lock = confirmation_path * ".lock"
-        try
-            mkdir(confirmation_lock)
-        catch
-            error("confirmation ledger is locked: $(confirmation_path)")
-        end
+        confirmation_lock_monitor = _acquire_stage2_ledger_lock(
+            confirmation_lock,
+            confirmation_path,
+            "confirmation ledger is locked",
+        )
         try
             confirmation_sha256 = stage2_file_sha256(confirmation_path)
             rows = load_stage2_attempt_ledger(
@@ -2428,10 +2444,10 @@ function evaluate_stage2_release_gate(;
                 diagnostic_result_sha256 = diagnostic_hashes,
             )
         finally
-            rm(confirmation_lock; force = true, recursive = true)
+            Base.close(confirmation_lock_monitor)
         end
     finally
-        rm(development_lock; force = true, recursive = true)
+        Base.close(development_lock_monitor)
     end
 end
 
@@ -2633,17 +2649,14 @@ function append_stage2_attempt!(
     parent = dirname(ledger_path)
     isempty(parent) || mkpath(parent)
     lock_path = ledger_path * ".lock"
-    try
-        mkdir(lock_path)
-    catch
-        error("attempt ledger is locked: $(ledger_path)")
-    end
+    ledger_lock = _acquire_stage2_ledger_lock(
+        lock_path, ledger_path, "attempt ledger is locked")
     try
         isfile(stage2_development_freeze_path(ledger_path)) &&
             error("development ledger is sealed by its canonical freeze")
         return _append_stage2_attempt_locked!(ledger_path, row)
     finally
-        rm(lock_path; force = true, recursive = true)
+        Base.close(ledger_lock)
     end
 end
 
@@ -2664,20 +2677,20 @@ function append_stage2_confirmation_attempt!(
     confirmation_path = stage2_confirmation_ledger_path(development_path)
     mkpath(dirname(confirmation_path))
     development_lock = development_path * ".lock"
-    try
-        mkdir(development_lock)
-    catch
-        error("development ledger is locked: $(development_path)")
-    end
+    development_lock_monitor = _acquire_stage2_ledger_lock(
+        development_lock,
+        development_path,
+        "development ledger is locked",
+    )
     try
         freeze = _validate_confirmation_freeze_locked(row, development_path)
         _validate_confirmation_reservation_preflight(row, freeze)
         confirmation_lock = confirmation_path * ".lock"
-        try
-            mkdir(confirmation_lock)
-        catch
-            error("attempt ledger is locked: $(confirmation_path)")
-        end
+        confirmation_lock_monitor = _acquire_stage2_ledger_lock(
+            confirmation_lock,
+            confirmation_path,
+            "attempt ledger is locked",
+        )
         try
             existing_rows = isfile(confirmation_path) ?
                             load_stage2_attempt_ledger(
@@ -2691,10 +2704,10 @@ function append_stage2_confirmation_attempt!(
                 allow_existing_attempt_id,
             )
         finally
-            rm(confirmation_lock; force = true, recursive = true)
+            Base.close(confirmation_lock_monitor)
         end
     finally
-        rm(development_lock; force = true, recursive = true)
+        Base.close(development_lock_monitor)
     end
 end
 
