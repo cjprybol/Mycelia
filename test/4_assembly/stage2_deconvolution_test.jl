@@ -21,11 +21,28 @@ Test.@testset "Stage-2 transition scoring and variant ranking" begin
     high = Mycelia.Rhizomorph._score_variant_sequence("AACCGG", index)
     medium = Mycelia.Rhizomorph._score_variant_sequence("AATCGG", index)
     unsupported = Mycelia.Rhizomorph._score_variant_sequence("TTTTTT", index)
+    partially_supported = Mycelia.Rhizomorph._score_variant_sequence("AACCGT", index)
+    ambiguous = Mycelia.Rhizomorph._score_variant_sequence("AACNGG", index)
+    Test.@test keytype(index.log2_probability) == UInt64
     Test.@test high.scored_fraction == 1.0
     Test.@test medium.scored_fraction == 1.0
     Test.@test high.mean_log2_probability > medium.mean_log2_probability
     Test.@test unsupported.scored_fraction == 0.0
     Test.@test unsupported.mean_log2_probability == -Inf
+    Test.@test partially_supported.scored_fraction == 0.75
+    Test.@test partially_supported.mean_log2_probability == -Inf
+    Test.@test ambiguous.scored_fraction < 1.0
+    Test.@test ambiguous.mean_log2_probability == -Inf
+
+    graph = Mycelia.Rhizomorph.build_kmer_graph(
+        [Mycelia.FASTX.FASTA.Record("candidate", "AACCGG")],
+        2;
+        mode = :doublestrand,
+    )
+    graph_index = Mycelia.Rhizomorph._transition_likelihood_index(graph, 2)
+    graph_score = Mycelia.Rhizomorph._score_variant_sequence("AACCGG", graph_index)
+    Test.@test graph_score.scored_fraction == 1.0
+    Test.@test isfinite(graph_score.mean_log2_probability)
 
     mktempdir() do dir
         gfa = joinpath(dir, "strain_unitigs.gfa")
@@ -94,14 +111,107 @@ Test.@testset "Stage-2 GFA coverage and primary agreement" begin
             Mycelia.Rhizomorph.RankedVariant(
                 2, 1, :secondary, "abundance_primary", "AACC", -1.0, 1.0, 20.0)
         ]
-        message = try
-            Mycelia.Rhizomorph._write_ranked_variants(variants, dir, 3)
-            ""
-        catch error
-            sprint(showerror, error)
-        end
-        Test.@test occursin("disagree on primary", message)
+        outputs = Mycelia.Rhizomorph._write_ranked_variants(variants, dir, 3)
+        Test.@test outputs.primary_status == :rank_disagreement
+        Test.@test outputs.likelihood_primary_id == "likelihood_primary"
+        Test.@test outputs.abundance_primary_id == "abundance_primary"
+        Test.@test occursin(
+            "status=rank_disagreement", read(outputs.primary, String))
+        Test.@test occursin("primary_status", read(outputs.tsv, String))
     end
+end
+
+Test.@testset "Stage-2 compact transition scoring allocations" begin
+    cycle = repeat("ACGT", 16)
+    index = Mycelia.Rhizomorph.TransitionLikelihoodIndex(
+        31,
+        Dict(
+            (String(cycle[index:(index + 30)]),
+                String(cycle[(index + 1):(index + 31)])) => -0.1
+            for index in 1:4
+        ),
+    )
+    sequence = repeat("ACGT", 10_000)
+    Test.@test isconcretetype(keytype(index.vertex_ids))
+    Test.@test keytype(index.log2_probability) == UInt64
+    Mycelia.Rhizomorph._score_variant_sequence(sequence, index)
+    allocations = @allocated Mycelia.Rhizomorph._score_variant_sequence(
+        sequence, index)
+    Test.@test allocations <= 1_000_000
+end
+
+Test.@testset "Stage-2 probabilistic abundance bridge" begin
+    variants = [
+        Mycelia.Rhizomorph.RankedVariant(
+            1, 1, :primary, "primary", "AACC", 0.0, 1.0, 30.0),
+        Mycelia.Rhizomorph.RankedVariant(
+            2, 2, :secondary, "secondary", "AATC", -1.0, 1.0, 20.0),
+        Mycelia.Rhizomorph.RankedVariant(
+            3, 3, :tertiary, "tertiary", "AAGC", -2.0, 1.0, 10.0)
+    ]
+    alignments = Mycelia.Rhizomorph.ReadCandidateLikelihood[
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r1", "primary", -0.01),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r1", "secondary", -4.0),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r2", "primary", -0.02),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r2", "secondary", -3.0),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r3", "secondary", -0.01),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r3", "primary", -4.0),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r4", "tertiary", -0.01),
+        Mycelia.Rhizomorph.ReadCandidateLikelihood("r4", "secondary", -3.0)
+    ]
+    noise = [
+        Mycelia.Rhizomorph.ReadNoiseLikelihood("r$(index)", -8.0)
+        for index in 1:4
+    ]
+    result = Mycelia.Rhizomorph.infer_variant_abundances(
+        variants, alignments, noise)
+    Test.@test result.inference.converged
+    Test.@test result.primary_agreement
+    Test.@test result.primary_status == :resolved
+    Test.@test length(result.candidate_set_sha256) == 64
+    Test.@test length(result.inference_input_sha256) == 64
+    Test.@test [ranking.candidate_id for ranking in result.rankings] ==
+               ["primary", "secondary", "tertiary"]
+    Test.@test isapprox(sum(ranking.abundance for ranking in result.rankings) +
+                        result.inference.noise_abundance, 1.0; atol = 1.0e-12)
+    Test.@test all(ranking -> ranking.has_alignment_support, result.rankings)
+
+    mktempdir() do directory
+        output = Mycelia.Rhizomorph.write_probabilistic_variant_ranking(
+            joinpath(directory, "posterior.tsv"), result)
+        Test.@test isfile(output)
+        table_text = read(output, String)
+        Test.@test occursin("estimated_abundance", table_text)
+        Test.@test occursin("noise_abundance", table_text)
+        Test.@test occursin("final_log_likelihood", table_text)
+        Test.@test occursin("trace_sha256", table_text)
+        Test.@test occursin("inference_input_sha256", table_text)
+        Test.@test countlines(output) == 4
+    end
+
+    tied = Mycelia.Rhizomorph.infer_variant_abundances(
+        variants,
+        [
+            Mycelia.Rhizomorph.ReadCandidateLikelihood("tie", "primary", 0.0),
+            Mycelia.Rhizomorph.ReadCandidateLikelihood("tie", "secondary", 0.0)
+        ],
+        [Mycelia.Rhizomorph.ReadNoiseLikelihood("tie", -10.0)],
+    )
+    Test.@test !tied.primary_agreement
+    Test.@test tied.primary_status == :tied
+
+    collision_left = Mycelia.Rhizomorph._stage2_inference_input_sha256(
+        Mycelia.Rhizomorph.ReadCandidateLikelihood[],
+        [Mycelia.Rhizomorph.ReadNoiseLikelihood("a\0-1.0\nnoise\0b", -2.0)],
+    )
+    collision_right = Mycelia.Rhizomorph._stage2_inference_input_sha256(
+        Mycelia.Rhizomorph.ReadCandidateLikelihood[],
+        [
+            Mycelia.Rhizomorph.ReadNoiseLikelihood("a", -1.0),
+            Mycelia.Rhizomorph.ReadNoiseLikelihood("b", -2.0),
+        ],
+    )
+    Test.@test collision_left != collision_right
 end
 
 Test.@testset "Stage-2 AssemblyConfig validation" begin
@@ -110,12 +220,11 @@ Test.@testset "Stage-2 AssemblyConfig validation" begin
         corrector = :iterative,
         strategy = :scalable,
         sequencing_tech = :nanopore,
-        layout = :olc,
-        olc_tool = :metaflye,
         output_dir = "stage2-output")
-    Test.@test config.layout == :olc
-    Test.@test config.olc_tool == :metaflye
-    Test.@test Mycelia.Rhizomorph._resolve_olc_tool(config) == :metaflye
+    Test.@test config.corrector == :iterative
+    Test.@test config.strategy == :scalable
+    Test.@test config.sequencing_tech == :nanopore
+    Test.@test config.output_dir == "stage2-output"
 
     error_message = try
         Mycelia.Rhizomorph.AssemblyConfig(;

@@ -91,6 +91,7 @@ include("variable-length/fasta-graphs.jl")
 include("variable-length/fastq-graphs.jl")
 include("variable-length/strand-conversions.jl")
 include("assembly.jl")
+include("stage2-inference.jl")
 include("stage2-deconvolution.jl")
 
 end  # module Rhizomorph

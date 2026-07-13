@@ -5,9 +5,36 @@ The index deliberately excludes read-level evidence and graph topology so the
 full corrector graph can be released before the external layout/deconvolution
 tools run.
 """
-struct TransitionLikelihoodIndex
+struct TransitionLikelihoodIndex{KmerType <: Kmers.DNAKmer}
     k::Int
-    log2_probability::Dict{Tuple{String, String}, Float64}
+    vertex_ids::Dict{KmerType, UInt32}
+    log2_probability::Dict{UInt64, Float64}
+end
+
+function _stage2_edge_key(source_id::UInt32, destination_id::UInt32)::UInt64
+    return (UInt64(source_id) << 32) | UInt64(destination_id)
+end
+
+function TransitionLikelihoodIndex(
+        k::Int,
+        probabilities::AbstractDict{
+            <:Tuple{<:AbstractString, <:AbstractString}, <:Real}
+)::TransitionLikelihoodIndex
+    k > 0 || throw(ArgumentError("k must be positive"))
+    KmerType = Kmers.derive_type(Kmers.DNAKmer{k})
+    vertex_ids = Dict{KmerType, UInt32}()
+    encoded_probabilities = Dict{UInt64, Float64}()
+    for ((source, destination), probability) in probabilities
+        source_kmer = KmerType(source)
+        destination_kmer = KmerType(destination)
+        source_id = get!(
+            vertex_ids, source_kmer, UInt32(length(vertex_ids) + 1))
+        destination_id = get!(
+            vertex_ids, destination_kmer, UInt32(length(vertex_ids) + 1))
+        encoded_probabilities[_stage2_edge_key(source_id, destination_id)] =
+            Float64(probability)
+    end
+    return TransitionLikelihoodIndex(k, vertex_ids, encoded_probabilities)
 end
 
 """
@@ -22,6 +49,163 @@ struct RankedVariant
     graph_mean_log2_probability::Float64
     scored_transition_fraction::Float64
     strainy_coverage::Float64
+end
+
+"""Fitted soft-mixture abundance attached to one Stage-2 candidate."""
+struct ProbabilisticVariantRanking
+    candidate_id::String
+    likelihood_rank::Int
+    abundance_rank::Int
+    abundance::Float64
+    expected_read_count::Float64
+    has_alignment_support::Bool
+end
+
+"""Soft abundance inference and the resulting Stage-2 primary agreement."""
+struct ProbabilisticVariantRankingResult
+    rankings::Vector{ProbabilisticVariantRanking}
+    inference::CandidateInferenceResult
+    primary_agreement::Bool
+    primary_status::Symbol
+    candidate_set_sha256::String
+    inference_input_sha256::String
+end
+
+function _stage2_candidate_set_sha256(
+        variants::AbstractVector{RankedVariant}
+)::String
+    context = Mycelia.SHA.SHA2_256_CTX()
+    integer_buffer = Vector{UInt8}(undef, 8)
+    tag_buffer = Vector{UInt8}(undef, 1)
+    order = sortperm(eachindex(variants); by = index -> variants[index].id)
+    _stage2_update_uint64!(context, integer_buffer, UInt64(length(order)))
+    for index in order
+        variant = variants[index]
+        _stage2_update_tag!(context, tag_buffer, 0x20)
+        _stage2_update_bytes!(context, integer_buffer, variant.id)
+        _stage2_update_uint64!(
+            context,
+            integer_buffer,
+            reinterpret(UInt64, Int64(variant.likelihood_rank)),
+        )
+        _stage2_update_bytes!(context, integer_buffer, variant.sequence)
+    end
+    return bytes2hex(Mycelia.SHA.digest!(context))
+end
+
+"""
+    infer_variant_abundances(variants, alignments, noise_likelihoods; config)
+
+Attach the technology-agnostic soft-EM inference core to an existing Stage-2
+candidate set. This bridge deliberately accepts calibrated log-likelihoods
+rather than manufacturing them from a best-hit alignment score. Callers must
+derive the likelihood records from an explicit read-error model.
+"""
+function infer_variant_abundances(
+        variants::AbstractVector{RankedVariant},
+        alignments::AbstractVector{ReadCandidateLikelihood},
+        noise_likelihoods::AbstractVector{ReadNoiseLikelihood};
+        config::CandidateInferenceConfig = CandidateInferenceConfig()
+)::ProbabilisticVariantRankingResult
+    isempty(variants) && throw(ArgumentError("variants must not be empty"))
+    candidate_ids = [variant.id for variant in variants]
+    length(unique(candidate_ids)) == length(candidate_ids) ||
+        throw(ArgumentError("variant identifiers must be unique"))
+    inference = infer_candidate_abundances(
+        alignments,
+        noise_likelihoods;
+        candidate_ids,
+        config,
+    )
+    inferred_by_id = Dict(candidate.candidate_id => candidate
+        for candidate in inference.candidates)
+    rankings = ProbabilisticVariantRanking[
+        ProbabilisticVariantRanking(
+            variant.id,
+            variant.likelihood_rank,
+            inferred_by_id[variant.id].rank,
+            inferred_by_id[variant.id].abundance,
+            inferred_by_id[variant.id].expected_read_count,
+            inferred_by_id[variant.id].has_alignment_support,
+        )
+        for variant in variants
+    ]
+    sort!(rankings; by = ranking -> ranking.abundance_rank)
+    likelihood_primary = only(filter(
+        ranking -> ranking.likelihood_rank == 1, rankings))
+    inferred_primary = inference.primary_candidate_id
+    primary_agreement = inferred_primary !== nothing &&
+                        likelihood_primary.candidate_id == inferred_primary
+    primary_status = if inference.primary_status != :resolved
+        inference.primary_status
+    elseif primary_agreement
+        :resolved
+    else
+        :rank_disagreement
+    end
+    return ProbabilisticVariantRankingResult(
+        rankings,
+        inference,
+        primary_agreement,
+        primary_status,
+        _stage2_candidate_set_sha256(variants),
+        inference.input_sha256,
+    )
+end
+
+"""Write the auditable fitted-abundance ranking table."""
+function write_probabilistic_variant_ranking(
+        path::AbstractString,
+        result::ProbabilisticVariantRankingResult
+)::String
+    table = DataFrames.DataFrame(
+        candidate_id = [ranking.candidate_id for ranking in result.rankings],
+        likelihood_rank = [ranking.likelihood_rank for ranking in result.rankings],
+        abundance_rank = [ranking.abundance_rank for ranking in result.rankings],
+        estimated_abundance = [ranking.abundance for ranking in result.rankings],
+        expected_read_count = [ranking.expected_read_count for ranking in result.rankings],
+        noise_abundance = fill(
+            result.inference.noise_abundance, length(result.rankings)),
+        noise_expected_read_count = fill(
+            result.inference.noise_expected_read_count, length(result.rankings)),
+        has_alignment_support = [
+            ranking.has_alignment_support for ranking in result.rankings],
+        primary_agreement = fill(result.primary_agreement, length(result.rankings)),
+        primary_status = fill(String(result.primary_status), length(result.rankings)),
+        inference_converged = fill(
+            result.inference.converged, length(result.rankings)),
+        inference_iterations = fill(
+            result.inference.iterations, length(result.rankings)),
+        final_log_likelihood = fill(
+            result.inference.final_log_likelihood, length(result.rankings)),
+        n_reads = fill(result.inference.n_reads, length(result.rankings)),
+        n_alignments = fill(
+            result.inference.n_alignments, length(result.rankings)),
+        n_active_pairs = fill(
+            result.inference.n_active_pairs, length(result.rankings)),
+        max_iterations = fill(
+            result.inference.config.max_iterations, length(result.rankings)),
+        abundance_tolerance = fill(
+            result.inference.config.abundance_tolerance, length(result.rankings)),
+        primary_tolerance = fill(
+            result.inference.config.primary_tolerance, length(result.rankings)),
+        retain_full_trace = fill(
+            result.inference.config.retain_full_trace, length(result.rankings)),
+        trace_sha256 = fill(
+            result.inference.trace_sha256, length(result.rankings)),
+        candidate_set_sha256 = fill(
+            result.candidate_set_sha256, length(result.rankings)),
+        inference_input_sha256 = fill(
+            result.inference_input_sha256, length(result.rankings)),
+    )
+    output = String(path)
+    mkpath(dirname(output))
+    mktemp(dirname(output)) do temporary_path, stream
+        close(stream)
+        CSV.write(temporary_path, table; delim = '\t')
+        mv(temporary_path, output; force = true)
+    end
+    return output
 end
 
 """
@@ -45,14 +229,29 @@ function _prepare_stage2_inputs(
 )::NamedTuple where {R}
     stage1 = _run_stage1_correction(
         reads, config; materialize_corrected_reads = false)
+    metadata = stage1.result_dict[:metadata]
     graph = get(stage1.result_dict, :final_graph, nothing)
-    graph_k = get(stage1.result_dict[:metadata], :final_graph_k, stage1.max_k)
-    graph_k isa Int || (graph_k = stage1.max_k)
-    graph_source = "stage1-final"
-    if graph === nothing
-        graph_source = "corrected-fastq-rebuild"
+    recorded_graph_k = get(metadata, :final_graph_k, stage1.max_k)
+    graph_k = recorded_graph_k isa Int && recorded_graph_k > 0 ?
+              recorded_graph_k : stage1.max_k
+    reusable = get(metadata, :final_graph_reusable, false) === true
+    graph_mode = get(metadata, :final_graph_mode, nothing)
+    can_reuse_graph = graph !== nothing && reusable &&
+                      recorded_graph_k == graph_k && graph_mode == :doublestrand
+    rebuild_reasons = String[]
+    graph === nothing && push!(rebuild_reasons, "final-graph-absent")
+    reusable || push!(rebuild_reasons, "final-graph-not-byte-identical")
+    recorded_graph_k == graph_k || push!(rebuild_reasons, "invalid-final-graph-k")
+    graph_mode == :doublestrand || push!(rebuild_reasons, "non-doublestrand-final-graph")
+    graph_source = can_reuse_graph ? "stage1-final" : "corrected-fastq-rebuild"
+    if !can_reuse_graph
         graph = open(FASTX.FASTQ.Reader, stage1.corrected_fastq) do reader
-            build_kmer_graph(collect(reader), graph_k; mode = :doublestrand)
+            build_kmer_graph(
+                collect(reader),
+                graph_k;
+                mode = :doublestrand,
+                memory_profile = :ultralight_quality,
+            )
         end
     end
     index = _transition_likelihood_index(graph, graph_k)
@@ -60,6 +259,8 @@ function _prepare_stage2_inputs(
         corrected_fastq = stage1.corrected_fastq,
         corrected_read_count = stage1.corrected_read_count,
         graph_source,
+        graph_rebuild_reason =
+            can_reuse_graph ? nothing : join(rebuild_reasons, ","),
         graph_k,
         index)
 end
@@ -68,45 +269,94 @@ function _transition_likelihood_index(
         graph::MetaGraphsNext.MetaGraph,
         k::Int
 )::TransitionLikelihoodIndex
-    outgoing = Dict{String, Float64}()
-    weights = Dict{Tuple{String, String}, Float64}()
-    for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        src_string = string(src)
-        dst_string = string(dst)
-        weight = _edge_transition_weight(graph[src, dst])
-        weights[(src_string, dst_string)] = weight
-        outgoing[src_string] = get(outgoing, src_string, 0.0) + weight
+    base_graph = graph.graph
+    n_vertices = Graphs.nv(base_graph)
+    n_vertices > 0 || error("cannot index an empty Stage-1 graph")
+    n_vertices <= typemax(UInt32) ||
+        error("Stage-1 graph has too many vertices for the compact index")
+    first_code = first(Graphs.vertices(base_graph))
+    first_label = MetaGraphsNext.label_for(graph, first_code)
+    KmerType = typeof(first_label)
+    KmerType <: Kmers.DNAKmer ||
+        error("Stage-1 transition index requires DNA k-mer graph labels")
+    length(first_label) == k ||
+        error("Stage-1 graph label length differs from graph_k")
+    vertex_ids = Dict{KmerType, UInt32}()
+    sizehint!(vertex_ids, n_vertices)
+    for code in Graphs.vertices(base_graph)
+        vertex_ids[MetaGraphsNext.label_for(graph, code)] = UInt32(code)
+    end
+    outgoing = zeros(Float64, n_vertices)
+    probabilities = Dict{UInt64, Float64}()
+    sizehint!(probabilities, Graphs.ne(base_graph))
+    for edge in Graphs.edges(base_graph)
+        source_code = Graphs.src(edge)
+        destination_code = Graphs.dst(edge)
+        source_label = MetaGraphsNext.label_for(graph, source_code)
+        destination_label = MetaGraphsNext.label_for(graph, destination_code)
+        weight = _edge_transition_weight(graph[source_label, destination_label])
+        isfinite(weight) && weight > 0.0 ||
+            error("Stage-1 graph contains a nonpositive transition weight")
+        source_id = UInt32(source_code)
+        destination_id = UInt32(destination_code)
+        outgoing[Int(source_id)] += weight
+        probabilities[_stage2_edge_key(source_id, destination_id)] = weight
     end
 
-    probabilities = Dict{Tuple{String, String}, Float64}()
-    for (edge, weight) in weights
-        total = get(outgoing, edge[1], 0.0)
+    for (edge, weight) in probabilities
+        source_id = UInt32(edge >> 32)
+        total = outgoing[Int(source_id)]
         total > 0.0 || continue
         probabilities[edge] = log2(weight / total)
     end
-    return TransitionLikelihoodIndex(k, probabilities)
+    return TransitionLikelihoodIndex(k, vertex_ids, probabilities)
 end
 
 function _score_variant_sequence(
         sequence::AbstractString,
         index::TransitionLikelihoodIndex
 )::NamedTuple{(:mean_log2_probability, :scored_fraction), Tuple{Float64, Float64}}
-    n_transitions = length(sequence) - index.k
+    return _score_variant_sequence(sequence, index, Val(index.k))
+end
+
+function _score_variant_sequence(
+        sequence::AbstractString,
+        index::TransitionLikelihoodIndex{KmerType},
+        ::Val{K}
+)::NamedTuple{(:mean_log2_probability, :scored_fraction), Tuple{Float64, Float64}} where {
+        KmerType <: Kmers.DNAKmer, K}
+    dna_sequence = try
+        BioSequences.LongDNA{4}(sequence)
+    catch exception
+        throw(ArgumentError(
+            "variant sequence is not valid DNA: $(sprint(showerror, exception))"))
+    end
+    n_transitions = length(dna_sequence) - K
     n_transitions > 0 || return (mean_log2_probability = -Inf, scored_fraction = 0.0)
 
     score = 0.0
     n_scored = 0
-    for i in 1:n_transitions
-        src = String(sequence[i:(i + index.k - 1)])
-        dst = String(sequence[(i + 1):(i + index.k)])
-        edge_score = get(index.log2_probability, (src, dst), nothing)
-        if edge_score !== nothing
-            score += edge_score
-            n_scored += 1
+    previous_kmer = nothing
+    previous_position = 0
+    for (kmer, position) in Kmers.UnambiguousDNAMers{K}(dna_sequence)
+        if previous_kmer !== nothing && position == previous_position + 1
+            source_id = get(index.vertex_ids, previous_kmer, UInt32(0))
+            destination_id = get(index.vertex_ids, kmer, UInt32(0))
+            edge_score = get(
+                index.log2_probability,
+                _stage2_edge_key(source_id, destination_id),
+                nothing,
+            )
+            if source_id != 0 && destination_id != 0 && edge_score !== nothing
+                score += edge_score
+                n_scored += 1
+            end
         end
+        previous_kmer = kmer
+        previous_position = position
     end
     fraction = n_scored / n_transitions
-    mean_score = n_scored == 0 ? -Inf : score / n_scored
+    mean_score = n_scored == n_transitions ? score / n_transitions : -Inf
     return (mean_log2_probability = mean_score, scored_fraction = fraction)
 end
 
@@ -142,7 +392,10 @@ function _find_column(
         candidates::Vector{String},
         purpose::String
 )::String
-    lookup = Dict(lowercase(String(name)) => String(name) for name in DataFrames.names(table))
+    lookup = Dict(
+        lowercase(String(name)) => String(name)
+        for name in DataFrames.names(table)
+    )
     for candidate in candidates
         haskey(lookup, candidate) && return lookup[candidate]
     end
@@ -167,6 +420,13 @@ function _strainy_coverages(path::String)::Dict{String, Float64}
     return coverages
 end
 
+"""
+Legacy first-slice best-hit support used by the existing production route.
+
+This is retained only until a calibrated read-candidate likelihood builder is
+wired to [`infer_variant_abundances`](@ref). It must not be described as
+probabilistic abundance inference.
+"""
 function _read_support_coverages(
         records::Dict{String, NamedTuple},
         fastq::String,
@@ -181,7 +441,8 @@ function _read_support_coverages(
                 println(io, record.sequence)
             end
         end
-        command = `$(Mycelia.CONDA_RUNNER) run -n strainy minimap2 -x map-ont -t $(threads) $(candidates) $(fastq)`
+        command = `$(Mycelia.CONDA_RUNNER) run -n strainy minimap2 -x map-ont
+            -t $(threads) $(candidates) $(fastq)`
         paf = read(command, String)
         best = Dict{String, Tuple{Int, String, Int}}()
         for line in eachline(IOBuffer(paf))
@@ -245,15 +506,28 @@ function _rank_stage2_variants(
             strainy_coverage = Float64(coverage)
         ))
     end
-    likelihood_order = sort(copy(candidates);
-        by = candidate -> (-candidate.graph_mean_log2_probability,
-            -candidate.strainy_coverage, -length(candidate.sequence), candidate.id))
-    abundance_order = sort(copy(candidates);
-        by = candidate -> (-candidate.strainy_coverage,
-            -candidate.graph_mean_log2_probability, -length(candidate.sequence), candidate.id))
+    likelihood_order = sort(
+        copy(candidates);
+        by = candidate -> (
+            -candidate.graph_mean_log2_probability,
+            -candidate.strainy_coverage,
+            -length(candidate.sequence),
+            candidate.id,
+        ),
+    )
+    abundance_order = sort(
+        copy(candidates);
+        by = candidate -> (
+            -candidate.strainy_coverage,
+            -candidate.graph_mean_log2_probability,
+            -length(candidate.sequence),
+            candidate.id,
+        ),
+    )
     length(likelihood_order) >= max_variants ||
-        error("Stage-2 produced only $(length(likelihood_order)) graph-supported variants; " *
-              "$(max_variants) required")
+        error(
+            "Stage-2 produced only $(length(likelihood_order)) " *
+            "graph-supported variants; $(max_variants) required")
     likelihood_rank = Dict(candidate.id => rank
         for (rank, candidate) in enumerate(likelihood_order))
     abundance_rank = Dict(candidate.id => rank
@@ -277,9 +551,8 @@ function _write_ranked_variants(
     mkpath(output_dir)
     likelihood_primary = only(filter(variant -> variant.likelihood_rank == 1, variants))
     abundance_primary = only(filter(variant -> variant.abundance_rank == 1, variants))
-    likelihood_primary.id == abundance_primary.id ||
-        error("likelihood and abundance rankings disagree on primary: " *
-              "$(likelihood_primary.id) != $(abundance_primary.id)")
+    primary_status = likelihood_primary.id == abundance_primary.id ?
+                     :resolved : :rank_disagreement
     primary = joinpath(output_dir, "primary_consensus.fasta")
     likelihood_fasta = joinpath(output_dir, "ranked_variants_likelihood.fasta")
     abundance_fasta = joinpath(output_dir, "ranked_variants_abundance.fasta")
@@ -300,7 +573,11 @@ function _write_ranked_variants(
     end
     open(primary, "w") do io
         variant = likelihood_primary
-        println(io, ">primary|id=$(variant.id)")
+        println(
+            io,
+            ">primary|id=$(variant.id)|status=$(primary_status)|" *
+            "abundance_primary_id=$(abundance_primary.id)",
+        )
         println(io, variant.sequence)
     end
     table = DataFrames.DataFrame(
@@ -313,10 +590,21 @@ function _write_ranked_variants(
             [variant.graph_mean_log2_probability for variant in variants],
         scored_transition_fraction =
             [variant.scored_transition_fraction for variant in variants],
-        strainy_coverage = [variant.strainy_coverage for variant in variants]
+        strainy_coverage = [variant.strainy_coverage for variant in variants],
+        primary_status = fill(String(primary_status), length(variants)),
+        likelihood_primary_id = fill(likelihood_primary.id, length(variants)),
+        abundance_primary_id = fill(abundance_primary.id, length(variants)),
     )
     CSV.write(tsv, table; delim = '\t')
-    return (; primary, likelihood_fasta, abundance_fasta, tsv)
+    return (;
+        primary,
+        likelihood_fasta,
+        abundance_fasta,
+        tsv,
+        primary_status,
+        likelihood_primary_id = likelihood_primary.id,
+        abundance_primary_id = abundance_primary.id,
+    )
 end
 
 """
@@ -324,7 +612,11 @@ end
 
 Run Stage-1 graph accurization once, reuse metaFlye for long-read repeat-graph
 layout, and reuse Strainy for strain-haplotype deconvolution. Candidate
-haplotypes are ranked by normalized likelihood under the accurized graph.
+haplotypes are ranked by normalized likelihood under the accurized graph. The
+production route still uses explicitly labeled legacy best-hit abundance until
+a calibrated read-candidate likelihood builder is connected to
+[`infer_variant_abundances`](@ref); the soft-EM implementation in this slice is
+an inference seam, not yet the production abundance method.
 """
 function deconvolve_stage2(
         reads::R,
@@ -394,12 +686,18 @@ function deconvolve_stage2(
         "layout_read_type" => "nano-corr",
         "layout_iterations" => layout_iterations,
         "deconvolution_tool" => "strainy",
+        "abundance_method" => "legacy-best-hit-minimap2",
+        "probabilistic_abundance_status" => "available-requires-calibrated-likelihoods",
         "graph_k" => graph_k,
         "graph_source" => prepared.graph_source,
+        "graph_rebuild_reason" => prepared.graph_rebuild_reason,
         "corrected_read_count" => prepared.corrected_read_count,
         "max_variants" => max_variants,
         "min_scored_fraction" => min_scored_fraction
     )
+    provenance["primary_status"] = String(ranked.primary_status)
+    provenance["likelihood_primary_id"] = ranked.likelihood_primary_id
+    provenance["abundance_primary_id"] = ranked.abundance_primary_id
     return Stage2DeconvolutionResult(
         ranked.primary,
         layout.assembly,
