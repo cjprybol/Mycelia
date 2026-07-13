@@ -19,13 +19,35 @@ function abundance_by_id(
     )
 end
 
+function _test_stage2_inference_error(
+        f::Function,
+        exception_type::Type{<:Exception},
+        expected_message::AbstractString,
+)::Nothing
+    caught = try
+        f()
+        nothing
+    catch error
+        error
+    end
+    message = caught === nothing ? "" : sprint(showerror, caught)
+    Test.@test caught isa exception_type
+    Test.@test occursin(expected_message, message)
+    return nothing
+end
+
 Test.@testset "Stage-2 stable logsumexp" begin
     expected = -1000.0 + log1p(exp(-1.0))
     Test.@test Stage2Inference.logsumexp([-1000.0, -1001.0]) ≈ expected
     Test.@test Stage2Inference.logsumexp([-Inf, -Inf]) == -Inf
     Test.@test Stage2Inference.logsumexp(Float64[]) == -Inf
     Test.@test Stage2Inference.logsumexp([Inf, -1.0]) == Inf
-    Test.@test_throws ArgumentError Stage2Inference.logsumexp([0.0, NaN])
+    _test_stage2_inference_error(
+        ArgumentError,
+        "logsumexp values must not contain NaN",
+    ) do
+        Stage2Inference.logsumexp([0.0, NaN])
+    end
 end
 
 Test.@testset "Stage-2 soft-EM abundance and noise inference" begin
@@ -228,52 +250,115 @@ Test.@testset "Stage-2 retained universe, active support, and deterministic rank
 end
 
 Test.@testset "Stage-2 inference validation" begin
-    Test.@test_throws ArgumentError Stage2Inference.ReadCandidateLikelihood(
-        "", "candidate", 0.0)
-    Test.@test_throws ArgumentError Stage2Inference.ReadCandidateLikelihood(
-        "read", "candidate", Inf)
-    Test.@test_throws ArgumentError Stage2Inference.ReadNoiseLikelihood("read", NaN)
-    Test.@test_throws ArgumentError Stage2Inference.CandidateInferenceConfig(
-        max_iterations = 0)
-    Test.@test_throws ArgumentError Stage2Inference.CandidateInferenceConfig(
-        abundance_tolerance = -1.0)
-    Test.@test_throws ArgumentError Stage2Inference.CandidateInferenceConfig(
-        primary_tolerance = -1.0)
-    Test.@test_throws ArgumentError Stage2Inference.CandidateInferenceConfig(
-        500, 1.0e-10, NaN)
+    _test_stage2_inference_error(
+        ArgumentError,
+        "read_id must not be empty",
+    ) do
+        Stage2Inference.ReadCandidateLikelihood("", "candidate", 0.0)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "alignment log_likelihood must be finite",
+    ) do
+        Stage2Inference.ReadCandidateLikelihood("read", "candidate", Inf)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "noise log_likelihood must be finite",
+    ) do
+        Stage2Inference.ReadNoiseLikelihood("read", NaN)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "max_iterations must be positive",
+    ) do
+        Stage2Inference.CandidateInferenceConfig(max_iterations = 0)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "abundance_tolerance must be finite and nonnegative",
+    ) do
+        Stage2Inference.CandidateInferenceConfig(abundance_tolerance = -1.0)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "primary_tolerance must be finite and nonnegative",
+    ) do
+        Stage2Inference.CandidateInferenceConfig(primary_tolerance = -1.0)
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "primary_tolerance must be finite and nonnegative",
+    ) do
+        Stage2Inference.CandidateInferenceConfig(500, 1.0e-10, NaN)
+    end
 
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        Stage2Inference.ReadCandidateLikelihood[],
-        Stage2Inference.ReadNoiseLikelihood[],
-    )
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        [Stage2Inference.ReadCandidateLikelihood("read-1", "candidate", 0.0)],
-        [Stage2Inference.ReadNoiseLikelihood("read-2", 0.0)],
-    )
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        Stage2Inference.ReadCandidateLikelihood[],
-        [
-            Stage2Inference.ReadNoiseLikelihood("read-1", 0.0),
-            Stage2Inference.ReadNoiseLikelihood("read-1", -1.0),
-        ],
-    )
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        [Stage2Inference.ReadCandidateLikelihood("read-1", "candidate", 0.0)],
-        [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)];
-        candidate_ids = ["different-candidate"],
-    )
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        [
-            Stage2Inference.ReadCandidateLikelihood("read-1", "candidate", 0.0),
-            Stage2Inference.ReadCandidateLikelihood("read-1", "candidate", -1.0)
-        ],
-        [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)],
-    )
-    Test.@test_throws ArgumentError Stage2Inference.infer_candidate_abundances(
-        Stage2Inference.ReadCandidateLikelihood[],
-        [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)];
-        candidate_ids = ["duplicate", "duplicate"],
-    )
+    _test_stage2_inference_error(
+        ArgumentError,
+        "at least one noise likelihood is required",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            Stage2Inference.ReadCandidateLikelihood[],
+            Stage2Inference.ReadNoiseLikelihood[],
+        )
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "alignment read read-1 has no noise likelihood",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            [Stage2Inference.ReadCandidateLikelihood(
+                "read-1", "candidate", 0.0)],
+            [Stage2Inference.ReadNoiseLikelihood("read-2", 0.0)],
+        )
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "duplicate noise likelihood for read read-1",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            Stage2Inference.ReadCandidateLikelihood[],
+            [
+                Stage2Inference.ReadNoiseLikelihood("read-1", 0.0),
+                Stage2Inference.ReadNoiseLikelihood("read-1", -1.0),
+            ],
+        )
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "alignment candidates are absent from candidate_ids: candidate",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            [Stage2Inference.ReadCandidateLikelihood(
+                "read-1", "candidate", 0.0)],
+            [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)];
+            candidate_ids = ["different-candidate"],
+        )
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "duplicate read-candidate likelihood for read-1 / candidate",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            [
+                Stage2Inference.ReadCandidateLikelihood(
+                    "read-1", "candidate", 0.0),
+                Stage2Inference.ReadCandidateLikelihood(
+                    "read-1", "candidate", -1.0),
+            ],
+            [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)],
+        )
+    end
+    _test_stage2_inference_error(
+        ArgumentError,
+        "duplicate candidate identifier duplicate",
+    ) do
+        Stage2Inference.infer_candidate_abundances(
+            Stage2Inference.ReadCandidateLikelihood[],
+            [Stage2Inference.ReadNoiseLikelihood("read-1", 0.0)];
+            candidate_ids = ["duplicate", "duplicate"],
+        )
+    end
 
     noise_only = Stage2Inference.infer_candidate_abundances(
         Stage2Inference.ReadCandidateLikelihood[],

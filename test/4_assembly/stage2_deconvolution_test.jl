@@ -1,5 +1,23 @@
-import Test
+import MetaGraphsNext
 import Mycelia
+import Test
+
+function _test_stage2_deconvolution_error(
+        f::Function,
+        exception_type::Type{<:Exception},
+        expected_message::AbstractString,
+)::Nothing
+    caught = try
+        f()
+        nothing
+    catch error
+        error
+    end
+    message = caught === nothing ? "" : sprint(showerror, caught)
+    Test.@test caught isa exception_type
+    Test.@test occursin(expected_message, message)
+    return nothing
+end
 
 Test.@testset "Stage-2 transition scoring and segment-candidate ranking" begin
     index = Mycelia.Rhizomorph.TransitionLikelihoodIndex(
@@ -32,16 +50,31 @@ Test.@testset "Stage-2 transition scoring and segment-candidate ranking" begin
     Test.@test unsupported.scored_fraction == 0.0
     Test.@test unsupported.mean_log2_probability == -Inf
     Test.@test partially_supported.scored_fraction == 0.75
-    Test.@test partially_supported.mean_log2_probability == -Inf
+    Test.@test partially_supported.mean_log2_probability ≈ log2(0.9)
     Test.@test ambiguous.scored_fraction < 1.0
-    Test.@test ambiguous.mean_log2_probability == -Inf
+    Test.@test isfinite(ambiguous.mean_log2_probability)
 
-    Test.@test_throws ArgumentError Mycelia.Rhizomorph.TransitionLikelihoodIndex(
-        2, Dict(("AA", "AC") => 0.1))
-    Test.@test_throws ArgumentError Mycelia.Rhizomorph.TransitionLikelihoodIndex(
-        2, Dict(("AA", "AC") => NaN))
-    Test.@test_throws ArgumentError Mycelia.Rhizomorph.TransitionLikelihoodIndex(
-        2, Dict(("aa", "ac") => -1.0, ("AA", "AC") => -2.0))
+    _test_stage2_deconvolution_error(
+        ArgumentError,
+        "transition log2 probabilities must be nonpositive",
+    ) do
+        Mycelia.Rhizomorph.TransitionLikelihoodIndex(
+            2, Dict(("AA", "AC") => 0.1))
+    end
+    _test_stage2_deconvolution_error(
+        ArgumentError,
+        "transition log2 probabilities must be finite",
+    ) do
+        Mycelia.Rhizomorph.TransitionLikelihoodIndex(
+            2, Dict(("AA", "AC") => NaN))
+    end
+    _test_stage2_deconvolution_error(
+        ArgumentError,
+        "duplicate transition after DNA k-mer normalization",
+    ) do
+        Mycelia.Rhizomorph.TransitionLikelihoodIndex(
+            2, Dict(("aa", "ac") => -1.0, ("AA", "AC") => -2.0))
+    end
 
     graph = Mycelia.Rhizomorph.build_kmer_graph(
         [Mycelia.FASTX.FASTA.Record("candidate", "AACCGG")],
@@ -53,6 +86,129 @@ Test.@testset "Stage-2 transition scoring and segment-candidate ranking" begin
         "AACCGG", graph_index)
     Test.@test graph_score.scored_fraction == 1.0
     Test.@test isfinite(graph_score.mean_log2_probability)
+
+    mktempdir() do dir
+        fastq = joinpath(dir, "reads.fastq")
+        write(
+            fastq,
+            "@read1\nAACCGG\n+\nIIIIII\n" *
+            "@read2\nAATCGG\n+\nIIIIII\n",
+        )
+        streaming_graph = Mycelia.Rhizomorph._build_stage2_graph_from_fastq(
+            fastq, 2; chunk_size = 1)
+        eager_graph = open(Mycelia.FASTX.FASTQ.Reader, fastq) do reader
+            Mycelia.Rhizomorph.build_kmer_graph(
+                collect(reader),
+                2;
+                mode = :doublestrand,
+                memory_profile = :ultralight_quality,
+            )
+        end
+        Test.@test Set(MetaGraphsNext.labels(streaming_graph)) ==
+                   Set(MetaGraphsNext.labels(eager_graph))
+        Test.@test Set(MetaGraphsNext.edge_labels(streaming_graph)) ==
+                   Set(MetaGraphsNext.edge_labels(eager_graph))
+        for label in MetaGraphsNext.labels(eager_graph)
+            Test.@test streaming_graph[label].total_count ==
+                       eager_graph[label].total_count
+            Test.@test streaming_graph[label].dataset_counts ==
+                       eager_graph[label].dataset_counts
+            Test.@test streaming_graph[label].joint_quality ==
+                       eager_graph[label].joint_quality
+            Test.@test streaming_graph[label].dataset_joint_quality ==
+                       eager_graph[label].dataset_joint_quality
+        end
+        for edge in MetaGraphsNext.edge_labels(eager_graph)
+            Test.@test streaming_graph[edge...].total_count ==
+                       eager_graph[edge...].total_count
+            Test.@test streaming_graph[edge...].dataset_counts ==
+                       eager_graph[edge...].dataset_counts
+            Test.@test streaming_graph[edge...].from_joint_quality ==
+                       eager_graph[edge...].from_joint_quality
+            Test.@test streaming_graph[edge...].to_joint_quality ==
+                       eager_graph[edge...].to_joint_quality
+        end
+
+        bounded_fastq = joinpath(dir, "bounded.fastq")
+        open(bounded_fastq, "w") do stream
+            for read_index in 1:10
+                write(
+                    stream,
+                    "@bounded$(read_index)\nAACCGG\n+\nIIIIII\n",
+                )
+            end
+        end
+        observed_chunk_sizes = Int[]
+        Mycelia.Rhizomorph._build_stage2_graph_from_fastq(
+            bounded_fastq,
+            2;
+            chunk_size = 3,
+            chunk_observer = size -> push!(observed_chunk_sizes, size),
+        )
+        Test.@test observed_chunk_sizes == [3, 3, 3, 1]
+        Test.@test maximum(observed_chunk_sizes) == 3
+        invalid_chunk_message = try
+            Mycelia.Rhizomorph._build_stage2_graph_from_fastq(
+                fastq, 2; chunk_size = 0)
+            ""
+        catch error
+            sprint(showerror, error)
+        end
+        Test.@test occursin("chunk_size must be positive", invalid_chunk_message)
+
+        empty_fastq = joinpath(dir, "empty.fastq")
+        touch(empty_fastq)
+        _test_stage2_deconvolution_error(
+            ErrorException,
+            "corrected FASTQ contains no reads",
+        ) do
+            Mycelia.Rhizomorph._build_stage2_graph_from_fastq(
+                empty_fastq, 2; chunk_size = 1)
+        end
+
+        no_kmer_fastq = joinpath(dir, "no-kmer.fastq")
+        write(no_kmer_fastq, "@short\nA\n+\nI\n")
+        _test_stage2_deconvolution_error(
+            ErrorException,
+            "corrected FASTQ contains no k-mers at k=2",
+        ) do
+            Mycelia.Rhizomorph._build_stage2_graph_from_fastq(
+                no_kmer_fastq, 2; chunk_size = 1)
+        end
+    end
+
+    mktempdir() do output_root
+        first_attempt = Mycelia.Rhizomorph._reserve_stage2_attempt_directory(
+            output_root)
+        write(joinpath(first_attempt.attempt_output_dir, "marker"), "first")
+        second_attempt = Mycelia.Rhizomorph._reserve_stage2_attempt_directory(
+            output_root)
+        Test.@test first_attempt.attempt_id != second_attempt.attempt_id
+        Test.@test dirname(first_attempt.attempt_output_dir) == abspath(output_root)
+        Test.@test dirname(second_attempt.attempt_output_dir) == abspath(output_root)
+        first_provenance = Mycelia.Rhizomorph._stage2_attempt_provenance(
+            first_attempt)
+        Test.@test first_provenance["stage2_attempt_id"] ==
+                   first_attempt.attempt_id
+        Test.@test first_provenance["stage2_attempt_relative_path"] ==
+                   first_attempt.attempt_id
+        Test.@test first_provenance["stage2_attempt_path_semantics"] ==
+                   "relative-to-config-output-dir"
+        for property in (:corrected_fastq, :layout_dir, :strainy_dir, :ranked_dir)
+            Test.@test dirname(getproperty(first_attempt, property)) ==
+                       first_attempt.attempt_output_dir
+            Test.@test dirname(getproperty(second_attempt, property)) ==
+                       second_attempt.attempt_output_dir
+            Test.@test getproperty(first_attempt, property) !=
+                       getproperty(second_attempt, property)
+        end
+        Test.@test read(
+            joinpath(first_attempt.attempt_output_dir, "marker"), String) == "first"
+
+        retained_graph = Dict{Symbol, Any}(:final_graph => first_attempt)
+        Mycelia.Rhizomorph._release_unreusable_stage2_graph!(retained_graph)
+        Test.@test !haskey(retained_graph, :final_graph)
+    end
 
     mktempdir() do dir
         gfa = joinpath(dir, "strain_unitigs.gfa")
@@ -420,7 +576,10 @@ Test.@testset "Strainy fail-loud argument validation" begin
         Test.@test count(==('>'), text) == 2
 
         write(gfa, "S\tdup\tAACC\nS\tdup\tAATC\n")
-        Test.@test_throws ErrorException begin
+        _test_stage2_deconvolution_error(
+            ErrorException,
+            "duplicate Strainy GFA segment identifier: dup",
+        ) do
             Mycelia._write_strainy_segment_candidates_fasta(gfa, fasta)
         end
 

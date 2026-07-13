@@ -2917,6 +2917,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             String[]
         end
     else
+        isfile(final_fastq) || error(
+            "final FASTQ does not exist for disk-backed result: $(final_fastq)")
         nothing
     end
 

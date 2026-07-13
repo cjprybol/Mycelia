@@ -1009,7 +1009,67 @@ function _corrector_strategy_knobs(strategy::Symbol)
 end
 
 """
-    _run_stage1_correction(reads, config::AssemblyConfig)
+Copy a corrected FASTQ to a temporary sibling, validate it, then atomically
+promote it.
+
+The existing destination is untouched until the staged FASTQ parses and contains
+exactly the expected positive number of corrected records. The count binds the
+handoff to the staged corrector input's one-output-record-per-input contract.
+`Base.Filesystem.rename` performs the same-filesystem atomic replacement after
+validation, so malformed, empty, or partial output cannot destroy a prior
+successful handoff.
+"""
+function _validate_and_promote_corrected_fastq!(
+        source_path::AbstractString,
+        destination_path::AbstractString;
+        materialize_corrected_reads::Bool,
+        expected_record_count::Int,
+)::NamedTuple
+    expected_record_count > 0 || throw(
+        ArgumentError("expected_record_count must be positive"))
+    source = abspath(normpath(String(source_path)))
+    destination = abspath(normpath(String(destination_path)))
+    isfile(source) || error("corrected FASTQ source does not exist: $(source)")
+    mkpath(dirname(destination))
+    staged_fastq, staged_stream = mktemp(dirname(destination); cleanup = false)
+    close(staged_stream)
+    staged_owned = true
+    try
+        # The corrector writes under a system temporary root, while persistent
+        # output may live on another filesystem (for example, HPC scratch).
+        # Copy into a destination sibling before validation so the final rename
+        # is same-filesystem and atomic; the caller removes the source temp tree.
+        Base.cp(source, staged_fastq; force = true)
+        corrected_reads, n_corrected = open(
+            FASTX.FASTQ.Reader, staged_fastq) do reader
+            if materialize_corrected_reads
+                records = collect(reader)
+                return records, length(records)
+            end
+            return nothing, count(_ -> true, reader)
+        end
+        n_corrected > 0 || error(
+            "iterative corrector produced 0 corrected reads; refusing to " *
+            "replace $(destination)")
+        n_corrected == expected_record_count || error(
+            "iterative corrector produced $(n_corrected) corrected reads; " *
+            "expected $(expected_record_count); refusing to replace " *
+            "$(destination)")
+        Base.Filesystem.rename(staged_fastq, destination)
+        staged_owned = false
+        return (; corrected_reads, n_corrected, corrected_fastq = destination)
+    finally
+        staged_owned && rm(staged_fastq; force = true)
+    end
+end
+
+"""
+    _run_stage1_correction(
+        reads,
+        config::AssemblyConfig;
+        materialize_corrected_reads=true,
+        persistent_output_dir=config.output_dir,
+    )
         -> (; corrected_reads, corrected_fastq, result_dict, knobs, max_k,
               ephemeral, indel_params)
 
@@ -1022,16 +1082,18 @@ re-assembly path materializes corrected reads, while disk-backed OLC and Stage-2
 callers pass `materialize_corrected_reads = false` to retain only the validated
 read count and persistent FASTQ hand-off.
 The corrected FASTQ produced by the corrector normally lives in an `mktempdir`
-that is deleted here on return; this helper moves it OUT of that doomed directory
-to `corrected_fastq` before cleanup, so an external OLC assembler can consume it.
+that is deleted here on return; this helper copies it to a validated sibling of
+`corrected_fastq` before atomic promotion, so an external OLC assembler can
+consume it.
 
-Destination: `config.output_dir === nothing` ⇒ a fresh `tempname()` path the
-CALLER owns and must delete (`ephemeral == true`; preserves the native path's
-historical no-stray-file behavior). Otherwise the FIXED path
-`joinpath(config.output_dir, "corrected.fastq")`, left in place for the Stage-2
-handoff (`ephemeral == false`). Because the basename is fixed, a caller reusing
-one `output_dir` across runs overwrites the prior corrected set — give each
-Stage-1 run its own `output_dir`.
+Destination: `persistent_output_dir` defaults to `config.output_dir`.
+`nothing` selects a fresh `tempname()` path the CALLER owns and must delete
+(`ephemeral == true`; preserving the native path's historical no-stray-file
+behavior). Otherwise the fixed path
+`joinpath(persistent_output_dir, "corrected.fastq")` is left in place for the
+disk-backed handoff (`ephemeral == false`). Stage-2 supplies its atomically
+reserved attempt directory here. Because the basename is fixed, other callers
+must give each concurrent Stage-1 run its own output directory.
 
 Returns a NamedTuple: optionally materialized `corrected_reads`, the validated
 `corrected_read_count`, persistent FASTQ path (`corrected_fastq`), whether the
@@ -1044,7 +1106,8 @@ corrected FASTQ or a 0-read correction, guarding both callers.
 function _run_stage1_correction(
         reads,
         config::AssemblyConfig;
-        materialize_corrected_reads::Bool = true
+        materialize_corrected_reads::Bool = true,
+        persistent_output_dir::Union{Nothing, AbstractString} = config.output_dir
 )
     _log_info(config,
         "Routing assembly through iterative corrector " *
@@ -1069,26 +1132,31 @@ function _run_stage1_correction(
     end
     max_k = config.k === nothing ? 13 : max(config.k, 13)
 
-    # Resolve the persistent corrected-FASTQ destination up front (td-ohob). When
-    # config.output_dir is nothing this is a fresh tempname() path the CALLER owns
-    # and must clean up (native re-assembly deletes it, preserving no-stray-file
-    # behavior); when set, the corrected reads persist at a FIXED basename for an
-    # external OLC assembler (hybrid route) to consume and are left in place.
-    ephemeral = config.output_dir === nothing
+    # Resolve the persistent corrected-FASTQ destination up front (td-ohob).
+    # Stage-2 may override the config root with an atomically reserved attempt
+    # directory; all other callers retain the historical config.output_dir behavior.
+    effective_output_dir = persistent_output_dir === nothing ?
+                           nothing : String(persistent_output_dir)
+    effective_output_dir === nothing || !isempty(effective_output_dir) ||
+        error("persistent_output_dir must be nonempty")
+    ephemeral = effective_output_dir === nothing
     persistent_fastq = ephemeral ?
                        tempname() * ".fastq" :
-                       joinpath(mkpath(config.output_dir), "corrected.fastq")
+                       joinpath(mkpath(effective_output_dir), "corrected.fastq")
+    destination_existed = isfile(persistent_fastq)
 
     input_dir = mktempdir()
     corrector_output_dir = mktempdir()
-    # Did THIS call actually move the corrected FASTQ into persistent_fastq? The
-    # catch cleanup must delete only a file this call created — otherwise an early
-    # failure (before the mv) with a reused config.output_dir would delete a PRIOR
-    # run's good corrected.fastq (a data-loss footgun surfaced in review).
-    moved_here = false
+    promoted_here = false
     try
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
+        expected_corrected_read_count = open(
+            FASTX.FASTQ.Reader, temp_fastq) do reader
+            count(_ -> true, reader)
+        end
+        expected_corrected_read_count > 0 || error(
+            "iterative corrector input contains 0 reads")
 
         # Fork the engine knobs by tier (td-fuo8). :exhaustive is the
         # maximum-sensitivity exact-ML engine (n_k_rungs=nothing / 10 iters /
@@ -1163,43 +1231,30 @@ function _run_stage1_correction(
             error("iterative corrector :final_fastq_file points at a nonexistent path: " *
                   "$(corrected_fastq) (output_dir=$(corrector_output_dir))")
         end
-        # Persist the corrected FASTQ OUT of the doomed corrector_output_dir before
-        # the finally block deletes it, so the corrected reads outlive corrector
-        # cleanup (the hybrid-OLC gap, td-ohob). `mv` (not cp) because
-        # corrector_output_dir is removed immediately after — no need to double-store.
-        Base.mv(corrected_fastq, persistent_fastq; force = true)
-        moved_here = true
-        # Keep the returned metadata honest: the corrector set :final_fastq_file to
-        # the now-moved original path (inside the deleted temp dir). Repoint it at
-        # persistent_fastq so a downstream consumer that reads the metadata key sees
-        # a live path, not a dangling one. (The native tail never reads this key, so
-        # this does not perturb the byte-identical re-assembly.)
+        # Validate in a temporary sibling before atomically replacing the
+        # persistent handoff. A malformed/empty new output leaves any prior
+        # corrected.fastq untouched.
+        promotion = _validate_and_promote_corrected_fastq!(
+            corrected_fastq,
+            persistent_fastq;
+            materialize_corrected_reads,
+            expected_record_count = expected_corrected_read_count,
+        )
+        promoted_here = true
+        persistent_fastq = promotion.corrected_fastq
+        corrected_reads = promotion.corrected_reads
+        n_corrected = promotion.n_corrected
+        # Keep returned metadata honest: the original corrector path is inside the
+        # doomed temporary directory; downstream consumers must see the promoted path.
         result_dict[:metadata][:final_fastq_file] = persistent_fastq
-        # Keep the FASTQ reader inside a do-block so both modes close the stream
-        # promptly (including on malformed FASTQ). The historical mode collects
-        # records; the disk-backed mode streams only a count.
-        corrected_reads, n_corrected = open(FASTX.FASTQ.Reader, persistent_fastq) do reader
-            if materialize_corrected_reads
-                records = collect(reader)
-                return records, length(records)
-            end
-            return nothing, count(_ -> true, reader)
-        end
-        # A corrector that silently ate every read (empty/header-only FASTQ) would
-        # otherwise flow into assemble_genome([]) → a 0-contig "successful" assembly.
-        # Fail loud instead of handing downstream a silently-empty assembly.
-        if n_corrected == 0
-            error("iterative corrector produced 0 corrected reads (from $(persistent_fastq)); " *
-                  "refusing to return an empty assembly")
-        end
         return (; corrected_reads, corrected_read_count = n_corrected,
             corrected_fastq = persistent_fastq,
             result_dict, knobs, max_k, ephemeral, indel_params)
     catch
-        # Ownership of the persistent FASTQ only transfers to the caller on a clean
-        # return. Delete ONLY a file this call created (moved_here) — never a
-        # pre-existing corrected.fastq a reused output_dir may already hold.
-        moved_here && rm(persistent_fastq; force = true)
+        # Invalid output never replaces a prior destination. If a later in-memory
+        # bookkeeping error occurs after a first-time promotion, clean only the file
+        # this call introduced; a validated replacement of a prior file is retained.
+        promoted_here && !destination_existed && rm(persistent_fastq; force = true)
         rethrow()
     finally
         # Prompt cleanup so repeated assemblies in a long-lived process do not leak

@@ -243,12 +243,126 @@ struct Stage2SegmentCandidateResult
     provenance::Dict{String, Any}
 end
 
+"""
+Atomically reserve a unique Stage-2 attempt directory under a caller-owned root.
+
+Each production attempt keeps its Stage-1, layout, phasing, and ranking artifacts
+in this directory. Failed attempts are intentionally preserved for inspection;
+concurrent attempts never share paths.
+"""
+function _reserve_stage2_attempt_directory(
+        output_root::AbstractString
+)::NamedTuple
+    isempty(strip(output_root)) && error("Stage-2 output root must be nonempty")
+    root = abspath(normpath(String(output_root)))
+    islink(root) && error("Stage-2 output root must not be a symbolic link")
+    mkpath(root)
+    islink(root) && error("Stage-2 output root must not be a symbolic link")
+    attempt_output_dir = mktempdir(
+        root; prefix = "attempt-", cleanup = false)
+    return (;
+        attempt_id = basename(attempt_output_dir),
+        attempt_output_dir,
+        output_root = root,
+        corrected_fastq = joinpath(attempt_output_dir, "corrected.fastq"),
+        layout_dir = joinpath(attempt_output_dir, "metaflye"),
+        strainy_dir = joinpath(attempt_output_dir, "strainy"),
+        ranked_dir = joinpath(attempt_output_dir, "ranked"),
+    )
+end
+
+function _stage2_attempt_provenance(
+        attempt::NamedTuple
+)::Dict{String, Any}
+    attempt_id = String(attempt.attempt_id)
+    isempty(attempt_id) && error("Stage-2 attempt ID must be nonempty")
+    relative_path = relpath(
+        String(attempt.attempt_output_dir), String(attempt.output_root))
+    relative_path == attempt_id || error(
+        "Stage-2 attempt path is not bound to its attempt ID")
+    return Dict{String, Any}(
+        "stage2_attempt_id" => attempt_id,
+        "stage2_attempt_relative_path" => relative_path,
+        "stage2_attempt_path_semantics" => "relative-to-config-output-dir",
+    )
+end
+
+function _release_unreusable_stage2_graph!(
+        result_dict::AbstractDict
+)::Nothing
+    pop!(result_dict, :final_graph, nothing)
+    return nothing
+end
+
+function _merge_stage2_graph_chunk(
+        graph::Union{Nothing, MetaGraphsNext.MetaGraph},
+        records::Vector{FASTX.FASTQ.Record},
+        k::Int
+)::MetaGraphsNext.MetaGraph
+    isempty(records) && error("Stage-2 graph chunk must not be empty")
+    chunk_graph = build_kmer_graph(
+        records,
+        k;
+        mode = :singlestrand,
+        memory_profile = :ultralight_quality,
+    )
+    if graph === nothing
+        return chunk_graph
+    end
+    _merge_reduced_graphs!(graph, chunk_graph, :ultralight_quality)
+    return graph
+end
+
+"""
+Build the Stage-2 fallback graph from a FASTQ with bounded read materialization.
+
+Only `chunk_size` records are held in addition to the graph. `chunk_observer`
+receives each live batch size as a regression seam. Chunk graphs are merged in
+input order before one doublestrand conversion, matching the eager
+`build_kmer_graph(...; mode=:doublestrand, memory_profile=:ultralight_quality)`
+semantics without `collect(reader)`.
+"""
+function _build_stage2_graph_from_fastq(
+        fastq_path::AbstractString,
+        k::Int;
+        chunk_size::Int = 1024,
+        chunk_observer::Function = _ -> nothing,
+)::MetaGraphsNext.MetaGraph
+    isfile(fastq_path) || error("corrected FASTQ does not exist: $(fastq_path)")
+    chunk_size > 0 || throw(ArgumentError("chunk_size must be positive"))
+    graph::Union{Nothing, MetaGraphsNext.MetaGraph} = nothing
+    chunk = FASTX.FASTQ.Record[]
+    open(FASTX.FASTQ.Reader, fastq_path) do reader
+        for record in reader
+            push!(chunk, record)
+            if length(chunk) == chunk_size
+                chunk_observer(length(chunk))
+                graph = _merge_stage2_graph_chunk(graph, chunk, k)
+                empty!(chunk)
+            end
+        end
+    end
+    if !isempty(chunk)
+        chunk_observer(length(chunk))
+        graph = _merge_stage2_graph_chunk(graph, chunk, k)
+    end
+    graph === nothing && error("corrected FASTQ contains no reads: $(fastq_path)")
+    isempty(MetaGraphsNext.labels(graph)) && error(
+        "corrected FASTQ contains no k-mers at k=$(k): $(fastq_path)")
+    return convert_to_doublestrand(graph)
+end
+
 function _prepare_stage2_inputs(
         reads::R,
-        config::AssemblyConfig
+        config::AssemblyConfig;
+        persistent_output_dir::Union{Nothing, AbstractString} = config.output_dir
 )::NamedTuple where {R}
     stage1 = _run_stage1_correction(
-        reads, config; materialize_corrected_reads = false)
+        reads,
+        config;
+        materialize_corrected_reads = false,
+        persistent_output_dir,
+    )
     metadata = stage1.result_dict[:metadata]
     graph = get(stage1.result_dict, :final_graph, nothing)
     recorded_graph_k = get(metadata, :final_graph_k, stage1.max_k)
@@ -265,14 +379,14 @@ function _prepare_stage2_inputs(
     graph_mode == :doublestrand || push!(rebuild_reasons, "non-doublestrand-final-graph")
     graph_source = can_reuse_graph ? "stage1-final" : "corrected-fastq-rebuild"
     if !can_reuse_graph
-        graph = open(FASTX.FASTQ.Reader, stage1.corrected_fastq) do reader
-            build_kmer_graph(
-                collect(reader),
-                graph_k;
-                mode = :doublestrand,
-                memory_profile = :ultralight_quality,
-            )
-        end
+        # A retained Stage-1 graph can be the dominant allocation. Remove every
+        # strong reference before rebuilding so the streamed fallback never
+        # co-resides with an obsolete full graph at scale.
+        _release_unreusable_stage2_graph!(stage1.result_dict)
+        graph = nothing
+        GC.gc()
+        graph = _build_stage2_graph_from_fastq(
+            stage1.corrected_fastq, graph_k)
     end
     index = _transition_likelihood_index(graph, graph_k)
     return (;
@@ -377,7 +491,7 @@ function _score_segment_candidate_sequence(
         previous_position = position
     end
     fraction = n_scored / n_transitions
-    mean_score = n_scored == n_transitions ? score / n_transitions : -Inf
+    mean_score = n_scored > 0 ? score / n_scored : -Inf
     return (mean_log2_probability = mean_score, scored_fraction = fraction)
 end
 
@@ -818,15 +932,17 @@ function deconvolve_stage2(
     max_variants === nothing || max_variants > 0 || throw(
         ArgumentError("max_variants diagnostic output cap must be positive"))
 
-    output_dir = config.output_dir
-    layout_dir = joinpath(output_dir, "metaflye")
-    strainy_dir = joinpath(output_dir, "strainy")
-    ranked_dir = joinpath(output_dir, "ranked")
-    any(isdir, (layout_dir, strainy_dir, ranked_dir)) &&
-        error("Stage-2 output directory already contains a prior run: $(output_dir)")
+    attempt = _reserve_stage2_attempt_directory(config.output_dir)
+    output_dir = attempt.attempt_output_dir
+    layout_dir = attempt.layout_dir
+    strainy_dir = attempt.strainy_dir
+    ranked_dir = attempt.ranked_dir
 
-    prepared = _prepare_stage2_inputs(reads, config)
+    prepared = _prepare_stage2_inputs(
+        reads, config; persistent_output_dir = output_dir)
     (; corrected_fastq, graph_k, index) = prepared
+    corrected_fastq == attempt.corrected_fastq || error(
+        "Stage-1 corrected FASTQ escaped its reserved Stage-2 attempt")
 
     layout = Mycelia.run_metaflye(;
         fastq = corrected_fastq,
@@ -862,7 +978,8 @@ function deconvolve_stage2(
         "Stage-2 segment-candidate ranks disagree; no consumable primary " *
         "segment candidate was written")
 
-    provenance = Dict{String, Any}(
+    provenance = _stage2_attempt_provenance(attempt)
+    Base.merge!(provenance, Dict{String, Any}(
         "stage1_corrector" => "iterative",
         "stage1_strategy" => String(config.strategy),
         "sequencing_tech" => "nanopore",
@@ -881,8 +998,8 @@ function deconvolve_stage2(
         "graph_rebuild_reason" => prepared.graph_rebuild_reason,
         "corrected_read_count" => prepared.corrected_read_count,
         "diagnostic_segment_candidate_cap" => max_variants,
-        "min_scored_fraction" => min_scored_fraction
-    )
+        "min_scored_fraction" => min_scored_fraction,
+    ))
     provenance["primary_status"] = String(ranked.primary_status)
     provenance["likelihood_primary_id"] = ranked.likelihood_primary_id
     provenance["abundance_primary_id"] = ranked.abundance_primary_id

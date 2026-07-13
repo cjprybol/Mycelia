@@ -7,6 +7,7 @@ import CSV
 import DataFrames
 import Dates
 import FASTX
+import FileWatching
 import JSON
 import Mycelia
 import Random
@@ -33,22 +34,50 @@ const RUN_MODE = Symbol(get(ENV, "RHIZOMORPH_STAGE2_MODE", "development"))
 const FIXTURE_COMPLEXITY = Symbol(
     get(ENV, "RHIZOMORPH_STAGE2_COMPLEXITY", "repeat_rich"))
 const STAGE2_STAGING_SENTINEL_NAME = ".rhizomorph-stage2-staging.toml"
-const STAGE2_STAGING_SENTINEL_SCHEMA = "rhizomorph-stage2-staging-v1"
+const STAGE2_STAGING_SENTINEL_SCHEMA = "rhizomorph-stage2-staging-v2"
+# The toy gate is bounded at about one hour. A four-hour stale floor avoids
+# reclaiming a plausibly live slow attempt while permitting dead-owner recovery.
+const STAGE2_STAGING_LOCK_STALE_SECONDS = 4 * 60 * 60
+const STAGE2_REPEAT_RICH_MINIMUM_LENGTH = 5_399
+const STAGE2_TOY_EVIDENCE_STATUS = "unattested_contract_only"
+
+mutable struct Stage2StagingAttempt{T}
+    attempt_id::String
+    final_output_root::String
+    staging_root::String
+    lock_path::String
+    lock::T
+    active::Bool
+end
 
 function stage2_output_paths(final_output_root::AbstractString)::NamedTuple
     isempty(strip(final_output_root)) &&
         error("Stage-2 final output root must be nonempty")
     final = abspath(normpath(String(final_output_root)))
-    return (; final, staging = final * ".staging")
+    staging = final * ".staging"
+    return (; final, staging, lock = staging * ".lock")
 end
 
 function stage2_staging_sentinel_path(staging_root::AbstractString)::String
     return joinpath(staging_root, STAGE2_STAGING_SENTINEL_NAME)
 end
 
+function validate_stage2_attempt_id(attempt_id::AbstractString)::String
+    value = String(attempt_id)
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$", value) ||
+        error("Stage-2 staging attempt ID is invalid")
+    return value
+end
+
+function new_stage2_attempt_id()::String
+    return bytes2hex(Random.rand(Random.RandomDevice(), UInt8, 16))
+end
+
 function validate_stage2_owned_staging(
         staging_root::AbstractString,
-        final_output_root::AbstractString
+        final_output_root::AbstractString;
+        expected_attempt_id::Union{Nothing, AbstractString} = nothing,
+        expected_lock_state::Union{Nothing, AbstractString} = nothing,
 )::Nothing
     paths = stage2_output_paths(final_output_root)
     staging = abspath(normpath(String(staging_root)))
@@ -66,65 +95,147 @@ function validate_stage2_owned_staging(
         error("Stage-2 staging sentinel is bound to a different final path")
     get(table, "staging_root", "") == paths.staging ||
         error("Stage-2 staging sentinel is bound to a different staging path")
+    get(table, "lock_path", "") == paths.lock ||
+        error("Stage-2 staging sentinel is bound to a different lock path")
+    attempt_id = get(table, "attempt_id", nothing)
+    attempt_id isa AbstractString ||
+        error("Stage-2 staging sentinel lacks an attempt ID")
+    validated_attempt_id = validate_stage2_attempt_id(attempt_id)
+    expected_attempt_id === nothing ||
+        validated_attempt_id == validate_stage2_attempt_id(expected_attempt_id) ||
+        error("Stage-2 staging sentinel attempt ID differs from the active attempt")
+    lock_state = get(table, "lock_state", nothing)
+    lock_state in ("active", "promoted") ||
+        error("Stage-2 staging sentinel has an invalid lock state")
+    expected_lock_state === nothing ||
+        lock_state == String(expected_lock_state) ||
+        error("Stage-2 staging sentinel lock state differs from the active attempt")
     return nothing
 end
 
 function write_stage2_staging_sentinel!(
-        staging_root::AbstractString,
-        final_output_root::AbstractString
+        attempt::Stage2StagingAttempt;
+        lock_state::AbstractString = "active",
 )::String
-    paths = stage2_output_paths(final_output_root)
-    staging = abspath(normpath(String(staging_root)))
-    staging == paths.staging ||
+    paths = stage2_output_paths(attempt.final_output_root)
+    attempt.staging_root == paths.staging ||
         error("Stage-2 staging path differs from the exact final-path sibling")
-    sentinel = stage2_staging_sentinel_path(staging)
-    mktemp(staging) do temporary_path, stream
+    attempt.lock_path == paths.lock ||
+        error("Stage-2 lock path differs from the exact staging-path sibling")
+    validated_attempt_id = validate_stage2_attempt_id(attempt.attempt_id)
+    lock_state in ("active", "promoted") ||
+        error("Stage-2 staging lock state must be active or promoted")
+    sentinel = stage2_staging_sentinel_path(attempt.staging_root)
+    mktemp(attempt.staging_root) do temporary_path, stream
         TOML.print(stream, Dict(
             "schema" => STAGE2_STAGING_SENTINEL_SCHEMA,
             "final_output_root" => paths.final,
             "staging_root" => paths.staging,
+            "lock_path" => paths.lock,
+            "attempt_id" => validated_attempt_id,
+            "lock_state" => String(lock_state),
         ))
-        close(stream)
-        mv(temporary_path, sentinel)
+        Base.close(stream)
+        Base.Filesystem.rename(temporary_path, sentinel)
     end
     return sentinel
 end
 
+function release_stage2_staging_attempt!(
+        attempt::Stage2StagingAttempt
+)::Nothing
+    attempt.active || return nothing
+    Base.close(attempt.lock)
+    attempt.active = false
+    return nothing
+end
+
 function prepare_stage2_staging!(
-        final_output_root::AbstractString
-)::String
+        final_output_root::AbstractString;
+        attempt_id::AbstractString = new_stage2_attempt_id(),
+)::Stage2StagingAttempt
     paths = stage2_output_paths(final_output_root)
-    islink(paths.final) &&
-        error("Stage-2 final output root must not be a symbolic link")
-    ispath(paths.final) &&
-        error("Stage-2 final output root already exists; refusing to replace it")
-    if ispath(paths.staging) || islink(paths.staging)
-        validate_stage2_owned_staging(paths.staging, paths.final)
-        rm(paths.staging; recursive = true)
+    validated_attempt_id = validate_stage2_attempt_id(attempt_id)
+    mkpath(dirname(paths.lock))
+    lock = FileWatching.Pidfile.trymkpidlock(
+        paths.lock; stale_age = STAGE2_STAGING_LOCK_STALE_SECONDS)
+    lock === false && error(
+        "Stage-2 staging has an active attempt lock: $(paths.lock)",
+    )
+    attempt = Stage2StagingAttempt(
+        validated_attempt_id,
+        paths.final,
+        paths.staging,
+        paths.lock,
+        lock,
+        true,
+    )
+    created_staging = false
+    try
+        islink(paths.final) &&
+            error("Stage-2 final output root must not be a symbolic link")
+        ispath(paths.final) && error(
+            "Stage-2 final output root already exists; refusing to replace it",
+        )
+        if ispath(paths.staging) || islink(paths.staging)
+            validate_stage2_owned_staging(paths.staging, paths.final)
+            rm(paths.staging; recursive = true)
+        end
+        mkdir(paths.staging)
+        created_staging = true
+        write_stage2_staging_sentinel!(attempt)
+        return attempt
+    catch
+        created_staging && ispath(paths.staging) &&
+            rm(paths.staging; force = true, recursive = true)
+        release_stage2_staging_attempt!(attempt)
+        rethrow()
     end
-    mkpath(dirname(paths.staging))
-    mkdir(paths.staging)
-    write_stage2_staging_sentinel!(paths.staging, paths.final)
-    return paths.staging
 end
 
-function promote_stage2_staging!(final_output_root::AbstractString)::String
-    paths = stage2_output_paths(final_output_root)
-    validate_stage2_owned_staging(paths.staging, paths.final)
-    islink(paths.final) &&
-        error("Stage-2 final output root must not be a symbolic link")
-    ispath(paths.final) &&
-        error("Stage-2 final output root already exists; refusing to replace it")
-    mv(paths.staging, paths.final)
-    return paths.final
+function promote_stage2_staging!(attempt::Stage2StagingAttempt)::String
+    attempt.active || error("Stage-2 staging attempt lock is not active")
+    try
+        paths = stage2_output_paths(attempt.final_output_root)
+        attempt.staging_root == paths.staging ||
+            error("Stage-2 staging path differs from the active attempt")
+        attempt.lock_path == paths.lock ||
+            error("Stage-2 lock path differs from the active attempt")
+        validate_stage2_owned_staging(
+            paths.staging,
+            paths.final;
+            expected_attempt_id = attempt.attempt_id,
+            expected_lock_state = "active",
+        )
+        islink(paths.final) &&
+            error("Stage-2 final output root must not be a symbolic link")
+        ispath(paths.final) && error(
+            "Stage-2 final output root already exists; refusing to replace it",
+        )
+        write_stage2_staging_sentinel!(attempt; lock_state = "promoted")
+        mv(paths.staging, paths.final)
+        return paths.final
+    finally
+        release_stage2_staging_attempt!(attempt)
+    end
 end
 
-function make_primary_sequence(rng::Random.AbstractRNG)::String
-    sequence = collect(String(BioSequences.randdnaseq(rng, FIXTURE_LENGTH)))
-    FIXTURE_COMPLEXITY == :random && return String(sequence)
-    FIXTURE_COMPLEXITY == :repeat_rich ||
+function make_primary_sequence(
+        rng::Random.AbstractRNG;
+        fixture_length::Int = FIXTURE_LENGTH,
+        fixture_complexity::Symbol = FIXTURE_COMPLEXITY,
+)::String
+    fixture_length > 0 || error("Stage-2 fixture length must be positive")
+    fixture_complexity in (:random, :repeat_rich) ||
         error("RHIZOMORPH_STAGE2_COMPLEXITY must be random or repeat_rich")
-    for (offset, base) in zip(500:500:(FIXTURE_LENGTH - 20), "ACGTACGTACGTAC")
+    fixture_complexity == :repeat_rich &&
+        fixture_length < STAGE2_REPEAT_RICH_MINIMUM_LENGTH && error(
+        "repeat-rich Stage-2 fixture length must be at least " *
+        "$(STAGE2_REPEAT_RICH_MINIMUM_LENGTH)",
+    )
+    sequence = collect(String(BioSequences.randdnaseq(rng, fixture_length)))
+    fixture_complexity == :random && return String(sequence)
+    for (offset, base) in zip(500:500:(fixture_length - 20), "ACGTACGTACGTAC")
         sequence[offset:(offset + 19)] .= base
     end
     repeat_unit = sequence[1000:1099]
@@ -419,6 +530,30 @@ function file_sha256(path::AbstractString)::String
     end
 end
 
+function serialized_stage2_deconvolution_provenance(
+        provenance::AbstractDict
+)::Dict{String, Any}
+    payload = Dict{String, Any}()
+    for (key, value) in provenance
+        key isa AbstractString || error(
+            "Stage-2 deconvolution provenance keys must be strings")
+        payload[String(key)] = Base.deepcopy(value)
+    end
+    attempt_id = get(payload, "stage2_attempt_id", nothing)
+    attempt_id isa AbstractString || error(
+        "Stage-2 deconvolution provenance lacks an attempt ID")
+    validated_attempt_id = validate_stage2_attempt_id(attempt_id)
+    get(payload, "stage2_attempt_relative_path", nothing) ==
+        validated_attempt_id || error(
+        "Stage-2 deconvolution provenance path is not bound to its attempt ID",
+    )
+    get(payload, "stage2_attempt_path_semantics", nothing) ==
+        "relative-to-config-output-dir" || error(
+        "Stage-2 deconvolution provenance has invalid path semantics",
+    )
+    return payload
+end
+
 function conda_package_version(environment::String, package::String)::String
     payload = read(`$(Mycelia.CONDA_RUNNER) list -n $(environment) $(package) --json`, String)
     records = JSON.parse(payload)
@@ -426,7 +561,11 @@ function conda_package_version(environment::String, package::String)::String
     return String(only(records)["version"])
 end
 
-function main()::Nothing
+function run_stage2_toy_benchmark!(
+        staging_attempt::Stage2StagingAttempt
+)::Nothing
+    abspath(normpath(OUTPUT_ROOT)) == staging_attempt.staging_root ||
+        error("Stage-2 benchmark output differs from its staging attempt")
     RUN_MODE in (:development, :confirmation) ||
         error("RHIZOMORPH_STAGE2_MODE must be development or confirmation")
     git_dirty = !isempty(strip(read(`git status --porcelain --untracked-files=no`, String)))
@@ -440,7 +579,6 @@ function main()::Nothing
         "RHIZOMORPH_STAGE2_REUSE is disabled because stale artifacts are not " *
         "bound to the current configuration and input digests",
     )
-    prepare_stage2_staging!(FINAL_OUTPUT_ROOT)
     fixture = make_fixture(OUTPUT_ROOT)
 
     raw_layout = Mycelia.run_metaflye(;
@@ -605,8 +743,11 @@ function main()::Nothing
         "scale" => "toy-smoke",
         "claim_boundary" =>
             "unattested toy contract only; not a deconvolution or SOTA claim",
-        "evidence_status" => "unattested-toy-contract",
+        "evidence_status" => STAGE2_TOY_EVIDENCE_STATUS,
         "generated_at" => string(Dates.now()),
+        "staging_attempt_id" => staging_attempt.attempt_id,
+        "stage2_deconvolution" =>
+            serialized_stage2_deconvolution_provenance(stage2.provenance),
         "git_sha" => strip(read(`git rev-parse HEAD`, String)),
         "fixture_length" => FIXTURE_LENGTH,
         "truth_abundances" => COVERAGES,
@@ -670,11 +811,20 @@ function main()::Nothing
         JSON.print(io, artifact_index, 2)
     end
     contract_passed || error("Stage-2 toy contract gate failed: $(gates)")
-    promote_stage2_staging!(FINAL_OUTPUT_ROOT)
+    promote_stage2_staging!(staging_attempt)
     println(
         "Unattested Stage-2 toy contract satisfied: $(FINAL_OUTPUT_ROOT)",
     )
     return nothing
+end
+
+function main()::Nothing
+    staging_attempt = prepare_stage2_staging!(FINAL_OUTPUT_ROOT)
+    try
+        return run_stage2_toy_benchmark!(staging_attempt)
+    finally
+        release_stage2_staging_attempt!(staging_attempt)
+    end
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

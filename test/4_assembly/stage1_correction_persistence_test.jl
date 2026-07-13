@@ -63,6 +63,80 @@ function _read_fastq(path)
     end
 end
 
+Test.@testset "corrected FASTQ validates before atomic promotion" begin
+    dir = mktempdir()
+    destination = joinpath(dir, "corrected.fastq")
+    prior = "@prior\nACGT\n+\nIIII\n"
+    write(destination, prior)
+    empty_source = joinpath(dir, "empty.fastq")
+    touch(empty_source)
+    message = try
+        R._validate_and_promote_corrected_fastq!(
+            empty_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 1,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin("produced 0 corrected reads", message)
+    Test.@test read(destination, String) == prior
+
+    malformed_source = joinpath(dir, "malformed.fastq")
+    write(malformed_source, "@malformed\nACGT\n+\nIII\n")
+    malformed_message = try
+        R._validate_and_promote_corrected_fastq!(
+            malformed_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 1,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin(
+        "Length of quality must be identical to length of sequence",
+        malformed_message,
+    )
+    Test.@test read(destination, String) == prior
+
+    partial_source = joinpath(dir, "partial.fastq")
+    write(partial_source, "@only_one\nACGT\n+\nIIII\n")
+    partial_message = try
+        R._validate_and_promote_corrected_fastq!(
+            partial_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 2,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin(
+        "produced 1 corrected reads; expected 2",
+        partial_message,
+    )
+    Test.@test read(destination, String) == prior
+
+    valid_source = joinpath(dir, "valid.fastq")
+    replacement = "@replacement\nTGCA\n+\nJJJJ\n"
+    write(valid_source, replacement)
+    promoted = R._validate_and_promote_corrected_fastq!(
+        valid_source,
+        destination;
+        materialize_corrected_reads = true,
+        expected_record_count = 1,
+    )
+    Test.@test promoted.n_corrected == 1
+    Test.@test length(something(promoted.corrected_reads)) == 1
+    Test.@test promoted.corrected_fastq == abspath(destination)
+    Test.@test read(destination, String) == replacement
+end
+
 Test.@testset "Stage-1 correction persistence (td-ohob)" begin
     # Mycelia.observe draws error/quality from the GLOBAL RNG (bare rand()), so
     # seed it for reproducibility — matching reassembly_graph_reuse_test.jl's

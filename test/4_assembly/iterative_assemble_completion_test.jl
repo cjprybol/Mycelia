@@ -83,4 +83,20 @@ Test.@testset "iterative finalization supports a disk-backed result" begin
         verbose = false,
     )
     Test.@test historical_default[:final_assembly] == ["ACGT", "TGCA"]
+
+    rm(final_fastq)
+    missing_message = try
+        Mycelia.finalize_iterative_assembly(
+            output_dir,
+            [3],
+            history,
+            0.0;
+            verbose = false,
+            materialize_final_assembly = false,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin("final FASTQ does not exist for disk-backed result", missing_message)
 end

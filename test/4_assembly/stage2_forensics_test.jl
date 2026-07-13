@@ -9,6 +9,23 @@ include(joinpath(
     "rhizomorph_stage2_forensics.jl",
 ))
 
+function _test_stage2_forensics_error(
+        f::Function,
+        exception_type::Type{<:Exception},
+        expected_message::AbstractString,
+)::Nothing
+    caught = try
+        f()
+        nothing
+    catch error
+        error
+    end
+    message = caught === nothing ? "" : sprint(showerror, caught)
+    Test.@test caught isa exception_type
+    Test.@test occursin(expected_message, message)
+    return nothing
+end
+
 Test.@testset "Stage-2 frozen seed partitions" begin
     Test.@test STAGE2_DEVELOPMENT_SEEDS == (43_003, 43_006, 43_007, 43_008, 43_009)
     Test.@test STAGE2_CONFIRMATION_SEEDS == (44_001, 44_002, 44_003)
@@ -68,6 +85,19 @@ Test.@testset "Stage-2 assembly discrepancy components" begin
         sprint(showerror, error)
     end
     Test.@test occursin("aligned_reference_bases exceeds", message)
+
+    aligned_error_message = try
+        assembly_discrepancy_components(100, 100, 40, 30, 71)
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin(
+        "aligned_error_bases exceeds total aligned bases",
+        aligned_error_message,
+    )
+    boundary = assembly_discrepancy_components(100, 100, 40, 30, 70)
+    Test.@test boundary.aligned_error_bases == 70
 end
 
 Test.@testset "Stage-2 candidate assignment summary" begin
@@ -786,23 +816,50 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
         Test.@test !failing.observation_gates[
             (:long_noisy, 44_001)]["three_truths"]
     end
-    for options in (
-            (; malformed_cell = (:long_noisy, 44_001)),
-            (; conflicting_native = true),
-            (; component_mismatch = true),
-            (; failed_attempt = true),
-            (; forged_assignment = true),
-            (; metric_report_mismatch = true),
-            (; metric_nonce_mismatch = true),
-            (; native_candidate_count_mismatch = (:long_noisy, 44_001)),
+    for (options, expected_message) in (
+            (
+                (; malformed_cell = (:long_noisy, 44_001)),
+                "NGA50 values must be nonnegative",
+            ),
+            (
+                (; conflicting_native = true),
+                "native evidence disagrees across comparator rows",
+            ),
+            (
+                (; component_mismatch = true),
+                "comparator consumed-input components differ from manifest",
+            ),
+            (
+                (; failed_attempt = true),
+                "a required full-input confirmation attempt did not pass",
+            ),
+            (
+                (; forged_assignment = true),
+                "candidate assignment summary is internally inconsistent",
+            ),
+            (
+                (; metric_report_mismatch = true),
+                "metric report field native_nga50 differs from observation",
+            ),
+            (
+                (; metric_nonce_mismatch = true),
+                "metric report field reservation_nonce_sha256 differs from observation",
+            ),
+            (
+                (; native_candidate_count_mismatch = (:long_noisy, 44_001)),
+                "native ranked FASTA candidate count differs from assigned truth records",
+            ),
         )
         mktempdir() do directory
             case = _build_release_case(directory; options...)
             confirmation_before = read(case.confirmation_ledger_path)
-            Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-                case.manifest_path,
-                case.development_ledger_path,
-            )
+            _test_stage2_forensics_error(
+                ErrorException, expected_message) do
+                evaluate_stage2_release_gate(;
+                    case.manifest_path,
+                    case.development_ledger_path,
+                )
+            end
             Test.@test read(case.confirmation_ledger_path) ==
                        confirmation_before
         end
@@ -846,45 +903,70 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
         open(subset_result, "a") do stream
             write(stream, "\n# tampered subset report\n")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation result artifact hash differs from completion row",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory; incomplete_attempt = true)
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(ErrorException, "is incomplete") do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
         open(first(case.result_paths), "a") do stream
             write(stream, "\n# tampered\n")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation result artifact hash differs from completion row",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
         observation_path = first(case.result_paths)
-        Test.@test_throws ErrorException _observation_relative_path(
-            observation_path, "../outside")
-        Test.@test_throws ErrorException _observation_relative_path(
-            observation_path, abspath("outside"))
+        _test_stage2_forensics_error(
+            ErrorException,
+            "artifact path escapes the run bundle",
+        ) do
+            _observation_relative_path(observation_path, "../outside")
+        end
+        _test_stage2_forensics_error(
+            ErrorException,
+            "artifact paths must be relative to the run bundle",
+        ) do
+            _observation_relative_path(observation_path, abspath("outside"))
+        end
         observation = _parse_stage2_release_observation(read(observation_path))
         native_result_path = _observation_relative_path(
             observation_path, observation.native_result_path)
         open(native_result_path, "a") do stream
             write(stream, "N")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "native result artifact hash differs from observation",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
@@ -895,18 +977,27 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
         open(comparator_result_path, "a") do stream
             write(stream, "N")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "comparator result artifact hash differs from observation",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         target = joinpath(directory, "target.txt")
         link = joinpath(directory, "link.txt")
         write(target, "target")
         symlink(target, link)
-        Test.@test_throws ErrorException _validate_bundle_file(
-            link, directory, "symlink test")
+        _test_stage2_forensics_error(
+            ErrorException,
+            "symlink test artifact must not be a symbolic link",
+        ) do
+            _validate_bundle_file(link, directory, "symlink test")
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
@@ -918,10 +1009,15 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
         open(component_path, "a") do stream
             write(stream, "tampered")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "input component artifact hash differs:",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
@@ -979,39 +1075,59 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             !startswith(line, source_row.attempt_id * "\t")
         end
         write(case.confirmation_ledger_path, join(retained_lines, '\n') * "\n")
-        Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-            duplicate_reservation;
-            development_ledger_path = case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation cell already has a reservation receipt",
+        ) do
+            append_stage2_confirmation_attempt!(
+                duplicate_reservation;
+                development_ledger_path = case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
         lines = readlines(case.confirmation_ledger_path; keep = true)
         write(case.confirmation_ledger_path, join(lines[1:(end - 1)]))
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(ErrorException, "is incomplete") do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
-        open(case.development_ledger_path, "a") do stream
-            write(stream, "tampered-after-freeze\n")
-        end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
+        development_lines = readlines(case.development_ledger_path)
+        development_lines[end] *= " tampered-after-freeze"
+        write(
             case.development_ledger_path,
+            join(development_lines, '\n') * "\n",
         )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development ledger hash differs from freeze",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
         open(case.seal.path, "a") do stream
             write(stream, "\n# freeze tamper\n")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation ledger contains a noncanonical freeze hash",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         original_directory = joinpath(directory, "original")
@@ -1022,20 +1138,30 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
         cloned_ledger = joinpath(clone_directory, "development.tsv")
         cp(case.development_ledger_path, cloned_ledger)
         cp(case.seal.path, stage2_development_freeze_path(cloned_ledger))
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            development_ledger_path = cloned_ledger,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development ledger path differs from frozen campaign identity",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                development_ledger_path = cloned_ledger,
+            )
+        end
     end
     mktempdir() do directory
         case = _build_release_case(directory)
         open(case.manifest_path, "a") do stream
             write(stream, "\n# manifest tamper\n")
         end
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "release manifest bytes differ from development freeze",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
     mktempdir() do directory
         message = try
@@ -1049,23 +1175,44 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
 end
 
 Test.@testset "Stage-2 strict development grid identity" begin
-    for mutation in (:missing, :duplicate, :extra)
+    for (mutation, expected_message) in (
+            (
+                :missing,
+                "development gate artifact does not exactly cover the frozen grid",
+            ),
+            (
+                :duplicate,
+                "development gate artifact contains duplicate cell IDs",
+            ),
+            (
+                :extra,
+                "development gate artifact does not exactly cover the frozen grid",
+            ),
+        )
         mktempdir() do directory
-            Test.@test_throws ErrorException _build_release_case(
-                directory;
-                populate_confirmation = false,
-                development_grid_mutation = mutation,
-            )
+            _test_stage2_forensics_error(
+                ErrorException, expected_message) do
+                _build_release_case(
+                    directory;
+                    populate_confirmation = false,
+                    development_grid_mutation = mutation,
+                )
+            end
             Test.@test !isfile(stage2_development_freeze_path(
                 joinpath(directory, "development.tsv")))
         end
     end
     mktempdir() do directory
-        Test.@test_throws ErrorException _build_release_case(
-            directory;
-            populate_confirmation = false,
-            stale_development_source_provenance = true,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development source report manifest_sha256 differs from campaign",
+        ) do
+            _build_release_case(
+                directory;
+                populate_confirmation = false,
+                stale_development_source_provenance = true,
+            )
+        end
         Test.@test !isfile(stage2_development_freeze_path(
             joinpath(directory, "development.tsv")))
     end
@@ -1093,70 +1240,100 @@ Test.@testset "Stage-2 confirmation preflight is mutation-free" begin
         )
         ledger_before = read(case.confirmation_ledger_path)
         invalid_reservations = (
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-cross-seed-truth",
-                truth_reference_sha256 =
-                    case.truth_reference_sha256[44_001],
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-cross-seed-truth",
+                    truth_reference_sha256 =
+                        case.truth_reference_sha256[44_001],
+                ),
+                "confirmation truth hash differs from frozen fixture index",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-configuration-id",
-                configuration_id = "wrong-configuration",
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-configuration-id",
+                    configuration_id = "wrong-configuration",
+                ),
+                "confirmation configuration ID differs from frozen artifact",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-comparator",
-                comparator_id = "unregistered-comparator",
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-comparator",
+                    comparator_id = "unregistered-comparator",
+                ),
+                "confirmation preflight found an unregistered comparator cell",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-comparator-version",
-                comparator_version = "wrong-version",
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-comparator-version",
+                    comparator_version = "wrong-version",
+                ),
+                "confirmation comparator version differs from frozen manifest",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-command",
-                command_sha256 = repeat("a", 64),
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-command",
+                    command_sha256 = repeat("a", 64),
+                ),
+                "confirmation command hash differs from frozen manifest",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-comparator-configuration",
-                comparator_configuration_sha256 = repeat("b", 64),
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-comparator-configuration",
+                    comparator_configuration_sha256 = repeat("b", 64),
+                ),
+                "confirmation comparator configuration differs from manifest",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-input-bundle",
-                input_bundle_sha256 = repeat("c", 64),
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-input-bundle",
+                    input_bundle_sha256 = repeat("c", 64),
+                ),
+                "confirmation full input bundle differs from frozen fixture index",
             ),
-            _replace_ledger_row(
-                subset_target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-consumed-input",
-                consumed_input_sha256 = repeat("d", 64),
+            (
+                _replace_ledger_row(
+                    subset_target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-consumed-input",
+                    consumed_input_sha256 = repeat("d", 64),
+                ),
+                "confirmation consumed-input digest differs from frozen fixture index",
             ),
-            _replace_ledger_row(
-                target_reservation;
-                development_freeze = case.seal.freeze,
-                attempt_id = "wrong-error-profile",
-                error_profile_sha256 = repeat("e", 64),
+            (
+                _replace_ledger_row(
+                    target_reservation;
+                    development_freeze = case.seal.freeze,
+                    attempt_id = "wrong-error-profile",
+                    error_profile_sha256 = repeat("e", 64),
+                ),
+                "confirmation error profile differs from frozen fixture index",
             ),
         )
-        for invalid_reservation in invalid_reservations
+        for (invalid_reservation, expected_message) in invalid_reservations
             receipt_directory = _confirmation_reservation_directory(
                 case.confirmation_ledger_path, invalid_reservation)
             Test.@test !ispath(receipt_directory)
-            Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-                invalid_reservation;
-                development_ledger_path = case.development_ledger_path,
-            )
+            _test_stage2_forensics_error(
+                ErrorException, expected_message) do
+                append_stage2_confirmation_attempt!(
+                    invalid_reservation;
+                    development_ledger_path = case.development_ledger_path,
+                )
+            end
             Test.@test read(case.confirmation_ledger_path) == ledger_before
             Test.@test !ispath(receipt_directory)
         end
@@ -1166,10 +1343,15 @@ end
 Test.@testset "Stage-2 evaluation rejects wrong truth FASTA IDs" begin
     mktempdir() do directory
         case = _build_release_case(directory; bad_truth_seed = 44_001)
-        Test.@test_throws ErrorException evaluate_stage2_release_gate(;
-            case.manifest_path,
-            case.development_ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "truth FASTA identifiers differ from expected truth IDs",
+        ) do
+            evaluate_stage2_release_gate(;
+                case.manifest_path,
+                case.development_ledger_path,
+            )
+        end
     end
 end
 
@@ -1359,20 +1541,29 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
         freeze_path = seal.path
         Test.@test freeze.development_ledger_sha256 == fingerprint.sha256
         Test.@test freeze_path == stage2_development_freeze_path(ledger_path)
-        Test.@test_throws ErrorException seal_stage2_development_ledger!(
-            ledger_path;
-            frozen_at_utc = "2026-07-12T16:31:00Z",
-            manifest_path,
-            configuration_path,
-            fixture_path,
-            git_sha,
-            manifest_sha256 = sha_a,
-            configuration_sha256 = sha_b,
-            fixture_sha256 = sha_c,
-            git_dirty = false,
-        )
-        Test.@test_throws ErrorException append_stage2_attempt!(
-            ledger_path, second_row)
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development freeze already exists:",
+        ) do
+            seal_stage2_development_ledger!(
+                ledger_path;
+                frozen_at_utc = "2026-07-12T16:31:00Z",
+                manifest_path,
+                configuration_path,
+                fixture_path,
+                git_sha,
+                manifest_sha256 = sha_a,
+                configuration_sha256 = sha_b,
+                fixture_sha256 = sha_c,
+                git_dirty = false,
+            )
+        end
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development ledger is sealed by its canonical freeze",
+        ) do
+            append_stage2_attempt!(ledger_path, second_row)
+        end
         confirmation = Stage2AttemptLedgerRow(;
             attempt_id = "confirmation-001",
             recorded_at_utc = "2026-07-12T17:00:00Z",
@@ -1421,11 +1612,16 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
                 "nested\\escape",
                 abspath(joinpath(directory, "escape")),
             )
-            Test.@test_throws ErrorException _replace_ledger_row(
-                reservation;
-                development_freeze = freeze,
-                attempt_id = unsafe_attempt_id,
-            )
+            _test_stage2_forensics_error(
+                ErrorException,
+                "attempt_id must be one safe filename component",
+            ) do
+                _replace_ledger_row(
+                    reservation;
+                    development_freeze = freeze,
+                    attempt_id = unsafe_attempt_id,
+                )
+            end
         end
         append_stage2_confirmation_attempt!(
             reservation;
@@ -1491,10 +1687,15 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             development_ledger_path = ledger_path,
         )
         confirmation_before_wrong_nonce = read(confirmation_ledger_path)
-        Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-            wrong_nonce_completion;
-            development_ledger_path = ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation terminal result reservation nonce differs from receipt",
+        ) do
+            append_stage2_confirmation_attempt!(
+                wrong_nonce_completion;
+                development_ledger_path = ledger_path,
+            )
+        end
         Test.@test read(confirmation_ledger_path) ==
                    confirmation_before_wrong_nonce
 
@@ -1562,10 +1763,15 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             error_profile_sha256 = cell_44_003.error_profile_sha256,
             development_freeze_sha256 = repeat("e", 64),
         )
-        Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-            wrong_freeze_reservation;
-            development_ledger_path = ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation development freeze hash differs from canonical freeze",
+        ) do
+            append_stage2_confirmation_attempt!(
+                wrong_freeze_reservation;
+                development_ledger_path = ledger_path,
+            )
+        end
 
         mkdir(ledger_path * ".lock")
         locked_reservation = _replace_ledger_row(
@@ -1578,11 +1784,182 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             consumed_input_sha256 = cell_44_003.input_bundle_sha256,
             error_profile_sha256 = cell_44_003.error_profile_sha256,
         )
-        Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-            locked_reservation;
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development ledger is locked:",
+        ) do
+            append_stage2_confirmation_attempt!(
+                locked_reservation;
+                development_ledger_path = ledger_path,
+            )
+        end
+        rm(ledger_path * ".lock"; recursive = true)
+
+        invalid_return_comparator = manifest["comparators"]["hairsplitter"]
+        invalid_return_reservation = _replace_ledger_row(
+            callback_reservation;
+            development_freeze = freeze,
+            attempt_id = "invalid-runner-return",
+            seed = 44_003,
+            truth_reference_sha256 = confirmation_truth_sha256[44_003],
+            input_bundle_sha256 = cell_44_003.input_bundle_sha256,
+            consumed_input_sha256 = cell_44_003.input_bundle_sha256,
+            error_profile_sha256 = cell_44_003.error_profile_sha256,
+            comparator_id = "hairsplitter",
+            comparator_version = invalid_return_comparator["version"],
+            command_sha256 = _sha256(invalid_return_comparator["command"]),
+            comparator_configuration_sha256 = _sha256(
+                invalid_return_comparator["configuration"]),
+        )
+        invalid_return_message = try
+            run_stage2_confirmation_attempt!(
+                invalid_return_reservation,
+                (_, _) -> nothing;
+                development_ledger_path = ledger_path,
+            )
+            ""
+        catch error
+            sprint(showerror, error)
+        end
+        Test.@test occursin(
+            "confirmation runner must return Stage2AttemptLedgerRow",
+            invalid_return_message,
+        )
+        events_after_invalid_return = load_stage2_attempt_ledger(
+            confirmation_ledger_path; development_freeze = freeze)
+        invalid_return_events = filter(events_after_invalid_return) do event
+            event.attempt_id == invalid_return_reservation.attempt_id
+        end
+        Test.@test length(invalid_return_events) == 2
+        Test.@test Set(event.status for event in invalid_return_events) ==
+                   Set((:reserved, :error))
+        invalid_return_error = only(filter(invalid_return_events) do event
+            event.status == :error
+        end)
+        invalid_return_error_path = _stage2_result_artifact_path(
+            confirmation_ledger_path, invalid_return_error.result_path)
+        Test.@test isfile(invalid_return_error_path)
+        invalid_return_artifact = TOML.parsefile(invalid_return_error_path)
+        Test.@test invalid_return_artifact["attempt_id"] ==
+                   invalid_return_reservation.attempt_id
+        Test.@test occursin(
+            "confirmation runner must return Stage2AttemptLedgerRow",
+            invalid_return_artifact["error"],
+        )
+
+        signature_comparator = manifest["comparators"]["strainberry"]
+        signature_reservation = _replace_ledger_row(
+            callback_reservation;
+            development_freeze = freeze,
+            attempt_id = "invalid-runner-signature",
+            seed = 44_003,
+            truth_reference_sha256 = confirmation_truth_sha256[44_003],
+            input_bundle_sha256 = cell_44_003.input_bundle_sha256,
+            consumed_input_sha256 = cell_44_003.input_bundle_sha256,
+            error_profile_sha256 = cell_44_003.error_profile_sha256,
+            comparator_id = "strainberry",
+            comparator_version = signature_comparator["version"],
+            command_sha256 = _sha256(signature_comparator["command"]),
+            comparator_configuration_sha256 = _sha256(
+                signature_comparator["configuration"]),
+        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation runner must return a terminal completion",
+        ) do
+            _validate_confirmation_runner_completion(
+                signature_reservation, signature_reservation)
+        end
+        wrong_signature_completion = _replace_ledger_row(
+            callback_completion;
+            development_freeze = freeze,
+            attempt_id = "different-runner-signature",
+            seed = 44_003,
+            truth_reference_sha256 = confirmation_truth_sha256[44_003],
+            input_bundle_sha256 = cell_44_003.input_bundle_sha256,
+            consumed_input_sha256 = cell_44_003.input_bundle_sha256,
+            error_profile_sha256 = cell_44_003.error_profile_sha256,
+            comparator_id = "strainberry",
+            comparator_version = signature_comparator["version"],
+            command_sha256 = _sha256(signature_comparator["command"]),
+            comparator_configuration_sha256 = _sha256(
+                signature_comparator["configuration"]),
+            notes = "wrong callback reservation signature",
+        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation runner completion differs from its reservation",
+        ) do
+            run_stage2_confirmation_attempt!(
+                signature_reservation,
+                (_, _) -> wrong_signature_completion;
+                development_ledger_path = ledger_path,
+            )
+        end
+        signature_events = filter(
+            load_stage2_attempt_ledger(
+                confirmation_ledger_path; development_freeze = freeze),
+        ) do event
+            event.attempt_id == signature_reservation.attempt_id
+        end
+        Test.@test Set(event.status for event in signature_events) ==
+                   Set((:reserved, :error))
+
+        retry_comparator = manifest["comparators"]["nanomdbg"]
+        retry_completion = _replace_ledger_row(
+            callback_completion;
+            development_freeze = freeze,
+            attempt_id = "completion-lock-retry",
+            seed = 44_003,
+            truth_reference_sha256 = confirmation_truth_sha256[44_003],
+            input_bundle_sha256 = cell_44_003.input_bundle_sha256,
+            consumed_input_sha256 = cell_44_003.input_bundle_sha256,
+            error_profile_sha256 = cell_44_003.error_profile_sha256,
+            comparator_id = "nanomdbg",
+            comparator_version = retry_comparator["version"],
+            command_sha256 = _sha256(retry_comparator["command"]),
+            comparator_configuration_sha256 = _sha256(
+                retry_comparator["configuration"]),
+            result_path = "results/completion-lock-retry.toml",
+            notes = "terminal append retries transient lock contention",
+        )
+        retry_reservation = _replace_ledger_row(
+            retry_completion;
+            development_freeze = freeze,
+            recorded_at_utc = "2026-07-12T16:59:00Z",
+            status = :reserved,
+            result_path = "",
+            result_sha256 = "",
+            notes = "lock-retry reservation",
+        )
+        unlock_task = Ref{Union{Nothing, Task}}(nothing)
+        retry_completed = run_stage2_confirmation_attempt!(
+            retry_reservation,
+            (canonical_ledger, reservation_nonce_sha256) -> begin
+            absolute_retry_result = _stage2_result_artifact_path(
+                canonical_ledger, retry_completion.result_path)
+            open(absolute_retry_result, "w") do stream
+                TOML.print(stream, Dict(
+                    "schema" => "rhizomorph-stage2-test-completion-v1",
+                    "reservation_nonce_sha256" => reservation_nonce_sha256,
+                ))
+            end
+            mkdir(ledger_path * ".lock")
+            unlock_task[] = @async begin
+                Base.sleep(0.05)
+                rm(ledger_path * ".lock"; recursive = true)
+            end
+            return _replace_ledger_row(
+                retry_completion;
+                development_freeze = freeze,
+                result_sha256 = bytes2hex(
+                    SHA.sha256(read(absolute_retry_result))),
+            )
+            end;
             development_ledger_path = ledger_path,
         )
-        rm(ledger_path * ".lock"; recursive = true)
+        wait(something(unlock_task[]))
+        Test.@test retry_completed.status == :passed
 
         throwing_reservation = _replace_ledger_row(
             callback_reservation;
@@ -1594,11 +1971,16 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             consumed_input_sha256 = cell_44_003.input_bundle_sha256,
             error_profile_sha256 = cell_44_003.error_profile_sha256,
         )
-        Test.@test_throws ErrorException run_stage2_confirmation_attempt!(
-            throwing_reservation,
-            (_, _) -> error("synthetic runner failure");
-            development_ledger_path = ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "synthetic runner failure",
+        ) do
+            run_stage2_confirmation_attempt!(
+                throwing_reservation,
+                (_, _) -> error("synthetic runner failure");
+                development_ledger_path = ledger_path,
+            )
+        end
         events_after_throw = load_stage2_attempt_ledger(
             confirmation_ledger_path; development_freeze = freeze)
         throwing_error = only(filter(events_after_throw) do event
@@ -1617,10 +1999,15 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             development_freeze = freeze,
             attempt_id = "replacement-after-error",
         )
-        Test.@test_throws ErrorException append_stage2_confirmation_attempt!(
-            replacement_after_error;
-            development_ledger_path = ledger_path,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "confirmation cell has already been consumed:",
+        ) do
+            append_stage2_confirmation_attempt!(
+                replacement_after_error;
+                development_ledger_path = ledger_path,
+            )
+        end
 
         malformed_time_message = try
             Stage2DevelopmentFreeze(;
@@ -1644,26 +2031,36 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             sprint(showerror, error)
         end
         Test.@test occursin("UTC format", malformed_time_message)
-        Test.@test_throws ErrorException Stage2DevelopmentFreeze(;
-            frozen_at_utc = "2026-07-12T16:30:00Z",
-            development_ledger_path = ledger_path,
-            confirmation_ledger_path,
-            manifest_path,
-            configuration_path,
-            fixture_path,
-            git_sha,
-            manifest_sha256 = sha_a,
-            configuration_sha256 = sha_b,
-            fixture_sha256 = sha_c,
-            development_ledger_sha256 = fingerprint.sha256,
-            development_ledger_rows = fingerprint.rows,
-            final_attempt_id = fingerprint.final_attempt_id,
-            git_dirty = true,
-        )
-        Test.@test_throws MethodError Stage2AttemptLedgerRow((
-            getfield(first_row, index)
-            for index in 1:fieldcount(Stage2AttemptLedgerRow)
-        )...)
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development freeze requires git_dirty=false",
+        ) do
+            Stage2DevelopmentFreeze(;
+                frozen_at_utc = "2026-07-12T16:30:00Z",
+                development_ledger_path = ledger_path,
+                confirmation_ledger_path,
+                manifest_path,
+                configuration_path,
+                fixture_path,
+                git_sha,
+                manifest_sha256 = sha_a,
+                configuration_sha256 = sha_b,
+                fixture_sha256 = sha_c,
+                development_ledger_sha256 = fingerprint.sha256,
+                development_ledger_rows = fingerprint.rows,
+                final_attempt_id = fingerprint.final_attempt_id,
+                git_dirty = true,
+            )
+        end
+        _test_stage2_forensics_error(
+            MethodError,
+            "no method matching Stage2AttemptLedgerRow",
+        ) do
+            Stage2AttemptLedgerRow((
+                getfield(first_row, index)
+                for index in 1:fieldcount(Stage2AttemptLedgerRow)
+            )...)
+        end
     end
 end
 
@@ -1673,14 +2070,32 @@ Test.@testset "Stage-2 development seal requires strict PASS evidence" begin
         git_sha = repeat("b", 40)
         manifest_path = joinpath(directory, "manifest.toml")
         configuration_path = joinpath(directory, "configuration.toml")
-        fixture_path = joinpath(directory, "fixture.toml")
-        write(manifest_path, "schema_version = 1\n")
-        write(configuration_path, "configuration_id = \"failed\"\n")
-        write(fixture_path,
-            "schema = \"rhizomorph-stage2-fixture-index-v1\"\n")
+        source_manifest = joinpath(
+            @__DIR__,
+            "..",
+            "..",
+            "benchmarking",
+            "rhizomorph_stage2_multimodal_benchmark.toml",
+        )
+        manifest = TOML.parsefile(source_manifest)
+        for (comparator_id, comparator) in manifest["comparators"]
+            comparator["version"] = "locked-$(comparator_id)"
+            comparator["command"] = "run-$(comparator_id) --frozen-input"
+        end
+        manifest["evaluation"]["version"] = "QUAST-5.3.0"
+        open(manifest_path, "w") do stream
+            TOML.print(stream, manifest)
+        end
+        write(
+            configuration_path,
+            "schema = \"rhizomorph-stage2-configuration-v1\"\n" *
+            "configuration_id = \"failed\"\n",
+        )
+        fixture = _write_confirmation_fixture!(directory, manifest)
+        fixture_path = fixture.fixture_path
         manifest_sha256 = bytes2hex(SHA.sha256(read(manifest_path)))
         configuration_sha256 = bytes2hex(SHA.sha256(read(configuration_path)))
-        fixture_sha256 = bytes2hex(SHA.sha256(read(fixture_path)))
+        fixture_sha256 = fixture.fixture_sha256
         ledger_path = joinpath(directory, "failed-development.tsv")
         failed_row = Stage2AttemptLedgerRow(;
             attempt_id = "failed-final",
@@ -1688,7 +2103,7 @@ Test.@testset "Stage-2 development seal requires strict PASS evidence" begin
             seed_partition = :development,
             seed = 43_003,
             modality = :long_noisy,
-            configuration_id = "failed-configuration",
+            configuration_id = "failed",
             git_sha,
             git_dirty = false,
             manifest_sha256,
@@ -1706,18 +2121,23 @@ Test.@testset "Stage-2 development seal requires strict PASS evidence" begin
             notes = "failed strict development gate",
         )
         append_stage2_attempt!(ledger_path, failed_row)
-        Test.@test_throws ErrorException seal_stage2_development_ledger!(
-            ledger_path;
-            frozen_at_utc = "2026-07-12T15:30:00Z",
-            manifest_path,
-            configuration_path,
-            fixture_path,
-            git_sha,
-            manifest_sha256,
-            configuration_sha256,
-            fixture_sha256,
-            git_dirty = false,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development ledger final attempt must pass the strict gate",
+        ) do
+            seal_stage2_development_ledger!(
+                ledger_path;
+                frozen_at_utc = "2026-07-12T15:30:00Z",
+                manifest_path,
+                configuration_path,
+                fixture_path,
+                git_sha,
+                manifest_sha256,
+                configuration_sha256,
+                fixture_sha256,
+                git_dirty = false,
+            )
+        end
         Test.@test !isfile(stage2_development_freeze_path(ledger_path))
 
         attestation_ledger_path = joinpath(directory, "self-attested.tsv")
@@ -1732,18 +2152,23 @@ Test.@testset "Stage-2 development seal requires strict PASS evidence" begin
             result_sha256 = bytes2hex(SHA.sha256(read(attestation_path))),
         )
         append_stage2_attempt!(attestation_ledger_path, self_attested_row)
-        Test.@test_throws ErrorException seal_stage2_development_ledger!(
-            attestation_ledger_path;
-            frozen_at_utc = "2026-07-12T15:31:00Z",
-            manifest_path,
-            configuration_path,
-            fixture_path,
-            git_sha,
-            manifest_sha256,
-            configuration_sha256,
-            fixture_sha256,
-            git_dirty = false,
-        )
+        _test_stage2_forensics_error(
+            ErrorException,
+            "development gate artifact has an unsupported schema",
+        ) do
+            seal_stage2_development_ledger!(
+                attestation_ledger_path;
+                frozen_at_utc = "2026-07-12T15:31:00Z",
+                manifest_path,
+                configuration_path,
+                fixture_path,
+                git_sha,
+                manifest_sha256,
+                configuration_sha256,
+                fixture_sha256,
+                git_dirty = false,
+            )
+        end
         Test.@test !isfile(
             stage2_development_freeze_path(attestation_ledger_path))
     end

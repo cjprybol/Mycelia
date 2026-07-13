@@ -44,6 +44,8 @@ const STAGE2_ATTEMPT_LEDGER_COLUMNS = (
 
 const STAGE2_TERMINAL_ATTEMPT_STATUSES = (:passed, :failed, :error)
 const STAGE2_ATTEMPT_STATUSES = (:reserved, STAGE2_TERMINAL_ATTEMPT_STATUSES...)
+const STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_ATTEMPTS = 500
+const STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_DELAY_SECONDS = 0.01
 const STAGE2_MODALITIES = (
     :long_noisy,
     :long_accurate,
@@ -452,6 +454,8 @@ function assembly_discrepancy_components(
         error("aligned_reference_bases exceeds total_reference_bases")
     aligned_query_bases <= total_query_bases ||
         error("aligned_query_bases exceeds total_query_bases")
+    aligned_error_bases <= aligned_reference_bases + aligned_query_bases ||
+        error("aligned_error_bases exceeds total aligned bases")
 
     total_reference = Int(total_reference_bases)
     total_query = Int(total_query_bases)
@@ -2694,13 +2698,48 @@ function append_stage2_confirmation_attempt!(
     end
 end
 
+function _append_stage2_confirmation_attempt_with_retry!(
+        row::Stage2AttemptLedgerRow;
+        development_ledger_path::AbstractString
+)::String
+    for attempt in 1:STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_ATTEMPTS
+        try
+            return append_stage2_confirmation_attempt!(
+                row; development_ledger_path)
+        catch caught
+            message = sprint(showerror, caught)
+            lock_contention = caught isa ErrorException &&
+                              occursin("ledger is locked:", message)
+            lock_contention || rethrow()
+            attempt < STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_ATTEMPTS ||
+                rethrow()
+            Base.sleep(STAGE2_CONFIRMATION_APPEND_LOCK_RETRY_DELAY_SECONDS)
+        end
+    end
+    error("unreachable confirmation append retry state")
+end
+
+function _validate_confirmation_runner_completion(
+        completion::Stage2AttemptLedgerRow,
+        reservation::Stage2AttemptLedgerRow
+)::Nothing
+    completion.status in STAGE2_TERMINAL_ATTEMPT_STATUSES ||
+        error("confirmation runner must return a terminal completion")
+    isequal(
+        _attempt_reservation_signature(completion),
+        _attempt_reservation_signature(reservation),
+    ) || error("confirmation runner completion differs from its reservation")
+    return nothing
+end
+
 """
 Reserve a confirmation cell before invoking its runner, then append completion.
 
-If the runner throws, an error completion consumes the reservation and keeps the
-release gate blocked. The callback receives the canonical confirmation ledger
-path and its unpredictable reservation nonce digest. Every terminal result must
-bind that digest, proving it was created after the reservation receipt.
+If the runner throws or returns an invalid completion, an error completion
+consumes the reservation and keeps the release gate blocked. The callback
+receives the canonical confirmation ledger path and its unpredictable
+reservation nonce digest. Every terminal result must bind that digest, proving
+it was created after the reservation receipt.
 """
 function run_stage2_confirmation_attempt!(
         reservation::Stage2AttemptLedgerRow,
@@ -2709,12 +2748,18 @@ function run_stage2_confirmation_attempt!(
 )::Stage2AttemptLedgerRow
     reservation.status == :reserved ||
         error("confirmation runner requires a reserved row")
-    ledger_path = append_stage2_confirmation_attempt!(
+    ledger_path = _append_stage2_confirmation_attempt_with_retry!(
         reservation; development_ledger_path)
     reservation_nonce_sha256 = _validate_confirmation_reservation_receipt(
         ledger_path, reservation)
-    completion = try
-        runner(ledger_path, reservation_nonce_sha256)
+    try
+        candidate = runner(ledger_path, reservation_nonce_sha256)
+        candidate isa Stage2AttemptLedgerRow ||
+            error("confirmation runner must return Stage2AttemptLedgerRow")
+        _validate_confirmation_runner_completion(candidate, reservation)
+        _append_stage2_confirmation_attempt_with_retry!(
+            candidate; development_ledger_path)
+        return candidate
     catch caught
         development_path = abspath(normpath(String(development_ledger_path)))
         freeze = load_stage2_development_freeze(
@@ -2758,15 +2803,12 @@ function run_stage2_confirmation_attempt!(
             result_sha256 = stage2_file_sha256(absolute_result_path),
             development_freeze_sha256 =
                 reservation.development_freeze_sha256,
-            notes = "runner threw; reservation permanently consumed",
+            notes =
+                "runner or completion validation failed; reservation permanently consumed",
             development_freeze = freeze,
         )
-        append_stage2_confirmation_attempt!(
+        _append_stage2_confirmation_attempt_with_retry!(
             error_completion; development_ledger_path)
         rethrow()
     end
-    completion isa Stage2AttemptLedgerRow ||
-        error("confirmation runner must return Stage2AttemptLedgerRow")
-    append_stage2_confirmation_attempt!(completion; development_ledger_path)
-    return completion
 end
