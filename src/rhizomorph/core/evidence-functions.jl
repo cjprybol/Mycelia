@@ -614,17 +614,13 @@ function compute_edge_coverage(edge)
 end
 
 # ============================================================================
-# Soft-EM edge weighting (SCAFFOLD, td-e70t)
+# Soft-EM v2 edge weighting (ACTIVE, td-e70t/td-h6w9)
 # ============================================================================
 #
-# Design note (graph-as-HMM correction redesign). Today the M-step is a HARD
-# assignment: `compute_edge_weight` returns `count_total_observations(edge)` — a
-# raw integer coverage count — and each EM iteration rebuilds the graph from the
-# corrected *sequences*. The graph keeps no path-probability memory, so cleaning
-# only happens because corrected reads stop emitting error k-mers, not because
-# low-probability edges decay on their own.
-#
-# The soft-EM thesis replaces the hard count with probability-weighted evidence:
+# Design note (graph-as-HMM correction redesign). Before v2, the M-step used
+# only hard integer coverage and rebuilt the graph from corrected sequences. The
+# active soft-EM implementation replaces that historical hard assignment with
+# probability-weighted evidence:
 # after Viterbi returns a path + likelihood, the path's RESPONSIBILITY (posterior
 # probability, normalized against competing paths) is accumulated onto each edge
 # it traverses. Summing responsibilities over all reads gives a soft, real-valued
@@ -651,7 +647,7 @@ end
     SoftEdgeWeightAccumulator
 
 Probability-weighted (soft) edge-evidence accumulator for soft-EM correction
-(td-e70t scaffold). Maps an edge identity (e.g. an ordered `(src_label,
+(td-e70t v2). Maps an edge identity (e.g. an ordered `(src_label,
 dst_label)` tuple) to the sum of the responsibilities of the decoded paths that
 traversed it. Unlike `count_total_observations` (a hard integer count), the
 accumulated value is a real-valued soft weight in which a low-probability error

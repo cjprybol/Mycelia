@@ -386,6 +386,162 @@ struct IndelDecodeParams
     band_width::Union{Nothing, Int}
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Raw-space coefficients for the calibrated per-base probability that a proposed
+substitution is correct. The fixed feature order is the Viterbi gap, minimum
+support among decoded k-mers overlapping the emitted base, the Stage-0 all-solid
+indicator, and the selected branch's normalized support ratio. A collapsed
+survivor frontier (`gap == Inf`) is represented by its own indicator coefficient.
+"""
+struct CorrectionConfidenceModel
+    intercept::Float64
+    gap_weight::Float64
+    min_kmer_support_weight::Float64
+    stage0_solid_weight::Float64
+    branch_support_ratio_weight::Float64
+    collapsed_frontier_weight::Float64
+
+    function CorrectionConfidenceModel(intercept::Real, gap_weight::Real,
+            min_kmer_support_weight::Real, stage0_solid_weight::Real,
+            branch_support_ratio_weight::Real,
+            collapsed_frontier_weight::Real)
+        values = (
+            Float64(intercept),
+            Float64(gap_weight),
+            Float64(min_kmer_support_weight),
+            Float64(stage0_solid_weight),
+            Float64(branch_support_ratio_weight),
+            Float64(collapsed_frontier_weight),
+        )
+        all(isfinite, values) ||
+            throw(ArgumentError("correction-confidence coefficients must be finite"))
+        return new(values...)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Typed serving schema for one proposed substitution. `competing_branch_support_ratio`
+is the selected incoming edge's normalized support, not a whole-path posterior. Edge
+support is soft-EM-aware when the graph has responsibility-weighted edges registered.
+`raw_gap == Inf` represents a collapsed survivor frontier and is calibrated as a
+separate indicator rather than treated as certainty.
+"""
+struct CorrectionConfidenceFeatures
+    raw_gap::Float64
+    min_kmer_support::Float64
+    all_stage0_solid::Bool
+    competing_branch_support_ratio::Float64
+
+    function CorrectionConfidenceFeatures(raw_gap::Real, min_kmer_support::Real,
+            all_stage0_solid::Bool, competing_branch_support_ratio::Real)
+        gap = Float64(raw_gap)
+        support = Float64(min_kmer_support)
+        ratio = Float64(competing_branch_support_ratio)
+        ((isfinite(gap) && gap >= 0.0) || gap == Inf) ||
+            throw(ArgumentError(
+                "correction-confidence raw gap must be nonnegative and finite or +Inf"))
+        all(isfinite, (support, ratio)) ||
+            throw(ArgumentError("correction-confidence support features must be finite"))
+        support >= 0.0 ||
+            throw(ArgumentError("minimum k-mer support must be nonnegative"))
+        0.0 <= ratio <= 1.0 ||
+            throw(ArgumentError("competing branch support ratio must be in [0, 1]"))
+        return new(gap, support, all_stage0_solid, ratio)
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+One opt-in training/telemetry observation emitted by the correction serving path.
+"""
+struct CorrectionFeatureObservation
+    read_id::String
+    k::Int
+    position::Int
+    observed_base::Char
+    corrected_base::Char
+    features::CorrectionConfidenceFeatures
+end
+
+struct _CorrectionFeatureSinkError <: Exception
+    message::String
+end
+
+function Base.showerror(io::IO, error::_CorrectionFeatureSinkError)::Nothing
+    print(io, error.message)
+    return nothing
+end
+
+struct _CorrectionFeatureContractError <: Exception
+    message::String
+end
+
+function Base.showerror(io::IO, error::_CorrectionFeatureContractError)::Nothing
+    print(io, error.message)
+    return nothing
+end
+
+struct _CorrectionConfidenceServingError <: Exception
+    message::String
+    cause::Exception
+end
+
+function Base.showerror(io::IO, error::_CorrectionConfidenceServingError)::Nothing
+    print(io, error.message, ": ")
+    showerror(io, error.cause)
+    return nothing
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Evaluate a [`CorrectionConfidenceModel`](@ref) on one per-base feature vector.
+"""
+function correction_confidence_probability(model::CorrectionConfidenceModel,
+        features::CorrectionConfidenceFeatures)::Float64
+    collapsed = features.raw_gap == Inf
+    raw_gap = collapsed ? 0.0 : features.raw_gap
+    solid = features.all_stage0_solid ? 1.0 : 0.0
+    z = model.intercept + model.gap_weight * raw_gap +
+        model.min_kmer_support_weight * features.min_kmer_support +
+        model.stage0_solid_weight * solid +
+        model.branch_support_ratio_weight * features.competing_branch_support_ratio +
+        model.collapsed_frontier_weight * (collapsed ? 1.0 : 0.0)
+    isnan(z) && throw(ArgumentError("correction-confidence logit must not be NaN"))
+    return z >= 0.0 ? 1.0 / (1.0 + exp(-z)) : exp(z) / (1.0 + exp(z))
+end
+
+function correction_confidence_probability(model::CorrectionConfidenceModel,
+        gap::Real, min_kmer_support::Real, stage0_solid::Bool,
+        branch_support_ratio::Real)::Float64
+    features = CorrectionConfidenceFeatures(
+        gap, min_kmer_support, stage0_solid, branch_support_ratio)
+    return correction_confidence_probability(model, features)
+end
+
+function _validate_correction_gate(calibrated_gap_threshold::Union{Real, Nothing},
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing},
+        calibrated_probability_threshold::Real)::Nothing
+    if calibrated_gap_threshold !== nothing && calibrated_probability_model !== nothing
+        throw(ArgumentError(
+            "calibrated_gap_threshold and calibrated_probability_model are mutually exclusive"))
+    end
+    if calibrated_gap_threshold !== nothing
+        gap_threshold = Float64(calibrated_gap_threshold)
+        isnan(gap_threshold) &&
+            throw(ArgumentError("calibrated_gap_threshold must not be NaN"))
+    end
+    probability_threshold = Float64(calibrated_probability_threshold)
+    0.0 <= probability_threshold <= 1.0 ||
+        throw(ArgumentError("calibrated_probability_threshold must be in [0, 1]"))
+    return nothing
+end
+
 # =============================================================================
 # Core Iterative Assembly Framework
 # =============================================================================
@@ -394,6 +550,14 @@ end
 Main iterative maximum likelihood assembly function.
 Processes entire read sets per iteration with complete FASTQ I/O tracking.
 Enhanced with performance optimizations, caching, and progress tracking.
+
+`calibrated_gap_threshold`, `calibrated_probability_model`, and
+`correction_feature_sink` are opt-in, substitution-only controls. They remain off by
+default. When `indel_params !== nothing`, requests are retained in result provenance
+but are not executed because an indel alignment has no stable base-to-column mapping
+for positional reverts or per-base feature labels. Expected per-read feature-contract
+misses fail open to the ungated substitution decode and are counted; callback failures
+and unexpected implementation exceptions propagate.
 """
 function mycelia_iterative_assemble(input_fastq::String;
         max_k::Int = 101,
@@ -416,10 +580,15 @@ function mycelia_iterative_assemble(input_fastq::String;
         soft_em::Bool = false,
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -774,6 +943,9 @@ function mycelia_iterative_assemble(input_fastq::String;
                     cheap_correct = cheap_correct,
                     beam_width = beam_width,
                     calibrated_gap_threshold = calibrated_gap_threshold,
+                    calibrated_probability_model = calibrated_probability_model,
+                    calibrated_probability_threshold = calibrated_probability_threshold,
+                    correction_feature_sink = correction_feature_sink,
                     soft_weights = current_soft_weights,
                     hard_vertices = hard_vertices,
                     windowed_decode = windowed_decode,
@@ -953,6 +1125,13 @@ function mycelia_iterative_assemble(input_fastq::String;
         cheap_correction_counts = cheap_correction_counts,
         hard_window = hard_window, windowed_decode = windowed_decode,
         soft_em = soft_em, cheap_correct = cheap_correct,
+        calibrated_gap_threshold = calibrated_gap_threshold,
+        calibrated_probability_model = calibrated_probability_model,
+        calibrated_probability_threshold = calibrated_probability_threshold,
+        correction_feature_sink_requested = correction_feature_sink !== nothing,
+        correction_feature_sink_active =
+            correction_feature_sink !== nothing && indel_params === nothing,
+        indel_params = indel_params,
         min_decode_k = effective_min_decode_k,
         decode_gate_density = effective_decode_gate_density,
         decode_gated_rungs = decode_gated_rungs,
@@ -1394,7 +1573,11 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         weighted_graph = nothing,
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
+        solid_kmers::Union{Nothing, AbstractSet} = nothing,
         max_window::Int = 500,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
@@ -1405,6 +1588,10 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph, diagnostics = diagnostics,
         pad = pad, calibrated_gap_threshold = calibrated_gap_threshold,
+        calibrated_probability_model = calibrated_probability_model,
+        calibrated_probability_threshold = calibrated_probability_threshold,
+        correction_feature_sink = correction_feature_sink,
+        solid_kmers = solid_kmers,
         max_window = max_window, indel_params = indel_params)
     return record, improved
 end
@@ -1438,7 +1625,11 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         weighted_graph = nothing,
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
+        solid_kmers::Union{Nothing, AbstractSet} = nothing,
         max_window::Int = 500,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool, Int, Int}
@@ -1482,6 +1673,12 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             beam_width = beam_width, soft_weights = soft_weights,
             weighted_graph = weighted_graph, diagnostics = diagnostics,
             calibrated_gap_threshold = calibrated_gap_threshold,
+            calibrated_probability_model = calibrated_probability_model,
+            calibrated_probability_threshold = calibrated_probability_threshold,
+            correction_feature_sink = correction_feature_sink,
+            correction_read_id = String(id),
+            correction_position_offset = lo - 1,
+            solid_kmers = solid_kmers,
             indel_params = indel_params)
         improved || continue
         dseq = FASTX.sequence(String, decoded_sub)
@@ -1613,15 +1810,26 @@ parallel (`@threads`) read loop increments them race-free.
   an internal decoder contract regression rather than a data-dependent miss.
 - `window_divergences` : substitution windows rejected for violating the
   length-preserving splice contract.
+- `candidate_substitutions_evaluated` : proposed substitutions reached by an
+  effective gate or feature sink.
+- `feature_events_emitted` : observations successfully delivered to the caller's
+  sink. A later callback failure can occur after earlier external mutations.
+- `gate_reverts` : proposed substitutions reverted by a calibrated gate after the
+  complete read-level feature contract was validated.
 """
 mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
     unkmerizable_reads::Threads.Atomic{Int}
-    # Calibrated gate requested (threshold set, substitution mode) but a decode
-    # contract invariant was violated so gating silently fell open to the ungated
-    # decode. On a healthy substitution decode this is always 0; a nonzero value
-    # means the opt-in gate disabled itself — a regression signal, not data loss.
+    # Calibrated gate or feature telemetry requested in substitution mode, but a
+    # usable decode/path/gap contract was unavailable (including no-path,
+    # structural, and un-k-merizable attempts). The read stays ungated and emits
+    # no feature event; a nonzero value makes that survivor selection visible.
     gate_skipped::Threads.Atomic{Int}
+    # Serving activity is tracked separately from configuration provenance so an
+    # enabled gate that saw no candidate edits cannot masquerade as executed.
+    candidate_substitutions_evaluated::Threads.Atomic{Int}
+    feature_events_emitted::Threads.Atomic{Int}
+    gate_reverts::Threads.Atomic{Int}
     indel_decodes::Threads.Atomic{Int}
     truncated_decodes::Threads.Atomic{Int}
     trace_contract_errors::Threads.Atomic{Int}
@@ -1630,7 +1838,20 @@ end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+end
+
+function _record_gate_contract_miss!(
+        diagnostics::Union{Nothing, CorrectorDiagnostics},
+        reason::AbstractString)::Nothing
+    if diagnostics === nothing
+        @warn "calibrated feature/gate contract unavailable; returning the " *
+              "ungated read" reason maxlog = 1
+    else
+        Threads.atomic_add!(diagnostics.gate_skipped, 1)
+    end
+    return nothing
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -1802,6 +2023,13 @@ Stage 0 progress. `decode_gated` is `true` iff the per-read decode was gated OFF
 the whole pass (low-k gate, td-9h5r). Callers destructuring only the first
 two/three/four values are unaffected.
 """
+function _correction_pass_uses_parallel(enable_parallel::Bool, nthreads::Int,
+        soft_weights_active::Bool, feature_collection_active::Bool)::Bool
+    nthreads >= 1 || throw(ArgumentError("nthreads must be positive"))
+    return enable_parallel && nthreads > 1 && !soft_weights_active &&
+           !feature_collection_active
+end
+
 function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph, k::Int;
         verbose::Bool = false,
         batch_size::Int = 10000,
@@ -1810,7 +2038,10 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         skip_solid::Bool = false,
         cheap_correct::Bool = false,
         beam_width::Union{Int, Nothing} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
         soft_weights::Union{Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         hard_vertices::Union{Nothing, AbstractSet} = nothing,
         windowed_decode::Bool = false,
@@ -1819,6 +2050,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
         Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
     diag = diagnostics === nothing ? CorrectorDiagnostics() : diagnostics
     # Snapshot so the per-call @warn reflects THIS pass's swallowed fraction even
     # when `diag` is a shared accumulator threaded across many passes.
@@ -1850,7 +2083,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     end
     # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
     # corrector needs the solid set. Compute once, share both consumers.
-    need_solid = (skip_solid || cheap_correct) && graph_mode != :singlestrand
+    feature_collection_active = correction_feature_sink !== nothing && indel_params === nothing
+    probability_gate_active = calibrated_probability_model !== nothing &&
+                              indel_params === nothing
+    need_solid = probability_gate_active || feature_collection_active ||
+                 ((skip_solid || cheap_correct) && graph_mode != :singlestrand)
     solid_kmers = need_solid ? _solid_kmer_set(graph) : nothing
 
     # Stage 0 CHEAP correction (td-bjnt): fix simple single-substitution errors
@@ -1926,11 +2163,18 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # otherwise use the precomputed gate flags.
     _skip_this_read_at = i -> pass_decode_off || base_skip_flags[i]
 
-    # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
-    # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
-    use_parallel = enable_parallel && Threads.nthreads() > 1 && soft_weights === nothing
+    # Soft-EM accumulation and the opt-in calibration sink are caller-owned
+    # mutable state, so those passes run sequentially. Otherwise honor the
+    # caller's parallel request.
+    use_parallel = _correction_pass_uses_parallel(
+        enable_parallel, Threads.nthreads(), soft_weights !== nothing,
+        feature_collection_active)
     if enable_parallel && soft_weights !== nothing && Threads.nthreads() > 1
         @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
+    end
+    if enable_parallel && feature_collection_active && Threads.nthreads() > 1
+        @warn "correction feature collection is sequential (race-free); ignoring " *
+              "enable_parallel for this pass." maxlog = 1
     end
 
     if verbose
@@ -1958,6 +2202,14 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # expensive/bounded; short reads keep the cheap, exact whole-read decode
     # (so the :scalable short-read quality gate never regresses).
     use_windowed = windowed_decode && hard_vertices !== nothing
+    # Windowed decoding now threads the parent indel profile. The calibrated gates
+    # and feature sink remain substitution-only, so exclude those opt-in controls
+    # when the parent requested indels rather than applying positional reverts to
+    # an alignment whose coordinates can shift.
+    windowed_gap_threshold = indel_params === nothing ? calibrated_gap_threshold : nothing
+    windowed_probability_model = indel_params === nothing ?
+                                   calibrated_probability_model : nothing
+    windowed_feature_sink = indel_params === nothing ? correction_feature_sink : nothing
 
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
@@ -1989,13 +2241,21 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                         read, graph, k, hard_vertices; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
                         diagnostics = diag,
-                        calibrated_gap_threshold = calibrated_gap_threshold,
+                        calibrated_gap_threshold = windowed_gap_threshold,
+                        calibrated_probability_model = windowed_probability_model,
+                        calibrated_probability_threshold = calibrated_probability_threshold,
+                        correction_feature_sink = windowed_feature_sink,
+                        solid_kmers = solid_kmers,
                         indel_params = indel_params) :
                                    improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
                         diagnostics = diag, indel_params = indel_params,
-                        calibrated_gap_threshold = calibrated_gap_threshold)
+                        calibrated_gap_threshold = calibrated_gap_threshold,
+                        calibrated_probability_model = calibrated_probability_model,
+                        calibrated_probability_threshold = calibrated_probability_threshold,
+                        correction_feature_sink = correction_feature_sink,
+                        solid_kmers = solid_kmers)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -2025,14 +2285,22 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
                     diagnostics = diag,
-                    calibrated_gap_threshold = calibrated_gap_threshold,
+                    calibrated_gap_threshold = windowed_gap_threshold,
+                    calibrated_probability_model = windowed_probability_model,
+                    calibrated_probability_threshold = calibrated_probability_threshold,
+                    correction_feature_sink = windowed_feature_sink,
+                    solid_kmers = solid_kmers,
                     indel_params = indel_params) :
                                improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
                     diagnostics = diag, indel_params = indel_params,
-                    calibrated_gap_threshold = calibrated_gap_threshold)
+                    calibrated_gap_threshold = calibrated_gap_threshold,
+                    calibrated_probability_model = calibrated_probability_model,
+                    calibrated_probability_threshold = calibrated_probability_threshold,
+                    correction_feature_sink = correction_feature_sink,
+                    solid_kmers = solid_kmers)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -2108,15 +2376,14 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             truncated_this_pass / completed_indel_outcomes, digits = 3)
     end
 
-    # A requested calibrated gate that silently fell open on a substitution decode
-    # is a contract regression (the gate did nothing despite being opted in) — see
-    # CorrectorDiagnostics.gate_skipped. Surface it rather than let the frontier look
-    # like "the gate doesn't help."
+    # A requested calibrated gate or feature sink whose substitution decode did
+    # not satisfy the full-length gap/path contract cannot act on that read. Surface
+    # the skip rather than silently fitting/scoring only an unexplained survivor set.
     gate_skipped_this_pass = diag.gate_skipped[] - gate_skipped_before
     if gate_skipped_this_pass > 0
-        @warn "iterative corrector: calibrated gate fell open (ungated) on " *
-              "$(gate_skipped_this_pass) read(s) despite a substitution decode — the " *
-              "gap/path alignment contract was violated; the gate silently did nothing." total_reads gate_skipped = gate_skipped_this_pass
+        @warn "iterative corrector: calibrated feature/gate contract unavailable on " *
+              "$(gate_skipped_this_pass) read(s); those reads stayed ungated and " *
+              "emitted no calibration features." total_reads gate_skipped = gate_skipped_this_pass
     end
 
     window_divergences_this_pass =
@@ -2144,8 +2411,16 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Tuple{
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
+        correction_read_id::Union{Nothing, String} = nothing,
+        correction_position_offset::Int = 0,
+        solid_kmers::Union{Nothing, AbstractSet} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -2173,7 +2448,13 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
-        calibrated_gap_threshold = calibrated_gap_threshold)
+        calibrated_gap_threshold = calibrated_gap_threshold,
+        calibrated_probability_model = calibrated_probability_model,
+        calibrated_probability_threshold = calibrated_probability_threshold,
+        correction_feature_sink = correction_feature_sink,
+        correction_read_id = correction_read_id,
+        correction_position_offset = correction_position_offset,
+        solid_kmers = solid_kmers)
 
     # Only update if significant improvement
     if likelihood_improvement > 0.01  # Threshold for meaningful improvement
@@ -2210,8 +2491,20 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Tuple{
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
+        correction_read_id::Union{Nothing, String} = nothing,
+        correction_position_offset::Int = 0,
+        solid_kmers::Union{Nothing, AbstractSet} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
+    gate_contract_requested = indel_params === nothing &&
+                              (calibrated_gap_threshold !== nothing ||
+                               calibrated_probability_model !== nothing ||
+                               correction_feature_sink !== nothing)
     # Trustworthy Viterbi (graph-as-HMM correction core, td-ak6w). Trust the
     # maximum-likelihood path or report no improvement. The prior heuristic
     # fallback cascade (0.01 abandon-threshold -> statistical resampling -> local
@@ -2233,6 +2526,10 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         if error isa BioSequences.EncodeError
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.unkmerizable_reads, 1)
+            if gate_contract_requested
+                _record_gate_contract_miss!(
+                    diagnostics, "input read could not be k-merized")
+            end
             return read, 0.0
         end
         rethrow()
@@ -2243,7 +2540,13 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph,
         diagnostics = diagnostics, indel_params = indel_params,
-        calibrated_gap_threshold = calibrated_gap_threshold)
+        calibrated_gap_threshold = calibrated_gap_threshold,
+        calibrated_probability_model = calibrated_probability_model,
+        calibrated_probability_threshold = calibrated_probability_threshold,
+        correction_feature_sink = correction_feature_sink,
+        correction_read_id = correction_read_id,
+        correction_position_offset = correction_position_offset,
+        solid_kmers = solid_kmers)
     if viterbi_result === nothing
         # Viterbi could not decode (empty observation set, structural error, or an
         # un-k-merizable read): report no improvement rather than falling back to a
@@ -2864,6 +3167,12 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         windowed_decode::Bool = false,
         soft_em::Bool = false,
         cheap_correct::Bool = false,
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink_requested::Bool = false,
+        correction_feature_sink_active::Bool = false,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
         decode_gated_rungs::Vector{Int} = Int[],
@@ -3003,6 +3312,61 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :final_graph_reusable => final_pass_graph_reusable
     )
 
+    # Preserve literal default-off metadata identity. Gate provenance and
+    # feature-contract telemetry are present only when those opt-in paths were
+    # requested. Configuration, effectiveness, and observed execution are distinct:
+    # an enabled gate can legitimately see zero proposed substitutions.
+    gate_requested = calibrated_gap_threshold !== nothing ||
+                     calibrated_probability_model !== nothing
+    gate_effective = gate_requested && indel_params === nothing
+    candidate_evaluations = diagnostics === nothing ?
+                            0 : diagnostics.candidate_substitutions_evaluated[]
+    feature_events = diagnostics === nothing ? 0 : diagnostics.feature_events_emitted[]
+    gate_reverts = diagnostics === nothing ? 0 : diagnostics.gate_reverts[]
+    if calibrated_gap_threshold !== nothing
+        metadata[:calibrated_gap_threshold] = Float64(calibrated_gap_threshold)
+    end
+    if calibrated_probability_model !== nothing
+        metadata[:calibrated_probability_threshold] =
+            Float64(calibrated_probability_threshold)
+        metadata[:calibrated_probability_model] = Dict{Symbol, Float64}(
+            :intercept => calibrated_probability_model.intercept,
+            :gap_weight => calibrated_probability_model.gap_weight,
+            :min_kmer_support_weight =>
+            calibrated_probability_model.min_kmer_support_weight,
+            :stage0_solid_weight => calibrated_probability_model.stage0_solid_weight,
+            :branch_support_ratio_weight =>
+            calibrated_probability_model.branch_support_ratio_weight,
+            :collapsed_frontier_weight =>
+            calibrated_probability_model.collapsed_frontier_weight,
+        )
+    end
+    if gate_requested
+        metadata[:calibrated_gate_kind] = calibrated_gap_threshold === nothing ?
+                                          :probability : :raw_gap
+        metadata[:calibrated_gate_requested] = true
+        metadata[:calibrated_gate_effective] = gate_effective
+        metadata[:calibrated_gate_executed] =
+            gate_effective && candidate_evaluations > 0
+        metadata[:calibrated_gate_disabled_reason] = gate_effective ?
+                                                        nothing : "indel_params_requested"
+    end
+    if correction_feature_sink_requested
+        metadata[:correction_feature_sink_requested] = true
+        metadata[:correction_feature_sink_effective] = correction_feature_sink_active
+        metadata[:correction_feature_sink_executed] =
+            correction_feature_sink_active && feature_events > 0
+        metadata[:correction_feature_sink_disabled_reason] =
+            correction_feature_sink_active ? nothing : "indel_params_requested"
+    end
+    if gate_requested || correction_feature_sink_requested
+        metadata[:calibrated_gate_candidate_evaluations] = candidate_evaluations
+        metadata[:calibrated_feature_events] = feature_events
+        metadata[:calibrated_gate_reverts] = gate_reverts
+        metadata[:calibrated_feature_contract_skips] = diagnostics === nothing ?
+                                                         0 : diagnostics.gate_skipped[]
+    end
+
     if verbose
         println("Iterative assembly finalized:")
         println("  Total k-mer sizes: $(length(k_progression))")
@@ -3104,9 +3468,76 @@ end
 # Integration with Viterbi algorithms and statistical path resampling
 # =============================================================================
 
+function _correction_confidence_features(graph::Any, decoded_path::Any, i::Int, k::Int,
+        solid_kmers::AbstractSet, raw_gap::Real,
+        contract_error::Type{<:Exception})::CorrectionConfidenceFeatures
+    first_step = i + 1
+    last_step = min(i + k, length(decoded_path.steps))
+    first_step <= last_step ||
+        throw(contract_error(
+            "empty overlapping-k-mer window for correction feature"))
+    gap = Float64(raw_gap)
+    ((isfinite(gap) && gap >= 0.0) || gap == Inf) ||
+        throw(contract_error(
+            "correction-confidence raw gap must be nonnegative and finite or +Inf"))
+    min_support = Inf
+    all_solid = true
+    for j in first_step:last_step
+        label = decoded_path.steps[j].vertex_label
+        support = Float64(_vertex_coverage(graph[label]))
+        isfinite(support) ||
+            throw(contract_error("k-mer support feature must be finite"))
+        support >= 0.0 ||
+            throw(contract_error("k-mer support feature must be nonnegative"))
+        min_support = min(min_support, support)
+        solid = try
+            label in solid_kmers
+        catch error
+            error isa ArgumentError || rethrow()
+            throw(contract_error(sprint(showerror, error)))
+        end
+        all_solid &= solid
+    end
+    branch_support_ratio = Float64(decoded_path.steps[first_step].probability)
+    isfinite(branch_support_ratio) ||
+        throw(contract_error("branch support ratio must be finite"))
+    0.0 <= branch_support_ratio <= 1.0 ||
+        throw(contract_error("branch support ratio must be in [0, 1]"))
+    return CorrectionConfidenceFeatures(
+        gap, min_support, all_solid, branch_support_ratio)
+end
+
 """
-Try to improve FASTQ read using Viterbi algorithm from viterbi-next.jl.
-Returns (improved_read, likelihood) or nothing if no improvement.
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Extract the typed correction-confidence features for `position_gaps[i]` from a
+decoded substitution path. The corresponding emitted base is at read position `i + k`.
+"""
+function correction_confidence_features(
+        graph::Any, decoded_path::Any, i::Int, k::Int,
+        solid_kmers::AbstractSet, raw_gap::Real)::CorrectionConfidenceFeatures
+    return _correction_confidence_features(
+        graph, decoded_path, i, k, solid_kmers, raw_gap, ArgumentError)
+end
+
+function _gate_correction_confidence_features(
+        graph::Any, decoded_path::Any, i::Int, k::Int,
+        solid_kmers::AbstractSet, raw_gap::Real)::CorrectionConfidenceFeatures
+    return _correction_confidence_features(
+        graph, decoded_path, i, k, solid_kmers, raw_gap,
+        _CorrectionFeatureContractError)
+end
+
+"""
+Try to improve a FASTQ read using the Viterbi decoder.
+Returns `(improved_read, likelihood)` or `nothing` if no path is available.
+
+The raw-gap and probability gates are mutually exclusive, opt-in, and
+substitution-only. Expected feature/data-contract errors fail open for the complete
+read and increment `diagnostics.gate_skipped`; interrupts, resource exhaustion,
+callback failures, and unexpected implementation exceptions propagate. Feature
+extraction is read-transactional, but sink callbacks mutate caller-owned state one
+at a time: callback `N` can fail after callbacks `1:(N - 1)` have completed.
 """
 function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         graph,
@@ -3117,8 +3548,27 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         weighted_graph = nothing,
         diagnostics::Union{Nothing, CorrectorDiagnostics} = nothing,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
-        calibrated_gap_threshold::Union{Float64, Nothing} = nothing)::Union{
+        calibrated_gap_threshold::Union{Real, Nothing} = nothing,
+        calibrated_probability_model::Union{CorrectionConfidenceModel, Nothing} = nothing,
+        calibrated_probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing,
+        correction_read_id::Union{Nothing, String} = nothing,
+        correction_position_offset::Int = 0,
+        solid_kmers::Union{Nothing, AbstractSet} = nothing)::Union{
         Tuple{FASTX.FASTQ.Record, Float64}, Nothing}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
+    if indel_params !== nothing &&
+       (calibrated_gap_threshold !== nothing ||
+        calibrated_probability_model !== nothing ||
+        correction_feature_sink !== nothing)
+        @warn "calibrated gates and feature collection are substitution-only; " *
+              "ignoring the requested gate/sink because indel_params is set" maxlog = 1
+    end
+    gate_contract_requested = indel_params === nothing &&
+                              (calibrated_gap_threshold !== nothing ||
+                               calibrated_probability_model !== nothing ||
+                               correction_feature_sink !== nothing)
     try
         sequence_string = FASTX.sequence(String, read)
         alphabet = Mycelia.detect_alphabet(sequence_string)
@@ -3130,6 +3580,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # in the catch below, NOT a crash of the (threaded) batch (td-63qy family).
         kmers = collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
         if isempty(kmers)
+            if gate_contract_requested
+                _record_gate_contract_miss!(
+                    diagnostics, "input read produced no k-mer observations")
+            end
             return nothing
         end
 
@@ -3178,6 +3632,17 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         beam_is_exact = effective_beam_width == typemax(Int)
         effective_margin = beam_is_exact ? Inf : _AUTO_BEAM_SCORE_MARGIN
         effective_successor_bound = beam_is_exact ? typemax(Int) : _AUTO_SUCCESSOR_BOUND
+        probability_gate_active = calibrated_probability_model !== nothing &&
+                                  indel_params === nothing
+        feature_sink_active = correction_feature_sink !== nothing && indel_params === nothing
+        feature_extraction_active = probability_gate_active || feature_sink_active
+        effective_solid_kmers = if feature_extraction_active
+            solid_kmers === nothing ? _solid_kmer_set(graph) : solid_kmers
+        else
+            nothing
+        end
+        record_position_gaps = calibrated_gap_threshold !== nothing ||
+                               feature_extraction_active
         # Indel-aware wiring (td-9q84 / 4a): when the assembler's error profile
         # enables indels it threads a non-nothing `indel_params`; the config then
         # turns on the pair-HMM gap moves with the profile's gap-open fractions +
@@ -3198,7 +3663,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 beam_width = effective_beam_width,
                 max_successors_per_state = effective_successor_bound,
                 beam_score_margin = effective_margin,
-                record_position_gaps = calibrated_gap_threshold !== nothing
+                record_position_gaps = record_position_gaps
             )
         else
             Mycelia.ViterbiCorrectionConfig(
@@ -3217,13 +3682,17 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 deletion_max_run = indel_params.deletion_max_run,
                 max_insertion_run = indel_params.max_insertion_run,
                 band_width = indel_params.band_width,
-                record_position_gaps = calibrated_gap_threshold !== nothing
+                record_position_gaps = record_position_gaps
             )
         end
         correction = Mycelia.correct_observations(
             graph, [observations]; config = config, weighted_graph = weighted_graph)
         corrected_path = only(correction.corrected_observations)
         if corrected_path === nothing || isempty(corrected_path)
+            if gate_contract_requested
+                _record_gate_contract_miss!(
+                    diagnostics, "decoder produced no corrected path")
+            end
             return nothing
         end
         path_diagnostics = only(correction.paths).diagnostics
@@ -3289,7 +3758,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         # net-length-neutral — it would pass a length check yet shift the interior
         # map — so we exclude indel mode entirely rather than trust `length` as a
         # proxy for alignment (review: convergent finding, 3 reviewers).
-        if calibrated_gap_threshold !== nothing && indel_params === nothing
+        gate_active = calibrated_gap_threshold !== nothing ||
+                      calibrated_probability_model !== nothing
+        serving_features_active = gate_active || feature_sink_active
+        if serving_features_active && indel_params === nothing
             path_result = only(correction.paths)
             decoded_path = path_result.path
             gaps = get(path_result.diagnostics, :position_gaps, nothing)
@@ -3298,26 +3770,130 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             # gaps[i] is the Viterbi margin INTO path.steps[i+1], i.e. read position
             # i+k. Where the margin is below threshold the decode is ambiguous, so
             # revert that base to the observed one — this is what pulls over-correction
-            # back down. `Inf` gaps (collapsed frontier ⇒ maximally confident) clear
-            # any finite threshold and are kept.
+            # back down. Under the legacy raw-gap gate, `Inf` clears any finite
+            # threshold. The probability gate instead uses its fitted collapsed-
+            # frontier probability, because `Inf` is also routine after beam pruning.
             if decoded_path !== nothing && gaps !== nothing &&
                length(gaps) == length(decoded_path.steps) - 1 &&
                length(corrected_chars) == length(original_chars)
-                @inbounds for i in eachindex(gaps)
-                    position = i + k
-                    position > length(corrected_chars) && break
-                    if gaps[i] < calibrated_gap_threshold
-                        corrected_chars[position] = original_chars[position]
+                revert_positions = Int[]
+                feature_observations = CorrectionFeatureObservation[]
+                gate_contract_ok = true
+                try
+                    @inbounds for i in eachindex(gaps)
+                        position = i + k
+                        position > length(corrected_chars) && break
+                        # The gate can only act on a proposed substitution. Training
+                        # and held-out evaluation use this same candidate-edit cohort.
+                        corrected_chars[position] == original_chars[position] && continue
+                        diagnostics === nothing || Threads.atomic_add!(
+                            diagnostics.candidate_substitutions_evaluated, 1)
+                        if serving_features_active &&
+                           !isfinite(gaps[i]) && gaps[i] != Inf
+                            throw(_CorrectionFeatureContractError(
+                                "correction feature extraction received a non-finite " *
+                                "Viterbi gap for $(FASTX.identifier(read)) at position " *
+                                "$(position)"))
+                        end
+                        features = if (isfinite(gaps[i]) || gaps[i] == Inf) &&
+                                      feature_extraction_active
+                            _gate_correction_confidence_features(
+                                graph, decoded_path, i, k,
+                                effective_solid_kmers, gaps[i])
+                        else
+                            nothing
+                        end
+                        if feature_sink_active && features !== nothing
+                            event_read_id = correction_read_id === nothing ?
+                                            String(FASTX.identifier(read)) : correction_read_id
+                            push!(feature_observations, CorrectionFeatureObservation(
+                                event_read_id,
+                                k,
+                                position + correction_position_offset,
+                                original_chars[position],
+                                corrected_chars[position],
+                                features,
+                            ))
+                        end
+                        keep_correction = if calibrated_gap_threshold !== nothing
+                            # A NaN threshold is rejected at configuration validation.
+                            # Malformed per-position gaps were rejected above for every
+                            # gate/sink serving path.
+                            !(gaps[i] < Float64(calibrated_gap_threshold))
+                        elseif calibrated_probability_model === nothing
+                            true
+                        elseif isfinite(gaps[i]) || gaps[i] == Inf
+                            confidence = correction_confidence_probability(
+                                calibrated_probability_model, features)
+                            confidence >= calibrated_probability_threshold
+                        else
+                            throw(_CorrectionFeatureContractError(
+                                "probability gate received a non-finite Viterbi gap"))
+                        end
+                        keep_correction || push!(revert_positions, position)
+                    end
+                catch gate_error
+                    if gate_error isa _CorrectionFeatureContractError
+                        # Expected feature/data-contract defects must not partially
+                        # gate a read. Keep the ungated decode, emit no buffered
+                        # observations, and surface the contract miss once.
+                        gate_contract_ok = false
+                        @debug "calibrated probability gate failed open" exception =
+                            (gate_error, catch_backtrace())
+                    else
+                        # Interrupts, resource exhaustion, callback defects, and
+                        # unexpected implementation failures are never a safe
+                        # fail-open condition.
+                        if gate_error isa ArgumentError
+                            # The outer decoder boundary intentionally treats legacy
+                            # ArgumentErrors as structural per-read skips. Wrap an
+                            # unexpected serving ArgumentError so that boundary cannot
+                            # silently swallow a numerical/model defect.
+                            throw(_CorrectionConfidenceServingError(
+                                "correction-confidence serving failed for " *
+                                String(FASTX.identifier(read)), gate_error))
+                        end
+                        rethrow()
                     end
                 end
-                corrected_sequence_string = String(corrected_chars)
-            elseif diagnostics !== nothing
+                if gate_contract_ok
+                    # Feature EXTRACTION is read-transactional: do not invoke the
+                    # caller-owned sink until every proposed edit has satisfied the
+                    # feature/gate contract. Callback delivery cannot roll back
+                    # external mutations: callback N may fail after 1:(N - 1) ran.
+                    # `_CorrectionFeatureSinkError` propagates such failures.
+                    for observation in feature_observations
+                        try
+                            correction_feature_sink(observation)
+                            diagnostics === nothing || Threads.atomic_add!(
+                                diagnostics.feature_events_emitted, 1)
+                        catch sink_error
+                            sink_error isa InterruptException && rethrow()
+                            throw(_CorrectionFeatureSinkError(
+                                "correction feature sink failed for " *
+                                "$(observation.read_id) at position " *
+                                "$(observation.position): " *
+                                sprint(showerror, sink_error)))
+                        end
+                    end
+                    for position in revert_positions
+                        corrected_chars[position] = original_chars[position]
+                        diagnostics === nothing ||
+                            Threads.atomic_add!(diagnostics.gate_reverts, 1)
+                    end
+                    corrected_sequence_string = String(corrected_chars)
+                elseif serving_features_active
+                    _record_gate_contract_miss!(
+                        diagnostics, "per-base feature extraction failed")
+                end
+            elseif serving_features_active
                 # In substitution mode the decode contract (path present, gaps
                 # recorded, len == steps-1, length preserved) is ALWAYS satisfiable;
                 # a miss means the gate silently fell open to the ungated decode —
                 # count it so an opt-in gate that disabled itself is visible, not
                 # invisible (fail-open is the right data-safety choice; silence is not).
-                Threads.atomic_add!(diagnostics.gate_skipped, 1)
+                _record_gate_contract_miss!(
+                    diagnostics, "path/gap/length contract was incomplete")
             end
         end
         improved_quality, improved_likelihood = if indel_params === nothing
@@ -3348,6 +3924,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             # gain"). See CorrectorDiagnostics + the per-pass @warn.
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
+            if gate_contract_requested
+                _record_gate_contract_miss!(
+                    diagnostics, "decoder raised a structural error")
+            end
             return nothing
         elseif error isa BioSequences.EncodeError
             # UN-K-MERIZABLE read: the 2-bit k-mer iterator throws EncodeError (NOT
@@ -3357,6 +3937,10 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             # corrector on one N-containing read (td-63qy family).
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.unkmerizable_reads, 1)
+            if gate_contract_requested
+                _record_gate_contract_miss!(
+                    diagnostics, "input read could not be k-merized")
+            end
             return nothing
         end
         rethrow()

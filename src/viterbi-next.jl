@@ -1570,9 +1570,9 @@ function _viterbi_correct_observation(
         # cases — under target anchoring the loop can run PAST the last on-path depth,
         # leaving trailing gaps for abandoned frontiers. TWO caveats for consumers:
         #   • An entry of `Inf` means "no surviving competitor at that depth" — a
-        #     ROUTINE value on a collapsed/beam-pruned frontier — so consumers MUST
-        #     `filter(isfinite, _)` (or clip) BEFORE any sum-based calibration metric
-        #     (reliability/ECE/Brier); a raw `Inf` silently poisons those to Inf/NaN.
+        #     ROUTINE value on a collapsed/beam-pruned frontier. Legacy sum-based
+        #     metrics must filter or clip it; calibrated serving instead encodes it
+        #     explicitly as a collapsed-frontier indicator with raw gap set to zero.
         #   • Under a finite `beam_width`/`beam_score_margin` this is a SURVIVOR
         #     margin (2nd-best among survivors), not the exact Viterbi margin.
         diagnostics[:position_gaps] = position_gaps[1:min(best_depth, length(position_gaps))]
@@ -2200,9 +2200,9 @@ end
 # Best-minus-second-best of a state->score Dict's values (the per-position Viterbi
 # margin, td-4osf / Tier-2 calibration). Single pass, no allocation. Returns Inf
 # when fewer than two states survive (no competitor => maximally confident). NOTE:
-# Inf is a ROUTINE value (any collapsed frontier), so downstream calibration must
-# filter/clip it before averaging — see the consumption contract at the
-# diagnostics[:position_gaps] stash site.
+# Inf is a ROUTINE value (any collapsed frontier). Legacy aggregate calibration
+# must filter or clip it; calibrated serving may instead encode it explicitly as
+# a collapsed-frontier indicator — see the diagnostics stash-site contract.
 function _top2_score_gap(scores)::Float64
     best = -Inf
     second = -Inf
