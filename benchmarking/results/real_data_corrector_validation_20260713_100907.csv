@@ -1,7 +1,0 @@
-name,arm,validation_scope,ok,runtime_s,n_contigs,total_length,largest_contig,n50,genome_fraction,avg_identity,mismatches_per_100kbp,indels_per_100kbp
-phix174,naive,interim_engineering_validation,true,7.28,958,48276,5225,41,99.83,99.98,18.6,0.0
-phix174,scalable,interim_engineering_validation,true,34.78,1,5348,5348,5348,99.29,100.0,0.0,0.0
-phix174,hybrid-olc,interim_engineering_validation,true,17.8,1,5312,5312,5312,98.63,100.0,0.0,0.0
-lambda,naive,interim_engineering_validation,true,42.19,8937,450931,48495,41,99.99,100.0,0.0,0.0
-lambda,scalable,interim_engineering_validation,true,600.45,2,48513,48474,48474,99.94,100.0,0.0,0.0
-lambda,hybrid-olc,interim_engineering_validation,true,505.31,1,48453,48453,48453,99.9,100.0,0.0,0.0
