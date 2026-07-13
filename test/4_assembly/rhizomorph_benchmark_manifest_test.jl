@@ -20,6 +20,74 @@ include(joinpath(
 ))
 end
 
+struct FailingCSVCell end
+
+function Base.show(::IO, ::FailingCSVCell)::Nothing
+    error("intentional CSV serialization failure")
+end
+
+function parse_dnadiff_lines(
+        lines::AbstractVector{<:AbstractString})::NamedTuple
+    return mktemp() do report, io
+        write(io, join(lines, "\n") * "\n")
+        close(io)
+        return RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
+    end
+end
+
+function test_invalid_dnadiff_field(
+        lines::AbstractVector{<:AbstractString},
+        invalid_field::Symbol)::Nothing
+    parsed = parse_dnadiff_lines(lines)
+    if invalid_field == :aligned
+        Test.@test parsed.aligned_ref_bases == 0
+        Test.@test isnan(parsed.genome_fraction)
+    elseif invalid_field == :identity
+        Test.@test isnan(parsed.avg_identity)
+    elseif invalid_field == :snps
+        Test.@test parsed.total_snps === nothing
+    else
+        invalid_field == :indels || error(
+            "unsupported dnadiff field in test helper: $(invalid_field)",
+        )
+        Test.@test parsed.total_indel_bases === nothing
+    end
+    return nothing
+end
+
+function test_validation_rejection(
+        results::DataFrames.DataFrame,
+        mutate!::Function,
+        message::AbstractString;
+        comparative::Bool = false,
+        targets::AbstractVector{<:AbstractString} = ["phix174", "lambda"],
+        arms::Tuple{Vararg{Symbol}} = (:naive, :scalable, :hybrid_olc),
+    )::Nothing
+    candidate = copy(results)
+    mutate!(candidate)
+    if comparative
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_comparative_gate(
+                candidate,
+                targets,
+            ),
+            ErrorException,
+            message,
+        )
+    else
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                candidate,
+                targets,
+                arms,
+            ),
+            ErrorException,
+            message,
+        )
+    end
+    return nothing
+end
+
 Test.@testset "Hybrid-OLC validation helpers" begin
     Test.@test RealDataCorrectorValidationHarness.arm_name(:naive) == "naive"
     Test.@test RealDataCorrectorValidationHarness.arm_name(:scalable) == "scalable"
@@ -30,62 +98,183 @@ Test.@testset "Hybrid-OLC validation helpers" begin
         "unknown validation arm",
     )
 
-    mktemp() do report, io
-        write(io, """
-        AlignedBases 110(95.00%) 110(95.00%)
-        AvgIdentity 99.50 99.50
-        AvgIdentity 98.00 98.00
-        TotalSNPs 2 2
-        TotalIndels 1 1
-        """)
-        close(io)
-        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
-        Test.@test parsed.aligned_ref_bases == 110
-        Test.@test parsed.genome_fraction == 95.0
-        Test.@test parsed.avg_identity == 99.5
-        Test.@test parsed.total_snps == 2
-        Test.@test parsed.total_indels == 1
+    valid_lines = [
+        "[Bases]",
+        "AlignedBases 110(95.00%) 110(95.00%)",
+        "[Alignments]",
+        "1-to-1 1 1",
+        "AvgIdentity 99.50 99.50",
+        "M-to-M 1 1",
+        "AvgIdentity 98.00 98.00",
+        "[SNPs]",
+        "TotalSNPs 2 2",
+        "TotalIndels 1 1",
+    ]
+    parsed = parse_dnadiff_lines(valid_lines)
+    Test.@test parsed.aligned_ref_bases == 110
+    Test.@test parsed.genome_fraction == 95.0
+    Test.@test parsed.avg_identity == 99.5
+    Test.@test parsed.total_snps == 2
+    Test.@test parsed.total_indel_bases == 1
+
+    invalid_cases = [
+        (
+            "malformed aligned bases",
+            [valid_lines[1], "AlignedBases malformed 110(95.00%)", valid_lines[3:end]...],
+            :aligned,
+        ),
+        (
+            "duplicate aligned bases",
+            [valid_lines[1:2]..., valid_lines[2], valid_lines[3:end]...],
+            :aligned,
+        ),
+        (
+            "missing second identity",
+            [valid_lines[1:6]..., valid_lines[8:end]...],
+            :identity,
+        ),
+        (
+            "third identity",
+            [valid_lines[1:7]..., "AvgIdentity 97.00 97.00", valid_lines[8:end]...],
+            :identity,
+        ),
+        (
+            "reversed identity modes",
+            [
+                valid_lines[1:3]...,
+                "M-to-M 1 1",
+                "AvgIdentity 98.00 98.00",
+                "1-to-1 1 1",
+                "AvgIdentity 99.50 99.50",
+                valid_lines[8:end]...,
+            ],
+            :identity,
+        ),
+        (
+            "malformed identity marker",
+            [valid_lines[1:3]..., "1-to-1 malformed", valid_lines[5:end]...],
+            :identity,
+        ),
+        (
+            "unequal identity marker totals",
+            [valid_lines[1:3]..., "1-to-1 1 2", valid_lines[5:end]...],
+            :identity,
+        ),
+        (
+            "duplicate identity marker",
+            [valid_lines[1:4]..., "1-to-1 1 1", valid_lines[5:end]...],
+            :identity,
+        ),
+        (
+            "nonfinite query identity",
+            [valid_lines[1:4]..., "AvgIdentity 99.50 NaN", valid_lines[6:end]...],
+            :identity,
+        ),
+        (
+            "out-of-range query identity",
+            [valid_lines[1:4]..., "AvgIdentity 99.50 101.00", valid_lines[6:end]...],
+            :identity,
+        ),
+        (
+            "unequal identity totals",
+            [valid_lines[1:4]..., "AvgIdentity 99.50 98.00", valid_lines[6:end]...],
+            :identity,
+        ),
+        (
+            "duplicate SNP totals",
+            [valid_lines[1:9]..., "TotalSNPs 1 1", valid_lines[10]],
+            :snps,
+        ),
+        (
+            "unequal SNP totals",
+            [valid_lines[1:8]..., "TotalSNPs 2 3", valid_lines[10]],
+            :snps,
+        ),
+        (
+            "negative query SNP total",
+            [valid_lines[1:8]..., "TotalSNPs 2 -1", valid_lines[10]],
+            :snps,
+        ),
+        (
+            "duplicate indel totals",
+            [valid_lines..., "TotalIndels 2 2"],
+            :indels,
+        ),
+        (
+            "unequal indel totals",
+            [valid_lines[1:9]..., "TotalIndels 1 2"],
+            :indels,
+        ),
+        (
+            "aligned bases adjacent garbage",
+            [valid_lines[1], "AlignedBases 110(95.00%)garbage 110(95.00%)", valid_lines[3:end]...],
+            :aligned,
+        ),
+        (
+            "aligned bases trailing data",
+            [valid_lines[1], "AlignedBases 110(95.00%) 110(95.00%) trailing", valid_lines[3:end]...],
+            :aligned,
+        ),
+        (
+            "identity trailing data",
+            [valid_lines[1:4]..., "AvgIdentity 99.50 99.50 trailing", valid_lines[6:end]...],
+            :identity,
+        ),
+        (
+            "SNP trailing data",
+            [valid_lines[1:8]..., "TotalSNPs 2 2 trailing", valid_lines[10]],
+            :snps,
+        ),
+        (
+            "indel trailing data",
+            [valid_lines[1:9]..., "TotalIndels 1 1 trailing"],
+            :indels,
+        ),
+    ]
+    for (description, lines, invalid_field) in invalid_cases
+        Test.@testset "$(description)" begin
+            test_invalid_dnadiff_field(lines, invalid_field)
+        end
     end
 
-    mktemp() do report, io
-        write(io, """
-        AlignedBases malformed
-        AvgIdentity 99.50 99.50
-        TotalSNPs 0 0
-        """)
-        close(io)
-        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
-        Test.@test parsed.aligned_ref_bases == 0
-        Test.@test isnan(parsed.genome_fraction)
-        Test.@test parsed.total_snps == 0
-        Test.@test parsed.total_indels === nothing
-    end
+    mktempdir() do directory
+        r1 = joinpath(directory, "r1.fastq")
+        r2 = joinpath(directory, "r2.fastq")
+        write(r1, "R1\n")
+        write(r2, "R2\n")
+        Test.@test RealDataCorrectorValidationHarness.sha256_files((r1, r2)) ==
+                   "2dff6f60b9e15e9fe172b6b209b512bd3dd2a6d6905d2ad40fcbd94f9a9eb593"
+        Test.@test RealDataCorrectorValidationHarness.sha256_files((r2, r1)) ==
+                   "66bbab0ff7b2b575bda2a5404efcee67990b63dac0a8dec43702c37cb51f8126"
 
-    mktemp() do report, io
-        write(io, """
-        AlignedBases 110(95.00%) 110(95.00%)
-        AvgIdentity malformed
-        AvgIdentity 99.50 99.50
-        TotalSNPs 0 0
-        TotalIndels 0 0
-        """)
-        close(io)
-        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
-        Test.@test isnan(parsed.avg_identity)
-    end
+        candidate = joinpath(directory, "candidate.csv")
+        frame = DataFrames.DataFrame(value = [1, 2])
+        Test.@test RealDataCorrectorValidationHarness.write_csv_atomically(
+            candidate,
+            frame,
+        ) == candidate
+        Test.@test DataFrames.DataFrame(CSV.File(candidate)) == frame
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.write_csv_atomically(
+                candidate,
+                frame,
+            ),
+            ArgumentError,
+            "refusing to overwrite existing CSV",
+        )
 
-    mktemp() do report, io
-        write(io, """
-        AlignedBases 100(90.00%) 100(90.00%)
-        AlignedBases 110(95.00%) 110(95.00%)
-        AvgIdentity 99.50 99.50
-        TotalSNPs 0 0
-        TotalIndels 0 0
-        """)
-        close(io)
-        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
-        Test.@test parsed.aligned_ref_bases == 0
-        Test.@test isnan(parsed.genome_fraction)
+        failing_candidate = joinpath(directory, "failing.csv")
+        files_before_failure = Set(readdir(directory))
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.write_csv_atomically(
+                failing_candidate,
+                DataFrames.DataFrame(value = [FailingCSVCell()]),
+            ),
+            ErrorException,
+            "intentional CSV serialization failure",
+        )
+        Test.@test !ispath(failing_candidate)
+        Test.@test Set(readdir(directory)) == files_before_failure
     end
 end
 
@@ -139,7 +328,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
     Test.@test Set(keys(input_reads_sha256)) == Set(engineering_validation["dataset_ids"])
     Test.@test engineering_validation["arms"] == ["naive", "scalable", "hybrid-olc"]
     Test.@test engineering_validation["expected_outputs"] ==
-               ["comparison_csv", "dnadiff_metrics"]
+               ["comparison_csv", "dnadiff_metrics", "dnadiff_reports"]
     benchmark_config = engineering_validation["benchmark_config"]
     Test.@test benchmark_config == Dict(
         "art_profile" => "HS25",
@@ -154,6 +343,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         "simulated_layout" => "paired_end",
         "assembly_input_layout" => "single_end_unpaired",
         "input_read_order" => "R1_then_R2",
+        "input_reads_sha256_semantics" => "sha256_raw_R1_then_raw_R2_bytes",
         "hybrid_corrector" => "iterative",
         "hybrid_strategy" => "scalable",
         "hybrid_sequencing_tech" => "illumina",
@@ -167,11 +357,33 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         "mummer" => "mummer-3.23-pl5321haef7865_21@osx-arm64",
         "gfatools" => "gfatools-0.5.5-hba9b596_0@osx-arm64",
     )
-    Test.@test engineering_validation["metric_units"]["n50"] == "bp"
+    Test.@test engineering_validation["metric_units"] == Dict(
+        "assembly_runtime_s" => "seconds",
+        "raw_n_contigs" => "count",
+        "n_contigs" => "count",
+        "total_length" => "bp",
+        "largest_contig" => "bp",
+        "n50" => "bp",
+        "genome_fraction" => "percent",
+        "avg_identity" => "percent",
+        "aligned_reference_bases" => "bp",
+        "total_snps" => "count",
+        "total_indel_bases" => "gap_affected_bases",
+        "mismatches_per_100kbp" => "count_per_100kbp",
+        "indel_bases_per_100kbp" => "gap_affected_bases_per_100kbp",
+        "dnadiff_report_sha256" => "sha256_hex",
+    )
+    Test.@test engineering_validation["assembly_runtime_scope"] ==
+               "assemble_genome_call_wall_time_only_excludes_contig_filtering_fasta_and_dnadiff"
     Test.@test occursin(
         "common 22 bp contig floor",
         engineering_validation["artifact_gate"],
     )
+    Test.@test occursin(
+        "single-run bounded-retention thresholds",
+        engineering_validation["artifact_gate"],
+    )
+    Test.@test !occursin("noninferior", engineering_validation["artifact_gate"])
     Test.@test occursin(
         "does not establish an incremental hybrid-OLC quality win",
         engineering_validation["comparison_interpretation"],
@@ -194,7 +406,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "arm",
             "validation_scope",
             "ok",
-            "runtime_s",
+            "assembly_runtime_s",
             "raw_n_contigs",
             "n_contigs",
             "total_length",
@@ -202,8 +414,13 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "n50",
             "genome_fraction",
             "avg_identity",
+            "aligned_reference_bases",
+            "total_snps",
+            "total_indel_bases",
             "mismatches_per_100kbp",
-            "indels_per_100kbp",
+            "indel_bases_per_100kbp",
+            "dnadiff_report_path",
+            "dnadiff_report_sha256",
             "reference_accession",
             "reference_length",
             "reference_sha256",
@@ -221,6 +438,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "read_count",
             "read_bases",
             "input_reads_sha256",
+            "input_reads_sha256_semantics",
             "promotion_eligible",
             "art_build",
             "megahit_build",
@@ -229,15 +447,6 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "run_platform",
             "julia_version",
         ]
-        Test.@test DataFrames.nrow(results) == 6
-        Test.@test Set(zip(results.name, results.arm)) == Set([
-            (target, arm)
-            for target in values(result_names)
-            for arm in ["naive", "scalable", "hybrid-olc"]
-        ])
-        Test.@test all(results.validation_scope .== "interim_engineering_validation")
-        Test.@test all(results.ok)
-        Test.@test all(results.promotion_eligible)
         Test.@test all(results.art_profile .== benchmark_config["art_profile"])
         Test.@test all(results.requested_coverage .== benchmark_config["coverage"])
         Test.@test all(results.read_length .== benchmark_config["read_length"])
@@ -250,6 +459,8 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         Test.@test all(results.assembly_input_layout .==
                        benchmark_config["assembly_input_layout"])
         Test.@test all(results.input_read_order .== benchmark_config["input_read_order"])
+        Test.@test all(results.input_reads_sha256_semantics .==
+                       benchmark_config["input_reads_sha256_semantics"])
         Test.@test all(results.art_build .== engineering_validation["tool_builds"]["art"])
         Test.@test all(results.megahit_build .==
                        engineering_validation["tool_builds"]["megahit"])
@@ -257,36 +468,48 @@ Test.@testset "Rhizomorph benchmark manifest" begin
                        engineering_validation["tool_builds"]["mummer"])
         Test.@test all(results.gfatools_build .==
                        engineering_validation["tool_builds"]["gfatools"])
-        Test.@test all(!isempty, results.run_platform)
-        Test.@test all(!isempty, results.julia_version)
-        Test.@test all(value -> occursin(r"^[0-9a-f]{64}$", value),
-            results.reference_sha256)
-        Test.@test all(value -> occursin(r"^[0-9a-f]{64}$", value),
-            results.input_reads_sha256)
-        for column in [
-                :runtime_s,
-                :genome_fraction,
-                :avg_identity,
-                :mismatches_per_100kbp,
-                :indels_per_100kbp,
-        ]
-            Test.@test all(isfinite, results[!, column])
+        Test.@test RealDataCorrectorValidationHarness.validate_results(
+            results,
+            ["phix174", "lambda"],
+            (:naive, :scalable, :hybrid_olc),
+        ) === nothing
+        expected_reports_dir = normpath(joinpath(
+            dirname(results_path),
+            "dnadiff_reports",
+        ))
+        registered_reports_dir = normpath(joinpath(
+            @__DIR__,
+            "..",
+            "..",
+            engineering_validation["result_dnadiff_reports_dir"],
+        ))
+        Test.@test registered_reports_dir == expected_reports_dir
+        Test.@test isdir(expected_reports_dir)
+        for row in DataFrames.eachrow(results)
+            retained_report = normpath(joinpath(
+                @__DIR__,
+                "..",
+                "..",
+                row.dnadiff_report_path,
+            ))
+            Test.@test dirname(retained_report) == expected_reports_dir
+            Test.@test isfile(retained_report)
+            if isfile(retained_report)
+                Test.@test bytes2hex(SHA.sha256(read(retained_report))) ==
+                           row.dnadiff_report_sha256
+                parsed_report =
+                    RealDataCorrectorValidationHarness.parse_dnadiff_local(retained_report)
+                Test.@test parsed_report.aligned_ref_bases == row.aligned_reference_bases
+                Test.@test parsed_report.genome_fraction == row.genome_fraction
+                Test.@test parsed_report.avg_identity == row.avg_identity
+                Test.@test parsed_report.total_snps == row.total_snps
+                Test.@test parsed_report.total_indel_bases == row.total_indel_bases
+            end
         end
-        Test.@test all(results.runtime_s .>= 0.0)
-        Test.@test all(results.raw_n_contigs .>= results.n_contigs)
-        Test.@test all(results.n_contigs .> 0)
-        Test.@test all(results.total_length .> 0)
-        Test.@test all(results.largest_contig .> 0)
-        Test.@test all(results.n50 .> 0)
-        Test.@test all(results.n50 .<= results.largest_contig)
-        Test.@test all(results.largest_contig .<= results.total_length)
-        Test.@test all((0.0 .< results.genome_fraction) .&
-                       (results.genome_fraction .<= 100.0))
-        Test.@test all((0.0 .< results.avg_identity) .&
-                       (results.avg_identity .<= 100.0))
-        Test.@test all(results.mismatches_per_100kbp .>= 0.0)
-        Test.@test all(results.indels_per_100kbp .>= 0.0)
-
+        if isdir(expected_reports_dir)
+            Test.@test Set(readdir(expected_reports_dir)) ==
+                       Set(basename.(results.dnadiff_report_path))
+        end
         datasets_by_id = Dict(dataset["id"] => dataset for dataset in manifest["datasets"])
         for (dataset_id, result_name) in result_names
             target_rows = results[results.name .== result_name, :]
@@ -298,107 +521,484 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             Test.@test all(
                 target_rows.input_reads_sha256 .== input_reads_sha256[dataset_id],
             )
-            for column in [
-                    :reference_length,
-                    :reference_sha256,
-                    :read_count,
-                    :read_bases,
-                    :input_reads_sha256,
-                ]
-                Test.@test length(unique(target_rows[!, column])) == 1
+        end
+
+        phix_rows = results.name .== "phix174"
+        phix_naive_index = only(findall(
+            phix_rows .& (results.arm .== "naive"),
+        ))
+        phix_scalable_index = only(findall(
+            phix_rows .& (results.arm .== "scalable"),
+        ))
+        phix_hybrid_index = only(findall(
+            phix_rows .& (results.arm .== "hybrid-olc"),
+        ))
+
+        test_validation_rejection(
+            results,
+            candidate -> deleteat!(candidate, 1),
+            "incomplete target-arm matrix",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> append!(candidate, candidate[1:1, :]),
+            "duplicate validation rows",
+        )
+        test_validation_rejection(
+            results,
+            _ -> nothing,
+            "validation targets must be unique",
+            targets = ["phix174", "phix174"],
+        )
+        test_validation_rejection(
+            results,
+            _ -> nothing,
+            "validation arms must be unique",
+            arms = (:naive, :scalable, :scalable),
+        )
+
+        invariant_cases = [
+            (
+                "non-finite metric",
+                candidate -> candidate.assembly_runtime_s[1] = NaN,
+                "non-finite metric",
+            ),
+            (
+                "validation scope",
+                candidate -> candidate.validation_scope[1] = "wrong_scope",
+                "validation_scope must be",
+            ),
+            (
+                "failed arm",
+                candidate -> candidate.ok[1] = false,
+                "one or more validation arms failed",
+            ),
+            (
+                "negative assembly runtime",
+                candidate -> candidate.assembly_runtime_s[1] = -0.01,
+                "assembly_runtime_s must be non-negative",
+            ),
+            (
+                "filtered count exceeds raw count",
+                candidate -> candidate.raw_n_contigs[1] = candidate.n_contigs[1] - 1,
+                "raw_n_contigs must be at least n_contigs",
+            ),
+            (
+                "zero contigs",
+                candidate -> begin
+                    candidate.raw_n_contigs[1] = 0
+                    candidate.n_contigs[1] = 0
+                end,
+                "at least one contig",
+            ),
+            (
+                "zero total length",
+                candidate -> candidate.total_length[1] = 0,
+                "positive total length",
+            ),
+            (
+                "zero largest contig",
+                candidate -> candidate.largest_contig[1] = 0,
+                "positive largest contig",
+            ),
+            (
+                "zero n50",
+                candidate -> candidate.n50[1] = 0,
+                "positive N50",
+            ),
+            (
+                "n50 exceeds largest contig",
+                candidate -> candidate.n50[1] = candidate.largest_contig[1] + 1,
+                "n50 must not exceed largest_contig",
+            ),
+            (
+                "largest contig exceeds total length",
+                candidate -> candidate.largest_contig[1] = candidate.total_length[1] + 1,
+                "largest_contig must not exceed total_length",
+            ),
+            (
+                "zero genome fraction",
+                candidate -> candidate.genome_fraction[1] = 0.0,
+                "genome_fraction must be in",
+            ),
+            (
+                "genome fraction above 100",
+                candidate -> candidate.genome_fraction[1] = 100.01,
+                "genome_fraction must be in",
+            ),
+            (
+                "zero identity",
+                candidate -> candidate.avg_identity[1] = 0.0,
+                "avg_identity must be in",
+            ),
+            (
+                "identity above 100",
+                candidate -> candidate.avg_identity[1] = 100.01,
+                "avg_identity must be in",
+            ),
+            (
+                "negative mismatch rate",
+                candidate -> candidate.mismatches_per_100kbp[1] = -0.1,
+                "mismatches_per_100kbp must be non-negative",
+            ),
+            (
+                "negative indel-base rate",
+                candidate -> candidate.indel_bases_per_100kbp[1] = -0.1,
+                "indel_bases_per_100kbp must be non-negative",
+            ),
+            (
+                "zero read count",
+                candidate -> candidate.read_count[1] = 0,
+                "read_count must be positive",
+            ),
+            (
+                "zero read bases",
+                candidate -> candidate.read_bases[1] = 0,
+                "read_bases must be positive",
+            ),
+            (
+                "invalid reference hash",
+                candidate -> candidate.reference_sha256[1] = "invalid",
+                "invalid reference SHA-256",
+            ),
+            (
+                "invalid input hash",
+                candidate -> candidate.input_reads_sha256[1] = "invalid",
+                "invalid input-read SHA-256",
+            ),
+        ]
+        for (description, mutate!, message) in invariant_cases
+            Test.@testset "reject invariant violation: $(description)" begin
+                test_validation_rejection(results, mutate!, message)
+            end
+        end
+        test_validation_rejection(
+            results,
+            candidate -> candidate.min_contig_length[phix_scalable_index] = 23,
+            "common k+1 minimum contig length",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.n50[1] = candidate.min_contig_length[1] - 1,
+            "n50 must be at least min_contig_length",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> begin
+                candidate.n50[1] = candidate.min_contig_length[1]
+                candidate.largest_contig[1] = candidate.min_contig_length[1] - 1
+            end,
+            "largest_contig must be at least min_contig_length",
+        )
+
+        short_total_indices = findall(
+            results.largest_contig .<
+            results.n_contigs .* results.min_contig_length,
+        )
+        Test.@test !isempty(short_total_indices)
+        short_total_index = first(short_total_indices)
+        test_validation_rejection(
+            results,
+            candidate -> candidate.total_length[short_total_index] =
+                candidate.n_contigs[short_total_index] *
+                candidate.min_contig_length[short_total_index] - 1,
+            "total_length must cover every contig",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.total_length[1] =
+                candidate.n_contigs[1] * candidate.largest_contig[1] + 1,
+            "total_length exceeds the maximum possible",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.read_bases[1] += 1,
+            "read_bases must equal read_count times read_length",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.run_platform[1] = "different-platform",
+            "run_platform must identify one platform",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.julia_version[1] = "0.0.0",
+            "julia_version must identify one Julia version",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.mismatches_per_100kbp[1] += 0.1,
+            "mismatches_per_100kbp does not match raw dnadiff counts",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.genome_fraction[1] +=
+                candidate.genome_fraction[1] >= 50.0 ? -0.01 : 0.01,
+            "genome_fraction does not match aligned reference bases",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.indel_bases_per_100kbp[1] += 0.1,
+            "indel_bases_per_100kbp does not match raw dnadiff counts",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.dnadiff_report_sha256[1] = "not-a-sha256",
+            "invalid dnadiff report SHA-256",
+        )
+
+        report_path_cases = [
+            ("", "repository-relative paths"),
+            ("/tmp/report", "repository-relative paths"),
+            ("benchmarking/results/../report", "canonical path components"),
+        ]
+        for (value, message) in report_path_cases
+            Test.@testset "reject dnadiff report path: $(value)" begin
+                test_validation_rejection(
+                    results,
+                    candidate -> candidate.dnadiff_report_path[1] = value,
+                    message,
+                )
             end
         end
 
-        Test.@test RealDataCorrectorValidationHarness.validate_results(
+        test_validation_rejection(
             results,
-            ["phix174", "lambda"],
-            (:naive, :scalable, :hybrid_olc),
-        ) === nothing
+            candidate -> candidate.dnadiff_report_path[1] =
+                candidate.dnadiff_report_path[2],
+            "dnadiff report paths must be unique",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.dnadiff_report_path[1] = joinpath(
+                "benchmarking",
+                "results",
+                "other_bundle",
+                basename(candidate.dnadiff_report_path[1]),
+            ),
+            "canonical validation artifact layout",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.dnadiff_report_path[1] = joinpath(
+                dirname(candidate.dnadiff_report_path[1]),
+                "wrong.report",
+            ),
+            "do not match the target-arm matrix",
+        )
 
-        for result_name in values(result_names)
-            naive = only(DataFrames.eachrow(results[
-                (results.name .== result_name) .& (results.arm .== "naive"),
-                :,
-            ]))
-            hybrid = only(DataFrames.eachrow(results[
-                (results.name .== result_name) .& (results.arm .== "hybrid-olc"),
-                :,
-            ]))
-            scalable = only(DataFrames.eachrow(results[
-                (results.name .== result_name) .& (results.arm .== "scalable"),
-                :,
-            ]))
-            Test.@test hybrid.n50 > naive.n50
-            Test.@test hybrid.n_contigs < naive.n_contigs
-            Test.@test hybrid.avg_identity >= 99.9
-            Test.@test hybrid.avg_identity >= naive.avg_identity - 0.02
-            Test.@test hybrid.genome_fraction >= 95.0
-            Test.@test hybrid.mismatches_per_100kbp <= naive.mismatches_per_100kbp
-            Test.@test hybrid.indels_per_100kbp <= naive.indels_per_100kbp
-            Test.@test hybrid.n50 >= 0.99 * scalable.n50
-            Test.@test hybrid.avg_identity >= scalable.avg_identity - 0.02
-            Test.@test hybrid.genome_fraction >= scalable.genome_fraction - 1.0
-            Test.@test hybrid.mismatches_per_100kbp <= scalable.mismatches_per_100kbp
-            Test.@test hybrid.indels_per_100kbp <= scalable.indels_per_100kbp
+        raw_dnadiff_cases = [
+            (
+                :aligned_reference_bases,
+                0,
+                "aligned_reference_bases must be in",
+            ),
+            (
+                :aligned_reference_bases,
+                results.reference_length[1] + 1,
+                "aligned_reference_bases must be in",
+            ),
+            (:total_snps, -1, "total_snps must be non-negative"),
+            (:total_indel_bases, -1, "total_indel_bases must be non-negative"),
+        ]
+        for (column, value, message) in raw_dnadiff_cases
+            Test.@testset "reject raw dnadiff drift: $(column)=$(value)" begin
+                test_validation_rejection(
+                    results,
+                    candidate -> candidate[1, column] = value,
+                    message,
+                )
+            end
         end
 
-        missing_row = results[2:end, :]
-        test_throws_message(
-            () -> RealDataCorrectorValidationHarness.validate_results(
-                missing_row,
-                ["phix174", "lambda"],
-                (:naive, :scalable, :hybrid_olc),
+        test_validation_rejection(
+            results,
+            candidate -> candidate.input_reads_sha256_semantics[1] = "ambiguous",
+            "unexpected input-read SHA-256 semantics",
+        )
+
+        configured_provenance_cases = [
+            (:art_profile, "wrong", "ART profile must match"),
+            (:requested_coverage, 49, "requested coverage must match"),
+            (:read_length, 149, "read length must match"),
+            (:fragment_mean, 299, "fragment mean must match"),
+            (:fragment_sd, 11, "fragment standard deviation must match"),
+            (:art_seed, 43, "ART seed must match"),
+            (:k, 19, "k must match"),
+            (:simulated_layout, "single_end", "simulated layout must match"),
+            (
+                :assembly_input_layout,
+                "paired_end",
+                "assembly input layout must match",
             ),
-            ErrorException,
-            "incomplete target-arm matrix",
-        )
-        duplicate_row = vcat(results, results[1:1, :])
-        test_throws_message(
-            () -> RealDataCorrectorValidationHarness.validate_results(
-                duplicate_row,
-                ["phix174", "lambda"],
-                (:naive, :scalable, :hybrid_olc),
+            (:input_read_order, "R2_then_R1", "input read order must be"),
+            (
+                :promotion_eligible,
+                !RealDataCorrectorValidationHarness.PROMOTION_ELIGIBLE,
+                "promotion eligibility does not match",
             ),
-            ErrorException,
-            "duplicate validation rows",
+        ]
+        for (column, value, message) in configured_provenance_cases
+            Test.@testset "reject configured provenance drift: $(column)" begin
+                test_validation_rejection(
+                    results,
+                    candidate -> begin
+                        candidate[1, column] = value
+                        if column == :k
+                            candidate.min_contig_length[1] = value + 1
+                        end
+                    end,
+                    message,
+                )
+            end
+        end
+
+        target_consistency_cases = [
+            (:reference_sha256, repeat("a", 64), "reference_sha256 must be identical"),
+            (:input_reads_sha256, repeat("b", 64), "input_reads_sha256 must be identical"),
+        ]
+        for (column, value, message) in target_consistency_cases
+            test_validation_rejection(
+                results,
+                candidate -> candidate[1, column] = value,
+                message,
+            )
+        end
+
+        test_validation_rejection(
+            results,
+            candidate -> candidate.reference_accession[phix_rows] .= "NC_000000.1",
+            "unexpected reference accession",
         )
-        nonfinite = copy(results)
-        nonfinite.runtime_s[1] = NaN
-        test_throws_message(
-            () -> RealDataCorrectorValidationHarness.validate_results(
-                nonfinite,
-                ["phix174", "lambda"],
-                (:naive, :scalable, :hybrid_olc),
+        test_validation_rejection(
+            results,
+            candidate -> begin
+                candidate.reference_length[phix_rows] .= 5387
+                candidate.genome_fraction[phix_rows] = round.(
+                    candidate.aligned_reference_bases[phix_rows] ./ 5387 .* 100.0;
+                    digits = 2,
+                )
+            end,
+            "unexpected reference length",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.art_build[1] = "different-build",
+            "art_build must identify one tool build",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.art_build .= "",
+            "art_build must not be empty",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.run_platform .= "",
+            "run_platform must not be empty",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> candidate.julia_version .= "",
+            "julia_version must not be empty",
+        )
+        comparative_cases = [
+            (
+                "n50 vs naive",
+                candidate -> candidate.n50[phix_hybrid_index] =
+                    candidate.n50[phix_naive_index],
+                "hybrid-olc N50 must exceed naive",
             ),
-            ErrorException,
-            "non-finite metric",
-        )
-        inconsistent_floor = copy(results)
-        inconsistent_floor.min_contig_length[1] = 200
-        test_throws_message(
-            () -> RealDataCorrectorValidationHarness.validate_results(
-                inconsistent_floor,
-                ["phix174", "lambda"],
-                (:naive, :scalable, :hybrid_olc),
+            (
+                "contig count vs naive",
+                candidate -> candidate.n_contigs[phix_naive_index] =
+                    candidate.n_contigs[phix_hybrid_index],
+                "hybrid-olc contig count must be below naive",
             ),
-            ErrorException,
-            "common k+1 minimum contig length",
-        )
-        regressed_hybrid = copy(results)
-        hybrid_index = findfirst(
-            (regressed_hybrid.name .== "phix174") .&
-            (regressed_hybrid.arm .== "hybrid-olc"),
-        )
-        regressed_hybrid.n50[hybrid_index] = 1
-        test_throws_message(
-            () -> RealDataCorrectorValidationHarness.validate_results(
-                regressed_hybrid,
-                ["phix174", "lambda"],
-                (:naive, :scalable, :hybrid_olc),
+            (
+                "minimum identity",
+                candidate -> candidate.avg_identity[phix_hybrid_index] = 99.89,
+                "hybrid-olc identity is below",
             ),
-            ErrorException,
-            "hybrid-olc N50 must exceed naive",
-        )
+            (
+                "identity vs naive",
+                candidate -> begin
+                    candidate.avg_identity[phix_hybrid_index] = 99.9
+                    candidate.avg_identity[phix_naive_index] = 100.0
+                end,
+                "identity materially regressed from naive",
+            ),
+            (
+                "minimum genome fraction",
+                candidate -> candidate.genome_fraction[phix_hybrid_index] = 94.99,
+                "hybrid-olc genome fraction is below",
+            ),
+            (
+                "mismatches vs naive",
+                candidate -> candidate.mismatches_per_100kbp[phix_hybrid_index] =
+                    candidate.mismatches_per_100kbp[phix_naive_index] + 0.1,
+                "mismatch rate exceeds naive",
+            ),
+            (
+                "indel bases vs naive",
+                candidate -> candidate.indel_bases_per_100kbp[phix_hybrid_index] =
+                    candidate.indel_bases_per_100kbp[phix_naive_index] + 0.1,
+                "indel-base rate exceeds naive",
+            ),
+            (
+                "n50 retention vs scalable",
+                candidate -> candidate.n50[phix_hybrid_index] = floor(
+                    Int,
+                    0.98 * candidate.n50[phix_scalable_index],
+                ),
+                "retains less than",
+            ),
+            (
+                "identity vs scalable",
+                candidate -> begin
+                    candidate.avg_identity[phix_hybrid_index] = 99.9
+                    candidate.avg_identity[phix_naive_index] = 99.9
+                    candidate.avg_identity[phix_scalable_index] = 100.0
+                end,
+                "identity materially regressed from scalable",
+            ),
+            (
+                "genome fraction vs scalable",
+                candidate -> begin
+                    candidate.genome_fraction[phix_hybrid_index] = 95.0
+                    candidate.genome_fraction[phix_naive_index] = 95.0
+                    candidate.genome_fraction[phix_scalable_index] = 100.0
+                end,
+                "genome fraction regressed by more than",
+            ),
+            (
+                "mismatches vs scalable",
+                candidate -> begin
+                    candidate.mismatches_per_100kbp[phix_hybrid_index] = 1.0
+                    candidate.mismatches_per_100kbp[phix_naive_index] = 1.0
+                    candidate.mismatches_per_100kbp[phix_scalable_index] = 0.0
+                end,
+                "mismatch rate exceeds scalable",
+            ),
+            (
+                "indel bases vs scalable",
+                candidate -> begin
+                    candidate.indel_bases_per_100kbp[phix_hybrid_index] = 1.0
+                    candidate.indel_bases_per_100kbp[phix_naive_index] = 1.0
+                    candidate.indel_bases_per_100kbp[phix_scalable_index] = 0.0
+                end,
+                "indel-base rate exceeds scalable",
+            ),
+        ]
+        for (description, mutate!, message) in comparative_cases
+            Test.@testset "reject comparative gate: $(description)" begin
+                test_validation_rejection(
+                    results,
+                    mutate!,
+                    message,
+                    comparative = true,
+                )
+            end
+        end
     end
 end
 

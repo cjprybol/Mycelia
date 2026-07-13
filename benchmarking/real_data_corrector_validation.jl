@@ -30,10 +30,11 @@
 #
 # Reference-free structural metrics (#contigs, N50, largest contig) use the same
 # k+1 minimum contig length for every arm. Reference-aligned genome fraction,
-# identity, mismatches, and indels come from MUMmer dnadiff. Genome fraction is
-# alignment based (not total_length/reference_length).
-# Runtime is recorded for diagnostics, not as a fair performance comparison:
-# the interim hybrid arm is pinned to one MEGAHIT thread (see its config below).
+# identity, mismatches, and gap-affected indel bases come from MUMmer dnadiff.
+# Genome fraction is alignment based (not total_length/reference_length).
+# Assembly-call wall time is recorded for diagnostics, not as a fair performance
+# comparison: the interim hybrid arm is pinned to one MEGAHIT thread (see its
+# config below). It excludes contig filtering, FASTA writing, and dnadiff.
 #
 # Read-only w.r.t. src/ — this script only consumes the public Mycelia API.
 #
@@ -88,6 +89,7 @@ const FRAGMENT_MEAN = 300
 const FRAGMENT_SD = 10
 const SIMULATED_LAYOUT = "paired_end"
 const ASSEMBLY_INPUT_LAYOUT = "single_end_unpaired"
+const INPUT_READS_SHA256_SEMANTICS = "sha256_raw_R1_then_raw_R2_bytes"
 const MIN_CONTIG_LENGTH = K + 1
 const PROMOTION_ELIGIBLE = !SMOKE && TARGETS == DEFAULT_TARGETS &&
                            COVERAGE == 50 && K == 21 && SEED == 42
@@ -147,9 +149,11 @@ Parse a MUMmer 3.23 `dnadiff` .report into the reference-based metrics we need.
 The shared `Mycelia.parse_dnadiff_report` does not decode MUMmer's
 `count(pct%)` single-token format for the `[Bases]` block, so we parse it here
 (read-only w.r.t. src/). Returns (aligned_ref_bases, genome_fraction_pct,
-avg_identity_pct, total_snps, total_indels); absent fields remain non-finite or
-`nothing` so artifact validation fails closed. The single `AlignedBases` entry
-is the M-to-M reference coverage; the first `AvgIdentity` is the 1-to-1 identity.
+avg_identity_pct, total_snps, total_indel_bases); absent fields remain non-finite or
+`nothing` so artifact validation fails closed. MUMmer 3.23 emits one
+`AlignedBases`, two `AvgIdentity` rows (1-to-1 then M-to-M), one `TotalSNPs`,
+and one `TotalIndels`; any missing, malformed, or duplicate record is rejected.
+`TotalIndels` is interpreted as the number of gap-affected bases, not events.
 
 Report layout (columns are REF then QRY):
     AlignedBases   48487(99.97%)   48502(100.00%)
@@ -158,56 +162,131 @@ Report layout (columns are REF then QRY):
     TotalIndels    3               3
 """
 function parse_dnadiff_local(report::String)::NamedTuple
-    aln_ref = 0
-    gf = NaN
-    ident = NaN
-    snps = nothing
-    indels = nothing
-    seen_aligned = false
-    seen_ident = false
+    aligned_values = Union{Nothing, Tuple{Int, Float64}}[]
+    alignment_markers = String[]
+    identity_modes = String[]
+    identity_values = Union{Nothing, Tuple{Float64, Float64}}[]
+    snp_values = Union{Nothing, Tuple{Int, Int}}[]
+    indel_values = Union{Nothing, Tuple{Int, Int}}[]
+    section = ""
+    alignment_mode = ""
 
     function count_pct(
             tok::AbstractString)::Union{Nothing, Tuple{Int, Float64}}
-        m = match(r"^(\d+)\(([\d.]+)%\)", tok)
+        m = match(r"^(\d+)\((\d+(?:\.\d+)?)%\)$", tok)
         if m === nothing
             return nothing
         end
-        return (parse(Int, m.captures[1]), parse(Float64, m.captures[2]))
+        count = parse(Int, m.captures[1])
+        percentage = parse(Float64, m.captures[2])
+        0.0 <= percentage <= 100.0 || return nothing
+        return (count, percentage)
+    end
+
+    function float_pair(
+            fields::AbstractVector{<:AbstractString},
+        )::Union{Nothing, Tuple{Float64, Float64}}
+        length(fields) == 3 || return nothing
+        ref_value = tryparse(Float64, fields[2])
+        qry_value = tryparse(Float64, fields[3])
+        (ref_value === nothing || qry_value === nothing) && return nothing
+        all(isfinite, (ref_value, qry_value)) || return nothing
+        all(value -> 0.0 <= value <= 100.0, (ref_value, qry_value)) ||
+            return nothing
+        ref_value == qry_value || return nothing
+        return (ref_value, qry_value)
+    end
+
+    function int_pair(
+            fields::AbstractVector{<:AbstractString},
+        )::Union{Nothing, Tuple{Int, Int}}
+        length(fields) == 3 || return nothing
+        ref_value = tryparse(Int, fields[2])
+        qry_value = tryparse(Int, fields[3])
+        (ref_value === nothing || qry_value === nothing) && return nothing
+        (ref_value >= 0 && qry_value >= 0 && ref_value == qry_value) ||
+            return nothing
+        return (ref_value, qry_value)
+    end
+
+    function alignment_marker_valid(fields::AbstractVector{<:AbstractString})::Bool
+        length(fields) == 3 || return false
+        ref_value = tryparse(Int, fields[2])
+        qry_value = tryparse(Int, fields[3])
+        return ref_value !== nothing && qry_value !== nothing &&
+               ref_value >= 0 && qry_value >= 0 && ref_value == qry_value
     end
 
     for line in eachline(report)
-        f = split(strip(line))
-        isempty(f) && continue
-        key = f[1]
-        if key == "AlignedBases" && length(f) >= 2
-            if seen_aligned
-                aln_ref = 0
-                gf = NaN
-                continue
+        stripped = strip(line)
+        if startswith(stripped, "[") && endswith(stripped, "]")
+            section = stripped
+            alignment_mode = ""
+            continue
+        end
+        fields = split(stripped)
+        isempty(fields) && continue
+        key = fields[1]
+        if section == "[Alignments]" && key in ("1-to-1", "M-to-M")
+            alignment_mode = alignment_marker_valid(fields) ? String(key) : ""
+            push!(alignment_markers, alignment_mode)
+        elseif section == "[Bases]" && key == "AlignedBases"
+            if length(fields) == 3
+                ref_value = count_pct(fields[2])
+                qry_value = count_pct(fields[3])
+                push!(
+                    aligned_values,
+                    ref_value === nothing || qry_value === nothing ?
+                    nothing : ref_value,
+                )
+            else
+                push!(aligned_values, nothing)
             end
-            seen_aligned = true
-            count_and_pct = count_pct(f[2])
-            if count_and_pct !== nothing
-                c, p = count_and_pct
-                aln_ref = c
-                gf = p
-            end
-        elseif key == "AvgIdentity" && !seen_ident
-            seen_ident = true
-            if length(f) >= 2
-                v = tryparse(Float64, f[2])
-                v !== nothing && (ident = v)
-            end
-        elseif key == "TotalSNPs" && length(f) >= 2
-            v = tryparse(Int, f[2])
-            v !== nothing && (snps = v)
-        elseif key == "TotalIndels" && length(f) >= 2
-            v = tryparse(Int, f[2])
-            v !== nothing && (indels = v)
+        elseif section == "[Alignments]" && key == "AvgIdentity"
+            push!(identity_modes, alignment_mode)
+            push!(identity_values, float_pair(fields))
+        elseif section == "[SNPs]" && key == "TotalSNPs"
+            push!(snp_values, int_pair(fields))
+        elseif section == "[SNPs]" && key == "TotalIndels"
+            push!(indel_values, int_pair(fields))
         end
     end
-    return (aligned_ref_bases = aln_ref, genome_fraction = gf,
-        avg_identity = ident, total_snps = snps, total_indels = indels)
+
+    aligned = length(aligned_values) == 1 ? only(aligned_values) : nothing
+    identities_valid = length(identity_values) == 2 &&
+                       alignment_markers == ["1-to-1", "M-to-M"] &&
+                       identity_modes == ["1-to-1", "M-to-M"] &&
+                       all(value -> value !== nothing, identity_values)
+    snp_pair = length(snp_values) == 1 ? only(snp_values) : nothing
+    indel_pair = length(indel_values) == 1 ? only(indel_values) : nothing
+
+    return (
+        aligned_ref_bases = aligned === nothing ? 0 : first(aligned),
+        genome_fraction = aligned === nothing ? NaN : last(aligned),
+        avg_identity = identities_valid ? first(identity_values[1]) : NaN,
+        total_snps = snp_pair === nothing ? nothing : first(snp_pair),
+        total_indel_bases = indel_pair === nothing ? nothing : first(indel_pair),
+    )
+end
+
+"""Write a CSV through a same-directory temporary file and atomic rename."""
+function write_csv_atomically(
+        path::String,
+        df::DataFrames.AbstractDataFrame,
+    )::String
+    ispath(path) && throw(ArgumentError("refusing to overwrite existing CSV: $(path)"))
+    directory = dirname(path)
+    mkpath(directory)
+    temporary_path, io = mktemp(directory; cleanup = false)
+    close(io)
+    try
+        CSV.write(temporary_path, df)
+        mv(temporary_path, path; force = false)
+    catch
+        ispath(temporary_path) && rm(temporary_path; force = true)
+        rethrow()
+    end
+    return path
 end
 
 """Write assembly contigs to a FASTA file."""
@@ -232,17 +311,21 @@ reference-aligned quantities with the definitions below):
   * genome fraction (%) = M-to-M AlignedBases % of the reference
   * avg identity (%)    = first 1-to-1 AvgIdentity
   * mismatches/100 kbp  = TotalSNPs / M-to-M aligned reference bases * 1e5
-  * indels/100 kbp      = TotalIndels / M-to-M aligned reference bases * 1e5
+  * indel bases/100 kbp = TotalIndels / M-to-M aligned reference bases * 1e5
 
 The normalized error rates are harness diagnostics, not claimed to be identical
-to QUAST's rates.
+to QUAST's rates. `assembly_runtime_s` measures only the `assemble_genome` call;
+it excludes filtering, FASTA writing, and reference evaluation.
 """
 function run_arm(
         name::String,
         reads::AbstractVector{<:FASTX.FASTQ.Record},
         arm::Symbol,
         reference::String,
-        outdir::String)::NamedTuple
+        outdir::String,
+        report_staging_path::String,
+        report_relative_path::String,
+    )::NamedTuple
     tag = arm_name(arm)
     mkpath(outdir)
     contigs_path = joinpath(outdir, "$(name)_$(tag)_contigs.fasta")
@@ -282,7 +365,8 @@ function run_arm(
                 # these corrected validation reads, the Bioconda osx-arm64
                 # MEGAHIT 1.2.9 k-mer counter crashed at three threads; one thread
                 # succeeds. Manuscript H5 performance tuning is explicitly out of
-                # scope, so runtime is diagnostic rather than a fair comparison.
+                # scope, so assembly runtime is diagnostic rather than a fair
+                # comparison.
                 olc_options = (;
                     k_list = string(K),
                     min_contig_len = MIN_CONTIG_LENGTH,
@@ -296,11 +380,16 @@ function run_arm(
         @warn "Assembly arm failed" name tag exception = (e, catch_backtrace())
         return (name = name, arm = tag,
             validation_scope = VALIDATION_SCOPE,
-            ok = false, runtime_s = round(time() - t0; digits = 2),
+            ok = false, assembly_runtime_s = round(time() - t0; digits = 2),
             raw_n_contigs = 0, n_contigs = 0, total_length = 0,
             largest_contig = 0, n50 = 0,
             genome_fraction = NaN, avg_identity = NaN,
-            mismatches_per_100kbp = NaN, indels_per_100kbp = NaN)
+            aligned_reference_bases = 0, total_snps = -1,
+            total_indel_bases = -1,
+            mismatches_per_100kbp = NaN,
+            indel_bases_per_100kbp = NaN,
+            dnadiff_report_path = report_relative_path,
+            dnadiff_report_sha256 = "")
     end
     runtime = time() - t0
     raw_n_contigs = length(result.contigs)
@@ -322,20 +411,33 @@ function run_arm(
     gf = NaN
     ident = NaN
     mm = NaN
-    indels_100k = NaN
+    aligned_reference_bases = 0
+    total_snps = -1
+    total_indel_bases = -1
+    indel_bases_100k = NaN
+    dnadiff_report_sha256 = ""
     if n_contigs > 0 && total_length > 0
         dd_out = joinpath(outdir, "$(name)_$(tag)_dnadiff")
         try
             paths = Mycelia.run_dnadiff(reference = reference, query = contigs_path,
                 outdir = dd_out, prefix = "dnadiff", force = true)
             p = parse_dnadiff_local(paths.report)
+            cp(paths.report, report_staging_path; force = false)
+            dnadiff_report_sha256 = sha256_file(report_staging_path)
             gf = p.genome_fraction
             ident = p.avg_identity
+            aligned_reference_bases = p.aligned_ref_bases
+            total_snps = p.total_snps === nothing ? -1 : p.total_snps
+            total_indel_bases = p.total_indel_bases === nothing ?
+                                -1 : p.total_indel_bases
             if p.aligned_ref_bases > 0 &&
                     p.total_snps !== nothing &&
-                    p.total_indels !== nothing
+                    p.total_indel_bases !== nothing
                 mm = round(p.total_snps / p.aligned_ref_bases * 1e5; digits = 1)
-                indels_100k = round(p.total_indels / p.aligned_ref_bases * 1e5; digits = 1)
+                indel_bases_100k = round(
+                    p.total_indel_bases / p.aligned_ref_bases * 1e5;
+                    digits = 1,
+                )
             end
         catch e
             e isa InterruptException && rethrow()
@@ -343,15 +445,25 @@ function run_arm(
         end
     end
 
-    metrics_complete = all(isfinite, (gf, ident, mm, indels_100k))
+    metrics_complete = all(isfinite, (gf, ident, mm, indel_bases_100k)) &&
+                       aligned_reference_bases > 0 &&
+                       total_snps >= 0 &&
+                       total_indel_bases >= 0 &&
+                       occursin(r"^[0-9a-f]{64}$", dnadiff_report_sha256)
     return (name = name, arm = tag,
         validation_scope = VALIDATION_SCOPE,
-        ok = metrics_complete, runtime_s = round(runtime; digits = 2),
+        ok = metrics_complete, assembly_runtime_s = round(runtime; digits = 2),
         raw_n_contigs = raw_n_contigs, n_contigs = n_contigs,
         total_length = total_length,
         largest_contig = largest, n50 = n50,
         genome_fraction = gf, avg_identity = ident,
-        mismatches_per_100kbp = mm, indels_per_100kbp = indels_100k)
+        aligned_reference_bases = aligned_reference_bases,
+        total_snps = total_snps,
+        total_indel_bases = total_indel_bases,
+        mismatches_per_100kbp = mm,
+        indel_bases_per_100kbp = indel_bases_100k,
+        dnadiff_report_path = report_relative_path,
+        dnadiff_report_sha256 = dnadiff_report_sha256)
 end
 
 """Apply the interim hybrid-vs-naive and hybrid-vs-scalable engineering gate."""
@@ -387,8 +499,8 @@ function validate_comparative_gate(
         hybrid.mismatches_per_100kbp <= naive.mismatches_per_100kbp || error(
             "hybrid-olc mismatch rate exceeds naive for $(target)",
         )
-        hybrid.indels_per_100kbp <= naive.indels_per_100kbp || error(
-            "hybrid-olc indel rate exceeds naive for $(target)",
+        hybrid.indel_bases_per_100kbp <= naive.indel_bases_per_100kbp || error(
+            "hybrid-olc indel-base rate exceeds naive for $(target)",
         )
 
         hybrid.n50 >= SCALABLE_N50_RETENTION * scalable.n50 || error(
@@ -406,8 +518,8 @@ function validate_comparative_gate(
         hybrid.mismatches_per_100kbp <= scalable.mismatches_per_100kbp || error(
             "hybrid-olc mismatch rate exceeds scalable for $(target)",
         )
-        hybrid.indels_per_100kbp <= scalable.indels_per_100kbp || error(
-            "hybrid-olc indel rate exceeds scalable for $(target)",
+        hybrid.indel_bases_per_100kbp <= scalable.indel_bases_per_100kbp || error(
+            "hybrid-olc indel-base rate exceeds scalable for $(target)",
         )
     end
     return nothing
@@ -438,52 +550,137 @@ function validate_results(
     all(df.ok) || error("one or more validation arms failed or lack dnadiff metrics")
 
     finite_columns = [
-        :runtime_s,
+        :assembly_runtime_s,
         :genome_fraction,
         :avg_identity,
         :mismatches_per_100kbp,
-        :indels_per_100kbp,
+        :indel_bases_per_100kbp,
     ]
     for column in finite_columns
         all(isfinite, df[!, column]) || error("non-finite metric in column $(column)")
     end
 
-    all(df.runtime_s .>= 0.0) || error("runtime_s must be non-negative")
+    all(df.assembly_runtime_s .>= 0.0) ||
+        error("assembly_runtime_s must be non-negative")
     all(df.raw_n_contigs .>= df.n_contigs) ||
         error("raw_n_contigs must be at least n_contigs")
     all(df.n_contigs .> 0) || error("every arm must produce at least one contig")
     all(df.total_length .> 0) || error("every arm must produce positive total length")
     all(df.largest_contig .> 0) || error("every arm must produce a positive largest contig")
     all(df.n50 .> 0) || error("every arm must produce a positive N50")
+    all(df.n50 .>= df.min_contig_length) ||
+        error("n50 must be at least min_contig_length")
+    all(df.largest_contig .>= df.min_contig_length) ||
+        error("largest_contig must be at least min_contig_length")
     all(df.n50 .<= df.largest_contig) || error("n50 must not exceed largest_contig")
     all(df.largest_contig .<= df.total_length) ||
         error("largest_contig must not exceed total_length")
+    all(df.total_length .>= df.n_contigs .* df.min_contig_length) ||
+        error("total_length must cover every contig at the common minimum length")
+    all(df.total_length .<= df.n_contigs .* df.largest_contig) ||
+        error("total_length exceeds the maximum possible from n_contigs and largest_contig")
     all((0.0 .< df.genome_fraction) .& (df.genome_fraction .<= 100.0)) ||
         error("genome_fraction must be in (0, 100]")
     all((0.0 .< df.avg_identity) .& (df.avg_identity .<= 100.0)) ||
         error("avg_identity must be in (0, 100]")
     all(df.mismatches_per_100kbp .>= 0.0) ||
         error("mismatches_per_100kbp must be non-negative")
-    all(df.indels_per_100kbp .>= 0.0) ||
-        error("indels_per_100kbp must be non-negative")
+    all(df.indel_bases_per_100kbp .>= 0.0) ||
+        error("indel_bases_per_100kbp must be non-negative")
+    all((0 .< df.aligned_reference_bases) .&
+        (df.aligned_reference_bases .<= df.reference_length)) ||
+        error("aligned_reference_bases must be in (0, reference_length]")
+    all(df.total_snps .>= 0) || error("total_snps must be non-negative")
+    all(df.total_indel_bases .>= 0) ||
+        error("total_indel_bases must be non-negative")
+    all(value -> occursin(r"^[0-9a-f]{64}$", value), df.dnadiff_report_sha256) ||
+        error("invalid dnadiff report SHA-256")
+    all(value -> !isempty(value) && !isabspath(value), df.dnadiff_report_path) ||
+        error("dnadiff report paths must be non-empty repository-relative paths")
+    all(
+        value -> all(
+            part -> !isempty(part) && part != "." && part != "..",
+            split(value, "/"; keepempty = true),
+        ),
+        df.dnadiff_report_path,
+    ) || error("dnadiff report paths must use canonical path components")
+    report_path_pattern =
+        r"^benchmarking/results/(real_data_corrector_validation_\d{8}_\d{6}_\d{3}_p\d+)/dnadiff_reports/([^/]+\.report)$"
+    report_path_matches = match.(Ref(report_path_pattern), df.dnadiff_report_path)
+    all(value -> value !== nothing, report_path_matches) ||
+        error("dnadiff report paths must use the canonical validation artifact layout")
+    valid_report_matches = something.(report_path_matches)
+    length(unique(df.dnadiff_report_path)) == DataFrames.nrow(df) ||
+        error("dnadiff report paths must be unique per validation row")
+    report_artifact_names = [value.captures[1] for value in valid_report_matches]
+    length(unique(report_artifact_names)) == 1 ||
+        error("dnadiff reports must identify one retained bundle for the run")
+    expected_report_names = Set(
+        "$(String(target))_$(arm_name)_dnadiff.report"
+        for target in targets for arm_name in arm_names
+    )
+    report_names = [value.captures[2] for value in valid_report_matches]
+    Set(report_names) == expected_report_names ||
+        error("dnadiff report paths do not match the target-arm matrix")
+    expected_mismatches = round.(
+        df.total_snps ./ df.aligned_reference_bases .* 1e5;
+        digits = 1,
+    )
+    expected_indel_bases = round.(
+        df.total_indel_bases ./ df.aligned_reference_bases .* 1e5;
+        digits = 1,
+    )
+    expected_genome_fraction = round.(
+        df.aligned_reference_bases ./ df.reference_length .* 100.0;
+        digits = 2,
+    )
+    all(isapprox.(
+        df.genome_fraction,
+        expected_genome_fraction;
+        atol = 1.0e-8,
+        rtol = 0.0,
+    )) || error("genome_fraction does not match aligned reference bases")
+    all(isapprox.(
+        df.mismatches_per_100kbp,
+        expected_mismatches;
+        atol = 1.0e-8,
+        rtol = 0.0,
+    )) || error("mismatches_per_100kbp does not match raw dnadiff counts")
+    all(isapprox.(
+        df.indel_bases_per_100kbp,
+        expected_indel_bases;
+        atol = 1.0e-8,
+        rtol = 0.0,
+    )) || error("indel_bases_per_100kbp does not match raw dnadiff counts")
 
-    all(!isempty, df.art_profile) || error("ART profile must not be empty")
-    all(df.requested_coverage .> 0) || error("requested coverage must be positive")
-    all(df.read_length .> 0) || error("read length must be positive")
-    all(df.fragment_mean .> 0) || error("fragment mean must be positive")
-    all(df.fragment_sd .>= 0) || error("fragment standard deviation must be non-negative")
-    all(df.art_seed .>= 0) || error("ART seed must be non-negative")
-    all(df.k .> 0) || error("k must be positive")
+    all(df.art_profile .== ART_PROFILE) ||
+        error("ART profile must match the configured profile")
+    all(df.requested_coverage .== COVERAGE) ||
+        error("requested coverage must match the configured coverage")
+    all(df.read_length .== READ_LENGTH) ||
+        error("read length must match the configured read length")
+    all(df.fragment_mean .== FRAGMENT_MEAN) ||
+        error("fragment mean must match the configured fragment mean")
+    all(df.fragment_sd .== FRAGMENT_SD) ||
+        error("fragment standard deviation must match the configured value")
+    all(df.art_seed .== SEED) || error("ART seed must match the configured seed")
+    all(df.k .== K) || error("k must match the configured k-mer size")
     all(df.min_contig_length .== df.k .+ 1) ||
         error("all arms must use the common k+1 minimum contig length")
-    all(!isempty, df.simulated_layout) || error("simulated layout must not be empty")
-    all(!isempty, df.assembly_input_layout) ||
-        error("assembly input layout must not be empty")
-    all(!isempty, df.input_read_order) || error("input read order must not be empty")
-    length(unique(df.promotion_eligible)) == 1 ||
-        error("promotion eligibility must be identical across the run")
+    all(df.simulated_layout .== SIMULATED_LAYOUT) ||
+        error("simulated layout must match the configured layout")
+    all(df.assembly_input_layout .== ASSEMBLY_INPUT_LAYOUT) ||
+        error("assembly input layout must match the configured layout")
+    all(df.input_read_order .== "R1_then_R2") ||
+        error("input read order must be R1_then_R2")
+    all(df.input_reads_sha256_semantics .== INPUT_READS_SHA256_SEMANTICS) ||
+        error("unexpected input-read SHA-256 semantics")
+    all(df.promotion_eligible .== PROMOTION_ELIGIBLE) ||
+        error("promotion eligibility does not match the configured run")
     all(df.read_count .> 0) || error("read_count must be positive")
     all(df.read_bases .> 0) || error("read_bases must be positive")
+    all(df.read_bases .== df.read_count .* df.read_length) ||
+        error("read_bases must equal read_count times read_length")
     all(value -> occursin(r"^[0-9a-f]{64}$", value), df.reference_sha256) ||
         error("invalid reference SHA-256")
     all(value -> occursin(r"^[0-9a-f]{64}$", value), df.input_reads_sha256) ||
@@ -507,6 +704,7 @@ function validate_results(
         :read_count,
         :read_bases,
         :input_reads_sha256,
+        :input_reads_sha256_semantics,
     ]
     for target in targets
         target_rows = df[df.name .== String(target), :]
@@ -527,7 +725,11 @@ function validate_results(
             error("$(column) must identify one tool build for the run")
         all(!isempty, df[!, column]) || error("$(column) must not be empty")
     end
+    length(unique(df.run_platform)) == 1 ||
+        error("run_platform must identify one platform for the run")
     all(!isempty, df.run_platform) || error("run_platform must not be empty")
+    length(unique(df.julia_version)) == 1 ||
+        error("julia_version must identify one Julia version for the run")
     all(!isempty, df.julia_version) || error("julia_version must not be empty")
 
     validate_comparative_gate(df, targets)
@@ -550,6 +752,21 @@ function main()::Nothing
     workdir = mktempdir(prefix = "rdv_")
     results_dir = joinpath(@__DIR__, "results")
     mkpath(results_dir)
+    stamp = Dates.format(Dates.now(Dates.UTC), "yyyymmdd_HHMMSS_sss")
+    artifact_id = "$(stamp)_p$(getpid())"
+    artifact_name = "real_data_corrector_validation_$(artifact_id)"
+    artifact_relative = "benchmarking/results/$(artifact_name)"
+    artifact_path = joinpath(results_dir, artifact_name)
+    ispath(artifact_path) && error(
+        "refusing to overwrite existing validation artifact: $(artifact_path)",
+    )
+    artifact_staging_dir = mktempdir(
+        results_dir;
+        prefix = ".rdv_artifact_staging_",
+        cleanup = true,
+    )
+    report_staging_dir = joinpath(artifact_staging_dir, "dnadiff_reports")
+    mkpath(report_staging_dir)
     println("Workdir      : $(workdir)")
 
     rows = NamedTuple[]
@@ -639,6 +856,7 @@ function main()::Nothing
             read_count = length(reads),
             read_bases = read_bases,
             input_reads_sha256 = input_reads_sha256,
+            input_reads_sha256_semantics = INPUT_READS_SHA256_SEMANTICS,
             promotion_eligible = PROMOTION_ELIGIBLE,
         )
 
@@ -649,6 +867,7 @@ function main()::Nothing
         target_rows = NamedTuple[]
         for arm in ARMS
             tag = arm_name(arm)
+            report_filename = "$(name)_$(tag)_dnadiff.report"
             row = merge(
                 run_arm(
                     name,
@@ -656,6 +875,8 @@ function main()::Nothing
                     arm,
                     reference,
                     joinpath(target_dir, tag),
+                    joinpath(report_staging_dir, report_filename),
+                    "$(artifact_relative)/dnadiff_reports/$(report_filename)",
                 ),
                 provenance,
             )
@@ -669,7 +890,8 @@ function main()::Nothing
                     "largest=$(row.largest_contig) GF=$(row.genome_fraction)% " *
                     "ident=$(row.avg_identity)% " *
                     "mm/100kb=$(row.mismatches_per_100kbp) " *
-                    "indels/100kb=$(row.indels_per_100kbp) t=$(row.runtime_s)s")
+                    "indel-bases/100kb=$(row.indel_bases_per_100kbp) " *
+                    "assembly_t=$(row.assembly_runtime_s)s")
         end
     end
 
@@ -685,12 +907,10 @@ function main()::Nothing
     df.julia_version = fill(string(VERSION), n_rows)
 
     validate_results(df, TARGETS, ARMS)
-    stamp = Dates.format(Dates.now(Dates.UTC), "yyyymmdd_HHMMSS_sss")
-    csv_path = joinpath(
-        results_dir,
-        "real_data_corrector_validation_$(stamp)_p$(getpid()).csv",
-    )
-    CSV.write(csv_path, df)
+    staged_csv_path = joinpath(artifact_staging_dir, "comparison.csv")
+    csv_path = joinpath(artifact_path, "comparison.csv")
+    write_csv_atomically(staged_csv_path, df)
+    mv(artifact_staging_dir, artifact_path; force = false)
 
     println("\n" * "="^70)
     println("SUMMARY — INTERIM ENGINEERING VALIDATION ONLY")
@@ -698,6 +918,7 @@ function main()::Nothing
     println("="^70)
     show(df; allrows = true, allcols = true)
     println("\n\nCandidate CSV: $(csv_path)")
+    println("dnadiff bundle: $(joinpath(artifact_path, "dnadiff_reports"))")
     println("Registration : UNREGISTERED until the manifest pointer is updated explicitly")
     println("Promotable   : $(PROMOTION_ELIGIBLE)")
     println("Done         : $(Dates.now())")
