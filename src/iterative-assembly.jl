@@ -2228,7 +2228,13 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     end
 
     viterbi_read, viterbi_likelihood = viterbi_result
-    improvement = viterbi_likelihood - original_likelihood
+    improvement = _comparable_likelihood_improvement(
+        original_likelihood,
+        viterbi_likelihood,
+        length(FASTX.sequence(read)),
+        length(FASTX.sequence(viterbi_read)),
+        k;
+        length_normalized = indel_params !== nothing)
     # Accept the ML path only when it is at least as likely as the original; a
     # non-positive delta means the ML path is not an improvement, so report none
     # (never return a strictly-worse read). This is the ADR's "trust the ML path
@@ -2250,6 +2256,34 @@ function calculate_read_likelihood(
     quality_scores = collect(FASTX.quality_scores(read))
     return calculate_sequence_likelihood(
         sequence, quality_scores, graph, k; graph_mode = graph_mode)
+end
+
+"""
+    _comparable_likelihood_improvement(original_likelihood, corrected_likelihood,
+        original_length, corrected_length, k; length_normalized=false)
+
+Compare graph log-likelihoods without giving a mechanical advantage to a shorter
+length-changing correction. Substitution mode keeps the historical raw-sum
+difference exactly. Indel mode compares mean log-likelihood per emitted k-mer;
+the pair-HMM has already applied its affine gap priors while choosing the decoded
+path, and this secondary acceptance gate therefore tests graph support on a
+length-comparable scale.
+"""
+function _comparable_likelihood_improvement(
+        original_likelihood::Float64,
+        corrected_likelihood::Float64,
+        original_length::Int,
+        corrected_length::Int,
+        k::Int;
+        length_normalized::Bool = false
+)::Float64
+    if !length_normalized
+        return corrected_likelihood - original_likelihood
+    end
+    original_terms = max(original_length - k + 1, 1)
+    corrected_terms = max(corrected_length - k + 1, 1)
+    return corrected_likelihood / corrected_terms -
+           original_likelihood / original_terms
 end
 
 """
@@ -3248,7 +3282,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 k,
                 length(corrected_sequence_string))
             if quality === nothing ||
-               get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm
+               get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm ||
+               get(path_diagnostics, :truncated, false) === true
                 diagnostics === nothing ||
                     Threads.atomic_add!(diagnostics.structural_errors, 1)
                 return nothing

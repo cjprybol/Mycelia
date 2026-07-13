@@ -1619,6 +1619,11 @@ Affine transition masses come from the error model: `δ_I = ε·f_ins`,
 `γ_I`, `γ_D`. Setting the indel fractions to 0 sends every gap transition to
 `log(0) = -Inf`, so the reachable frontier collapses to the pure-M substitution
 path — Illumina falls out as the special case.
+
+The result diagnostics include `:move_counts`, the ordered `:move_trace`, and the
+parallel `:read_index_trace`. The latter two preserve the exact pair-HMM traceback
+used to reconstruct length-changing per-base qualities. `:decoded_read_index` and
+`:truncated` report whether the frontier consumed the complete observation.
 """
 function _viterbi_correct_observation_indel(
         graph::MetaGraphsNext.MetaGraph,
