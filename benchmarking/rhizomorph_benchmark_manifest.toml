@@ -344,11 +344,18 @@ follow_on_work = "Wrap assembler_comparison_standard_fixtures.jl and external-to
 id = "hybrid_olc_short_read"
 status = "interim_engineering_validation"
 claim_scope = "engineering_validation_only_not_manuscript_h5"
-description = "Three-arm short-read validation on identical ART HS25 inputs; the hybrid arm pins MEGAHIT to one thread, and this does not mark the full H7 harness or manuscript H5 complete."
+description = "Three-arm short-read validation on identical ART HS25 inputs with a common k+1 contig floor; the hybrid arm pins MEGAHIT to one thread, and this does not mark the full H7 harness or manuscript H5 complete."
 entrypoint = "benchmarking/real_data_corrector_validation.jl"
 dataset_ids = ["phix174", "lambda_phage"]
 result_names = { phix174 = "phix174", lambda_phage = "lambda" }
+reference_sha256 = { phix174 = "a0d9bfd990c62c0908392b962bb65b574466ad9fba3777681e40f7fb3debf3a2", lambda_phage = "80897a7ee6b8aaffbab5442e0daad292592ac74701dbdf35af4b400ae0770ef3" }
+input_reads_sha256 = { phix174 = "978aeeb9e5dc9271f7d4edc6ff4ac358088c04582aa891db6b210b634849f9ce", lambda_phage = "f2fe0ac76a0813cc35ae49669b8a7d24d8cc38e2a2cc3e6d0206c2b282bb0d7a" }
 arms = ["naive", "scalable", "hybrid-olc"]
 expected_outputs = ["comparison_csv", "dnadiff_metrics"]
-artifact_gate = "Hybrid-OLC must improve N50 and contig count relative to naive while retaining at least 99.9% identity and 95% genome fraction; this is an interim engineering gate, not manuscript H5."
-result_csv = "benchmarking/results/real_data_corrector_validation_20260713_100907.csv"
+benchmark_config = { art_profile = "HS25", coverage = 50, read_length = 150, fragment_mean = 300, fragment_sd = 10, art_seed = 42, k = 21, min_contig_length = 22, graph_mode = "DoubleStrand", simulated_layout = "paired_end", assembly_input_layout = "single_end_unpaired", input_read_order = "R1_then_R2", hybrid_corrector = "iterative", hybrid_strategy = "scalable", hybrid_sequencing_tech = "illumina", hybrid_layout = "olc", hybrid_olc_tool = "megahit", hybrid_olc_threads = 1 }
+tool_builds = { art = "art-2016.06.05-h8899720_13@osx-arm64", megahit = "megahit-1.2.9-h96a01ab_8@osx-arm64", mummer = "mummer-3.23-pl5321haef7865_21@osx-arm64", gfatools = "gfatools-0.5.5-hba9b596_0@osx-arm64" }
+metric_units = { runtime_s = "s", total_length = "bp", largest_contig = "bp", n50 = "bp", genome_fraction = "percent", avg_identity = "percent", mismatches_per_100kbp = "count_per_100kbp", indels_per_100kbp = "count_per_100kbp" }
+artifact_gate = "At the common 22 bp contig floor, hybrid-OLC must improve N50 and contig count relative to naive, retain at least 99.9% identity and 95% genome fraction, and remain noninferior to scalable within 1% N50, 1 percentage point genome fraction, and 0.02 percentage point identity without increasing reference error rates."
+comparison_interpretation = "This interim gate tests improvement over naive and bounded quality retention relative to scalable. Contig count relative to scalable is descriptive, and the result does not establish an incremental hybrid-OLC quality win over scalable or the manuscript H5 claim."
+result_csv = "benchmarking/results/real_data_corrector_validation_20260713_152548_610_p39502.csv"
+result_csv_sha256 = "1bd2b4be95bdddbea06c1e2eb7ba3cb8fc033a0c43ecd48c5824173d8f1fd497"

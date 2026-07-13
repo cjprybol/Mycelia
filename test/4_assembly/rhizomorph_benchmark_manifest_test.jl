@@ -1,6 +1,7 @@
 import CSV
 import DataFrames
 import JSON
+import SHA
 import Test
 
 if !isdefined(Main, :test_throws_message)
@@ -8,6 +9,85 @@ if !isdefined(Main, :test_throws_message)
 end
 
 include(joinpath(@__DIR__, "..", "..", "benchmarking", "rhizomorph_benchmark_harness.jl"))
+
+module RealDataCorrectorValidationHarness
+include(joinpath(
+    @__DIR__,
+    "..",
+    "..",
+    "benchmarking",
+    "real_data_corrector_validation.jl",
+))
+end
+
+Test.@testset "Hybrid-OLC validation helpers" begin
+    Test.@test RealDataCorrectorValidationHarness.arm_name(:naive) == "naive"
+    Test.@test RealDataCorrectorValidationHarness.arm_name(:scalable) == "scalable"
+    Test.@test RealDataCorrectorValidationHarness.arm_name(:hybrid_olc) == "hybrid-olc"
+    test_throws_message(
+        () -> RealDataCorrectorValidationHarness.arm_name(:unknown),
+        ArgumentError,
+        "unknown validation arm",
+    )
+
+    mktemp() do report, io
+        write(io, """
+        AlignedBases 110(95.00%) 110(95.00%)
+        AvgIdentity 99.50 99.50
+        AvgIdentity 98.00 98.00
+        TotalSNPs 2 2
+        TotalIndels 1 1
+        """)
+        close(io)
+        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
+        Test.@test parsed.aligned_ref_bases == 110
+        Test.@test parsed.genome_fraction == 95.0
+        Test.@test parsed.avg_identity == 99.5
+        Test.@test parsed.total_snps == 2
+        Test.@test parsed.total_indels == 1
+    end
+
+    mktemp() do report, io
+        write(io, """
+        AlignedBases malformed
+        AvgIdentity 99.50 99.50
+        TotalSNPs 0 0
+        """)
+        close(io)
+        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
+        Test.@test parsed.aligned_ref_bases == 0
+        Test.@test isnan(parsed.genome_fraction)
+        Test.@test parsed.total_snps == 0
+        Test.@test parsed.total_indels === nothing
+    end
+
+    mktemp() do report, io
+        write(io, """
+        AlignedBases 110(95.00%) 110(95.00%)
+        AvgIdentity malformed
+        AvgIdentity 99.50 99.50
+        TotalSNPs 0 0
+        TotalIndels 0 0
+        """)
+        close(io)
+        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
+        Test.@test isnan(parsed.avg_identity)
+    end
+
+    mktemp() do report, io
+        write(io, """
+        AlignedBases 100(90.00%) 100(90.00%)
+        AlignedBases 110(95.00%) 110(95.00%)
+        AvgIdentity 99.50 99.50
+        TotalSNPs 0 0
+        TotalIndels 0 0
+        """)
+        close(io)
+        parsed = RealDataCorrectorValidationHarness.parse_dnadiff_local(report)
+        Test.@test parsed.aligned_ref_bases == 0
+        Test.@test isnan(parsed.genome_fraction)
+    end
+end
 
 Test.@testset "Rhizomorph benchmark manifest" begin
     manifest = load_rhizomorph_benchmark_manifest()
@@ -53,10 +133,49 @@ Test.@testset "Rhizomorph benchmark manifest" begin
     Test.@test result_names ==
                Dict("phix174" => "phix174", "lambda_phage" => "lambda")
     Test.@test Set(keys(result_names)) == Set(engineering_validation["dataset_ids"])
+    reference_sha256 = engineering_validation["reference_sha256"]
+    input_reads_sha256 = engineering_validation["input_reads_sha256"]
+    Test.@test Set(keys(reference_sha256)) == Set(engineering_validation["dataset_ids"])
+    Test.@test Set(keys(input_reads_sha256)) == Set(engineering_validation["dataset_ids"])
     Test.@test engineering_validation["arms"] == ["naive", "scalable", "hybrid-olc"]
     Test.@test engineering_validation["expected_outputs"] ==
                ["comparison_csv", "dnadiff_metrics"]
-    Test.@test occursin("not manuscript H5", engineering_validation["artifact_gate"])
+    benchmark_config = engineering_validation["benchmark_config"]
+    Test.@test benchmark_config == Dict(
+        "art_profile" => "HS25",
+        "coverage" => 50,
+        "read_length" => 150,
+        "fragment_mean" => 300,
+        "fragment_sd" => 10,
+        "art_seed" => 42,
+        "k" => 21,
+        "min_contig_length" => 22,
+        "graph_mode" => "DoubleStrand",
+        "simulated_layout" => "paired_end",
+        "assembly_input_layout" => "single_end_unpaired",
+        "input_read_order" => "R1_then_R2",
+        "hybrid_corrector" => "iterative",
+        "hybrid_strategy" => "scalable",
+        "hybrid_sequencing_tech" => "illumina",
+        "hybrid_layout" => "olc",
+        "hybrid_olc_tool" => "megahit",
+        "hybrid_olc_threads" => 1,
+    )
+    Test.@test engineering_validation["tool_builds"] == Dict(
+        "art" => "art-2016.06.05-h8899720_13@osx-arm64",
+        "megahit" => "megahit-1.2.9-h96a01ab_8@osx-arm64",
+        "mummer" => "mummer-3.23-pl5321haef7865_21@osx-arm64",
+        "gfatools" => "gfatools-0.5.5-hba9b596_0@osx-arm64",
+    )
+    Test.@test engineering_validation["metric_units"]["n50"] == "bp"
+    Test.@test occursin(
+        "common 22 bp contig floor",
+        engineering_validation["artifact_gate"],
+    )
+    Test.@test occursin(
+        "does not establish an incremental hybrid-OLC quality win",
+        engineering_validation["comparison_interpretation"],
+    )
 
     results_path = normpath(joinpath(
         @__DIR__,
@@ -67,6 +186,8 @@ Test.@testset "Rhizomorph benchmark manifest" begin
     results_exist = isfile(results_path)
     Test.@test results_exist
     if results_exist
+        Test.@test bytes2hex(SHA.sha256(read(results_path))) ==
+                   engineering_validation["result_csv_sha256"]
         results = DataFrames.DataFrame(CSV.File(results_path))
         Test.@test DataFrames.names(results) == [
             "name",
@@ -74,6 +195,7 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "validation_scope",
             "ok",
             "runtime_s",
+            "raw_n_contigs",
             "n_contigs",
             "total_length",
             "largest_contig",
@@ -82,6 +204,30 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             "avg_identity",
             "mismatches_per_100kbp",
             "indels_per_100kbp",
+            "reference_accession",
+            "reference_length",
+            "reference_sha256",
+            "art_profile",
+            "requested_coverage",
+            "read_length",
+            "fragment_mean",
+            "fragment_sd",
+            "art_seed",
+            "k",
+            "min_contig_length",
+            "simulated_layout",
+            "assembly_input_layout",
+            "input_read_order",
+            "read_count",
+            "read_bases",
+            "input_reads_sha256",
+            "promotion_eligible",
+            "art_build",
+            "megahit_build",
+            "mummer_build",
+            "gfatools_build",
+            "run_platform",
+            "julia_version",
         ]
         Test.@test DataFrames.nrow(results) == 6
         Test.@test Set(zip(results.name, results.arm)) == Set([
@@ -91,26 +237,83 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         ])
         Test.@test all(results.validation_scope .== "interim_engineering_validation")
         Test.@test all(results.ok)
+        Test.@test all(results.promotion_eligible)
+        Test.@test all(results.art_profile .== benchmark_config["art_profile"])
+        Test.@test all(results.requested_coverage .== benchmark_config["coverage"])
+        Test.@test all(results.read_length .== benchmark_config["read_length"])
+        Test.@test all(results.fragment_mean .== benchmark_config["fragment_mean"])
+        Test.@test all(results.fragment_sd .== benchmark_config["fragment_sd"])
+        Test.@test all(results.art_seed .== benchmark_config["art_seed"])
+        Test.@test all(results.k .== benchmark_config["k"])
+        Test.@test all(results.min_contig_length .== benchmark_config["min_contig_length"])
+        Test.@test all(results.simulated_layout .== benchmark_config["simulated_layout"])
+        Test.@test all(results.assembly_input_layout .==
+                       benchmark_config["assembly_input_layout"])
+        Test.@test all(results.input_read_order .== benchmark_config["input_read_order"])
+        Test.@test all(results.art_build .== engineering_validation["tool_builds"]["art"])
+        Test.@test all(results.megahit_build .==
+                       engineering_validation["tool_builds"]["megahit"])
+        Test.@test all(results.mummer_build .==
+                       engineering_validation["tool_builds"]["mummer"])
+        Test.@test all(results.gfatools_build .==
+                       engineering_validation["tool_builds"]["gfatools"])
+        Test.@test all(!isempty, results.run_platform)
+        Test.@test all(!isempty, results.julia_version)
+        Test.@test all(value -> occursin(r"^[0-9a-f]{64}$", value),
+            results.reference_sha256)
+        Test.@test all(value -> occursin(r"^[0-9a-f]{64}$", value),
+            results.input_reads_sha256)
         for column in [
                 :runtime_s,
                 :genome_fraction,
                 :avg_identity,
                 :mismatches_per_100kbp,
                 :indels_per_100kbp,
-            ]
+        ]
             Test.@test all(isfinite, results[!, column])
         end
         Test.@test all(results.runtime_s .>= 0.0)
+        Test.@test all(results.raw_n_contigs .>= results.n_contigs)
         Test.@test all(results.n_contigs .> 0)
         Test.@test all(results.total_length .> 0)
         Test.@test all(results.largest_contig .> 0)
         Test.@test all(results.n50 .> 0)
+        Test.@test all(results.n50 .<= results.largest_contig)
+        Test.@test all(results.largest_contig .<= results.total_length)
         Test.@test all((0.0 .< results.genome_fraction) .&
                        (results.genome_fraction .<= 100.0))
         Test.@test all((0.0 .< results.avg_identity) .&
                        (results.avg_identity .<= 100.0))
         Test.@test all(results.mismatches_per_100kbp .>= 0.0)
         Test.@test all(results.indels_per_100kbp .>= 0.0)
+
+        datasets_by_id = Dict(dataset["id"] => dataset for dataset in manifest["datasets"])
+        for (dataset_id, result_name) in result_names
+            target_rows = results[results.name .== result_name, :]
+            expected_accession = only(
+                datasets_by_id[dataset_id]["provenance"]["accessions"],
+            )
+            Test.@test all(target_rows.reference_accession .== expected_accession)
+            Test.@test all(target_rows.reference_sha256 .== reference_sha256[dataset_id])
+            Test.@test all(
+                target_rows.input_reads_sha256 .== input_reads_sha256[dataset_id],
+            )
+            for column in [
+                    :reference_length,
+                    :reference_sha256,
+                    :read_count,
+                    :read_bases,
+                    :input_reads_sha256,
+                ]
+                Test.@test length(unique(target_rows[!, column])) == 1
+            end
+        end
+
+        Test.@test RealDataCorrectorValidationHarness.validate_results(
+            results,
+            ["phix174", "lambda"],
+            (:naive, :scalable, :hybrid_olc),
+        ) === nothing
 
         for result_name in values(result_names)
             naive = only(DataFrames.eachrow(results[
@@ -121,12 +324,81 @@ Test.@testset "Rhizomorph benchmark manifest" begin
                 (results.name .== result_name) .& (results.arm .== "hybrid-olc"),
                 :,
             ]))
+            scalable = only(DataFrames.eachrow(results[
+                (results.name .== result_name) .& (results.arm .== "scalable"),
+                :,
+            ]))
             Test.@test hybrid.n50 > naive.n50
             Test.@test hybrid.n_contigs < naive.n_contigs
             Test.@test hybrid.avg_identity >= 99.9
             Test.@test hybrid.avg_identity >= naive.avg_identity - 0.02
             Test.@test hybrid.genome_fraction >= 95.0
+            Test.@test hybrid.mismatches_per_100kbp <= naive.mismatches_per_100kbp
+            Test.@test hybrid.indels_per_100kbp <= naive.indels_per_100kbp
+            Test.@test hybrid.n50 >= 0.99 * scalable.n50
+            Test.@test hybrid.avg_identity >= scalable.avg_identity - 0.02
+            Test.@test hybrid.genome_fraction >= scalable.genome_fraction - 1.0
+            Test.@test hybrid.mismatches_per_100kbp <= scalable.mismatches_per_100kbp
+            Test.@test hybrid.indels_per_100kbp <= scalable.indels_per_100kbp
         end
+
+        missing_row = results[2:end, :]
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                missing_row,
+                ["phix174", "lambda"],
+                (:naive, :scalable, :hybrid_olc),
+            ),
+            ErrorException,
+            "incomplete target-arm matrix",
+        )
+        duplicate_row = vcat(results, results[1:1, :])
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                duplicate_row,
+                ["phix174", "lambda"],
+                (:naive, :scalable, :hybrid_olc),
+            ),
+            ErrorException,
+            "duplicate validation rows",
+        )
+        nonfinite = copy(results)
+        nonfinite.runtime_s[1] = NaN
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                nonfinite,
+                ["phix174", "lambda"],
+                (:naive, :scalable, :hybrid_olc),
+            ),
+            ErrorException,
+            "non-finite metric",
+        )
+        inconsistent_floor = copy(results)
+        inconsistent_floor.min_contig_length[1] = 200
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                inconsistent_floor,
+                ["phix174", "lambda"],
+                (:naive, :scalable, :hybrid_olc),
+            ),
+            ErrorException,
+            "common k+1 minimum contig length",
+        )
+        regressed_hybrid = copy(results)
+        hybrid_index = findfirst(
+            (regressed_hybrid.name .== "phix174") .&
+            (regressed_hybrid.arm .== "hybrid-olc"),
+        )
+        regressed_hybrid.n50[hybrid_index] = 1
+        test_throws_message(
+            () -> RealDataCorrectorValidationHarness.validate_results(
+                regressed_hybrid,
+                ["phix174", "lambda"],
+                (:naive, :scalable, :hybrid_olc),
+            ),
+            ErrorException,
+            "hybrid-olc N50 must exceed naive",
+        )
     end
 end
 
