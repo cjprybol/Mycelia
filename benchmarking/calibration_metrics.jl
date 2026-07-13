@@ -217,10 +217,100 @@ function fit_logistic_map(scores::AbstractVector{<:Real},
     return (a = α - β * μ / σ, b = β / σ)
 end
 
+"""
+    fit_logistic_map(features, labels; iters=500, lr=0.1) -> NamedTuple
+
+Fit a multi-feature logistic probability map with samples in rows and features
+in columns. Each feature is standardized independently during optimization and
+the fitted coefficients are folded back to raw-feature space. Returns
+`(a, b::Vector{Float64})`, where `a` is the intercept and `b[j]` multiplies
+`features[:, j]`. Constant columns receive a zero raw-space coefficient.
+"""
+function fit_logistic_map(features::AbstractMatrix{<:Real},
+        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1)::NamedTuple
+    n_samples, n_features = size(features)
+    n_samples == length(labels) ||
+        throw(ArgumentError("feature rows and labels must have equal length"))
+    n_samples >= 1 || throw(ArgumentError("features and labels must be non-empty"))
+    n_features >= 1 || throw(ArgumentError("features must have at least one column"))
+    all(isfinite, features) || throw(ArgumentError("features must be finite"))
+    iters >= 1 || throw(ArgumentError("iters must be >= 1"))
+    isfinite(lr) && lr > 0.0 || throw(ArgumentError("lr must be finite and > 0"))
+
+    x = Float64.(features)
+    y = [label ? 1.0 : 0.0 for label in labels]
+    means = zeros(Float64, n_features)
+    scales = ones(Float64, n_features)
+    standardized = zeros(Float64, n_samples, n_features)
+    for j in 1:n_features
+        means[j] = sum(x[:, j]) / n_samples
+        variance = sum((x[i, j] - means[j])^2 for i in 1:n_samples) / n_samples
+        if variance > eps(Float64)
+            scales[j] = sqrt(variance)
+            for i in 1:n_samples
+                standardized[i, j] = (x[i, j] - means[j]) / scales[j]
+            end
+        end
+    end
+
+    intercept = 0.0
+    coefficients = zeros(Float64, n_features)
+    coefficient_gradient = zeros(Float64, n_features)
+    for _ in 1:iters
+        intercept_gradient = 0.0
+        fill!(coefficient_gradient, 0.0)
+        for i in 1:n_samples
+            linear_predictor = intercept
+            for j in 1:n_features
+                linear_predictor += coefficients[j] * standardized[i, j]
+            end
+            probability = 1.0 / (1.0 + exp(-linear_predictor))
+            residual = probability - y[i]
+            intercept_gradient += residual
+            for j in 1:n_features
+                coefficient_gradient[j] += residual * standardized[i, j]
+            end
+        end
+        intercept -= lr * intercept_gradient / n_samples
+        for j in 1:n_features
+            coefficients[j] -= lr * coefficient_gradient[j] / n_samples
+        end
+    end
+
+    raw_coefficients = coefficients ./ scales
+    raw_intercept = intercept -
+                    sum(coefficients[j] * means[j] / scales[j] for j in 1:n_features)
+    return (a = raw_intercept, b = raw_coefficients)
+end
+
 """Map raw `scores` through a fitted logistic probability map."""
 function predict_logistic(model::NamedTuple,
         scores::AbstractVector{<:Real})::Vector{Float64}
     return [1.0 / (1.0 + exp(-(model.a + model.b * Float64(score)))) for score in scores]
+end
+
+"""Map raw row-oriented `features` through a fitted multi-feature logistic map."""
+function predict_logistic(model::NamedTuple,
+        features::AbstractMatrix{<:Real})::Vector{Float64}
+    hasproperty(model, :a) && hasproperty(model, :b) ||
+        throw(ArgumentError("logistic model must contain a and b"))
+    model.b isa AbstractVector ||
+        throw(ArgumentError("multi-feature logistic model b must be a vector"))
+    size(features, 2) == length(model.b) ||
+        throw(ArgumentError("feature columns must match model coefficients"))
+    all(isfinite, features) || throw(ArgumentError("features must be finite"))
+    isfinite(model.a) && all(isfinite, model.b) ||
+        throw(ArgumentError("logistic model coefficients must be finite"))
+
+    probabilities = Vector{Float64}(undef, size(features, 1))
+    for i in axes(features, 1)
+        linear_predictor = Float64(model.a)
+        for j in axes(features, 2)
+            linear_predictor += Float64(model.b[j]) * Float64(features[i, j])
+        end
+        probabilities[i] = 1.0 / (1.0 + exp(-linear_predictor))
+    end
+    return probabilities
 end
 
 """

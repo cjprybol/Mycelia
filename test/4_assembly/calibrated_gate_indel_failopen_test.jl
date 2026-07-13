@@ -28,13 +28,20 @@ function _write_fastq(reads, dir)
     return path
 end
 
-function _assemble_corrected(fastq, k; threshold, indel_params, outdir)
+function _assemble_corrected(fastq::AbstractString, k::Int;
+        threshold::Union{Nothing, Float64},
+        indel_params::Union{Nothing, Mycelia.IndelDecodeParams},
+        outdir::AbstractString,
+        probability_model::Union{Nothing, Mycelia.CorrectionConfidenceModel} = nothing,
+        probability_threshold::Float64 = 0.5)::Dict{String, String}
     Random.seed!(42)
     result = Mycelia.mycelia_iterative_assemble(fastq;
         max_k = max(k, 13), skip_solid = false, graph_mode = :doublestrand,
         n_k_rungs = 1, max_iterations_per_k = 1, hard_window = false,
         soft_em = false, cheap_correct = true, beam_width = nothing,
         calibrated_gap_threshold = threshold, indel_params = indel_params,
+        calibrated_probability_model = probability_model,
+        calibrated_probability_threshold = probability_threshold,
         verbose = false, enable_checkpointing = false, output_dir = outdir)
     corrected_fastq = get(result[:metadata], :final_fastq_file, nothing)
     (corrected_fastq === nothing || !isfile(corrected_fastq)) &&
@@ -74,7 +81,15 @@ Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
         (base = base, gated = gated)
     end
 
+    probability_model = Mycelia.CorrectionConfidenceModel(0.0, 0.0, 0.0, 0.0, 0.0)
+    probability_gated = mktempdir() do d
+        _assemble_corrected(_write_fastq(reads, d), k;
+            threshold = nothing, indel_params = indel, outdir = mktempdir(),
+            probability_model = probability_model, probability_threshold = 1.0)
+    end
+
     # Under indel mode the gate is excluded, so the threshold changes nothing.
     Test.@test !isempty(corrected.base)
     Test.@test corrected.base == corrected.gated
+    Test.@test corrected.base == probability_gated
 end

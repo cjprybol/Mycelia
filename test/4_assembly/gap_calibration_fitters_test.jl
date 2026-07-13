@@ -43,6 +43,40 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     # The decision boundary (P=0.5) lands near the true 2.5 threshold.
     Test.@test isapprox(logistic_gap_for_probability(lm, 0.5), 2.5; atol = 0.3)
 
+    # --- Multi-feature logistic uses samples as rows -----------------------
+    features = hcat(
+        gaps,
+        2.0 .+ 3.0 .* gaps,
+        Float64.(gaps .> 1.5),
+        fill(7.0, length(gaps))
+    )
+    multi_lm = fit_logistic_map(features, labels)
+    multi_p = predict_logistic(multi_lm, features)
+    Test.@test multi_lm.b isa Vector{Float64}
+    Test.@test length(multi_lm.b) == size(features, 2)
+    Test.@test length(multi_p) == size(features, 1)
+    Test.@test all(isfinite, (multi_lm.a, multi_lm.b...))
+    Test.@test all(probability -> 0.0 <= probability <= 1.0, multi_p)
+    Test.@test auroc(multi_p, labels) == 1.0
+    # The final column is constant, so it must remain inert rather than
+    # generating a huge unfolded coefficient from a near-zero scale.
+    Test.@test multi_lm.b[4] == 0.0
+
+    # Returned coefficients are in raw feature space, not standardized space.
+    manual_p = [1.0 /
+                (1.0 + exp(-(multi_lm.a + sum(multi_lm.b .* Float64.(features[i, :])))))
+                for i in axes(features, 1)]
+    Test.@test multi_p ≈ manual_p
+
+    # A one-column matrix preserves the scalar fitter's numerical contract,
+    # while returning its slope as a length-one vector.
+    one_feature_lm = fit_logistic_map(reshape(gaps, :, 1), labels)
+    Test.@test lm.b isa Float64
+    Test.@test one_feature_lm.a ≈ lm.a
+    Test.@test only(one_feature_lm.b) ≈ lm.b
+    Test.@test predict_logistic(one_feature_lm, reshape(gaps, :, 1)) ≈
+               predict_logistic(lm, gaps)
+
     # --- Tied scores share one isotonic probability (PAVA tie-pooling) -------
     # Repeated Viterbi gaps tie; all observations at an identical score must map
     # to their shared empirical probability, not to a duplicate-threshold artifact.
@@ -68,6 +102,16 @@ Test.@testset "gap calibration fitters (isotonic / logistic / binned)" begin
     end
     Test.@test throws_msg(() -> fit_isotonic_map([0.1, Inf], [false, true]), "finite")
     Test.@test throws_msg(() -> fit_logistic_map(Float64[], Bool[]), "non-empty")
+    Test.@test throws_msg(
+        () -> fit_logistic_map(zeros(2, 2), [true]), "equal length")
+    Test.@test throws_msg(
+        () -> fit_logistic_map(zeros(2, 0), [false, true]), "at least one column")
+    Test.@test throws_msg(
+        () -> fit_logistic_map([0.0 NaN; 1.0 2.0], [false, true]), "finite")
+    Test.@test throws_msg(
+        () -> predict_logistic(multi_lm, zeros(2, 3)), "match model")
+    Test.@test throws_msg(
+        () -> predict_logistic(multi_lm, [0.0 Inf 0.0 7.0]), "finite")
     Test.@test throws_msg(() -> fit_binned_map([0.1, 0.2], [true]), "equal length")
     Test.@test throws_msg(() -> logistic_gap_for_probability(lm, 1.0), "open interval")
 
