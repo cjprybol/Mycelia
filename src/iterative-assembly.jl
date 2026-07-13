@@ -394,6 +394,9 @@ end
 Main iterative maximum likelihood assembly function.
 Processes entire read sets per iteration with complete FASTQ I/O tracking.
 Enhanced with performance optimizations, caching, and progress tracking.
+
+Set `materialize_final_assembly=false` for disk-backed consumers that need the
+final FASTQ path but not an in-memory copy of every corrected sequence.
 """
 function mycelia_iterative_assemble(input_fastq::String;
         max_k::Int = 101,
@@ -419,7 +422,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
-        indel_params::Union{Nothing, IndelDecodeParams} = nothing)
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
+        materialize_final_assembly::Bool = true)
     start_time = time()
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
@@ -961,7 +965,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         final_pass_graph = final_pass_graph,
         final_pass_graph_k = final_pass_graph_k,
         final_pass_graph_mode = graph_mode,
-        final_pass_graph_reusable = final_pass_graph_reusable)
+        final_pass_graph_reusable = final_pass_graph_reusable,
+        materialize_final_assembly = materialize_final_assembly)
 end
 
 # =============================================================================
@@ -2853,6 +2858,9 @@ end
 
 """
 Finalize iterative assembly by combining results from all k-mer sizes and iterations.
+
+When `materialize_final_assembly=false`, `result[:final_assembly]` is `nothing`
+and the final FASTQ remains available through `result[:metadata][:final_fastq_file]`.
 """
 function finalize_iterative_assembly(output_dir::String, k_progression::Vector{Int},
         iteration_history::Dict{Int, Vector{Dict{Symbol, Any}}},
@@ -2870,7 +2878,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         final_pass_graph = nothing,
         final_pass_graph_k::Int = 0,
         final_pass_graph_mode::Symbol = :canonical,
-        final_pass_graph_reusable::Bool = false)
+        final_pass_graph_reusable::Bool = false,
+        materialize_final_assembly::Bool = true)
     if verbose
         println("Finalizing iterative assembly results...")
     end
@@ -2896,12 +2905,19 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     total_improvements = sum(sum(iter[:improvements_made] for iter in iterations)
     for iterations in values(iteration_history))
 
-    # Read final assembly for k-mer extraction
-    if isfile(final_fastq)
-        final_reads = collect(FASTX.FASTQ.Reader(open(final_fastq)))
-        final_assembly = [FASTX.sequence(String, read) for read in final_reads]
+    # The historical API materializes every corrected sequence by default. Disk-
+    # backed callers can opt out so finalization retains only the FASTQ path and
+    # avoids holding both FASTQ records and copied sequence strings in memory.
+    final_assembly = if materialize_final_assembly
+        if isfile(final_fastq)
+            open(FASTX.FASTQ.Reader, final_fastq) do reader
+                [FASTX.sequence(String, read) for read in reader]
+            end
+        else
+            String[]
+        end
     else
-        final_assembly = String[]
+        nothing
     end
 
     # Swallowed-decode tally (structural / un-k-merizable). Surfaced on the result

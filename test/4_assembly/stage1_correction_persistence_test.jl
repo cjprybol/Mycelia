@@ -5,8 +5,8 @@
 # outlived the call — a public accessor for just the corrected reads did not
 # exist. The hybrid-OLC route (Stage-2 route (a)) needs those corrected reads to
 # survive so an external OLC assembler can consume them. The reusable helper
-# `_run_stage1_correction(reads, config)` now materializes the corrected reads AND
-# persists the corrected FASTQ to a caller-owned location.
+# `_run_stage1_correction(reads, config)` now optionally materializes corrected
+# reads and always persists the corrected FASTQ to a caller-owned location.
 #
 # These tests prove:
 #   (1) With config.output_dir set, the corrected FASTQ exists AFTER the call
@@ -97,6 +97,8 @@ Test.@testset "Stage-1 correction persistence (td-ohob)" begin
         Test.@test length(reread) == length(res.corrected_reads)
         Test.@test [FASTX.sequence(String, r) for r in reread] ==
                    [FASTX.sequence(String, r) for r in res.corrected_reads]
+        Test.@test res.result_dict[:final_assembly] ==
+                   [FASTX.sequence(String, r) for r in res.corrected_reads]
 
         # The tail-consumed pieces are present so the native path needs no recompute.
         Test.@test haskey(res.result_dict, :metadata)
@@ -129,8 +131,14 @@ Test.@testset "Stage-1 correction persistence (td-ohob)" begin
         res = R._run_stage1_correction(
             reads, config; materialize_corrected_reads = false)
         Test.@test res.corrected_reads === nothing
-        Test.@test res.corrected_read_count > 0
+        Test.@test res.result_dict[:final_assembly] === nothing
         Test.@test isfile(res.corrected_fastq)
+        Test.@test res.result_dict[:metadata][:final_fastq_file] == res.corrected_fastq
+        reread_count = open(FASTX.FASTQ.Reader, res.corrected_fastq) do reader
+            count(_ -> true, reader)
+        end
+        Test.@test reread_count > 0
+        Test.@test res.corrected_read_count == reread_count
     end
 
     Test.@testset "end-to-end corrector wiring intact" begin

@@ -1147,12 +1147,14 @@ function _run_stage1_correction(
             indel_params = indel_params,
             verbose = false,
             enable_checkpointing = false,
-            output_dir = corrector_output_dir
+            output_dir = corrector_output_dir,
+            materialize_final_assembly = materialize_corrected_reads
         )
 
-        # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
-        # corrected READS, not an assembly. The caller re-assembles them (or hands
-        # them to an external assembler) — here we just materialize + persist them.
+        # mycelia_iterative_assemble is a read CORRECTOR: when requested, its
+        # :final_assembly contains corrected READ sequences, not contigs. Disk-backed
+        # callers disable that legacy materialization and consume only the persisted
+        # FASTQ, avoiding a redundant all-read sequence copy during finalization.
         corrected_fastq = get(result_dict[:metadata], :final_fastq_file, nothing)
         if corrected_fastq === nothing
             error("iterative corrector metadata is missing the :final_fastq_file key; " *
@@ -1173,9 +1175,9 @@ function _run_stage1_correction(
         # a live path, not a dangling one. (The native tail never reads this key, so
         # this does not perturb the byte-identical re-assembly.)
         result_dict[:metadata][:final_fastq_file] = persistent_fastq
-        # Eager `collect` inside a do-block: materializes ALL corrected reads into
-        # memory AND closes the stream (no leaked fd across many assemblies, and
-        # closes on a malformed-FASTQ throw too).
+        # Keep the FASTQ reader inside a do-block so both modes close the stream
+        # promptly (including on malformed FASTQ). The historical mode collects
+        # records; the disk-backed mode streams only a count.
         corrected_reads, n_corrected = open(FASTX.FASTQ.Reader, persistent_fastq) do reader
             if materialize_corrected_reads
                 records = collect(reader)

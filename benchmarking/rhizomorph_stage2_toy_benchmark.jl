@@ -12,6 +12,7 @@ import Mycelia
 import Random
 import SHA
 import StableRNGs
+import TOML
 
 include(joinpath(@__DIR__, "quast_report_parsing.jl"))
 
@@ -31,6 +32,92 @@ const DIVERGENCES = parse.(Float64,
 const RUN_MODE = Symbol(get(ENV, "RHIZOMORPH_STAGE2_MODE", "development"))
 const FIXTURE_COMPLEXITY = Symbol(
     get(ENV, "RHIZOMORPH_STAGE2_COMPLEXITY", "repeat_rich"))
+const STAGE2_STAGING_SENTINEL_NAME = ".rhizomorph-stage2-staging.toml"
+const STAGE2_STAGING_SENTINEL_SCHEMA = "rhizomorph-stage2-staging-v1"
+
+function stage2_output_paths(final_output_root::AbstractString)::NamedTuple
+    isempty(strip(final_output_root)) &&
+        error("Stage-2 final output root must be nonempty")
+    final = abspath(normpath(String(final_output_root)))
+    return (; final, staging = final * ".staging")
+end
+
+function stage2_staging_sentinel_path(staging_root::AbstractString)::String
+    return joinpath(staging_root, STAGE2_STAGING_SENTINEL_NAME)
+end
+
+function validate_stage2_owned_staging(
+        staging_root::AbstractString,
+        final_output_root::AbstractString
+)::Nothing
+    paths = stage2_output_paths(final_output_root)
+    staging = abspath(normpath(String(staging_root)))
+    staging == paths.staging ||
+        error("Stage-2 staging path differs from the exact final-path sibling")
+    islink(staging) && error("Stage-2 staging root must not be a symbolic link")
+    isdir(staging) || error("Stage-2 staging root is not a directory")
+    sentinel = stage2_staging_sentinel_path(staging)
+    islink(sentinel) && error("Stage-2 staging sentinel must not be a symbolic link")
+    isfile(sentinel) || error("refusing to replace unowned Stage-2 staging root")
+    table = TOML.parsefile(sentinel)
+    get(table, "schema", "") == STAGE2_STAGING_SENTINEL_SCHEMA ||
+        error("Stage-2 staging sentinel has an unsupported schema")
+    get(table, "final_output_root", "") == paths.final ||
+        error("Stage-2 staging sentinel is bound to a different final path")
+    get(table, "staging_root", "") == paths.staging ||
+        error("Stage-2 staging sentinel is bound to a different staging path")
+    return nothing
+end
+
+function write_stage2_staging_sentinel!(
+        staging_root::AbstractString,
+        final_output_root::AbstractString
+)::String
+    paths = stage2_output_paths(final_output_root)
+    staging = abspath(normpath(String(staging_root)))
+    staging == paths.staging ||
+        error("Stage-2 staging path differs from the exact final-path sibling")
+    sentinel = stage2_staging_sentinel_path(staging)
+    mktemp(staging) do temporary_path, stream
+        TOML.print(stream, Dict(
+            "schema" => STAGE2_STAGING_SENTINEL_SCHEMA,
+            "final_output_root" => paths.final,
+            "staging_root" => paths.staging,
+        ))
+        close(stream)
+        mv(temporary_path, sentinel)
+    end
+    return sentinel
+end
+
+function prepare_stage2_staging!(
+        final_output_root::AbstractString
+)::String
+    paths = stage2_output_paths(final_output_root)
+    islink(paths.final) &&
+        error("Stage-2 final output root must not be a symbolic link")
+    ispath(paths.final) &&
+        error("Stage-2 final output root already exists; refusing to replace it")
+    if ispath(paths.staging) || islink(paths.staging)
+        validate_stage2_owned_staging(paths.staging, paths.final)
+        rm(paths.staging; recursive = true)
+    end
+    mkpath(dirname(paths.staging))
+    mkdir(paths.staging)
+    write_stage2_staging_sentinel!(paths.staging, paths.final)
+    return paths.staging
+end
+
+function promote_stage2_staging!(final_output_root::AbstractString)::String
+    paths = stage2_output_paths(final_output_root)
+    validate_stage2_owned_staging(paths.staging, paths.final)
+    islink(paths.final) &&
+        error("Stage-2 final output root must not be a symbolic link")
+    ispath(paths.final) &&
+        error("Stage-2 final output root already exists; refusing to replace it")
+    mv(paths.staging, paths.final)
+    return paths.final
+end
 
 function make_primary_sequence(rng::Random.AbstractRNG)::String
     sequence = collect(String(BioSequences.randdnaseq(rng, FIXTURE_LENGTH)))
@@ -81,13 +168,13 @@ end
 function append_gzip_fastq(input::String, output::IO)::Nothing
     open(input, "r") do raw
         stream = CodecZlib.GzipDecompressorStream(raw)
-        write(output, read(stream))
+        write(output, stream)
         close(stream)
     end
     return nothing
 end
 
-function make_fixture(root::String; reuse::Bool = false)::NamedTuple
+function make_fixture(root::String)::NamedTuple
     fixture_dir = mkpath(joinpath(root, "fixture"))
     length(COVERAGES) == 3 || error("RHIZOMORPH_STAGE2_COVERAGES requires 3 values")
     length(DIVERGENCES) == 2 ||
@@ -106,23 +193,23 @@ function make_fixture(root::String; reuse::Bool = false)::NamedTuple
     for haplotype in truth
         reference = joinpath(fixture_dir, "$(haplotype.id).fasta")
         reads = joinpath(fixture_dir, "$(haplotype.id).fastq.gz")
-        if !reuse
-            write_reference(reference, haplotype.id, haplotype.sequence)
-            Mycelia.simulate_badread_reads(;
-                fasta = reference,
-                quantity = haplotype.coverage,
-                outfile = reads,
-                identity = BADREAD_IDENTITY,
-                quiet = true,
-                seed = haplotype.seed)
-        end
+        write_reference(reference, haplotype.id, haplotype.sequence)
+        Mycelia.simulate_badread_reads(;
+            fasta = reference,
+            quantity = haplotype.coverage,
+            outfile = reads,
+            identity = BADREAD_IDENTITY,
+            quiet = true,
+            seed = haplotype.seed)
         push!(reference_paths, reference)
         push!(read_paths, reads)
     end
     combined_reference = joinpath(fixture_dir, "truth.fasta")
     open(combined_reference, "w") do io
         for reference in reference_paths
-            write(io, read(reference))
+            open(reference, "r") do input
+                write(io, input)
+            end
         end
     end
     mixed_fastq = joinpath(fixture_dir, "mixed.fastq")
@@ -152,7 +239,7 @@ function require_quast_metrics(report::String)::NamedTuple
     return metrics
 end
 
-function evaluate_primary(
+function evaluate_primary_segment_candidate(
         assembly::String,
         reference::String,
         output_dir::String
@@ -162,11 +249,14 @@ function evaluate_primary(
     return require_quast_metrics(joinpath(quast_dir, "report.tsv"))
 end
 
-function raw_ranked_variants(
-        strainy_result,
+function raw_ranked_segment_candidates(
+        strainy_result::NamedTuple,
         fastq::String,
-        max_variants::Int
-)::Vector{NamedTuple}
+        evaluation_panel_size::Int
+)::Vector{<:NamedTuple}
+    evaluation_panel_size > 0 || throw(
+        ArgumentError("evaluation_panel_size must be positive"),
+    )
     segments = Mycelia.Rhizomorph._read_gfa_records(strainy_result.strain_contigs_gfa)
     coverages = Mycelia.Rhizomorph._strainy_coverages(strainy_result.phased_unitig_info)
     support = Mycelia.Rhizomorph._read_support_coverages(segments, fastq, THREADS)
@@ -180,42 +270,35 @@ function raw_ranked_variants(
                      haskey(coverages, id)]
     sort!(candidates; by = candidate ->
         (-candidate.coverage, -length(candidate.sequence), candidate.id))
-    length(candidates) >= max_variants ||
-        error("raw SOTA arm produced only $(length(candidates)) strain candidates")
-    return candidates[1:max_variants]
-end
-
-function load_ranked_variants(
-        paths::Vector{String},
-        table_path::String
-)::Vector{NamedTuple}
-    sequences = Dict{String, String}()
-    for path in paths
-        open(FASTX.FASTA.Reader, path) do reader
-            for record in reader
-                header = FASTX.FASTA.identifier(record)
-                id = last(split(header, "id="; limit = 2))
-                sequences[id] = FASTX.FASTA.sequence(String, record)
-            end
-        end
-    end
-    table = CSV.read(table_path, DataFrames.DataFrame; delim = '\t')
-    return [(;
-        id = String(row.id),
-        sequence = sequences[String(row.id)],
-        likelihood_rank = Int(row.likelihood_rank),
-        abundance_rank = Int(row.abundance_rank)) for row in DataFrames.eachrow(table)]
+    length(candidates) >= evaluation_panel_size ||
+        error(
+            "raw comparator arm produced only $(length(candidates)) " *
+            "experimental segment candidates",
+        )
+    return candidates[1:evaluation_panel_size]
 end
 
 function write_single_fasta(path::String, id::String, sequence::String)::String
     return write_reference(path, id, sequence)
 end
 
-function parse_dnadiff_discrepancy(report::String)::NamedTuple
-    total_match = match(r"TotalBases\s+(\d+)\s+(\d+)", report)
-    aligned_match = match(
-        r"AlignedBases\s+(\d+)\(([\d.]+)%\)\s+(\d+)\(([\d.]+)%\)", report)
-    identity_match = match(r"AvgIdentity\s+([\d.]+)", report)
+function _parse_dnadiff_discrepancy_stream(stream::IO)::NamedTuple
+    total_match = nothing
+    aligned_match = nothing
+    identity_match = nothing
+    for line in eachline(stream)
+        total_match === nothing &&
+            (total_match = match(r"TotalBases\s+(\d+)\s+(\d+)", line))
+        aligned_match === nothing &&
+            (aligned_match = match(
+                r"AlignedBases\s+(\d+)\(([\d.]+)%\)\s+(\d+)\(([\d.]+)%\)",
+                line,
+            ))
+        identity_match === nothing &&
+            (identity_match = match(r"AvgIdentity\s+([\d.]+)", line))
+        total_match !== nothing && aligned_match !== nothing &&
+            identity_match !== nothing && break
+    end
     total_match === nothing && error("dnadiff report lacks total base counts")
     aligned_match === nothing && error("dnadiff report lacks reference aligned percentage")
     identity_match === nothing && error("dnadiff report lacks average identity")
@@ -233,6 +316,17 @@ function parse_dnadiff_discrepancy(report::String)::NamedTuple
         total_errors_per_100kbp = discrepancy / total_ref * 100_000.0)
 end
 
+function parse_dnadiff_discrepancy(report::String)::NamedTuple
+    return _parse_dnadiff_discrepancy_stream(IOBuffer(report))
+end
+
+function parse_dnadiff_discrepancy_file(path::AbstractString)::NamedTuple
+    isfile(path) || error("dnadiff report does not exist: $(path)")
+    return open(path, "r") do stream
+        _parse_dnadiff_discrepancy_stream(stream)
+    end
+end
+
 function pair_metrics(
         candidate_id::String,
         candidate_sequence::String,
@@ -248,8 +342,11 @@ function pair_metrics(
         query = candidate_path,
         outdir = joinpath(output_dir, "$(candidate_id)_vs_$(truth_id)"),
         force = true)
-    report = read(result.report, String)
-    return (; candidate_id, truth_id, parse_dnadiff_discrepancy(report)...)
+    return (;
+        candidate_id,
+        truth_id,
+        parse_dnadiff_discrepancy_file(result.report)...,
+    )
 end
 
 function all_permutations(values::Vector{Int})::Vector{Vector{Int}}
@@ -264,10 +361,10 @@ function all_permutations(values::Vector{Int})::Vector{Vector{Int}}
     return permutations
 end
 
-function evaluate_ranked_variants(
+function evaluate_ranked_segment_candidates(
         arm::String,
-        variants,
-        fixture,
+        variants::AbstractVector,
+        fixture::NamedTuple,
         output_dir::String
 )::DataFrames.DataFrame
     mkpath(output_dir)
@@ -315,8 +412,11 @@ function create_figure(summary::DataFrames.DataFrame, output_dir::String)::Nothi
     return nothing
 end
 
-function file_sha256(path::String)::String
-    return bytes2hex(SHA.sha256(read(path)))
+function file_sha256(path::AbstractString)::String
+    isfile(path) || error("cannot hash a missing file: $(path)")
+    return open(path, "r") do stream
+        bytes2hex(SHA.sha256(stream))
+    end
 end
 
 function conda_package_version(environment::String, package::String)::String
@@ -332,17 +432,18 @@ function main()::Nothing
     git_dirty = !isempty(strip(read(`git status --porcelain --untracked-files=no`, String)))
     RUN_MODE == :confirmation && git_dirty &&
         error("confirmation runs require a clean tracked worktree")
-    reuse = get(ENV, "RHIZOMORPH_STAGE2_REUSE", "false") == "true"
-    if !reuse
-        isdir(OUTPUT_ROOT) && rm(OUTPUT_ROOT; recursive = true, force = true)
-        mkpath(OUTPUT_ROOT)
-    end
-    fixture = reuse ? make_fixture(OUTPUT_ROOT; reuse = true) : make_fixture(OUTPUT_ROOT)
+    reuse_value = get(ENV, "RHIZOMORPH_STAGE2_REUSE", "false")
+    reuse_value in ("true", "false") || error(
+        "RHIZOMORPH_STAGE2_REUSE must be true or false",
+    )
+    reuse_value == "true" && error(
+        "RHIZOMORPH_STAGE2_REUSE is disabled because stale artifacts are not " *
+        "bound to the current configuration and input digests",
+    )
+    prepare_stage2_staging!(FINAL_OUTPUT_ROOT)
+    fixture = make_fixture(OUTPUT_ROOT)
 
-    raw_layout = reuse ? (;
-        assembly = joinpath(OUTPUT_ROOT, "raw", "metaflye", "assembly.fasta"),
-        graph = joinpath(OUTPUT_ROOT, "raw", "metaflye", "assembly_graph.gfa")) :
-    Mycelia.run_metaflye(;
+    raw_layout = Mycelia.run_metaflye(;
         fastq = fixture.mixed_fastq,
         outdir = joinpath(OUTPUT_ROOT, "raw", "metaflye"),
         genome_size = "$(FIXTURE_LENGTH)",
@@ -353,11 +454,7 @@ function main()::Nothing
         keep_haplotypes = true,
         no_alt_contigs = true,
         threads = THREADS)
-    raw_strainy = reuse ? (;
-        strain_contigs_gfa = joinpath(OUTPUT_ROOT, "raw", "strainy", "strain_contigs.gfa"),
-        phased_unitig_info = joinpath(
-            OUTPUT_ROOT, "raw", "strainy", "phased_unitig_info_table.csv")) :
-    Mycelia.run_strainy(;
+    raw_strainy = Mycelia.run_strainy(;
         gfa_ref = raw_layout.graph,
         fastq = fixture.mixed_fastq,
         outdir = joinpath(OUTPUT_ROOT, "raw", "strainy"),
@@ -373,90 +470,110 @@ function main()::Nothing
         strategy = :scalable,
         sequencing_tech = :nanopore,
         output_dir = joinpath(OUTPUT_ROOT, "stage2"))
-    stage2 = reuse ? (;
-        primary_fasta = joinpath(
-            OUTPUT_ROOT, "stage2", "ranked", "primary_consensus.fasta"),
-        layout_assembly = joinpath(OUTPUT_ROOT, "stage2", "metaflye", "assembly.fasta"),
-        corrected_fastq = joinpath(OUTPUT_ROOT, "stage2", "corrected.fastq"),
-        likelihood_ranked_variants_fasta = joinpath(
-            OUTPUT_ROOT, "stage2", "ranked", "ranked_variants_likelihood.fasta"),
-        abundance_ranked_variants_fasta = joinpath(
-            OUTPUT_ROOT, "stage2", "ranked", "ranked_variants_abundance.fasta"),
-        variants = load_ranked_variants([
-            joinpath(OUTPUT_ROOT, "stage2", "ranked", "ranked_variants_likelihood.fasta"),
-            joinpath(OUTPUT_ROOT, "stage2", "ranked", "ranked_variants_abundance.fasta")],
-            joinpath(OUTPUT_ROOT, "stage2", "ranked", "ranked_variants.tsv"))) :
-    Mycelia.Rhizomorph.deconvolve_stage2(
+    stage2 = Mycelia.Rhizomorph.deconvolve_stage2(
         fixture.mixed_fastq, stage2_config;
         genome_size = "$(FIXTURE_LENGTH)", min_overlap = 1000,
-        max_variants = 3, min_scored_fraction = 0.9, threads = THREADS)
+        min_scored_fraction = 0.9, threads = THREADS)
 
-    if reuse
-        for directory in (
-                joinpath(OUTPUT_ROOT, "raw", "quast"),
-                joinpath(OUTPUT_ROOT, "stage2", "quast"),
-                joinpath(OUTPUT_ROOT, "raw", "dnadiff"),
-                joinpath(OUTPUT_ROOT, "stage2", "dnadiff")
-        )
-            rm(directory; recursive = true, force = true)
-        end
-    end
-
-    raw_variants = raw_ranked_variants(raw_strainy, fixture.mixed_fastq, 3)
+    # The truth count is used only by this evaluator to choose a fixed-size
+    # assignment panel. It is not supplied to the production candidate generator.
+    raw_candidates = raw_ranked_segment_candidates(
+        raw_strainy,
+        fixture.mixed_fastq,
+        length(fixture.truth),
+    )
     raw_primary_fasta = write_single_fasta(
         joinpath(mkpath(joinpath(OUTPUT_ROOT, "raw", "primary")), "primary.fasta"),
-        raw_variants[1].id, raw_variants[1].sequence)
-    raw_metrics = evaluate_primary(raw_primary_fasta, fixture.reference_paths[1],
+        raw_candidates[1].id, raw_candidates[1].sequence)
+    raw_metrics = evaluate_primary_segment_candidate(
+        raw_primary_fasta, fixture.reference_paths[1],
         joinpath(OUTPUT_ROOT, "raw", "quast"))
-    stage2_metrics = evaluate_primary(stage2.primary_fasta, fixture.reference_paths[1],
+    stage2_metrics = evaluate_primary_segment_candidate(
+        stage2.primary_segment_candidate_fasta, fixture.reference_paths[1],
         joinpath(OUTPUT_ROOT, "stage2", "quast"))
     raw_primary_metrics = pair_metrics(
-        "raw_primary", raw_variants[1].sequence, fixture.truth[1].id,
+        "raw_primary", raw_candidates[1].sequence, fixture.truth[1].id,
         fixture.reference_paths[1], joinpath(OUTPUT_ROOT, "raw", "primary_dnadiff"))
-    stage2_primary = only(filter(variant -> variant.likelihood_rank == 1, stage2.variants))
+    stage2_primary = only(filter(
+        candidate -> candidate.likelihood_rank == 1,
+        stage2.segment_candidates,
+    ))
     stage2_primary_metrics = pair_metrics(
         "stage2_primary", stage2_primary.sequence, fixture.truth[1].id,
         fixture.reference_paths[1], joinpath(OUTPUT_ROOT, "stage2", "primary_dnadiff"))
     summary = DataFrames.DataFrame([
-        (arm = "raw-sota", nga50 = raw_metrics.quast_nga50,
+        (arm = "raw-comparator", nga50 = raw_metrics.quast_nga50,
             misassemblies = raw_metrics.quast_num_misassemblies,
             genome_fraction = raw_metrics.quast_genome_fraction,
             total_errors_per_100kbp = raw_primary_metrics.total_errors_per_100kbp),
-        (arm = "rhizomorph-stage2", nga50 = stage2_metrics.quast_nga50,
+        (arm = "rhizomorph-stage2-foundation",
+            nga50 = stage2_metrics.quast_nga50,
             misassemblies = stage2_metrics.quast_num_misassemblies,
             genome_fraction = stage2_metrics.quast_genome_fraction,
             total_errors_per_100kbp = stage2_primary_metrics.total_errors_per_100kbp)
     ])
 
-    raw_rank_table = evaluate_ranked_variants(
-        "raw-sota-abundance", raw_variants, fixture,
+    raw_rank_table = evaluate_ranked_segment_candidates(
+        "raw-comparator-abundance", raw_candidates, fixture,
         joinpath(OUTPUT_ROOT, "raw", "dnadiff"))
-    likelihood_variants = sort(stage2.variants; by = variant -> variant.likelihood_rank)[1:3]
-    abundance_variants = sort(stage2.variants; by = variant -> variant.abundance_rank)[1:3]
-    likelihood_rank_table = evaluate_ranked_variants(
-        "rhizomorph-stage2-likelihood", likelihood_variants, fixture,
-        joinpath(OUTPUT_ROOT, "stage2", "dnadiff_likelihood"))
-    abundance_rank_table = evaluate_ranked_variants(
-        "rhizomorph-stage2-abundance", abundance_variants, fixture,
-        joinpath(OUTPUT_ROOT, "stage2", "dnadiff_abundance"))
+    n_truth = length(fixture.truth)
+    length(stage2.segment_candidates) >= n_truth || error(
+        "Stage-2 produced fewer segment candidates than the evaluator truth panel",
+    )
+    likelihood_candidates = sort(
+        stage2.segment_candidates;
+        by = candidate -> candidate.likelihood_rank,
+    )[1:n_truth]
+    abundance_candidates = sort(
+        stage2.segment_candidates;
+        by = candidate -> candidate.abundance_rank,
+    )[1:n_truth]
+    likelihood_rank_table = evaluate_ranked_segment_candidates(
+        "rhizomorph-segment-candidate-likelihood",
+        likelihood_candidates,
+        fixture,
+        joinpath(OUTPUT_ROOT, "stage2", "dnadiff_likelihood"),
+    )
+    abundance_rank_table = evaluate_ranked_segment_candidates(
+        "rhizomorph-segment-candidate-abundance",
+        abundance_candidates,
+        fixture,
+        joinpath(OUTPUT_ROOT, "stage2", "dnadiff_abundance"),
+    )
     ranking = vcat(raw_rank_table, likelihood_rank_table, abundance_rank_table)
 
     tables_dir = mkpath(joinpath(OUTPUT_ROOT, "tables"))
     plots_dir = mkpath(joinpath(OUTPUT_ROOT, "plots"))
     outputs_dir = mkpath(joinpath(OUTPUT_ROOT, "outputs"))
     CSV.write(joinpath(tables_dir, "stage2_primary_summary.csv"), summary)
-    CSV.write(joinpath(tables_dir, "stage2_ranked_variant_recovery.csv"), ranking)
-    cp(stage2.primary_fasta, joinpath(outputs_dir, "primary_consensus.fasta"); force = true)
-    cp(stage2.likelihood_ranked_variants_fasta,
-        joinpath(outputs_dir, "ranked_variants_likelihood.fasta"); force = true)
-    cp(stage2.abundance_ranked_variants_fasta,
-        joinpath(outputs_dir, "ranked_variants_abundance.fasta"); force = true)
+    CSV.write(joinpath(tables_dir, "stage2_ranked_candidate_recovery.csv"), ranking)
+    cp(
+        stage2.primary_segment_candidate_fasta,
+        joinpath(outputs_dir, "primary_segment_candidate.fasta");
+        force = true,
+    )
+    cp(
+        stage2.likelihood_ranked_segment_candidates_fasta,
+        joinpath(outputs_dir, "ranked_segment_candidates_likelihood.fasta");
+        force = true,
+    )
+    cp(
+        stage2.abundance_ranked_segment_candidates_fasta,
+        joinpath(outputs_dir, "ranked_segment_candidates_abundance.fasta");
+        force = true,
+    )
     create_figure(summary, plots_dir)
 
-    raw_row = summary[summary.arm .== "raw-sota", :][1, :]
-    stage2_row = summary[summary.arm .== "rhizomorph-stage2", :][1, :]
-    likelihood_ranks = ranking[ranking.arm .== "rhizomorph-stage2-likelihood", :]
-    abundance_ranks = ranking[ranking.arm .== "rhizomorph-stage2-abundance", :]
+    raw_row = summary[summary.arm .== "raw-comparator", :][1, :]
+    stage2_row = summary[summary.arm .== "rhizomorph-stage2-foundation", :][1, :]
+    likelihood_ranks = ranking[
+        ranking.arm .== "rhizomorph-segment-candidate-likelihood",
+        :,
+    ]
+    abundance_ranks = ranking[
+        ranking.arm .== "rhizomorph-segment-candidate-abundance",
+        :,
+    ]
     gates = Dict(
         "nga50_no_worse" => stage2_row.nga50 >= raw_row.nga50,
         "misassemblies_no_worse" =>
@@ -481,12 +598,14 @@ function main()::Nothing
         "abundance_rank_exact" =>
             all(abundance_ranks.truth_id .== abundance_ranks.expected_truth_id)
     )
-    passed = all(values(gates))
+    contract_passed = all(values(gates))
 
     provenance_dir = mkpath(joinpath(OUTPUT_ROOT, "provenance"))
     provenance = Dict(
         "scale" => "toy-smoke",
-        "claim_boundary" => "engineering proof only; not a real-genome SOTA claim",
+        "claim_boundary" =>
+            "unattested toy contract only; not a deconvolution or SOTA claim",
+        "evidence_status" => "unattested-toy-contract",
         "generated_at" => string(Dates.now()),
         "git_sha" => strip(read(`git rev-parse HEAD`, String)),
         "fixture_length" => FIXTURE_LENGTH,
@@ -509,19 +628,24 @@ function main()::Nothing
             "strainy" => conda_package_version("strainy", "strainy"),
             "quast" => conda_package_version("quast", "quast"),
             "mummer" => conda_package_version("mummer", "mummer")),
-        "passed" => passed,
+        "scientific_passed" => false,
+        "contract_passed" => contract_passed,
         "gates" => gates,
         "output_hashes" => Dict(
-            "primary_consensus" => file_sha256(
-                joinpath(outputs_dir, "primary_consensus.fasta")),
-            "ranked_variants_likelihood" => file_sha256(
-                joinpath(outputs_dir, "ranked_variants_likelihood.fasta")),
-            "ranked_variants_abundance" => file_sha256(
-                joinpath(outputs_dir, "ranked_variants_abundance.fasta")),
+            "primary_segment_candidate" => file_sha256(
+                joinpath(outputs_dir, "primary_segment_candidate.fasta")),
+            "ranked_segment_candidates_likelihood" => file_sha256(joinpath(
+                outputs_dir,
+                "ranked_segment_candidates_likelihood.fasta",
+            )),
+            "ranked_segment_candidates_abundance" => file_sha256(joinpath(
+                outputs_dir,
+                "ranked_segment_candidates_abundance.fasta",
+            )),
             "primary_summary" => file_sha256(
                 joinpath(tables_dir, "stage2_primary_summary.csv")),
-            "variant_recovery" => file_sha256(
-                joinpath(tables_dir, "stage2_ranked_variant_recovery.csv")),
+            "candidate_recovery" => file_sha256(
+                joinpath(tables_dir, "stage2_ranked_candidate_recovery.csv")),
             "mixed_reads" => file_sha256(fixture.mixed_fastq),
             "raw_layout" => file_sha256(raw_layout.assembly),
             "corrected_reads" => file_sha256(stage2.corrected_fastq),
@@ -533,22 +657,23 @@ function main()::Nothing
     artifact_index = Dict(
         "tables" => [
             "tables/stage2_primary_summary.csv",
-            "tables/stage2_ranked_variant_recovery.csv"],
+            "tables/stage2_ranked_candidate_recovery.csv"],
         "plots" => [
             "plots/stage2_accuracy_contiguity.svg",
             "plots/stage2_accuracy_contiguity.png"],
         "outputs" => [
-            "outputs/primary_consensus.fasta",
-            "outputs/ranked_variants_likelihood.fasta",
-            "outputs/ranked_variants_abundance.fasta"],
+            "outputs/primary_segment_candidate.fasta",
+            "outputs/ranked_segment_candidates_likelihood.fasta",
+            "outputs/ranked_segment_candidates_abundance.fasta"],
         "provenance" => "provenance/run.provenance.json")
     open(joinpath(OUTPUT_ROOT, "artifact-index.json"), "w") do io
         JSON.print(io, artifact_index, 2)
     end
-    passed || error("Stage-2 toy acceptance gate failed: $(gates)")
-    isdir(FINAL_OUTPUT_ROOT) && rm(FINAL_OUTPUT_ROOT; recursive = true, force = true)
-    mv(OUTPUT_ROOT, FINAL_OUTPUT_ROOT)
-    println("Stage-2 toy gate PASS: $(FINAL_OUTPUT_ROOT)")
+    contract_passed || error("Stage-2 toy contract gate failed: $(gates)")
+    promote_stage2_staging!(FINAL_OUTPUT_ROOT)
+    println(
+        "Unattested Stage-2 toy contract satisfied: $(FINAL_OUTPUT_ROOT)",
+    )
     return nothing
 end
 

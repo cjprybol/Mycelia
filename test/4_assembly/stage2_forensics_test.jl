@@ -338,6 +338,7 @@ function _build_release_case(
         incomplete_attempt::Bool = false,
         metric_report_mismatch::Bool = false,
         metric_nonce_mismatch::Bool = false,
+        native_candidate_count_mismatch::Union{Nothing, Tuple{Symbol, Int}} = nothing,
         populate_confirmation::Bool = true,
         bad_truth_seed::Union{Nothing, Int} = nothing,
         development_grid_mutation::Symbol = :none,
@@ -546,20 +547,24 @@ function _build_release_case(
                             absolute_native_result = normpath(joinpath(
                                 directory, "results", native_result_path))
                             mkpath(dirname(absolute_native_result))
-                            write(
-                                absolute_native_result,
-                                ">native\n$(repeat("A", 8_000))\n",
-                            )
-                            native_result_sha256 = bytes2hex(
-                                SHA.sha256(read(absolute_native_result)))
+                            native_count = cell == native_candidate_count_mismatch ?
+                                           2 : 3
+                            open(absolute_native_result, "w") do stream
+                                for candidate_index in 1:native_count
+                                    println(stream, ">native-$(candidate_index)")
+                                    println(stream, repeat("A", 8_000))
+                                end
+                            end
+                            native_result_sha256 =
+                                stage2_file_sha256(absolute_native_result)
                             absolute_comparator_result = normpath(joinpath(
                                 directory, "results", comparator_result_path))
                             write(
                                 absolute_comparator_result,
                                 ">comparator\n$(repeat("A", 8_000))\n",
                             )
-                            comparator_result_sha256 = bytes2hex(
-                                SHA.sha256(read(absolute_comparator_result)))
+                            comparator_result_sha256 =
+                                stage2_file_sha256(absolute_comparator_result)
                             absolute_metric_report = normpath(joinpath(
                                 directory, "results", metric_report_path))
                             mkpath(dirname(absolute_metric_report))
@@ -615,8 +620,8 @@ function _build_release_case(
                                     ),
                                 ))
                             end
-                            metric_report_sha256 = bytes2hex(
-                                SHA.sha256(read(absolute_metric_report)))
+                            metric_report_sha256 =
+                                stage2_file_sha256(absolute_metric_report)
                             observation = Stage2ReleaseObservation(
                                 modality_symbol,
                                 seed,
@@ -675,8 +680,8 @@ function _build_release_case(
                                 recorded_at_utc = "2026-07-12T17:00:00Z",
                                 status = terminal_status,
                                 result_path,
-                                result_sha256 = bytes2hex(
-                                    SHA.sha256(read(absolute_result_path))),
+                                result_sha256 =
+                                    stage2_file_sha256(absolute_result_path),
                                 notes = "frozen confirmation attempt",
                             )
                         end;
@@ -704,10 +709,12 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             case.manifest_path,
             case.development_ledger_path,
         )
-        Test.@test passing.passed
+        Test.@test !passing.passed
+        Test.@test passing.contract_passed
+        Test.@test passing.evidence_status == :unattested_contract_only
         Test.@test passing.development_freeze_sha256 == case.seal.sha256
         Test.@test passing.confirmation_ledger_sha256 ==
-                   bytes2hex(SHA.sha256(read(case.confirmation_ledger_path)))
+                   stage2_file_sha256(case.confirmation_ledger_path)
         Test.@test length(passing.attempt_result_sha256) == 48
         Test.@test length(passing.diagnostic_attempt_status) == 9
         Test.@test length(passing.diagnostic_result_sha256) == 9
@@ -774,6 +781,8 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             case.development_ledger_path,
         )
         Test.@test !failing.passed
+        Test.@test !failing.contract_passed
+        Test.@test failing.evidence_status == :unattested_contract_only
         Test.@test !failing.observation_gates[
             (:long_noisy, 44_001)]["three_truths"]
     end
@@ -785,6 +794,7 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             (; forged_assignment = true),
             (; metric_report_mismatch = true),
             (; metric_nonce_mismatch = true),
+            (; native_candidate_count_mismatch = (:long_noisy, 44_001)),
         )
         mktempdir() do directory
             case = _build_release_case(directory; options...)
@@ -804,6 +814,7 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             case.development_ledger_path,
         )
         Test.@test !result.passed
+        Test.@test !result.contract_passed
         Test.@test !result.observation_gates[
             (:hybrid_ont_short, 44_001)]["no_large_error_regression"]
         Test.@test !result.observation_gates[
@@ -815,7 +826,9 @@ Test.@testset "Stage-2 ledger-owned release gate" begin
             case.manifest_path,
             case.development_ledger_path,
         )
-        Test.@test result.passed
+        Test.@test !result.passed
+        Test.@test result.contract_passed
+        Test.@test result.evidence_status == :unattested_contract_only
         Test.@test all(==(:failed), values(result.diagnostic_attempt_status))
         Test.@test length(result.diagnostic_result_sha256) == 9
     end
@@ -1400,6 +1413,20 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
             result_sha256 = "",
             notes = "reserve confirmation cell",
         )
+        for unsafe_attempt_id in (
+                ".",
+                "..",
+                "../escape",
+                "nested/escape",
+                "nested\\escape",
+                abspath(joinpath(directory, "escape")),
+            )
+            Test.@test_throws ErrorException _replace_ledger_row(
+                reservation;
+                development_freeze = freeze,
+                attempt_id = unsafe_attempt_id,
+            )
+        end
         append_stage2_confirmation_attempt!(
             reservation;
             development_ledger_path = ledger_path,
@@ -1574,11 +1601,17 @@ Test.@testset "Stage-2 append-only attempt ledger" begin
         )
         events_after_throw = load_stage2_attempt_ledger(
             confirmation_ledger_path; development_freeze = freeze)
-        Test.@test any(event ->
+        throwing_error = only(filter(events_after_throw) do event
             event.attempt_id == throwing_reservation.attempt_id &&
-            event.status == :error,
-            events_after_throw,
-        )
+                event.status == :error
+        end)
+        Test.@test throwing_error.result_path ==
+                   joinpath("errors", "throwing-attempt.toml")
+        throwing_error_path = _stage2_result_artifact_path(
+            confirmation_ledger_path, throwing_error.result_path)
+        Test.@test isfile(throwing_error_path)
+        Test.@test TOML.parsefile(throwing_error_path)["attempt_id"] ==
+                   throwing_reservation.attempt_id
         replacement_after_error = _replace_ledger_row(
             throwing_reservation;
             development_freeze = freeze,

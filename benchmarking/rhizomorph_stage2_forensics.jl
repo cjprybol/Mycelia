@@ -135,9 +135,17 @@ struct Stage2ReleaseObservation
     ensemble_noninferior_or_abstained::Bool
 end
 
-"""Fail-closed release-gate result with auditable component decisions."""
+"""
+Fail-closed release-gate result with auditable component decisions.
+
+`contract_passed` reports whether supplied evidence satisfies the frozen logical
+contract. `passed` remains false until a later slice authenticates tool-native
+execution and evaluator output; `evidence_status` makes that boundary explicit.
+"""
 struct Stage2ReleaseGateResult
     passed::Bool
+    contract_passed::Bool
+    evidence_status::Symbol
     observation_gates::Dict{Tuple{Symbol, Int}, Dict{String, Bool}}
     modality_gates::Dict{Symbol, Dict{String, Bool}}
     development_freeze_sha256::String
@@ -147,7 +155,17 @@ struct Stage2ReleaseGateResult
     diagnostic_result_sha256::Dict{String, String}
 end
 
-"""Immutable hashes authorizing the first confirmation run after development."""
+const STAGE2_UNATTESTED_EVIDENCE_STATUS = :unattested_contract_only
+
+"""Return a streaming SHA-256 digest without materializing the file."""
+function stage2_file_sha256(path::AbstractString)::String
+    isfile(path) || error("cannot hash a missing file: $(path)")
+    return open(path, "r") do stream
+        bytes2hex(SHA.sha256(stream))
+    end
+end
+
+"""Frozen local-contract hashes authorizing the first confirmation run."""
 struct Stage2DevelopmentFreeze
     frozen_at_utc::String
     development_ledger_path::String
@@ -202,7 +220,7 @@ struct Stage2DevelopmentFreeze
             _validate_hex_digest(
                 development_ledger_sha256, "development_ledger_sha256", (64,)),
             development_ledger_rows,
-            _validate_ledger_text(final_attempt_id, "final_attempt_id"),
+            _validate_attempt_id(final_attempt_id),
             git_dirty,
         )
     end
@@ -215,7 +233,7 @@ struct Stage2DevelopmentSeal
     sha256::String
 end
 
-"""One immutable row in the Stage-2 tuning-attempt ledger."""
+"""One validated row in the trusted-local Stage-2 attempt ledger."""
 struct Stage2AttemptLedgerRow
     attempt_id::String
     recorded_at_utc::String
@@ -310,7 +328,7 @@ struct Stage2AttemptLedgerRow
                                   _validate_hex_digest(
             result_sha256, "result_sha256", (64,))
         return new(
-            _validate_ledger_text(attempt_id, "attempt_id"),
+            _validate_attempt_id(attempt_id),
             _validate_utc_timestamp(recorded_at_utc, "recorded_at_utc"),
             seed_partition,
             seed,
@@ -645,10 +663,9 @@ function write_stage2_release_observation(
     return output
 end
 
-function _parse_stage2_release_observation(
-        bytes::Vector{UInt8}
+function _parse_stage2_release_observation_table(
+        table::AbstractDict
 )::Stage2ReleaseObservation
-    table = TOML.parse(String(bytes))
     assignment = table["assignment"]
     summary = CandidateAssignmentSummary(
         String.(assignment["expected_truth_ids"]),
@@ -715,6 +732,18 @@ function _parse_stage2_release_observation(
     )
 end
 
+function _parse_stage2_release_observation(
+        bytes::Vector{UInt8}
+)::Stage2ReleaseObservation
+    return _parse_stage2_release_observation_table(TOML.parse(String(bytes)))
+end
+
+function _load_stage2_release_observation(
+        path::AbstractString
+)::Stage2ReleaseObservation
+    return _parse_stage2_release_observation_table(TOML.parsefile(path))
+end
+
 function stage2_input_component_digest(
         component_sha256::AbstractDict{<:AbstractString, <:AbstractString},
         components::AbstractVector{<:AbstractString}
@@ -770,12 +799,11 @@ function _validate_stage2_configuration_artifact(
         expected_sha256::AbstractString
 )::String
     _validate_bundle_file(path, bundle_directory, "configuration")
-    configuration_bytes = read(path)
     expected_digest = _validate_hex_digest(
         expected_sha256, "configuration_sha256", (64,))
-    bytes2hex(SHA.sha256(configuration_bytes)) == expected_digest ||
+    stage2_file_sha256(path) == expected_digest ||
         error("configuration artifact hash differs from frozen campaign")
-    configuration = TOML.parse(String(configuration_bytes))
+    configuration = TOML.parsefile(path)
     get(configuration, "schema", "") == "rhizomorph-stage2-configuration-v1" ||
         error("configuration artifact has an unsupported schema")
     configuration_id = get(configuration, "configuration_id", nothing)
@@ -897,7 +925,7 @@ function _validate_fixture_artifact(
     _validate_bundle_file(artifact_path, bundle_directory, label)
     _validate_fixture_no_symlink_components(
         artifact_path, bundle_directory, label)
-    bytes2hex(SHA.sha256(read(artifact_path))) == digest ||
+    stage2_file_sha256(artifact_path) == digest ||
         error("$(label) artifact hash differs from fixture index")
     return (path = artifact_path, sha256 = digest)
 end
@@ -1062,9 +1090,17 @@ function _validate_observation_raw_artifacts(
             observation_path, recorded_path)
         _validate_bundle_file(
             artifact_path, dirname(observation_path), label)
-        bytes2hex(SHA.sha256(read(artifact_path))) == expected_sha256 ||
+        stage2_file_sha256(artifact_path) == expected_sha256 ||
             error("$(label) artifact hash differs from observation")
     end
+    native_path = _observation_relative_path(
+        observation_path, observation.native_result_path)
+    native_candidate_ids = _truth_reference_ids(native_path)
+    length(native_candidate_ids) ==
+    length(observation.assignment.assigned_truth_ids) ||
+        error("native ranked FASTA candidate count differs from assigned truth records")
+    length(unique(native_candidate_ids)) == length(native_candidate_ids) ||
+        error("native ranked FASTA candidate identifiers must be unique")
     truth_path = _observation_relative_path(
         observation_path, observation.truth_reference_path)
     truth_ids = _truth_reference_ids(truth_path)
@@ -1083,7 +1119,7 @@ function _validate_observation_raw_artifacts(
             dirname(observation_path),
             "input component $(component)",
         )
-        bytes2hex(SHA.sha256(read(component_path))) ==
+        stage2_file_sha256(component_path) ==
         observation.input_component_sha256[component] ||
             error("input component artifact hash differs: $(component)")
     end
@@ -1109,10 +1145,9 @@ function _validate_observation_metric_report(
         observation_path, observation.metric_report_path)
     _validate_bundle_file(
         report_path, dirname(observation_path), "metric report")
-    report_bytes = read(report_path)
-    bytes2hex(SHA.sha256(report_bytes)) == observation.metric_report_sha256 ||
+    stage2_file_sha256(report_path) == observation.metric_report_sha256 ||
         error("metric report artifact hash differs from observation")
-    report = TOML.parse(String(report_bytes))
+    report = TOML.parsefile(report_path)
     report["schema"] == evaluation_contract["report_schema"] ||
         error("metric report schema differs from manifest")
     for (field, expected) in (
@@ -1413,10 +1448,13 @@ function _evaluate_stage2_release_observations(
                 "minimum_median_error_reduction_fraction"],
         )
     end
-    passed = all(all(values(gates)) for gates in values(observation_gates)) &&
-             all(all(values(gates)) for gates in values(modality_gates))
+    contract_passed =
+        all(all(values(gates)) for gates in values(observation_gates)) &&
+        all(all(values(gates)) for gates in values(modality_gates))
     return Stage2ReleaseGateResult(
-        passed,
+        false,
+        contract_passed,
+        STAGE2_UNATTESTED_EVIDENCE_STATUS,
         observation_gates,
         modality_gates,
         development_freeze_sha256,
@@ -1433,6 +1471,17 @@ function _validate_ledger_text(value::AbstractString, field::String)::String
     any(character -> character == '\t' || character == '\n' || character == '\r',
         normalized) && error("$(field) must not contain tabs or newlines")
     return normalized
+end
+
+function _validate_attempt_id(value::AbstractString)::String
+    attempt_id = _validate_ledger_text(value, "attempt_id")
+    ncodeunits(attempt_id) <= 200 ||
+        error("attempt_id must contain at most 200 bytes")
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9._-]*$", attempt_id) ||
+        error("attempt_id must be one safe filename component")
+    attempt_id in (".", "..") &&
+        error("attempt_id must not be a dot path component")
+    return attempt_id
 end
 
 function _validate_empty_text(value::AbstractString, field::String)::String
@@ -1522,10 +1571,9 @@ function _validate_development_gate_artifact(
         development_ledger_path, final_row.result_path)
     _validate_bundle_file(
         result_path, dirname(development_ledger_path), "development gate")
-    result_bytes = read(result_path)
-    bytes2hex(SHA.sha256(result_bytes)) == final_row.result_sha256 ||
+    stage2_file_sha256(result_path) == final_row.result_sha256 ||
         error("development gate artifact hash differs from final ledger row")
-    gate = TOML.parse(String(result_bytes))
+    gate = TOML.parsefile(result_path)
     get(gate, "schema", "") == "rhizomorph-stage2-development-gate-v1" ||
         error("development gate artifact has an unsupported schema")
     get(gate, "gate_id", "") == "strict-development-grid" ||
@@ -1562,7 +1610,7 @@ function _validate_development_gate_artifact(
     strict_gate_passed === recomputed_pass ||
         error("development gate aggregate differs from cell decisions")
     recomputed_pass ||
-        error("development artifact does not attest a strict-gate PASS")
+        error("development artifact does not record a strict-gate PASS")
     for (field, expected) in (
             ("git_sha", final_row.git_sha),
             ("manifest_sha256", final_row.manifest_sha256),
@@ -1591,10 +1639,9 @@ function _validate_development_gate_artifact(
             dirname(result_path),
             "development source report",
         )
-        source_bytes = read(absolute_source_path)
-        bytes2hex(SHA.sha256(source_bytes)) == source_sha256 ||
+        stage2_file_sha256(absolute_source_path) == source_sha256 ||
             error("development source report hash differs from gate artifact")
-        source_report = TOML.parse(String(source_bytes))
+        source_report = TOML.parsefile(absolute_source_path)
         get(source_report, "schema", "") ==
         "rhizomorph-stage2-development-cell-v1" ||
             error("development source report has an unsupported schema")
@@ -1649,7 +1696,7 @@ function seal_stage2_development_ledger!(
             )
             _validate_bundle_file(
                 artifact_path, dirname(ledger_path), label)
-            bytes2hex(SHA.sha256(read(artifact_path))) == expected_sha256 ||
+            stage2_file_sha256(artifact_path) == expected_sha256 ||
                 error("$(label) artifact hash differs from seal request")
         end
         frozen_configuration_id = _validate_stage2_configuration_artifact(
@@ -1723,7 +1770,7 @@ function seal_stage2_development_ledger!(
         return Stage2DevelopmentSeal(
             freeze,
             output,
-            bytes2hex(SHA.sha256(read(output))),
+            stage2_file_sha256(output),
         )
     finally
         rm(lock_path; force = true, recursive = true)
@@ -1871,7 +1918,7 @@ function _validate_confirmation_freeze_locked(
         error("confirmation configuration hash differs from freeze")
     row.fixture_sha256 == freeze.fixture_sha256 ||
         error("confirmation fixture hash differs from freeze")
-    freeze_sha256 = bytes2hex(SHA.sha256(read(freeze_path)))
+    freeze_sha256 = stage2_file_sha256(freeze_path)
     row.development_freeze_sha256 == freeze_sha256 ||
         error("confirmation development freeze hash differs from canonical freeze")
     return freeze
@@ -1890,7 +1937,7 @@ function _validate_confirmation_reservation_preflight(
         )
         _validate_bundle_file(
             artifact_path, dirname(freeze.development_ledger_path), label)
-        bytes2hex(SHA.sha256(read(artifact_path))) == expected_sha256 ||
+        stage2_file_sha256(artifact_path) == expected_sha256 ||
             error("confirmation preflight found changed $(label) bytes")
     end
     frozen_configuration_id = _validate_stage2_configuration_artifact(
@@ -1976,7 +2023,7 @@ function stage2_attempt_ledger_fingerprint(
     length(final_fields) == length(STAGE2_ATTEMPT_LEDGER_COLUMNS) ||
         error("attempt ledger final row is malformed")
     return (
-        sha256 = bytes2hex(SHA.sha256(read(path))),
+        sha256 = stage2_file_sha256(path),
         rows = length(lines) - 1,
         final_attempt_id = String(final_fields[1]),
     )
@@ -2170,7 +2217,7 @@ function evaluate_stage2_release_gate(;
             )
             _validate_bundle_file(
                 artifact_path, dirname(development_path), label)
-            bytes2hex(SHA.sha256(read(artifact_path))) == expected_sha256 ||
+            stage2_file_sha256(artifact_path) == expected_sha256 ||
                 error("frozen $(label) artifact hash has changed")
         end
         frozen_configuration_id = _validate_stage2_configuration_artifact(
@@ -2178,7 +2225,7 @@ function evaluate_stage2_release_gate(;
             dirname(development_path),
             freeze.configuration_sha256,
         )
-        freeze_sha256 = bytes2hex(SHA.sha256(read(freeze_path)))
+        freeze_sha256 = stage2_file_sha256(freeze_path)
         fingerprint = stage2_attempt_ledger_fingerprint(development_path)
         fingerprint.sha256 == freeze.development_ledger_sha256 ||
             error("development ledger hash differs from freeze")
@@ -2186,10 +2233,9 @@ function evaluate_stage2_release_gate(;
             error("development ledger row count differs from freeze")
         fingerprint.final_attempt_id == freeze.final_attempt_id ||
             error("development ledger final attempt differs from freeze")
-        manifest_bytes = read(manifest_file)
-        bytes2hex(SHA.sha256(manifest_bytes)) == freeze.manifest_sha256 ||
+        stage2_file_sha256(manifest_file) == freeze.manifest_sha256 ||
             error("release manifest bytes differ from development freeze")
-        manifest = TOML.parse(String(manifest_bytes))
+        manifest = TOML.parsefile(manifest_file)
         development_rows = load_stage2_attempt_ledger(development_path)
         last(development_rows).configuration_id == frozen_configuration_id ||
             error("development configuration ID differs from frozen artifact")
@@ -2203,8 +2249,7 @@ function evaluate_stage2_release_gate(;
             error("confirmation ledger is locked: $(confirmation_path)")
         end
         try
-            confirmation_bytes = read(confirmation_path)
-            confirmation_sha256 = bytes2hex(SHA.sha256(confirmation_bytes))
+            confirmation_sha256 = stage2_file_sha256(confirmation_path)
             rows = load_stage2_attempt_ledger(
                 confirmation_path; development_freeze = freeze)
             isempty(rows) && error("confirmation ledger has no attempts")
@@ -2332,13 +2377,12 @@ function evaluate_stage2_release_gate(;
                     dirname(confirmation_path),
                     "diagnostic result",
                 )
-                result_bytes = read(result_path)
-                result_sha256 = bytes2hex(SHA.sha256(result_bytes))
+                result_sha256 = stage2_file_sha256(result_path)
                 result_sha256 == row.result_sha256 ||
                     error("diagnostic result artifact hash differs from ledger")
                 diagnostic_hashes[row.attempt_id] = result_sha256
                 row.status == :passed || continue
-                observation = _parse_stage2_release_observation(result_bytes)
+                observation = _load_stage2_release_observation(result_path)
                 _validate_observation_raw_artifacts(observation, result_path)
                 _validate_observation_metric_report(
                     observation, result_path, manifest["evaluation"])
@@ -2357,11 +2401,10 @@ function evaluate_stage2_release_gate(;
                     dirname(confirmation_path),
                     "confirmation result",
                 )
-                result_bytes = read(result_path)
-                result_sha256 = bytes2hex(SHA.sha256(result_bytes))
+                result_sha256 = stage2_file_sha256(result_path)
                 result_sha256 == row.result_sha256 ||
                     error("confirmation result artifact hash differs from ledger")
-                observation = _parse_stage2_release_observation(result_bytes)
+                observation = _load_stage2_release_observation(result_path)
                 _validate_observation_raw_artifacts(
                     observation, result_path)
                 _validate_observation_metric_report(
@@ -2470,7 +2513,7 @@ function _write_confirmation_reservation_receipt!(
     try
         mkdir(receipt_directory)
     catch
-        error("confirmation cell already has an immutable reservation receipt")
+        error("confirmation cell already has a reservation receipt")
     end
     receipt_path = joinpath(receipt_directory, "reservation.toml")
     open(receipt_path, "w") do stream
@@ -2522,10 +2565,9 @@ function _validate_confirmation_result_reservation_nonce(
         confirmation_ledger_path, completion.result_path)
     _validate_bundle_file(
         result_path, dirname(confirmation_ledger_path), "confirmation result")
-    result_bytes = read(result_path)
-    bytes2hex(SHA.sha256(result_bytes)) == completion.result_sha256 ||
+    stage2_file_sha256(result_path) == completion.result_sha256 ||
         error("confirmation result artifact hash differs from completion row")
-    result = TOML.parse(String(result_bytes))
+    result = TOML.parsefile(result_path)
     result_nonce = get(result, "reservation_nonce_sha256", nothing)
     result_nonce isa AbstractString ||
         error("confirmation terminal result lacks a reservation nonce")
@@ -2713,7 +2755,7 @@ function run_stage2_confirmation_attempt!(
                 reservation.comparator_configuration_sha256,
             status = :error,
             result_path,
-            result_sha256 = bytes2hex(SHA.sha256(read(absolute_result_path))),
+            result_sha256 = stage2_file_sha256(absolute_result_path),
             development_freeze_sha256 =
                 reservation.development_freeze_sha256,
             notes = "runner threw; reservation permanently consumed",

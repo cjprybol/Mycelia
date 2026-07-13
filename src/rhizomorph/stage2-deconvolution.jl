@@ -25,22 +25,33 @@ function TransitionLikelihoodIndex(
     vertex_ids = Dict{KmerType, UInt32}()
     encoded_probabilities = Dict{UInt64, Float64}()
     for ((source, destination), probability) in probabilities
+        log2_probability = Float64(probability)
+        isfinite(log2_probability) || throw(ArgumentError(
+            "transition log2 probabilities must be finite"))
+        log2_probability <= 0.0 || throw(ArgumentError(
+            "transition log2 probabilities must be nonpositive"))
         source_kmer = KmerType(source)
         destination_kmer = KmerType(destination)
         source_id = get!(
             vertex_ids, source_kmer, UInt32(length(vertex_ids) + 1))
         destination_id = get!(
             vertex_ids, destination_kmer, UInt32(length(vertex_ids) + 1))
-        encoded_probabilities[_stage2_edge_key(source_id, destination_id)] =
-            Float64(probability)
+        edge = _stage2_edge_key(source_id, destination_id)
+        haskey(encoded_probabilities, edge) && throw(ArgumentError(
+            "duplicate transition after DNA k-mer normalization: " *
+            "$(source) -> $(destination)"))
+        encoded_probabilities[edge] = log2_probability
     end
     return TransitionLikelihoodIndex(k, vertex_ids, encoded_probabilities)
 end
 
 """
-One ranked Stage-2 haplotype candidate.
+One ranked experimental Strainy GFA segment candidate.
+
+This record does not represent a complete path, consensus genome, or inferred
+haplotype. Path grouping is a blocked follow-on.
 """
-struct RankedVariant
+struct RankedSegmentCandidate
     likelihood_rank::Int
     abundance_rank::Int
     role::Symbol
@@ -51,8 +62,13 @@ struct RankedVariant
     strainy_coverage::Float64
 end
 
+struct GfaSegmentRecord
+    sequence::String
+    coverage::Union{Nothing, Float64}
+end
+
 """Fitted soft-mixture abundance attached to one Stage-2 candidate."""
-struct ProbabilisticVariantRanking
+struct ProbabilisticSegmentCandidateRanking
     candidate_id::String
     likelihood_rank::Int
     abundance_rank::Int
@@ -62,8 +78,8 @@ struct ProbabilisticVariantRanking
 end
 
 """Soft abundance inference and the resulting Stage-2 primary agreement."""
-struct ProbabilisticVariantRankingResult
-    rankings::Vector{ProbabilisticVariantRanking}
+struct ProbabilisticSegmentCandidateRankingResult
+    rankings::Vector{ProbabilisticSegmentCandidateRanking}
     inference::CandidateInferenceResult
     primary_agreement::Bool
     primary_status::Symbol
@@ -72,45 +88,47 @@ struct ProbabilisticVariantRankingResult
 end
 
 function _stage2_candidate_set_sha256(
-        variants::AbstractVector{RankedVariant}
+        candidates::AbstractVector{RankedSegmentCandidate}
 )::String
     context = Mycelia.SHA.SHA2_256_CTX()
     integer_buffer = Vector{UInt8}(undef, 8)
     tag_buffer = Vector{UInt8}(undef, 1)
-    order = sortperm(eachindex(variants); by = index -> variants[index].id)
+    order = sortperm(eachindex(candidates); by = index -> candidates[index].id)
     _stage2_update_uint64!(context, integer_buffer, UInt64(length(order)))
     for index in order
-        variant = variants[index]
+        candidate = candidates[index]
         _stage2_update_tag!(context, tag_buffer, 0x20)
-        _stage2_update_bytes!(context, integer_buffer, variant.id)
+        _stage2_update_bytes!(context, integer_buffer, candidate.id)
         _stage2_update_uint64!(
             context,
             integer_buffer,
-            reinterpret(UInt64, Int64(variant.likelihood_rank)),
+            reinterpret(UInt64, Int64(candidate.likelihood_rank)),
         )
-        _stage2_update_bytes!(context, integer_buffer, variant.sequence)
+        _stage2_update_bytes!(context, integer_buffer, candidate.sequence)
     end
     return bytes2hex(Mycelia.SHA.digest!(context))
 end
 
 """
-    infer_variant_abundances(variants, alignments, noise_likelihoods; config)
+    infer_segment_candidate_abundances(
+        candidates, alignments, noise_likelihoods; config)
 
 Attach the technology-agnostic soft-EM inference core to an existing Stage-2
 candidate set. This bridge deliberately accepts calibrated log-likelihoods
 rather than manufacturing them from a best-hit alignment score. Callers must
 derive the likelihood records from an explicit read-error model.
 """
-function infer_variant_abundances(
-        variants::AbstractVector{RankedVariant},
+function infer_segment_candidate_abundances(
+        candidates::AbstractVector{RankedSegmentCandidate},
         alignments::AbstractVector{ReadCandidateLikelihood},
         noise_likelihoods::AbstractVector{ReadNoiseLikelihood};
         config::CandidateInferenceConfig = CandidateInferenceConfig()
-)::ProbabilisticVariantRankingResult
-    isempty(variants) && throw(ArgumentError("variants must not be empty"))
-    candidate_ids = [variant.id for variant in variants]
+)::ProbabilisticSegmentCandidateRankingResult
+    isempty(candidates) && throw(
+        ArgumentError("segment candidates must not be empty"))
+    candidate_ids = [candidate.id for candidate in candidates]
     length(unique(candidate_ids)) == length(candidate_ids) ||
-        throw(ArgumentError("variant identifiers must be unique"))
+        throw(ArgumentError("segment-candidate identifiers must be unique"))
     inference = infer_candidate_abundances(
         alignments,
         noise_likelihoods;
@@ -119,16 +137,16 @@ function infer_variant_abundances(
     )
     inferred_by_id = Dict(candidate.candidate_id => candidate
         for candidate in inference.candidates)
-    rankings = ProbabilisticVariantRanking[
-        ProbabilisticVariantRanking(
-            variant.id,
-            variant.likelihood_rank,
-            inferred_by_id[variant.id].rank,
-            inferred_by_id[variant.id].abundance,
-            inferred_by_id[variant.id].expected_read_count,
-            inferred_by_id[variant.id].has_alignment_support,
+    rankings = ProbabilisticSegmentCandidateRanking[
+        ProbabilisticSegmentCandidateRanking(
+            candidate.id,
+            candidate.likelihood_rank,
+            inferred_by_id[candidate.id].rank,
+            inferred_by_id[candidate.id].abundance,
+            inferred_by_id[candidate.id].expected_read_count,
+            inferred_by_id[candidate.id].has_alignment_support,
         )
-        for variant in variants
+        for candidate in candidates
     ]
     sort!(rankings; by = ranking -> ranking.abundance_rank)
     likelihood_primary = only(filter(
@@ -143,20 +161,20 @@ function infer_variant_abundances(
     else
         :rank_disagreement
     end
-    return ProbabilisticVariantRankingResult(
+    return ProbabilisticSegmentCandidateRankingResult(
         rankings,
         inference,
         primary_agreement,
         primary_status,
-        _stage2_candidate_set_sha256(variants),
+        _stage2_candidate_set_sha256(candidates),
         inference.input_sha256,
     )
 end
 
 """Write the auditable fitted-abundance ranking table."""
-function write_probabilistic_variant_ranking(
+function write_probabilistic_segment_candidate_ranking(
         path::AbstractString,
-        result::ProbabilisticVariantRankingResult
+        result::ProbabilisticSegmentCandidateRankingResult
 )::String
     table = DataFrames.DataFrame(
         candidate_id = [ranking.candidate_id for ranking in result.rankings],
@@ -209,17 +227,19 @@ function write_probabilistic_variant_ranking(
 end
 
 """
-Persistent outputs from the Stage-2 metaFlye + Strainy route.
+Persistent experimental segment-candidate outputs from the Stage-2 route.
+
+The result deliberately exposes no complete-path or haplotype claim.
 """
-struct Stage2DeconvolutionResult
-    primary_fasta::String
+struct Stage2SegmentCandidateResult
+    primary_segment_candidate_fasta::String
     layout_assembly::String
     layout_gfa::String
-    likelihood_ranked_variants_fasta::String
-    abundance_ranked_variants_fasta::String
-    ranking_tsv::String
+    likelihood_ranked_segment_candidates_fasta::String
+    abundance_ranked_segment_candidates_fasta::String
+    segment_candidate_ranking_tsv::String
     corrected_fastq::String
-    variants::Vector{RankedVariant}
+    segment_candidates::Vector{RankedSegmentCandidate}
     provenance::Dict{String, Any}
 end
 
@@ -312,14 +332,14 @@ function _transition_likelihood_index(
     return TransitionLikelihoodIndex(k, vertex_ids, probabilities)
 end
 
-function _score_variant_sequence(
+function _score_segment_candidate_sequence(
         sequence::AbstractString,
         index::TransitionLikelihoodIndex
 )::NamedTuple{(:mean_log2_probability, :scored_fraction), Tuple{Float64, Float64}}
-    return _score_variant_sequence(sequence, index, Val(index.k))
+    return _score_segment_candidate_sequence(sequence, index, Val(index.k))
 end
 
-function _score_variant_sequence(
+function _score_segment_candidate_sequence(
         sequence::AbstractString,
         index::TransitionLikelihoodIndex{KmerType},
         ::Val{K}
@@ -329,7 +349,8 @@ function _score_variant_sequence(
         BioSequences.LongDNA{4}(sequence)
     catch exception
         throw(ArgumentError(
-            "variant sequence is not valid DNA: $(sprint(showerror, exception))"))
+            "segment-candidate sequence is not valid DNA: " *
+            sprint(showerror, exception)))
     end
     n_transitions = length(dna_sequence) - K
     n_transitions > 0 || return (mean_log2_probability = -Inf, scored_fraction = 0.0)
@@ -360,23 +381,56 @@ function _score_variant_sequence(
     return (mean_log2_probability = mean_score, scored_fraction = fraction)
 end
 
-function _read_gfa_records(path::String)::Dict{String, NamedTuple}
+function _read_gfa_records(path::String)::Dict{String, GfaSegmentRecord}
     isfile(path) || error("GFA file does not exist: $(path)")
-    segments = Dict{String, NamedTuple}()
+    segments = Dict{String, GfaSegmentRecord}()
+    identifiers = Set{String}()
     open(path, "r") do io
-        for line in eachline(io)
-            fields = split(line, '\t')
-            length(fields) >= 3 || continue
+        for (line_number, line) in enumerate(eachline(io))
+            fields = split(line, '\t'; keepempty = true)
+            isempty(fields) && continue
             fields[1] == "S" || continue
+            length(fields) >= 3 || error(
+                "malformed GFA S record at line $(line_number): " *
+                "expected at least 3 tab-delimited fields")
+            identifier = String(fields[2])
+            isempty(identifier) && error(
+                "malformed GFA S record at line $(line_number): empty identifier")
+            identifier in identifiers && error(
+                "duplicate GFA segment identifier at line $(line_number): " *
+                identifier)
+            push!(identifiers, identifier)
             fields[3] == "*" && continue
+            sequence = String(fields[3])
+            isempty(sequence) && error(
+                "malformed GFA S record at line $(line_number): empty sequence")
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch exception
+                error(
+                    "invalid DNA in GFA segment $(identifier) at line " *
+                    "$(line_number): $(sprint(showerror, exception))",
+                )
+            end
             coverage = nothing
             for tag in fields[4:end]
                 startswith(tag, "dp:") || continue
-                parsed = tryparse(Float64, split(tag, ':'; limit = 3)[3])
-                parsed === nothing || (coverage = parsed)
+                coverage === nothing || error(
+                    "duplicate dp coverage tag for GFA segment $(identifier)")
+                components = split(tag, ':'; limit = 3, keepempty = true)
+                length(components) == 3 && components[2] in ("i", "f") || error(
+                    "malformed dp coverage tag for GFA segment $(identifier): " *
+                    tag)
+                parsed = tryparse(Float64, components[3])
+                parsed === nothing && error(
+                    "non-numeric dp coverage for GFA segment $(identifier): " *
+                    components[3])
+                isfinite(parsed) && parsed >= 0.0 || error(
+                    "GFA segment coverage must be finite and nonnegative for " *
+                    identifier)
+                coverage = parsed
             end
-            segments[String(fields[2])] = (;
-                sequence = String(fields[3]), coverage)
+            segments[identifier] = GfaSegmentRecord(sequence, coverage)
         end
     end
     isempty(segments) && error("GFA contains no sequence-bearing segments: $(path)")
@@ -413,10 +467,106 @@ function _strainy_coverages(path::String)::Dict{String, Float64}
     coverages = Dict{String, Float64}()
     for row in DataFrames.eachrow(table)
         id = String(row[id_column])
+        isempty(id) && error("empty Strainy unitig identifier")
+        haskey(coverages, id) && error("duplicate Strainy coverage row for $(id)")
         coverage = tryparse(Float64, string(row[coverage_column]))
         coverage === nothing && error("non-numeric Strainy coverage for $(id)")
+        isfinite(coverage) && coverage >= 0.0 || error(
+            "Strainy coverage must be finite and nonnegative for $(id)")
         coverages[id] = coverage
     end
+    return coverages
+end
+
+const _Stage2PafBestHit = NamedTuple{
+    (:matches, :target, :aligned), Tuple{Int, String, Int}}
+
+function _parse_stage2_paf_integer(
+        value::AbstractString,
+        field_name::String,
+        line_number::Int
+)::Int
+    parsed = tryparse(Int, value)
+    parsed === nothing && error(
+        "malformed PAF row $(line_number): $(field_name) is not an integer")
+    return parsed
+end
+
+function _read_stage2_paf_best_hits(
+        io::IO,
+        records::AbstractDict{String, GfaSegmentRecord}
+)::Dict{String, _Stage2PafBestHit}
+    best = Dict{String, _Stage2PafBestHit}()
+    for (line_number, line) in enumerate(eachline(io))
+        isempty(strip(line)) && continue
+        fields = split(line, '\t'; keepempty = true)
+        length(fields) >= 12 || error(
+            "malformed PAF row $(line_number): expected at least 12 fields")
+        query = String(fields[1])
+        target = String(fields[6])
+        isempty(query) && error(
+            "malformed PAF row $(line_number): empty query identifier")
+        isempty(target) && error(
+            "malformed PAF row $(line_number): empty target identifier")
+        haskey(records, target) || error(
+            "PAF row $(line_number) references unknown target: $(target)")
+
+        query_length = _parse_stage2_paf_integer(fields[2], "query length", line_number)
+        query_start = _parse_stage2_paf_integer(fields[3], "query start", line_number)
+        query_end = _parse_stage2_paf_integer(fields[4], "query end", line_number)
+        target_length =
+            _parse_stage2_paf_integer(fields[7], "target length", line_number)
+        target_start =
+            _parse_stage2_paf_integer(fields[8], "target start", line_number)
+        target_end = _parse_stage2_paf_integer(fields[9], "target end", line_number)
+        matches = _parse_stage2_paf_integer(fields[10], "matches", line_number)
+        aligned =
+            _parse_stage2_paf_integer(fields[11], "alignment length", line_number)
+        mapq = _parse_stage2_paf_integer(fields[12], "mapping quality", line_number)
+
+        query_length > 0 && 0 <= query_start < query_end <= query_length || error(
+            "malformed PAF row $(line_number): invalid query coordinates")
+        fields[5] in ("+", "-") || error(
+            "malformed PAF row $(line_number): invalid strand")
+        target_length == length(records[target].sequence) || error(
+            "malformed PAF row $(line_number): target length disagrees with " *
+            "candidate sequence")
+        0 <= target_start < target_end <= target_length || error(
+            "malformed PAF row $(line_number): invalid target coordinates")
+        matches > 0 && aligned > 0 && matches <= aligned || error(
+            "malformed PAF row $(line_number): support must be positive, " *
+            "finite, and no greater than alignment length")
+        0 <= mapq <= 255 || error(
+            "malformed PAF row $(line_number): invalid mapping quality")
+
+        current = get(best, query, (matches = -1, target = "", aligned = 0))
+        (matches, aligned, target) >
+        (current.matches, current.aligned, current.target) || continue
+        best[query] = (; matches, target, aligned)
+    end
+    return best
+end
+
+function _stage2_support_coverages(
+        records::AbstractDict{String, GfaSegmentRecord},
+        best::AbstractDict{String, _Stage2PafBestHit}
+)::Dict{String, Float64}
+    aligned_bases = Dict(id => 0.0 for id in keys(records))
+    for hit in values(best)
+        haskey(records, hit.target) || error(
+            "support record references unknown target: $(hit.target)")
+        hit.matches > 0 && hit.aligned > 0 || error(
+            "mapped support must be finite and positive")
+        aligned_bases[hit.target] += hit.aligned
+    end
+    total_support = sum(values(aligned_bases))
+    isfinite(total_support) && total_support > 0.0 || error(
+        "minimap2 produced zero total mapped support for segment candidates")
+    coverages = Dict(id => aligned_bases[id] / length(record.sequence)
+        for (id, record) in records)
+    all(coverage -> isfinite(coverage) && coverage >= 0.0,
+        values(coverages)) || error(
+        "minimap2 produced invalid segment-candidate support")
     return coverages
 end
 
@@ -424,15 +574,16 @@ end
 Legacy first-slice best-hit support used by the existing production route.
 
 This is retained only until a calibrated read-candidate likelihood builder is
-wired to [`infer_variant_abundances`](@ref). It must not be described as
+wired to [`infer_segment_candidate_abundances`](@ref). It must not be described as
 probabilistic abundance inference.
 """
 function _read_support_coverages(
-        records::Dict{String, NamedTuple},
+        records::AbstractDict{String, GfaSegmentRecord},
         fastq::String,
         threads::Int
 )::Dict{String, Float64}
     isfile(fastq) || error("support FASTQ does not exist: $(fastq)")
+    threads > 0 || throw(ArgumentError("threads must be positive"))
     mktempdir() do directory
         candidates = joinpath(directory, "candidates.fasta")
         open(candidates, "w") do io
@@ -443,45 +594,31 @@ function _read_support_coverages(
         end
         command = `$(Mycelia.CONDA_RUNNER) run -n strainy minimap2 -x map-ont
             -t $(threads) $(candidates) $(fastq)`
-        paf = read(command, String)
-        best = Dict{String, Tuple{Int, String, Int}}()
-        for line in eachline(IOBuffer(paf))
-            fields = split(line, '\t')
-            length(fields) >= 12 || continue
-            query = String(fields[1])
-            target = String(fields[6])
-            matches = something(tryparse(Int, fields[10]), 0)
-            aligned = something(tryparse(Int, fields[11]), 0)
-            current = get(best, query, (-1, "", 0))
-            (matches, aligned, target) > (current[1], current[3], current[2]) || continue
-            best[query] = (matches, target, aligned)
+        best = open(command, "r") do paf_stream
+            _read_stage2_paf_best_hits(paf_stream, records)
         end
-        aligned_bases = Dict(id => 0.0 for id in keys(records))
-        for (_, target, aligned) in values(best)
-            aligned_bases[target] = get(aligned_bases, target, 0.0) + aligned
-        end
-        return Dict(id => aligned_bases[id] / length(record.sequence)
-            for (id, record) in records)
+        return _stage2_support_coverages(records, best)
     end
 end
 
-function _variant_role(rank::Int)::Symbol
+function _segment_candidate_role(rank::Int)::Symbol
     rank == 1 && return :primary
     rank == 2 && return :secondary
     rank == 3 && return :tertiary
     return :alternate
 end
 
-function _rank_stage2_variants(
+function _rank_stage2_segment_candidates(
         strain_unitigs_gfa::String,
         phased_unitig_info::String,
         index::TransitionLikelihoodIndex;
-        max_variants::Int = 3,
+        max_variants::Union{Nothing, Int} = nothing,
         min_scored_fraction::Float64 = 0.9,
         support_fastq::Union{Nothing, String} = nothing,
         threads::Int = Mycelia.get_default_threads()
-)::Vector{RankedVariant}
-    max_variants > 0 || throw(ArgumentError("max_variants must be positive"))
+)::Vector{RankedSegmentCandidate}
+    max_variants === nothing || max_variants > 0 || throw(
+        ArgumentError("max_variants diagnostic output cap must be positive"))
     0.0 <= min_scored_fraction <= 1.0 ||
         throw(ArgumentError("min_scored_fraction must be between 0 and 1"))
 
@@ -489,13 +626,18 @@ function _rank_stage2_variants(
     coverages = _strainy_coverages(phased_unitig_info)
     support_coverages = support_fastq === nothing ? Dict{String, Float64}() :
                         _read_support_coverages(segments, support_fastq, threads)
-    candidates = NamedTuple[]
+    candidate_type = NamedTuple{
+        (:id, :sequence, :graph_mean_log2_probability,
+            :scored_transition_fraction, :strainy_coverage),
+        Tuple{String, String, Float64, Float64, Float64},
+    }
+    candidates = candidate_type[]
     for (id, record) in segments
         sequence = record.sequence
         coverage = haskey(support_coverages, id) ? support_coverages[id] :
                    something(record.coverage, get(coverages, id, nothing))
         coverage === nothing && continue
-        score = _score_variant_sequence(sequence, index)
+        score = _score_segment_candidate_sequence(sequence, index)
         score.scored_fraction >= min_scored_fraction || continue
         isfinite(score.mean_log2_probability) || continue
         push!(candidates, (;
@@ -524,83 +666,114 @@ function _rank_stage2_variants(
             candidate.id,
         ),
     )
-    length(likelihood_order) >= max_variants ||
-        error(
-            "Stage-2 produced only $(length(likelihood_order)) " *
-            "graph-supported variants; $(max_variants) required")
+    isempty(likelihood_order) && error(
+        "Stage-2 produced no graph-supported experimental segment candidates")
     likelihood_rank = Dict(candidate.id => rank
         for (rank, candidate) in enumerate(likelihood_order))
     abundance_rank = Dict(candidate.id => rank
         for (rank, candidate) in enumerate(abundance_order))
+    output_count = max_variants === nothing ? length(likelihood_order) :
+                   min(max_variants, length(likelihood_order))
     selected_ids = union(
-        Set(candidate.id for candidate in likelihood_order[1:max_variants]),
-        Set(candidate.id for candidate in abundance_order[1:max_variants]))
+        Set(candidate.id for candidate in likelihood_order[1:output_count]),
+        Set(candidate.id for candidate in abundance_order[1:output_count]))
     selected = filter(candidate -> candidate.id in selected_ids, likelihood_order)
-    return [RankedVariant(likelihood_rank[candidate.id], abundance_rank[candidate.id],
-                _variant_role(likelihood_rank[candidate.id]), candidate.id,
-                candidate.sequence, candidate.graph_mean_log2_probability,
-                candidate.scored_transition_fraction, candidate.strainy_coverage)
+    return [RankedSegmentCandidate(
+                likelihood_rank[candidate.id],
+                abundance_rank[candidate.id],
+                _segment_candidate_role(likelihood_rank[candidate.id]),
+                candidate.id,
+                candidate.sequence,
+                candidate.graph_mean_log2_probability,
+                candidate.scored_transition_fraction,
+                candidate.strainy_coverage,
+            )
             for candidate in selected]
 end
 
 function _write_ranked_variants(
-        variants::Vector{RankedVariant},
+        candidates::Vector{RankedSegmentCandidate},
         output_dir::String,
-        max_variants::Int
+        max_variants::Union{Nothing, Int}
 )::NamedTuple
     mkpath(output_dir)
-    likelihood_primary = only(filter(variant -> variant.likelihood_rank == 1, variants))
-    abundance_primary = only(filter(variant -> variant.abundance_rank == 1, variants))
+    likelihood_primary = only(filter(
+        candidate -> candidate.likelihood_rank == 1, candidates))
+    abundance_primary = only(filter(
+        candidate -> candidate.abundance_rank == 1, candidates))
     primary_status = likelihood_primary.id == abundance_primary.id ?
                      :resolved : :rank_disagreement
-    primary = joinpath(output_dir, "primary_consensus.fasta")
-    likelihood_fasta = joinpath(output_dir, "ranked_variants_likelihood.fasta")
-    abundance_fasta = joinpath(output_dir, "ranked_variants_abundance.fasta")
-    tsv = joinpath(output_dir, "ranked_variants.tsv")
+    primary_path = joinpath(output_dir, "primary_segment_candidate.fasta")
+    likelihood_fasta =
+        joinpath(output_dir, "ranked_segment_candidates_likelihood.fasta")
+    abundance_fasta =
+        joinpath(output_dir, "ranked_segment_candidates_abundance.fasta")
+    tsv = joinpath(output_dir, "segment_candidate_ranking.tsv")
+    within_output_cap = max_variants === nothing ? (_ -> true) :
+                        (candidate -> candidate.likelihood_rank <= max_variants)
     open(likelihood_fasta, "w") do io
-        for variant in filter(variant -> variant.likelihood_rank <= max_variants,
-                sort(variants; by = variant -> variant.likelihood_rank))
-            println(io, ">likelihood_rank=$(variant.likelihood_rank)|id=$(variant.id)")
-            println(io, variant.sequence)
+        for candidate in filter(within_output_cap,
+                sort(candidates; by = candidate -> candidate.likelihood_rank))
+            println(
+                io,
+                ">experimental_segment_candidate|" *
+                "likelihood_rank=$(candidate.likelihood_rank)|id=$(candidate.id)",
+            )
+            println(io, candidate.sequence)
         end
     end
+    within_abundance_cap = max_variants === nothing ? (_ -> true) :
+                           (candidate -> candidate.abundance_rank <= max_variants)
     open(abundance_fasta, "w") do io
-        for variant in filter(variant -> variant.abundance_rank <= max_variants,
-                sort(variants; by = variant -> variant.abundance_rank))
-            println(io, ">abundance_rank=$(variant.abundance_rank)|id=$(variant.id)")
-            println(io, variant.sequence)
+        for candidate in filter(within_abundance_cap,
+                sort(candidates; by = candidate -> candidate.abundance_rank))
+            println(
+                io,
+                ">experimental_segment_candidate|" *
+                "abundance_rank=$(candidate.abundance_rank)|id=$(candidate.id)",
+            )
+            println(io, candidate.sequence)
         end
     end
-    open(primary, "w") do io
-        variant = likelihood_primary
-        println(
-            io,
-            ">primary|id=$(variant.id)|status=$(primary_status)|" *
-            "abundance_primary_id=$(abundance_primary.id)",
-        )
-        println(io, variant.sequence)
+    primary = nothing
+    if primary_status === :resolved
+        open(primary_path, "w") do io
+            println(
+                io,
+                ">experimental_primary_segment_candidate|" *
+                "id=$(likelihood_primary.id)|status=resolved",
+            )
+            println(io, likelihood_primary.sequence)
+        end
+        primary = primary_path
+    else
+        rm(primary_path; force = true)
     end
     table = DataFrames.DataFrame(
-        likelihood_rank = [variant.likelihood_rank for variant in variants],
-        abundance_rank = [variant.abundance_rank for variant in variants],
-        role = [String(variant.role) for variant in variants],
-        id = [variant.id for variant in variants],
-        length = [length(variant.sequence) for variant in variants],
+        likelihood_rank = [candidate.likelihood_rank for candidate in candidates],
+        abundance_rank = [candidate.abundance_rank for candidate in candidates],
+        role = [String(candidate.role) for candidate in candidates],
+        id = [candidate.id for candidate in candidates],
+        length = [length(candidate.sequence) for candidate in candidates],
         graph_mean_log2_probability =
-            [variant.graph_mean_log2_probability for variant in variants],
+            [candidate.graph_mean_log2_probability for candidate in candidates],
         scored_transition_fraction =
-            [variant.scored_transition_fraction for variant in variants],
-        strainy_coverage = [variant.strainy_coverage for variant in variants],
-        primary_status = fill(String(primary_status), length(variants)),
-        likelihood_primary_id = fill(likelihood_primary.id, length(variants)),
-        abundance_primary_id = fill(abundance_primary.id, length(variants)),
+            [candidate.scored_transition_fraction for candidate in candidates],
+        strainy_coverage = [candidate.strainy_coverage for candidate in candidates],
+        primary_status = fill(String(primary_status), length(candidates)),
+        likelihood_primary_id = fill(likelihood_primary.id, length(candidates)),
+        abundance_primary_id = fill(abundance_primary.id, length(candidates)),
     )
     CSV.write(tsv, table; delim = '\t')
     return (;
         primary,
+        primary_segment_candidate_fasta = primary,
         likelihood_fasta,
+        likelihood_ranked_segment_candidates_fasta = likelihood_fasta,
         abundance_fasta,
+        abundance_ranked_segment_candidates_fasta = abundance_fasta,
         tsv,
+        segment_candidate_ranking_tsv = tsv,
         primary_status,
         likelihood_primary_id = likelihood_primary.id,
         abundance_primary_id = abundance_primary.id,
@@ -611,12 +784,18 @@ end
     deconvolve_stage2(reads, config::AssemblyConfig; kwargs...)
 
 Run Stage-1 graph accurization once, reuse metaFlye for long-read repeat-graph
-layout, and reuse Strainy for strain-haplotype deconvolution. Candidate
-haplotypes are ranked by normalized likelihood under the accurized graph. The
-production route still uses explicitly labeled legacy best-hit abundance until
-a calibrated read-candidate likelihood builder is connected to
-[`infer_variant_abundances`](@ref); the soft-EM implementation in this slice is
+layout, and rank Strainy sequence-bearing GFA `S` records as experimental
+segment candidates under the accurized graph. These candidates are not complete
+paths, consensus genomes, or inferred haplotypes. The production route still
+uses explicitly labeled legacy best-hit abundance until a calibrated
+read-candidate likelihood builder is connected to
+[`infer_segment_candidate_abundances`](@ref); the soft-EM implementation in this
+slice is
 an inference seam, not yet the production abundance method.
+
+`max_variants` is an optional per-ranking diagnostic output cap. `nothing`
+retains every graph-supported segment candidate. It does not supply or infer a
+truth strain count.
 """
 function deconvolve_stage2(
         reads::R,
@@ -624,10 +803,10 @@ function deconvolve_stage2(
         genome_size::Union{Nothing, Integer, AbstractString} = nothing,
         min_overlap::Union{Nothing, Int} = nothing,
         layout_iterations::Int = 0,
-        max_variants::Int = 3,
+        max_variants::Union{Nothing, Int} = nothing,
         min_scored_fraction::Float64 = 0.9,
         threads::Int = Mycelia.get_default_threads()
-)::Stage2DeconvolutionResult where {R}
+)::Stage2SegmentCandidateResult where {R}
     config.corrector == :iterative ||
         throw(ArgumentError("Stage-2 requires corrector=:iterative"))
     config.sequencing_tech == :nanopore ||
@@ -636,6 +815,8 @@ function deconvolve_stage2(
         throw(ArgumentError("Stage-2 requires a persistent AssemblyConfig.output_dir"))
     layout_iterations >= 0 ||
         throw(ArgumentError("layout_iterations must be nonnegative"))
+    max_variants === nothing || max_variants > 0 || throw(
+        ArgumentError("max_variants diagnostic output cap must be positive"))
 
     output_dir = config.output_dir
     layout_dir = joinpath(output_dir, "metaflye")
@@ -670,13 +851,16 @@ function deconvolve_stage2(
         min_unitig_coverage = 3,
         unitig_split_length = 0,
         threads = threads)
-    variants = _rank_stage2_variants(
+    candidates = _rank_stage2_segment_candidates(
         phased.strain_contigs_gfa, phased.phased_unitig_info, index;
         max_variants = max_variants,
         min_scored_fraction = min_scored_fraction,
         support_fastq = corrected_fastq,
         threads = threads)
-    ranked = _write_ranked_variants(variants, ranked_dir, max_variants)
+    ranked = _write_ranked_variants(candidates, ranked_dir, max_variants)
+    ranked.primary_status === :resolved || error(
+        "Stage-2 segment-candidate ranks disagree; no consumable primary " *
+        "segment candidate was written")
 
     provenance = Dict{String, Any}(
         "stage1_corrector" => "iterative",
@@ -685,27 +869,31 @@ function deconvolve_stage2(
         "layout_tool" => "metaflye",
         "layout_read_type" => "nano-corr",
         "layout_iterations" => layout_iterations,
-        "deconvolution_tool" => "strainy",
+        "segment_candidate_tool" => "strainy",
+        "segment_candidate_semantics" =>
+            "experimental-gfa-s-records-not-complete-paths-or-haplotypes",
+        "path_grouping_status" => "not-implemented",
+        "strain_count_inference_status" => "not-implemented",
         "abundance_method" => "legacy-best-hit-minimap2",
         "probabilistic_abundance_status" => "available-requires-calibrated-likelihoods",
         "graph_k" => graph_k,
         "graph_source" => prepared.graph_source,
         "graph_rebuild_reason" => prepared.graph_rebuild_reason,
         "corrected_read_count" => prepared.corrected_read_count,
-        "max_variants" => max_variants,
+        "diagnostic_segment_candidate_cap" => max_variants,
         "min_scored_fraction" => min_scored_fraction
     )
     provenance["primary_status"] = String(ranked.primary_status)
     provenance["likelihood_primary_id"] = ranked.likelihood_primary_id
     provenance["abundance_primary_id"] = ranked.abundance_primary_id
-    return Stage2DeconvolutionResult(
-        ranked.primary,
+    return Stage2SegmentCandidateResult(
+        something(ranked.primary_segment_candidate_fasta),
         layout.assembly,
         layout.graph,
-        ranked.likelihood_fasta,
-        ranked.abundance_fasta,
-        ranked.tsv,
+        ranked.likelihood_ranked_segment_candidates_fasta,
+        ranked.abundance_ranked_segment_candidates_fasta,
+        ranked.segment_candidate_ranking_tsv,
         corrected_fastq,
-        variants,
+        candidates,
         provenance)
 end

@@ -48,3 +48,39 @@ Test.@testset "mycelia_iterative_assemble completes end-to-end" begin
         Test.@test length(result[:k_progression]) >= 2   # completed past the first k
     end
 end
+
+Test.@testset "iterative finalization supports a disk-backed result" begin
+    output_dir = mktempdir()
+    timestamp = "20260713_120000"
+    final_fastq = joinpath(output_dir, "reads_k3_iter1_$(timestamp).fastq")
+    write(
+        final_fastq,
+        "@read1\nACGT\n+\nIIII\n@read2\nTGCA\n+\nIIII\n",
+    )
+    history = Dict{Int, Vector{Dict{Symbol, Any}}}(
+        3 => [Dict{Symbol, Any}(
+            :timestamp => timestamp,
+            :improvements_made => 0,
+        )],
+    )
+
+    disk_backed = Mycelia.finalize_iterative_assembly(
+        output_dir,
+        [3],
+        history,
+        0.0;
+        verbose = false,
+        materialize_final_assembly = false,
+    )
+    Test.@test disk_backed[:final_assembly] === nothing
+    Test.@test disk_backed[:metadata][:final_fastq_file] == final_fastq
+
+    historical_default = Mycelia.finalize_iterative_assembly(
+        output_dir,
+        [3],
+        history,
+        0.0;
+        verbose = false,
+    )
+    Test.@test historical_default[:final_assembly] == ["ACGT", "TGCA"]
+end
