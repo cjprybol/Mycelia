@@ -193,6 +193,14 @@ end
 # "decode almost everything" pathology the #370 profile flagged.
 const _DEFAULT_DECODE_GATE_DENSITY = 0.90
 
+# Runtime-derived ceiling for staging the pair-HMM indel decoder (td-2rxh).
+# The calibration fixes a 200 ms/read budget independently of correction
+# accuracy: a 200 bp probe decoded in a 1,996-vertex graph in 153.788 ms median,
+# while the next measured size, 3,610 vertices, took 279.200 ms. The measured
+# feasible boundary is rounded from 1,996 to 2,000 vertices. Reproduce with
+# `scratchpad/measure_indel_decode_vertex_budget.jl`.
+const _INDEL_DECODE_MAX_VERTICES = 2_000
+
 """
 Estimate memory usage for a graph with a given number of k-mers.
 Provides a rough estimate for memory monitoring.
@@ -384,6 +392,12 @@ struct IndelDecodeParams
     deletion_max_run::Int
     max_insertion_run::Int
     band_width::Union{Nothing, Int}
+end
+
+function _indel_decode_is_staged(graph::Graphs.AbstractGraph,
+        indel_params::Union{Nothing, IndelDecodeParams})::Bool
+    return indel_params !== nothing &&
+           Graphs.nv(graph) <= _INDEL_DECODE_MAX_VERTICES
 end
 
 # =============================================================================
@@ -599,6 +613,11 @@ function mycelia_iterative_assemble(input_fastq::String;
     # Telemetry: the k-rungs whose per-read decode was gated OFF (low-k skip).
     decode_gated_rungs = Int[]
 
+    # Sparse k-rungs where the staged pair-HMM indel decoder actually processed
+    # at least one read. Recording the vertex count keeps the runtime-budget
+    # decision auditable in downstream assembly statistics.
+    staged_indel_rungs = NamedTuple{(:k, :n_vertices), Tuple{Int, Int}}[]
+
     # Hard-window skip telemetry (td-nn6l): the fraction of reads the hard-window
     # gate passed through WITHOUT a decode, recorded PER PASS (across every k and
     # iteration) so the run metadata can surface min/mean/max, not just the last
@@ -756,6 +775,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             pass_skip_fraction = 0.0
             pass_cheap_corrections = 0
             pass_decode_gated = false
+            indel_decodes_before = corrector_diagnostics.indel_decodes[]
             try
                 if soft_em && prev_soft_weights !== nothing
                     Mycelia.Rhizomorph.register_soft_edge_weights!(graph, prev_soft_weights)
@@ -784,6 +804,11 @@ function mycelia_iterative_assemble(input_fastq::String;
                 )
             finally
                 Mycelia.Rhizomorph.clear_soft_edge_weights!()
+            end
+            if _indel_decode_is_staged(graph, indel_params) &&
+               corrector_diagnostics.indel_decodes[] > indel_decodes_before &&
+               all(rung -> rung.k != k, staged_indel_rungs)
+                push!(staged_indel_rungs, (k = k, n_vertices = Graphs.nv(graph)))
             end
             push!(skip_fractions, pass_skip_fraction)
             push!(cheap_correction_counts, pass_cheap_corrections)
@@ -956,6 +981,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         min_decode_k = effective_min_decode_k,
         decode_gate_density = effective_decode_gate_density,
         decode_gated_rungs = decode_gated_rungs,
+        staged_indel_rungs = staged_indel_rungs,
         # Final-pass graph reuse (td-04tb): hand the corrector's last-pass qualmer
         # graph back so a converged run's re-assembly can skip a redundant rebuild.
         final_pass_graph = final_pass_graph,
@@ -1898,6 +1924,19 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     natural_decode_fraction = total_reads > 0 ?
                               count(!, base_skip_flags) / total_reads : 0.0
 
+    # Stage the pair-HMM indel decoder only on graphs whose measured vertex count
+    # fits the fixed ~200 ms/read runtime budget. Dense rungs take the historical
+    # substitution path byte-for-byte, while raw indel intent continues to disable
+    # PR #412's substitution-only calibrated positional gate.
+    indel_staged = _indel_decode_is_staged(graph, indel_params)
+    effective_indel_params = indel_staged ? indel_params : nothing
+    effective_calibrated_gap_threshold =
+        indel_params === nothing ? calibrated_gap_threshold : nothing
+    if verbose && indel_staged
+        println("  Staged indel decode (td-2rxh): k=$k, " *
+                "vertices=$(Graphs.nv(graph)) <= $(_INDEL_DECODE_MAX_VERTICES).")
+    end
+
     # -- Low-k decode gating (td-9h5r) -----------------------------------------
     # `decode_enabled == false` (EXPLICIT floor `min_decode_k`): skip the per-read
     # graph-Viterbi decode for EVERY read this pass. Stage 0 cheap correction has
@@ -1913,7 +1952,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # discrimination signal to act on, so the decode runs as before.
     adaptive_gated = decode_enabled && decode_gate_density !== nothing &&
                      hard_vertices !== nothing &&
-                     natural_decode_fraction >= decode_gate_density
+                     natural_decode_fraction >= decode_gate_density &&
+                     !indel_staged
     pass_decode_off = !decode_enabled || adaptive_gated
     if verbose && adaptive_gated
         println("  Low-k decode gate (td-9h5r): hard-window gate non-discriminating " *
@@ -1954,9 +1994,9 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # the hard sub-window(s) around its hard vertices, each boundary-constrained and
     # <=500 bp) instead of whole-read. Requires `hard_vertices` — without the gate
     # there are no hard windows to target. The per-read `_windowed_decode_read_is_long`
-    # check restricts windowing to reads long enough that whole-read decode is
-    # expensive/bounded; short reads keep the cheap, exact whole-read decode
-    # (so the :scalable short-read quality gate never regresses).
+    # check restricts substitution windowing to reads long enough that whole-read
+    # decode is expensive/bounded. Staged indel decoding always uses windows,
+    # including for short reads, so the pair-HMM never runs over a whole read.
     use_windowed = windowed_decode && hard_vertices !== nothing
 
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
@@ -1984,18 +2024,21 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 else
                     improved_read,
                     was_improved = (use_windowed &&
-                                    _windowed_decode_read_is_long(read, k)) ?
+                                    (_windowed_decode_read_is_long(read, k) ||
+                                     effective_indel_params !== nothing)) ?
                                    improve_read_likelihood_windowed(
                         read, graph, k, hard_vertices; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
                         diagnostics = diag,
-                        calibrated_gap_threshold = calibrated_gap_threshold,
-                        indel_params = indel_params) :
+                        calibrated_gap_threshold =
+                            effective_calibrated_gap_threshold,
+                        indel_params = effective_indel_params) :
                                    improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
-                        diagnostics = diag, indel_params = indel_params,
-                        calibrated_gap_threshold = calibrated_gap_threshold)
+                        diagnostics = diag, indel_params = effective_indel_params,
+                        calibrated_gap_threshold =
+                            effective_calibrated_gap_threshold)
                     batch_results[i] = (improved_read, was_improved)
                 end
             end
@@ -2019,20 +2062,23 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                 end
                 improved_read,
                 was_improved = (use_windowed &&
-                                _windowed_decode_read_is_long(read, k)) ?
+                                (_windowed_decode_read_is_long(read, k) ||
+                                 effective_indel_params !== nothing)) ?
                                improve_read_likelihood_windowed(
                     read, graph, k, hard_vertices; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
                     diagnostics = diag,
-                    calibrated_gap_threshold = calibrated_gap_threshold,
-                    indel_params = indel_params) :
+                    calibrated_gap_threshold =
+                        effective_calibrated_gap_threshold,
+                    indel_params = effective_indel_params) :
                                improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
-                    diagnostics = diag, indel_params = indel_params,
-                    calibrated_gap_threshold = calibrated_gap_threshold)
+                    diagnostics = diag, indel_params = effective_indel_params,
+                    calibrated_gap_threshold =
+                        effective_calibrated_gap_threshold)
                 updated_reads[batch_start + i - 1] = improved_read
 
                 if was_improved
@@ -2867,6 +2913,9 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         min_decode_k::Union{Int, Nothing} = nothing,
         decode_gate_density::Union{Float64, Nothing} = nothing,
         decode_gated_rungs::Vector{Int} = Int[],
+        staged_indel_rungs::Vector{
+            NamedTuple{(:k, :n_vertices), Tuple{Int, Int}}
+        } = NamedTuple{(:k, :n_vertices), Tuple{Int, Int}}[],
         final_pass_graph = nothing,
         final_pass_graph_k::Int = 0,
         final_pass_graph_mode::Symbol = :canonical,
@@ -2895,6 +2944,10 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     total_iterations = sum(length(iterations) for iterations in values(iteration_history))
     total_improvements = sum(sum(iter[:improvements_made] for iter in iterations)
     for iterations in values(iteration_history))
+    rung_vertex_counts = Dict(
+        k => [iteration[:memory_kmers] for iteration in iterations]
+        for (k, iterations) in iteration_history
+    )
 
     # Read final assembly for k-mer extraction
     if isfile(final_fastq)
@@ -2949,6 +3002,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :final_fastq_file => final_fastq,
         :output_directory => output_dir,
         :iteration_history => iteration_history,
+        :rung_vertex_counts => rung_vertex_counts,
         :corrector_errors => corrector_errors,
         :assembly_type => "iterative_maximum_likelihood",
         :version => "Phase_5.2a",
@@ -2976,6 +3030,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         :min_decode_k => min_decode_k,
         :decode_gate_density => decode_gate_density,
         :decode_gated_rungs => decode_gated_rungs,
+        :staged_indel_rungs => staged_indel_rungs,
         :last_skip_fraction => last_skip_fraction,
         :skip_fraction_per_pass => skip_fractions,
         :skip_fraction_min => skip_min,
