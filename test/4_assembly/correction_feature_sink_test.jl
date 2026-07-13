@@ -15,6 +15,19 @@ function _sink_throws_message(f::Function, fragment::AbstractString)::Bool
     return false
 end
 
+mutable struct _FailingSolidKmers <: AbstractSet{Any}
+    memberships::Int
+    fail_after::Int
+    failure::Exception
+end
+
+function Base.in(::Any, solid_kmers::_FailingSolidKmers)::Bool
+    solid_kmers.memberships += 1
+    solid_kmers.memberships > solid_kmers.fail_after &&
+        throw(solid_kmers.failure)
+    return true
+end
+
 Test.@testset "correction feature serving sink" begin
     k = 7
     clean = "ATGCGTACGTACGTTAGCCGATACAGGTCA"
@@ -59,6 +72,49 @@ Test.@testset "correction feature serving sink" begin
             graph_mode = :canonical,
             correction_feature_sink = _ -> error("sink sentinel")),
         "sink sentinel")
+
+    multi_error_chars = collect(clean)
+    for position in (10, 25)
+        multi_error_chars[position] = multi_error_chars[position] == 'A' ? 'C' : 'A'
+    end
+    multi_error = _sink_record("multi-error", String(multi_error_chars))
+    complete_observations = Mycelia.CorrectionFeatureObservation[]
+    Mycelia.try_viterbi_path_improvement(
+        multi_error,
+        graph,
+        k;
+        graph_mode = :canonical,
+        correction_feature_sink = observation ->
+            push!(complete_observations, observation),
+    )
+    Test.@test length(complete_observations) >= 2
+
+    # A later feature-extraction failure invalidates the whole read contract. No
+    # observation buffered for an earlier edit may escape to the caller-owned sink.
+    transactional_observations = Mycelia.CorrectionFeatureObservation[]
+    transactional_diagnostics = Mycelia.CorrectorDiagnostics()
+    Mycelia.try_viterbi_path_improvement(
+        multi_error,
+        graph,
+        k;
+        graph_mode = :canonical,
+        diagnostics = transactional_diagnostics,
+        correction_feature_sink = observation ->
+            push!(transactional_observations, observation),
+        solid_kmers = _FailingSolidKmers(
+            0, k, ArgumentError("solid-kmer membership sentinel")),
+    )
+    Test.@test isempty(transactional_observations)
+    Test.@test transactional_diagnostics.gate_skipped[] == 1
+
+    Test.@test_throws InterruptException Mycelia.try_viterbi_path_improvement(
+        multi_error,
+        graph,
+        k;
+        graph_mode = :canonical,
+        correction_feature_sink = _ -> nothing,
+        solid_kmers = _FailingSolidKmers(0, 0, InterruptException()),
+    )
 
     ambiguous = _sink_record("ambiguous", repeat("N", length(clean)))
     ambiguous_diagnostics = Mycelia.CorrectorDiagnostics()

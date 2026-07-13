@@ -33,6 +33,7 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
             readlen = 80,
             coverage = 15,
             error_rates = [0.08, 0.10],
+            assigned_q = 21,
             seed = 1,
             replicates = 1,
             results_dir = dir,
@@ -48,6 +49,7 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
             "scope,error_rate,model,n,positive_frac,auroc,ece,brier")
         Test.@test readline(model_path) == "model,term,coefficient"
         Test.@test readline(manifest_path) == "key,value"
+        Test.@test "assigned_q,21" in readlines(manifest_path)
         result
     end
 
@@ -86,8 +88,9 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
         soft_em = true,
         cheap_correct = true,
         beam_width = nothing,
-        assigned_q = 20
+        assigned_q = 21
     )
+    Test.@test artifact.assigned_q == 21
     Test.@test length(artifact.dataset) >= artifact.training.n + artifact.heldout.n
     Test.@test all(row.k >= 1 for row in artifact.dataset)
     Test.@test isempty(intersect(
@@ -132,6 +135,15 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
 
     test_throws_message(ArgumentError, "max_contract_skip_fraction") do
         run_gap_calibration(max_contract_skip_fraction = 1.1)
+    end
+    Test.@test _uniform_phred_quality_string(3, 0) == "!!!"
+    Test.@test _uniform_phred_quality_string(3, 20) == "555"
+    Test.@test _uniform_phred_quality_string(3, 93) == "~~~"
+    test_throws_message(ArgumentError, "supported Phred range 0:93") do
+        run_gap_calibration(assigned_q = -1)
+    end
+    test_throws_message(ArgumentError, "supported Phred range 0:93") do
+        run_gap_calibration(assigned_q = 94)
     end
     test_throws_message(ArgumentError, "needs both correctness classes") do
         _heldout_metric_rows(
@@ -216,7 +228,7 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
                        (corrected_sequence[gt.positions[row_index]] ==
                         clean[gt.positions[row_index]])
         end
-        any_finite |= n_rows > 0
+        any_finite |= any(isfinite, gt.scores)
     end
     Test.@test any_finite
 end

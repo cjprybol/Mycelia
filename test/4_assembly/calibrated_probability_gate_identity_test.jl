@@ -110,4 +110,21 @@ Test.@testset "calibrated probability gate" begin
             reads, graph, k; calibrated_gap_threshold = 1.0,
             calibrated_probability_model = model),
         "mutually exclusive")
+
+    # Public record entry points validate configuration before data-dependent
+    # early returns (short reads and un-k-merizable ambiguous reads).
+    short_read = _prob_rec("short", "ATG")
+    Test.@test _prob_throws_message(
+        () -> Mycelia.improve_read_likelihood(
+            short_read, graph, k;
+            calibrated_gap_threshold = 1.0,
+            calibrated_probability_model = model),
+        "mutually exclusive")
+    ambiguous_read = _prob_rec("ambiguous", repeat("N", length(clean)))
+    Test.@test _prob_throws_message(
+        () -> Mycelia.find_optimal_sequence_path(
+            ambiguous_read, graph, k;
+            calibrated_gap_threshold = 1.0,
+            calibrated_probability_model = model),
+        "mutually exclusive")
 end

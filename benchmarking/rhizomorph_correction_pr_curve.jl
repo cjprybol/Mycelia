@@ -126,7 +126,7 @@ benchmark logistic coefficients to the runtime model's fixed feature order.
 The calibration cohort uses a disjoint seed and never sees frontier truth.
 """
 function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
-        coverage::Float64, k::Int, seed::Int)::NamedTuple
+        coverage::Float64, k::Int, seed::Int, assigned_q::Int)::NamedTuple
     results_root = joinpath(@__DIR__, "results")
     mkpath(results_root)
     calibration_results_dir = mktempdir(
@@ -137,6 +137,7 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
         readlen = readlen,
         coverage = max(1, round(Int, coverage)),
         error_rates = errs,
+        assigned_q = assigned_q,
         seed = seed + 10_000,
         results_dir = calibration_results_dir,
         return_artifact = true)
@@ -155,7 +156,8 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
         throw(ArgumentError("multi-feature logistic has wrong coefficient count"))
     runtime_model = Mycelia.CorrectionConfidenceModel(model.a, model.b...)
     println("Calibration cohort: multi-feature model fitted with grouped holdout; " *
-            "seed=$(seed + 10_000), n_train=$(length(artifact.training.labels)), " *
+            "seed=$(seed + 10_000), assigned_q=$(assigned_q), " *
+            "n_train=$(length(artifact.training.labels)), " *
             "n_heldout=$(length(artifact.heldout.labels)), " *
             "artifacts=$(calibration_results_dir)")
     println("Calibration coefficients: intercept=$(runtime_model.intercept), " *
@@ -226,6 +228,7 @@ function run_pr_curve(;
     coverage = parse(Float64, get(ENV, "MYCELIA_RPC_COVERAGE", smoke ? "15" : "30"))
     k = parse(Int, get(ENV, "MYCELIA_RPC_K", "21"))
     assigned_q = parse(Int, get(ENV, "MYCELIA_RPC_ASSIGNED_Q", "20"))
+    _validate_assigned_q(assigned_q)
     seed = parse(Int, get(ENV, "MYCELIA_RPC_SEED", "42"))
     want = strip(get(ENV, "MYCELIA_RPC_POINTS", ""))
     all_points = vcat(
@@ -250,7 +253,7 @@ function run_pr_curve(;
     if any(startswith(point.name, "calibrated-prob-") for point in points)
         effective_probability_model = if probability_model === nothing
             fit = fit_frontier_probability_model(
-                errs, readlens[1], coverage, k, seed)
+                errs, readlens[1], coverage, k, seed, assigned_q)
             calibration_artifact = fit.results_dir
             fit.model
         else
@@ -342,10 +345,9 @@ function run_pr_curve(;
         end
     end
     # The multi-feature probability family is the td-21eg decision surface. Report
-    # both requested error rates separately; only err=0.10 is the completion gate.
+    # every requested error rate separately; err=0.10 is the completion gate.
     if any(startswith(point.name, "calibrated-prob-") for point in points)
-        for err in (0.05, 0.10)
-            err in errs || continue
+        for err in errs
             dom = assess_frontier_dominance(
                 rows; err = err, candidate_prefix = "calibrated-prob-")
             if hasproperty(dom, :reason)

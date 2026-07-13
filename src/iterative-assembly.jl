@@ -2029,7 +2029,9 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # Classify k-mers once if EITHER the skip-solid gate OR the Stage 0 cheap
     # corrector needs the solid set. Compute once, share both consumers.
     feature_collection_active = correction_feature_sink !== nothing && indel_params === nothing
-    need_solid = calibrated_probability_model !== nothing || feature_collection_active ||
+    probability_gate_active = calibrated_probability_model !== nothing &&
+                              indel_params === nothing
+    need_solid = probability_gate_active || feature_collection_active ||
                  ((skip_solid || cheap_correct) && graph_mode != :singlestrand)
     solid_kmers = need_solid ? _solid_kmer_set(graph) : nothing
 
@@ -2110,11 +2112,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # mutable state, so those passes run sequentially. Otherwise honor the
     # caller's parallel request.
     use_parallel = enable_parallel && Threads.nthreads() > 1 &&
-                   soft_weights === nothing && correction_feature_sink === nothing
+                   soft_weights === nothing && !feature_collection_active
     if enable_parallel && soft_weights !== nothing && Threads.nthreads() > 1
         @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
     end
-    if enable_parallel && correction_feature_sink !== nothing && Threads.nthreads() > 1
+    if enable_parallel && feature_collection_active && Threads.nthreads() > 1
         @warn "correction feature collection is sequential (race-free); ignoring " *
               "enable_parallel for this pass." maxlog = 1
     end
@@ -2361,6 +2363,8 @@ function improve_read_likelihood(read::FASTX.FASTQ.Record, graph, k::Int;
         correction_position_offset::Int = 0,
         solid_kmers::Union{Nothing, AbstractSet} = nothing)::Tuple{
         FASTX.FASTQ.Record, Bool}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
     # Extract sequence and quality
     original_seq = FASTX.sequence(String, read)
     original_qual = FASTX.quality(read)
@@ -2439,6 +2443,8 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
         correction_position_offset::Int = 0,
         solid_kmers::Union{Nothing, AbstractSet} = nothing)::Tuple{
         FASTX.FASTQ.Record, Float64}
+    _validate_correction_gate(calibrated_gap_threshold,
+        calibrated_probability_model, calibrated_probability_threshold)
     gate_contract_requested = indel_params === nothing &&
                               (calibrated_gap_threshold !== nothing ||
                                calibrated_probability_model !== nothing ||
@@ -3280,7 +3286,8 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
         metadata[:correction_feature_sink_disabled_reason] =
             correction_feature_sink_active ? nothing : "indel_params_requested"
     end
-    if calibrated_probability_model !== nothing || correction_feature_sink_active
+    if calibrated_gap_threshold !== nothing ||
+       calibrated_probability_model !== nothing || correction_feature_sink_active
         metadata[:calibrated_feature_contract_skips] = diagnostics === nothing ?
                                                          0 : diagnostics.gate_skipped[]
     end
@@ -3659,6 +3666,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                length(gaps) == length(decoded_path.steps) - 1 &&
                length(corrected_chars) == length(original_chars)
                 revert_positions = Int[]
+                feature_observations = CorrectionFeatureObservation[]
                 gate_contract_ok = true
                 try
                     @inbounds for i in eachindex(gaps)
@@ -3667,48 +3675,32 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                         # The gate can only act on a proposed substitution. Training
                         # and held-out evaluation use this same candidate-edit cohort.
                         corrected_chars[position] == original_chars[position] && continue
-                        if feature_sink_active && !isfinite(gaps[i]) && gaps[i] != Inf
-                            throw(_CorrectionFeatureSinkError(
+                        if feature_extraction_active &&
+                           !isfinite(gaps[i]) && gaps[i] != Inf
+                            throw(ArgumentError(
                                 "correction feature extraction received a non-finite " *
                                 "Viterbi gap for $(FASTX.identifier(read)) at position " *
                                 "$(position)"))
                         end
                         features = if (isfinite(gaps[i]) || gaps[i] == Inf) &&
                                       feature_extraction_active
-                            try
-                                correction_confidence_features(
-                                    graph, decoded_path, i, k,
-                                    effective_solid_kmers, gaps[i])
-                            catch feature_error
-                                feature_sink_active && throw(_CorrectionFeatureSinkError(
-                                    "correction feature extraction failed for " *
-                                    "$(FASTX.identifier(read)) at position $(position): " *
-                                    sprint(showerror, feature_error)))
-                                rethrow()
-                            end
+                            correction_confidence_features(
+                                graph, decoded_path, i, k,
+                                effective_solid_kmers, gaps[i])
                         else
                             nothing
                         end
                         if feature_sink_active && features !== nothing
                             event_read_id = correction_read_id === nothing ?
                                             String(FASTX.identifier(read)) : correction_read_id
-                            try
-                                correction_feature_sink(CorrectionFeatureObservation(
-                                    event_read_id,
-                                    k,
-                                    position + correction_position_offset,
-                                    original_chars[position],
-                                    corrected_chars[position],
-                                    features,
-                                ))
-                            catch sink_error
-                                sink_error isa InterruptException && rethrow()
-                                throw(_CorrectionFeatureSinkError(
-                                    "correction feature sink failed for " *
-                                    "$(event_read_id) at position " *
-                                    "$(position + correction_position_offset): " *
-                                    sprint(showerror, sink_error)))
-                            end
+                            push!(feature_observations, CorrectionFeatureObservation(
+                                event_read_id,
+                                k,
+                                position + correction_position_offset,
+                                original_chars[position],
+                                corrected_chars[position],
+                                features,
+                            ))
                         end
                         keep_correction = if calibrated_gap_threshold !== nothing
                             # Preserve the legacy raw-gap gate's fail-open behavior
@@ -3727,26 +3719,40 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                         keep_correction || push!(revert_positions, position)
                     end
                 catch gate_error
-                    gate_error isa _CorrectionFeatureSinkError && rethrow()
+                    gate_error isa InterruptException && rethrow()
                     # A feature/alignment defect must not partially gate a read. Keep
-                    # the ungated decode and surface the contract miss once.
+                    # the ungated decode, emit no buffered observations, and surface
+                    # the contract miss once.
                     gate_contract_ok = false
                     @debug "calibrated probability gate failed open" exception =
                         (gate_error, catch_backtrace())
                 end
                 if gate_contract_ok
+                    # Feature observations are read-transactional: do not invoke the
+                    # caller-owned sink until every proposed edit has satisfied the
+                    # feature/gate contract. `_CorrectionFeatureSinkError` is
+                    # reserved for callback failures and propagates to the caller.
+                    for observation in feature_observations
+                        try
+                            correction_feature_sink(observation)
+                        catch sink_error
+                            sink_error isa InterruptException && rethrow()
+                            throw(_CorrectionFeatureSinkError(
+                                "correction feature sink failed for " *
+                                "$(observation.read_id) at position " *
+                                "$(observation.position): " *
+                                sprint(showerror, sink_error)))
+                        end
+                    end
                     for position in revert_positions
                         corrected_chars[position] = original_chars[position]
                     end
                     corrected_sequence_string = String(corrected_chars)
-                elseif gate_active
+                elseif serving_features_active
                     _record_gate_contract_miss!(
                         diagnostics, "per-base feature extraction failed")
                 end
-            elseif feature_sink_active
-                _record_gate_contract_miss!(
-                    diagnostics, "path/gap/length contract was incomplete")
-            elseif gate_active
+            elseif serving_features_active
                 # In substitution mode the decode contract (path present, gaps
                 # recorded, len == steps-1, length preserved) is ALWAYS satisfiable;
                 # a miss means the gate silently fell open to the ungated decode —

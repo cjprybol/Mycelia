@@ -67,4 +67,27 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
             Test.@test seqs(out)[i] == clean_seq
         end
     end
+
+    # Raw-gap requests expose the same contract-miss telemetry as probability
+    # gates and feature sinks.
+    diagnostics = Mycelia.CorrectorDiagnostics()
+    Base.Threads.atomic_add!(diagnostics.gate_skipped, 2)
+    history = Dict{Int, Vector{Dict{Symbol, Any}}}(
+        k => [Dict{Symbol, Any}(
+            :timestamp => "raw-gap-contract",
+            :improvements_made => 0,
+        )],
+    )
+    mktempdir() do output_dir
+        result = Mycelia.finalize_iterative_assembly(
+            output_dir,
+            [k],
+            history,
+            0.0;
+            verbose = false,
+            diagnostics = diagnostics,
+            calibrated_gap_threshold = 1.0,
+        )
+        Test.@test result[:metadata][:calibrated_feature_contract_skips] == 2
+    end
 end

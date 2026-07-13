@@ -21,6 +21,23 @@ const CORRECTION_CONFIDENCE_FEATURES = (
     :collapsed_frontier
 )
 
+const MIN_SUPPORTED_PHRED = 0
+const MAX_SUPPORTED_PHRED = 93
+
+function _validate_assigned_q(assigned_q::Int)::Nothing
+    MIN_SUPPORTED_PHRED <= assigned_q <= MAX_SUPPORTED_PHRED ||
+        throw(ArgumentError(
+            "assigned_q must be in the supported Phred range " *
+            "$(MIN_SUPPORTED_PHRED):$(MAX_SUPPORTED_PHRED)"))
+    return nothing
+end
+
+function _uniform_phred_quality_string(n_bases::Int, assigned_q::Int)::String
+    n_bases >= 0 || throw(ArgumentError("n_bases must be non-negative"))
+    _validate_assigned_q(assigned_q)
+    return String(fill(Char(assigned_q + 33), n_bases))
+end
+
 function correction_calibration_serving_config(k::Int)::NamedTuple
     return (
         max_k = max(k, 13),
@@ -348,7 +365,7 @@ end
 """
     run_gap_calibration(; kwargs...) -> Union{Vector, NamedTuple}
 
-At each error rate (through err=0.10), simulate a substitution-only Q20 read
+At each error rate (through err=0.10), simulate a substitution-only uniform-Phred read
 cohort and run it through the exact iterative-corrector configuration used by
 the frontier probability family: doublestrand graphs, `skip_solid=false`,
 `cheap_correct=true`, `soft_em=true`, `hard_window=false`, three k rungs, two
@@ -370,6 +387,7 @@ function run_gap_calibration(;
         readlen::Int = 120,
         coverage::Int = 30,
         error_rates::Vector{Float64} = [0.05, 0.08, 0.10],
+        assigned_q::Int = 20,
         seed::Int = 42,
         nbins::Int = 10,
         holdout_fraction::Float64 = 0.2,
@@ -385,10 +403,12 @@ function run_gap_calibration(;
     genome_length >= readlen ||
         throw(ArgumentError("genome_length must be at least readlen"))
     replicates >= 1 || throw(ArgumentError("replicates must be at least 1"))
+    _validate_assigned_q(assigned_q)
     0.0 <= max_contract_skip_fraction <= 1.0 ||
         throw(ArgumentError("max_contract_skip_fraction must be in [0, 1]"))
     rng = Random.MersenneTwister(seed)
     n_reads = max(1, ceil(Int, coverage * genome_length / readlen))
+    quality_string = _uniform_phred_quality_string(readlen, assigned_q)
     serving_config = correction_calibration_serving_config(k)
     mkpath(results_dir)
     dataset = NamedTuple[]
@@ -396,7 +416,8 @@ function run_gap_calibration(;
     contract_read_passes = Dict{Float64, Int}()
     println("=== Rhizomorph multi-feature correction-confidence calibration ===")
     println("genome=$(genome_length)  k=$(k)  readlen=$(readlen)  coverage=$(coverage)x  " *
-            "n_reads=$(n_reads)  replicates=$(replicates)  seed=$(seed)")
+            "assigned_q=$(assigned_q)  n_reads=$(n_reads)  " *
+            "replicates=$(replicates)  seed=$(seed)")
     for er in error_rates
         contract_skips[er] = 0
         contract_read_passes[er] = 0
@@ -412,7 +433,7 @@ function run_gap_calibration(;
                 observed = _inject_substitutions(clean, er, rng)
                 read_id = "rep$(replicate)-err$(er)-r$(i)"
                 push!(reads,
-                    FASTX.FASTQ.Record(read_id, observed, String(fill('5', readlen))))
+                    FASTX.FASTQ.Record(read_id, observed, quality_string))
                 truth_by_id[read_id] = clean
             end
             event_rows = NamedTuple[]
@@ -443,29 +464,34 @@ function run_gap_calibration(;
                     ))
                 return nothing
             end
-            input_dir = mktempdir(prefix = "gapcal_input_")
-            output_dir = mktempdir(prefix = "gapcal_output_")
-            input_fastq = joinpath(input_dir, "calibration.fastq")
-            open(FASTX.FASTQ.Writer, input_fastq) do writer
-                for read in reads
-                    write(writer, read)
+            mktempdir(prefix = "gapcal_input_") do input_dir
+                mktempdir(prefix = "gapcal_output_") do output_dir
+                    input_fastq = joinpath(input_dir, "calibration.fastq")
+                    open(FASTX.FASTQ.Writer, input_fastq) do writer
+                        for read in reads
+                            write(writer, read)
+                        end
+                    end
+                    Random.seed!(
+                        seed + 1_000_000 * replicate + round(Int, er * 1_000_000))
+                    correction_result = Mycelia.mycelia_iterative_assemble(
+                        input_fastq;
+                        serving_config...,
+                        correction_feature_sink = feature_sink,
+                        verbose = false,
+                        enable_checkpointing = false,
+                        output_dir = output_dir)
+                    contract_skips[er] += Int(get(
+                        correction_result[:metadata],
+                        :calibrated_feature_contract_skips,
+                        0))
+                    contract_read_passes[er] +=
+                        n_reads * Int(correction_result[:metadata][:total_iterations])
+                    append!(dataset, event_rows)
+                    rate_event_count += length(event_rows)
+                    union!(rate_groups, (row.read_id for row in event_rows))
                 end
             end
-            Random.seed!(seed + 1_000_000 * replicate + round(Int, er * 1_000_000))
-            correction_result = Mycelia.mycelia_iterative_assemble(
-                input_fastq;
-                serving_config...,
-                correction_feature_sink = feature_sink,
-                verbose = false,
-                enable_checkpointing = false,
-                output_dir = output_dir)
-            contract_skips[er] += Int(get(
-                correction_result[:metadata], :calibrated_feature_contract_skips, 0))
-            contract_read_passes[er] +=
-                n_reads * Int(correction_result[:metadata][:total_iterations])
-            append!(dataset, event_rows)
-            rate_event_count += length(event_rows)
-            union!(rate_groups, (row.read_id for row in event_rows))
         end
         println("err=$(er): candidate_events=$(rate_event_count)  " *
                 "candidate-bearing_reads=$(length(rate_groups))  " *
@@ -568,6 +594,7 @@ function run_gap_calibration(;
         println(io, "genome_length,$(genome_length)")
         println(io, "readlen,$(readlen)")
         println(io, "coverage,$(coverage)")
+        println(io, "assigned_q,$(assigned_q)")
         println(io, "replicates,$(replicates)")
         println(io, "holdout_fraction,$(holdout_fraction)")
         println(io, "max_contract_skip_fraction,$(max_contract_skip_fraction)")
@@ -603,7 +630,8 @@ function run_gap_calibration(;
         metrics_path = csv_path,
         model_path = model_path,
         manifest_path = manifest_path,
-        serving_config = merge(serving_config, (assigned_q = 20,))
+        assigned_q = assigned_q,
+        serving_config = merge(serving_config, (assigned_q = assigned_q,))
     ) : out_rows
 end
 

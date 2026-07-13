@@ -53,6 +53,11 @@ Test.@testset "calibrated probability operating points" begin
             calibrated_probability_points()
         end,
         "must be in [0, 1]")
+    Test.@test _frontier_throws_message(
+        () -> withenv("MYCELIA_RPC_ASSIGNED_Q" => "94") do
+            run_pr_curve()
+        end,
+        "supported Phred range 0:93")
 
     model = Mycelia.CorrectionConfidenceModel(
         1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
