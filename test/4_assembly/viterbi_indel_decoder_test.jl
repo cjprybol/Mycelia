@@ -528,11 +528,14 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         params = Mycelia.IndelDecodeParams(
             0.10, 0.30, 0.30, 0.10, 0.10, 1, 0, 16)
         diagnostics = Mycelia.CorrectorDiagnostics()
+        soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         result = Mycelia.try_viterbi_path_improvement(
             observed, graph, 5; graph_mode = :doublestrand,
-            beam_width = typemax(Int), diagnostics = diagnostics,
+            beam_width = typemax(Int), soft_weights = soft_weights,
+            diagnostics = diagnostics,
             indel_params = params)
         Test.@test result === nothing
+        Test.@test isempty(soft_weights.weights)
         Test.@test diagnostics.structural_errors[] == 0
         Test.@test diagnostics.truncated_decodes[] == 1
         Test.@test diagnostics.trace_contract_errors[] == 0

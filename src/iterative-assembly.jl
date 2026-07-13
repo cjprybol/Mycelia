@@ -1824,6 +1824,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # when `diag` is a shared accumulator threaded across many passes.
     struct_before = diag.structural_errors[]
     unk_before = diag.unkmerizable_reads[]
+    indel_decodes_before = diag.indel_decodes[]
     truncated_before = diag.truncated_decodes[]
     trace_contract_before = diag.trace_contract_errors[]
     gate_skipped_before = diag.gate_skipped[]
@@ -2097,10 +2098,14 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
               "decode(s) before correction or soft-EM side effects." total_reads trace_contract_errors = trace_contract_this_pass
     end
     truncated_this_pass = diag.truncated_decodes[] - truncated_before
-    if total_reads > 0 && truncated_this_pass / total_reads >= 0.5
+    successful_indel_this_pass = diag.indel_decodes[] - indel_decodes_before
+    completed_indel_outcomes = successful_indel_this_pass + truncated_this_pass +
+                               trace_contract_this_pass
+    if completed_indel_outcomes > 0 &&
+       truncated_this_pass / completed_indel_outcomes >= 0.5
         @warn "iterative corrector: high truncated pair-HMM decode fraction; prefix-only " *
-              "paths were rejected before correction or soft-EM side effects." total_reads truncated_decodes = truncated_this_pass fraction = round(
-            truncated_this_pass / total_reads, digits = 3)
+              "paths were rejected before correction or soft-EM side effects." total_reads completed_indel_outcomes truncated_decodes = truncated_this_pass fraction = round(
+            truncated_this_pass / completed_indel_outcomes, digits = 3)
     end
 
     # A requested calibrated gate that silently fell open on a substitution decode
