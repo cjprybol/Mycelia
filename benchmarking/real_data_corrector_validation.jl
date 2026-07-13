@@ -1,8 +1,9 @@
-# Real-Data Corrector Validation — Rhizomorph :scalable corrector on REAL genomes
-# =============================================================================
-# Production-confidence validation: does the near-complete + fast + low-redundancy
-# result from the synthetic-read sweeps hold on a REAL, well-characterized genome
-# with real repeat/GC structure?
+# Hybrid-OLC Engineering Validation — Rhizomorph on REAL genomes
+# ==============================================================
+# INTERIM ENGINEERING VALIDATION ONLY — this is not the manuscript H5 result.
+# Compare the native naive and :scalable paths against the short-read hybrid-OLC
+# route on the same reads, asking whether Stage-1 correction followed by MEGAHIT
+# preserves reference accuracy while providing an established layout path.
 #
 # Data provenance (documented, honest):
 #   * REFERENCE  — REAL genome downloaded from NCBI RefSeq by accession.
@@ -16,12 +17,18 @@
 #                  error characteristics matched to a real Illumina platform.
 #
 # Arms:
-#   * naive    — assemble_genome(reads; corrector=:none, k=21)
-#   * scalable — assemble_genome(reads; corrector=:iterative, strategy=:scalable, k=21)
+#   * naive      — assemble_genome(reads; corrector=:none, k=21)
+#   * scalable   — assemble_genome(reads; corrector=:iterative,
+#                                  strategy=:scalable, k=21)
+#   * hybrid-olc — assemble_genome(reads; corrector=:iterative,
+#                                  strategy=:scalable, layout=:olc,
+#                                  olc_tool=:megahit, k=21)
 #
-# Metrics vs REFERENCE via QUAST: genome fraction (%), #contigs, N50, largest
-# contig, mismatches per 100 kbp, misassemblies. This is a true alignment-based
-# genome fraction (not total_length/glen).
+# Metrics vs REFERENCE via MUMmer dnadiff: genome fraction (%), #contigs, N50,
+# largest contig, mismatches per 100 kbp, and indels per 100 kbp. This is a true
+# alignment-based genome fraction (not total_length/glen).
+# Runtime is recorded for diagnostics, not as a fair performance comparison:
+# the interim hybrid arm is pinned to one MEGAHIT thread (see its config below).
 #
 # Read-only w.r.t. src/ — this script only consumes the public Mycelia API.
 #
@@ -47,11 +54,12 @@ import BioSequences
 import DataFrames
 import CSV
 import Dates
-import Statistics
 
 # --- Config -----------------------------------------------------------------
 
-_truthy(s) = lowercase(strip(s)) in ("1", "true", "yes", "on")
+function _truthy(value::AbstractString)::Bool
+    return lowercase(strip(value)) in ("1", "true", "yes", "on")
+end
 
 const SMOKE = _truthy(get(ENV, "MYCELIA_RDV_SMOKE", "false"))
 
@@ -69,8 +77,11 @@ end
 const COVERAGE = parse(Int, get(ENV, "MYCELIA_RDV_COVERAGE", SMOKE ? "30" : "50"))
 const K = parse(Int, get(ENV, "MYCELIA_RDV_K", "21"))
 const SEED = parse(Int, get(ENV, "MYCELIA_RDV_SEED", "42"))
+const ARMS = (:naive, :scalable, :hybrid_olc)
+const VALIDATION_SCOPE = "interim_engineering_validation"
 
-println("=== Real-Data Corrector Validation ===")
+println("=== Hybrid-OLC Engineering Validation ===")
+println("Claim scope  : INTERIM ENGINEERING VALIDATION ONLY (not manuscript H5)")
 println("Start        : $(Dates.now())")
 println("Targets      : $(join(TARGETS, ", "))")
 println("Coverage     : $(COVERAGE)x  |  k=$(K)  |  ART seed=$(SEED)")
@@ -84,10 +95,16 @@ println("Workdir      : $(workdir)")
 
 # --- Helpers ----------------------------------------------------------------
 
-"""Load a FASTQ file into a Vector of FASTQ.Record."""
-function load_fastq(path::String)
-    open(FASTX.FASTQ.Reader, path) do reader
-        collect(reader)
+function arm_name(arm::Symbol)::String
+    arm in ARMS || throw(ArgumentError(
+        "unknown validation arm :$(arm); expected one of $(ARMS)"))
+    return arm == :hybrid_olc ? "hybrid-olc" : String(arm)
+end
+
+"""Load a FASTQ file into a `Vector{FASTX.FASTQ.Record}`."""
+function load_fastq(path::String)::Vector{FASTX.FASTQ.Record}
+    return open(FASTX.FASTQ.Reader, path) do reader
+        return collect(reader)
     end
 end
 
@@ -96,7 +113,8 @@ Parse a MUMmer 3.23 `dnadiff` .report into the reference-based metrics we need.
 The shared `Mycelia.parse_dnadiff_report` does not decode MUMmer's
 `count(pct%)` single-token format for the `[Bases]` block, so we parse it here
 (read-only w.r.t. src/). Returns (aligned_ref_bases, genome_fraction_pct,
-avg_identity_pct, total_snps, total_indels); NaN/0 when a field is absent.
+avg_identity_pct, total_snps, total_indels); absent fields remain non-finite or
+`nothing` so artifact validation fails closed.
 
 Report layout (columns are REF then QRY):
     AlignedBases   48487(99.97%)   48502(100.00%)
@@ -104,34 +122,54 @@ Report layout (columns are REF then QRY):
     TotalSNPs      12              12
     TotalIndels    3               3
 """
-function parse_dnadiff_local(report::String)
-    aln_ref = 0; gf = NaN; ident = NaN; snps = 0; indels = 0
+function parse_dnadiff_local(report::String)::NamedTuple
+    aln_ref = 0
+    gf = NaN
+    ident = NaN
+    snps = nothing
+    indels = nothing
     seen_ident = false
-    count_pct(tok) = begin
+
+    function count_pct(
+            tok::AbstractString)::Tuple{Union{Nothing, Int}, Union{Nothing, Float64}}
         m = match(r"^(\d+)\(([\d.]+)%\)", tok)
-        m === nothing ? (nothing, nothing) : (parse(Int, m.captures[1]), parse(Float64, m.captures[2]))
+        if m === nothing
+            return (nothing, nothing)
+        end
+        return (parse(Int, m.captures[1]), parse(Float64, m.captures[2]))
     end
+
     for line in eachline(report)
         f = split(strip(line))
         isempty(f) && continue
         key = f[1]
         if key == "AlignedBases" && length(f) >= 2
             c, p = count_pct(f[2])
-            c !== nothing && (aln_ref = c; gf = p)
+            if c !== nothing
+                aln_ref = c
+                gf = p
+            end
         elseif key == "AvgIdentity" && !seen_ident && length(f) >= 2
-            v = tryparse(Float64, f[2]); v !== nothing && (ident = v; seen_ident = true)
+            v = tryparse(Float64, f[2])
+            if v !== nothing
+                ident = v
+                seen_ident = true
+            end
         elseif key == "TotalSNPs" && length(f) >= 2
-            v = tryparse(Int, f[2]); v !== nothing && (snps = v)
+            v = tryparse(Int, f[2])
+            v !== nothing && (snps = v)
         elseif key == "TotalIndels" && length(f) >= 2
-            v = tryparse(Int, f[2]); v !== nothing && (indels = v)
+            v = tryparse(Int, f[2])
+            v !== nothing && (indels = v)
         end
     end
     return (aligned_ref_bases = aln_ref, genome_fraction = gf,
         avg_identity = ident, total_snps = snps, total_indels = indels)
 end
 
-"""Write assembly contigs (Vector of String) to a FASTA file."""
-function write_contigs(contigs, path::String)
+"""Write assembly contigs to a FASTA file."""
+function write_contigs(
+        contigs::AbstractVector{<:AbstractString}, path::String)::String
     open(path, "w") do io
         for (i, contig) in enumerate(contigs)
             println(io, ">contig_$(i) length=$(length(contig))")
@@ -153,20 +191,34 @@ reference-aligned quantities):
   * mismatches/100 kbp  = SNPs / aligned_ref_bases * 1e5
   * indels/100 kbp      = Indels / aligned_ref_bases * 1e5
 """
-function run_arm(name::String, reads, corrector::Symbol, strategy, reference::String, outdir::String)
-    tag = corrector == :none ? "naive" : "scalable"
+function run_arm(
+        name::String,
+        reads::AbstractVector{<:FASTX.FASTQ.Record},
+        arm::Symbol,
+        reference::String,
+        outdir::String)::NamedTuple
+    tag = arm_name(arm)
     mkpath(outdir)
     contigs_path = joinpath(outdir, "$(name)_$(tag)_contigs.fasta")
 
     t0 = time()
     local result
     try
-        if corrector == :none
+        if arm == :naive
             result = Mycelia.Rhizomorph.assemble_genome(
                 reads;
                 k = K,
                 graph_mode = Mycelia.Rhizomorph.DoubleStrand,
                 corrector = :none,
+                verbose = false,
+            )
+        elseif arm == :scalable
+            result = Mycelia.Rhizomorph.assemble_genome(
+                reads;
+                k = K,
+                graph_mode = Mycelia.Rhizomorph.DoubleStrand,
+                corrector = :iterative,
+                strategy = :scalable,
                 verbose = false,
             )
         else
@@ -175,13 +227,25 @@ function run_arm(name::String, reads, corrector::Symbol, strategy, reference::St
                 k = K,
                 graph_mode = Mycelia.Rhizomorph.DoubleStrand,
                 corrector = :iterative,
-                strategy = strategy,
+                strategy = :scalable,
+                sequencing_tech = :illumina,
+                layout = :olc,
+                olc_tool = :megahit,
+                # Pin one thread for a cross-platform engineering artifact. On
+                # these corrected validation reads, the Bioconda osx-arm64
+                # MEGAHIT 1.2.9 k-mer counter crashed at three threads; one thread
+                # succeeds. Manuscript H5 performance tuning is explicitly out of
+                # scope, so runtime is diagnostic rather than a fair comparison.
+                olc_options = (; k_list = string(K), threads = 1),
                 verbose = false,
             )
         end
     catch e
+        e isa InterruptException && rethrow()
         @warn "Assembly arm failed" name tag exception = (e, catch_backtrace())
-        return (name = name, arm = tag, ok = false, runtime_s = time() - t0,
+        return (name = name, arm = tag,
+            validation_scope = VALIDATION_SCOPE,
+            ok = false, runtime_s = round(time() - t0; digits = 2),
             n_contigs = 0, total_length = 0, largest_contig = 0, n50 = 0,
             genome_fraction = NaN, avg_identity = NaN,
             mismatches_per_100kbp = NaN, indels_per_100kbp = NaN)
@@ -200,7 +264,10 @@ function run_arm(name::String, reads, corrector::Symbol, strategy, reference::St
     end
 
     # Reference-based metrics via MUMmer dnadiff
-    gf = NaN; ident = NaN; mm = NaN; indels_100k = NaN
+    gf = NaN
+    ident = NaN
+    mm = NaN
+    indels_100k = NaN
     if n_contigs > 0 && total_length > 0
         dd_out = joinpath(outdir, "$(name)_$(tag)_dnadiff")
         try
@@ -209,20 +276,75 @@ function run_arm(name::String, reads, corrector::Symbol, strategy, reference::St
             p = parse_dnadiff_local(paths.report)
             gf = p.genome_fraction
             ident = p.avg_identity
-            if p.aligned_ref_bases > 0
+            if p.aligned_ref_bases > 0 &&
+                    p.total_snps !== nothing &&
+                    p.total_indels !== nothing
                 mm = round(p.total_snps / p.aligned_ref_bases * 1e5; digits = 1)
                 indels_100k = round(p.total_indels / p.aligned_ref_bases * 1e5; digits = 1)
             end
         catch e
+            e isa InterruptException && rethrow()
             @warn "dnadiff failed" name tag exception = (e, catch_backtrace())
         end
     end
 
-    return (name = name, arm = tag, ok = true, runtime_s = round(runtime; digits = 2),
+    metrics_complete = all(isfinite, (gf, ident, mm, indels_100k))
+    return (name = name, arm = tag,
+        validation_scope = VALIDATION_SCOPE,
+        ok = metrics_complete, runtime_s = round(runtime; digits = 2),
         n_contigs = n_contigs, total_length = total_length,
         largest_contig = largest, n50 = n50,
         genome_fraction = gf, avg_identity = ident,
         mismatches_per_100kbp = mm, indels_per_100kbp = indels_100k)
+end
+
+"""Fail closed unless every requested target and arm has complete metrics."""
+function validate_results(
+        df::DataFrames.DataFrame,
+        targets::AbstractVector{<:AbstractString},
+        arms::Tuple{Vararg{Symbol}})::Nothing
+    length(unique(targets)) == length(targets) ||
+        error("validation targets must be unique: $(targets)")
+
+    arm_names = arm_name.(arms)
+    expected_pairs = Set((String(target), arm_name)
+    for target in targets for arm_name in arm_names)
+    actual_pairs = Set(zip(String.(df.name), String.(df.arm)))
+    actual_pairs == expected_pairs || error(
+        "incomplete target-arm matrix: expected $(sort!(collect(expected_pairs))), " *
+        "got $(sort!(collect(actual_pairs)))")
+    DataFrames.nrow(df) == length(expected_pairs) || error(
+        "duplicate validation rows: expected $(length(expected_pairs)), " *
+        "got $(DataFrames.nrow(df))")
+    all(df.validation_scope .== VALIDATION_SCOPE) ||
+        error("validation_scope must be $(VALIDATION_SCOPE) for every row")
+    all(df.ok) || error("one or more validation arms failed or lack dnadiff metrics")
+
+    finite_columns = [
+        :runtime_s,
+        :genome_fraction,
+        :avg_identity,
+        :mismatches_per_100kbp,
+        :indels_per_100kbp,
+    ]
+    for column in finite_columns
+        all(isfinite, df[!, column]) || error("non-finite metric in column $(column)")
+    end
+
+    all(df.runtime_s .>= 0.0) || error("runtime_s must be non-negative")
+    all(df.n_contigs .> 0) || error("every arm must produce at least one contig")
+    all(df.total_length .> 0) || error("every arm must produce positive total length")
+    all(df.largest_contig .> 0) || error("every arm must produce a positive largest contig")
+    all(df.n50 .> 0) || error("every arm must produce a positive N50")
+    all((0.0 .< df.genome_fraction) .& (df.genome_fraction .<= 100.0)) ||
+        error("genome_fraction must be in (0, 100]")
+    all((0.0 .< df.avg_identity) .& (df.avg_identity .<= 100.0)) ||
+        error("avg_identity must be in (0, 100]")
+    all(df.mismatches_per_100kbp .>= 0.0) ||
+        error("mismatches_per_100kbp must be non-negative")
+    all(df.indels_per_100kbp .>= 0.0) ||
+        error("indels_per_100kbp must be non-negative")
+    return nothing
 end
 
 # --- Main -------------------------------------------------------------------
@@ -270,14 +392,24 @@ for name in TARGETS
     read_bases = sum(length(FASTX.sequence(String, rec)) for rec in reads)
     println("      Reads: $(length(reads)) ($(read_bases) bp, ~$(round(read_bases / ref_len; digits = 1))x effective)")
 
-    # 3. Two arms + dnadiff (reference-based) evaluation
-    println("[3/3] Assembling (naive vs scalable, k=$(K)) + dnadiff ...")
-    naive = run_arm(name, reads, :none, nothing, reference, joinpath(target_dir, "naive"))
-    scalable = run_arm(name, reads, :iterative, :scalable, reference, joinpath(target_dir, "scalable"))
-    push!(rows, naive)
-    push!(rows, scalable)
+    # 3. Three arms + dnadiff (reference-based) evaluation. Every arm receives
+    # this exact `reads` vector, so the comparison changes assembly route only.
+    println("[3/3] Assembling (naive vs scalable vs hybrid-olc, k=$(K)) + dnadiff ...")
+    target_rows = NamedTuple[]
+    for arm in ARMS
+        tag = arm_name(arm)
+        row = run_arm(
+            name,
+            reads,
+            arm,
+            reference,
+            joinpath(target_dir, tag),
+        )
+        push!(rows, row)
+        push!(target_rows, row)
+    end
 
-    for r in (naive, scalable)
+    for r in target_rows
         println("   [$(r.arm)] contigs=$(r.n_contigs) total=$(r.total_length) " *
                 "N50=$(r.n50) largest=$(r.largest_contig) " *
                 "GF=$(r.genome_fraction)% ident=$(r.avg_identity)% " *
@@ -294,12 +426,14 @@ if isempty(rows)
 end
 
 df = DataFrames.DataFrame(rows)
+validate_results(df, TARGETS, ARMS)
 stamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
 csv_path = joinpath(results_dir, "real_data_corrector_validation_$(stamp).csv")
 CSV.write(csv_path, df)
 
 println("\n" * "="^70)
-println("SUMMARY (real reference, ART-simulated reads)")
+println("SUMMARY — INTERIM ENGINEERING VALIDATION ONLY")
+println("Real references, same ART-simulated reads; not manuscript H5")
 println("="^70)
 show(df; allrows = true, allcols = true)
 println("\n\nResults CSV: $(csv_path)")
