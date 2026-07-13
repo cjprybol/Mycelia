@@ -772,12 +772,24 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
 - `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
   (route through the iterative maximum-likelihood read corrector before assembly)
-- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
-  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
-  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
-  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
-  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
-  `:illumina` leaves their indels uncorrected.
+- `strategy`: iterative-corrector scheduling tier. The default `:scalable` tier
+  uses a sparse three-rung ladder and applies the score-free branching/frontier
+  runtime classifier to each eligible hard window. Affordable windows are
+  admitted to pair-HMM decoding on the raw graph or a privately cleaned rescue
+  copy; rejected windows retain the bounded substitution-only decode when its
+  measured raw+weighted graph footprint fits the configured memory ceiling.
+  Otherwise the pass fails closed and records the memory gate. `:exhaustive`
+  selects explicit `:unrestricted` indel scheduling: it bypasses frontier
+  admission and its private rescue cleaning, uses an exact unbounded Viterbi
+  beam, and can exhaust memory on large or highly branching inputs.
+- `sequencing_tech`: error-profile intent driving the corrector's indel-aware
+  decode; only consulted when `corrector=:iterative`. Default `:illumina` is
+  substitution-only correction (byte-identical to the pre-wiring corrector).
+  Set `:nanopore` or `:pacbio` to request indel-aware pair-HMM correction of long
+  or indel-prone reads; `:ultima` is substitution-only. A long-read profile
+  records intent (`assembly_stats["indel_moves"] == true`), not a claim that a
+  pair-HMM decode ran or used an indel move. Runtime admission and engagement are
+  reported separately in the indel telemetry described below.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -789,6 +801,25 @@ This interface automatically:
 2. **Chooses assembly method**: k-mer vs overlap-based on parameters
 3. **Validates compatibility**: AA/String sequences -> SingleStrand only
 4. **Dispatches optimally**: Based on input type and quality scores
+
+For an iterative correction, `assembly_stats["indel_rung_telemetry"]` contains
+one row per actual k-rung iteration. Its counters have the following meanings:
+
+- `requested`: eligible hard windows requesting pair-HMM service under
+  `:scalable`, or non-skipped reads under `:unrestricted` semantics.
+- `attempted`: pair-HMM kernel calls actually entered after scheduling.
+- `completed`: full, nontruncated, trace-valid pair-HMM decodes.
+- `truncated`: pair-HMM calls returning only a decoded prefix; these are rejected
+  before correction or soft-EM side effects.
+- `engaged`: completed traces containing at least one insertion or deletion move.
+
+The aggregate `indel_requested`, `indel_attempted`, `indel_completed`,
+`indel_truncated`, and `indel_engaged` fields sum those counters over all rows.
+In particular, selecting `sequencing_tech=:nanopore` or `:pacbio` does not imply
+`engaged > 0`: admission may reject every scalable window, or completed traces
+may remain substitution-only. Frontier metric samples are intentionally empty
+under `strategy=:exhaustive` because its `:unrestricted` semantics bypass the
+classifier entirely.
 
 **Method Selection Logic:**
 - String input + k -> N-gram graph
@@ -1384,6 +1415,8 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             get(corrector_errors, :indel_engaged, 0),
         )
         assembly.assembly_stats["indel_rung_telemetry"] = indel_rung_telemetry
+        assembly.assembly_stats["indel_schedule"] =
+            String(get(_corr_meta, :indel_schedule, knobs.indel_schedule))
         assembly.assembly_stats["indel_requested"] = indel_requested
         assembly.assembly_stats["indel_attempted"] = indel_attempted
         assembly.assembly_stats["indel_completed"] = indel_completed

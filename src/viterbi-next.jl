@@ -1820,6 +1820,10 @@ conservative pre-beam topology bound.
 The probe stops as soon as its saturating `frontier_work` exceeds `work_limit`.
 `completed_columns` counts only fully constructed nonempty read columns, so a
 limit hit during expansion never reports a partial column as complete.
+
+`graph_summary` may be supplied by a multi-window scheduler to reuse one
+topology scan for every window on the same immutable graph. Omitting it preserves
+the direct-call behavior and computes the summary locally.
 """
 function _probe_indel_frontier(
         graph::MetaGraphsNext.MetaGraph,
@@ -1827,12 +1831,14 @@ function _probe_indel_frontier(
         alphabet::Symbol;
         config::ViterbiCorrectionConfig,
         strand_mode::Symbol,
-        work_limit::Int = typemax(Int)
+        work_limit::Int = typemax(Int),
+        graph_summary::Union{Nothing, NamedTuple} = nothing,
 )::IndelFrontierMetrics
     work_limit < 0 && throw(ArgumentError(
         "work_limit must be non-negative, got $work_limit"))
 
-    summary = _indel_frontier_graph_summary(graph)
+    summary = graph_summary === nothing ?
+              _indel_frontier_graph_summary(graph) : graph_summary
     window_length = length(observation)
     frontier_area = 0
     edge_expansions = 0

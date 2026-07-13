@@ -128,6 +128,128 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         Test.@test isempty(Mycelia._hard_window_ranges(clean[1], k, empty_hard))
     end
 
+    Test.@testset "overlong indel regions retain anchored tails" begin
+        # Substitution-only calls preserve the historical first-window cap. The
+        # explicit complete-span indel mode covers the tail with k-base overlaps,
+        # giving every later pair-HMM decode a complete immutable start anchor.
+        read_length = 1_010
+        sequence = first(repeat("ACGT", cld(read_length, 4)), read_length)
+        read = FASTX.FASTQ.Record(
+            "overlong_hard_region",
+            sequence,
+            repeat("I", read_length),
+        )
+        graph = R.build_qualmer_graph(
+            FASTX.FASTQ.Record[read], k; mode = :canonical)
+        hard = Set(R.MetaGraphsNext.labels(graph))
+        legacy_windows = Mycelia._hard_window_ranges(
+            read,
+            k,
+            hard;
+            pad = 0,
+            max_window = 500,
+            graph_mode = :canonical,
+        )
+        Test.@test legacy_windows == UnitRange{Int}[1:500]
+
+        windows = Mycelia._hard_window_ranges(
+            read,
+            k,
+            hard;
+            pad = 0,
+            max_window = 500,
+            graph_mode = :canonical,
+            complete_span = true,
+        )
+
+        Test.@test length(windows) == 3
+        Test.@test first(first(windows)) == 1
+        Test.@test last(last(windows)) == read_length
+        Test.@test all(k <= length(window) <= 500 for window in windows)
+        Test.@test all(
+            last(windows[index]) - first(windows[index + 1]) + 1 == k
+            for index in 1:(length(windows) - 1)
+        )
+        owned_bases = length(first(windows)) +
+                      sum(length(window) - k for window in windows[2:end])
+        Test.@test owned_bases == read_length
+
+        # Exercise the production anchor-trim helper with true length changes,
+        # then splice every balanced ownership range by original coordinates.
+        sequence_chars = collect(sequence)
+        quality_chars = collect(repeat("I", read_length))
+        accepted = Tuple{UnitRange{Int}, String, String}[]
+
+        first_window = first(windows)
+        first_decoded = String(sequence_chars[first_window]) * "A"
+        push!(accepted,
+            (first_window, first_decoded, repeat("I", length(first_decoded))))
+
+        second_window = windows[2]
+        second_anchor_stop = first(second_window) + k - 1
+        second_anchor = sequence_chars[first(second_window):second_anchor_stop]
+        second_owned = sequence_chars[(first(second_window) + k):last(second_window)]
+        # Delete the first owned base while retaining the immutable k-base anchor.
+        second_decoded = vcat(second_anchor, second_owned[2:end])
+        second_quality = fill('I', length(second_decoded))
+        second_trimmed = Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            second_decoded,
+            second_quality,
+            first(second_window),
+            k,
+        )
+        Test.@test second_trimmed !== nothing
+        second_trimmed_sequence, second_trimmed_quality = something(second_trimmed)
+        push!(accepted,
+            (
+                (first(second_window) + k):last(second_window),
+                String(second_trimmed_sequence),
+                String(second_trimmed_quality),
+            ))
+
+        third_window = windows[3]
+        third_decoded = sequence_chars[third_window]
+        third_quality = fill('I', length(third_decoded))
+        third_trimmed = Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            third_decoded,
+            third_quality,
+            first(third_window),
+            k,
+        )
+        Test.@test third_trimmed !== nothing
+        third_trimmed_sequence, third_trimmed_quality = something(third_trimmed)
+        push!(accepted,
+            (
+                (first(third_window) + k):last(third_window),
+                String(third_trimmed_sequence),
+                String(third_trimmed_quality),
+            ))
+
+        corrected = Mycelia._splice_indel_windows(
+            "overlap_length_change",
+            sequence_chars,
+            quality_chars,
+            accepted,
+        )
+        expected_sequence = first_decoded *
+                            String(second_owned[2:end]) *
+                            String(sequence_chars[(first(third_window) + k):end])
+        Test.@test FASTX.sequence(String, corrected) == expected_sequence
+        Test.@test length(FASTX.quality(corrected)) == length(expected_sequence)
+
+        mutated_anchor = copy(third_decoded)
+        mutated_anchor[1] = mutated_anchor[1] == 'A' ? 'C' : 'A'
+        Test.@test Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            mutated_anchor,
+            third_quality,
+            first(third_window),
+            k,
+        ) === nothing
+    end
+
     Test.@testset "doublestrand windows use observed graph orientation" begin
         branch_reads = FASTX.FASTQ.Record[
             FASTX.FASTQ.Record("r1", "TTTA", "IIII"),

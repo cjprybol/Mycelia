@@ -750,17 +750,15 @@ end
 # by object identity, falling back to the raw coverage count for any edge absent
 # from it.
 #
-# Invariant preserved: the registry is EMPTY except during a soft-EM `:scalable`
-# pass (populated between decode passes, cleared after), so every other code path
-# — and the whole `:exhaustive` tier — computes raw counts, byte-for-byte
-# unchanged.
-#
-# CAVEAT: this is process-global state. In the shipped scalable route it is
-# written single-threaded between decode passes and only READ during the soft-EM
-# (⇒ sequential) decode, so there is no read/write race. A lock-free / scoped
-# design is a tracked follow-on before enabling parallel soft-EM.
+# Invariant preserved: a scoped owner restores the registry to its exact prior
+# contents after every soft-EM `:scalable` pass, including exceptional exits, so
+# every unrelated code path — and the whole `:exhaustive` tier — computes raw
+# counts unchanged. A reentrant process lock serializes those scoped owners; the
+# lock is reentrant because frontier scheduling temporarily registers private
+# cleaned-copy edges inside the read-set owner's wider raw-graph scope.
 
 const _SOFT_EDGE_WEIGHT_REGISTRY = Base.IdDict{Any, Float64}()
+const _SOFT_EDGE_WEIGHT_REGISTRY_LOCK = Base.ReentrantLock()
 
 # ----------------------------------------------------------------------------
 # Soft-EM SUPPORT FLOOR (variation preservation, td-h6w9)
@@ -807,15 +805,20 @@ allowed to fall below the cleaning gate).
 """
 function register_soft_edge_weights!(graph, acc::SoftEdgeWeightAccumulator;
         min_support::Integer = SOFT_EM_MIN_SUPPORT)
-    for (src, dst) in MetaGraphsNext.edge_labels(graph)
-        w = soft_edge_weight(acc, (src, dst); prior = NaN)
-        isnan(w) && continue   # edge unvisited by any decoded path ⇒ keep raw count
-        edge = graph[src, dst]
-        raw = Float64(count_total_observations(edge))
-        # Support floor: raw for a well-supported edge (never decays below its own
-        # coverage), 0 for a near-zero-support edge (free to decay to zero).
-        floor = raw >= min_support ? raw : 0.0
-        _SOFT_EDGE_WEIGHT_REGISTRY[edge] = max(w, floor)
+    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
+    try
+        for (src, dst) in MetaGraphsNext.edge_labels(graph)
+            w = soft_edge_weight(acc, (src, dst); prior = NaN)
+            isnan(w) && continue   # unvisited edge ⇒ retain raw count
+            edge = graph[src, dst]
+            raw = Float64(count_total_observations(edge))
+            # Support floor: raw for a well-supported edge (never decays below its
+            # own coverage), 0 for a near-zero-support edge (free to decay to zero).
+            floor = raw >= min_support ? raw : 0.0
+            _SOFT_EDGE_WEIGHT_REGISTRY[edge] = max(w, floor)
+        end
+    finally
+        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
     end
     return graph
 end
@@ -828,8 +831,44 @@ coverage counts. Called after each soft-EM decode pass so no unrelated caller
 (or the `:exhaustive` tier) ever sees registered soft weights.
 """
 function clear_soft_edge_weights!()
-    empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
+    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
+    try
+        empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
+    finally
+        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
+    end
     return nothing
+end
+
+"""
+    _with_soft_edge_weight_scope(f, graph, acc) -> Any
+
+Run `f()` with `acc` registered on `graph`, then restore the exact registry state
+that existed on entry. When `acc === nothing`, no weights are registered, but the
+same reentrant lock still covers the complete operation. This makes an
+unrestricted/raw-count decode wait for any concurrent soft-weight owner rather
+than reading its temporary registry entries. The lock also keeps nested
+raw/cleaned graph scopes deterministic.
+"""
+function _with_soft_edge_weight_scope(
+        f::Function,
+        graph::Any,
+        acc::Union{Nothing, SoftEdgeWeightAccumulator},
+)::Any
+    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
+    try
+        acc === nothing && return f()
+        snapshot = copy(_SOFT_EDGE_WEIGHT_REGISTRY)
+        try
+            register_soft_edge_weights!(graph, acc)
+            return f()
+        finally
+            empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
+            merge!(_SOFT_EDGE_WEIGHT_REGISTRY, snapshot)
+        end
+    finally
+        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
+    end
 end
 
 # ============================================================================

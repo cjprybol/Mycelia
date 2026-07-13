@@ -1543,22 +1543,25 @@ end
 """
     clean_corrector_graph!(graph; k=21, clip_tips=true, collapse_bubbles=true, ...) -> Dict{String,Any}
 
-Linear-time defragmentation of the corrector's final graph, run BEFORE contig
-extraction (td-969e). Combines coverage-1 dead-end tip clipping, guarded
-low-coverage bubble collapse, and disconnected error-component pruning (td-byva):
-first tips/bubbles are alternated to a fixpoint (re-clipping any tips exposed by a
-collapse), then whole standalone error-debris components are pruned. Every removal
-targets an unambiguous error; a data-supported variant is never collapsed (the
-td-h6w9 variation-preservation invariant is enforced by
+Linear-time defragmentation of a corrector graph. It runs on the final graph
+before contig extraction (td-969e) and may also run between rungs on a private
+mid-correction rescue copy; callers that need raw-graph identity must pass a copy,
+because this function mutates its argument. It combines low-support dead-end tip
+clipping (coverage up to 2 by default), guarded low-coverage bubble collapse, and
+disconnected error-component pruning (td-byva): first tips/bubbles are alternated
+to a fixpoint (re-clipping any tips exposed by a collapse), then whole standalone
+error-debris components are pruned. Every removal targets an unambiguous error; a
+data-supported variant is never collapsed (the td-h6w9
+variation-preservation invariant is enforced by
 [`clip_error_tips!`](@ref), [`collapse_error_bubbles!`](@ref), and
 [`prune_disconnected_error_components!`](@ref)).
 
 # Keywords
 - `k::Int=21`: k-mer size; the tip-length ceiling is `tip_length_multiple * k`.
-- `clip_tips::Bool=true`: run coverage-1 dead-end tip clipping.
+- `clip_tips::Bool=true`: run low-support dead-end tip clipping.
 - `collapse_bubbles::Bool=true`: run the guarded low-coverage bubble collapse.
 - `prune_components::Bool=true`: run disconnected error-component pruning.
-- `max_tip_support::Real=1`: max coverage for a removable tip vertex.
+- `max_tip_support::Real=2`: max coverage for a removable tip vertex.
 - `tip_length_multiple::Int=3`: tip-length ceiling in units of `k`.
 - `max_error_support::Real=2`: max mean coverage for a collapsible bubble branch.
 - `min_real_support::Real=3`: min mean coverage the surviving sibling must have.

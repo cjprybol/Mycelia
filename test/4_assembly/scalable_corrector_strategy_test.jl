@@ -143,6 +143,55 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test ex.assembly_stats["skip_solid"] == false
     end
 
+    Test.@testset "exhaustive nanopore scheduling is unrestricted end to end" begin
+        # Keep the explicit exact/oracle contract covered through the public
+        # assemble_genome entry point, not only through the pure knob mapper or a
+        # low-level decoder call. Four identical 24 bp reads clear the default
+        # coverage floor while keeping the unbounded exhaustive pair-HMM cheap.
+        sequence = "ACGTTGCAAGTCGATCGTACGATC"
+        reads = [
+            FASTX.FASTQ.Record(
+                "unrestricted_$(i)",
+                sequence,
+                repeat("I", length(sequence)),
+            ) for i in 1:4
+        ]
+        assembly = R.assemble_genome(
+            reads;
+            k = 13,
+            corrector = :iterative,
+            strategy = :exhaustive,
+            sequencing_tech = :nanopore,
+        )
+
+        Test.@test assembly isa R.AssemblyResult
+        Test.@test assembly.assembly_stats["strategy"] == "exhaustive"
+        Test.@test assembly.assembly_stats["indel_schedule"] == "unrestricted"
+        telemetry = assembly.assembly_stats["indel_rung_telemetry"]
+        Test.@test !isempty(telemetry)
+        Test.@test all(row -> get(row, :profile_requested, false), telemetry)
+        Test.@test all(
+            row -> get(row, :decision_reason, nothing) == :unrestricted_semantics,
+            telemetry,
+        )
+        Test.@test all(
+            row -> isempty(get(row, :raw_frontier_metrics, Any[])) &&
+                   isempty(get(row, :cleaned_frontier_metrics, Any[])),
+            telemetry,
+        )
+        Test.@test assembly.assembly_stats["indel_requested"] > 0
+        Test.@test assembly.assembly_stats["indel_attempted"] > 0
+        Test.@test assembly.assembly_stats["indel_completed"] > 0
+        Test.@test assembly.assembly_stats["indel_truncated"] == 0
+        Test.@test assembly.assembly_stats["indel_attempted"] ==
+                   assembly.assembly_stats["indel_completed"]
+        for field in (:requested, :attempted, :completed, :truncated, :engaged)
+            Test.@test all(row -> haskey(row, field), telemetry)
+            Test.@test assembly.assembly_stats["indel_$(field)"] ==
+                       sum(row[field] for row in telemetry)
+        end
+    end
+
     Test.@testset "default corrector tier is scalable" begin
         reads = _toy_fastq_records(Random.MersenneTwister(11))
         # No explicit strategy ⇒ scalable.

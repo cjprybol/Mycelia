@@ -22,6 +22,52 @@ function indel_frontier_probe_graph()::MetaGraphsNext.MetaGraph
         records; min_overlap = 3)
 end
 
+
+Test.@testset "Checkpoint restores complete per-pass indel telemetry" begin
+    serialized = Dict{String, Any}(
+        "indel_rung_telemetry" => Any[
+            Dict{String, Any}(
+                "profile_requested" => true,
+                "requested" => 5,
+                "attempted" => 3,
+                "completed" => 2,
+                "truncated" => 1,
+                "engaged" => 1,
+                "graph_source" => "mixed",
+                "decision_reason" => "sparse_frontier_affordable",
+                "raw_frontier_metrics" => Any[
+                    Dict{String, Any}(
+                        "anchored" => true,
+                        "reason" => "complete",
+                    ),
+                ],
+            ),
+            Dict{String, Any}(
+                "profile_requested" => true,
+                "requested" => 2,
+                "attempted" => 0,
+                "completed" => 0,
+                "truncated" => 0,
+                "engaged" => 0,
+                "decision_reason" => "frontier_budget_exceeded",
+            ),
+        ],
+    )
+    restored = Mycelia._restore_indel_rung_telemetry(serialized)
+
+    Test.@test length(restored) == 2
+    Test.@test restored[1][:requested] == 5
+    Test.@test restored[1][:attempted] == 3
+    Test.@test restored[1][:completed] == 2
+    Test.@test restored[1][:truncated] == 1
+    Test.@test restored[1][:engaged] == 1
+    Test.@test restored[1][:graph_source] == :mixed
+    Test.@test restored[1][:decision_reason] == :sparse_frontier_affordable
+    Test.@test only(restored[1][:raw_frontier_metrics])[:reason] == :complete
+    Test.@test restored[2][:decision_reason] == :frontier_budget_exceeded
+    Test.@test !restored[2][:bounded_windowing_forced]
+end
+
 function indel_frontier_probe_config()::Mycelia.ViterbiCorrectionConfig
     return Mycelia.ViterbiCorrectionConfig(
         error_rate = 0.10,
@@ -70,6 +116,19 @@ Test.@testset "Indel topology-frontier probe" begin
     Test.@test metrics.completed_columns == length(observation)
     Test.@test metrics.frontier_work ==
                metrics.frontier_area + metrics.edge_expansions
+
+    graph_summary = Mycelia._indel_frontier_graph_summary(graph)
+    cached_metrics = Mycelia._probe_indel_frontier(
+        graph,
+        observation,
+        :DNA;
+        config = config,
+        strand_mode = :singlestrand,
+        graph_summary = graph_summary,
+    )
+    for field in fieldnames(Mycelia.IndelFrontierMetrics)
+        Test.@test getfield(cached_metrics, field) == getfield(metrics, field)
+    end
 
     unanchored = Mycelia._probe_indel_frontier(
         graph,
@@ -272,12 +331,14 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
             :singlestrand;
             prior_soft_weights = prior_soft_weights,
         )
-        Test.@test length(Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY) >
+        Test.@test length(
+            Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY) ==
                    raw_registration_count
-        Test.@test count(
-            value -> isapprox(value, 0.25),
-            values(Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY),
-        ) > raw_registration_count
+        Test.@test all(
+            isapprox(value, 0.25)
+            for value in values(
+                Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY)
+        )
     finally
         Mycelia.Rhizomorph.clear_soft_edge_weights!()
     end
@@ -302,11 +363,173 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
         indel_classifier_params(),
         :singlestrand,
     )
-    Test.@test linear_decision.requested == 1
+    max_window = Mycelia._INDEL_FRONTIER_MAX_WINDOW
+    expected_linear_windows = 1 + cld(
+        length(linear_sequence) - max_window, max_window - 7)
+    Test.@test linear_decision.requested == expected_linear_windows
     Test.@test linear_decision.admitted
-    Test.@test linear_decision.admitted_windows == 1
+    Test.@test linear_decision.admitted_windows == expected_linear_windows
     Test.@test linear_decision.rejected_windows == 0
-    Test.@test only(values(linear_decision.window_sources[1])) == :raw
+    Test.@test length(linear_decision.window_sources[1]) ==
+               expected_linear_windows
+    Test.@test all(
+        source == :raw
+        for source in values(linear_decision.window_sources[1])
+    )
+
+    # A 1 kb read remains below the normal whole-read windowing threshold, but
+    # the frontier-budgeted schedule must still retain its rejected substitution
+    # windows and force bounded windowing. Anchored overlaps require three windows;
+    # the fully branching graph makes every one unaffordable without relying on
+    # correction accuracy.
+    short_sequence = first(
+        repeat(branch_cycle, cld(1_000, length(branch_cycle))), 1_000)
+    short_read = indel_classifier_fastq("all_rejected_short", short_sequence)
+    Test.@test !Mycelia._windowed_decode_read_is_long(short_read, 3)
+    short_decision = Mycelia._evaluate_indel_frontier_schedule(
+        FASTX.FASTQ.Record[short_read],
+        branch_graph,
+        3,
+        branch_hard,
+        Bool[false],
+        indel_classifier_params(),
+        :singlestrand,
+    )
+    expected_short_windows = 1 + cld(
+        length(short_sequence) - max_window, max_window - 3)
+    Test.@test short_decision.requested == expected_short_windows
+    Test.@test short_decision.admitted_windows == 0
+    Test.@test short_decision.rejected_windows == expected_short_windows
+    Test.@test !short_decision.admitted
+    Test.@test Set(keys(short_decision.window_sources)) == Set([1])
+    Test.@test length(short_decision.window_sources[1]) == expected_short_windows
+    Test.@test all(
+        source == :substitution
+        for source in values(short_decision.window_sources[1])
+    )
+    Test.@test all(
+        length(window) <= Mycelia._INDEL_FRONTIER_MAX_WINDOW
+        for window in keys(short_decision.window_sources[1])
+    )
+
+    # A direct caller owns the complete soft-registry lifetime, including the
+    # cleaned-graph scheduler and post-schedule errors. Preserve an existing,
+    # nonempty registry exactly rather than merely clearing it on exit.
+    baseline_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+    Mycelia.Rhizomorph.accumulate_path_probability!(
+        baseline_soft_weights, branch_edge_labels, 0.125)
+    Mycelia.Rhizomorph.clear_soft_edge_weights!()
+    Mycelia.Rhizomorph.register_soft_edge_weights!(
+        branch_graph,
+        baseline_soft_weights;
+        min_support = typemax(Int),
+    )
+    registry = Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY
+    registry_before = copy(registry)
+    telemetry = Dict{Symbol, Any}()
+    try
+        result = Mycelia.improve_read_set_likelihood(
+            FASTX.FASTQ.Record[short_read],
+            branch_graph,
+            3;
+            graph_mode = :singlestrand,
+            beam_width = 16,
+            prior_soft_weights = prior_soft_weights,
+            hard_vertices = branch_hard,
+            windowed_decode = true,
+            indel_params = indel_classifier_params(),
+            indel_schedule = :frontier_budgeted,
+            rung_telemetry = telemetry,
+        )
+        Test.@test !result[5]
+        Test.@test telemetry[:requested] == expected_short_windows
+        Test.@test telemetry[:admitted_windows] == 0
+        Test.@test telemetry[:rejected_windows] == expected_short_windows
+        Test.@test telemetry[:bounded_windowing_forced]
+        Test.@test telemetry[:attempted] == 0
+        Test.@test length(registry) == length(registry_before)
+        Test.@test all(
+            haskey(registry, edge) && registry[edge] == weight
+            for (edge, weight) in registry_before
+        )
+
+        error_registry_before = copy(registry)
+        caught = nothing
+        try
+            Mycelia.improve_read_set_likelihood(
+                FASTX.FASTQ.Record[branch_read],
+                branch_graph,
+                3;
+                batch_size = 0,
+                graph_mode = :singlestrand,
+                prior_soft_weights = prior_soft_weights,
+                hard_vertices = branch_hard,
+                windowed_decode = true,
+                decode_gate_density = 0.0,
+                indel_params = indel_classifier_params(),
+                indel_schedule = :frontier_budgeted,
+            )
+        catch error
+            caught = error
+        end
+        Test.@test caught isa ArgumentError
+        Test.@test length(registry) == length(error_registry_before)
+        Test.@test all(
+            haskey(registry, edge) && registry[edge] == weight
+            for (edge, weight) in error_registry_before
+        )
+    finally
+        Mycelia.Rhizomorph.clear_soft_edge_weights!()
+    end
+
+    # An unrestricted decode (`prior_soft_weights === nothing`) must take the
+    # same scope lock as a soft-weighted decode. Hold a soft scope open while a
+    # second task reaches the unrestricted scope; before the release, the second
+    # task must not enter and observe the temporary 0.25 edge weight. This
+    # deterministically catches the former `acc === nothing && return f()` race.
+    concurrent_edge_label = first(branch_edge_labels)
+    concurrent_edge = branch_graph[concurrent_edge_label...]
+    raw_edge_weight = Mycelia.Rhizomorph.compute_edge_weight(concurrent_edge)
+    concurrent_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+    Mycelia.Rhizomorph.accumulate_path_probability!(
+        concurrent_soft_weights, [concurrent_edge_label], 0.25)
+    soft_scope_entered = Base.Channel{Nothing}(1)
+    release_soft_scope = Base.Channel{Nothing}(1)
+    unrestricted_started = Base.Channel{Nothing}(1)
+    unrestricted_entered = Base.Channel{Nothing}(1)
+
+    Mycelia.Rhizomorph.clear_soft_edge_weights!()
+    soft_task = Base.Threads.@spawn begin
+        Mycelia.Rhizomorph._with_soft_edge_weight_scope(
+            branch_graph, concurrent_soft_weights) do
+            Base.put!(soft_scope_entered, nothing)
+            Base.take!(release_soft_scope)
+            return nothing
+        end
+    end
+    Base.take!(soft_scope_entered)
+    Test.@test Mycelia.Rhizomorph.compute_edge_weight(concurrent_edge) == 0.25
+
+    unrestricted_task = Base.Threads.@spawn begin
+        Base.put!(unrestricted_started, nothing)
+        return Mycelia.Rhizomorph._with_soft_edge_weight_scope(
+            branch_graph, nothing) do
+            Base.put!(unrestricted_entered, nothing)
+            return Mycelia.Rhizomorph.compute_edge_weight(concurrent_edge)
+        end
+    end
+    Base.take!(unrestricted_started)
+    unrestricted_entry_status = try
+        Base.timedwait(() -> Base.isready(unrestricted_entered), 0.25)
+    finally
+        Base.put!(release_soft_scope, nothing)
+    end
+    Base.fetch(soft_task)
+    unrestricted_edge_weight = Base.fetch(unrestricted_task)
+
+    Test.@test unrestricted_entry_status == :timed_out
+    Test.@test unrestricted_edge_weight == raw_edge_weight
+    Test.@test isempty(Mycelia.Rhizomorph._SOFT_EDGE_WEIGHT_REGISTRY)
 end
 
 
@@ -398,4 +621,175 @@ Test.@testset "Mixed sparse-window sources preserve substitution bytes" begin
     Test.@test FASTX.identifier(corrected) == FASTX.identifier(read)
     Test.@test FASTX.sequence(String, corrected) == FASTX.sequence(String, read)
     Test.@test String(FASTX.quality(corrected)) == String(FASTX.quality(read))
+
+    invalid_sources = copy(sources)
+    invalid_sources[windows[1]] = :bogus
+    invalid_error = nothing
+    try
+        Mycelia.improve_read_likelihood_windowed_detail(
+            read,
+            graph,
+            k,
+            hard;
+            graph_mode = :singlestrand,
+            weighted_graph = Mycelia.build_correction_weighted_graph(graph),
+            cleaned_graph = cleaned_graph,
+            cleaned_weighted_graph =
+                Mycelia.build_correction_weighted_graph(cleaned_graph),
+            indel_window_sources = invalid_sources,
+            pad = 0,
+            indel_params = indel_classifier_params(),
+        )
+    catch error
+        invalid_error = error
+    end
+    Test.@test invalid_error isa ArgumentError
+    invalid_message = sprint(showerror, invalid_error)
+    Test.@test occursin("bogus", invalid_message)
+    Test.@test occursin("substitution", invalid_message)
+
+    missing_cleaned_sources = Dict{UnitRange{Int}, Symbol}(
+        windows[1] => :cleaned,
+        windows[2] => :substitution,
+        windows[3] => :substitution,
+    )
+    missing_cleaned_error = nothing
+    try
+        Mycelia.improve_read_likelihood_windowed_detail(
+            read,
+            graph,
+            k,
+            hard;
+            graph_mode = :singlestrand,
+            weighted_graph = Mycelia.build_correction_weighted_graph(graph),
+            cleaned_graph = nothing,
+            cleaned_weighted_graph = nothing,
+            indel_window_sources = missing_cleaned_sources,
+            pad = 0,
+            indel_params = indel_classifier_params(),
+        )
+    catch error
+        missing_cleaned_error = error
+    end
+    Test.@test missing_cleaned_error isa ArgumentError
+    missing_cleaned_message = lowercase(sprint(showerror, missing_cleaned_error))
+    Test.@test occursin("cleaned", missing_cleaned_message)
+    Test.@test occursin("graph", missing_cleaned_message)
+end
+
+
+Test.@testset "Frontier cleaning respects projected memory" begin
+    k = 7
+    sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
+    read = indel_classifier_fastq("memory_limited", sequence)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[read], k; mode = :singlestrand)
+    hard = Set(MetaGraphsNext.labels(graph))
+    decision = Mycelia._evaluate_indel_frontier_schedule(
+        FASTX.FASTQ.Record[read],
+        graph,
+        k,
+        hard,
+        Bool[false],
+        indel_classifier_params(),
+        :singlestrand;
+        work_limit = 0,
+        memory_limit = 1,
+    )
+
+    Test.@test !decision.admitted
+    Test.@test decision.decision_reason == :cleaning_memory_limit
+    Test.@test decision.cleaned_evaluated == 0
+    Test.@test decision.graph_source == :substitution
+    Test.@test decision.cleanup["graph_cleanup_status"] ==
+               "skipped_memory_limit"
+    Test.@test decision.cleanup["projected_graph_variants"] == 4
+end
+
+
+Test.@testset "Raw weighted frontier copy respects measured graph memory" begin
+    k = 7
+    sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
+    read = indel_classifier_fastq("raw_weight_memory_limited", sequence)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[read], k; mode = :singlestrand)
+    hard = Set(MetaGraphsNext.labels(graph))
+    graph_bytes = Mycelia._indel_graph_memory_bytes(graph)
+    decision = Mycelia._evaluate_indel_frontier_schedule(
+        FASTX.FASTQ.Record[read],
+        graph,
+        k,
+        hard,
+        Bool[false],
+        indel_classifier_params(),
+        :singlestrand;
+        memory_limit = 2 * graph_bytes - 1,
+    )
+
+    Test.@test decision.requested == 1
+    Test.@test !decision.admitted
+    Test.@test decision.admitted_windows == 0
+    Test.@test decision.rejected_windows == 1
+    Test.@test decision.decision_reason == :weighted_graph_memory_limit
+    Test.@test decision.graph_source == :substitution
+    Test.@test decision.raw_weighted_graph === nothing
+    Test.@test decision.cleanup["graph_cleanup_status"] ==
+               "skipped_weighted_memory_limit"
+    Test.@test decision.cleanup["measured_graph_bytes"] == graph_bytes
+    Test.@test decision.cleanup["projected_graph_variants"] == 2
+
+    telemetry = Dict{Symbol, Any}()
+    result = Mycelia.improve_read_set_likelihood(
+        FASTX.FASTQ.Record[read],
+        graph,
+        k;
+        graph_mode = :singlestrand,
+        hard_vertices = hard,
+        windowed_decode = true,
+        indel_params = indel_classifier_params(),
+        indel_schedule = :frontier_budgeted,
+        rung_telemetry = telemetry,
+        memory_limit = 1,
+    )
+    # Memory fallback disables this pass operationally but is not a low-k
+    # density/floor gate, so it must not populate decode_gated_rungs upstream.
+    Test.@test !result[5]
+    Test.@test telemetry[:requested] == 1
+    Test.@test telemetry[:attempted] == 0
+    Test.@test telemetry[:completed] == 0
+    Test.@test telemetry[:substitution_decode_memory_gated]
+end
+
+Test.@testset "Measured graph variants admit an affordable finite budget" begin
+    k = 7
+    sequence = first(indel_classifier_de_bruijn_sequence(k), 80)
+    read = indel_classifier_fastq("finite_memory_admitted", sequence)
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        FASTX.FASTQ.Record[read], k; mode = :singlestrand)
+    graph_bytes = Mycelia._indel_graph_memory_bytes(graph)
+
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+    Test.@test !Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, live_bytes + graph_bytes - 1)
+
+    Base.GC.gc()
+    live_bytes = Int(Base.gc_live_bytes())
+    finite_budget = live_bytes + graph_bytes + 64_000_000
+    Test.@test Mycelia._indel_graph_variants_fit_memory(
+        graph, 2, finite_budget)
+
+    hard = Set(MetaGraphsNext.labels(graph))
+    decision = Mycelia._evaluate_indel_frontier_schedule(
+        FASTX.FASTQ.Record[read],
+        graph,
+        k,
+        hard,
+        Bool[false],
+        indel_classifier_params(),
+        :singlestrand;
+        memory_limit = finite_budget,
+    )
+    Test.@test decision.admitted
+    Test.@test decision.raw_weighted_graph !== nothing
 end
