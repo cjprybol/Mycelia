@@ -48,6 +48,13 @@ Test.@testset "calibrated probability gate" begin
             0.0, 0.0, 0.0, 0.0, 0.0, NaN),
         "coefficients must be finite")
 
+    Test.@test _prob_throws_message(
+        () -> Mycelia.CorrectionConfidenceFeatures(-0.1, 1.0, true, 0.5),
+        "raw gap must be nonnegative")
+    Test.@test _prob_throws_message(
+        () -> Mycelia.CorrectionConfidenceFeatures(0.1, -1.0, true, 0.5),
+        "minimum k-mer support must be nonnegative")
+
     k = 7
     clean = "ATGCGTACGTACGTTAGCCGATACAGGTCA"
     reads = [_prob_rec("clean$(i)", clean) for i in 1:10]
@@ -58,7 +65,7 @@ Test.@testset "calibrated probability gate" begin
         dataset_id = "prob-gate", mode = :canonical, memory_profile = :full)
 
     function run_gate(model_arg::Union{Nothing, Mycelia.CorrectionConfidenceModel},
-            threshold::Float64)::NamedTuple
+            threshold::Real)::NamedTuple
         Random.seed!(11)
         diagnostics = Mycelia.CorrectorDiagnostics()
         corrected = FASTX.FASTQ.Record[]
@@ -76,13 +83,21 @@ Test.@testset "calibrated probability gate" begin
     end
 
     off = run_gate(nothing, 0.5)
-    permissive = run_gate(model, 0.0)
-    strict = run_gate(model, 1.0)
+    permissive = run_gate(model, Float32(0.0))
+    equality = run_gate(model, Float32(0.5))
+    strict = run_gate(model, 1)
 
     # Engaging feature extraction and gap recording without rejecting any edit is
     # byte-identical to the default-off path, including identifiers and qualities.
     Test.@test _prob_record_bytes(off.corrected) ==
                _prob_record_bytes(permissive.corrected)
+    # The serving predicate is `P >= tau`: equality retains every proposed edit.
+    Test.@test _prob_record_bytes(off.corrected) ==
+               _prob_record_bytes(equality.corrected)
+    Test.@test off.diagnostics.candidate_substitutions_evaluated[] == 0
+    Test.@test permissive.diagnostics.candidate_substitutions_evaluated[] > 0
+    Test.@test equality.diagnostics.gate_reverts[] == 0
+    Test.@test strict.diagnostics.gate_reverts[] > 0
     Test.@test permissive.diagnostics.gate_skipped[] == 0
     Test.@test strict.diagnostics.gate_skipped[] == 0
 

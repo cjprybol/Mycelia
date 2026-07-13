@@ -18,7 +18,8 @@ import Mycelia
 import FASTX
 import Random
 
-function _write_fastq(reads, dir)
+function _write_fastq(
+        reads::AbstractVector{<:FASTX.FASTQ.Record}, dir::AbstractString)::String
     path = joinpath(dir, "in.fastq")
     open(FASTX.FASTQ.Writer, path) do w
         for r in reads
@@ -29,11 +30,12 @@ function _write_fastq(reads, dir)
 end
 
 function _assemble_corrected(fastq::AbstractString, k::Int;
-        threshold::Union{Nothing, Float64},
+        threshold::Union{Nothing, Real},
         indel_params::Union{Nothing, Mycelia.IndelDecodeParams},
         outdir::AbstractString,
         probability_model::Union{Nothing, Mycelia.CorrectionConfidenceModel} = nothing,
-        probability_threshold::Float64 = 0.5)::Dict{String, String}
+        probability_threshold::Real = 0.5,
+        correction_feature_sink::Any = nothing)::NamedTuple
     Random.seed!(42)
     result = Mycelia.mycelia_iterative_assemble(fastq;
         max_k = max(k, 13), skip_solid = false, graph_mode = :doublestrand,
@@ -42,6 +44,7 @@ function _assemble_corrected(fastq::AbstractString, k::Int;
         calibrated_gap_threshold = threshold, indel_params = indel_params,
         calibrated_probability_model = probability_model,
         calibrated_probability_threshold = probability_threshold,
+        correction_feature_sink = correction_feature_sink,
         verbose = false, enable_checkpointing = false, output_dir = outdir)
     corrected_fastq = get(result[:metadata], :final_fastq_file, nothing)
     (corrected_fastq === nothing || !isfile(corrected_fastq)) &&
@@ -52,7 +55,7 @@ function _assemble_corrected(fastq::AbstractString, k::Int;
             out[FASTX.identifier(rec)] = FASTX.sequence(String, rec)
         end
     end
-    return out
+    return (sequences = out, metadata = result[:metadata])
 end
 
 Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
@@ -72,25 +75,55 @@ Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
     # An indel-capable decode profile (values mirror a modest nanopore-ish setting).
     indel = Mycelia.IndelDecodeParams(0.06, 0.4, 0.4, 0.1, 0.1, 3, 3, nothing)
 
-    corrected = mktempdir() do d
-        base = _assemble_corrected(_write_fastq(reads, d), k;
-            threshold = nothing, indel_params = indel, outdir = mktempdir())
-        # A huge threshold would revert EVERY finite-gap correction if the gate ran.
-        gated = _assemble_corrected(_write_fastq(reads, d), k;
-            threshold = 1.0e6, indel_params = indel, outdir = mktempdir())
-        (base = base, gated = gated)
-    end
-
-    probability_model = Mycelia.CorrectionConfidenceModel(
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.5)
-    probability_gated = mktempdir() do d
-        _assemble_corrected(_write_fastq(reads, d), k;
-            threshold = nothing, indel_params = indel, outdir = mktempdir(),
+    results = mktempdir() do directory
+        fastq = _write_fastq(reads, directory)
+        base = _assemble_corrected(fastq, k;
+            threshold = nothing, indel_params = indel,
+            outdir = joinpath(directory, "base"))
+        # A huge threshold would revert every finite-gap correction if the gate ran.
+        # Attach the sink to this same run so the strengthened provenance checks do
+        # not add a fourth expensive indel assembly to the existing test.
+        sink_calls = Ref(0)
+        raw = _assemble_corrected(fastq, k;
+            threshold = 1.0e6, indel_params = indel,
+            outdir = joinpath(directory, "raw"),
+            correction_feature_sink = _ -> (sink_calls[] += 1))
+        probability_model = Mycelia.CorrectionConfidenceModel(
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.5)
+        probability = _assemble_corrected(fastq, k;
+            threshold = nothing, indel_params = indel,
+            outdir = joinpath(directory, "probability"),
             probability_model = probability_model, probability_threshold = 1.0)
+        (; base, raw, probability, sink_calls = sink_calls[])
     end
 
-    # Under indel mode the gate is excluded, so the threshold changes nothing.
-    Test.@test !isempty(corrected.base)
-    Test.@test corrected.base == corrected.gated
-    Test.@test corrected.base == probability_gated
+    # A real indel decode ran, but all substitution-only controls were disabled.
+    Test.@test results.base.metadata[:corrector_errors][:indel_decodes] > 0
+    Test.@test !isempty(results.base.sequences)
+    Test.@test results.base.sequences == results.raw.sequences
+    Test.@test results.base.sequences == results.probability.sequences
+
+    for (result, kind) in ((results.raw, :raw_gap),
+            (results.probability, :probability))
+        metadata = result.metadata
+        Test.@test metadata[:calibrated_gate_kind] == kind
+        Test.@test metadata[:calibrated_gate_requested] === true
+        Test.@test metadata[:calibrated_gate_effective] === false
+        Test.@test metadata[:calibrated_gate_executed] === false
+        Test.@test metadata[:calibrated_gate_disabled_reason] ==
+                   "indel_params_requested"
+        Test.@test metadata[:calibrated_gate_candidate_evaluations] == 0
+        Test.@test metadata[:calibrated_gate_reverts] == 0
+    end
+    Test.@test results.sink_calls == 0
+    Test.@test results.raw.metadata[:correction_feature_sink_requested] === true
+    Test.@test results.raw.metadata[:correction_feature_sink_effective] === false
+    Test.@test results.raw.metadata[:correction_feature_sink_executed] === false
+    Test.@test results.raw.metadata[:correction_feature_sink_disabled_reason] ==
+               "indel_params_requested"
+    Test.@test results.raw.metadata[:calibrated_feature_events] == 0
+
+    # Default-off assembly metadata remains free of opt-in gate/sink keys.
+    Test.@test !haskey(results.base.metadata, :calibrated_gate_requested)
+    Test.@test !haskey(results.base.metadata, :correction_feature_sink_requested)
 end

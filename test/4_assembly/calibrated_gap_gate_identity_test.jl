@@ -21,6 +21,14 @@ import Random
 rec(id, seq) = FASTX.FASTQ.Record(id, seq, String(fill('I', length(seq))))
 seqs(reads) = [FASTX.sequence(String, r) for r in reads]
 mismatches(a, b) = count(x -> x[1] != x[2], zip(collect(a), collect(b)))
+function _gap_throws_message(f::Function, fragment::AbstractString)::Bool
+    try
+        f()
+    catch error
+        return error isa ArgumentError && occursin(fragment, sprint(showerror, error))
+    end
+    return false
+end
 
 Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" begin
     k = 7
@@ -44,6 +52,16 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
     off = run_at(nothing)
     permissive = run_at(-Inf)
     strict = run_at(100.0)
+    infinite_strict = run_at(Inf)
+    integer_permissive = run_at(-1)
+
+    # Real-valued public thresholds accept integer/Float32 callers, while NaN is
+    # rejected rather than becoming a silent no-op. Both infinite sentinels remain
+    # valid (`-Inf` permissive, `Inf` strict).
+    Test.@test seqs(integer_permissive) == seqs(off)
+    Test.@test length(infinite_strict) == length(reads)
+    Test.@test _gap_throws_message(
+        () -> run_at(NaN), "calibrated_gap_threshold must not be NaN")
 
     # (1) BYTE-IDENTITY (the core guarantee): gate OFF === gate engaged-but-permissive.
     # Proves the gap-recording telemetry + the no-op gate never perturb the decode.
@@ -59,6 +77,8 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
     obs = seqs(reads)
     for i in eachindex(reads)
         Test.@test mismatches(seqs(strict)[i], obs[i]) <= mismatches(seqs(off)[i], obs[i])
+        Test.@test mismatches(seqs(infinite_strict)[i], obs[i]) <=
+                   mismatches(seqs(off)[i], obs[i])
     end
 
     # Solid clean reads are untouched under every setting (no spurious edits).
@@ -72,6 +92,8 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
     # gates and feature sinks.
     diagnostics = Mycelia.CorrectorDiagnostics()
     Base.Threads.atomic_add!(diagnostics.gate_skipped, 2)
+    Base.Threads.atomic_add!(diagnostics.candidate_substitutions_evaluated, 3)
+    Base.Threads.atomic_add!(diagnostics.gate_reverts, 1)
     history = Dict{Int, Vector{Dict{Symbol, Any}}}(
         k => [Dict{Symbol, Any}(
             :timestamp => "raw-gap-contract",
@@ -88,6 +110,30 @@ Test.@testset "calibrated gap gate: OFF byte-identity + ON reverts to observed" 
             diagnostics = diagnostics,
             calibrated_gap_threshold = 1.0,
         )
-        Test.@test result[:metadata][:calibrated_feature_contract_skips] == 2
+        metadata = result[:metadata]
+        Test.@test metadata[:calibrated_gate_kind] == :raw_gap
+        Test.@test metadata[:calibrated_gate_requested] === true
+        Test.@test metadata[:calibrated_gate_effective] === true
+        Test.@test metadata[:calibrated_gate_executed] === true
+        Test.@test metadata[:calibrated_gate_disabled_reason] === nothing
+        Test.@test metadata[:calibrated_gate_candidate_evaluations] == 3
+        Test.@test metadata[:calibrated_gate_reverts] == 1
+        Test.@test metadata[:calibrated_feature_contract_skips] == 2
+
+        default_result = Mycelia.finalize_iterative_assembly(
+            output_dir, [k], history, 0.0; verbose = false,
+            diagnostics = diagnostics)
+        default_metadata = default_result[:metadata]
+        opt_in_keys = (
+            :calibrated_gate_kind,
+            :calibrated_gate_requested,
+            :calibrated_gate_effective,
+            :calibrated_gate_executed,
+            :calibrated_gate_candidate_evaluations,
+            :calibrated_feature_events,
+            :calibrated_gate_reverts,
+            :calibrated_feature_contract_skips,
+        )
+        Test.@test all(!haskey(default_metadata, key) for key in opt_in_keys)
     end
 end
