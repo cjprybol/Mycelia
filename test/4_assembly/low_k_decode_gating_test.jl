@@ -38,6 +38,9 @@ import Test
 import Mycelia
 import FASTX
 import Random
+import BioSequences
+import Graphs
+import Kmers
 
 const _LK_BASES = ['A', 'C', 'G', 'T']
 
@@ -54,6 +57,84 @@ end
 
 Test.@testset "low-k decode gating (td-9h5r)" begin
     R = Mycelia.Rhizomorph
+    indel_params = Mycelia.IndelDecodeParams(
+        0.10, 0.30, 0.30, 0.30, 0.30, 3, 3, 16)
+
+    Test.@testset "staged-indel predicate includes only the measured boundary" begin
+        ceiling = Mycelia._INDEL_DECODE_MAX_VERTICES
+        at_ceiling = Graphs.SimpleDiGraph(ceiling)
+        above_ceiling = Graphs.SimpleDiGraph(ceiling + 1)
+
+        Test.@test Mycelia._indel_decode_is_staged(at_ceiling, indel_params)
+        Test.@test !Mycelia._indel_decode_is_staged(above_ceiling, indel_params)
+        Test.@test !Mycelia._indel_decode_is_staged(at_ceiling, nothing)
+    end
+
+    Test.@testset "sparse staged indel bypasses density gate and windows short reads" begin
+        rng = Random.MersenneTwister(812)
+        read_length = 150
+        sequence = join(rand(rng, _LK_BASES, read_length))
+        reads = [FASTX.FASTQ.Record(
+                     "sparse_$i", sequence, String(fill('I', read_length)))
+                 for i in 1:10]
+        probe = first(reads)
+        k = 13
+        graph = R.build_qualmer_graph(reads, k; mode = :doublestrand)
+
+        # Two separated hard k-mers yield two windows on a read that is far below
+        # the legacy long-read windowing threshold. Include both orientations plus
+        # the canonical key: should_decode_read uses observed orientation for a
+        # doublestrand graph, while _hard_window_ranges uses canonical lookup.
+        sequence_dna = BioSequences.LongDNA{4}(sequence)
+        positioned_kmers = collect(Kmers.UnambiguousDNAMers{k}(sequence_dna))
+        hard = Set{typeof(first(positioned_kmers)[1])}()
+        for position in (15, 95)
+            kmer = positioned_kmers[position][1]
+            push!(hard, kmer)
+            push!(hard, BioSequences.reverse_complement(kmer))
+            push!(hard, BioSequences.canonical(kmer))
+        end
+        windows = Mycelia._hard_window_ranges(probe, k, hard; pad = k)
+
+        Test.@test Graphs.nv(graph) <= Mycelia._INDEL_DECODE_MAX_VERTICES
+        Test.@test Mycelia._indel_decode_is_staged(graph, indel_params)
+        Test.@test Mycelia.should_decode_read(
+            probe, k, hard; graph_mode = :doublestrand)
+        Test.@test !Mycelia._windowed_decode_read_is_long(probe, k)
+        Test.@test windows == UnitRange{Int}[2:40, 82:120]
+
+        # Every read would decode, so the adaptive density gate would normally
+        # veto this pass. A sparse staged-indel rung must bypass that veto, and
+        # the short probe must take the two-window path rather than one whole-read
+        # pair-HMM decode.
+        diagnostics = Mycelia.CorrectorDiagnostics()
+        _out, _improvements, skip_fraction, _cheap, decode_gated =
+            Mycelia.improve_read_set_likelihood(
+                [probe], graph, k; graph_mode = :doublestrand,
+                skip_solid = false, cheap_correct = false,
+                hard_vertices = hard, windowed_decode = true,
+                decode_gate_density = 0.90, beam_width = 16,
+                diagnostics = diagnostics, indel_params = indel_params)
+        Test.@test decode_gated == false
+        Test.@test skip_fraction == 0.0
+        Test.@test diagnostics.indel_decodes[] == length(windows)
+        Test.@test diagnostics.truncated_decodes[] == 0
+        Test.@test diagnostics.trace_contract_errors[] == 0
+
+        # Substitution mode is the unchanged control: the same non-discriminating
+        # pass remains density-gated, so nothing reaches either decode kernel.
+        substitution_diagnostics = Mycelia.CorrectorDiagnostics()
+        _sub_out, _sub_improvements, sub_skip, _sub_cheap, sub_gated =
+            Mycelia.improve_read_set_likelihood(
+                [probe], graph, k; graph_mode = :doublestrand,
+                skip_solid = false, cheap_correct = false,
+                hard_vertices = hard, windowed_decode = true,
+                decode_gate_density = 0.90, beam_width = 16,
+                diagnostics = substitution_diagnostics, indel_params = nothing)
+        Test.@test sub_gated == true
+        Test.@test sub_skip == 1.0
+        Test.@test substitution_diagnostics.indel_decodes[] == 0
+    end
 
     Test.@testset "explicit floor: decode_enabled=false gates the whole pass" begin
         rng = Random.MersenneTwister(101)

@@ -1346,6 +1346,13 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["hard_window"] = get(_corr_meta, :hard_window, false)
         assembly.assembly_stats["hard_read_gate"] = get(_corr_meta, :hard_read_gate, false)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
+        # Staged-indel provenance (td-2rxh): actual sparse rungs where the pair-HMM
+        # decode ran, with each rung carrying its k and graph vertex count. Empty
+        # for substitution-only profiles and for indel profiles with no sparse rung.
+        assembly.assembly_stats["staged_indel_rungs"] =
+            get(_corr_meta, :staged_indel_rungs, NamedTuple[])
+        assembly.assembly_stats["rung_vertex_counts"] =
+            get(_corr_meta, :rung_vertex_counts, Dict{Int, Vector{Int}}())
         corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
         assembly.assembly_stats["corrector_errors"] = corrector_errors
         assembly.assembly_stats["indel_decodes"] =

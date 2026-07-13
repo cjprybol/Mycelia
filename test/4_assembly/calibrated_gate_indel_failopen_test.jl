@@ -18,7 +18,8 @@ import Mycelia
 import FASTX
 import Random
 
-function _write_fastq(reads, dir)
+function _write_fastq(
+        reads::Vector{FASTX.FASTQ.Record}, dir::String)::String
     path = joinpath(dir, "in.fastq")
     open(FASTX.FASTQ.Writer, path) do w
         for r in reads
@@ -28,7 +29,13 @@ function _write_fastq(reads, dir)
     return path
 end
 
-function _assemble_corrected(fastq, k; threshold, indel_params, outdir)
+function _assemble_corrected(
+        fastq::String,
+        k::Int;
+        threshold::Union{Float64, Nothing},
+        indel_params::Union{Mycelia.IndelDecodeParams, Nothing},
+        outdir::String,
+)::NamedTuple
     Random.seed!(42)
     result = Mycelia.mycelia_iterative_assemble(fastq;
         max_k = max(k, 13), skip_solid = false, graph_mode = :doublestrand,
@@ -45,7 +52,11 @@ function _assemble_corrected(fastq, k; threshold, indel_params, outdir)
             out[FASTX.identifier(rec)] = FASTX.sequence(String, rec)
         end
     end
-    return out
+    return (
+        sequences = out,
+        bytes = read(corrected_fastq),
+        metadata = result[:metadata],
+    )
 end
 
 Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
@@ -71,10 +82,34 @@ Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
         # A huge threshold would revert EVERY finite-gap correction if the gate ran.
         gated = _assemble_corrected(_write_fastq(reads, d), k;
             threshold = 1.0e6, indel_params = indel, outdir = mktempdir())
-        (base = base, gated = gated)
+        substitution = _assemble_corrected(_write_fastq(reads, d), k;
+            threshold = nothing, indel_params = nothing, outdir = mktempdir())
+        (base = base, gated = gated, substitution = substitution)
     end
 
-    # Under indel mode the gate is excluded, so the threshold changes nothing.
-    Test.@test !isempty(corrected.base)
-    Test.@test corrected.base == corrected.gated
+    # This fixture is above the measured indel budget, so raw nanopore intent must
+    # stage OFF and take the byte-identical substitution fallback. PR #412's
+    # positional calibrated gate remains excluded based on RAW indel intent.
+    max_vertices = maximum(
+        iteration[:memory_kmers]
+        for iterations in values(corrected.base.metadata[:iteration_history])
+        for iteration in iterations
+    )
+    Test.@test max_vertices > Mycelia._INDEL_DECODE_MAX_VERTICES
+    staged = corrected.base.metadata[:staged_indel_rungs]
+    dense_ks = Set(
+        rung_k
+        for (rung_k, counts) in corrected.base.metadata[:rung_vertex_counts]
+        if maximum(counts) > Mycelia._INDEL_DECODE_MAX_VERTICES
+    )
+    Test.@test !isempty(dense_ks)
+    Test.@test all(
+        rung.n_vertices <= Mycelia._INDEL_DECODE_MAX_VERTICES &&
+        !(rung.k in dense_ks)
+        for rung in staged
+    )
+    Test.@test corrected.base.metadata[:corrector_errors][:indel_decodes] > 0
+    Test.@test !isempty(corrected.base.sequences)
+    Test.@test corrected.base.bytes == corrected.gated.bytes
+    Test.@test corrected.base.bytes == corrected.substitution.bytes
 end
