@@ -1613,6 +1613,10 @@ parallel (`@threads`) read loop increments them race-free.
   an internal decoder contract regression rather than a data-dependent miss.
 - `window_divergences` : substitution windows rejected for violating the
   length-preserving splice contract.
+- `substitution_length_divergences` : substitution-mode whole-read decodes whose
+  reconstruction diverged from the input length (typically a truncated decode);
+  the read FAILED OPEN to its original (uncorrected) sequence to keep the
+  length-preserving contract, so it is still scored at input length.
 """
 mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
@@ -1626,11 +1630,19 @@ mutable struct CorrectorDiagnostics
     truncated_decodes::Threads.Atomic{Int}
     trace_contract_errors::Threads.Atomic{Int}
     window_divergences::Threads.Atomic{Int}
+    # Substitution-mode decode returned a length-divergent (typically truncated)
+    # reconstruction, so the read FAILED OPEN to its original (uncorrected)
+    # sequence rather than emitting a length-changed record. Substitution mode is
+    # a length-preserving contract; a nonzero value flags reads the decoder could
+    # not faithfully correct (e.g. a full-read ungated Viterbi that dead-ended at
+    # the first uncorrectable position — see the decode-truncation defect). It is
+    # the completeness guarantee: every such read is still scored at input length.
+    substitution_length_divergences::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
         Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -1829,6 +1841,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     trace_contract_before = diag.trace_contract_errors[]
     gate_skipped_before = diag.gate_skipped[]
     window_divergences_before = diag.window_divergences[]
+    subst_len_div_before = diag.substitution_length_divergences[]
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
     improvements_made = 0
@@ -2103,9 +2116,9 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                                trace_contract_this_pass
     if completed_indel_outcomes > 0 &&
        truncated_this_pass / completed_indel_outcomes >= 0.5
-        @warn "iterative corrector: high truncated pair-HMM decode fraction; prefix-only " *
-              "paths were rejected before correction or soft-EM side effects." total_reads completed_indel_outcomes truncated_decodes = truncated_this_pass fraction = round(
-            truncated_this_pass / completed_indel_outcomes, digits = 3)
+        @warn "iterative corrector: high truncated pair-HMM decode fraction; prefix-only "*
+        "paths were rejected before correction or soft-EM side effects." total_reads completed_indel_outcomes truncated_decodes=truncated_this_pass fraction=round(
+            truncated_this_pass/completed_indel_outcomes, digits = 3)
     end
 
     # A requested calibrated gate that silently fell open on a substitution decode
@@ -2119,11 +2132,23 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
               "gap/path alignment contract was violated; the gate silently did nothing." total_reads gate_skipped = gate_skipped_this_pass
     end
 
-    window_divergences_this_pass =
-        diag.window_divergences[] - window_divergences_before
+    window_divergences_this_pass = diag.window_divergences[] - window_divergences_before
     if window_divergences_this_pass > 0
         @warn "iterative corrector: rejected substitution window(s) whose decoded " *
               "length violated the length-preserving splice contract." total_reads window_divergences = window_divergences_this_pass
+    end
+
+    # A substitution decode whose reconstruction diverged from the input length
+    # FAILED OPEN to the original read (completeness guarantee). A high fraction
+    # means the decoder could not faithfully correct most reads (e.g. a full-read
+    # ungated Viterbi truncating at the first error) — the read is still scored at
+    # input length, but as UNCORRECTED, so surface it rather than let a
+    # mostly-pass-through pass look like a working corrector.
+    subst_len_div_this_pass = diag.substitution_length_divergences[] - subst_len_div_before
+    if subst_len_div_this_pass > 0
+        @warn "iterative corrector: substitution decode reconstruction was " *
+              "length-divergent; failed open to the original (uncorrected) read to " *
+              "preserve the length contract." total_reads substitution_length_divergences = subst_len_div_this_pass
     end
 
     return updated_reads, improvements_made, skip_fraction, cheap_corrections,
@@ -2910,13 +2935,15 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     corrector_errors = diagnostics === nothing ?
                        Dict(:structural => 0, :unkmerizable => 0,
         :indel_decodes => 0, :truncated_decodes => 0,
-        :trace_contract_errors => 0, :window_divergences => 0) :
+        :trace_contract_errors => 0, :window_divergences => 0,
+        :substitution_length_divergences => 0) :
                        Dict(:structural => diagnostics.structural_errors[],
         :unkmerizable => diagnostics.unkmerizable_reads[],
         :indel_decodes => diagnostics.indel_decodes[],
         :truncated_decodes => diagnostics.truncated_decodes[],
         :trace_contract_errors => diagnostics.trace_contract_errors[],
-        :window_divergences => diagnostics.window_divergences[])
+        :window_divergences => diagnostics.window_divergences[],
+        :substitution_length_divergences => diagnostics.substitution_length_divergences[])
 
     # Per-pass skip-fraction summary (FIX 6): min/mean/max across every k+iteration
     # pass, not just the last. `last_skip_fraction` is retained for back-compat.
@@ -3320,7 +3347,23 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.gate_skipped, 1)
             end
         end
-        improved_quality, improved_likelihood = if indel_params === nothing
+        # Substitution mode is a LENGTH-PRESERVING contract. If reconstruction
+        # diverged from the input length (e.g. a truncated decode that dead-ended
+        # before spanning the read), FAIL OPEN: return `nothing` so the caller
+        # (`find_optimal_sequence_path`) passes the ORIGINAL read through untouched
+        # — identifier and qualities preserved exactly — rather than emit a
+        # length-changed record that the length-preserving scoring contract would
+        # silently exclude. This is the completeness guarantee: every substitution
+        # read is scored at input length. Indel mode is length-changing by design
+        # and is exempt from the guard.
+        if indel_params === nothing &&
+           length(corrected_sequence_string) != length(sequence_string)
+            diagnostics === nothing ||
+                Threads.atomic_add!(diagnostics.substitution_length_divergences, 1)
+            return nothing
+        end
+        improved_quality,
+        improved_likelihood = if indel_params === nothing
             likelihood = Mycelia.calculate_sequence_likelihood(
                 corrected_sequence_string, quality_scores, graph, k;
                 graph_mode = graph_mode)
