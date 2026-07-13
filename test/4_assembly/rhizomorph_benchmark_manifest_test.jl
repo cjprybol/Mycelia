@@ -37,6 +37,97 @@ Test.@testset "Rhizomorph benchmark manifest" begin
             Test.@test all(occursin(".", accession) for accession in provenance["accessions"])
         end
     end
+
+    h7 = only(filter(slice -> slice["id"] == "H7", manifest["hypothesis_slices"]))
+    Test.@test h7["status"] == "stub"
+    engineering_validation = h7["engineering_validation"]
+    Test.@test engineering_validation["id"] == "hybrid_olc_short_read"
+    Test.@test engineering_validation["status"] == "interim_engineering_validation"
+    Test.@test engineering_validation["claim_scope"] ==
+               "engineering_validation_only_not_manuscript_h5"
+    Test.@test engineering_validation["entrypoint"] ==
+               "benchmarking/real_data_corrector_validation.jl"
+    Test.@test Set(engineering_validation["dataset_ids"]) ==
+               Set(["phix174", "lambda_phage"])
+    result_names = engineering_validation["result_names"]
+    Test.@test result_names ==
+               Dict("phix174" => "phix174", "lambda_phage" => "lambda")
+    Test.@test Set(keys(result_names)) == Set(engineering_validation["dataset_ids"])
+    Test.@test engineering_validation["arms"] == ["naive", "scalable", "hybrid-olc"]
+    Test.@test engineering_validation["expected_outputs"] ==
+               ["comparison_csv", "dnadiff_metrics"]
+    Test.@test occursin("not manuscript H5", engineering_validation["artifact_gate"])
+
+    results_path = normpath(joinpath(
+        @__DIR__,
+        "..",
+        "..",
+        engineering_validation["result_csv"],
+    ))
+    results_exist = isfile(results_path)
+    Test.@test results_exist
+    if results_exist
+        results = DataFrames.DataFrame(CSV.File(results_path))
+        Test.@test DataFrames.names(results) == [
+            "name",
+            "arm",
+            "validation_scope",
+            "ok",
+            "runtime_s",
+            "n_contigs",
+            "total_length",
+            "largest_contig",
+            "n50",
+            "genome_fraction",
+            "avg_identity",
+            "mismatches_per_100kbp",
+            "indels_per_100kbp",
+        ]
+        Test.@test DataFrames.nrow(results) == 6
+        Test.@test Set(zip(results.name, results.arm)) == Set([
+            (target, arm)
+            for target in values(result_names)
+            for arm in ["naive", "scalable", "hybrid-olc"]
+        ])
+        Test.@test all(results.validation_scope .== "interim_engineering_validation")
+        Test.@test all(results.ok)
+        for column in [
+                :runtime_s,
+                :genome_fraction,
+                :avg_identity,
+                :mismatches_per_100kbp,
+                :indels_per_100kbp,
+            ]
+            Test.@test all(isfinite, results[!, column])
+        end
+        Test.@test all(results.runtime_s .>= 0.0)
+        Test.@test all(results.n_contigs .> 0)
+        Test.@test all(results.total_length .> 0)
+        Test.@test all(results.largest_contig .> 0)
+        Test.@test all(results.n50 .> 0)
+        Test.@test all((0.0 .< results.genome_fraction) .&
+                       (results.genome_fraction .<= 100.0))
+        Test.@test all((0.0 .< results.avg_identity) .&
+                       (results.avg_identity .<= 100.0))
+        Test.@test all(results.mismatches_per_100kbp .>= 0.0)
+        Test.@test all(results.indels_per_100kbp .>= 0.0)
+
+        for result_name in values(result_names)
+            naive = only(DataFrames.eachrow(results[
+                (results.name .== result_name) .& (results.arm .== "naive"),
+                :,
+            ]))
+            hybrid = only(DataFrames.eachrow(results[
+                (results.name .== result_name) .& (results.arm .== "hybrid-olc"),
+                :,
+            ]))
+            Test.@test hybrid.n50 > naive.n50
+            Test.@test hybrid.n_contigs < naive.n_contigs
+            Test.@test hybrid.avg_identity >= 99.9
+            Test.@test hybrid.avg_identity >= naive.avg_identity - 0.02
+            Test.@test hybrid.genome_fraction >= 95.0
+        end
+    end
 end
 
 Test.@testset "Rhizomorph benchmark dry-run plans" begin

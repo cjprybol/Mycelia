@@ -339,3 +339,16 @@ status = "stub"
 expected_inputs = ["paired_fastq", "reference_fasta", "assembler_list"]
 expected_outputs = ["benchmark_plan_csv", "assembler_comparison_csv", "contigs_fasta", "tool_versions_json"]
 follow_on_work = "Wrap assembler_comparison_standard_fixtures.jl and external-tool checks in a scale-aware runner."
+
+[hypothesis_slices.engineering_validation]
+id = "hybrid_olc_short_read"
+status = "interim_engineering_validation"
+claim_scope = "engineering_validation_only_not_manuscript_h5"
+description = "Three-arm short-read validation on identical ART HS25 inputs; the hybrid arm pins MEGAHIT to one thread, and this does not mark the full H7 harness or manuscript H5 complete."
+entrypoint = "benchmarking/real_data_corrector_validation.jl"
+dataset_ids = ["phix174", "lambda_phage"]
+result_names = { phix174 = "phix174", lambda_phage = "lambda" }
+arms = ["naive", "scalable", "hybrid-olc"]
+expected_outputs = ["comparison_csv", "dnadiff_metrics"]
+artifact_gate = "Hybrid-OLC must improve N50 and contig count relative to naive while retaining at least 99.9% identity and 95% genome fraction; this is an interim engineering gate, not manuscript H5."
+result_csv = "benchmarking/results/real_data_corrector_validation_20260713_100907.csv"
