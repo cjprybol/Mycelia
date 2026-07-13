@@ -1596,6 +1596,469 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Topology-only cost summary for one prospective indel pair-HMM decode.
+
+`frontier_area` is the sum of the retained M/I/D reachability-frontier sizes over
+completed read columns. `edge_expansions` counts graph transitions enumerated by
+match advancement and bounded deletion relaxation. Their saturating sum is
+`frontier_work`, the score-free scheduling metric. No emission, quality,
+likelihood, traceback, or target-correction information contributes to these
+fields.
+"""
+struct IndelFrontierMetrics
+    anchored::Bool
+    window_length::Int
+    vertex_count::Int
+    edge_count::Int
+    branch_vertices::Int
+    join_vertices::Int
+    branch_fraction::Float64
+    join_fraction::Float64
+    max_out_degree::Int
+    frontier_area::Int
+    edge_expansions::Int
+    peak_frontier::Int
+    completed_columns::Int
+    frontier_work::Int
+    reason::Symbol
+end
+
+# A score-free reachability cell. The scored pair-HMM keeps only the best score
+# for each (vertex, strand, phase) state. The probe cannot make that score-based
+# choice, so it conservatively retains distinct net-gap/run-length variants. It
+# therefore upper-bounds the pre-beam topology work without consulting emissions.
+struct _IndelFrontierCell{V}
+    vertex::V
+    strand::Rhizomorph.StrandOrientation
+    phase::Symbol
+    net_gap::Int
+    run_length::Int
+end
+
+function _saturating_indel_frontier_add(lhs::Int, rhs::Int)::Int
+    rhs <= typemax(Int) - lhs && return lhs + rhs
+    return typemax(Int)
+end
+
+function _indel_frontier_graph_summary(
+        graph::MetaGraphsNext.MetaGraph
+)::NamedTuple
+    graph_data = graph.graph
+    vertex_count = Graphs.nv(graph_data)
+    edge_count = Graphs.ne(graph_data)
+    branch_vertices = 0
+    join_vertices = 0
+    max_out_degree = 0
+    for vertex in Graphs.vertices(graph_data)
+        outdegree = Graphs.outdegree(graph_data, vertex)
+        indegree = Graphs.indegree(graph_data, vertex)
+        branch_vertices += outdegree > 1
+        join_vertices += indegree > 1
+        max_out_degree = max(max_out_degree, outdegree)
+    end
+    denominator = max(vertex_count, 1)
+    return (
+        vertex_count = vertex_count,
+        edge_count = edge_count,
+        branch_vertices = branch_vertices,
+        join_vertices = join_vertices,
+        branch_fraction = branch_vertices / denominator,
+        join_fraction = join_vertices / denominator,
+        max_out_degree = max_out_degree
+    )
+end
+
+function _indel_frontier_metrics(
+        summary::NamedTuple,
+        anchored::Bool,
+        window_length::Int,
+        frontier_area::Int,
+        edge_expansions::Int,
+        peak_frontier::Int,
+        completed_columns::Int,
+        reason::Symbol
+)::IndelFrontierMetrics
+    frontier_work = _saturating_indel_frontier_add(
+        frontier_area, edge_expansions)
+    return IndelFrontierMetrics(
+        anchored,
+        window_length,
+        summary.vertex_count,
+        summary.edge_count,
+        summary.branch_vertices,
+        summary.join_vertices,
+        summary.branch_fraction,
+        summary.join_fraction,
+        summary.max_out_degree,
+        frontier_area,
+        edge_expansions,
+        peak_frontier,
+        completed_columns,
+        frontier_work,
+        reason
+    )
+end
+
+function _indel_frontier_edge_strands(
+        edge_data::Any
+)::Set{Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}}
+    strand_pairs = Set{
+        Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}
+    }()
+    if edge_data isa Rhizomorph.StrandWeightedEdgeData
+        push!(strand_pairs, (
+            Rhizomorph._normalize_strand(edge_data.src_strand),
+            Rhizomorph._normalize_strand(edge_data.dst_strand),
+        ))
+    elseif hasproperty(edge_data, :evidence)
+        strands = Rhizomorph.collect_evidence_strands(
+            getproperty(edge_data, :evidence))
+        for strand in strands
+            normalized = Rhizomorph._normalize_strand(strand)
+            push!(strand_pairs, (normalized, normalized))
+        end
+    end
+    isempty(strand_pairs) && push!(
+        strand_pairs, (Rhizomorph.Forward, Rhizomorph.Forward))
+    return strand_pairs
+end
+
+function _indel_frontier_successors(
+        graph::MetaGraphsNext.MetaGraph,
+        cell::_IndelFrontierCell{V}
+)::Vector{Tuple{V, Rhizomorph.StrandOrientation}} where {V}
+    successors = Tuple{V, Rhizomorph.StrandOrientation}[]
+    if Graphs.is_directed(graph.graph)
+        source_code = MetaGraphsNext.code_for(graph, cell.vertex)
+        neighbors = Graphs.outneighbors(graph.graph, source_code)
+        sizehint!(successors, length(neighbors))
+        for target_code in neighbors
+            target_vertex = convert(V, MetaGraphsNext.label_for(graph, target_code))
+            edge_data = graph[cell.vertex, target_vertex]
+            for (source_strand, target_strand) in
+                _indel_frontier_edge_strands(edge_data)
+                source_strand == cell.strand || continue
+                push!(successors, (target_vertex, target_strand))
+            end
+        end
+    else
+        # Match `_get_valid_transitions`' stored-source convention for undirected
+        # MetaGraphs rather than traversing symmetric adjacency in both directions.
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            if length(edge_labels) == 2 && edge_labels[1] == cell.vertex
+                target_vertex = convert(V, edge_labels[2])
+                edge_data = graph[edge_labels...]
+                for (source_strand, target_strand) in
+                    _indel_frontier_edge_strands(edge_data)
+                    source_strand == cell.strand || continue
+                    push!(successors, (target_vertex, target_strand))
+                end
+            end
+        end
+    end
+    return successors
+end
+
+function _indel_frontier_start_strands(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex::V,
+        strand_mode::Symbol,
+        configured_start::Rhizomorph.StrandOrientation
+)::Vector{Rhizomorph.StrandOrientation} where {V}
+    configured = Rhizomorph._normalize_strand(configured_start)
+    strand_mode == :singlestrand && return [configured]
+
+    outgoing = Set{Rhizomorph.StrandOrientation}()
+    if Graphs.is_directed(graph.graph)
+        source_code = MetaGraphsNext.code_for(graph, vertex)
+        for target_code in Graphs.outneighbors(graph.graph, source_code)
+            target_vertex = MetaGraphsNext.label_for(graph, target_code)
+            edge_data = graph[vertex, target_vertex]
+            for (source_strand, _) in _indel_frontier_edge_strands(edge_data)
+                push!(outgoing, source_strand)
+            end
+        end
+    else
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            if length(edge_labels) == 2 && edge_labels[1] == vertex
+                for (source_strand, _) in
+                    _indel_frontier_edge_strands(graph[edge_labels...])
+                    push!(outgoing, source_strand)
+                end
+            end
+        end
+    end
+
+    if strand_mode == :canonical
+        if configured in outgoing || isempty(outgoing)
+            return [configured]
+        end
+        return [first(outgoing)]
+    end
+    if isempty(outgoing)
+        other = configured == Rhizomorph.Forward ?
+                Rhizomorph.Reverse : Rhizomorph.Forward
+        return [configured, other]
+    end
+    return collect(outgoing)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Probe the topology-only M/I/D frontier required by an indel pair-HMM decode.
+
+The first observed graph unit must resolve directly (or canonically) to a graph
+vertex. Unlike `_viterbi_start_candidates`, an absent start never falls back to
+all vertices: the probe returns `anchored=false` and
+`reason=:unanchored_start`. From that anchor it propagates score-free match,
+insertion, and bounded-deletion reachability while honoring the configured
+net-gap band and gap-run caps. Beam and score-margin pruning are deliberately not
+modeled because both require likelihood scores; the resulting frontier work is a
+conservative pre-beam topology bound.
+
+The probe stops as soon as its saturating `frontier_work` exceeds `work_limit`.
+`completed_columns` counts only fully constructed nonempty read columns, so a
+limit hit during expansion never reports a partial column as complete.
+"""
+function _probe_indel_frontier(
+        graph::MetaGraphsNext.MetaGraph,
+        observation::AbstractVector,
+        alphabet::Symbol;
+        config::ViterbiCorrectionConfig,
+        strand_mode::Symbol,
+        work_limit::Int = typemax(Int)
+)::IndelFrontierMetrics
+    work_limit < 0 && throw(ArgumentError(
+        "work_limit must be non-negative, got $work_limit"))
+
+    summary = _indel_frontier_graph_summary(graph)
+    window_length = length(observation)
+    frontier_area = 0
+    edge_expansions = 0
+    peak_frontier = 0
+    completed_columns = 0
+    if summary.vertex_count == 0
+        return _indel_frontier_metrics(
+            summary, false, window_length, frontier_area, edge_expansions,
+            peak_frontier, completed_columns, :empty_graph)
+    end
+    if isempty(observation)
+        return _indel_frontier_metrics(
+            summary, false, window_length, frontier_area, edge_expansions,
+            peak_frontier, completed_columns, :empty_observation)
+    end
+
+    label_type = _viterbi_graph_label_type(graph)
+    observed_unit = _viterbi_label_unit(first(observation))
+    start_vertex = if haskey(graph, observed_unit)
+        convert(label_type, observed_unit)
+    elseif strand_mode == :canonical &&
+           _viterbi_supports_reverse_complement(alphabet)
+        canonical = _viterbi_canonical_unit(observed_unit, alphabet)
+        haskey(graph, canonical) ? convert(label_type, canonical) : nothing
+    else
+        nothing
+    end
+    if start_vertex === nothing
+        return _indel_frontier_metrics(
+            summary, false, window_length, frontier_area, edge_expansions,
+            peak_frontier, completed_columns, :unanchored_start)
+    end
+
+    Cell = _IndelFrontierCell{label_type}
+    # Raw corrector graphs carry orientation in evidence rather than mandatory
+    # `src_strand`/`dst_strand` fields. Resolve every evidence-backed outgoing
+    # orientation without consulting its weight or likelihood.
+    match_frontier = Set{Cell}()
+    for start_strand in _indel_frontier_start_strands(
+            graph, start_vertex, strand_mode, config.start_strand)
+        push!(match_frontier, Cell(start_vertex, start_strand, :M, 0, 0))
+    end
+    if isempty(match_frontier)
+        return _indel_frontier_metrics(
+            summary, true, window_length, frontier_area, edge_expansions,
+            peak_frontier, completed_columns, :no_start_state)
+    end
+
+    insertion_open = config.insertion_fraction > 0.0 &&
+                     config.max_insertion_run > 0
+    insertion_extend = config.insertion_extend_probability > 0.0
+    deletion_open = config.deletion_fraction > 0.0 &&
+                    config.deletion_max_run > 0
+    deletion_extend = config.deletion_extend_probability > 0.0
+
+    # Initial read column: seed M at the anchored observation, then perform the
+    # same bounded within-column deletion relaxation as the scored kernel. There
+    # is intentionally no leading insertion state.
+    deletion_frontier = Set{Cell}()
+    deletion_hop = match_frontier
+    if deletion_open
+        for hop in 1:config.deletion_max_run
+            hop > 1 && !deletion_extend && break
+            next_deletions = Set{Cell}()
+            for cell in deletion_hop
+                successors = _indel_frontier_successors(graph, cell)
+                edge_expansions = _saturating_indel_frontier_add(
+                    edge_expansions, length(successors))
+                if _saturating_indel_frontier_add(
+                        frontier_area, edge_expansions) > work_limit
+                    return _indel_frontier_metrics(
+                        summary, true, window_length, frontier_area,
+                        edge_expansions, peak_frontier, completed_columns,
+                        :work_limit)
+                end
+                for (next_vertex, next_strand) in successors
+                    next_cell = Cell(
+                        next_vertex,
+                        next_strand,
+                        :D,
+                        cell.net_gap + 1,
+                        hop
+                    )
+                    push!(next_deletions, next_cell)
+                    push!(deletion_frontier, next_cell)
+                end
+            end
+            deletion_hop = next_deletions
+            isempty(deletion_hop) && break
+        end
+    end
+
+    insertion_frontier = Set{Cell}()
+    layer_size = length(match_frontier) + length(deletion_frontier)
+    frontier_area = _saturating_indel_frontier_add(frontier_area, layer_size)
+    peak_frontier = max(peak_frontier, layer_size)
+    completed_columns = 1
+    if _saturating_indel_frontier_add(
+            frontier_area, edge_expansions) > work_limit
+        return _indel_frontier_metrics(
+            summary, true, window_length, frontier_area, edge_expansions,
+            peak_frontier, completed_columns, :work_limit)
+    end
+
+    for read_index in 2:window_length
+        new_match = Set{Cell}()
+        new_insertion = Set{Cell}()
+        new_deletion = Set{Cell}()
+
+        # M consumes one observed unit and advances one graph transition from any
+        # prior phase. The topology probe does not inspect the observed emission.
+        for frontier in (match_frontier, insertion_frontier, deletion_frontier)
+            for cell in frontier
+                successors = _indel_frontier_successors(graph, cell)
+                edge_expansions = _saturating_indel_frontier_add(
+                    edge_expansions, length(successors))
+                if _saturating_indel_frontier_add(
+                        frontier_area, edge_expansions) > work_limit
+                    return _indel_frontier_metrics(
+                        summary, true, window_length, frontier_area,
+                        edge_expansions, peak_frontier, completed_columns,
+                        :work_limit)
+                end
+                for (next_vertex, next_strand) in successors
+                    push!(new_match, Cell(
+                        next_vertex, next_strand, :M, cell.net_gap, 0))
+                end
+            end
+        end
+
+        # I consumes one observed unit while staying on the graph vertex. Opening
+        # is permitted only from M; extension is permitted only from I.
+        if insertion_open
+            for cell in match_frontier
+                push!(new_insertion, Cell(
+                    cell.vertex, cell.strand, :I, cell.net_gap - 1, 1))
+            end
+            if insertion_extend
+                for cell in insertion_frontier
+                    cell.run_length >= config.max_insertion_run && continue
+                    push!(new_insertion, Cell(
+                        cell.vertex,
+                        cell.strand,
+                        :I,
+                        cell.net_gap - 1,
+                        cell.run_length + 1
+                    ))
+                end
+            end
+        end
+
+        # D advances one or more graph transitions without consuming another
+        # observed unit, beginning from the freshly constructed M phase.
+        deletion_hop = new_match
+        if deletion_open
+            for hop in 1:config.deletion_max_run
+                hop > 1 && !deletion_extend && break
+                next_deletions = Set{Cell}()
+                for cell in deletion_hop
+                    successors = _indel_frontier_successors(graph, cell)
+                    edge_expansions = _saturating_indel_frontier_add(
+                        edge_expansions, length(successors))
+                    if _saturating_indel_frontier_add(
+                            frontier_area, edge_expansions) > work_limit
+                        return _indel_frontier_metrics(
+                            summary, true, window_length, frontier_area,
+                            edge_expansions, peak_frontier, completed_columns,
+                            :work_limit)
+                    end
+                    for (next_vertex, next_strand) in successors
+                        next_cell = Cell(
+                            next_vertex,
+                            next_strand,
+                            :D,
+                            cell.net_gap + 1,
+                            hop
+                        )
+                        push!(next_deletions, next_cell)
+                        push!(new_deletion, next_cell)
+                    end
+                end
+                deletion_hop = next_deletions
+                isempty(deletion_hop) && break
+            end
+        end
+
+        # The scored kernel applies its net-gap band after within-column deletion
+        # relaxation. Preserve that ordering here.
+        if config.band_width !== nothing
+            band = config.band_width
+            filter!(cell -> abs(cell.net_gap) <= band, new_match)
+            filter!(cell -> abs(cell.net_gap) <= band, new_insertion)
+            filter!(cell -> abs(cell.net_gap) <= band, new_deletion)
+        end
+
+        if isempty(new_match) && isempty(new_insertion) && isempty(new_deletion)
+            return _indel_frontier_metrics(
+                summary, true, window_length, frontier_area, edge_expansions,
+                peak_frontier, completed_columns, :frontier_exhausted)
+        end
+
+        match_frontier = new_match
+        insertion_frontier = new_insertion
+        deletion_frontier = new_deletion
+        layer_size = length(match_frontier) + length(insertion_frontier) +
+                     length(deletion_frontier)
+        frontier_area = _saturating_indel_frontier_add(
+            frontier_area, layer_size)
+        peak_frontier = max(peak_frontier, layer_size)
+        completed_columns = read_index
+        if _saturating_indel_frontier_add(
+                frontier_area, edge_expansions) > work_limit
+            return _indel_frontier_metrics(
+                summary, true, window_length, frontier_area, edge_expansions,
+                peak_frontier, completed_columns, :work_limit)
+        end
+    end
+
+    return _indel_frontier_metrics(
+        summary, true, window_length, frontier_area, edge_expansions,
+        peak_frontier, completed_columns, :complete)
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Indel-aware pair-HMM decode of one observation against a Rhizomorph weighted
 graph. This is the gap-move counterpart of `_viterbi_correct_observation`,
 selected when `config.indel_moves` is set.
@@ -1692,7 +2155,14 @@ function _viterbi_correct_observation_indel(
         :emission_scoring => _viterbi_graph_has_quality(quality_graph) ?
                              :quality_aware : :alphabet_parameterized,
         :move_counts => Dict{Symbol, Int}(:M => 0, :I => 0, :D => 0),
-        :reached_target => target_vertex === nothing ? nothing : false
+        :reached_target => target_vertex === nothing ? nothing : false,
+        # Runtime-only pair-HMM work telemetry. These counters observe the
+        # existing frontier after each pruning step and never participate in a
+        # score, tie-break, traceback, or returned correction.
+        :frontier_area => 0,
+        :edge_expansions => 0,
+        :peak_frontier => 0,
+        :completed_columns => 0
     )
 
     # Global backpointer: (read_index, state, phase) -> predecessor cell or nothing.
@@ -1707,6 +2177,8 @@ function _viterbi_correct_observation_indel(
     function _expand(state)
         vertex, strand = state
         transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
+        diagnostics[:edge_expansions] = _saturating_indel_frontier_add(
+            diagnostics[:edge_expansions], length(transitions))
         out = Tuple{Any, Float64}[]
         isempty(transitions) && return out
         total_out = Rhizomorph._total_outgoing_weight(graph, vertex, strand)
@@ -1796,6 +2268,11 @@ function _viterbi_correct_observation_indel(
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
     _relax_deletions!(1, match_scores, match_net, del_scores, del_net, del_run)
+
+    initial_frontier = length(match_scores) + length(ins_scores) + length(del_scores)
+    diagnostics[:frontier_area] = initial_frontier
+    diagnostics[:peak_frontier] = initial_frontier
+    diagnostics[:completed_columns] = 1
 
     # The read index of the layer currently held in match/ins/del_scores. If a noisy
     # read kills the whole frontier mid-decode we KEEP the last non-empty layer (its
@@ -1897,6 +2374,13 @@ function _viterbi_correct_observation_indel(
         if isempty(new_match) && isempty(new_ins) && isempty(new_del)
             break
         end
+
+        retained_frontier = length(new_match) + length(new_ins) + length(new_del)
+        diagnostics[:frontier_area] = _saturating_indel_frontier_add(
+            diagnostics[:frontier_area], retained_frontier)
+        diagnostics[:peak_frontier] = max(
+            diagnostics[:peak_frontier], retained_frontier)
+        diagnostics[:completed_columns] = read_index
 
         match_scores, ins_scores, del_scores = new_match, new_ins, new_del
         match_net, ins_net, del_net = new_match_net, new_ins_net, new_del_net

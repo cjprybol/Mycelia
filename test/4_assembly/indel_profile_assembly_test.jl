@@ -133,11 +133,13 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test sc.band_width > 0
         Test.@test sc.deletion_max_run == 3
         Test.@test sc.max_insertion_run >= 1
+        Test.@test sc.indel_schedule == :frontier_budgeted
 
         ex = R._corrector_strategy_knobs(:exhaustive)
-        # :exhaustive => unbounded band + larger caps.
+        # :exhaustive => unbounded band + larger caps and no runtime classifier.
         Test.@test ex.band_width === nothing
         Test.@test ex.deletion_max_run > sc.deletion_max_run
+        Test.@test ex.indel_schedule == :unrestricted
     end
 
     Test.@testset "illumina default is the substitution-only oracle (byte-identical)" begin
@@ -155,6 +157,19 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test base.assembly_stats["indel_moves"] == false
         Test.@test il.assembly_stats["indel_moves"] == false
         Test.@test il.assembly_stats["sequencing_tech"] == "illumina"
+        il_telemetry = il.assembly_stats["indel_rung_telemetry"]
+        Test.@test il_telemetry isa AbstractVector
+        Test.@test all(row -> !get(row, :profile_requested, false), il_telemetry)
+        Test.@test all(row -> get(row, :requested, 0) == 0, il_telemetry)
+        Test.@test il.assembly_stats["indel_requested"] == 0
+        Test.@test il.assembly_stats["indel_attempted"] == 0
+        Test.@test il.assembly_stats["indel_completed"] == 0
+        Test.@test il.assembly_stats["indel_truncated"] == 0
+        Test.@test il.assembly_stats["indel_engaged"] == 0
+        Test.@test il.assembly_stats["indel_decodes"] ==
+                   il.assembly_stats["indel_completed"]
+        Test.@test il.assembly_stats["truncated_decodes"] ==
+                   il.assembly_stats["indel_truncated"]
     end
 
     Test.@testset "nanopore enables indel-aware correction" begin
@@ -163,11 +178,33 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             sequencing_tech = :nanopore)
         Test.@test np isa R.AssemblyResult
         Test.@test !isempty(np.contigs)
-        # The provenance stamp proves the indel decode path was engaged.
+        # The legacy provenance stamp records profile intent. Runtime engagement
+        # is surfaced separately by the aggregate and per-rung telemetry.
         Test.@test np.assembly_stats["indel_moves"] == true
         Test.@test np.assembly_stats["sequencing_tech"] == "nanopore"
-        Test.@test np.assembly_stats["indel_decodes"] >= 0
-        Test.@test np.assembly_stats["truncated_decodes"] >= 0
+        np_telemetry = np.assembly_stats["indel_rung_telemetry"]
+        Test.@test np_telemetry isa AbstractVector
+        Test.@test np.assembly_stats["indel_requested"] >= 0
+        Test.@test np.assembly_stats["indel_attempted"] >= 0
+        Test.@test np.assembly_stats["indel_completed"] >= 0
+        Test.@test np.assembly_stats["indel_truncated"] >= 0
+        Test.@test np.assembly_stats["indel_engaged"] >= 0
+        for field in (:requested, :attempted, :completed, :truncated, :engaged)
+            key = "indel_$(field)"
+            Test.@test np.assembly_stats[key] ==
+                       sum(get(row, field, 0) for row in np_telemetry)
+        end
+        Test.@test np.assembly_stats["indel_requested"] >=
+                   np.assembly_stats["indel_attempted"]
+        Test.@test np.assembly_stats["indel_attempted"] >=
+                   np.assembly_stats["indel_completed"] +
+                   np.assembly_stats["indel_truncated"]
+        Test.@test np.assembly_stats["indel_completed"] >=
+                   np.assembly_stats["indel_engaged"]
+        Test.@test np.assembly_stats["indel_decodes"] ==
+                   np.assembly_stats["indel_completed"]
+        Test.@test np.assembly_stats["truncated_decodes"] ==
+                   np.assembly_stats["indel_truncated"]
         Test.@test np.assembly_stats["trace_contract_errors"] == 0
         Test.@test np.assembly_stats["window_divergences"] >= 0
     end
@@ -194,7 +231,9 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         id_np = Float64[]
         id_il = Float64[]
         np_indel_moves = Bool[]
+        np_indel_requested = Int[]
         np_indel_decodes = Int[]
+        np_indel_engaged = Int[]
         np_nonempty = Bool[]
         for seed in seeds
             reads,
@@ -207,7 +246,9 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             push!(id_np, _best_identity_to_ref(np.contigs, refseq))
             push!(id_il, _best_identity_to_ref(il.contigs, refseq))
             push!(np_indel_moves, np.assembly_stats["indel_moves"] == true)
+            push!(np_indel_requested, np.assembly_stats["indel_requested"])
             push!(np_indel_decodes, np.assembly_stats["indel_decodes"])
+            push!(np_indel_engaged, np.assembly_stats["indel_engaged"])
             push!(np_nonempty, !isempty(np.contigs))
         end
         mean_np = Statistics.mean(id_np)
@@ -215,9 +256,14 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         wins = count(id_np .>= id_il)
         @info "E2E nanopore-vs-illumina identity" seeds = collect(seeds) id_np id_il mean_np mean_il wins
 
-        # The nanopore arm actually engaged the indel decode and produced contigs.
+        # Every nanopore arm requests indel service. The branching/frontier
+        # classifier may correctly reject individual high-branching seeds, so the
+        # matrix requires actual completed and gap-engaged decodes across the
+        # fixed seeds rather than forcing every seed through an unaffordable rung.
         Test.@test all(np_indel_moves)
-        Test.@test all(>(0), np_indel_decodes)
+        Test.@test all(>(0), np_indel_requested)
+        Test.@test any(>(0), np_indel_decodes)
+        Test.@test any(>(0), np_indel_engaged)
         Test.@test all(np_nonempty)
         # DIFFERENTIAL (the PR's value): indel-aware correction lands closer to the
         # truth than substitution-only on the SAME nanopore reads, on average.

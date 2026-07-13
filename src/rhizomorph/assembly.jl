@@ -151,8 +151,8 @@ struct AssemblyConfig
 
     # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
     # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
-    #   hard-read gating + soft-EM edge memory (record-only v1). Built for
-    #   real-scale inputs.
+    #   hard-read gating + soft-EM v2 competing-path edge memory + frontier-
+    #   budgeted indel scheduling. Built for real-scale inputs.
     # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
     #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
     #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
@@ -933,13 +933,16 @@ routing can be unit-tested without running the (slow) corrector.
 - `:scalable` — coarse LoRMA-style 3-rung k-ladder, a low (2) iteration cap,
   skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
   linear single-substitution fix before the decode), hard-read gating (Stage 3,
-  now narrowed to bubble/repeat vertices only), soft-EM edge memory (Stage 2,
-  record-only v1), the size-aware auto-beam (`beam_width=nothing`), and
+  now narrowed to bubble/repeat vertices only), soft-EM competing-path edge
+  memory (Stage 2, v2 wired), branching/frontier-budgeted indel scheduling, the
+  size-aware
+  auto-beam (`beam_width=nothing`), and
   `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
   machinery and was the cause of the quality gap; the skip/classification is
   coverage-based and mode-agnostic).
 - `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
   (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  unrestricted indel scheduling,
   `graph_mode=nothing` (derive from `config.graph_mode`, byte-identical
   passthrough), and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
   of the prior corrector default: master's corrector route used the size-aware
@@ -948,7 +951,7 @@ routing can be unit-tested without running the (slow) corrector.
   Intended for SMALL-SCALE / high-sensitivity inputs; the exact beam can OOM on
   very large reads — use `:scalable` at scale.
 """
-function _corrector_strategy_knobs(strategy::Symbol)
+function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
     if strategy == :scalable
         return (
             n_k_rungs = 3,
@@ -979,6 +982,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             # caps (the bounded Bellman-Ford relaxation replacing the O(V³)
             # Floyd-Warshall). Ignored on substitution-only profiles (:illumina),
             # whose decode threads no indel params at all.
+            indel_schedule = :frontier_budgeted,
             band_width = 16,
             deletion_max_run = 3,
             max_insertion_run = 3
@@ -998,7 +1002,10 @@ function _corrector_strategy_knobs(strategy::Symbol)
             graph_mode = nothing,
             # Indel-decode bounds (td-9q84 / 4a): maximum-sensitivity tier ⇒ UNBOUNDED
             # band (`band_width=nothing`, the exact/oracle setting) + larger run caps.
+            # The unrestricted schedule preserves the tier's explicit exact/oracle
+            # semantics rather than applying the scalable frontier classifier.
             # Consulted only when the error profile enables indels.
+            indel_schedule = :unrestricted,
             band_width = nothing,
             deletion_max_run = 10,
             max_insertion_run = 10
@@ -1142,6 +1149,7 @@ function _run_stage1_correction(reads, config::AssemblyConfig)
             cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
             indel_params = indel_params,
+            indel_schedule = knobs.indel_schedule,
             verbose = false,
             enable_checkpointing = false,
             output_dir = corrector_output_dir
@@ -1313,9 +1321,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
         assembly.assembly_stats["strategy"] = String(config.strategy)
-        # Indel-aware correction provenance (td-9q84 / 4a): the driving error profile
-        # and whether it engaged the pair-HMM gap moves. `indel_moves=false` (the
-        # :illumina default) marks the substitution-only oracle path.
+        # Indel-aware correction provenance (td-9q84 / 4a): the driving error
+        # profile and whether it requested pair-HMM gap moves. `indel_moves` is the
+        # retained profile-intent field; it does not claim that any rung engaged.
+        # `indel_engaged` below carries that runtime outcome explicitly.
         assembly.assembly_stats["sequencing_tech"] = String(config.sequencing_tech)
         assembly.assembly_stats["indel_moves"] = indel_params !== nothing
         # Final-pass graph reuse provenance (td-04tb): true when the re-assembly
@@ -1348,16 +1357,47 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
         corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
         assembly.assembly_stats["corrector_errors"] = corrector_errors
-        assembly.assembly_stats["indel_decodes"] =
-            get(corrector_errors, :indel_decodes, 0)
-        assembly.assembly_stats["truncated_decodes"] =
-            get(corrector_errors, :truncated_decodes, 0)
+        indel_rung_telemetry = get(
+            _corr_meta,
+            :indel_rung_telemetry,
+            Dict{Symbol, Any}[],
+        )
+        indel_requested = get(_corr_meta, :indel_requested, 0)
+        indel_attempted = get(
+            _corr_meta,
+            :indel_attempted,
+            get(corrector_errors, :indel_attempts, 0),
+        )
+        indel_completed = get(
+            _corr_meta,
+            :indel_completed,
+            get(corrector_errors, :indel_decodes, 0),
+        )
+        indel_truncated = get(
+            _corr_meta,
+            :indel_truncated,
+            get(corrector_errors, :truncated_decodes, 0),
+        )
+        indel_engaged = get(
+            _corr_meta,
+            :indel_engaged,
+            get(corrector_errors, :indel_engaged, 0),
+        )
+        assembly.assembly_stats["indel_rung_telemetry"] = indel_rung_telemetry
+        assembly.assembly_stats["indel_requested"] = indel_requested
+        assembly.assembly_stats["indel_attempted"] = indel_attempted
+        assembly.assembly_stats["indel_completed"] = indel_completed
+        assembly.assembly_stats["indel_truncated"] = indel_truncated
+        assembly.assembly_stats["indel_engaged"] = indel_engaged
+        # Backward-compatible aliases for callers predating per-rung telemetry.
+        assembly.assembly_stats["indel_decodes"] = indel_completed
+        assembly.assembly_stats["truncated_decodes"] = indel_truncated
         assembly.assembly_stats["trace_contract_errors"] =
             get(corrector_errors, :trace_contract_errors, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
-        # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
-        # :exhaustive), never a bare `true` (FIX 1/5).
+        # Soft-EM metadata names the active v2 competing-path/support-floor
+        # engine (or is `false` on :exhaustive), never a bare `true`.
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
         assembly.assembly_stats["skip_fraction"] = get(_corr_meta, :last_skip_fraction, 0.0)
         assembly.assembly_stats["skip_fraction_per_pass"] = get(_corr_meta, :skip_fraction_per_pass, Float64[])

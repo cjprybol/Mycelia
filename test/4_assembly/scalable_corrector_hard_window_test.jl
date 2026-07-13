@@ -128,6 +128,26 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         Test.@test isempty(Mycelia._hard_window_ranges(clean[1], k, empty_hard))
     end
 
+    Test.@testset "doublestrand windows use observed graph orientation" begin
+        branch_reads = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("r1", "TTTA", "IIII"),
+            FASTX.FASTQ.Record("r2", "TTTC", "IIII"),
+        ]
+        graph = R.build_qualmer_graph(branch_reads, 3; mode = :doublestrand)
+        hard = Mycelia._hard_vertex_set(graph, 3)
+        Test.@test Set(string.(hard)) == Set(["TTT"])
+        for read in branch_reads
+            Test.@test Mycelia.should_decode_read(
+                read, 3, hard; graph_mode = :doublestrand)
+            Test.@test Mycelia._hard_window_ranges(
+                read, 3, hard;
+                pad = 3,
+                max_window = 500,
+                graph_mode = :doublestrand,
+            ) == UnitRange{Int}[1:4]
+        end
+    end
+
     Test.@testset "end-to-end scalable assemble reports a skip fraction" begin
         rng = Random.MersenneTwister(23)
         ref = join(rand(rng, _BASES, 1200))

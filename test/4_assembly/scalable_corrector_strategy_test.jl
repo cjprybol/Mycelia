@@ -73,6 +73,9 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test ex.windowed_decode == false
         Test.@test ex.soft_em == false
         Test.@test ex.beam_width == typemax(Int)
+        # Exhaustive is the explicit exact/oracle tier: it must never inherit the
+        # scalable branching/frontier classifier.
+        Test.@test ex.indel_schedule == :unrestricted
         # td-nt69: :exhaustive derives its corrector graph_mode from
         # config.graph_mode (nothing ⇒ derive), a byte-identical passthrough.
         Test.@test ex.graph_mode === nothing
@@ -91,6 +94,7 @@ Test.@testset "scalable corrector strategy fork (td-fuo8)" begin
         Test.@test sc.windowed_decode == true
         Test.@test sc.soft_em == true
         Test.@test sc.beam_width === nothing
+        Test.@test sc.indel_schedule == :frontier_budgeted
         # td-nt69: :scalable runs the corrector on a :doublestrand graph. Forcing
         # :canonical was THE cause of the quality gap (skip machinery was over-
         # constrained to require it); the classification is coverage-based and
