@@ -81,7 +81,8 @@ Test.@testset "calibrated gate is excluded under indel mode (fail-open)" begin
         (base = base, gated = gated)
     end
 
-    probability_model = Mycelia.CorrectionConfidenceModel(0.0, 0.0, 0.0, 0.0, 0.0)
+    probability_model = Mycelia.CorrectionConfidenceModel(
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.5)
     probability_gated = mktempdir() do d
         _assemble_corrected(_write_fastq(reads, d), k;
             threshold = nothing, indel_params = indel, outdir = mktempdir(),

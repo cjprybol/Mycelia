@@ -37,6 +37,7 @@
 #   MYCELIA_RPC_GAP_THRESHOLDS (default 0,0.5,1,2,4),
 #   MYCELIA_RPC_PROB_THRESHOLDS (dense near zero, where recall changes fastest)
 
+import Dates
 import Pkg
 if isinteractive()
     Pkg.activate(joinpath(@__DIR__, ".."))
@@ -97,14 +98,39 @@ function calibrated_probability_points()::Vector
             ) for threshold in thresholds]
 end
 
+function persist_runtime_probability_model(
+        model::Mycelia.CorrectionConfidenceModel,
+        results_dir::AbstractString)::String
+    mkpath(results_dir)
+    model_path = joinpath(results_dir, "runtime_probability_model.csv")
+    coefficients = (
+        intercept = model.intercept,
+        raw_gap = model.gap_weight,
+        min_kmer_support = model.min_kmer_support_weight,
+        all_stage0_solid = model.stage0_solid_weight,
+        competing_branch_support_ratio = model.branch_support_ratio_weight,
+        collapsed_frontier = model.collapsed_frontier_weight
+    )
+    open(model_path, "w") do io
+        println(io, "term,coefficient")
+        for term in keys(coefficients)
+            println(io, "$(term),$(getproperty(coefficients, term))")
+        end
+    end
+    return model_path
+end
+
 """
 Fit the probability gate on an independent synthetic cohort and convert the
 benchmark logistic coefficients to the runtime model's fixed feature order.
 The calibration cohort uses a disjoint seed and never sees frontier truth.
 """
 function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
-        coverage::Float64, k::Int, seed::Int)::Mycelia.CorrectionConfidenceModel
-    calibration_results_dir = joinpath(@__DIR__, "results", "td21eg_calibration")
+        coverage::Float64, k::Int, seed::Int)::NamedTuple
+    results_root = joinpath(@__DIR__, "results")
+    mkpath(results_root)
+    calibration_results_dir = mktempdir(
+        results_root; prefix = "td21eg_calibration_", cleanup = false)
     artifact = run_gap_calibration(
         k = k,
         genome_length = max(1200, 10 * readlen),
@@ -118,14 +144,15 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
         :raw_gap,
         :min_kmer_support,
         :all_stage0_solid,
-        :competing_branch_support_ratio
+        :competing_branch_support_ratio,
+        :collapsed_frontier
     )
     artifact.feature_names == expected_features ||
         throw(ArgumentError("calibration/runtime feature-order mismatch: " *
                             "expected $(expected_features), got $(artifact.feature_names)"))
     model = artifact.multifeature_model
     length(model.b) == length(expected_features) ||
-        throw(ArgumentError("multi-feature logistic must have four coefficients"))
+        throw(ArgumentError("multi-feature logistic has wrong coefficient count"))
     runtime_model = Mycelia.CorrectionConfidenceModel(model.a, model.b...)
     println("Calibration cohort: multi-feature model fitted with grouped holdout; " *
             "seed=$(seed + 10_000), n_train=$(length(artifact.training.labels)), " *
@@ -135,8 +162,9 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
             "gap=$(runtime_model.gap_weight), " *
             "min_support=$(runtime_model.min_kmer_support_weight), " *
             "stage0_solid=$(runtime_model.stage0_solid_weight), " *
-            "competing_branch=$(runtime_model.branch_support_ratio_weight)")
-    return runtime_model
+            "competing_branch=$(runtime_model.branch_support_ratio_weight), " *
+            "collapsed_frontier=$(runtime_model.collapsed_frontier_weight)")
+    return (model = runtime_model, results_dir = calibration_results_dir)
 end
 
 """
@@ -204,6 +232,9 @@ function run_pr_curve(;
         PR_OPERATING_POINTS, calibrated_gap_points(), calibrated_probability_points())
     points = isempty(want) ? all_points :
              filter(p -> p.name in split(want, ","), all_points)
+    calibration_artifact = ""
+    results_dir = joinpath(@__DIR__, "results")
+    mkpath(results_dir)
 
     println("=== Rhizomorph Correction Precision-Recall Frontier ===")
     println("Start: $(Dates.now())   error rates: $errs   coverage: $(coverage)x   k: $k")
@@ -217,9 +248,18 @@ function run_pr_curve(;
     println("Reference: $ref_label ($glen bp)")
     k = min(k, minimum(readlens), glen)
     if any(startswith(point.name, "calibrated-prob-") for point in points)
-        effective_probability_model = probability_model === nothing ?
-                                      fit_frontier_probability_model(
-            errs, readlens[1], coverage, k, seed) : probability_model
+        effective_probability_model = if probability_model === nothing
+            fit = fit_frontier_probability_model(
+                errs, readlens[1], coverage, k, seed)
+            calibration_artifact = fit.results_dir
+            fit.model
+        else
+            supplied_dir = mktempdir(
+                results_dir; prefix = "td21eg_caller_model_", cleanup = false)
+            persist_runtime_probability_model(probability_model, supplied_dir)
+            calibration_artifact = supplied_dir
+            probability_model
+        end
         points = [startswith(point.name, "calibrated-prob-") ?
                   merge(point,
                       (calibrated_probability_model = effective_probability_model,)) :
@@ -231,7 +271,8 @@ function run_pr_curve(;
         error_rate = Float64[], point = String[], ok = Bool[], n_reads = Int[],
         reads_scored = Int[], injected = Int[], true_fixes = Int[], mis_fixes = Int[],
         over_corrections = Int[], recall = Float64[], precision = Float64[],
-        over_correction_rate = Float64[], correction_rate = Float64[], runtime_s = Float64[])
+        over_correction_rate = Float64[], correction_rate = Float64[], runtime_s = Float64[],
+        calibration_artifact = String[])
 
     for err in errs
         # SAME reads for every operating point at this error rate (fair comparison).
@@ -265,7 +306,9 @@ function run_pr_curve(;
                     reads_scored = m.reads_scored, injected = m.injected, true_fixes = m.tp,
                     mis_fixes = m.mis_fixes, over_corrections = m.over, recall = m.recall,
                     precision = m.precision, over_correction_rate = m.over_rate,
-                    correction_rate = m.correction_rate, runtime_s = rt))
+                    correction_rate = m.correction_rate, runtime_s = rt,
+                    calibration_artifact = startswith(pt.name, "calibrated-prob-") ?
+                                           calibration_artifact : ""))
             println("  $(rpad(pt.name, 15)) recall=$(rpad(round(m.recall; digits=4), 8)) " *
                     "precision=$(rpad(round(m.precision; digits=4), 8)) " *
                     "over_rate=$(rpad(round(m.over_rate; digits=6), 10)) " *
@@ -273,8 +316,6 @@ function run_pr_curve(;
         end
     end
 
-    results_dir = joinpath(@__DIR__, "results")
-    mkpath(results_dir)
     ts = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
     csv = joinpath(results_dir, "rhizomorph_correction_pr_curve_$(ts).csv")
     CSV.write(csv, rows)

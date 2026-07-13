@@ -53,6 +53,16 @@ Test.@testset "calibrated probability operating points" begin
             calibrated_probability_points()
         end,
         "must be in [0, 1]")
+
+    model = Mycelia.CorrectionConfidenceModel(
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    mktempdir() do dir
+        model_path = persist_runtime_probability_model(model, dir)
+        Test.@test isfile(model_path)
+        lines = readlines(model_path)
+        Test.@test first(lines) == "term,coefficient"
+        Test.@test "collapsed_frontier,6.0" in lines
+    end
 end
 
 Test.@testset "assess_frontier_dominance" begin

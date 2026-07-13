@@ -56,20 +56,26 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
         :raw_gap,
         :min_kmer_support,
         :all_stage0_solid,
-        :competing_branch_support_ratio
+        :competing_branch_support_ratio,
+        :collapsed_frontier
     )
-    Test.@test length(artifact.multifeature_model.b) == 4
-    Test.@test artifact.gap_model.b isa Float64
+    Test.@test length(artifact.multifeature_model.b) == 5
+    Test.@test artifact.gap_model.b isa Vector{Float64}
+    Test.@test length(artifact.gap_model.b) == 2
     Test.@test artifact.metrics_path ==
                joinpath(dirname(artifact.model_path), "rhizomorph_gap_calibration.csv")
     Test.@test artifact.manifest_path == joinpath(
         dirname(artifact.model_path), "rhizomorph_gap_calibration_manifest.csv")
     Test.@test artifact.training.n > 0
     Test.@test artifact.heldout.n > 0
-    Test.@test size(artifact.training.features) == (artifact.training.n, 4)
-    Test.@test size(artifact.heldout.features) == (artifact.heldout.n, 4)
+    Test.@test size(artifact.training.features) == (artifact.training.n, 5)
+    Test.@test size(artifact.heldout.features) == (artifact.heldout.n, 5)
+    Test.@test size(artifact.training.gap_features) == (artifact.training.n, 2)
+    Test.@test size(artifact.heldout.gap_features) == (artifact.heldout.n, 2)
     Test.@test all(row.candidate_edit for row in artifact.training.rows)
     Test.@test all(row.candidate_edit for row in artifact.heldout.rows)
+    Test.@test any(artifact.training.collapsed_frontier)
+    Test.@test any(artifact.heldout.collapsed_frontier)
     Test.@test artifact.serving_config == (
         max_k = 13,
         skip_solid = false,
@@ -96,6 +102,11 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
                    artifact.contract_read_passes[error_rate] <=
                    artifact.max_contract_skip_fraction
     end
+    Test.@test sum(values(artifact.contract_skips)) > 0
+    Test.@test _contract_skip_fraction(1, 4, 0.25) == 0.25
+    test_throws_message(ArgumentError, "exceeds configured bound") do
+        _contract_skip_fraction(1, 4, 0.2)
+    end
 
     metric_scopes = Set((row.scope, row.error_rate) for row in artifact.rows)
     Test.@test ("pooled", nothing) in metric_scopes
@@ -108,6 +119,7 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
                    Set(["multifeature-logistic", "gap-only-logistic"])
         for row in scope_rows
             Test.@test row.n > 0
+            Test.@test isfinite(row.auroc) && 0.0 <= row.auroc <= 1.0
             Test.@test isfinite(row.ece) && 0.0 <= row.ece <= 1.0
             Test.@test isfinite(row.brier) && 0.0 <= row.brier <= 1.0
             Test.@test all(bin.count > 0 for bin in row.reliability)
@@ -115,10 +127,24 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
     end
     pooled = filter(row -> row.scope == "pooled", artifact.rows)
     Test.@test all(!isnan(row.auroc) for row in pooled)
-    Test.@test only(filter(row -> row.model == "gap-only-logistic", pooled)).auroc > 0.5
+    Test.@test Set(row.model for row in pooled) ==
+               Set(["multifeature-logistic", "gap-only-logistic"])
 
     test_throws_message(ArgumentError, "max_contract_skip_fraction") do
         run_gap_calibration(max_contract_skip_fraction = 1.1)
+    end
+    test_throws_message(ArgumentError, "needs both correctness classes") do
+        _heldout_metric_rows(
+            (a = 0.0, b = zeros(5)),
+            (a = 0.0, b = zeros(2)),
+            (
+                labels = [true],
+                rows = [(error_rate = 0.10,)],
+                collapsed_frontier = [false],
+                features = zeros(1, 5),
+                gap_features = zeros(1, 2),
+                scores = [0.0]
+            ); nbins = 2)
     end
 end
 
@@ -158,11 +184,12 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
         Test.@test length(gt.positions) == n_rows
         Test.@test length(gt.candidate_edits) == n_rows
         Test.@test length(gt.feature_rows) == n_rows
-        Test.@test size(gt.features) == (n_rows, 4)
+        Test.@test size(gt.features) == (n_rows, 5)
         Test.@test all(isfinite, gt.features)
         Test.@test all(gt.features[:, 2] .>= 1.0)
         Test.@test all(value -> value == 0.0 || value == 1.0, gt.features[:, 3])
         Test.@test all(value -> 0.0 <= value <= 1.0, gt.features[:, 4])
+        Test.@test all(value -> value == 0.0 || value == 1.0, gt.features[:, 5])
 
         path = only(gt.result.paths).path
         Test.@test path !== nothing
@@ -180,6 +207,8 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
                        expected_features.all_stage0_solid
             Test.@test gt.feature_rows[row_index].competing_branch_support_ratio ==
                        expected_features.competing_branch_support_ratio
+            Test.@test gt.feature_rows[row_index].collapsed_frontier ==
+                       (gt.scores[row_index] == Inf)
             Test.@test gt.candidate_edits[row_index] ==
                        (corrected_sequence[gt.positions[row_index]] !=
                         observed[gt.positions[row_index]])

@@ -36,7 +36,8 @@ Test.@testset "correction feature serving sink" begin
         Test.@test observation.k == k
         Test.@test 1 <= observation.position <= length(clean)
         Test.@test observation.observed_base != observation.corrected_base
-        Test.@test isfinite(observation.features.raw_gap)
+        Test.@test isfinite(observation.features.raw_gap) ||
+                   observation.features.raw_gap == Inf
         Test.@test isfinite(observation.features.min_kmer_support)
         Test.@test 0.0 <= observation.features.competing_branch_support_ratio <= 1.0
     end
@@ -59,11 +60,32 @@ Test.@testset "correction feature serving sink" begin
             correction_feature_sink = _ -> error("sink sentinel")),
         "sink sentinel")
 
+    ambiguous = _sink_record("ambiguous", repeat("N", length(clean)))
+    ambiguous_diagnostics = Mycelia.CorrectorDiagnostics()
+    ambiguous_result = Mycelia.find_optimal_sequence_path(
+        ambiguous,
+        graph,
+        k;
+        graph_mode = :canonical,
+        diagnostics = ambiguous_diagnostics,
+        correction_feature_sink = _ -> nothing,
+    )
+    Test.@test first(ambiguous_result) == ambiguous
+    Test.@test ambiguous_diagnostics.unkmerizable_reads[] == 1
+    Test.@test ambiguous_diagnostics.gate_skipped[] == 1
+
     extreme = Mycelia.CorrectionConfidenceModel(
-        0.0, floatmax(Float64), -floatmax(Float64), 0.0, 0.0)
+        0.0, floatmax(Float64), -floatmax(Float64), 0.0, 0.0, 0.5)
     features = Mycelia.CorrectionConfidenceFeatures(
         floatmax(Float64), floatmax(Float64), false, 0.5)
     Test.@test _sink_throws_message(
         () -> Mycelia.correction_confidence_probability(extreme, features),
         "logit must not be NaN")
+
+    collapsed_model = Mycelia.CorrectionConfidenceModel(
+        0.0, 0.0, 0.0, 0.0, 0.0, 0.2)
+    collapsed_features = Mycelia.CorrectionConfidenceFeatures(
+        Inf, 3.0, true, 0.8)
+    Test.@test Mycelia.correction_confidence_probability(
+        collapsed_model, collapsed_features) ≈ 1.0 / (1.0 + exp(-0.2))
 end

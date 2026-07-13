@@ -17,7 +17,8 @@ const CORRECTION_CONFIDENCE_FEATURES = (
     :raw_gap,
     :min_kmer_support,
     :all_stage0_solid,
-    :competing_branch_support_ratio
+    :competing_branch_support_ratio,
+    :collapsed_frontier
 )
 
 function correction_calibration_serving_config(k::Int)::NamedTuple
@@ -34,6 +35,21 @@ function correction_calibration_serving_config(k::Int)::NamedTuple
     )
 end
 
+function _contract_skip_fraction(contract_skips::Int, read_passes::Int,
+        maximum_fraction::Float64)::Float64
+    contract_skips >= 0 || throw(ArgumentError("contract_skips must be non-negative"))
+    read_passes >= 0 || throw(ArgumentError("read_passes must be non-negative"))
+    0.0 <= maximum_fraction <= 1.0 ||
+        throw(ArgumentError("maximum contract-skip fraction must be in [0, 1]"))
+    contract_skips <= read_passes ||
+        throw(ArgumentError("contract skips cannot exceed read passes"))
+    fraction = read_passes == 0 ? 0.0 : contract_skips / read_passes
+    fraction <= maximum_fraction ||
+        throw(ArgumentError("feature-contract skip fraction $(fraction) exceeds " *
+                            "configured bound $(maximum_fraction)"))
+    return fraction
+end
+
 """
     collect_gap_truth(fixture, observed_sequence, truth_sequence;
         config, solid_kmers, quality_scores)
@@ -41,11 +57,11 @@ end
 Decode one fixed-length observation and align `position_gaps[i]` with
 `path.steps[i + 1]`. A k-mer transition contributes the newly emitted base at
 read position `i + k`; its label is true iff that corrected base matches truth.
-For each finite-gap base, emit the fixed feature vector
-`(raw_gap, min_kmer_support, all_stage0_solid, competing_branch_support_ratio)` plus a
-`candidate_edit` flag. The support/solidity window is
+For each candidate base, emit the fixed feature vector
+`(raw_gap, min_kmer_support, all_stage0_solid, competing_branch_support_ratio,
+collapsed_frontier)` plus a `candidate_edit` flag. The support/solidity window is
 `path.steps[i + 1:min(i + k, nsteps)]`, the decoded k-mers overlapping that
-base. Collapsed-frontier `Inf` sentinels are excluded before calibration.
+base. Collapsed-frontier `Inf` sentinels are retained as an explicit stratum.
 """
 function collect_gap_truth(fixture::NamedTuple,
         observed_sequence::AbstractString,
@@ -87,7 +103,8 @@ function collect_gap_truth(fixture::NamedTuple,
     candidate_edits = Bool[]
     feature_rows = NamedTuple[]
     for i in eachindex(gaps)
-        isfinite(gaps[i]) || continue
+        (isfinite(gaps[i]) || gaps[i] == Inf) ||
+            throw(ArgumentError("position gaps must be finite or +Inf"))
         position = i + k
         position <= lastindex(truth_sequence) || continue
         shared_features = Mycelia.correction_confidence_features(
@@ -97,7 +114,8 @@ function collect_gap_truth(fixture::NamedTuple,
             min_kmer_support = shared_features.min_kmer_support,
             all_stage0_solid = shared_features.all_stage0_solid,
             competing_branch_support_ratio =
-            shared_features.competing_branch_support_ratio
+            shared_features.competing_branch_support_ratio,
+            collapsed_frontier = shared_features.raw_gap == Inf
         )
         push!(scores, features.raw_gap)
         push!(labels, corrected_sequence[position] == truth_sequence[position])
@@ -110,10 +128,11 @@ function collect_gap_truth(fixture::NamedTuple,
         length(CORRECTION_CONFIDENCE_FEATURES))
     for (row_index, row) in enumerate(feature_rows)
         features[row_index, :] .= (
-            row.raw_gap,
+            row.collapsed_frontier ? 0.0 : row.raw_gap,
             row.min_kmer_support,
             row.all_stage0_solid ? 1.0 : 0.0,
-            row.competing_branch_support_ratio
+            row.competing_branch_support_ratio,
+            row.collapsed_frontier ? 1.0 : 0.0
         )
     end
     return (; scores, labels, positions, candidate_edits, features, feature_rows, result)
@@ -166,7 +185,7 @@ end
 """
     grouped_read_split(rows; holdout_fraction=0.2, seed=42) -> NamedTuple
 
-Split finite-gap rows by `(error_rate, read_id)`, stratified by error rate. The
+Split candidate rows by `(error_rate, read_id)`, stratified by error rate. The
 split is deterministic under `seed`; every error rate with at least two read
 groups contributes at least one held-out and one training group.
 """
@@ -208,10 +227,11 @@ function _feature_matrix(rows::AbstractVector{<:NamedTuple})::Matrix{Float64}
         length(CORRECTION_CONFIDENCE_FEATURES))
     for (i, row) in enumerate(rows)
         features[i, :] .= (
-            row.raw_gap,
+            row.collapsed_frontier ? 0.0 : row.raw_gap,
             row.min_kmer_support,
             row.all_stage0_solid ? 1.0 : 0.0,
-            row.competing_branch_support_ratio
+            row.competing_branch_support_ratio,
+            row.collapsed_frontier ? 1.0 : 0.0
         )
     end
     return features
@@ -227,6 +247,15 @@ function _calibration_partition(rows::AbstractVector{<:NamedTuple},
         indices = candidate_indices,
         features = _feature_matrix(candidate_rows),
         scores = Float64[row.raw_gap for row in candidate_rows],
+        collapsed_frontier = Bool[row.collapsed_frontier for row in candidate_rows],
+        # The gap-only baseline still uses only gap information. Its second
+        # column encodes the `Inf` sentinel state so beam-collapsed candidates
+        # are modeled rather than dropped or treated as certainty.
+        gap_features = hcat(
+            Float64[row.collapsed_frontier ? 0.0 : row.raw_gap
+                    for row in candidate_rows],
+            Float64[row.collapsed_frontier ? 1.0 : 0.0
+                    for row in candidate_rows]),
         labels = Bool[row.label for row in candidate_rows],
         groups = Tuple{Float64, String}[(Float64(row.error_rate), String(row.read_id))
                                         for row in candidate_rows]
@@ -262,9 +291,13 @@ function _heldout_metric_rows(multifeature_model::NamedTuple, gap_model::NamedTu
     end
     for (scope, error_rate, indices) in scopes
         labels = heldout.labels[indices]
+        (all(labels) || !any(labels)) &&
+            throw(ArgumentError(
+                "held-out $(scope) scope needs both correctness classes"))
         multifeature_probabilities = predict_logistic(
             multifeature_model, heldout.features[indices, :])
-        gap_probabilities = predict_logistic(gap_model, heldout.scores[indices])
+        gap_probabilities = predict_logistic(
+            gap_model, heldout.gap_features[indices, :])
         push!(rows,
             _metric_row("multifeature-logistic", scope, error_rate,
                 multifeature_probabilities, labels; nbins = nbins))
@@ -404,6 +437,7 @@ function run_gap_calibration(;
                         all_stage0_solid = features.all_stage0_solid,
                         competing_branch_support_ratio =
                         features.competing_branch_support_ratio,
+                        collapsed_frontier = features.raw_gap == Inf,
                         label = event.corrected_base == truth[event.position],
                         candidate_edit = event.corrected_base != event.observed_base
                     ))
@@ -436,16 +470,18 @@ function run_gap_calibration(;
         println("err=$(er): candidate_events=$(rate_event_count)  " *
                 "candidate-bearing_reads=$(length(rate_groups))  " *
                 "feature_contract_skips=$(contract_skips[er])")
-        contract_skip_fraction = contract_read_passes[er] == 0 ? 0.0 :
-                                 contract_skips[er] / contract_read_passes[er]
-        contract_skip_fraction <= max_contract_skip_fraction ||
-            throw(ArgumentError("error rate $(er) feature-contract skip fraction " *
-                                "$(contract_skip_fraction) exceeds configured bound " *
-                                "$(max_contract_skip_fraction)"))
+        try
+            _contract_skip_fraction(
+                contract_skips[er], contract_read_passes[er],
+                max_contract_skip_fraction)
+        catch error
+            error isa ArgumentError || rethrow()
+            throw(ArgumentError("error rate $(er) $(error.msg)"))
+        end
     end
 
     isempty(dataset) &&
-        throw(ArgumentError("no finite candidate-substitution events available"))
+        throw(ArgumentError("no candidate-substitution events available"))
     all(row.candidate_edit for row in dataset) ||
         throw(ArgumentError("correction feature sink emitted a non-candidate event"))
     split = grouped_read_split(dataset;
@@ -467,16 +503,27 @@ function run_gap_calibration(;
     isempty(training.labels) &&
         throw(ArgumentError("no candidate edits in training groups"))
     isempty(heldout.labels) && throw(ArgumentError("no candidate edits in held-out groups"))
+    any(training.collapsed_frontier) ||
+        throw(ArgumentError(
+            "training groups need collapsed-frontier candidate edits"))
+    any(heldout.collapsed_frontier) ||
+        throw(ArgumentError(
+            "held-out groups need collapsed-frontier candidate edits"))
+    any(!, training.collapsed_frontier) ||
+        throw(ArgumentError("training groups need finite-gap candidate edits"))
+    any(!, heldout.collapsed_frontier) ||
+        throw(ArgumentError("held-out groups need finite-gap candidate edits"))
     (all(training.labels) || !any(training.labels)) &&
         throw(ArgumentError("candidate-edit training labels need both classes"))
-
+    collapsed_training_indices = findall(training.collapsed_frontier)
     multifeature_model = fit_logistic_map(training.features, training.labels)
-    gap_model = fit_logistic_map(training.scores, training.labels)
+    gap_model = fit_logistic_map(training.gap_features, training.labels)
     out_rows = _heldout_metric_rows(
         multifeature_model, gap_model, heldout; nbins = nbins)
     println("train candidate edits=$(training.n)  held-out=$(heldout.n)  " *
             "train groups=$(length(unique(training.groups)))  " *
             "held-out groups=$(length(unique(heldout.groups)))")
+    println("collapsed-frontier training edits=$(length(collapsed_training_indices))")
     for row in out_rows
         rate_label = row.error_rate === nothing ? "pooled" : "err=$(row.error_rate)"
         println("$(rpad(rate_label, 10)) $(rpad(row.model, 23)) " *
@@ -507,7 +554,9 @@ function run_gap_calibration(;
                 "multifeature-logistic,$(feature_name),$(coefficient)")
         end
         println(io, "gap-only-logistic,intercept,$(gap_model.a)")
-        println(io, "gap-only-logistic,raw_gap,$(gap_model.b)")
+        println(io, "gap-only-logistic,raw_gap,$(gap_model.b[1])")
+        println(io,
+            "gap-only-logistic,collapsed_frontier,$(gap_model.b[2])")
     end
     println("Wrote $(model_path)")
 
@@ -524,6 +573,10 @@ function run_gap_calibration(;
         println(io, "max_contract_skip_fraction,$(max_contract_skip_fraction)")
         println(io, "training_candidate_edits,$(training.n)")
         println(io, "heldout_candidate_edits,$(heldout.n)")
+        println(io,
+            "training_collapsed_frontier_edits,$(length(collapsed_training_indices))")
+        println(io,
+            "heldout_collapsed_frontier_edits,$(count(heldout.collapsed_frontier))")
         println(io, "error_rates,$(join(error_rates, ';'))")
         for error_rate in error_rates
             println(io,

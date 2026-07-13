@@ -35,12 +35,17 @@ function _prob_throws_message(f::Function, fragment::AbstractString)::Bool
 end
 
 Test.@testset "calibrated probability gate" begin
-    model = Mycelia.CorrectionConfidenceModel(0.0, 0.0, 0.0, 0.0, 0.0)
+    model = Mycelia.CorrectionConfidenceModel(0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     Test.@test Mycelia.correction_confidence_probability(
         model, 1.0, 4.0, true, 0.75) == 0.5
 
     Test.@test _prob_throws_message(
-        () -> Mycelia.CorrectionConfidenceModel(0.0, NaN, 0.0, 0.0, 0.0),
+        () -> Mycelia.CorrectionConfidenceModel(
+            0.0, NaN, 0.0, 0.0, 0.0, 0.5),
+        "coefficients must be finite")
+    Test.@test _prob_throws_message(
+        () -> Mycelia.CorrectionConfidenceModel(
+            0.0, 0.0, 0.0, 0.0, 0.0, NaN),
         "coefficients must be finite")
 
     k = 7
