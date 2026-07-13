@@ -167,6 +167,8 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test np.assembly_stats["indel_moves"] == true
         Test.@test np.assembly_stats["sequencing_tech"] == "nanopore"
         Test.@test np.assembly_stats["indel_decodes"] >= 0
+        Test.@test np.assembly_stats["truncated_decodes"] >= 0
+        Test.@test np.assembly_stats["trace_contract_errors"] == 0
         Test.@test np.assembly_stats["window_divergences"] >= 0
     end
 

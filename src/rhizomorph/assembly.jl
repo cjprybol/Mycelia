@@ -1341,6 +1341,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["corrector_errors"] = corrector_errors
         assembly.assembly_stats["indel_decodes"] =
             get(corrector_errors, :indel_decodes, 0)
+        assembly.assembly_stats["truncated_decodes"] =
+            get(corrector_errors, :truncated_decodes, 0)
+        assembly.assembly_stats["trace_contract_errors"] =
+            get(corrector_errors, :trace_contract_errors, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
         # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on

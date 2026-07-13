@@ -533,7 +533,9 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             beam_width = typemax(Int), diagnostics = diagnostics,
             indel_params = params)
         Test.@test result === nothing
-        Test.@test diagnostics.structural_errors[] == 1
+        Test.@test diagnostics.structural_errors[] == 0
+        Test.@test diagnostics.truncated_decodes[] == 1
+        Test.@test diagnostics.trace_contract_errors[] == 0
         Test.@test diagnostics.indel_decodes[] == 0
     end
 end

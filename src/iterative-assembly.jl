@@ -1607,6 +1607,10 @@ parallel (`@threads`) read loop increments them race-free.
   ambiguous base (e.g. `N`) that the 2-bit k-mer iterator cannot encode. The
   read is SKIPPED (passes through uncorrected), never crashed on.
 - `indel_decodes`      : successful decodes stamped by the pair-HMM kernel.
+- `truncated_decodes`  : pair-HMM frontiers that returned only a decoded prefix;
+  rejected before correction or soft-EM side effects.
+- `trace_contract_errors` : malformed/missing pair-HMM traceback telemetry;
+  an internal decoder contract regression rather than a data-dependent miss.
 - `window_divergences` : substitution windows rejected for violating the
   length-preserving splice contract.
 """
@@ -1619,11 +1623,14 @@ mutable struct CorrectorDiagnostics
     # means the opt-in gate disabled itself — a regression signal, not data loss.
     gate_skipped::Threads.Atomic{Int}
     indel_decodes::Threads.Atomic{Int}
+    truncated_decodes::Threads.Atomic{Int}
+    trace_contract_errors::Threads.Atomic{Int}
     window_divergences::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -1817,6 +1824,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # when `diag` is a shared accumulator threaded across many passes.
     struct_before = diag.structural_errors[]
     unk_before = diag.unkmerizable_reads[]
+    truncated_before = diag.truncated_decodes[]
+    trace_contract_before = diag.trace_contract_errors[]
     gate_skipped_before = diag.gate_skipped[]
     window_divergences_before = diag.window_divergences[]
     total_reads = length(reads)
@@ -2080,6 +2089,18 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             "passed through uncorrected (not conflated with 'no likelihood gain')." total_reads structural_errors=struct_swallowed unkmerizable_reads=unk_swallowed fraction=round(
                 frac, digits = 3)
         end
+    end
+
+    trace_contract_this_pass = diag.trace_contract_errors[] - trace_contract_before
+    if trace_contract_this_pass > 0
+        @warn "iterative corrector: pair-HMM traceback contract failed; rejected " *
+              "decode(s) before correction or soft-EM side effects." total_reads trace_contract_errors = trace_contract_this_pass
+    end
+    truncated_this_pass = diag.truncated_decodes[] - truncated_before
+    if total_reads > 0 && truncated_this_pass / total_reads >= 0.5
+        @warn "iterative corrector: high truncated pair-HMM decode fraction; prefix-only " *
+              "paths were rejected before correction or soft-EM side effects." total_reads truncated_decodes = truncated_this_pass fraction = round(
+            truncated_this_pass / total_reads, digits = 3)
     end
 
     # A requested calibrated gate that silently fell open on a substitution decode
@@ -2883,10 +2904,13 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     # never actually ran, distinct from "ran and found nothing to fix".
     corrector_errors = diagnostics === nothing ?
                        Dict(:structural => 0, :unkmerizable => 0,
-        :indel_decodes => 0, :window_divergences => 0) :
+        :indel_decodes => 0, :truncated_decodes => 0,
+        :trace_contract_errors => 0, :window_divergences => 0) :
                        Dict(:structural => diagnostics.structural_errors[],
         :unkmerizable => diagnostics.unkmerizable_reads[],
         :indel_decodes => diagnostics.indel_decodes[],
+        :truncated_decodes => diagnostics.truncated_decodes[],
+        :trace_contract_errors => diagnostics.trace_contract_errors[],
         :window_divergences => diagnostics.window_divergences[])
 
     # Per-pass skip-fraction summary (FIX 6): min/mean/max across every k+iteration
@@ -3198,6 +3222,34 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             return nothing
         end
         path_diagnostics = only(correction.paths).diagnostics
+        corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
+        corrected_sequence_string = corrected_sequence isa AbstractString ?
+                                    corrected_sequence :
+                                    string(corrected_sequence)
+        aligned_indel_quality::Union{Nothing, String} = nothing
+        if indel_params !== nothing
+            if get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
+                return nothing
+            end
+            if get(path_diagnostics, :truncated, false) === true
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.truncated_decodes, 1)
+                return nothing
+            end
+            aligned_indel_quality = Mycelia._quality_from_indel_trace(
+                String(FASTX.quality(read)),
+                get(path_diagnostics, :move_trace, Symbol[]),
+                get(path_diagnostics, :read_index_trace, Int[]),
+                k,
+                length(corrected_sequence_string))
+            if aligned_indel_quality === nothing
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
+                return nothing
+            end
+        end
 
         # Soft-EM E-step (td-e70t v2): build this read's COMPETING candidate paths
         # (the observed read path + a consensus alternative re-routed through the
@@ -3225,10 +3277,6 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                                   _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
-        corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
-        corrected_sequence_string = corrected_sequence isa AbstractString ?
-                                    corrected_sequence :
-                                    string(corrected_sequence)
         # Calibrated gate is a SUBSTITUTION-ONLY tool: the positional revert
         # `corrected_chars[i+k] = original_chars[i+k]` requires a stable base<->column
         # map, which only a length-preserving substitution decode provides. Under
@@ -3275,22 +3323,9 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 FASTX.quality(read), corrected_sequence_string, likelihood)
             quality, likelihood
         else
-            quality = Mycelia._quality_from_indel_trace(
-                String(FASTX.quality(read)),
-                get(path_diagnostics, :move_trace, Symbol[]),
-                get(path_diagnostics, :read_index_trace, Int[]),
-                k,
-                length(corrected_sequence_string))
-            if quality === nothing ||
-               get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm ||
-               get(path_diagnostics, :truncated, false) === true
-                diagnostics === nothing ||
-                    Threads.atomic_add!(diagnostics.structural_errors, 1)
-                return nothing
-            end
             diagnostics === nothing ||
                 Threads.atomic_add!(diagnostics.indel_decodes, 1)
-            aligned_quality = quality::String
+            aligned_quality = aligned_indel_quality::String
             scores = Int8.(Int.(collect(codeunits(aligned_quality))) .- 33)
             likelihood = Mycelia.calculate_sequence_likelihood(
                 corrected_sequence_string, scores, graph, k; graph_mode = graph_mode)
