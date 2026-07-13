@@ -66,6 +66,7 @@ const EXTERNAL_DEPENDENCY_FILES = Set([
     "un_parallel_corpus.jl",
     # Dir 2: Preprocessing (SRA tools)
     "preprocessing.jl",
+    "fastp_interleaved.jl",  # fastp bioconda tool (interleaved-split smoke test)
     # Dir 4: Assembly (external assemblers, Bandage, MEGAHIT)
     "bandage_integration.jl",
     "megahit_phix_workflow.jl",

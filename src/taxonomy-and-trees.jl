@@ -1673,6 +1673,79 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Load an NCBI `merged.dmp` into a `Dict{Int,Int}` mapping each retired (merged)
+taxid to the current taxid it was merged into.
+
+`merged.dmp` lines are `old_tax_id\t|\tnew_tax_id\t|`. Unparseable lines are
+skipped. Pair with [`harmonize_taxids`](@ref) to reconcile taxids produced
+against different NCBI taxonomy snapshots.
+
+Errors (rather than returning a silently empty map) if zero mappings parse — the
+mechanism by which a wrong-but-present input (a gzipped `merged.dmp.gz`, a
+truncated file, or the wrong dmp such as `nodes.dmp`) would otherwise turn
+[`harmonize_taxids`](@ref) into a silent identity function and spuriously deflate
+downstream exact-taxid metrics with no signal. Warns if more lines were skipped
+than parsed.
+"""
+function load_merged_taxid_map(merged_dmp::AbstractString)::Dict{Int, Int}
+    isfile(merged_dmp) || error("merged.dmp not found: $(merged_dmp)")
+    mapping = Dict{Int, Int}()
+    skipped = 0
+    for line in eachline(merged_dmp)
+        isempty(strip(line)) && continue
+        parts = split(line, '|')
+        if length(parts) < 2
+            skipped += 1
+            continue
+        end
+        old_id = tryparse(Int, strip(parts[1]))
+        new_id = tryparse(Int, strip(parts[2]))
+        if old_id === nothing || new_id === nothing
+            skipped += 1
+            continue
+        end
+        mapping[old_id] = new_id
+    end
+    # A real NCBI merged.dmp has tens of thousands of rows; zero parsed mappings
+    # means the input is not a plaintext merged.dmp (gzipped / truncated / wrong
+    # file). Fail loud instead of degrading harmonize_taxids to identity.
+    isempty(mapping) && error("load_merged_taxid_map parsed 0 mappings from " *
+          "$(merged_dmp) ($(skipped) lines skipped) — expected a plaintext NCBI " *
+          "merged.dmp (`old \\t | \\t new \\t |`). A gzipped or wrong-file input " *
+          "parses to an empty map.")
+    skipped > length(mapping) &&
+        @warn "load_merged_taxid_map: skipped ($(skipped)) exceeds parsed " *
+              "($(length(mapping)))" merged_dmp
+    return mapping
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Remap taxids through a merged-taxid map (retired -> current), leaving taxids that
+are absent from the map unchanged.
+
+Use this to reconcile taxids drawn from an OLDER NCBI taxonomy snapshot (e.g. the
+CAMI gold-standard profiles, keyed to the taxonomy in effect at challenge time)
+with the CURRENT namespace emitted by classifiers, so that exact-taxid comparisons
+(as in the CAMI precision/recall scorer, which does no lineage climbing) are valid
+rather than spuriously mismatched by taxid merges. Apply the *current* `merged.dmp`
+to the older taxids. The string-path method loads the map via
+[`load_merged_taxid_map`](@ref).
+"""
+function harmonize_taxids(taxids::AbstractVector{<:Integer},
+        merged_map::AbstractDict{<:Integer, <:Integer})::Vector{Int}
+    return [get(merged_map, Int(t), Int(t)) for t in taxids]
+end
+
+function harmonize_taxids(taxids::AbstractVector{<:Integer},
+        merged_dmp::AbstractString)::Vector{Int}
+    return harmonize_taxids(taxids, load_merged_taxid_map(merged_dmp))
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Convert a vector of species/taxon names to their corresponding NCBI taxonomy IDs.
 
 # Arguments

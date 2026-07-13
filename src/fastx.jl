@@ -1943,6 +1943,64 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
+Deinterleave an interleaved paired-end FASTQ and QC-filter it with fastp in a
+single pass, writing separate forward/reverse outputs.
+
+`fastp --interleaved_in` treats `--in1` as an interleaved FASTQ (R1/R2 records
+alternating in one file) and splits it into `--out1`/`--out2` while applying the
+usual adapter/quality trimming. Use this for inputs distributed as a single
+interleaved `.fq.gz` (e.g. CAMI benchmark reads), where the separate-file
+`qc_filter_short_reads_fastp` does not apply. The outputs are drop-in inputs for
+`megahit_cmd` / `minimap_map_paired_end_with_index` (`forward=`/`reverse=`).
+
+# Arguments
+- `interleaved_reads::String`: interleaved paired-end FASTQ (may be gzipped).
+- `out_forward::String` / `out_reverse::String`: split, QC-filtered outputs
+  (default derived from the input name via `FASTQ_REGEX`).
+- `report_title`, `html`, `json`: fastp report settings.
+- `enable_dedup::Bool = false`: pass `--dedup` to fastp.
+
+# Returns
+NamedTuple `(; out_forward, out_reverse, json, html)`.
+"""
+function qc_filter_short_reads_fastp_interleaved(;
+        interleaved_reads::String,
+        out_forward::String = replace(interleaved_reads, Mycelia.FASTQ_REGEX => ".fastp.1.fq.gz"),
+        out_reverse::String = replace(interleaved_reads, Mycelia.FASTQ_REGEX => ".fastp.2.fq.gz"),
+        report_title::String = "$(interleaved_reads) fastp report",
+        html::String = Mycelia.find_matching_prefix(out_forward, out_reverse) *
+                       ".fastp_report.html",
+        json::String = Mycelia.find_matching_prefix(out_forward, out_reverse) *
+                       ".fastp_report.json",
+        enable_dedup::Bool = false
+)
+    if !(isfile(out_forward) && isfile(out_reverse) && isfile(json) && isfile(html))
+        Mycelia.add_bioconda_env("fastp")
+        dedup_args = enable_dedup ? ["--dedup"] : String[]
+        cmd = `$(Mycelia.CONDA_RUNNER) run --live-stream -n fastp fastp
+                --in1 $(interleaved_reads)
+                --interleaved_in
+                --out1 $(out_forward)
+                --out2 $(out_reverse)
+                --json $(json)
+                --html $(html)
+                --report_title $(report_title)
+                $(dedup_args)`
+        run(cmd)
+    else
+        @info "reusing existing fastp interleaved-split outputs" out_forward out_reverse
+    end
+    return (
+        out_forward = String(out_forward),
+        out_reverse = String(out_reverse),
+        json = String(json),
+        html = String(html)
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
 Perform QC filtering on long-read FASTQ files using fastplong.
 
 # Arguments
