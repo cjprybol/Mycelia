@@ -19,6 +19,7 @@ import DataFrames
 import FASTX
 import Mycelia
 import Random
+import SHA
 
 const INDEL_TOY_GENOME_LENGTH = 2_000
 const INDEL_TOY_SOURCE_READ_LENGTH = 1_200
@@ -29,6 +30,12 @@ const INDEL_TOY_FIXTURE_SEED = 42
 const INDEL_TOY_CORRECTOR_SEED = 1_042
 const INDEL_TOY_MAX_K = 31
 const INDEL_TOY_MAX_NANOPORE_WALL_SECONDS = 120.0
+# Detached origin/master at the implementation base (548dc984) produced this
+# deterministic explicit-Illumina assembly byte stream. Keeping the golden hash
+# separate from the current default-profile comparison prevents both current arms
+# from drifting together while still claiming pre-wiring byte identity.
+const INDEL_TOY_PREWIRING_ILLUMINA_SHA256 =
+    "d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311"
 const INDEL_TOY_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-fixed-toy"
 )
@@ -60,14 +67,6 @@ function main(args::Vector{String} = ARGS)::Nothing
     summary = DataFrames.DataFrame(_indel_toy_summary_row.(arms))
     telemetry = _indel_toy_telemetry_table(arms)
     checks = _indel_toy_checks(reads, nanopore, illumina, oracle)
-    Base.Filesystem.mkpath(output_dir)
-    summary_path = joinpath(output_dir, "fixed_toy_arm_summary.csv")
-    telemetry_path = joinpath(output_dir, "fixed_toy_rung_telemetry.csv")
-    checks_path = joinpath(output_dir, "fixed_toy_acceptance_checks.csv")
-    CSV.write(summary_path, summary)
-    CSV.write(telemetry_path, telemetry)
-    CSV.write(checks_path, checks)
-
     println("\nFixed-toy acceptance checks")
     for row in DataFrames.eachrow(checks)
         status = row.passed ? "PASS" : "FAIL"
@@ -79,6 +78,14 @@ function main(args::Vector{String} = ARGS)::Nothing
     if !isempty(failed)
         error("td-jt7r.2 fixed-toy proof failed: $(join(failed, ", "))")
     end
+
+    Base.Filesystem.mkpath(output_dir)
+    summary_path = joinpath(output_dir, "fixed_toy_arm_summary.csv")
+    telemetry_path = joinpath(output_dir, "fixed_toy_rung_telemetry.csv")
+    checks_path = joinpath(output_dir, "fixed_toy_acceptance_checks.csv")
+    CSV.write(summary_path, summary)
+    CSV.write(telemetry_path, telemetry)
+    CSV.write(checks_path, checks)
 
     println("\ntd-jt7r.2 fixed-toy/oracle proof: PASS")
     println("  summary:   $(summary_path)")
@@ -282,6 +289,7 @@ function _indel_toy_summary_row(arm::NamedTuple)::NamedTuple
         indel_engaged = arm.indel_engaged,
         trace_contract_errors = arm.trace_contract_errors,
         window_divergences = arm.window_divergences,
+        assembly_sha256 = Base.bytes2hex(SHA.sha256(arm.assembly_bytes)),
     )
 end
 
@@ -355,6 +363,35 @@ function _indel_toy_telemetry_total(
     )
 end
 
+function _indel_toy_totals_consistent(arm::NamedTuple)::Bool
+    return all(
+        _indel_toy_telemetry_total(arm, key) ==
+        getproperty(arm, Symbol("indel_$(key)"))
+        for key in (:requested, :attempted, :completed, :truncated, :engaged)
+    )
+end
+
+function _indel_toy_totals_zero(arm::NamedTuple)::Bool
+    return all(
+        getproperty(arm, Symbol("indel_$(key)")) == 0 &&
+        _indel_toy_telemetry_total(arm, key) == 0
+        for key in (:requested, :attempted, :completed, :truncated, :engaged)
+    )
+end
+
+function _indel_toy_totals_detail(arm::NamedTuple)::String
+    labels = "requested/attempted/completed/truncated/engaged"
+    stats = "$(arm.indel_requested)/$(arm.indel_attempted)/" *
+            "$(arm.indel_completed)/$(arm.indel_truncated)/" *
+            "$(arm.indel_engaged)"
+    telemetry = "$(_indel_toy_telemetry_total(arm, :requested))/" *
+                "$(_indel_toy_telemetry_total(arm, :attempted))/" *
+                "$(_indel_toy_telemetry_total(arm, :completed))/" *
+                "$(_indel_toy_telemetry_total(arm, :truncated))/" *
+                "$(_indel_toy_telemetry_total(arm, :engaged))"
+    return "$(labels): stats=$(stats), telemetry=$(telemetry)"
+end
+
 function _indel_toy_checks(
         reads::Vector{FASTX.FASTQ.Record},
         nanopore::NamedTuple,
@@ -370,17 +407,6 @@ function _indel_toy_checks(
         Int(_indel_toy_rung_value(rung, :completed, 0)) > 0
         for rung in nanopore.telemetry
     )
-    nanopore_totals_consistent =
-        (_indel_toy_telemetry_total(nanopore, :requested) ==
-         nanopore.indel_requested) &&
-        (_indel_toy_telemetry_total(nanopore, :attempted) ==
-         nanopore.indel_attempted) &&
-        (_indel_toy_telemetry_total(nanopore, :completed) ==
-         nanopore.indel_completed) &&
-        (_indel_toy_telemetry_total(nanopore, :truncated) ==
-         nanopore.indel_truncated) &&
-        (_indel_toy_telemetry_total(nanopore, :engaged) ==
-         nanopore.indel_engaged)
     required_telemetry_keys = (
         :requested, :attempted, :completed, :truncated, :engaged
     )
@@ -392,6 +418,7 @@ function _indel_toy_checks(
         for arm in (nanopore, illumina, oracle)
     )
     oracle_byte_identical = illumina.assembly_bytes == oracle.assembly_bytes
+    illumina_sha256 = Base.bytes2hex(SHA.sha256(illumina.assembly_bytes))
 
     rows = [
         (
@@ -422,16 +449,24 @@ function _indel_toy_checks(
             detail = "wall=$(nanopore.wall_seconds) s",
         ),
         (
-            check = "illumina_zero_indel_attempts",
-            passed = illumina.indel_attempted == 0 &&
-                     _indel_toy_telemetry_total(illumina, :attempted) == 0,
-            detail = "attempted=$(illumina.indel_attempted)",
+            check = "nanopore_decode_not_truncated",
+            passed = nanopore.indel_truncated == 0,
+            detail = "truncated=$(nanopore.indel_truncated)",
         ),
         (
-            check = "default_oracle_zero_indel_attempts",
-            passed = oracle.indel_attempted == 0 &&
-                     _indel_toy_telemetry_total(oracle, :attempted) == 0,
-            detail = "attempted=$(oracle.indel_attempted)",
+            check = "nanopore_substitution_window_contract_clean",
+            passed = nanopore.window_divergences == 0,
+            detail = "window_divergences=$(nanopore.window_divergences)",
+        ),
+        (
+            check = "illumina_all_indel_counters_zero",
+            passed = _indel_toy_totals_zero(illumina),
+            detail = _indel_toy_totals_detail(illumina),
+        ),
+        (
+            check = "default_oracle_all_indel_counters_zero",
+            passed = _indel_toy_totals_zero(oracle),
+            detail = _indel_toy_totals_detail(oracle),
         ),
         (
             check = "illumina_byte_identical_to_default_oracle",
@@ -440,17 +475,30 @@ function _indel_toy_checks(
                      "oracle_bytes=$(length(oracle.assembly_bytes))",
         ),
         (
+            check = "illumina_byte_identical_to_prewiring_oracle",
+            passed = illumina_sha256 == INDEL_TOY_PREWIRING_ILLUMINA_SHA256,
+            detail = "sha256=$(illumina_sha256), " *
+                     "origin_master=$(INDEL_TOY_PREWIRING_ILLUMINA_SHA256)",
+        ),
+        (
             check = "per_rung_telemetry_schema_complete",
             passed = telemetry_schema_complete,
             detail = "required keys=requested/attempted/completed/truncated/engaged",
         ),
         (
-            check = "per_rung_telemetry_totals_consistent",
-            passed = nanopore_totals_consistent,
-            detail = "requested/attempted/completed/truncated/engaged=" *
-                     "$(nanopore.indel_requested)/$(nanopore.indel_attempted)/" *
-                     "$(nanopore.indel_completed)/$(nanopore.indel_truncated)/" *
-                     "$(nanopore.indel_engaged)",
+            check = "nanopore_per_rung_totals_consistent",
+            passed = _indel_toy_totals_consistent(nanopore),
+            detail = _indel_toy_totals_detail(nanopore),
+        ),
+        (
+            check = "illumina_per_rung_totals_consistent",
+            passed = _indel_toy_totals_consistent(illumina),
+            detail = _indel_toy_totals_detail(illumina),
+        ),
+        (
+            check = "default_oracle_per_rung_totals_consistent",
+            passed = _indel_toy_totals_consistent(oracle),
+            detail = _indel_toy_totals_detail(oracle),
         ),
         (
             check = "nanopore_trace_contract_clean",
@@ -507,6 +555,7 @@ function _indel_toy_print_arm(arm::NamedTuple)::Nothing
     println("  indel truncated:       $(arm.indel_truncated)")
     println("  indel engaged:         $(arm.indel_engaged)")
     println("  trace_contract_errors: $(arm.trace_contract_errors)")
+    println("  window_divergences:    $(arm.window_divergences)")
     println("  per-rung telemetry:")
     if isempty(arm.telemetry)
         println("    none")

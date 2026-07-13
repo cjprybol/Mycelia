@@ -62,6 +62,9 @@ function main(args::Vector{String} = ARGS)::Nothing
     summary, replicates = _indel_frontier_run_matrix(
         graph_cases, window_bases, repeats
     )
+    if !smoke
+        _indel_frontier_assert_topology_controls(summary)
+    end
 
     Base.Filesystem.mkpath(output_dir)
     summary_path = joinpath(output_dir, "indel_frontier_runtime_summary.csv")
@@ -70,9 +73,6 @@ function main(args::Vector{String} = ARGS)::Nothing
     CSV.write(replicates_path, replicates)
 
     figure_paths = _indel_frontier_write_figure(summary, output_dir)
-    if !smoke
-        _indel_frontier_assert_topology_controls(summary)
-    end
 
     println("Wrote branching/frontier runtime calibration artifacts:")
     println("  summary:    $(summary_path)")
@@ -329,8 +329,14 @@ function _indel_frontier_run_matrix(
                         phase = row.phase,
                         replicate = row.replicate,
                         elapsed_ms = row.elapsed_ms,
+                        algorithm = string(row.algorithm),
+                        path_available = row.path_available,
+                        pair_hmm_path_valid = row.pair_hmm_path_valid,
+                        pair_hmm_valid = row.pair_hmm_valid,
                         truncated = row.truncated,
                         completed_columns = row.completed_columns,
+                        complete = row.complete,
+                        full_decode = row.full_decode,
                         frontier_area = row.frontier_area,
                         edge_expansions = row.edge_expansions,
                         peak_frontier = row.peak_frontier,
@@ -373,8 +379,14 @@ function _indel_frontier_run_matrix(
                     min_ms = measurement.min_ms,
                     max_ms = measurement.max_ms,
                     repeats = repeats,
+                    pair_hmm_samples = measurement.samples,
+                    pair_hmm_path_valid = measurement.path_valid,
                     pair_hmm_valid = measurement.valid,
                     pair_hmm_truncated = measurement.truncated,
+                    pair_hmm_truncated_samples = measurement.truncated_samples,
+                    pair_hmm_complete = measurement.complete,
+                    pair_hmm_complete_samples = measurement.complete_samples,
+                    pair_hmm_full_decode = measurement.full_decode,
                     cleanup_vertices_before = get(
                         cleanup, "graph_cleanup_vertices_before", missing
                     ),
@@ -533,16 +545,12 @@ function _indel_frontier_measure_decode(
     )
     warmup_ms = (time_ns() - warm_start) / 1.0e6
     warm_path = only(warm.paths)
-    warm_diag = warm_path.diagnostics
-    algorithm = get(warm_diag, :algorithm, :missing)
-    valid = algorithm == :viterbi_indel_pair_hmm && warm_path.path !== nothing
-    valid || error("pair-HMM warm-up failed: algorithm=$(algorithm)")
-
     rows = NamedTuple[
-        _indel_frontier_replicate_row("warmup", 0, warmup_ms, warm_diag)
+        _indel_frontier_replicate_row(
+            "warmup", 0, warmup_ms, warm_path, length(observations)
+        ),
     ]
     elapsed_ms = Float64[]
-    last_diag = warm_diag
     for replicate in 1:repeats
         Base.GC.gc()
         start_ns = time_ns()
@@ -554,15 +562,25 @@ function _indel_frontier_measure_decode(
         )
         elapsed = (time_ns() - start_ns) / 1.0e6
         path = only(result.paths)
-        last_diag = path.diagnostics
         push!(elapsed_ms, elapsed)
         push!(
             rows,
             _indel_frontier_replicate_row(
-                "measurement", replicate, elapsed, last_diag
+                "measurement",
+                replicate,
+                elapsed,
+                path,
+                length(observations),
             ),
         )
     end
+
+    path_valid = all(row.pair_hmm_path_valid for row in rows)
+    valid = all(row.pair_hmm_valid for row in rows)
+    truncated_samples = count(row.truncated for row in rows)
+    complete_samples = count(row.complete for row in rows)
+    truncated = truncated_samples > 0
+    complete = complete_samples == length(rows)
 
     return (
         warmup_ms = warmup_ms,
@@ -570,8 +588,14 @@ function _indel_frontier_measure_decode(
         p95_ms = Statistics.quantile(elapsed_ms, 0.95),
         min_ms = minimum(elapsed_ms),
         max_ms = maximum(elapsed_ms),
+        samples = length(rows),
+        path_valid = path_valid,
         valid = valid,
-        truncated = get(last_diag, :truncated, false),
+        truncated = truncated,
+        truncated_samples = truncated_samples,
+        complete = complete,
+        complete_samples = complete_samples,
+        full_decode = valid,
         replicates = rows,
     )
 end
@@ -580,14 +604,33 @@ function _indel_frontier_replicate_row(
         phase::String,
         replicate::Int,
         elapsed_ms::Float64,
-        diagnostics::AbstractDict,
+        path::Any,
+        expected_columns::Int,
 )::NamedTuple
+    diagnostics = path.diagnostics
+    algorithm = get(diagnostics, :algorithm, :missing)
+    path_available = path.path !== nothing
+    pair_hmm_path_valid = algorithm == :viterbi_indel_pair_hmm && path_available
+    pair_hmm_path_valid || error(
+        "pair-HMM $(phase) sample $(replicate) failed validation: " *
+        "algorithm=$(algorithm), path_available=$(path_available)"
+    )
+    truncated = get(diagnostics, :truncated, false)
+    completed_columns = get(diagnostics, :completed_columns, 0)
+    complete = !truncated && completed_columns == expected_columns
+    pair_hmm_valid = pair_hmm_path_valid && complete
     return (
         phase = phase,
         replicate = replicate,
         elapsed_ms = elapsed_ms,
-        truncated = get(diagnostics, :truncated, false),
-        completed_columns = get(diagnostics, :completed_columns, 0),
+        algorithm = algorithm,
+        path_available = path_available,
+        pair_hmm_path_valid = pair_hmm_path_valid,
+        pair_hmm_valid = pair_hmm_valid,
+        truncated = truncated,
+        completed_columns = completed_columns,
+        complete = complete,
+        full_decode = pair_hmm_valid && complete,
         frontier_area = get(diagnostics, :frontier_area, 0),
         edge_expansions = get(diagnostics, :edge_expansions, 0),
         peak_frontier = get(diagnostics, :peak_frontier, 0),
@@ -619,6 +662,15 @@ function _indel_frontier_assert_topology_controls(
     only(linear.probe_reason) == "complete" || error(
         "frontier classifier failed to admit the 10,001-vertex linear graph"
     )
+    only(linear.pair_hmm_valid) || error(
+        "admitted 500 bp large-linear control did not use the pair-HMM path"
+    )
+    only(linear.pair_hmm_full_decode) || error(
+        "admitted 500 bp large-linear control did not complete a full decode"
+    )
+    !only(linear.pair_hmm_truncated) || error(
+        "admitted 500 bp large-linear control was truncated"
+    )
     return nothing
 end
 
@@ -631,7 +683,7 @@ function _indel_frontier_write_figure(
     )
     vertex_axis = CairoMakie.Axis(
         figure[1, 1],
-        title = "Vertex count is not a runtime classifier",
+        title = "Vertex count is not a full-decode runtime classifier",
         xlabel = "graph vertices",
         ylabel = "warmed pair-HMM p95 (ms)",
         xscale = log10,
@@ -639,7 +691,7 @@ function _indel_frontier_write_figure(
     )
     frontier_axis = CairoMakie.Axis(
         figure[1, 2],
-        title = "Runtime against topology-only frontier work",
+        title = "Full-decode runtime against topology-only frontier work",
         xlabel = "bounded frontier work (area + edge expansions)",
         ylabel = "warmed pair-HMM p95 (ms)",
         xscale = log10,
@@ -658,45 +710,63 @@ function _indel_frontier_write_figure(
         max(minimum(summary.probe_frontier_work), 1) *
         max(maximum(summary.probe_frontier_work), 1)
     )
+    censored_index = 0
     for row in DataFrames.eachrow(summary)
         color = get(colors, row.graph_source, :gray40)
         marker = get(markers, row.window_bases, :circle)
         label = "$(row.graph_id):$(row.window_bases)"
+        runtime_evidence_valid =
+            row.pair_hmm_valid &&
+            row.pair_hmm_full_decode &&
+            !row.pair_hmm_truncated
+        plotted_color = runtime_evidence_valid ? color : :gray45
+        plotted_marker = runtime_evidence_valid ? marker : :xcross
+        plotted_size = runtime_evidence_valid ? 13 : 16
+        !runtime_evidence_valid && (censored_index += 1)
+        label_vertical_offset = runtime_evidence_valid ?
+                                5 : 5 + 12 * (censored_index - 1)
+        status_label = if runtime_evidence_valid
+            label
+        elseif row.pair_hmm_truncated
+            "$(label) [CENSORED: truncated diagnostic]"
+        else
+            "$(label) [CENSORED: incomplete diagnostic]"
+        end
         vertex_on_left = row.n_vertices <= vertex_midpoint
         frontier_on_left = row.probe_frontier_work <= frontier_midpoint
         CairoMakie.scatter!(
             vertex_axis,
             [row.n_vertices],
             [row.p95_ms];
-            color = color,
-            marker = marker,
-            markersize = 13,
+            color = plotted_color,
+            marker = plotted_marker,
+            markersize = plotted_size,
         )
         CairoMakie.text!(
             vertex_axis,
             row.n_vertices,
             row.p95_ms;
-            text = label,
+            text = status_label,
             fontsize = 8,
             align = (vertex_on_left ? :left : :right, :bottom),
-            offset = (vertex_on_left ? 5 : -5, 5),
+            offset = (vertex_on_left ? 5 : -5, label_vertical_offset),
         )
         CairoMakie.scatter!(
             frontier_axis,
             [max(row.probe_frontier_work, 1)],
             [row.p95_ms];
-            color = color,
-            marker = marker,
-            markersize = 13,
+            color = plotted_color,
+            marker = plotted_marker,
+            markersize = plotted_size,
         )
         CairoMakie.text!(
             frontier_axis,
             max(row.probe_frontier_work, 1),
             row.p95_ms;
-            text = "$(label) [$(row.probe_reason)]",
+            text = "$(status_label) [$(row.probe_reason)]",
             fontsize = 8,
             align = (frontier_on_left ? :left : :right, :bottom),
-            offset = (frontier_on_left ? 5 : -5, 5),
+            offset = (frontier_on_left ? 5 : -5, label_vertical_offset),
         )
     end
     CairoMakie.Label(
@@ -705,6 +775,14 @@ function _indel_frontier_write_figure(
         "correction accuracy";
         fontsize = 19,
         font = :bold,
+    )
+    CairoMakie.Label(
+        figure[2, 1:2],
+        "Colored symbols are complete, non-truncated pair-HMM decodes. Gray " *
+        "× symbols are explicitly censored timing diagnostics and are not " *
+        "full-decode runtime evidence.";
+        fontsize = 12,
+        color = :gray30,
     )
 
     png_path = joinpath(output_dir, "indel_frontier_runtime.png")
