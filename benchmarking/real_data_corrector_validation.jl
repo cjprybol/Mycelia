@@ -61,7 +61,12 @@ import SHA
 # --- Config -----------------------------------------------------------------
 
 function _truthy(value::AbstractString)::Bool
-    return lowercase(strip(value)) in ("1", "true", "yes", "on")
+    normalized = lowercase(strip(value))
+    normalized in ("1", "true", "yes", "on") && return true
+    normalized in ("0", "false", "no", "off") && return false
+    throw(ArgumentError(
+        "invalid boolean value $(repr(value)); expected true/false, yes/no, on/off, or 1/0",
+    ))
 end
 
 const SMOKE = _truthy(get(ENV, "MYCELIA_RDV_SMOKE", "false"))
@@ -351,7 +356,7 @@ function run_arm(
                 sequencing_tech = :illumina,
                 verbose = false,
             )
-        else
+        elseif arm == :hybrid_olc
             result = Mycelia.Rhizomorph.assemble_genome(
                 reads;
                 k = K,
@@ -374,6 +379,8 @@ function run_arm(
                 ),
                 verbose = false,
             )
+        else
+            throw(ArgumentError("unsupported validation arm :$(arm)"))
         end
     catch e
         e isa InterruptException && rethrow()
@@ -622,6 +629,12 @@ function validate_results(
     report_names = [value.captures[2] for value in valid_report_matches]
     Set(report_names) == expected_report_names ||
         error("dnadiff report paths do not match the target-arm matrix")
+    expected_report_names_by_row = [
+        "$(row.name)_$(row.arm)_dnadiff.report"
+        for row in DataFrames.eachrow(df)
+    ]
+    report_names == expected_report_names_by_row ||
+        error("dnadiff report filenames must match their target-arm rows")
     expected_mismatches = round.(
         df.total_snps ./ df.aligned_reference_bases .* 1e5;
         digits = 1,

@@ -89,6 +89,15 @@ function test_validation_rejection(
 end
 
 Test.@testset "Hybrid-OLC validation helpers" begin
+    Test.@test RealDataCorrectorValidationHarness._truthy("true")
+    Test.@test RealDataCorrectorValidationHarness._truthy("YES")
+    Test.@test !RealDataCorrectorValidationHarness._truthy("false")
+    Test.@test !RealDataCorrectorValidationHarness._truthy("0")
+    test_throws_message(
+        () -> RealDataCorrectorValidationHarness._truthy("tru"),
+        ArgumentError,
+        "invalid boolean value",
+    )
     Test.@test RealDataCorrectorValidationHarness.arm_name(:naive) == "naive"
     Test.@test RealDataCorrectorValidationHarness.arm_name(:scalable) == "scalable"
     Test.@test RealDataCorrectorValidationHarness.arm_name(:hybrid_olc) == "hybrid-olc"
@@ -126,6 +135,11 @@ Test.@testset "Hybrid-OLC validation helpers" begin
         (
             "duplicate aligned bases",
             [valid_lines[1:2]..., valid_lines[2], valid_lines[3:end]...],
+            :aligned,
+        ),
+        (
+            "aligned bases in wrong section",
+            ["[Alignments]", valid_lines[2], valid_lines[3:end]...],
             :aligned,
         ),
         (
@@ -181,6 +195,11 @@ Test.@testset "Hybrid-OLC validation helpers" begin
             :identity,
         ),
         (
+            "identity in wrong section",
+            [valid_lines[1:2]..., "[Bases]", valid_lines[4:end]...],
+            :identity,
+        ),
+        (
             "duplicate SNP totals",
             [valid_lines[1:9]..., "TotalSNPs 1 1", valid_lines[10]],
             :snps,
@@ -193,6 +212,11 @@ Test.@testset "Hybrid-OLC validation helpers" begin
         (
             "negative query SNP total",
             [valid_lines[1:8]..., "TotalSNPs 2 -1", valid_lines[10]],
+            :snps,
+        ),
+        (
+            "SNP total in wrong section",
+            [valid_lines[1:7]..., "[Alignments]", valid_lines[9:10]...],
             :snps,
         ),
         (
@@ -373,6 +397,18 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         "indel_bases_per_100kbp" => "gap_affected_bases_per_100kbp",
         "dnadiff_report_sha256" => "sha256_hex",
     )
+    Test.@test engineering_validation["gate_thresholds"] == Dict(
+        "min_hybrid_identity_percent" =>
+            RealDataCorrectorValidationHarness.MIN_HYBRID_IDENTITY,
+        "min_hybrid_genome_fraction_percent" =>
+            RealDataCorrectorValidationHarness.MIN_HYBRID_GENOME_FRACTION,
+        "scalable_n50_retention_fraction" =>
+            RealDataCorrectorValidationHarness.SCALABLE_N50_RETENTION,
+        "scalable_genome_fraction_tolerance_percentage_points" =>
+            RealDataCorrectorValidationHarness.SCALABLE_GENOME_FRACTION_TOLERANCE,
+        "identity_tolerance_percentage_points" =>
+            RealDataCorrectorValidationHarness.IDENTITY_TOLERANCE,
+    )
     Test.@test engineering_validation["assembly_runtime_scope"] ==
                "assemble_genome_call_wall_time_only_excludes_contig_filtering_fasta_and_dnadiff"
     Test.@test occursin(
@@ -486,6 +522,8 @@ Test.@testset "Rhizomorph benchmark manifest" begin
         Test.@test registered_reports_dir == expected_reports_dir
         Test.@test isdir(expected_reports_dir)
         for row in DataFrames.eachrow(results)
+            Test.@test basename(row.dnadiff_report_path) ==
+                       "$(row.name)_$(row.arm)_dnadiff.report"
             retained_report = normpath(joinpath(
                 @__DIR__,
                 "..",
@@ -785,6 +823,15 @@ Test.@testset "Rhizomorph benchmark manifest" begin
                 "wrong.report",
             ),
             "do not match the target-arm matrix",
+        )
+        test_validation_rejection(
+            results,
+            candidate -> begin
+                first_path = candidate.dnadiff_report_path[2]
+                candidate.dnadiff_report_path[2] = candidate.dnadiff_report_path[3]
+                candidate.dnadiff_report_path[3] = first_path
+            end,
+            "filenames must match their target-arm rows",
         )
 
         raw_dnadiff_cases = [
