@@ -2,24 +2,25 @@
 # ===============================================
 #
 # The per-base accuracy benchmark (rhizomorph_correction_accuracy_benchmark.jl)
-# measures ONE operating point — the wired :scalable corrector — and finds
-# precision=1.0 / over-correction=0 but conservative recall (0.99 -> 0.06 as error
-# density rises). The recall shortfall is an EDIT-AGGRESSIVENESS property of the
-# corrector's decision knobs, NOT the calibration map. This harness maps the
-# precision-recall FRONTIER by re-running the SAME corrector at several
-# aggressiveness operating points, so we can see whether recall can be bought back
-# and at what precision / over-correction cost.
+# measures ONE operating point — the wired :scalable corrector. A preliminary,
+# partial-cohort run suggested that dropping the decode gate could lift recall
+# toward 1.0, but that observation is not a supported full-cohort conclusion.
+# This harness maps the precision-recall FRONTIER by re-running the SAME corrector
+# at several aggressiveness operating points, so we can see whether recall can be
+# bought back and at what precision / over-correction cost.
 #
-# Operating points (all exposed knobs — NO src changes):
+# Operating points (wired knobs plus the opt-in calibrated gates):
 #   scalable        skip_solid=true,  cheap_correct=true, hard_window=true,  iter=2   (the wired default)
 #   noskip          skip_solid=FALSE, cheap_correct=true, hard_window=true,  iter=2   (isolates the skip_solid lever)
 #   noskip+nogate   skip_solid=FALSE, cheap_correct=true, hard_window=FALSE, iter=2   (also drops the decode gate)
+#   calibrated-gap-*  noskip+nogate plus the legacy raw-gap gate family
+#   calibrated-prob-* noskip+nogate plus the multi-feature probability family
 #
-# A smoke run localized the recall lever to the hard_window DECODE GATE, not
-# skip_solid: turning skip_solid off alone leaves recall unchanged; dropping the
-# gate too lifts recall from ~0.24 to ~1.0 (at a precision cost that grows with
-# error rate). Exact-beam / more-iteration points are dropped — the former is
-# intractable on the dense low-k graph, the latter is a no-op once converged.
+# The full threshold sweep is exploratory. Any selected threshold must be locked
+# before evaluation on a disjoint confirmatory cohort; this script does not treat
+# same-sweep threshold selection as confirmatory evidence. Exact-beam /
+# more-iteration points are dropped — the former is intractable on the dense
+# low-k graph, the latter is a no-op once converged.
 #
 # Reuses simulate_substitution_reads + per_base_metrics from the merged accuracy
 # harness. Reports (precision, recall, over_correction, mis_fixes, correction_rate,
@@ -39,6 +40,7 @@
 
 import Dates
 import Pkg
+import SHA
 if isinteractive()
     Pkg.activate(joinpath(@__DIR__, ".."))
 end
@@ -48,12 +50,12 @@ include(joinpath(@__DIR__, "viterbi_gap_calibration.jl"))
 
 # === Operating points (named knob presets) ==================================
 
-# Three informative points span the frontier (a smoke run localized the recall
-# limiter to the hard_window decode gate, NOT skip_solid): the wired default, the
-# skip_solid-off variant (isolates that lever), and both gates off. A prior
-# exact-beam "exhaustive" point is dropped — it is intractable on the dense low-k
-# graph (times out) and adds nothing once noskip+nogate reaches recall ~1.0. The
-# auto-bounded Viterbi beam (256) applies to every point, so these stay tractable.
+# Three informative points probe the preliminary partial-cohort signal: the
+# wired default, the skip_solid-off variant (isolates that lever), and both gates
+# off. This is an exploratory comparison, not proof that hard_window is the
+# unique recall limiter. A prior exact-beam "exhaustive" point is dropped because
+# it is intractable on the dense low-k graph (times out). The auto-bounded Viterbi
+# beam (256) applies to every point, so these stay tractable.
 const PR_OPERATING_POINTS = [
     (name = "scalable", skip_solid = true, cheap_correct = true, hard_window = true,
         soft_em = true, n_k_rungs = 3, max_iterations_per_k = 2, beam_width = nothing,
@@ -98,6 +100,54 @@ function calibrated_probability_points()::Vector
             ) for threshold in thresholds]
 end
 
+"""
+Select named operating points from `MYCELIA_RPC_POINTS` input. Unknown names,
+empty tokens, and an empty resulting set are configuration errors rather than a
+silent zero-row benchmark.
+"""
+function select_operating_points(
+        all_points::AbstractVector, requested_names::AbstractString)::Vector
+    isempty(all_points) &&
+        throw(ArgumentError("no precision-recall operating points are configured"))
+    isempty(strip(requested_names)) && return collect(all_points)
+
+    requested = strip.(split(requested_names, ","))
+    any(isempty, requested) &&
+        throw(ArgumentError("MYCELIA_RPC_POINTS contains an empty point name"))
+    available = Set(String(point.name) for point in all_points)
+    unknown = sort!(collect(setdiff(Set(requested), available)))
+    isempty(unknown) || throw(ArgumentError(
+        "unknown MYCELIA_RPC_POINTS name(s): $(join(unknown, ", "))"))
+    selected = filter(point -> point.name in requested, all_points)
+    isempty(selected) &&
+        throw(ArgumentError("MYCELIA_RPC_POINTS selected no operating points"))
+    return collect(selected)
+end
+
+"""Compute a stable SHA-256 digest for one file or a directory tree."""
+function artifact_digest(path::AbstractString)::String
+    isempty(path) && return ""
+    if isfile(path)
+        return SHA.bytes2hex(SHA.sha256(read(path)))
+    elseif !isdir(path)
+        throw(ArgumentError("cannot digest missing artifact path: $(path)"))
+    end
+
+    context = SHA.SHA2_256_CTX()
+    files = String[]
+    for (root, _directories, names) in walkdir(path)
+        append!(files, joinpath.(root, names))
+    end
+    for file in sort!(files; by = file -> relpath(file, path))
+        relative = relpath(file, path)
+        SHA.update!(context, collect(codeunits(relative)))
+        SHA.update!(context, UInt8[0x00])
+        SHA.update!(context, read(file))
+        SHA.update!(context, UInt8[0x00])
+    end
+    return SHA.bytes2hex(SHA.digest!(context))
+end
+
 function persist_runtime_probability_model(
         model::Mycelia.CorrectionConfidenceModel,
         results_dir::AbstractString)::String
@@ -121,13 +171,15 @@ function persist_runtime_probability_model(
 end
 
 """
-Fit the probability gate on an independent synthetic cohort and convert the
-benchmark logistic coefficients to the runtime model's fixed feature order.
-The calibration cohort uses a disjoint seed and never sees frontier truth.
+Fit the probability gate on a separately seeded synthetic cohort and convert
+the benchmark logistic coefficients to the runtime model's fixed feature order.
+The calibration cohort never sees frontier labels, but shares the simulator and
+design; it is therefore within-design exploratory evidence rather than an
+independent graph-regime confirmation.
 """
 function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
-        coverage::Float64, k::Int, seed::Int, assigned_q::Int)::NamedTuple
-    results_root = joinpath(@__DIR__, "results")
+        coverage::Float64, k::Int, seed::Int, assigned_q::Int;
+        results_root::AbstractString = joinpath(@__DIR__, "results"))::NamedTuple
     mkpath(results_root)
     calibration_results_dir = mktempdir(
         results_root; prefix = "td21eg_calibration_", cleanup = false)
@@ -151,10 +203,17 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
     artifact.feature_names == expected_features ||
         throw(ArgumentError("calibration/runtime feature-order mismatch: " *
                             "expected $(expected_features), got $(artifact.feature_names)"))
+    _require_converged_logistic(
+        artifact.multifeature_model, "frontier multi-feature")
+    _require_converged_logistic(artifact.gap_model, "frontier gap-only")
     model = artifact.multifeature_model
     length(model.b) == length(expected_features) ||
         throw(ArgumentError("multi-feature logistic has wrong coefficient count"))
     runtime_model = Mycelia.CorrectionConfidenceModel(model.a, model.b...)
+    runtime_model_path = persist_runtime_probability_model(
+        runtime_model, calibration_results_dir)
+    model_digest = artifact_digest(runtime_model_path)
+    calibration_digest = artifact_digest(calibration_results_dir)
     println("Calibration cohort: multi-feature model fitted with grouped holdout; " *
             "seed=$(seed + 10_000), assigned_q=$(assigned_q), " *
             "n_train=$(length(artifact.training.labels)), " *
@@ -166,56 +225,122 @@ function fit_frontier_probability_model(errs::Vector{Float64}, readlen::Int,
             "stage0_solid=$(runtime_model.stage0_solid_weight), " *
             "competing_branch=$(runtime_model.branch_support_ratio_weight), " *
             "collapsed_frontier=$(runtime_model.collapsed_frontier_weight)")
-    return (model = runtime_model, results_dir = calibration_results_dir)
+    return (model = runtime_model, results_dir = calibration_results_dir,
+        model_digest = model_digest, artifact_digest = calibration_digest)
 end
 
 """
 Correct `records` with an explicit knob preset `pt` (a PR_OPERATING_POINTS entry),
-returning `corrected_by_id`. Mirrors correct_reads_scalable but with the point's
-knobs instead of the hardwired :scalable set.
+returning `corrected_by_id`. With `return_metadata=true`, return corrected reads
+plus a copied metadata/diagnostics payload for audit columns. Temporary FASTQ and
+corrector output directories are removed before return. Mirrors
+`correct_reads_scalable` but with the point's knobs instead of the hardwired
+`:scalable` set.
 """
 function correct_reads_at_point(records::Vector{FASTX.FASTQ.Record}, k::Int,
-        pt::NamedTuple)::Dict{String, String}
-    input_dir = mktempdir()
-    output_dir = mktempdir()
-    temp_fastq = joinpath(input_dir, "corrector_input.fastq")
-    open(FASTX.FASTQ.Writer, temp_fastq) do w
-        for r in records
-            write(w, r)
+        pt::NamedTuple; return_metadata::Bool = false)::Union{Dict{String, String}, NamedTuple}
+    return mktempdir() do temporary_dir
+        input_dir = joinpath(temporary_dir, "input")
+        output_dir = joinpath(temporary_dir, "output")
+        mkpath(input_dir)
+        mkpath(output_dir)
+        temp_fastq = joinpath(input_dir, "corrector_input.fastq")
+        open(FASTX.FASTQ.Writer, temp_fastq) do writer
+            for record in records
+                write(writer, record)
+            end
         end
+        probability_model = hasproperty(pt, :calibrated_probability_model) ?
+                            pt.calibrated_probability_model : nothing
+        probability_threshold = hasproperty(pt, :calibrated_probability_threshold) ?
+                                pt.calibrated_probability_threshold : 0.5
+        gap_threshold = hasproperty(pt, :calibrated_gap_threshold) ?
+                        pt.calibrated_gap_threshold : nothing
+        result = Mycelia.mycelia_iterative_assemble(
+            temp_fastq;
+            max_k = max(k, 13),
+            skip_solid = pt.skip_solid,
+            graph_mode = :doublestrand,
+            n_k_rungs = pt.n_k_rungs,
+            max_iterations_per_k = pt.max_iterations_per_k,
+            hard_window = pt.hard_window,
+            soft_em = pt.soft_em,
+            cheap_correct = pt.cheap_correct,
+            beam_width = pt.beam_width,
+            calibrated_gap_threshold = gap_threshold,
+            calibrated_probability_model = probability_model,
+            calibrated_probability_threshold = probability_threshold,
+            verbose = false,
+            enable_checkpointing = false,
+            output_dir = output_dir
+        )
+        metadata = copy(result[:metadata])
+        corrected_fastq = get(metadata, :final_fastq_file, nothing)
+        (corrected_fastq === nothing || !isfile(corrected_fastq)) &&
+            error("corrector produced no :final_fastq_file at point $(pt.name)")
+        corrected_by_id = Dict{String, String}()
+        open(FASTX.FASTQ.Reader, corrected_fastq) do reader
+            for record in reader
+                corrected_by_id[FASTX.identifier(record)] = String(
+                    FASTX.sequence(BioSequences.LongDNA{4}, record))
+            end
+        end
+        !isempty(records) && isempty(corrected_by_id) && error(
+            "corrector produced zero reads at point $(pt.name)")
+        diagnostics = copy(get(metadata, :corrector_errors, Dict{Symbol, Int}()))
+        payload = (corrected_by_id = corrected_by_id, metadata = metadata,
+            diagnostics = diagnostics)
+        return return_metadata ? payload : corrected_by_id
     end
-    probability_model = hasproperty(pt, :calibrated_probability_model) ?
-                        pt.calibrated_probability_model : nothing
-    probability_threshold = hasproperty(pt, :calibrated_probability_threshold) ?
-                            pt.calibrated_probability_threshold : 0.5
-    result = Mycelia.mycelia_iterative_assemble(
-        temp_fastq;
-        max_k = max(k, 13),
-        skip_solid = pt.skip_solid,
-        graph_mode = :doublestrand,
-        n_k_rungs = pt.n_k_rungs,
-        max_iterations_per_k = pt.max_iterations_per_k,
-        hard_window = pt.hard_window,
-        soft_em = pt.soft_em,
-        cheap_correct = pt.cheap_correct,
-        beam_width = pt.beam_width,
-        calibrated_gap_threshold = pt.calibrated_gap_threshold,
-        calibrated_probability_model = probability_model,
-        calibrated_probability_threshold = probability_threshold,
-        verbose = false,
-        enable_checkpointing = false,
-        output_dir = output_dir
+end
+
+function _metadata_counter(metadata::AbstractDict,
+        keys::Tuple{Vararg{Symbol}}; default::Int = 0)::Int
+    for key in keys
+        haskey(metadata, key) && return Int(get(metadata, key, default))
+    end
+    return default
+end
+
+function _point_gate_requested(point::NamedTuple)::Bool
+    gap_threshold = hasproperty(point, :calibrated_gap_threshold) ?
+                    point.calibrated_gap_threshold : nothing
+    probability_model = hasproperty(point, :calibrated_probability_model) ?
+                        point.calibrated_probability_model : nothing
+    return gap_threshold !== nothing || probability_model !== nothing
+end
+
+"""Extract stable, schema-tolerant runtime provenance for one frontier row."""
+function point_runtime_provenance(point::NamedTuple, metadata::AbstractDict;
+        model_digest::AbstractString = "",
+        calibration_digest::AbstractString = "")::NamedTuple
+    requested_default = _point_gate_requested(point)
+    candidate_evaluations = _metadata_counter(metadata,
+        (:calibrated_gate_candidate_evaluations,
+            :calibrated_candidate_evaluations, :gate_candidate_evaluations))
+    feature_events = _metadata_counter(metadata,
+        (:calibrated_feature_events, :calibrated_gate_feature_events, :feature_events))
+    gate_reverts = _metadata_counter(metadata,
+        (:calibrated_gate_reverts, :gate_reverts))
+    requested = Bool(get(metadata, :calibrated_gate_requested, requested_default))
+    effective = Bool(get(metadata, :calibrated_gate_effective, requested))
+    executed = Bool(get(
+        metadata, :calibrated_gate_executed, candidate_evaluations > 0))
+    diagnostics = get(metadata, :corrector_errors, Dict{Symbol, Int}())
+    return (
+        gate_requested = requested,
+        gate_effective = effective,
+        gate_executed = executed,
+        feature_contract_skips = _metadata_counter(
+            metadata, (:calibrated_feature_contract_skips,)),
+        candidate_evaluations = candidate_evaluations,
+        feature_events = feature_events,
+        gate_reverts = gate_reverts,
+        structural_errors = Int(get(diagnostics, :structural, 0)),
+        unkmerizable_errors = Int(get(diagnostics, :unkmerizable, 0)),
+        model_digest = String(model_digest),
+        artifact_digest = String(calibration_digest)
     )
-    corrected_fastq = get(result[:metadata], :final_fastq_file, nothing)
-    (corrected_fastq === nothing || !isfile(corrected_fastq)) &&
-        error("corrector produced no :final_fastq_file at point $(pt.name)")
-    corrected_by_id = Dict{String, String}()
-    open(FASTX.FASTQ.Reader, corrected_fastq) do reader
-        for rec in reader
-            corrected_by_id[FASTX.identifier(rec)] = String(FASTX.sequence(BioSequences.LongDNA{4}, rec))
-        end
-    end
-    return corrected_by_id
 end
 
 function run_pr_curve(;
@@ -233,34 +358,45 @@ function run_pr_curve(;
     want = strip(get(ENV, "MYCELIA_RPC_POINTS", ""))
     all_points = vcat(
         PR_OPERATING_POINTS, calibrated_gap_points(), calibrated_probability_points())
-    points = isempty(want) ? all_points :
-             filter(p -> p.name in split(want, ","), all_points)
+    points = select_operating_points(all_points, want)
     calibration_artifact = ""
-    results_dir = joinpath(@__DIR__, "results")
-    mkpath(results_dir)
+    calibration_digest = ""
+    probability_model_digest = ""
+    results_root = joinpath(@__DIR__, "results")
+    mkpath(results_root)
+    results_dir = mktempdir(
+        results_root; prefix = "rhizomorph_correction_pr_curve_", cleanup = false)
 
     println("=== Rhizomorph Correction Precision-Recall Frontier ===")
     println("Start: $(Dates.now())   error rates: $errs   coverage: $(coverage)x   k: $k")
     println("Operating points: $(join([p.name for p in points], ", "))")
 
-    workdir = mktempdir(prefix = "rpc_")
-    refseq, _rp,
-    ref_label = acquire_reference(
-        smoke = smoke, accession = accession, smoke_len = smoke_len, seed = seed, workdir = workdir)
+    refseq, ref_label = mktempdir(; prefix = "rpc_") do workdir
+        sequence, _reference_path, label = acquire_reference(
+            smoke = smoke, accession = accession, smoke_len = smoke_len,
+            seed = seed, workdir = workdir)
+        return sequence, label
+    end
     glen = length(refseq)
     println("Reference: $ref_label ($glen bp)")
     k = min(k, minimum(readlens), glen)
     if any(startswith(point.name, "calibrated-prob-") for point in points)
         effective_probability_model = if probability_model === nothing
             fit = fit_frontier_probability_model(
-                errs, readlens[1], coverage, k, seed, assigned_q)
+                errs, readlens[1], coverage, k, seed, assigned_q;
+                results_root = results_dir)
             calibration_artifact = fit.results_dir
+            calibration_digest = fit.artifact_digest
+            probability_model_digest = fit.model_digest
             fit.model
         else
             supplied_dir = mktempdir(
                 results_dir; prefix = "td21eg_caller_model_", cleanup = false)
-            persist_runtime_probability_model(probability_model, supplied_dir)
+            supplied_model_path = persist_runtime_probability_model(
+                probability_model, supplied_dir)
             calibration_artifact = supplied_dir
+            probability_model_digest = artifact_digest(supplied_model_path)
+            calibration_digest = artifact_digest(supplied_dir)
             probability_model
         end
         points = [startswith(point.name, "calibrated-prob-") ?
@@ -275,7 +411,11 @@ function run_pr_curve(;
         reads_scored = Int[], injected = Int[], true_fixes = Int[], mis_fixes = Int[],
         over_corrections = Int[], recall = Float64[], precision = Float64[],
         over_correction_rate = Float64[], correction_rate = Float64[], runtime_s = Float64[],
-        calibration_artifact = String[])
+        calibration_artifact = String[], gate_requested = Bool[],
+        gate_effective = Bool[], gate_executed = Bool[],
+        feature_contract_skips = Int[], candidate_evaluations = Int[],
+        feature_events = Int[], gate_reverts = Int[], structural_errors = Int[],
+        unkmerizable_errors = Int[], model_digest = String[], artifact_digest = String[])
 
     for err in errs
         # SAME reads for every operating point at this error rate (fair comparison).
@@ -293,25 +433,44 @@ function run_pr_curve(;
             Random.seed!(seed)
             t0 = time()
             local corrected
+            local runtime_metadata
             ok = true
             try
-                corrected = correct_reads_at_point(records, k, pt)
+                correction_result = correct_reads_at_point(
+                    records, k, pt; return_metadata = true)
+                corrected = correction_result.corrected_by_id
+                runtime_metadata = correction_result.metadata
             catch e
                 e isa InterruptException && rethrow()
                 @warn "point failed" point=pt.name err exception=(e, catch_backtrace())
                 ok = false
                 corrected = Dict{String, String}()
+                runtime_metadata = Dict{Symbol, Any}()
             end
             rt = round(time() - t0; digits = 2)
             m = per_base_metrics(truth_by_id, observed_by_id, corrected)
+            probability_point = startswith(pt.name, "calibrated-prob-")
+            provenance = point_runtime_provenance(pt, runtime_metadata;
+                model_digest = probability_point ? probability_model_digest : "",
+                calibration_digest = probability_point ? calibration_digest : "")
             push!(rows,
                 (error_rate = err, point = pt.name, ok = ok, n_reads = length(records),
                     reads_scored = m.reads_scored, injected = m.injected, true_fixes = m.tp,
                     mis_fixes = m.mis_fixes, over_corrections = m.over, recall = m.recall,
                     precision = m.precision, over_correction_rate = m.over_rate,
                     correction_rate = m.correction_rate, runtime_s = rt,
-                    calibration_artifact = startswith(pt.name, "calibrated-prob-") ?
-                                           calibration_artifact : ""))
+                    calibration_artifact = probability_point ? calibration_artifact : "",
+                    gate_requested = provenance.gate_requested,
+                    gate_effective = provenance.gate_effective,
+                    gate_executed = provenance.gate_executed,
+                    feature_contract_skips = provenance.feature_contract_skips,
+                    candidate_evaluations = provenance.candidate_evaluations,
+                    feature_events = provenance.feature_events,
+                    gate_reverts = provenance.gate_reverts,
+                    structural_errors = provenance.structural_errors,
+                    unkmerizable_errors = provenance.unkmerizable_errors,
+                    model_digest = provenance.model_digest,
+                    artifact_digest = provenance.artifact_digest))
             println("  $(rpad(pt.name, 15)) recall=$(rpad(round(m.recall; digits=4), 8)) " *
                     "precision=$(rpad(round(m.precision; digits=4), 8)) " *
                     "over_rate=$(rpad(round(m.over_rate; digits=6), 10)) " *
@@ -319,8 +478,7 @@ function run_pr_curve(;
         end
     end
 
-    ts = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
-    csv = joinpath(results_dir, "rhizomorph_correction_pr_curve_$(ts).csv")
+    csv = joinpath(results_dir, "frontier.csv")
     CSV.write(csv, rows)
     println("\nCSV: $csv")
 
@@ -374,12 +532,12 @@ function run_pr_curve(;
     println("+ ~zero over_correction is a strict improvement (the corrector was over-conservative).")
     println("A point that trades precision/over-correction for recall exposes the real tradeoff.")
     println("=== done: $(Dates.now()) ===")
-    return (; csv, rows)
+    return (; csv, rows, results_dir)
 end
 
 """
     assess_frontier_dominance(rows; err=0.10, recall_eps=0.02,
-        candidate_prefix="calibrated-gap-") -> NamedTuple
+        candidate_prefix="calibrated-gap-", max_contract_skips=0) -> NamedTuple
 
 Programmatic frontier-dominance check (previously eyeballed from the CSV). At
 error rate `err`, decide whether any operating point selected by `candidate_prefix` DOMINATES
@@ -389,21 +547,30 @@ tie: recall retained (>= baseline recall − `recall_eps`), over-correction
 over-correction criterion is load-bearing — each family's zero-threshold point
 is by definition the ungated baseline (threshold 0 reverts nothing), so it TIES
 every metric; a non-strict predicate would report it as "dominating" itself. Returns
-`(dominates, baseline, best, candidates)`. A non-finite baseline or non-finite
-candidate metrics (zero-denominator rows) are treated as non-dominating. A row
-is eligible only when its run succeeded (`ok`) and scored every simulated read
-(`reads_scored == n_reads`); partial or failed runs cannot establish dominance.
+`(dominates, baseline, best, candidates)`. The verdict fails closed with an
+explicit incomplete-sweep reason when the requested family is absent or any
+requested candidate is failed, partial, zero-read, non-finite, or unauditable.
+A candidate must also match the baseline's read count and injected-error count.
+A candidate gate must have been requested, effective, executed, and evaluated
+at least one substitution candidate. Feature-contract skips may not exceed
+`max_contract_skips` (zero by default). This prevents a partial survivor set or
+a configured-but-inactive gate from being summarized as a valid "no winner".
 """
 function assess_frontier_dominance(rows::DataFrames.DataFrame;
         err::Float64 = 0.10, recall_eps::Float64 = 0.02,
-        candidate_prefix::AbstractString = "calibrated-gap-")::NamedTuple
+        candidate_prefix::AbstractString = "calibrated-gap-",
+        max_contract_skips::Int = 0)::NamedTuple
+    max_contract_skips >= 0 ||
+        throw(ArgumentError("max_contract_skips must be non-negative"))
+    isempty(candidate_prefix) &&
+        throw(ArgumentError("candidate_prefix must not be empty"))
     at = rows[[isapprox(r, err; atol = 1e-9) for r in rows.error_rate], :]
     base_idx = findfirst(==("noskip+nogate"), at.point)
     base_idx === nothing && return (dominates = false,
         reason = "no noskip+nogate baseline at err=$(err)",
         baseline = nothing, best = nothing, candidates = NamedTuple[])
     base = at[base_idx, :]
-    if !(base.ok && base.reads_scored == base.n_reads)
+    if !(base.ok && base.n_reads > 0 && base.reads_scored == base.n_reads)
         return (dominates = false,
             reason = "failed or partial noskip+nogate baseline at err=$(err): " *
                      "ok=$(base.ok), reads_scored=$(base.reads_scored)/$(base.n_reads)",
@@ -419,12 +586,85 @@ function assess_frontier_dominance(rows::DataFrames.DataFrame;
                 over_rate = base.over_correction_rate),
             best = nothing, candidates = NamedTuple[])
     end
+
+    candidate_rows = [row for row in DataFrames.eachrow(at)
+                      if startswith(row.point, candidate_prefix)]
+    if isempty(candidate_rows)
+        return (dominates = false,
+            reason = "incomplete candidate sweep at err=$(err): no " *
+                     "$(candidate_prefix)* rows were requested/scored",
+            baseline = (recall = base.recall, precision = base.precision,
+                over_rate = base.over_correction_rate),
+            best = nothing, candidates = NamedTuple[])
+    end
+
+    activity_columns = (
+        :gate_requested,
+        :gate_effective,
+        :gate_executed,
+        :feature_contract_skips,
+        :candidate_evaluations
+    )
+    incomplete = String[]
+    for row in candidate_rows
+        if !(row.ok && row.n_reads > 0 && row.reads_scored == row.n_reads)
+            push!(incomplete,
+                "$(row.point): failed or partial (ok=$(row.ok), " *
+                "reads_scored=$(row.reads_scored)/$(row.n_reads))")
+            continue
+        end
+        if row.n_reads != base.n_reads
+            push!(incomplete,
+                "$(row.point): cohort-size mismatch " *
+                "(candidate=$(row.n_reads), baseline=$(base.n_reads))")
+            continue
+        end
+        if !hasproperty(row, :injected) || !hasproperty(base, :injected)
+            push!(incomplete,
+                "$(row.point): missing injected-error cohort audit")
+            continue
+        elseif row.injected != base.injected
+            push!(incomplete,
+                "$(row.point): injected-error mismatch " *
+                "(candidate=$(row.injected), baseline=$(base.injected))")
+            continue
+        end
+        if !(isfinite(row.recall) && isfinite(row.precision) &&
+             isfinite(row.over_correction_rate))
+            push!(incomplete, "$(row.point): non-finite metrics")
+            continue
+        end
+        missing_columns = [column for column in activity_columns
+                           if !hasproperty(row, column)]
+        if !isempty(missing_columns)
+            push!(incomplete,
+                "$(row.point): missing gate audit columns " *
+                "$(join(string.(missing_columns), ","))")
+            continue
+        end
+        if !row.gate_requested
+            push!(incomplete, "$(row.point): calibrated gate was not requested")
+        elseif !row.gate_effective
+            push!(incomplete, "$(row.point): calibrated gate was not effective")
+        elseif !row.gate_executed || row.candidate_evaluations <= 0
+            push!(incomplete,
+                "$(row.point): calibrated gate evaluated zero candidates")
+        elseif row.feature_contract_skips > max_contract_skips
+            push!(incomplete,
+                "$(row.point): feature-contract skips $(row.feature_contract_skips) " *
+                "exceed bound $(max_contract_skips)")
+        end
+    end
+    if !isempty(incomplete)
+        return (dominates = false,
+            reason = "incomplete candidate sweep at err=$(err): " * join(incomplete, "; "),
+            baseline = (recall = base.recall, precision = base.precision,
+                over_rate = base.over_correction_rate),
+            best = nothing, candidates = NamedTuple[])
+    end
+
     winners = NamedTuple[]
-    for row in DataFrames.eachrow(at)
-        startswith(row.point, candidate_prefix) || continue
-        (row.ok && row.reads_scored == row.n_reads) || continue
-        (isfinite(row.recall) && isfinite(row.precision) &&
-         isfinite(row.over_correction_rate)) || continue
+    for row in candidate_rows
         # STRICT improvement: retain recall, strictly reduce over-correction, keep
         # precision. The strict `<` on over-correction excludes the gap-0.0 tie.
         if row.recall >= base.recall - recall_eps &&

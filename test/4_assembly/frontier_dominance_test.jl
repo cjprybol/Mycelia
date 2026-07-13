@@ -15,15 +15,29 @@ include(joinpath(@__DIR__, "..", "..", "benchmarking", "rhizomorph_correction_pr
 # Minimal row set the verdict reads: error_rate, point, recall, precision,
 # over_correction_rate. Baseline is always "noskip+nogate".
 function _frontier(rows::AbstractVector{<:Tuple})::DataFrames.DataFrame
+    points = [r[2] for r in rows]
+    gate_requested = [startswith(point, "calibrated-") for point in points]
     DataFrames.DataFrame(
         error_rate = [r[1] for r in rows],
-        point = [r[2] for r in rows],
+        point = points,
         ok = [length(r) >= 6 ? r[6] : true for r in rows],
         n_reads = [length(r) >= 7 ? r[7] : 100 for r in rows],
         reads_scored = [length(r) >= 8 ? r[8] : 100 for r in rows],
+        injected = [length(r) >= 9 ? r[9] : 100 for r in rows],
         recall = [r[3] for r in rows],
         precision = [r[4] for r in rows],
-        over_correction_rate = [r[5] for r in rows])
+        over_correction_rate = [r[5] for r in rows],
+        gate_requested = gate_requested,
+        gate_effective = gate_requested,
+        gate_executed = gate_requested,
+        feature_contract_skips = zeros(Int, length(rows)),
+        candidate_evaluations = Int.(gate_requested),
+        feature_events = Int.(gate_requested),
+        gate_reverts = zeros(Int, length(rows)),
+        structural_errors = zeros(Int, length(rows)),
+        unkmerizable_errors = zeros(Int, length(rows)),
+        model_digest = fill("", length(rows)),
+        artifact_digest = fill("", length(rows)))
 end
 
 function _frontier_throws_message(f::Function, fragment::AbstractString)::Bool
@@ -67,7 +81,24 @@ Test.@testset "calibrated probability operating points" begin
         lines = readlines(model_path)
         Test.@test first(lines) == "term,coefficient"
         Test.@test "collapsed_frontier,6.0" in lines
+        digest = artifact_digest(dir)
+        Test.@test length(digest) == 64
+        Test.@test digest == artifact_digest(dir)
+        write(joinpath(dir, "extra.txt"), "digest changes")
+        Test.@test digest != artifact_digest(dir)
     end
+
+    selected = select_operating_points(PR_OPERATING_POINTS, "noskip,scalable")
+    Test.@test [point.name for point in selected] == ["scalable", "noskip"]
+    Test.@test _frontier_throws_message(
+        () -> select_operating_points(PR_OPERATING_POINTS, "not-a-point"),
+        "unknown MYCELIA_RPC_POINTS")
+    Test.@test _frontier_throws_message(
+        () -> select_operating_points(PR_OPERATING_POINTS, "noskip,"),
+        "empty point name")
+    Test.@test _frontier_throws_message(
+        () -> select_operating_points(NamedTuple[], ""),
+        "no precision-recall operating points")
 end
 
 Test.@testset "assess_frontier_dominance" begin
@@ -96,12 +127,15 @@ Test.@testset "assess_frontier_dominance" begin
     ])
     Test.@test !assess_frontier_dominance(df_crash; err = 0.10).dominates
 
-    # --- NaN candidate metrics are excluded (never a false positive)
+    # --- NaN candidate metrics make the requested sweep explicitly incomplete
     df_nan = _frontier([
         (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
         (0.10, "calibrated-gap-1.0", NaN, NaN, NaN)
     ])
-    Test.@test !assess_frontier_dominance(df_nan; err = 0.10).dominates
+    nan_candidate = assess_frontier_dominance(df_nan; err = 0.10)
+    Test.@test !nan_candidate.dominates
+    Test.@test occursin("incomplete candidate sweep", nan_candidate.reason)
+    Test.@test occursin("non-finite metrics", nan_candidate.reason)
 
     # --- NaN BASELINE ⇒ non-dominating with an explicit reason (not a false pass)
     df_nanbase = _frontier([
@@ -190,4 +224,101 @@ Test.@testset "assess_frontier_dominance" begin
         candidate_prefix = "calibrated-prob-")
     Test.@test !partial_baseline.dominates
     Test.@test occursin("failed or partial", partial_baseline.reason)
+
+    # --- no requested family is not a valid negative result
+    df_empty_family = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "scalable", 0.40, 1.00, 0.000)
+    ])
+    empty_family = assess_frontier_dominance(
+        df_empty_family; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !empty_family.dominates
+    Test.@test occursin("no calibrated-prob-", empty_family.reason)
+
+    # --- all-invalid and mixed valid+invalid sweeps both fail closed
+    df_all_invalid = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "calibrated-prob-0.5", NaN, NaN, NaN),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009, false, 100, 100)
+    ])
+    all_invalid = assess_frontier_dominance(
+        df_all_invalid; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !all_invalid.dominates
+    Test.@test occursin("incomplete candidate sweep", all_invalid.reason)
+    Test.@test occursin("calibrated-prob-0.5", all_invalid.reason)
+    Test.@test occursin("calibrated-prob-0.8", all_invalid.reason)
+
+    df_mixed = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009),
+        (0.10, "calibrated-prob-0.9", NaN, NaN, NaN)
+    ])
+    mixed = assess_frontier_dominance(
+        df_mixed; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !mixed.dominates
+    Test.@test isnothing(mixed.best)
+    Test.@test occursin("calibrated-prob-0.9", mixed.reason)
+
+    # --- zero-read rows cannot establish either a baseline or candidate verdict
+    df_zero_baseline = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030, true, 0, 0),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009)
+    ])
+    zero_baseline = assess_frontier_dominance(
+        df_zero_baseline; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !zero_baseline.dominates
+    Test.@test occursin("failed or partial", zero_baseline.reason)
+
+    df_zero_candidate = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009, true, 0, 0)
+    ])
+    zero_candidate = assess_frontier_dominance(
+        df_zero_candidate; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !zero_candidate.dominates
+    Test.@test occursin("incomplete candidate sweep", zero_candidate.reason)
+
+    # --- internally complete candidates must still match the baseline cohort
+    df_smaller_cohort = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030, true, 200, 200, 1_000),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009, true, 20, 20, 100)
+    ])
+    smaller_cohort = assess_frontier_dominance(
+        df_smaller_cohort; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !smaller_cohort.dominates
+    Test.@test occursin("cohort-size mismatch", smaller_cohort.reason)
+
+    df_injected_mismatch = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030, true, 100, 100, 1_000),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009, true, 100, 100, 999)
+    ])
+    injected_mismatch = assess_frontier_dominance(
+        df_injected_mismatch; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !injected_mismatch.dominates
+    Test.@test occursin("injected-error mismatch", injected_mismatch.reason)
+
+    # --- configured-but-inactive gates and contract skips fail closed
+    df_inactive = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009)
+    ])
+    df_inactive.candidate_evaluations[2] = 0
+    df_inactive.gate_executed[2] = false
+    inactive = assess_frontier_dominance(
+        df_inactive; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !inactive.dominates
+    Test.@test occursin("zero candidates", inactive.reason)
+
+    df_skips = _frontier([
+        (0.10, "noskip+nogate", 0.90, 0.70, 0.030),
+        (0.10, "calibrated-prob-0.8", 0.89, 0.81, 0.009)
+    ])
+    df_skips.feature_contract_skips[2] = 1
+    strict_skips = assess_frontier_dominance(
+        df_skips; err = 0.10, candidate_prefix = "calibrated-prob-")
+    Test.@test !strict_skips.dominates
+    Test.@test occursin("exceed bound 0", strict_skips.reason)
+    Test.@test assess_frontier_dominance(
+        df_skips; err = 0.10, candidate_prefix = "calibrated-prob-",
+        max_contract_skips = 1).dominates
 end
