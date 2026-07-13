@@ -86,6 +86,22 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test cfg2.band_width == 12
     end
 
+    Test.@testset "length-changing acceptance compares mean k-mer support" begin
+        comparable = Mycelia._comparable_likelihood_improvement
+        # Ten original terms at -1 each. A deletion with nine terms and an
+        # insertion with eleven terms have identical mean support, not a raw-sum
+        # advantage/penalty caused solely by length.
+        Test.@test comparable(-10.0, -9.0, 22, 21, 13;
+            length_normalized = true) == 0.0
+        Test.@test comparable(-10.0, -11.0, 22, 23, 13;
+            length_normalized = true) == 0.0
+        Test.@test comparable(-10.0, -8.1, 22, 21, 13;
+            length_normalized = true) ≈ 0.1
+        # The substitution oracle retains the historical raw-sum comparison.
+        Test.@test comparable(-10.0, -9.0, 22, 21, 13;
+            length_normalized = false) == 1.0
+    end
+
     # Shared OLC fixture (mirrors viterbi_variable_length_graph_correction_test.jl):
     # a 5-vertex overlap-3 chain ATGCG -> GCGTA -> GTACC -> ACCGT -> CGTAA. The true
     # read under test covers only the FIRST THREE vertices; the graph deliberately
@@ -191,6 +207,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test diag[:indel_moves] == true
         # The deletion was bridged by >=1 D-move.
         Test.@test diag[:move_counts][:D] >= 1
+        Test.@test count(==(:D), diag[:move_trace]) >= 1
+        Test.@test length(diag[:move_trace]) == length(diag[:read_index_trace])
 
         ins_result = Mycelia.correct_observations(
             graph,
@@ -199,6 +217,8 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             config = _indel_config())
         ins_diag = only(ins_result.paths).diagnostics
         Test.@test ins_diag[:move_counts][:I] >= 1
+        Test.@test count(==(:I), ins_diag[:move_trace]) >= 1
+        Test.@test length(ins_diag[:move_trace]) == length(ins_diag[:read_index_trace])
     end
 
     Test.@testset "Milestone C: bounding knobs actually bite" begin
@@ -498,5 +518,27 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         full_diag = only(full.paths).diagnostics
         Test.@test full_diag[:truncated] == false
         Test.@test full_diag[:decoded_read_index] == length(full_observed)
+    end
+
+    Test.@testset "truncated read corrections fail closed" begin
+        reference = indel_quality_record("ref", "CGTAA", fill(40, 5))
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [reference], 5; mode = :doublestrand)
+        observed = indel_quality_record("obs", "CGTAAT", fill(40, 6))
+        params = Mycelia.IndelDecodeParams(
+            0.10, 0.30, 0.30, 0.10, 0.10, 1, 0, 16)
+        diagnostics = Mycelia.CorrectorDiagnostics()
+        soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        result = Mycelia.try_viterbi_path_improvement(
+            observed, graph, 5; graph_mode = :doublestrand,
+            beam_width = typemax(Int), soft_weights = soft_weights,
+            diagnostics = diagnostics,
+            indel_params = params)
+        Test.@test result === nothing
+        Test.@test isempty(soft_weights.weights)
+        Test.@test diagnostics.structural_errors[] == 0
+        Test.@test diagnostics.truncated_decodes[] == 1
+        Test.@test diagnostics.trace_contract_errors[] == 0
+        Test.@test diagnostics.indel_decodes[] == 0
     end
 end

@@ -96,9 +96,12 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
                 orig = FASTX.sequence(String, r)
                 wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
 
-                rec_w, imp_w = Mycelia.improve_read_likelihood(
+                rec_w,
+                imp_w = Mycelia.improve_read_likelihood(
                     r, graph, k; graph_mode = mode, beam_width = typemax(Int))
-                rec_win, imp_win, ndec, ndiv = Mycelia.improve_read_likelihood_windowed_detail(
+                rec_win, imp_win,
+                ndec,
+                ndiv = Mycelia.improve_read_likelihood_windowed_detail(
                     r, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
 
                 sw = FASTX.sequence(String, rec_w)
@@ -155,9 +158,9 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
                     r, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
             end
             n = length(fx.err_reads)
-            @info "windowed-decode per-hard-read time" readlen = length(FASTX.sequence(probe)) whole_per_read_ms = round(
-                t_whole / n * 1000, digits = 1) windowed_per_read_ms = round(
-                t_win / n * 1000, digits = 1) speedup = round(t_whole / t_win, digits = 2)
+            @info "windowed-decode per-hard-read time" readlen=length(FASTX.sequence(probe)) whole_per_read_ms=round(
+                t_whole/n*1000, digits = 1) windowed_per_read_ms=round(
+                t_win/n*1000, digits = 1) speedup=round(t_whole/t_win, digits = 2)
             # Bounding a ~3 kb read's decode to its <=500 bp hard windows is a large,
             # robust margin (~4-5x here); assert strict improvement.
             Test.@test t_win < t_whole
@@ -170,7 +173,8 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
         clean_probe = FASTX.FASTQ.Record(
             "clean_probe", fx.ref[100:(100 + 199)], String(fill('I', 200)))
         Test.@test Mycelia.should_decode_read(clean_probe, k, hard) == false
-        rec, improved = Mycelia.improve_read_likelihood_windowed(
+        rec,
+        improved = Mycelia.improve_read_likelihood_windowed(
             clean_probe, graph, k, hard; graph_mode = mode, beam_width = typemax(Int))
         Test.@test improved == false
         Test.@test FASTX.sequence(String, rec) == fx.ref[100:(100 + 199)]
@@ -187,5 +191,101 @@ Test.@testset "windowed decode (td-nn6l Stage 3c)" begin
         Test.@test res.assembly_stats["hard_window"] == true
         skip = res.assembly_stats["skip_fraction"]
         Test.@test 0.0 < skip <= 1.0
+    end
+end
+
+# Composition plumbing for the INDEL pair-HMM through the windowed decode (td-jt7r).
+# The windowed decode now threads `indel_params` into each per-window sub-read decode
+# (so a hard window is corrected by the indel kernel, not substitution-only) and the
+# splice is generalized to a length-changing (indel) correction. This testset asserts
+# the PLUMBING is correct and oracle-preserving; it does NOT assert an end-to-end
+# nanopore correction WIN — that is gated on staging the (dense-graph-expensive) indel
+# decode to sparse rungs, tracked separately under td-2rxh.
+Test.@testset "windowed indel decode plumbing (td-jt7r)" begin
+    R = Mycelia.Rhizomorph
+    k = 13
+    mode = :doublestrand
+
+    Test.@testset "pair-HMM traceback preserves quality coordinates" begin
+        traced_quality = Mycelia._quality_from_indel_trace
+        Test.@test traced_quality("BCDE", [:M, :M, :M], [1, 2, 3], 2, 4) == "BCDE"
+        # I consumes observed position 3 without emitting a corrected base.
+        Test.@test traced_quality("BCDE", [:M, :I, :M], [1, 2, 3], 2, 3) == "BCE"
+        # D emits a corrected base after observed position 3 with conservative
+        # adjacent quality min('D', 'E') == 'D'.
+        Test.@test traced_quality(
+            "BCDE", [:M, :M, :D, :M], [1, 2, 2, 3], 2, 5) == "BCDDE"
+        Test.@test traced_quality("BCDE", [:I], [1], 2, 3) === nothing
+        Test.@test traced_quality("BCDE", [:M], [1, 2], 2, 2) === nothing
+    end
+
+    # (A) POSITIVE CONTROL — the ORIGINAL-COORDINATE segment rebuild (the risky new
+    # length-changing code) tested DIRECTLY against hand-computed expectations, so an
+    # off-by-one / dropped / duplicated base is caught independent of the decoder.
+    # Each `accepted` triple is (original-window-range, corrected-seq, corrected-qual);
+    # gaps between windows + the trailing span must be copied verbatim from the
+    # ORIGINAL, and a window's length change must NOT shift a later window's range.
+    Test.@testset "segment rebuild: length-changing / multi-window / edges" begin
+        splice = Mycelia._splice_indel_windows
+        # single INSERTION (window 5:8 "CCCC" -> "CCACC", +1) + trailing span preserved
+        r1 = splice("r", collect("AAAACCCCGGGGTTTT"), collect(repeat("I", 16)),
+            [(5:8, "CCACC", "IIIII")])
+        Test.@test FASTX.sequence(String, r1) == "AAAACCACCGGGGTTTT"
+        Test.@test FASTX.quality(r1) == repeat("I", 17)
+        # two windows, DELETION then INSERTION, empty prefix + interior gap + trailing.
+        # w2=9:12 uses ORIGINAL coords even though w1 shortened the read (the invariant).
+        r2 = splice("r", collect("AAAACCCCGGGGTTTT"), collect(repeat("I", 16)),
+            [(1:4, "AA", "II"), (9:12, "GGAGG", "IIIII")])
+        Test.@test FASTX.sequence(String, r2) == "AACCCCGGAGGTTTT"   # AA|CCCC|GGAGG|TTTT
+        Test.@test FASTX.quality(r2) == repeat("I", 15)
+        # whole-read window (no gaps, no trailing), shortened
+        r3 = splice("r", collect("AAAACCCC"), collect(repeat("I", 8)), [(
+            1:8, "AAACCC", "IIIIII")])
+        Test.@test FASTX.sequence(String, r3) == "AAACCC"
+        # adjacent windows separated by a single original base (the minimum post-merge gap)
+        r4 = splice("r", collect("ACGTACGT"), collect(repeat("I", 8)),
+            [(1:3, "AC", "II"), (5:7, "ACGT", "IIII")])
+        Test.@test FASTX.sequence(String, r4) == "ACTACGTT"          # AC|T|ACGT|T
+        Test.@test FASTX.quality(r4) == repeat("I", 8)
+    end
+
+    # (B) INTEGRATION SMOKE — the indel path threads through the real decoder,
+    # returns a well-formed record, and only rewrites hard windows. (Substitution
+    # byte-identity is covered by the td-nn6l testset above; the E2E correction WIN
+    # is gated on staging the dense-graph-expensive decode to sparse rungs, td-2rxh.)
+    Test.@testset "indel path threads through the real decoder (well-formed + local)" begin
+        fx = _wd_long_read_fixture()
+        graph = R.build_qualmer_graph(fx.reads, k; mode = mode)
+        hard = Mycelia._hard_vertex_set(graph, k)
+        Test.@test !isempty(hard)
+        diagnostics = Mycelia.CorrectorDiagnostics()
+        profile = Mycelia.indel_error_profile(:nanopore)
+        ip = Mycelia.IndelDecodeParams(
+            profile.base_error_rate, profile.insertion_fraction, profile.deletion_fraction,
+            profile.insertion_extend_probability, profile.deletion_extend_probability,
+            3, 3, 16)
+        Logging.with_logger(Logging.NullLogger()) do
+            for r in fx.err_reads
+                rec_ind, _imp,
+                ndec_ind,
+                _ndiv = Mycelia.improve_read_likelihood_windowed_detail(
+                    r, graph, k, hard; graph_mode = mode, beam_width = 64,
+                    diagnostics = diagnostics, indel_params = ip)
+                sind = FASTX.sequence(String, rec_ind)
+                Test.@test length(sind) == length(FASTX.quality(rec_ind))   # well-formed
+                Test.@test all(c -> c in ('A', 'C', 'G', 'T'), sind)
+                Test.@test ndec_ind >= 1                                    # a window reached decode
+                wins = Mycelia._hard_window_ranges(r, k, hard; pad = k, max_window = 500)
+                if !isempty(wins)
+                    lo1 = first(first(wins))
+                    orig = FASTX.sequence(String, r)
+                    Test.@test sind[1:(lo1 - 1)] == orig[1:(lo1 - 1)]       # locality
+                end
+            end
+        end
+        # This counter is stamped from the decoder result's algorithm diagnostic,
+        # so the smoke fails if `indel_params` is dropped and the substitution
+        # kernel runs instead.
+        Test.@test diagnostics.indel_decodes[] >= 1
     end
 end

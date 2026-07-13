@@ -1294,19 +1294,16 @@ end
 # STATUS: ACTIVE under `windowed_decode=true` (the :scalable tier). Instead of
 # decoding a hard read end-to-end, `improve_read_likelihood_windowed` extracts the
 # k-mer sub-window(s) (<=500 bp) around each hard region (`_hard_window_ranges`)
-# and decodes ONLY those windows with start_vertex/target_vertex boundary
-# constraints — `Mycelia.correct_observations` derives the start from the first
-# window observation's vertex and the target from the last (via
-# `_decode_observation_bounds`), and `max_steps = n_window_obs - 1` bounds the
-# graph_states to the window — then splices each corrected window back into the
-# read. Windowing bounds decode cost to the hard neighborhood (O(max_window))
-# rather than the whole read (O(read_length)), which is the #375 super-linear
-# per-read term for long reads. Whole-read decode (`improve_read_likelihood`)
-# remains the fallback when `windowed_decode=false`.
+# and decodes ONLY those windows before splicing each correction back into the
+# read. Quality-wrapped observations leave the target endpoint free so the last
+# k-mer remains correctable. Windowing bounds the read-length axis to the hard
+# neighborhood; graph density remains an independent frontier-cost driver
+# (td-2rxh). Whole-read decode (`improve_read_likelihood`) remains the fallback
+# when `windowed_decode=false`.
 #
 # `_hard_window_ranges` (the read-coordinate ranges to decode) is the primitive;
-# `improve_read_likelihood_windowed` (below) does the boundary-constrained decode
-# + splice. Both are unit-tested.
+# `improve_read_likelihood_windowed` (below) does the bounded-window decode +
+# splice. Both are unit-tested.
 # ------------------------------------------------------------------------------
 
 """
@@ -1356,33 +1353,33 @@ end
 
 Stage 3c WINDOWED decode (td-nn6l). Instead of decoding a hard read end-to-end,
 decode ONLY the hard sub-window(s) — the k-mer span(s) around the read's hard
-vertices from `_hard_window_ranges` (each `<= max_window` bases) — with
-start/target boundary constraints, then splice each corrected window back into the
-read. Each window is decoded as its own `improve_read_likelihood` sub-read, so
-`correct_observations` derives the decode's `start_vertex` from the window's first
-k-mer, its `target_vertex` from the window's last k-mer, and bounds `max_steps`
-to `n_window_obs - 1` (the window's `graph_states` are bounded to the window; see
-`_decode_observation_bounds`). This makes the per-read decode cost scale with the
-hard-window size (`O(max_window)`) rather than the read length (`O(read_length)`)
-— the dominant super-linear per-read term for long reads (#375).
+vertices from `_hard_window_ranges` (each `<= max_window` bases) — then splice
+each corrected window back into the read. Each window is decoded as its own
+`improve_read_likelihood` sub-read. Quality-wrapped observations leave the target
+vertex free so the decoder can correct the window's last k-mer; the window bounds
+the observation-length axis of the decode, not the full graph frontier. This makes
+the read-length contribution scale with the hard-window size rather than the full
+read length, but graph density remains a separate cost driver (#375, td-2rxh).
 
-The window Viterbi is length-preserving (the corrected ML path has one vertex per
-window k-mer, so `path_to_sequence` reconstructs the same base count), so each
-accepted window is spliced in as a same-length substitution. As a defensive guard,
-a window whose corrected length differs from the original is DROPPED (left
-uncorrected) rather than shifting the read's coordinates; the returned
-`divergent_windows` count surfaces any such case. Windows shorter than `k` (which
-cannot be k-merized) are skipped.
+With `indel_params === nothing`, the window Viterbi is length-preserving (the
+corrected ML path has one vertex per window k-mer), so each accepted window is
+spliced in as a same-length substitution. A length mismatch on that path is
+dropped defensively and counted in `divergent_windows`. With non-`nothing`
+`indel_params`, the pair-HMM may emit insertions or deletions; those intentional
+length changes are accepted and spliced by rebuilding the read from original
+window coordinates. Windows shorter than `k` (which cannot be k-merized) are
+skipped.
 
 A read with no hard window (empty ranges) returns unchanged (`false`) — this only
 occurs for reads the caller's gate already classified as skip, so the whole-read
 fallback (`windowed_decode=false`) is the caller's, not this function's.
 
-Each window is anchored with a solid k-mer flank (`pad === nothing` ⇒ `k` bases)
-so its boundary start/target vertices are solid and the hard vertices sit in the
-window interior. This function windows unconditionally; the caller decides WHEN to
-window (`_windowed_decode_read_is_long` gates it to long reads, where whole-read
-decode is expensive/bounded — short reads keep the cheap, exact whole-read decode).
+Each window requests a k-mer-width flank (`pad === nothing` ⇒ `k` bases), keeping
+hard vertices away from a boundary when read ends and `max_window` permit. Padding
+is contextual rather than a solidity guarantee. The quality-aware decoder may use
+the first k-mer as its start but deliberately leaves the target endpoint free so
+the last k-mer remains correctable. This function windows unconditionally; the
+caller decides WHEN to window.
 
 Returns `(record, improved)` where `improved` is `true` iff `>= 1` window was
 corrected and spliced. The lower-level `improve_read_likelihood_windowed_detail`
@@ -1398,7 +1395,9 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
-        max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool}
+        max_window::Int = 500,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
+        FASTX.FASTQ.Record, Bool}
     record, improved,
     _decoded,
     _divergent = improve_read_likelihood_windowed_detail(
@@ -1406,7 +1405,7 @@ function improve_read_likelihood_windowed(read::FASTX.FASTQ.Record, graph, k::In
         graph_mode = graph_mode, beam_width = beam_width, soft_weights = soft_weights,
         weighted_graph = weighted_graph, diagnostics = diagnostics,
         pad = pad, calibrated_gap_threshold = calibrated_gap_threshold,
-        max_window = max_window)
+        max_window = max_window, indel_params = indel_params)
     return record, improved
 end
 
@@ -1417,10 +1416,19 @@ end
 Windowed-decode core (see `improve_read_likelihood_windowed`). Returns
 `(record, improved, decoded_windows, divergent_windows)` where `decoded_windows`
 is the number of hard windows that reached a Viterbi decode and `divergent_windows`
-is the number dropped for a length mismatch (defensive guard; expected 0 since the
-window decode is length-preserving). Exposed for the windowed-decode correctness
-test, which compares the spliced windows against a whole-read decode on the same
-hard region.
+is the number dropped for a length mismatch.
+
+`indel_params` (td-jt7r): `nothing` ⇒ SUBSTITUTION decode. The window ML path has
+one vertex per window k-mer, so the decode is length-preserving and each accepted
+window is spliced back IN PLACE; a window whose corrected length differs is DROPPED
+(defensive `divergent_windows` guard; expected 0). Non-`nothing` ⇒ the INDEL
+pair-HMM decode, which emits I/D moves and thus CHANGES a window's length by design
+— the length delta is the correction, not a defect. Those windows are accepted at
+their new length and the read is reassembled by ORIGINAL-coordinate segment
+rebuild, so an earlier window's length change cannot shift a later window's range.
+The substitution path (`indel_params === nothing`) is byte-for-byte unchanged
+(oracle preservation). Exposed for the windowed-decode correctness test, which
+compares the spliced windows against a whole-read decode on the same hard region.
 """
 function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph, k::Int,
         hard_vertices::AbstractSet;
@@ -1431,12 +1439,14 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         diagnostics = nothing,  # ::Union{Nothing, CorrectorDiagnostics}; struct defined below
         pad::Union{Int, Nothing} = nothing,
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
-        max_window::Int = 500)::Tuple{FASTX.FASTQ.Record, Bool, Int, Int}
+        max_window::Int = 500,
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
+        FASTX.FASTQ.Record, Bool, Int, Int}
     # Anchor each window with a full solid k-mer flank by default (`pad === nothing`
-    # ⇒ `k`): a pad of `k` bases guarantees the window's first/last k-mer clears the
-    # hard k-mer's span, so the boundary start/target vertices are SOLID anchors and
-    # the hard vertices sit in the window INTERIOR where the ML decode can re-route
-    # them (a 1-base pad can pin the decode to an error k-mer at the boundary).
+    # ⇒ `k`): request a k-mer-width flank around the hard span when read boundaries
+    # and `max_window` allow it. This is contextual padding, not a guarantee that a
+    # boundary k-mer is solid. Quality-aware decoding leaves the target endpoint free
+    # so the last k-mer remains correctable.
     effective_pad = pad === nothing ? k : pad
     windows = _hard_window_ranges(
         read, k, hard_vertices; pad = effective_pad, max_window = max_window)
@@ -1445,9 +1455,12 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
     seq_chars = collect(FASTX.sequence(String, read))
     qual_chars = collect(FASTX.quality(read))   # ASCII quality string, one char/base
     id = FASTX.identifier(read)
-    any_improved = false
     decoded_windows = 0
     divergent_windows = 0
+    # Accepted (window range, corrected seq, corrected qual) triples, spliced AFTER
+    # the loop. Deferring the splice lets the indel path (length-changing) reassemble
+    # from original coordinates; the substitution path splices these in place.
+    accepted = Tuple{UnitRange{Int}, String, String}[]
 
     for w in windows
         lo = first(w)
@@ -1459,54 +1472,113 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         sub_qual = String(qual_chars[lo:hi])
         sub_read = FASTX.FASTQ.Record("$(id)_win$(lo)_$(hi)", sub_seq, sub_qual)
         decoded_windows += 1
-        # Decode ONLY this window. `improve_read_likelihood` runs the boundary-
-        # constrained Viterbi (window first/last k-mer ⇒ start/target vertex,
-        # max_steps = n_window_obs - 1) over the bounded window graph_states.
+        # Decode ONLY this window. Quality-wrapped observations keep the target
+        # endpoint free; the window bounds observation length, while graph density
+        # remains an independent frontier-cost driver (td-2rxh). The pair-HMM runs
+        # on the short window rather than the full read.
         decoded_sub,
         improved = improve_read_likelihood(
             sub_read, graph, k; graph_mode = graph_mode,
             beam_width = beam_width, soft_weights = soft_weights,
             weighted_graph = weighted_graph, diagnostics = diagnostics,
-            calibrated_gap_threshold = calibrated_gap_threshold)
+            calibrated_gap_threshold = calibrated_gap_threshold,
+            indel_params = indel_params)
         improved || continue
         dseq = FASTX.sequence(String, decoded_sub)
-        dqual = FASTX.quality(decoded_sub)
-        # Length-preserving splice: the window ML path has one vertex per window
-        # k-mer, so a well-formed decode reconstructs exactly `win_len` bases. A
-        # divergent length would corrupt downstream read coordinates, so drop it.
-        if length(dseq) == win_len && length(dqual) == win_len
-            dseq_chars = collect(dseq)
-            dqual_chars = collect(dqual)
-            @inbounds for (j, p) in enumerate(lo:hi)
-                seq_chars[p] = dseq_chars[j]
-                qual_chars[p] = dqual_chars[j]
+        dqual = String(FASTX.quality(decoded_sub))
+        if indel_params === nothing
+            # Length-preserving splice: a divergent length would corrupt read
+            # coordinates for the in-place splice below, so drop it (expected 0).
+            if length(dseq) == win_len && length(dqual) == win_len
+                push!(accepted, (w, dseq, dqual))
+            else
+                divergent_windows += 1
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.window_divergences, 1)
             end
-            any_improved = true
         else
-            divergent_windows += 1
+            # The pair-HMM traceback already rebuilt quality coordinates in
+            # `try_viterbi_path_improvement`. Reject a malformed lower-layer record
+            # rather than padding/truncating it and silently shifting qualities.
+            if length(dqual) != length(dseq)
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.structural_errors, 1)
+                continue
+            end
+            push!(accepted, (w, dseq, dqual))
         end
     end
 
-    any_improved ||
+    isempty(accepted) &&
         return read, false, decoded_windows, divergent_windows
-    corrected = FASTX.FASTQ.Record(id, String(seq_chars), String(qual_chars))
+
+    if indel_params === nothing
+        # Substitution: length-preserving in-place overwrite (byte-identical to the
+        # pre-indel path — oracle preservation).
+        for (w, dseq, dqual) in accepted
+            dseq_chars = collect(dseq)
+            dqual_chars = collect(dqual)
+            @inbounds for (j, p) in enumerate(first(w):last(w))
+                seq_chars[p] = dseq_chars[j]
+                qual_chars[p] = dqual_chars[j]
+            end
+        end
+        corrected = FASTX.FASTQ.Record(id, String(seq_chars), String(qual_chars))
+        return corrected, true, decoded_windows, divergent_windows
+    end
+
+    # Indel: rebuild the read from ORIGINAL-coordinate segments (see
+    # `_splice_indel_windows`) so a window's length change cannot shift a later
+    # window's range.
+    corrected = _splice_indel_windows(id, seq_chars, qual_chars, accepted)
     return corrected, true, decoded_windows, divergent_windows
+end
+
+"""
+    _splice_indel_windows(id, seq_chars, qual_chars, accepted) -> FASTX.FASTQ.Record
+
+Rebuild a read from ORIGINAL-coordinate segments for the indel (length-changing)
+windowed decode. `seq_chars` / `qual_chars` are the ORIGINAL read's characters;
+`accepted` is a vector of `(window_range, corrected_seq, corrected_qual)` triples in
+window order (windows sorted and non-overlapping — see `_hard_window_ranges`). Each
+window's original span is replaced by its (possibly different-length) corrected
+sequence; the solid gaps BETWEEN windows and the trailing span are copied verbatim
+from the original. Because segments are cut at ORIGINAL coordinates (not a running
+offset), an earlier window's length change cannot shift a later window's range.
+Exposed for a deterministic unit test of the coordinate math (adjacent / gap /
+trailing / length-changing windows) independent of the decoder.
+"""
+function _splice_indel_windows(id::AbstractString,
+        seq_chars::Vector{Char}, qual_chars::Vector{Char},
+        accepted::AbstractVector{<:Tuple{
+            UnitRange{Int}, <:AbstractString, <:AbstractString}})
+    out_seq = IOBuffer()
+    out_qual = IOBuffer()
+    prev = 0
+    for (w, dseq, dqual) in accepted
+        lo = first(w)
+        hi = last(w)
+        print(out_seq, String(seq_chars[(prev + 1):(lo - 1)]))   # solid gap before window
+        print(out_qual, String(qual_chars[(prev + 1):(lo - 1)]))
+        print(out_seq, dseq)                                     # corrected window
+        print(out_qual, dqual)
+        prev = hi
+    end
+    print(out_seq, String(seq_chars[(prev + 1):end]))            # trailing solid span
+    print(out_qual, String(qual_chars[(prev + 1):end]))
+    return FASTX.FASTQ.Record(id, String(take!(out_seq)), String(take!(out_qual)))
 end
 
 """
     _windowed_decode_read_is_long(read, k) -> Bool
 
-Gate for WHEN to use windowed decode (td-nn6l Stage 3c). Returns `true` only for a
-read long enough that whole-read decode is EXPENSIVE — i.e. its observation count
-exceeds `_AUTO_BEAM_EXACT_THRESHOLD`, the same line above which the whole-read
-Viterbi is bounded (beam-pruned, hence inexact) to stay tractable. For such long
-reads, windowing to `<=max_window` sub-windows is BOTH cheaper (the #375 long-read
-term) AND more accurate (each window is exactly decodable again). At/below the
-threshold whole-read decode is exact and cheap, so windowing — which decodes only
-a small hard sub-span and thus discards the read's broader context — would only
-LOSE quality (a short read's hard window is tiny). Those reads keep whole-read
-decode as the fallback. This is why the :scalable quality gate (100 bp reads)
-never regresses: those reads are below the threshold and are decoded whole.
+Gate for WHEN to use windowed decode (td-nn6l Stage 3c). Returns `true` only when
+the read's observation count exceeds `_AUTO_BEAM_EXACT_THRESHOLD`, bounding the
+read-length axis by decoding `<=max_window` sub-windows. Exactness still depends on
+graph density and any explicit beam override: a short window on a graph with more
+than `_AUTO_BEAM_BOUNDED_WIDTH` vertices remains beam-bounded. Reads below
+the length threshold keep whole-read context unless another caller policy (such as
+staged indel decoding, td-2rxh) explicitly forces windowing.
 """
 function _windowed_decode_read_is_long(read::FASTX.FASTQ.Record, k::Int)::Bool
     n_obs = length(FASTX.sequence(read)) - k + 1
@@ -1534,6 +1606,13 @@ parallel (`@threads`) read loop increments them race-free.
 - `unkmerizable_reads` : `BioSequences.EncodeError` — a read carrying an
   ambiguous base (e.g. `N`) that the 2-bit k-mer iterator cannot encode. The
   read is SKIPPED (passes through uncorrected), never crashed on.
+- `indel_decodes`      : successful decodes stamped by the pair-HMM kernel.
+- `truncated_decodes`  : pair-HMM frontiers that returned only a decoded prefix;
+  rejected before correction or soft-EM side effects.
+- `trace_contract_errors` : malformed/missing pair-HMM traceback telemetry;
+  an internal decoder contract regression rather than a data-dependent miss.
+- `window_divergences` : substitution windows rejected for violating the
+  length-preserving splice contract.
 """
 mutable struct CorrectorDiagnostics
     structural_errors::Threads.Atomic{Int}
@@ -1543,10 +1622,15 @@ mutable struct CorrectorDiagnostics
     # decode. On a healthy substitution decode this is always 0; a nonzero value
     # means the opt-in gate disabled itself — a regression signal, not data loss.
     gate_skipped::Threads.Atomic{Int}
+    indel_decodes::Threads.Atomic{Int}
+    truncated_decodes::Threads.Atomic{Int}
+    trace_contract_errors::Threads.Atomic{Int}
+    window_divergences::Threads.Atomic{Int}
 end
 function CorrectorDiagnostics()
     CorrectorDiagnostics(Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
-        Threads.Atomic{Int}(0))
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0), Threads.Atomic{Int}(0),
+        Threads.Atomic{Int}(0), Threads.Atomic{Int}(0))
 end
 
 # Previously-proven-tractable finite beam (td-63qy: beam 256 completed on the
@@ -1740,7 +1824,11 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
     # when `diag` is a shared accumulator threaded across many passes.
     struct_before = diag.structural_errors[]
     unk_before = diag.unkmerizable_reads[]
+    indel_decodes_before = diag.indel_decodes[]
+    truncated_before = diag.truncated_decodes[]
+    trace_contract_before = diag.trace_contract_errors[]
     gate_skipped_before = diag.gate_skipped[]
+    window_divergences_before = diag.window_divergences[]
     total_reads = length(reads)
     updated_reads = Vector{FASTX.FASTQ.Record}(undef, total_reads)
     improvements_made = 0
@@ -1901,7 +1989,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                         read, graph, k, hard_vertices; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
                         diagnostics = diag,
-                        calibrated_gap_threshold = calibrated_gap_threshold) :
+                        calibrated_gap_threshold = calibrated_gap_threshold,
+                        indel_params = indel_params) :
                                    improve_read_likelihood(
                         read, graph, k; graph_mode = graph_mode,
                         beam_width = beam_width, weighted_graph = pass_weighted_graph,
@@ -1936,7 +2025,8 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
                     beam_width = beam_width, soft_weights = soft_weights,
                     weighted_graph = pass_weighted_graph,
                     diagnostics = diag,
-                    calibrated_gap_threshold = calibrated_gap_threshold) :
+                    calibrated_gap_threshold = calibrated_gap_threshold,
+                    indel_params = indel_params) :
                                improve_read_likelihood(
                     read, graph, k; graph_mode = graph_mode,
                     beam_width = beam_width, soft_weights = soft_weights,
@@ -2002,6 +2092,22 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         end
     end
 
+    trace_contract_this_pass = diag.trace_contract_errors[] - trace_contract_before
+    if trace_contract_this_pass > 0
+        @warn "iterative corrector: pair-HMM traceback contract failed; rejected " *
+              "decode(s) before correction or soft-EM side effects." total_reads trace_contract_errors = trace_contract_this_pass
+    end
+    truncated_this_pass = diag.truncated_decodes[] - truncated_before
+    successful_indel_this_pass = diag.indel_decodes[] - indel_decodes_before
+    completed_indel_outcomes = successful_indel_this_pass + truncated_this_pass +
+                               trace_contract_this_pass
+    if completed_indel_outcomes > 0 &&
+       truncated_this_pass / completed_indel_outcomes >= 0.5
+        @warn "iterative corrector: high truncated pair-HMM decode fraction; prefix-only " *
+              "paths were rejected before correction or soft-EM side effects." total_reads completed_indel_outcomes truncated_decodes = truncated_this_pass fraction = round(
+            truncated_this_pass / completed_indel_outcomes, digits = 3)
+    end
+
     # A requested calibrated gate that silently fell open on a substitution decode
     # is a contract regression (the gate did nothing despite being opted in) — see
     # CorrectorDiagnostics.gate_skipped. Surface it rather than let the frontier look
@@ -2011,6 +2117,13 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         @warn "iterative corrector: calibrated gate fell open (ungated) on " *
               "$(gate_skipped_this_pass) read(s) despite a substitution decode — the " *
               "gap/path alignment contract was violated; the gate silently did nothing." total_reads gate_skipped = gate_skipped_this_pass
+    end
+
+    window_divergences_this_pass =
+        diag.window_divergences[] - window_divergences_before
+    if window_divergences_this_pass > 0
+        @warn "iterative corrector: rejected substitution window(s) whose decoded " *
+              "length violated the length-preserving splice contract." total_reads window_divergences = window_divergences_this_pass
     end
 
     return updated_reads, improvements_made, skip_fraction, cheap_corrections,
@@ -2141,7 +2254,13 @@ function find_optimal_sequence_path(read::FASTX.FASTQ.Record, graph, k::Int;
     end
 
     viterbi_read, viterbi_likelihood = viterbi_result
-    improvement = viterbi_likelihood - original_likelihood
+    improvement = _comparable_likelihood_improvement(
+        original_likelihood,
+        viterbi_likelihood,
+        length(FASTX.sequence(read)),
+        length(FASTX.sequence(viterbi_read)),
+        k;
+        length_normalized = indel_params !== nothing)
     # Accept the ML path only when it is at least as likely as the original; a
     # non-positive delta means the ML path is not an improvement, so report none
     # (never return a strictly-worse read). This is the ADR's "trust the ML path
@@ -2163,6 +2282,34 @@ function calculate_read_likelihood(
     quality_scores = collect(FASTX.quality_scores(read))
     return calculate_sequence_likelihood(
         sequence, quality_scores, graph, k; graph_mode = graph_mode)
+end
+
+"""
+    _comparable_likelihood_improvement(original_likelihood, corrected_likelihood,
+        original_length, corrected_length, k; length_normalized=false)
+
+Compare graph log-likelihoods without giving a mechanical advantage to a shorter
+length-changing correction. Substitution mode keeps the historical raw-sum
+difference exactly. Indel mode compares mean log-likelihood per emitted k-mer;
+the pair-HMM has already applied its affine gap priors while choosing the decoded
+path, and this secondary acceptance gate therefore tests graph support on a
+length-comparable scale.
+"""
+function _comparable_likelihood_improvement(
+        original_likelihood::Float64,
+        corrected_likelihood::Float64,
+        original_length::Int,
+        corrected_length::Int,
+        k::Int;
+        length_normalized::Bool = false
+)::Float64
+    if !length_normalized
+        return corrected_likelihood - original_likelihood
+    end
+    original_terms = max(original_length - k + 1, 1)
+    corrected_terms = max(corrected_length - k + 1, 1)
+    return corrected_likelihood / corrected_terms -
+           original_likelihood / original_terms
 end
 
 """
@@ -2557,6 +2704,64 @@ function adjust_quality_scores(
     end
 end
 
+"""
+    _quality_from_indel_trace(original_quality, move_trace, read_index_trace, k,
+        corrected_length)
+
+Map observed FASTQ qualities onto a pair-HMM corrected sequence from the exact
+decoder traceback. The first matched k-mer inherits qualities `1:k`; subsequent
+`M` moves inherit the newly consumed observed base, `I` moves drop the consumed
+extra base, and `D` moves emit a corrected base with the lower of its adjacent
+observed qualities. Returns `nothing` when the trace is malformed or does not
+produce `corrected_length`, so callers can fail closed rather than attach shifted
+qualities. Runtime and memory are linear in the traceback length.
+"""
+function _quality_from_indel_trace(
+        original_quality::AbstractString,
+        move_trace::AbstractVector{Symbol},
+        read_index_trace::AbstractVector{Int},
+        k::Int,
+        corrected_length::Int
+)::Union{String, Nothing}
+    quality_chars = collect(original_quality)
+    n_quality = length(quality_chars)
+    if k <= 0 || n_quality < k || isempty(move_trace) ||
+       length(move_trace) != length(read_index_trace) || first(move_trace) != :M ||
+       first(read_index_trace) != 1
+        return nothing
+    end
+
+    corrected_quality = copy(quality_chars[1:k])
+    n_observations = n_quality - k + 1
+    previous_read_index = 1
+    @inbounds for trace_index in 2:length(move_trace)
+        phase = move_trace[trace_index]
+        read_index = read_index_trace[trace_index]
+        expected_read_index = phase == :D ? previous_read_index : previous_read_index + 1
+        if phase ∉ (:M, :I, :D) || read_index != expected_read_index ||
+           !(1 <= read_index <= n_observations)
+            return nothing
+        end
+        observed_position = read_index + k - 1
+        if phase == :M
+            push!(corrected_quality, quality_chars[observed_position])
+        elseif phase == :I
+            # The read consumed an extra observed base without advancing the graph;
+            # the corrected latent sequence therefore emits no base or quality.
+            previous_read_index = read_index
+            continue
+        elseif phase == :D
+            left_position = observed_position
+            right_position = min(observed_position + 1, n_quality)
+            push!(corrected_quality,
+                min(quality_chars[left_position], quality_chars[right_position]))
+        end
+        previous_read_index = read_index
+    end
+    length(corrected_quality) == corrected_length || return nothing
+    return String(corrected_quality)
+end
+
 # =============================================================================
 # Decision Making and Termination Conditions
 # =============================================================================
@@ -2703,9 +2908,15 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     # so a caller can detect a corrector that reported 0 improvements because it
     # never actually ran, distinct from "ran and found nothing to fix".
     corrector_errors = diagnostics === nothing ?
-                       Dict(:structural => 0, :unkmerizable => 0) :
+                       Dict(:structural => 0, :unkmerizable => 0,
+        :indel_decodes => 0, :truncated_decodes => 0,
+        :trace_contract_errors => 0, :window_divergences => 0) :
                        Dict(:structural => diagnostics.structural_errors[],
-        :unkmerizable => diagnostics.unkmerizable_reads[])
+        :unkmerizable => diagnostics.unkmerizable_reads[],
+        :indel_decodes => diagnostics.indel_decodes[],
+        :truncated_decodes => diagnostics.truncated_decodes[],
+        :trace_contract_errors => diagnostics.trace_contract_errors[],
+        :window_divergences => diagnostics.window_divergences[])
 
     # Per-pass skip-fraction summary (FIX 6): min/mean/max across every k+iteration
     # pass, not just the last. `last_skip_fraction` is retained for back-compat.
@@ -3015,6 +3226,35 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         if corrected_path === nothing || isempty(corrected_path)
             return nothing
         end
+        path_diagnostics = only(correction.paths).diagnostics
+        corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
+        corrected_sequence_string = corrected_sequence isa AbstractString ?
+                                    corrected_sequence :
+                                    string(corrected_sequence)
+        aligned_indel_quality::Union{Nothing, String} = nothing
+        if indel_params !== nothing
+            if get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
+                return nothing
+            end
+            if get(path_diagnostics, :truncated, false) === true
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.truncated_decodes, 1)
+                return nothing
+            end
+            aligned_indel_quality = Mycelia._quality_from_indel_trace(
+                String(FASTX.quality(read)),
+                get(path_diagnostics, :move_trace, Symbol[]),
+                get(path_diagnostics, :read_index_trace, Int[]),
+                k,
+                length(corrected_sequence_string))
+            if aligned_indel_quality === nothing
+                diagnostics === nothing ||
+                    Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
+                return nothing
+            end
+        end
 
         # Soft-EM E-step (td-e70t v2): build this read's COMPETING candidate paths
         # (the observed read path + a consensus alternative re-routed through the
@@ -3042,10 +3282,6 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                                   _SOFT_EM_ALT_SUCCESSOR_BOUND)
         end
 
-        corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
-        corrected_sequence_string = corrected_sequence isa AbstractString ?
-                                    corrected_sequence :
-                                    string(corrected_sequence)
         # Calibrated gate is a SUBSTITUTION-ONLY tool: the positional revert
         # `corrected_chars[i+k] = original_chars[i+k]` requires a stable base<->column
         # map, which only a length-preserving substitution decode provides. Under
@@ -3084,10 +3320,22 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.gate_skipped, 1)
             end
         end
-        improved_likelihood = Mycelia.calculate_sequence_likelihood(
-            corrected_sequence_string, quality_scores, graph, k; graph_mode = graph_mode)
-        improved_quality = Mycelia.adjust_quality_scores(
-            FASTX.quality(read), corrected_sequence_string, improved_likelihood)
+        improved_quality, improved_likelihood = if indel_params === nothing
+            likelihood = Mycelia.calculate_sequence_likelihood(
+                corrected_sequence_string, quality_scores, graph, k;
+                graph_mode = graph_mode)
+            quality = Mycelia.adjust_quality_scores(
+                FASTX.quality(read), corrected_sequence_string, likelihood)
+            quality, likelihood
+        else
+            diagnostics === nothing ||
+                Threads.atomic_add!(diagnostics.indel_decodes, 1)
+            aligned_quality = aligned_indel_quality::String
+            scores = Int8.(Int.(collect(codeunits(aligned_quality))) .- 33)
+            likelihood = Mycelia.calculate_sequence_likelihood(
+                corrected_sequence_string, scores, graph, k; graph_mode = graph_mode)
+            aligned_quality, likelihood
+        end
         improved_record = FASTX.FASTQ.Record(
             FASTX.identifier(read), corrected_sequence_string, improved_quality)
         return (improved_record, improved_likelihood)

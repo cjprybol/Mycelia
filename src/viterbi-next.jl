@@ -1619,6 +1619,11 @@ Affine transition masses come from the error model: `δ_I = ε·f_ins`,
 `γ_I`, `γ_D`. Setting the indel fractions to 0 sends every gap transition to
 `log(0) = -Inf`, so the reachable frontier collapses to the pure-M substitution
 path — Illumina falls out as the special case.
+
+The result diagnostics include `:move_counts`, the ordered `:move_trace`, and the
+parallel `:read_index_trace`. The latter two preserve the exact pair-HMM traceback
+used to reconstruct length-changing per-base qualities. `:decoded_read_index` and
+`:truncated` report whether the frontier consumed the complete observation.
 """
 function _viterbi_correct_observation_indel(
         graph::MetaGraphsNext.MetaGraph,
@@ -1936,12 +1941,18 @@ function _viterbi_correct_observation_indel(
     reverse!(chain)
 
     path_states = State[]
-    for (index, (_, state, phase)) in enumerate(chain)
+    move_trace = Symbol[]
+    read_index_trace = Int[]
+    for (index, (read_index, state, phase)) in enumerate(chain)
         diagnostics[:move_counts][phase] += 1
+        push!(move_trace, phase)
+        push!(read_index_trace, read_index)
         if index == 1 || phase != :I
             push!(path_states, state)
         end
     end
+    diagnostics[:move_trace] = move_trace
+    diagnostics[:read_index_trace] = read_index_trace
 
     path = Rhizomorph._build_graph_path_from_vertices(graph, path_states)
     diagnostics[:path_length] = length(path.steps)
