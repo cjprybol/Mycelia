@@ -39,17 +39,54 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
             results_dir = dir,
             return_artifact = true
         )
-        csv_path = joinpath(dir, "rhizomorph_gap_calibration.csv")
-        model_path = joinpath(dir, "rhizomorph_gap_calibration_model.csv")
-        manifest_path = joinpath(dir, "rhizomorph_gap_calibration_manifest.csv")
+        csv_path = result.metrics_path
+        model_path = result.model_path
+        audit_path = result.replicate_audit_path
+        manifest_path = result.manifest_path
+        Test.@test dirname(result.bundle_path) == dir
+        Test.@test startswith(
+            basename(result.bundle_path), "rhizomorph_gap_calibration_")
         Test.@test isfile(csv_path)
         Test.@test isfile(model_path)
+        Test.@test isfile(audit_path)
         Test.@test isfile(manifest_path)
         Test.@test startswith(readline(csv_path),
             "scope,error_rate,model,n,positive_frac,auroc,ece,brier")
         Test.@test readline(model_path) == "model,term,coefficient"
+        Test.@test startswith(readline(audit_path),
+            "error_rate,replicate,contract_skips,read_passes")
         Test.@test readline(manifest_path) == "key,value"
-        Test.@test "assigned_q,21" in readlines(manifest_path)
+        manifest_lines = readlines(manifest_path)
+        Test.@test "artifact_status,publishable" in manifest_lines
+        Test.@test "assigned_q,21" in manifest_lines
+        Test.@test "evaluation_scope,within_cohort_read_grouped_holdout" in
+                   manifest_lines
+        Test.@test "whole_graph_holdout,false" in manifest_lines
+        Test.@test "error_generator_distribution,bernoulli_per_base" in
+                   manifest_lines
+        Test.@test "frontier_simulator_parity_claimed,false" in manifest_lines
+        Test.@test "feature_schema_version,td-21eg-v1" in manifest_lines
+        Test.@test any(line -> startswith(line, "dataset_sha256,"), manifest_lines)
+        Test.@test any(line -> startswith(line, "model_sha256,"), manifest_lines)
+        Test.@test any(line -> startswith(line, "source_sha,"), manifest_lines)
+        Test.@test any(
+            line -> startswith(
+                line, "optimizer_multifeature_logistic_final_loss,"),
+            manifest_lines)
+        Test.@test "logistic_l2,0.01" in manifest_lines
+
+        # Publishing the same coherent contents again must create a distinct
+        # bundle rather than overwrite or mix with the first run.
+        second = _publish_calibration_bundle(
+            dir, result.rows, result.multifeature_model, result.gap_model,
+            result.replicate_audit, ["test_bundle" => "true"])
+        Test.@test second.bundle_path != result.bundle_path
+        Test.@test all(isfile, (
+            second.metrics_path,
+            second.model_path,
+            second.replicate_audit_path,
+            second.manifest_path
+        ))
         result
     end
 
@@ -68,6 +105,17 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
                joinpath(dirname(artifact.model_path), "rhizomorph_gap_calibration.csv")
     Test.@test artifact.manifest_path == joinpath(
         dirname(artifact.model_path), "rhizomorph_gap_calibration_manifest.csv")
+    Test.@test artifact.replicate_audit_path == joinpath(
+        dirname(artifact.model_path),
+        "rhizomorph_gap_calibration_replicate_audit.csv")
+    Test.@test artifact.bundle_path == dirname(artifact.model_path)
+    Test.@test !isempty(artifact.run_id)
+    Test.@test length(artifact.dataset_sha256) == 64
+    Test.@test length(artifact.model_sha256) == 64
+    Test.@test artifact.feature_schema_version == "td-21eg-v1"
+    Test.@test artifact.evaluation_scope == :within_cohort_read_grouped_holdout
+    Test.@test artifact.multifeature_model.diagnostics.converged
+    Test.@test artifact.gap_model.diagnostics.converged
     Test.@test artifact.training.n > 0
     Test.@test artifact.heldout.n > 0
     Test.@test size(artifact.training.features) == (artifact.training.n, 5)
@@ -92,6 +140,7 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
     )
     Test.@test artifact.assigned_q == 21
     Test.@test length(artifact.dataset) >= artifact.training.n + artifact.heldout.n
+    Test.@test all(row.replicate == 1 for row in artifact.dataset)
     Test.@test all(row.k >= 1 for row in artifact.dataset)
     Test.@test isempty(intersect(
         Set(artifact.training.groups), Set(artifact.heldout.groups)))
@@ -105,10 +154,35 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
                    artifact.contract_read_passes[error_rate] <=
                    artifact.max_contract_skip_fraction
     end
-    Test.@test sum(values(artifact.contract_skips)) > 0
+    Test.@test length(artifact.replicate_audit) == 2
+    Test.@test all(row -> row.read_passes > 0, artifact.replicate_audit)
+    Test.@test all(row -> row.candidate_events > 0, artifact.replicate_audit)
+    Test.@test all(row -> row.candidate_bearing_reads > 0,
+        artifact.replicate_audit)
     Test.@test _contract_skip_fraction(1, 4, 0.25) == 0.25
     test_throws_message(ArgumentError, "exceeds configured bound") do
         _contract_skip_fraction(1, 4, 0.2)
+    end
+    test_throws_message(ArgumentError, "zero usable candidate events") do
+        _validate_replicate_audit([(
+            error_rate = 0.10,
+            replicate = 2,
+            contract_skips = 0,
+            read_passes = 10,
+            candidate_events = 0,
+            candidate_bearing_reads = 0
+        )])
+    end
+    test_throws_message(ArgumentError, "did not converge") do
+        _require_converged_logistic((
+                a = 0.0,
+                b = [0.0],
+                diagnostics = (
+                    converged = false,
+                    iterations = 1,
+                    gradient_norm = 1.0
+                )
+            ), "test")
     end
 
     metric_scopes = Set((row.scope, row.error_rate) for row in artifact.rows)
@@ -139,6 +213,11 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
     Test.@test _uniform_phred_quality_string(3, 0) == "!!!"
     Test.@test _uniform_phred_quality_string(3, 20) == "555"
     Test.@test _uniform_phred_quality_string(3, 93) == "~~~"
+    assigned_record = _calibration_fastq_record("assigned-q", "ACGT", 21)
+    assigned_quality = _uniform_phred_quality_string(4, 21)
+    Test.@test String(FASTX.quality(assigned_record)) == assigned_quality
+    Test.@test all(character -> Int(character) - 33 == 21,
+        FASTX.quality(assigned_record))
     test_throws_message(ArgumentError, "supported Phred range 0:93") do
         run_gap_calibration(assigned_q = -1)
     end
@@ -156,6 +235,24 @@ Test.@testset "Grouped held-out correction-confidence calibration" begin
                 features = zeros(1, 5),
                 gap_features = zeros(1, 2),
                 scores = [0.0]
+            ); nbins = 2)
+    end
+    test_throws_message(ArgumentError, "error-rate scope") do
+        _heldout_metric_rows(
+            (a = 0.0, b = zeros(5)),
+            (a = 0.0, b = zeros(2)),
+            (
+                labels = [true, false, true, true],
+                rows = [
+                    (error_rate = 0.05,),
+                    (error_rate = 0.05,),
+                    (error_rate = 0.10,),
+                    (error_rate = 0.10,)
+                ],
+                collapsed_frontier = falses(4),
+                features = zeros(4, 5),
+                gap_features = zeros(4, 2),
+                scores = zeros(4)
             ); nbins = 2)
     end
 end
@@ -180,6 +277,7 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
         record_position_gaps = true, error_rate = 0.08,
         strand_mode = :doublestrand)
     any_finite = false
+    checked_boundary_windows = false
     for (record, clean) in zip(reads, truths)
         observed = FASTX.sequence(String, record)
         gt = try
@@ -207,18 +305,26 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
         Test.@test path !== nothing
         corrected_sequence = String(Mycelia.Rhizomorph.path_to_sequence(path, fixture.graph))
         gaps = only(gt.result.paths).diagnostics[:position_gaps]
+        checked_boundary_windows |= n_rows >= 3
         for row_index in eachindex(gt.positions)
             gap_index = gt.positions[row_index] - k
-            expected_features = Mycelia.correction_confidence_features(
-                fixture.graph, path, gap_index, k, solid_kmers,
-                Float64(gaps[gap_index]))
+            first_step = gap_index + 1
+            last_step = min(gap_index + k, length(path.steps))
+            overlapping_labels = [path.steps[index].vertex_label
+                                  for index in first_step:last_step]
+            expected_min_support = minimum(
+                Float64(Mycelia._vertex_coverage(fixture.graph[label]))
+                for label in overlapping_labels)
+            expected_all_solid = all(label -> label in solid_kmers,
+                overlapping_labels)
+            expected_branch_ratio = Float64(path.steps[first_step].probability)
             Test.@test gt.feature_rows[row_index].raw_gap == gt.scores[row_index]
             Test.@test gt.feature_rows[row_index].min_kmer_support ==
-                       expected_features.min_kmer_support
+                       expected_min_support
             Test.@test gt.feature_rows[row_index].all_stage0_solid ==
-                       expected_features.all_stage0_solid
+                       expected_all_solid
             Test.@test gt.feature_rows[row_index].competing_branch_support_ratio ==
-                       expected_features.competing_branch_support_ratio
+                       expected_branch_ratio
             Test.@test gt.feature_rows[row_index].collapsed_frontier ==
                        (gt.scores[row_index] == Inf)
             Test.@test gt.candidate_edits[row_index] ==
@@ -231,4 +337,5 @@ Test.@testset "Per-base correction-confidence feature alignment" begin
         any_finite |= any(isfinite, gt.scores)
     end
     Test.@test any_finite
+    Test.@test checked_boundary_windows
 end

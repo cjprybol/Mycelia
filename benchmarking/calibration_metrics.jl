@@ -21,6 +21,26 @@
 # measure CALIBRATION and require `confidences` already mapped to [0,1]
 # probabilities (fit a Platt/isotonic map first for a raw signal).
 
+function _validate_probability_inputs(confidences::AbstractVector{<:Real},
+        labels::AbstractVector{Bool})::Nothing
+    length(confidences) == length(labels) ||
+        throw(ArgumentError("confidences and labels must have equal length"))
+    all(isfinite, confidences) ||
+        throw(ArgumentError("confidences must be finite"))
+    all(confidence -> 0.0 <= confidence <= 1.0, confidences) ||
+        throw(ArgumentError("confidences must lie in [0, 1]"))
+    return nothing
+end
+
+function _stable_sigmoid(linear_predictor::Real)::Float64
+    z = Float64(linear_predictor)
+    isfinite(z) || throw(ArgumentError("logistic linear predictor must be finite"))
+    probability = z >= 0.0 ? 1.0 / (1.0 + exp(-z)) : exp(z) / (1.0 + exp(z))
+    isfinite(probability) ||
+        throw(ArgumentError("logistic probability must be finite"))
+    return probability
+end
+
 """
     reliability_bins(confidences, labels; nbins=10) -> Vector{NamedTuple}
 
@@ -32,8 +52,7 @@ every bin.
 """
 function reliability_bins(confidences::AbstractVector{<:Real},
         labels::AbstractVector{Bool}; nbins::Int = 10)
-    length(confidences) == length(labels) ||
-        throw(ArgumentError("confidences and labels must have equal length"))
+    _validate_probability_inputs(confidences, labels)
     nbins >= 1 || throw(ArgumentError("nbins must be >= 1"))
     edges = range(0.0, 1.0; length = nbins + 1)
     out = NamedTuple[]
@@ -61,9 +80,9 @@ ECE = sum over bins of (bin_count / N) * |bin_accuracy - bin_mean_confidence|.
 """
 function expected_calibration_error(confidences::AbstractVector{<:Real},
         labels::AbstractVector{Bool}; nbins::Int = 10)
+    bins = reliability_bins(confidences, labels; nbins = nbins)
     n = length(confidences)
     n == 0 && return NaN
-    bins = reliability_bins(confidences, labels; nbins = nbins)
     return sum(bin.count / n * abs(bin.accuracy - bin.mean_conf) for bin in bins; init = 0.0)
 end
 
@@ -98,10 +117,9 @@ label is 1.0 for true / 0.0 for false. 0 is best; combines calibration and
 refinement. Requires `confidences` in [0,1].
 """
 function brier_score(confidences::AbstractVector{<:Real}, labels::AbstractVector{Bool})
+    _validate_probability_inputs(confidences, labels)
     n = length(confidences)
     n == 0 && return NaN
-    length(confidences) == length(labels) ||
-        throw(ArgumentError("confidences and labels must have equal length"))
     return sum((confidences[i] - (labels[i] ? 1.0 : 0.0))^2 for i in 1:n) / n
 end
 
@@ -180,41 +198,33 @@ end
 
 Fit a Platt-style single-feature logistic probability map
 `P(true | score) = 1 / (1 + exp(-(a + b*score)))` by gradient descent on the
-standardized score, folded back to raw-score space. Returns `(a, b)` — the
-raw-space intercept and slope. Mirrors the standardize→fit→unfold structure of
-the repo's `fit_logistic_fusion`, but with a single feature and no Mycelia
-dependency. Two parameters, strictly monotone, so it inverts cleanly to a single
-raw gap cutoff (see `logistic_gap_for_probability`).
+standardized score, folded back to raw-score space. Returns `(a, b)` with the
+raw-space intercept and slope. Set `return_diagnostics=true` to additionally
+return convergence, final-loss, gradient, and regularization diagnostics
+without changing the default model schema. Mirrors the standardize→fit→unfold
+structure of the repo's `fit_logistic_fusion`, but with a single feature and no
+Mycelia dependency. Two parameters, strictly monotone, so it inverts cleanly to
+a single raw gap cutoff (see `logistic_gap_for_probability`).
 """
 function fit_logistic_map(scores::AbstractVector{<:Real},
-        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1)::NamedTuple
+        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1,
+        l2::Float64 = 0.0,
+        gradient_tolerance::Float64 = 1.0e-8,
+        return_diagnostics::Bool = false)::NamedTuple
     length(scores) == length(labels) ||
         throw(ArgumentError("scores and labels must have equal length"))
     isempty(scores) && throw(ArgumentError("scores and labels must be non-empty"))
     all(isfinite, scores) || throw(ArgumentError("scores must be finite"))
-    x = Float64.(scores)
-    y = [l ? 1.0 : 0.0 for l in labels]
-    n = length(x)
-    μ = sum(x) / n
-    σ = sqrt(max(sum((xi - μ)^2 for xi in x) / n, eps()))
-    z = (x .- μ) ./ σ
-    α = 0.0
-    β = 0.0
-    for _ in 1:iters
-        gα = 0.0
-        gβ = 0.0
-        for i in 1:n
-            p = 1.0 / (1.0 + exp(-(α + β * z[i])))
-            err = p - y[i]
-            gα += err
-            gβ += err * z[i]
-        end
-        α -= lr * gα / n
-        β -= lr * gβ / n
-    end
-    # Fold the standardized (α, β) back to raw-score space:
-    # α + β*(x-μ)/σ = (α - β*μ/σ) + (β/σ)*x.
-    return (a = α - β * μ / σ, b = β / σ)
+    matrix_model = fit_logistic_map(
+        reshape(Float64.(scores), :, 1), labels;
+        iters = iters,
+        lr = lr,
+        l2 = l2,
+        gradient_tolerance = gradient_tolerance,
+        return_diagnostics = true)
+    model = (a = matrix_model.a, b = only(matrix_model.b))
+    return return_diagnostics ?
+           merge(model, (diagnostics = matrix_model.diagnostics,)) : model
 end
 
 """
@@ -224,10 +234,15 @@ Fit a multi-feature logistic probability map with samples in rows and features
 in columns. Each feature is standardized independently during optimization and
 the fitted coefficients are folded back to raw-feature space. Returns
 `(a, b::Vector{Float64})`, where `a` is the intercept and `b[j]` multiplies
-`features[:, j]`. Constant columns receive a zero raw-space coefficient.
+`features[:, j]`. Constant columns receive a zero raw-space coefficient. Set
+`return_diagnostics=true` to additionally report convergence, final penalized
+log loss, gradient norm, iteration count, and the L2 setting.
 """
 function fit_logistic_map(features::AbstractMatrix{<:Real},
-        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1)::NamedTuple
+        labels::AbstractVector{Bool}; iters::Int = 500, lr::Float64 = 0.1,
+        l2::Float64 = 0.0,
+        gradient_tolerance::Float64 = 1.0e-8,
+        return_diagnostics::Bool = false)::NamedTuple
     n_samples, n_features = size(features)
     n_samples == length(labels) ||
         throw(ArgumentError("feature rows and labels must have equal length"))
@@ -236,6 +251,9 @@ function fit_logistic_map(features::AbstractMatrix{<:Real},
     all(isfinite, features) || throw(ArgumentError("features must be finite"))
     iters >= 1 || throw(ArgumentError("iters must be >= 1"))
     isfinite(lr) && lr > 0.0 || throw(ArgumentError("lr must be finite and > 0"))
+    isfinite(l2) && l2 >= 0.0 || throw(ArgumentError("l2 must be finite and >= 0"))
+    isfinite(gradient_tolerance) && gradient_tolerance >= 0.0 ||
+        throw(ArgumentError("gradient_tolerance must be finite and >= 0"))
 
     x = Float64.(features)
     y = [label ? 1.0 : 0.0 for label in labels]
@@ -256,7 +274,9 @@ function fit_logistic_map(features::AbstractMatrix{<:Real},
     intercept = 0.0
     coefficients = zeros(Float64, n_features)
     coefficient_gradient = zeros(Float64, n_features)
-    for _ in 1:iters
+    iterations_run = 0
+    converged = false
+    for iteration in 1:iters
         intercept_gradient = 0.0
         fill!(coefficient_gradient, 0.0)
         for i in 1:n_samples
@@ -264,29 +284,98 @@ function fit_logistic_map(features::AbstractMatrix{<:Real},
             for j in 1:n_features
                 linear_predictor += coefficients[j] * standardized[i, j]
             end
-            probability = 1.0 / (1.0 + exp(-linear_predictor))
+            probability = _stable_sigmoid(linear_predictor)
             residual = probability - y[i]
             intercept_gradient += residual
             for j in 1:n_features
                 coefficient_gradient[j] += residual * standardized[i, j]
             end
         end
-        intercept -= lr * intercept_gradient / n_samples
+        intercept_gradient /= n_samples
         for j in 1:n_features
-            coefficients[j] -= lr * coefficient_gradient[j] / n_samples
+            coefficient_gradient[j] =
+                coefficient_gradient[j] / n_samples + l2 * coefficients[j]
         end
+        gradient_norm = sqrt(intercept_gradient^2 +
+                             sum(abs2, coefficient_gradient))
+        isfinite(gradient_norm) ||
+            throw(ArgumentError("logistic optimizer gradient must be finite"))
+        iterations_run = iteration
+        if gradient_norm <= gradient_tolerance
+            converged = true
+            break
+        end
+        intercept -= lr * intercept_gradient
+        for j in 1:n_features
+            coefficients[j] -= lr * coefficient_gradient[j]
+        end
+        isfinite(intercept) && all(isfinite, coefficients) ||
+            throw(ArgumentError("logistic optimizer coefficients must remain finite"))
     end
 
+    final_loss = 0.0
+    final_intercept_gradient = 0.0
+    fill!(coefficient_gradient, 0.0)
+    for i in 1:n_samples
+        linear_predictor = intercept
+        for j in 1:n_features
+            linear_predictor += coefficients[j] * standardized[i, j]
+        end
+        isfinite(linear_predictor) ||
+            throw(ArgumentError("logistic optimizer linear predictor must be finite"))
+        probability = _stable_sigmoid(linear_predictor)
+        final_loss += max(linear_predictor, 0.0) -
+                      y[i] * linear_predictor + log1p(exp(-abs(linear_predictor)))
+        residual = probability - y[i]
+        final_intercept_gradient += residual
+        for j in 1:n_features
+            coefficient_gradient[j] += residual * standardized[i, j]
+        end
+    end
+    final_loss = final_loss / n_samples + l2 * sum(abs2, coefficients) / 2.0
+    final_intercept_gradient /= n_samples
+    for j in 1:n_features
+        coefficient_gradient[j] =
+            coefficient_gradient[j] / n_samples + l2 * coefficients[j]
+    end
+    final_gradient_norm = sqrt(final_intercept_gradient^2 +
+                               sum(abs2, coefficient_gradient))
+    all(isfinite, (final_loss, final_gradient_norm)) ||
+        throw(ArgumentError("logistic optimizer diagnostics must be finite"))
+    converged |= final_gradient_norm <= gradient_tolerance
     raw_coefficients = coefficients ./ scales
     raw_intercept = intercept -
                     sum(coefficients[j] * means[j] / scales[j] for j in 1:n_features)
-    return (a = raw_intercept, b = raw_coefficients)
+    model = (a = raw_intercept, b = raw_coefficients)
+    diagnostics = (
+        converged = converged,
+        iterations = iterations_run,
+        final_loss = final_loss,
+        gradient_norm = final_gradient_norm,
+        l2 = l2,
+        learning_rate = lr,
+        gradient_tolerance = gradient_tolerance
+    )
+    return return_diagnostics ? merge(model, (; diagnostics)) : model
 end
 
 """Map raw `scores` through a fitted logistic probability map."""
 function predict_logistic(model::NamedTuple,
         scores::AbstractVector{<:Real})::Vector{Float64}
-    return [1.0 / (1.0 + exp(-(model.a + model.b * Float64(score)))) for score in scores]
+    hasproperty(model, :a) && hasproperty(model, :b) ||
+        throw(ArgumentError("logistic model must contain a and b"))
+    model.b isa Real ||
+        throw(ArgumentError("single-feature logistic model b must be scalar"))
+    isfinite(model.a) && isfinite(model.b) ||
+        throw(ArgumentError("logistic model coefficients must be finite"))
+    all(isfinite, scores) || throw(ArgumentError("scores must be finite"))
+    probabilities = Vector{Float64}(undef, length(scores))
+    for i in eachindex(scores)
+        linear_predictor = Float64(model.a) +
+                           Float64(model.b) * Float64(scores[i])
+        probabilities[i] = _stable_sigmoid(linear_predictor)
+    end
+    return probabilities
 end
 
 """Map raw row-oriented `features` through a fitted multi-feature logistic map."""
@@ -308,7 +397,7 @@ function predict_logistic(model::NamedTuple,
         for j in axes(features, 2)
             linear_predictor += Float64(model.b[j]) * Float64(features[i, j])
         end
-        probabilities[i] = 1.0 / (1.0 + exp(-linear_predictor))
+        probabilities[i] = _stable_sigmoid(linear_predictor)
     end
     return probabilities
 end
