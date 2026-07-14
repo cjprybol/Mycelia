@@ -430,7 +430,7 @@ function _validate_autocycler_parameters(
     return normalized_read_type
 end
 
-function _prepare_autocycler_output_dir(out_dir::AbstractString)::String
+function _validate_autocycler_output_dir(out_dir::AbstractString)::String
     normalized_out_dir = abspath(out_dir)
     if isfile(normalized_out_dir)
         throw(ArgumentError("Autocycler output path is a file: $(normalized_out_dir)"))
@@ -442,6 +442,11 @@ function _prepare_autocycler_output_dir(out_dir::AbstractString)::String
             ),
         )
     end
+    return normalized_out_dir
+end
+
+function _prepare_autocycler_output_dir(out_dir::AbstractString)::String
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
     mkpath(normalized_out_dir)
     return normalized_out_dir
 end
@@ -794,8 +799,9 @@ function _run_autocycler(
         jobs,
         read_type,
     )
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
     toolchain = dependency_checker()
-    normalized_out_dir = _prepare_autocycler_output_dir(out_dir)
+    normalized_out_dir = _prepare_autocycler_output_dir(normalized_out_dir)
     _, script_path, _ = _autocycler_paths()
     plan = _autocycler_command_plan(
         normalized_long_reads,
@@ -895,11 +901,12 @@ function _run_autocycler_polished(
         jobs,
         read_type,
     )
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
     toolchain = dependency_checker()
 
     autocycler_result = _run_autocycler(
         normalized_long_reads,
-        out_dir;
+        normalized_out_dir;
         threads = threads,
         jobs = jobs,
         read_type = normalized_read_type,

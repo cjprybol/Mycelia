@@ -67,9 +67,10 @@ that is normalized to `:pacbio_hifi` before correction.
 Every corrected read set must preserve its input count and identifier order.
 Pair synchronization and normalized identifiers are also checked before and
 after correction. Explicit `/1` and `/2` mate roles are checked when present,
-so reversed libraries fail loudly. The direct `run_autocycler_polished` wrapper
-performs the same input mate check before dependency provisioning or long-read
-assembly.
+so reversed libraries fail loudly. R1, R2, and long reads must also be distinct
+in-memory and physical sources. The direct `run_autocycler_polished` wrapper
+performs its input mate and output-directory checks before dependency
+provisioning or long-read assembly.
 
 ## Public entry points
 

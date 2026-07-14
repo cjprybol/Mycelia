@@ -2624,22 +2624,22 @@ function _read_paths_refer_to_same_file(
     return abspath(path_1) == abspath(path_2)
 end
 
-function _paired_read_sources_overlap(short_r1::Any, short_r2::Any)::Bool
-    short_r1 === short_r2 && return true
-    r1_paths = if short_r1 isa AbstractString
-        [String(short_r1)]
-    elseif short_r1 isa AbstractVector{<:AbstractString}
-        String.(short_r1)
+function _read_sources_overlap(reads_1::Any, reads_2::Any)::Bool
+    reads_1 === reads_2 && return true
+    paths_1 = if reads_1 isa AbstractString
+        [String(reads_1)]
+    elseif reads_1 isa AbstractVector{<:AbstractString}
+        String.(reads_1)
     end
-    r2_paths = if short_r2 isa AbstractString
-        [String(short_r2)]
-    elseif short_r2 isa AbstractVector{<:AbstractString}
-        String.(short_r2)
+    paths_2 = if reads_2 isa AbstractString
+        [String(reads_2)]
+    elseif reads_2 isa AbstractVector{<:AbstractString}
+        String.(reads_2)
     end
-    if r1_paths !== nothing && r2_paths !== nothing
+    if paths_1 !== nothing && paths_2 !== nothing
         return any(
             _read_paths_refer_to_same_file(path_1, path_2)
-            for path_1 in r1_paths for path_2 in r2_paths
+            for path_1 in paths_1 for path_2 in paths_2
         )
     end
     return false
@@ -2650,7 +2650,7 @@ function _validate_paired_reads(
         short_r2::Any,
         stage::AbstractString,
 )::Int
-    _paired_read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
+    _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
         "$(stage) paired short-read R1 and R2 sources must be distinct.",
     ))
     r1_cursor = _read_identifier_cursor(short_r1)
@@ -3182,10 +3182,16 @@ function _assemble_paired_short_long(
         correction_runner::Function = _run_multi_input_stage1_correction,
         assembler_runner::Function,
 )::AssemblyResult
-    _paired_read_sources_overlap(short_reads[1], short_reads[2]) &&
+    _read_sources_overlap(short_reads[1], short_reads[2]) &&
         throw(ArgumentError(
             "input paired short-read R1 and R2 sources must be distinct.",
         ))
+    if _read_sources_overlap(short_reads[1], long_reads) ||
+       _read_sources_overlap(short_reads[2], long_reads)
+        throw(ArgumentError(
+            "Long-read input must be distinct from paired short-read R1 and R2 sources.",
+        ))
+    end
     short_r1 = _prepare_read_source(short_reads[1])
     short_r2 = _prepare_read_source(short_reads[2])
     prepared_long_reads = _prepare_read_source(long_reads)

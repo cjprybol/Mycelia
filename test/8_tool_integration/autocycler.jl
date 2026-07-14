@@ -345,12 +345,16 @@ Test.@testset "Autocycler wrapper" begin
             nonempty_out_dir = joinpath(temp_dir, "nonempty")
             mkpath(nonempty_out_dir)
             write(joinpath(nonempty_out_dir, "owned.txt"), "keep\n")
+            nonempty_dependency_checks = Ref(0)
 
             nonempty_error = _autocycler_test_error() do
                 Mycelia._run_autocycler(
                     long_reads,
                     nonempty_out_dir;
-                    dependency_checker = () -> nothing,
+                    dependency_checker = () -> begin
+                        nonempty_dependency_checks[] += 1
+                        return nothing
+                    end,
                     runner = _autocycler_test_runner!,
                 )
             end
@@ -359,6 +363,7 @@ Test.@testset "Autocycler wrapper" begin
                 "output directory must be empty",
                 sprint(showerror, nonempty_error),
             )
+            Test.@test nonempty_dependency_checks[] == 0
             Test.@test isfile(joinpath(nonempty_out_dir, "owned.txt"))
 
             missing_output_error = _autocycler_test_error() do
@@ -773,6 +778,32 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test !ispath(joinpath(temp_dir, "long-fasta-should-not-run"))
 
             write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
+            nonempty_out_dir = joinpath(temp_dir, "nonempty-polished")
+            mkpath(nonempty_out_dir)
+            write(joinpath(nonempty_out_dir, "owned.txt"), "keep\n")
+            nonempty_dependency_checks = Ref(0)
+            nonempty_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    nonempty_out_dir;
+                    dependency_checker = () -> begin
+                        nonempty_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = runner,
+                )
+            end
+            Test.@test nonempty_error isa ArgumentError
+            Test.@test occursin(
+                "output directory must be empty",
+                sprint(showerror, nonempty_error),
+            )
+            Test.@test nonempty_dependency_checks[] == 0
+            Test.@test runner_calls[] == 0
+            Test.@test isfile(joinpath(nonempty_out_dir, "owned.txt"))
+
             stale_environment_error = _autocycler_test_error() do
                 Mycelia._run_autocycler_polished(
                     long_reads,

@@ -1070,6 +1070,13 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
             )
         end
+        test_throws_message(ArgumentError, "Long-read input must be distinct") do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_R1;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
         test_throws_message(ArgumentError, "different counts") do
             Mycelia.Rhizomorph.assemble_hybrid(
                 (MULTI_INPUT_R1, MULTI_INPUT_R2[1:1]),
@@ -1089,6 +1096,17 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 Mycelia.Rhizomorph.assemble_hybrid(
                     ([paired_path], [paired_alias]),
                     MULTI_INPUT_LONG;
+                    config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                )
+            end
+            distinct_r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "distinct-r2.fastq"),
+                [multi_input_fastq_record("same_pair")],
+            )
+            test_throws_message(ArgumentError, "Long-read input must be distinct") do
+                Mycelia.Rhizomorph.assemble_hybrid(
+                    (paired_path, distinct_r2),
+                    paired_alias;
                     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
                 )
             end
