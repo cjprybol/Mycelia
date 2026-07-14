@@ -40,6 +40,180 @@ function checkpoint_resume_invocation(
     )
 end
 
+function checkpoint_frontier_params()::Mycelia.IndelDecodeParams
+    return Mycelia.IndelDecodeParams(
+        0.05,
+        0.2,
+        0.2,
+        0.1,
+        0.1,
+        3,
+        3,
+        16,
+    )
+end
+
+function checkpoint_frontier_invocation(
+        input_fastq::String,
+        output_directory::String,
+        max_iterations_per_k::Int,
+)::Dict{Symbol, Any}
+    return Mycelia.mycelia_iterative_assemble(
+        input_fastq;
+        max_k = 5,
+        max_iterations_per_k = max_iterations_per_k,
+        improvement_threshold = 0.0,
+        stop_on_no_change = false,
+        graph_mode = :canonical,
+        verbose = false,
+        enable_checkpointing = true,
+        checkpoint_interval = 1,
+        output_dir = output_directory,
+        k_ladder = [3, 5],
+        hard_window = true,
+        windowed_decode = true,
+        indel_params = checkpoint_frontier_params(),
+        indel_schedule = :frontier_budgeted,
+    )
+end
+
+Test.@testset "Fresh input hash and FASTQ parse share one descriptor" begin
+    Base.mktempdir() do temporary_directory
+        input_fastq = Base.joinpath(temporary_directory, "input.fastq")
+        replacement_fastq = Base.joinpath(
+            temporary_directory, "replacement.fastq")
+        original_reads = checkpoint_resume_reads()
+        replacement_reads = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("replacement", "TGCATGCA", "IIIIIIII"),
+        ]
+        Mycelia.write_fastq(records = original_reads, filename = input_fastq)
+        Mycelia.write_fastq(
+            records = replacement_reads, filename = replacement_fastq)
+        original_sha256 = Mycelia._stream_sha256_file(input_fastq)
+
+        observed_sha256,
+        observed_reads = Mycelia._load_hashed_input_fastq(
+            input_fastq;
+            after_initial_hash = () -> Base.mv(
+                replacement_fastq,
+                input_fastq;
+                force = true,
+            ),
+        )
+        Test.@test observed_sha256 == original_sha256
+        Test.@test [
+            FASTX.sequence(String, read) for read in observed_reads
+        ] == [FASTX.sequence(String, read) for read in original_reads]
+        current_reads = open(FASTX.FASTQ.Reader, input_fastq) do reader
+            collect(reader)
+        end
+        Test.@test [
+            FASTX.sequence(String, read) for read in current_reads
+        ] == [FASTX.sequence(String, read) for read in replacement_reads]
+
+        Mycelia.write_fastq(records = original_reads, filename = input_fastq)
+        replacement_bytes_path = Base.joinpath(
+            temporary_directory, "replacement_bytes.fastq")
+        Mycelia.write_fastq(
+            records = replacement_reads,
+            filename = replacement_bytes_path,
+        )
+        replacement_bytes = Base.read(replacement_bytes_path)
+        Test.@test_throws ArgumentError Mycelia._load_hashed_input_fastq(
+            input_fastq;
+            after_initial_hash = () -> Base.open(input_fastq, "w") do io
+                Base.write(io, replacement_bytes)
+            end,
+        )
+    end
+end
+
+Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
+    Base.mktempdir() do temporary_directory
+        sequence = "AAAGCTTAGGGAGAGTAGAAATAATATAGA"
+        input_fastq = Base.joinpath(temporary_directory, "input.fastq")
+        output_directory = Base.joinpath(temporary_directory, "run")
+        Mycelia.write_fastq(
+            records = FASTX.FASTQ.Record[
+                FASTX.FASTQ.Record(
+                    "multirung",
+                    sequence,
+                    repeat("I", length(sequence)),
+                ),
+            ],
+            filename = input_fastq,
+        )
+
+        first_result = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        first_telemetry = Base.deepcopy(
+            first_result[:metadata][:indel_rung_telemetry])
+        Test.@test length(first_telemetry) == 2
+        rejected_row, completed_row = first_telemetry
+        Test.@test rejected_row[:k] == 3
+        Test.@test rejected_row[:requested] > 0
+        Test.@test rejected_row[:cleaned_frontier_evaluated] > 0
+        Test.@test !isempty(rejected_row[:raw_frontier_metrics])
+        Test.@test !isempty(rejected_row[:cleaned_frontier_metrics])
+        Test.@test !isempty(rejected_row[:graph_cleanup])
+        Test.@test completed_row[:k] == 5
+        Test.@test completed_row[:requested] > 0
+        Test.@test completed_row[:attempted] > 0
+        Test.@test completed_row[:completed] > 0
+        Test.@test completed_row[:attempted] ==
+                   completed_row[:completed] + completed_row[:truncated]
+
+        checkpoint_file = Base.joinpath(
+            output_directory, "checkpoints", "latest_checkpoint.json")
+        checkpoint = JSON.parsefile(checkpoint_file)
+        Test.@test checkpoint["resume_configuration"]["version"] == 2
+        Test.@test !isempty(
+            first(checkpoint["indel_rung_telemetry"])[
+                "cleaned_frontier_metrics"])
+        checkpoint["next_k"] = checkpoint["current_k"]
+        checkpoint["next_iteration"] = 2
+        checkpoint["run_complete"] = false
+        checkpoint["resume_configuration"]["max_iterations_per_k"] = 2
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, checkpoint, 2)
+        end
+
+        resumed_result = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 2)
+        resumed_metadata = resumed_result[:metadata]
+        resumed_telemetry = resumed_metadata[:indel_rung_telemetry]
+        Test.@test length(resumed_telemetry) == 3
+        Test.@test resumed_telemetry[1:2] == first_telemetry
+        Test.@test resumed_telemetry[3][:k] == 5
+        Test.@test resumed_telemetry[3][:iteration] == 2
+        for row in resumed_telemetry
+            Test.@test row[:attempted] == row[:completed] + row[:truncated]
+            Test.@test row[:engaged] <= row[:completed]
+        end
+        Test.@test resumed_metadata[:indel_requested] ==
+                   sum(Int(row[:requested]) for row in resumed_telemetry)
+        Test.@test resumed_metadata[:indel_attempted] ==
+                   sum(Int(row[:attempted]) for row in resumed_telemetry)
+        Test.@test resumed_metadata[:indel_completed] ==
+                   sum(Int(row[:completed]) for row in resumed_telemetry)
+        Test.@test resumed_metadata[:indel_truncated] ==
+                   sum(Int(row[:truncated]) for row in resumed_telemetry)
+        Test.@test resumed_metadata[:indel_engaged] ==
+                   sum(Int(row[:engaged]) for row in resumed_telemetry)
+
+        completed_result = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 2)
+        completed_metadata = completed_result[:metadata]
+        Test.@test completed_metadata[:iteration_history] ==
+                   resumed_metadata[:iteration_history]
+        Test.@test completed_metadata[:indel_rung_telemetry] == resumed_telemetry
+        Test.@test completed_metadata[:final_fastq_file] ==
+                   resumed_metadata[:final_fastq_file]
+        Test.@test completed_result[:final_assembly] ==
+                   resumed_result[:final_assembly]
+    end
+end
+
 Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
     Base.mktempdir() do temporary_directory
         input_fastq = Base.joinpath(temporary_directory, "input.fastq")

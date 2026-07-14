@@ -725,6 +725,23 @@ function _stream_sha256_file(path::String)::String
     end
 end
 
+function _load_hashed_input_fastq(
+        canonical_fastq::String;
+        after_initial_hash::F = () -> nothing,
+)::Tuple{String, Vector{FASTX.FASTQ.Record}} where {F}
+    return open(canonical_fastq, "r") do io
+        initial_sha256 = SHA.bytes2hex(SHA.sha256(io))
+        after_initial_hash()
+        seekstart(io)
+        reads = collect(FASTX.FASTQ.Reader(io))
+        seekstart(io)
+        final_sha256 = SHA.bytes2hex(SHA.sha256(io))
+        initial_sha256 == final_sha256 || throw(ArgumentError(
+            "input FASTQ changed while it was being hashed and parsed"))
+        return initial_sha256, reads
+    end
+end
+
 function _path_is_within_directory(path::String, directory::String)::Bool
     ancestor = dirname(path)
     while true
@@ -1464,34 +1481,8 @@ function mycelia_iterative_assemble(input_fastq::String;
     isfile(input_fastq) || throw(ArgumentError(
         "input FASTQ file does not exist: $input_fastq"))
     canonical_input_fastq = realpath(input_fastq)
-    input_fastq_sha256 = _stream_sha256_file(canonical_input_fastq)
     isdir(output_dir) || mkpath(output_dir)
     output_dir = realpath(output_dir)
-
-    resume_configuration = _iterative_checkpoint_configuration(
-        input_fastq_path = canonical_input_fastq,
-        input_fastq_sha256 = input_fastq_sha256,
-        max_k = max_k,
-        memory_limit = memory_limit,
-        max_iterations_per_k = max_iterations_per_k,
-        improvement_threshold = improvement_threshold,
-        stop_on_no_change = stop_on_no_change,
-        k_ladder = k_ladder,
-        n_k_rungs = n_k_rungs,
-        graph_mode = graph_mode,
-        enable_parallel = enable_parallel,
-        skip_solid = skip_solid,
-        hard_window = hard_window,
-        windowed_decode = windowed_decode,
-        soft_em = soft_em,
-        cheap_correct = cheap_correct,
-        beam_width = beam_width,
-        calibrated_gap_threshold = calibrated_gap_threshold,
-        min_decode_k = min_decode_k,
-        decode_gate_density = decode_gate_density,
-        indel_params = indel_params,
-        indel_schedule = indel_schedule,
-    )
 
     # Accumulates swallowed decode failures (structural / un-k-merizable) across
     # every k and iteration so a systematically-broken corrector that reports
@@ -1589,6 +1580,41 @@ function mycelia_iterative_assemble(input_fastq::String;
         end
     end
 
+    initial_input_reads::Union{
+        Nothing, Vector{FASTX.FASTQ.Record}} = nothing
+    input_fastq_sha256 = ""
+    if resume_data === nothing
+        input_fastq_sha256, fresh_reads =
+            _load_hashed_input_fastq(canonical_input_fastq)
+        initial_input_reads = fresh_reads
+    else
+        input_fastq_sha256 = _stream_sha256_file(canonical_input_fastq)
+    end
+    resume_configuration = _iterative_checkpoint_configuration(
+        input_fastq_path = canonical_input_fastq,
+        input_fastq_sha256 = input_fastq_sha256,
+        max_k = max_k,
+        memory_limit = memory_limit,
+        max_iterations_per_k = max_iterations_per_k,
+        improvement_threshold = improvement_threshold,
+        stop_on_no_change = stop_on_no_change,
+        k_ladder = k_ladder,
+        n_k_rungs = n_k_rungs,
+        graph_mode = graph_mode,
+        enable_parallel = enable_parallel,
+        skip_solid = skip_solid,
+        hard_window = hard_window,
+        windowed_decode = windowed_decode,
+        soft_em = soft_em,
+        cheap_correct = cheap_correct,
+        beam_width = beam_width,
+        calibrated_gap_threshold = calibrated_gap_threshold,
+        min_decode_k = min_decode_k,
+        decode_gate_density = decode_gate_density,
+        indel_params = indel_params,
+        indel_schedule = indel_schedule,
+    )
+
     # Initialize or resume from checkpoint
     completed_checkpoint_k = nothing
     completed_checkpoint_iteration = nothing
@@ -1649,9 +1675,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         if verbose
             println("Reading initial FASTQ file...")
         end
-        initial_reads = open(canonical_input_fastq, "r") do io
-            collect(FASTX.FASTQ.Reader(io))
-        end
+        initial_reads = something(initial_input_reads)
         k = find_initial_k(initial_reads)  # Reuse from intelligent-assembly.jl
         k <= max_k || throw(ArgumentError(
             "max_k=$max_k is below the detected initial k-mer size k=$k"))
@@ -3491,6 +3515,17 @@ Exposed for the windowed-decode correctness test.
 """
 const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
 
+function _merge_soft_edge_weights!(
+        destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+        staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+)::Nothing
+    for (edge_id, weight) in staged.weights
+        destination.weights[edge_id] =
+            get(destination.weights, edge_id, 0.0) + weight
+    end
+    return nothing
+end
+
 function _validate_indel_window_sources(
         sources::Union{Nothing, Dict{UnitRange{Int}, Symbol}},
         cleaned_graph::Any,
@@ -3569,8 +3604,9 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         pad::Union{Int, Nothing} = nothing,
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         max_window::Int = 500,
-        indel_params::Union{Nothing, IndelDecodeParams} = nothing)::Tuple{
-        FASTX.FASTQ.Record, Bool, Int, Int}
+        indel_params::Union{Nothing, IndelDecodeParams} = nothing,
+        read_improver::F = improve_read_likelihood,
+)::Tuple{FASTX.FASTQ.Record, Bool, Int, Int} where {F}
     _validate_indel_window_sources(
         indel_window_sources, cleaned_graph, cleaned_weighted_graph)
     # Anchor each window with a full solid k-mer flank by default (`pad === nothing`
@@ -3628,10 +3664,13 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
             continue
         end
+        staged_soft_weights = soft_weights === nothing ?
+                              nothing :
+                              Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
         decoded_sub,
-        improved = improve_read_likelihood(
+        improved = read_improver(
             sub_read, window_graph, k; graph_mode = graph_mode,
-            beam_width = beam_width, soft_weights = soft_weights,
+            beam_width = beam_width, soft_weights = staged_soft_weights,
             weighted_graph = window_weighted_graph, diagnostics = diagnostics,
             calibrated_gap_threshold = calibrated_gap_threshold,
             indel_params = window_indel_params)
@@ -3669,12 +3708,14 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             dseq_chars, dqual_chars = trimmed
         end
         owned_window = (lo + overlap_prefix):hi
+        accepted_window = false
         if window_indel_params === nothing
             # Length-preserving splice: a divergent length would corrupt read
             # coordinates for the in-place splice below, so drop it (expected 0).
             if length(dseq) == win_len && length(dqual) == win_len
                 push!(accepted,
                     (owned_window, String(dseq_chars), String(dqual_chars)))
+                accepted_window = true
             else
                 divergent_windows += 1
                 diagnostics === nothing ||
@@ -3691,6 +3732,13 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             end
             push!(accepted,
                 (owned_window, String(dseq_chars), String(dqual_chars)))
+            accepted_window = true
+        end
+        if accepted_window && soft_weights !== nothing
+            _merge_soft_edge_weights!(
+                soft_weights,
+                something(staged_soft_weights),
+            )
         end
     end
 
@@ -4327,8 +4375,11 @@ function _improve_read_set_likelihood_impl(
 
     # Soft-EM accumulation into `soft_weights` is not thread-safe (shared Dict),
     # so a soft-EM pass runs sequentially. Otherwise honor the caller's request.
-    use_parallel = enable_parallel && Threads.nthreads() > 1 && soft_weights === nothing
-    if enable_parallel && soft_weights !== nothing && Threads.nthreads() > 1
+    # `Threads.@threads` still creates a distinct task with one Julia thread, so
+    # keep the explicit parallel contract (including task-local snapshot rebinding)
+    # active instead of silently taking the sequential branch on single-thread CI.
+    use_parallel = enable_parallel && soft_weights === nothing
+    if enable_parallel && soft_weights !== nothing
         @warn "soft-EM edge accumulation is sequential (race-free); ignoring enable_parallel for this pass." maxlog = 1
     end
 

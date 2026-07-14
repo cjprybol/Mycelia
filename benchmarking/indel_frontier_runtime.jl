@@ -398,6 +398,9 @@ function _indel_frontier_run_matrix(
                         pair_hmm_valid = row.pair_hmm_valid,
                         truncated = row.truncated,
                         completed_columns = row.completed_columns,
+                        decoded_read_index = row.decoded_read_index,
+                        terminal_contract_valid = row.terminal_contract_valid,
+                        trace_complete = row.trace_complete,
                         complete = row.complete,
                         full_decode = row.full_decode,
                         frontier_area = row.frontier_area,
@@ -445,6 +448,9 @@ function _indel_frontier_run_matrix(
                     pair_hmm_samples = measurement.samples,
                     pair_hmm_path_valid = measurement.path_valid,
                     pair_hmm_valid = measurement.valid,
+                    pair_hmm_terminal_contract_valid =
+                        measurement.terminal_contract_valid,
+                    pair_hmm_trace_complete = measurement.trace_complete,
                     pair_hmm_truncated = measurement.truncated,
                     pair_hmm_truncated_samples = measurement.truncated_samples,
                     pair_hmm_complete = measurement.complete,
@@ -640,6 +646,9 @@ function _indel_frontier_measure_decode(
 
     path_valid = all(row.pair_hmm_path_valid for row in rows)
     valid = all(row.pair_hmm_valid for row in rows)
+    terminal_contract_valid = all(
+        row.terminal_contract_valid for row in rows)
+    trace_complete = all(row.trace_complete for row in rows)
     truncated_samples = count(row.truncated for row in rows)
     complete_samples = count(row.complete for row in rows)
     truncated = truncated_samples > 0
@@ -654,6 +663,8 @@ function _indel_frontier_measure_decode(
         samples = length(rows),
         path_valid = path_valid,
         valid = valid,
+        terminal_contract_valid = terminal_contract_valid,
+        trace_complete = trace_complete,
         truncated = truncated,
         truncated_samples = truncated_samples,
         complete = complete,
@@ -661,6 +672,32 @@ function _indel_frontier_measure_decode(
         full_decode = valid,
         replicates = rows,
     )
+end
+
+function _indel_frontier_trace_complete(
+        move_trace::Any,
+        read_index_trace::Any,
+        expected_columns::Int,
+)::Bool
+    move_trace isa AbstractVector{Symbol} || return false
+    read_index_trace isa AbstractVector{Int} || return false
+    isempty(move_trace) && return false
+    length(move_trace) == length(read_index_trace) || return false
+    first(move_trace) == :M || return false
+    first(read_index_trace) == 1 || return false
+
+    previous_read_index = 1
+    for trace_index in 2:length(move_trace)
+        phase = move_trace[trace_index]
+        read_index = read_index_trace[trace_index]
+        expected_read_index = phase == :D ?
+                              previous_read_index : previous_read_index + 1
+        phase in (:M, :I, :D) || return false
+        read_index == expected_read_index || return false
+        1 <= read_index <= expected_columns || return false
+        previous_read_index = read_index
+    end
+    return previous_read_index == expected_columns
 end
 
 function _indel_frontier_replicate_row(
@@ -678,9 +715,27 @@ function _indel_frontier_replicate_row(
         "pair-HMM $(phase) sample $(replicate) failed validation: " *
         "algorithm=$(algorithm), path_available=$(path_available)"
     )
-    truncated = get(diagnostics, :truncated, false)
-    completed_columns = get(diagnostics, :completed_columns, 0)
-    complete = !truncated && completed_columns == expected_columns
+    truncated_field = get(diagnostics, :truncated, nothing)
+    completed_columns_field = get(diagnostics, :completed_columns, nothing)
+    decoded_read_index_field = get(
+        diagnostics, :decoded_read_index, nothing)
+    terminal_contract_valid =
+        truncated_field === false &&
+        typeof(completed_columns_field) === Int &&
+        completed_columns_field == expected_columns &&
+        typeof(decoded_read_index_field) === Int &&
+        decoded_read_index_field == expected_columns
+    trace_complete = _indel_frontier_trace_complete(
+        get(diagnostics, :move_trace, nothing),
+        get(diagnostics, :read_index_trace, nothing),
+        expected_columns,
+    )
+    truncated = truncated_field === true
+    completed_columns = typeof(completed_columns_field) === Int ?
+                        completed_columns_field : 0
+    decoded_read_index = typeof(decoded_read_index_field) === Int ?
+                         decoded_read_index_field : 0
+    complete = terminal_contract_valid && trace_complete
     pair_hmm_valid = pair_hmm_path_valid && complete
     return (
         phase = phase,
@@ -692,6 +747,9 @@ function _indel_frontier_replicate_row(
         pair_hmm_valid = pair_hmm_valid,
         truncated = truncated,
         completed_columns = completed_columns,
+        decoded_read_index = decoded_read_index,
+        terminal_contract_valid = terminal_contract_valid,
+        trace_complete = trace_complete,
         complete = complete,
         full_decode = pair_hmm_valid && complete,
         frontier_area = get(diagnostics, :frontier_area, 0),

@@ -32,6 +32,27 @@ function _clean_reads(rng, ref; n_reads = 120, readlen = 80)
     return records
 end
 
+struct _RejectingWindowImprover end
+
+function (::_RejectingWindowImprover)(
+        read::FASTX.FASTQ.Record,
+        ::Any,
+        ::Int;
+        soft_weights::Union{
+            Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
+        kwargs...,
+)::Tuple{FASTX.FASTQ.Record, Bool}
+    accumulator = something(soft_weights)
+    accumulator.weights[FASTX.identifier(read)] = 1.0
+    sequence = collect(FASTX.sequence(String, read))
+    sequence[end] = sequence[end] == 'A' ? 'C' : 'A'
+    return FASTX.FASTQ.Record(
+        FASTX.identifier(read),
+        String(sequence),
+        String(FASTX.quality(read)),
+    ), true
+end
+
 Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
     R = Mycelia.Rhizomorph
     k = 13
@@ -269,6 +290,54 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
             last(first_window),
             k,
         )
+
+        # Soft-EM updates are transactional per window. The injected improver
+        # stages one unique responsibility and mutates each window's final base:
+        # every nonfinal window then fails its terminal overlap anchor, while the
+        # final window is accepted. Only the final window may reach the shared
+        # accumulator that seeds the next EM pass.
+        soft_weights = R.SoftEdgeWeightAccumulator()
+        soft_weights.weights[:existing] = 2.0
+        diagnostics = Mycelia.CorrectorDiagnostics()
+        indel_params = Mycelia.IndelDecodeParams(
+            0.05,
+            0.2,
+            0.2,
+            0.1,
+            0.1,
+            3,
+            3,
+            16,
+        )
+        corrected,
+        improved,
+        decoded_windows,
+        divergent_windows =
+            Mycelia.improve_read_likelihood_windowed_detail(
+                read,
+                graph,
+                k,
+                hard;
+                graph_mode = :canonical,
+                soft_weights = soft_weights,
+                diagnostics = diagnostics,
+                pad = 0,
+                max_window = 500,
+                indel_params = indel_params,
+                read_improver = _RejectingWindowImprover(),
+            )
+        final_window = last(windows)
+        final_identifier =
+            "overlong_hard_region_win$(first(final_window))_$(last(final_window))"
+        Test.@test decoded_windows == length(windows)
+        Test.@test divergent_windows == 0
+        Test.@test improved
+        Test.@test FASTX.sequence(String, corrected) != sequence
+        Test.@test diagnostics.window_anchor_rejections[] == length(windows) - 1
+        Test.@test soft_weights.weights[:existing] == 2.0
+        Test.@test soft_weights.weights[final_identifier] == 1.0
+        Test.@test Set(keys(soft_weights.weights)) ==
+                   Set{Any}([:existing, final_identifier])
     end
 
     Test.@testset "doublestrand windows use observed graph orientation" begin

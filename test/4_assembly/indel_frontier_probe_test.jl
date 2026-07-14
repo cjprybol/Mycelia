@@ -739,6 +739,92 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
                raw_edge_weight
 end
 
+Test.@testset "Production parallel decode inherits prior soft weights" begin
+    major_sequence = "AAACCCAAA"
+    minor_sequence = "AAAGGGAAA"
+    query_sequence = "AAATTTAAA"
+    graph_reads = FASTX.FASTQ.Record[
+        FASTX.FASTQ.Record("major_1", major_sequence, repeat("I", 9)),
+        FASTX.FASTQ.Record("major_2", major_sequence, repeat("I", 9)),
+        FASTX.FASTQ.Record("minor", minor_sequence, repeat("I", 9)),
+    ]
+    graph = Mycelia.Rhizomorph.build_qualmer_graph(
+        graph_reads, 3; mode = :singlestrand)
+    queries = FASTX.FASTQ.Record[
+        FASTX.FASTQ.Record("query_$(index)", query_sequence, repeat("!", 9))
+        for index in 1:4
+    ]
+
+    prior_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+    for edge_label in MetaGraphsNext.edge_labels(graph)
+        edge_text = string(edge_label[1], edge_label[2])
+        weight = occursin('C', edge_text) ?
+                 0.001 : occursin('G', edge_text) ? 100.0 : 1.0
+        Mycelia.Rhizomorph.accumulate_path_probability!(
+            prior_soft_weights, [edge_label], weight)
+    end
+    no_hoist_builder = _ -> nothing
+
+    raw_result = Mycelia.improve_read_set_likelihood(
+        queries,
+        graph,
+        3;
+        graph_mode = :singlestrand,
+        beam_width = typemax(Int),
+        weighted_graph_builder = no_hoist_builder,
+    )
+    soft_result = Mycelia.improve_read_set_likelihood(
+        queries,
+        graph,
+        3;
+        graph_mode = :singlestrand,
+        beam_width = typemax(Int),
+        prior_soft_weights = prior_soft_weights,
+        weighted_graph_builder = no_hoist_builder,
+    )
+    parallel_telemetry = Dict{Symbol, Any}()
+    parallel_result = Mycelia.improve_read_set_likelihood(
+        queries,
+        graph,
+        3;
+        enable_parallel = true,
+        graph_mode = :singlestrand,
+        beam_width = typemax(Int),
+        prior_soft_weights = prior_soft_weights,
+        rung_telemetry = parallel_telemetry,
+        weighted_graph_builder = no_hoist_builder,
+    )
+
+    raw_sequences = [
+        FASTX.sequence(String, read) for read in raw_result[1]
+    ]
+    soft_sequences = [
+        FASTX.sequence(String, read) for read in soft_result[1]
+    ]
+    parallel_sequences = [
+        FASTX.sequence(String, read) for read in parallel_result[1]
+    ]
+    Test.@test raw_sequences == fill(major_sequence, length(queries))
+    Test.@test soft_sequences == fill(minor_sequence, length(queries))
+    Test.@test parallel_sequences == soft_sequences
+    Test.@test parallel_sequences != raw_sequences
+    Test.@test parallel_result[2] == length(queries)
+    Test.@test parallel_result[3] == 0.0
+    Test.@test !parallel_result[5]
+    Test.@test parallel_telemetry[:requested] == 0
+    Test.@test parallel_telemetry[:attempted] == 0
+    Test.@test parallel_telemetry[:completed] == 0
+    Test.@test parallel_telemetry[:truncated] == 0
+    Test.@test parallel_telemetry[:engaged] == 0
+
+    edge_label = first(MetaGraphsNext.edge_labels(graph))
+    edge = graph[edge_label...]
+    raw_weight = Mycelia.Rhizomorph.count_total_observations(edge)
+    Test.@test Mycelia.Rhizomorph.compute_edge_weight(edge) == raw_weight
+    Test.@test Base.fetch(Base.Threads.@spawn(
+        Mycelia.Rhizomorph.compute_edge_weight(edge))) == raw_weight
+end
+
 
 Test.@testset "Unrestricted indel schedule preserves exhaustive semantics" begin
     sequence = first(indel_classifier_de_bruijn_sequence(7), 80)
