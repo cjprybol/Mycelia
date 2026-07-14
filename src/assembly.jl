@@ -742,12 +742,15 @@ Named tuple containing:
 - Thread count is determined by get_default_threads() and capped at 128 (Flye's maximum)
 """
 function run_metaflye(;
-        fastq,
-        outdir = "metaflye_output",
-        genome_size = nothing,
-        read_type = "pacbio-hifi",
-        meta = true,
-        min_overlap = nothing,
+        fastq::String,
+        outdir::String = "metaflye_output",
+        genome_size::Union{Nothing, Integer, AbstractString} = nothing,
+        read_type::String = "pacbio-hifi",
+        meta::Bool = true,
+        min_overlap::Union{Nothing, Int} = nothing,
+        iterations::Int = 1,
+        keep_haplotypes::Bool = false,
+        no_alt_contigs::Bool = false,
         threads::Int = min(get_default_threads(), FLYE_MAX_THREADS),
         executor = nothing,
         site::Symbol = :local,
@@ -763,13 +766,15 @@ function run_metaflye(;
 
     if executor !== nothing
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
-            outdir, "--threads", string(threads)]
+            outdir, "--threads", string(threads), "--iterations", string(iterations)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
         if meta
             push!(cmd_args, "--meta")
         end
+        keep_haplotypes && push!(cmd_args, "--keep-haplotypes")
+        no_alt_contigs && push!(cmd_args, "--no-alt-contigs")
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
         end
@@ -802,7 +807,7 @@ function run_metaflye(;
 
     if !isfile(joinpath(outdir, "assembly.fasta"))
         cmd_args = ["flye", "--$(read_type)", fastq, "--out-dir",
-            outdir, "--threads", string(threads)]
+            outdir, "--threads", string(threads), "--iterations", string(iterations)]
         if !isnothing(genome_size)
             push!(cmd_args, "--genome-size", string(genome_size))
         end
@@ -810,6 +815,8 @@ function run_metaflye(;
         if meta
             push!(cmd_args, "--meta")
         end
+        keep_haplotypes && push!(cmd_args, "--keep-haplotypes")
+        no_alt_contigs && push!(cmd_args, "--no-alt-contigs")
 
         if !isnothing(min_overlap)
             push!(cmd_args, "--min-overlap", string(min_overlap))
@@ -2860,34 +2867,183 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
     return (; outdir, contigs = contigs_file, graph = graph_file)
 end
 
+function _strainy_output_paths(outdir::String, stage::Symbol)::NamedTuple
+    stage in (:phase, :transform, :e2e) || throw(
+        ArgumentError("stage must be :phase, :transform, or :e2e"))
+    has_phase_outputs = stage in (:phase, :e2e)
+    has_transform_outputs = stage in (:transform, :e2e)
+    alignment_phased_bam = joinpath(outdir, "alignment_phased.bam")
+    consensus_cache = joinpath(outdir, "intermediate", "consensus_dict.pkl")
+    strain_unitigs_gfa = joinpath(outdir, "strain_unitigs.gfa")
+    strain_contigs_gfa = joinpath(outdir, "strain_contigs.gfa")
+    strain_variants_vcf = joinpath(outdir, "strain_variants.vcf")
+    phased_unitig_info = joinpath(outdir, "phased_unitig_info_table.csv")
+    multiplicity_stats = joinpath(outdir, "multiplicity_stats.txt")
+    experimental_segment_candidates_fasta =
+        joinpath(outdir, "experimental_segment_candidates.fasta")
+    return (;
+        outdir,
+        stage,
+        alignment_phased_bam =
+            has_phase_outputs ? alignment_phased_bam : nothing,
+        alignment_phased_bai =
+            has_phase_outputs ? alignment_phased_bam * ".bai" : nothing,
+        # Transform consumes the cache created by a prior phase run.
+        consensus_cache,
+        strain_unitigs_gfa = has_transform_outputs ? strain_unitigs_gfa : nothing,
+        strain_contigs_gfa = has_transform_outputs ? strain_contigs_gfa : nothing,
+        strain_variants_vcf = has_transform_outputs ? strain_variants_vcf : nothing,
+        phased_unitig_info = has_transform_outputs ? phased_unitig_info : nothing,
+        multiplicity_stats = has_transform_outputs ? multiplicity_stats : nothing,
+        experimental_segment_candidates_fasta =
+            has_transform_outputs ? experimental_segment_candidates_fasta : nothing,
+        # Deprecated compatibility alias. This FASTA contains experimental
+        # Strainy S-record segments, not complete strain assemblies.
+        strain_assemblies =
+            has_transform_outputs ? experimental_segment_candidates_fasta : nothing,
+    )
+end
+
+function _strainy_required_outputs(outputs::NamedTuple)::Vector{String}
+    required = String[]
+    if outputs.stage in (:phase, :e2e)
+        append!(required, [
+            outputs.alignment_phased_bam,
+            outputs.alignment_phased_bai,
+            outputs.consensus_cache,
+        ])
+    end
+    if outputs.stage === :transform
+        push!(required, outputs.consensus_cache)
+    end
+    if outputs.stage in (:transform, :e2e)
+        append!(required, [
+            outputs.strain_unitigs_gfa,
+            outputs.strain_contigs_gfa,
+            outputs.strain_variants_vcf,
+            outputs.phased_unitig_info,
+            outputs.multiplicity_stats,
+        ])
+    end
+    return required
+end
+
+function _write_strainy_segment_candidates_fasta(
+        gfa_path::String,
+        fasta_path::String
+)::String
+    isfile(gfa_path) || error("Strainy GFA does not exist: $(gfa_path)")
+    mkpath(dirname(fasta_path))
+    mktemp(dirname(fasta_path)) do temporary_path, output
+        identifiers = Set{String}()
+        n_segments = 0
+        open(gfa_path, "r") do input
+            for (line_number, line) in enumerate(eachline(input))
+                fields = split(line, '\t'; keepempty = true)
+                isempty(fields) && continue
+                fields[1] == "S" || continue
+                length(fields) >= 3 || error(
+                    "malformed Strainy GFA S record at line $(line_number)")
+                identifier = String(fields[2])
+                isempty(identifier) && error(
+                    "empty Strainy GFA segment identifier at line $(line_number)")
+                identifier in identifiers && error(
+                    "duplicate Strainy GFA segment identifier: $(identifier)")
+                push!(identifiers, identifier)
+                sequence = String(fields[3])
+                sequence == "*" && continue
+                isempty(sequence) && error(
+                    "empty Strainy GFA segment sequence at line $(line_number)")
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch exception
+                    error(
+                        "invalid DNA in Strainy GFA segment $(identifier): " *
+                        sprint(showerror, exception),
+                    )
+                end
+                println(
+                    output,
+                    ">experimental_segment_candidate|id=$(identifier)|" *
+                    "source=strainy_S_record",
+                )
+                println(output, sequence)
+                n_segments += 1
+            end
+        end
+        n_segments > 0 || error(
+            "Strainy GFA contains no sequence-bearing S records: $(gfa_path)")
+        close(output)
+        mv(temporary_path, fasta_path; force = true)
+    end
+    return fasta_path
+end
+
+function _strainy_executor_script(
+        strainy_cmd::String,
+        outputs::NamedTuple
+)::String
+    required = _strainy_required_outputs(outputs)
+    tests = ["[ -f $(Base.shell_escape(path)) ]" for path in required]
+    lines = [
+        "set -euo pipefail",
+        "mkdir -p $(Base.shell_escape(outputs.outdir))",
+        "if ! { $(join(tests, " && ")); }; then",
+        "  $(strainy_cmd)",
+        "fi",
+    ]
+    append!(lines, ["test -f $(Base.shell_escape(path))" for path in required])
+    if outputs.stage in (:transform, :e2e)
+        gfa = Base.shell_escape(outputs.strain_contigs_gfa)
+        fasta = Base.shell_escape(outputs.experimental_segment_candidates_fasta)
+        temporary = Base.shell_escape(
+            outputs.experimental_segment_candidates_fasta * ".tmp")
+        awk_program = "'BEGIN { n = 0 } " *
+                      "\$1 == \"S\" { " *
+                      "if (NF < 3 || \$2 == \"\" || seen[\$2]++) exit 2; " *
+                      "if (\$3 == \"*\") next; " *
+                      "if (\$3 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) " *
+                      "exit 3; " *
+                      "print \">experimental_segment_candidate|id=\" \$2 " *
+                      "\"|source=strainy_S_record\"; print \$3; n += 1 } " *
+                      "END { if (n == 0) exit 1 }'"
+        push!(lines, "awk -F '\\t' $(awk_program) $(gfa) > $(temporary)")
+        push!(lines, "mv $(temporary) $(fasta)")
+        push!(lines, "test -s $(fasta)")
+    end
+    return join(lines, "\n")
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Run Strainy for strain phasing from long reads.
+Run a Strainy phase, transform, or end-to-end stage from long reads.
 
-# Arguments
-- `assembly_file::String`: Path to assembly FASTA file
-- `long_reads::String`: Path to long read FASTQ file
-- `outdir::String`: Output directory path (default: "strainy_output")
-- `mode::String`: Analysis mode ("transform" or "phase", default: "phase")
-- `threads::Int`: Number of threads to use for mapping and phasing (default: `get_default_threads()`)
+The returned named tuple has stable fields for every stage. Fields unavailable
+for the selected stage are `nothing`. `:phase` returns the phased BAM, BAM
+index, and consensus cache. `:transform` requires a prior phase consensus cache
+and returns Strainy's GFA, VCF, coverage, and multiplicity outputs plus a
+deterministic FASTA conversion of sequence-bearing GFA `S` records. `:e2e`
+returns both sets.
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `strain_assemblies::String`: Path to strain-phased assemblies
+Stable fields are `outdir`, `stage`, `alignment_phased_bam`,
+`alignment_phased_bai`, `consensus_cache`, `strain_unitigs_gfa`,
+`strain_contigs_gfa`, `strain_variants_vcf`, `phased_unitig_info`,
+`multiplicity_stats`, and `experimental_segment_candidates_fasta`.
 
-# Details
-- Uses connection graph-based read clustering for strain separation
-- Implements long-read phasing to resolve strain-level variants
-- Generates strain unitigs and simplified assembly graphs
-- Automatically creates and uses a conda environment with strainy
-- Utilizes requested CPU threads for read mapping
-- Skips analysis if output files already exist
+The converted FASTA contains **experimental segment candidates**, not complete
+strain paths, consensus genomes, or inferred haplotypes. `strain_assemblies` is
+a deprecated compatibility alias for that FASTA.
 """
 function run_strainy(
-        assembly_file::String, long_reads::String; outdir::String = "strainy_output",
-        mode::String = "phase",
+        ; gfa_ref::Union{Nothing, String} = nothing,
+        fasta_ref::Union{Nothing, String} = nothing,
+        fastq::String,
+        outdir::String = "strainy_output",
+        read_mode::Symbol = :nano,
+        stage::Symbol = :e2e,
+        min_unitig_coverage::Int = 3,
+        unitig_split_length::Int = 0,
         threads::Int = get_default_threads(),
         executor = nothing,
         site::Symbol = :local,
@@ -2897,36 +3053,42 @@ function run_strainy(
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
+        mail_user::Union{Nothing, String} = nothing
+)::NamedTuple
+    (gfa_ref === nothing) == (fasta_ref === nothing) &&
+        throw(ArgumentError("exactly one of gfa_ref or fasta_ref must be provided"))
+    read_mode in (:nano, :hifi) ||
+        throw(ArgumentError("read_mode must be :nano or :hifi, got :$(read_mode)"))
+    stage in (:phase, :transform, :e2e) ||
+        throw(ArgumentError("stage must be :phase, :transform, or :e2e, got :$(stage)"))
+    min_unitig_coverage > 0 ||
+        throw(ArgumentError("min_unitig_coverage must be positive"))
+    unitig_split_length >= 0 ||
+        throw(ArgumentError("unitig_split_length must be nonnegative"))
+    threads > 0 || throw(ArgumentError("threads must be positive"))
+
+    outputs = _strainy_output_paths(outdir, stage)
+    if stage === :transform && !isfile(outputs.consensus_cache)
+        error(
+            "Strainy stage=:transform requires a prior phase consensus cache: " *
+            outputs.consensus_cache,
+        )
+    end
     Mycelia.add_bioconda_env("strainy")
     mkpath(outdir)
 
-    strain_assemblies = joinpath(outdir, "strain_assemblies.fasta")
+    required = _strainy_required_outputs(outputs)
+    ref_flag = gfa_ref === nothing ? "--fasta_ref" : "--gfa_ref"
+    ref_path = something(gfa_ref, fasta_ref)
+    cmd_args = ["strainy", ref_flag, ref_path, "--fastq", fastq,
+        "--output", outdir, "--mode", String(read_mode), "--stage", String(stage),
+        "--threads", string(threads), "--min-unitig-coverage",
+        string(min_unitig_coverage), "--unitig-split-length", string(unitig_split_length)]
     if executor !== nothing
-        bam_file = joinpath(outdir, "mapped_reads.bam")
-        minimap_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`
-        )
-        sort_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`
-        )
-        index_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`
-        )
         strainy_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`
+            `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy $(cmd_args)`
         )
-        script = join([
-            "set -euo pipefail",
-            "mkdir -p \"$(outdir)\"",
-            "if [ ! -f \"$(strain_assemblies)\" ]; then",
-            "  if [ ! -f \"$(bam_file)\" ]; then",
-            "    $(minimap_cmd) | $(sort_cmd)",
-            "    $(index_cmd)",
-            "  fi",
-            "  $(strainy_cmd)",
-            "fi"
-        ], "\n")
+        script = _strainy_executor_script(strainy_cmd, outputs)
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -2940,22 +3102,47 @@ function run_strainy(
             mail_user = mail_user
         )
         Mycelia.execute(job, Mycelia.resolve_executor(executor))
-        return (; outdir, strain_assemblies)
+        return outputs
     end
 
-    if !isfile(strain_assemblies)
-        # First map reads to assembly
-        bam_file = joinpath(outdir, "mapped_reads.bam")
-        if !isfile(bam_file)
-            run(pipeline(
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy minimap2 -ax map-ont $(assembly_file) $(long_reads)`,
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools sort -@ $(threads) -o $(bam_file)`))
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy samtools index $(bam_file)`)
-        end
-
-        # Run Strainy
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy strainy --bam $(bam_file) --fasta $(assembly_file) --output $(outdir) --mode $(mode)`)
+    if !all(isfile, required)
+        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n strainy $(cmd_args)`)
     end
 
-    return (; outdir, strain_assemblies)
+    missing_outputs = filter(path -> !isfile(path), required)
+    isempty(missing_outputs) ||
+        error("Strainy did not produce required outputs: $(join(missing_outputs, ", "))")
+    if stage in (:transform, :e2e)
+        _write_strainy_segment_candidates_fasta(
+            outputs.strain_contigs_gfa,
+            outputs.experimental_segment_candidates_fasta,
+        )
+    end
+    return outputs
+end
+
+function _legacy_strainy_stage(mode::String)::Symbol
+    return mode == "phase" ? :e2e : Symbol(mode)
+end
+
+function run_strainy(
+        assembly_file::String,
+        long_reads::String;
+        outdir::String = "strainy_output",
+        mode::String = "phase",
+        read_mode::Symbol = :nano,
+        kwargs...
+)::NamedTuple
+    Base.depwarn(
+        "run_strainy(assembly_file, reads; mode=...) is deprecated; use " *
+        "run_strainy(; fasta_ref=..., fastq=..., read_mode=..., stage=...)",
+        :run_strainy)
+    legacy_stage = _legacy_strainy_stage(mode)
+    return run_strainy(;
+        fasta_ref = assembly_file,
+        fastq = long_reads,
+        outdir = outdir,
+        read_mode = read_mode,
+        stage = legacy_stage,
+        kwargs...)
 end

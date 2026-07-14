@@ -1,0 +1,246 @@
+schema_version = 1
+benchmark_id = "rhizomorph-stage2-three-strain-multimodal-v1"
+truth_model = "three-strain-small-genome"
+reference_seed = 43003
+development_seeds = [43003, 43006, 43007, 43008, 43009]
+confirmation_seeds = [44001, 44002, 44003]
+confirmation_status = "reserved-unrun"
+candidate_count_is_known_to_inference = false
+commit_artifacts_only_after_pass = true
+
+[fixture]
+length = 8000
+coverages = [50.0, 30.0, 20.0]
+divergences = [0.0, 0.01, 0.02]
+complexity = "repeat-rich"
+
+[modalities.long_noisy]
+regime = "long-error-prone"
+required = true
+input_components = ["ont"]
+branded_validation = ["ont-r10"]
+comparators = ["metaflye-strainy", "hairsplitter", "strainberry", "nanomdbg"]
+
+[modalities.long_accurate]
+regime = "long-high-accuracy"
+required = true
+input_components = ["accurate_long"]
+branded_validation = ["pacbio-hifi", "ont-r10-sup"]
+comparators = ["myloasm", "hifiasm-meta", "metamdbg", "metaflye-strainy"]
+
+[modalities.short_paired]
+regime = "paired-short-high-accuracy"
+required = true
+input_components = ["short_r1", "short_r2"]
+branded_validation = ["illumina", "aviti"]
+comparators = ["metaspades", "megahit", "floria", "strainxpress"]
+
+[modalities.short_single]
+regime = "single-short-high-accuracy"
+required = true
+input_components = ["short_single"]
+branded_validation = ["ultima"]
+comparators = ["megahit", "floria"]
+
+[modalities.hybrid_ont_short]
+regime = "ont-plus-paired-short"
+required = true
+input_components = ["ont", "short_r1", "short_r2"]
+branded_validation = ["ont-plus-illumina"]
+comparators = ["metaspades", "metaflye-strainy"]
+
+[modalities.hybrid_hifi_ont]
+regime = "hifi-plus-ont"
+required = true
+input_components = ["hifi", "ont"]
+branded_validation = ["hifi-plus-ont"]
+comparators = ["verkko", "hifiasm-meta", "metamdbg"]
+
+[comparator_contract]
+version_policy = "exact-version-required-before-run"
+configuration_policy = "one-author-recommended-configuration"
+input_policy = "same-frozen-modality-bundle-declared-consumed-subset"
+subset_consumer_policy = "stratify-report-non-gating"
+resource_policy = "four-threads-32-gb-60-minutes"
+unresolved_version_blocks_run = true
+
+[evaluation]
+tool = "QUAST"
+version = "UNRESOLVED"
+command = "quast.py --min-contig 0 --ambiguity-usage all"
+report_schema = "rhizomorph-stage2-metrics-v1"
+unresolved_version_blocks_run = true
+
+[comparators.metaflye-strainy]
+version = "UNRESOLVED"
+command = "Mycelia.run_metaflye_then_strainy"
+configuration = "author-default-metagenome"
+input_contract = "long-read-fastq"
+modalities = ["long_noisy", "long_accurate", "hybrid_ont_short"]
+configuration_budget = 1
+
+[comparators.metaflye-strainy.consumed_input_components]
+long_noisy = ["ont"]
+long_accurate = ["accurate_long"]
+hybrid_ont_short = ["ont"]
+
+[comparators.hairsplitter]
+version = "UNRESOLVED"
+command = "HairSplitter documented end-to-end command"
+configuration = "author-default"
+input_contract = "long-read-fastq-plus-draft-assembly"
+modalities = ["long_noisy"]
+configuration_budget = 1
+
+[comparators.hairsplitter.consumed_input_components]
+long_noisy = ["ont"]
+
+[comparators.strainberry]
+version = "UNRESOLVED"
+command = "Strainberry documented end-to-end command"
+configuration = "author-default"
+input_contract = "long-read-fastq-plus-draft-assembly"
+modalities = ["long_noisy"]
+configuration_budget = 1
+
+[comparators.strainberry.consumed_input_components]
+long_noisy = ["ont"]
+
+[comparators.nanomdbg]
+version = "UNRESOLVED"
+command = "nanoMDBG documented assembly command"
+configuration = "author-default"
+input_contract = "noisy-long-read-fastq"
+modalities = ["long_noisy"]
+configuration_budget = 1
+
+[comparators.nanomdbg.consumed_input_components]
+long_noisy = ["ont"]
+
+[comparators.myloasm]
+version = "UNRESOLVED"
+command = "myloasm documented assembly command"
+configuration = "author-default"
+input_contract = "modern-accurate-long-read-fastq"
+modalities = ["long_accurate"]
+configuration_budget = 1
+
+[comparators.myloasm.consumed_input_components]
+long_accurate = ["accurate_long"]
+
+[comparators.hifiasm-meta]
+version = "UNRESOLVED"
+command = "hifiasm-meta documented metagenome command"
+configuration = "author-default"
+input_contract = "hifi-fastq"
+modalities = ["long_accurate", "hybrid_hifi_ont"]
+configuration_budget = 1
+
+[comparators.hifiasm-meta.consumed_input_components]
+long_accurate = ["accurate_long"]
+hybrid_hifi_ont = ["hifi"]
+
+[comparators.metamdbg]
+version = "UNRESOLVED"
+command = "metaMDBG documented assembly command"
+configuration = "author-default"
+input_contract = "accurate-long-read-fastq"
+modalities = ["long_accurate", "hybrid_hifi_ont"]
+configuration_budget = 1
+
+[comparators.metamdbg.consumed_input_components]
+long_accurate = ["accurate_long"]
+hybrid_hifi_ont = ["hifi"]
+
+[comparators.metaspades]
+version = "UNRESOLVED"
+command = "metaSPAdes documented paired-or-hybrid command"
+configuration = "author-default-metagenome"
+input_contract = "paired-short-fastq-optionally-with-ont"
+modalities = ["short_paired", "hybrid_ont_short"]
+configuration_budget = 1
+
+[comparators.metaspades.consumed_input_components]
+short_paired = ["short_r1", "short_r2"]
+hybrid_ont_short = ["ont", "short_r1", "short_r2"]
+
+[comparators.megahit]
+version = "UNRESOLVED"
+command = "MEGAHIT documented metagenome command"
+configuration = "author-default"
+input_contract = "short-read-fastq"
+modalities = ["short_paired", "short_single"]
+configuration_budget = 1
+
+[comparators.megahit.consumed_input_components]
+short_paired = ["short_r1", "short_r2"]
+short_single = ["short_single"]
+
+[comparators.floria]
+version = "UNRESOLVED"
+command = "Floria documented haplotyping command"
+configuration = "author-default"
+input_contract = "short-read-fastq-plus-downstream-assembler"
+modalities = ["short_paired", "short_single"]
+configuration_budget = 1
+
+[comparators.floria.consumed_input_components]
+short_paired = ["short_r1", "short_r2"]
+short_single = ["short_single"]
+
+[comparators.strainxpress]
+version = "UNRESOLVED"
+command = "StrainXpress documented strain-assembly command"
+configuration = "author-default"
+input_contract = "paired-short-fastq"
+modalities = ["short_paired"]
+configuration_budget = 1
+
+[comparators.strainxpress.consumed_input_components]
+short_paired = ["short_r1", "short_r2"]
+
+[comparators.verkko]
+version = "UNRESOLVED"
+command = "Verkko documented HiFi-plus-ONT command"
+configuration = "author-default"
+input_contract = "hifi-fastq-plus-ont-fastq"
+modalities = ["hybrid_hifi_ont"]
+configuration_budget = 1
+
+[comparators.verkko.consumed_input_components]
+hybrid_hifi_ont = ["hifi", "ont"]
+
+[gates.development]
+evaluation_unit = "each-required-modality-each-development-seed"
+comparator_id = "rhizomorph-native"
+cell_id_format = "<modality>:<seed>:rhizomorph-native"
+require_exact_grid = true
+
+[gates.release]
+evaluation_unit = "each-modality-each-confirmation-seed"
+baseline = "best-compatible-locked-comparator-within-modality-and-input-stratum"
+required_input_stratum = "full"
+subset_input_strata_are_gating = false
+maximum_extra_misassemblies = 0
+minimum_nga50_ratio = 0.99
+maximum_genome_fraction_deficit_points = 0.5
+minimum_truth_reference_coverage = 0.99
+minimum_accuracy_win_seeds_per_modality = 2
+minimum_median_error_reduction_fraction = 0.10
+maximum_single_seed_error_regression_fraction = 0.10
+maximum_abundance_mae = 0.05
+require_three_distinct_truths = true
+require_exactly_three_supported_haplotypes = true
+require_no_spurious_or_duplicate_haplotypes = true
+required_strain_count_mode = 3
+require_90pct_strain_count_set_contains_truth = true
+require_primary_rank_agreement = true
+require_every_modality = true
+abundance_baseline_relation = "mae-no-worse-than-best-compatible-comparator"
+ensemble_policy = "noninferior-to-native-or-abstain"
+
+[gates.stretch]
+minimum_nga50_ratio = 1.0
+maximum_genome_fraction_deficit_points = 0.0
+maximum_extra_misassemblies = 0
+require_lower_error_every_seed = true
