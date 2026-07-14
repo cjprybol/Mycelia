@@ -15,6 +15,7 @@
 
 import BioSequences
 import FASTX
+import Graphs
 import Logging
 import MetaGraphsNext
 import Mycelia
@@ -298,6 +299,263 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
             max_insertion_run = max_insertion_run,
             beam_width = typemax(Int)
         )
+    end
+
+    Test.@testset "scored indel successors are cached by vertex and strand" begin
+        records = [
+            FASTX.FASTA.Record("branch_a_1", "ATGCGA"),
+            FASTX.FASTA.Record("branch_a_2", "ATGCGA"),
+            FASTX.FASTA.Record("branch_b", "ATGCGT"),
+        ]
+        raw_graph = Mycelia.Rhizomorph.build_kmer_graph_singlestrand(
+            records, 5)
+        config = _indel_config()
+        weighted_graph = Mycelia.build_correction_weighted_graph(
+            raw_graph; config = config)
+        label_type = Mycelia._viterbi_graph_label_type(weighted_graph)
+        Key = Tuple{
+            label_type, Mycelia.Rhizomorph.StrandOrientation
+        }
+        Batch = Mycelia._IndelDecodeSuccessorBatch{label_type}
+        cache = Dict{Key, Batch}()
+
+        function _legacy_scored_successors(
+                graph::MetaGraphsNext.MetaGraph,
+                vertex::V,
+                strand::Mycelia.Rhizomorph.StrandOrientation,
+        )::Vector{Tuple{
+            Tuple{V, Mycelia.Rhizomorph.StrandOrientation}, Float64
+        }} where {V}
+            transitions = Mycelia.Rhizomorph._get_valid_transitions(
+                graph, vertex, strand)
+            successors = Tuple{
+                Tuple{V, Mycelia.Rhizomorph.StrandOrientation}, Float64
+            }[]
+            isempty(transitions) && return successors
+            total_out = Mycelia.Rhizomorph._total_outgoing_weight(
+                graph, vertex, strand)
+            (!isfinite(total_out) || total_out <= 0.0) &&
+                return successors
+
+            for transition in transitions
+                edge_weight = Mycelia.Rhizomorph._edge_transition_weight(
+                    transition[:edge_data])
+                edge_weight <= 0.0 && continue
+                push!(
+                    successors,
+                    (
+                        (
+                            convert(V, transition[:target_vertex]),
+                            Mycelia.Rhizomorph._normalize_strand(
+                                transition[:target_strand]),
+                        ),
+                        log(edge_weight / total_out),
+                    ),
+                )
+            end
+            return successors
+        end
+
+        source = only(
+            label for label in MetaGraphsNext.labels(weighted_graph)
+            if string(label) == "ATGCG"
+        )
+        forward = Mycelia.Rhizomorph.Forward
+        expected = _legacy_scored_successors(
+            weighted_graph, source, forward)
+        first_lookup = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, source, forward)
+        Test.@test length(expected) == 2
+        Test.@test first_lookup.successors == expected
+        Test.@test first_lookup.enumerated_count == length(expected)
+        Test.@test sum(exp(last(successor)) for successor in expected) ≈ 1.0
+        Test.@test length(cache) == 1
+
+        second_lookup = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, source, forward)
+        Test.@test second_lookup.successors === first_lookup.successors
+        Test.@test length(cache) == 1
+
+        reverse = Mycelia.Rhizomorph.Reverse
+        reverse_lookup = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, source, reverse)
+        Test.@test reverse_lookup.successors ==
+                   _legacy_scored_successors(
+                       weighted_graph, source, reverse)
+        Test.@test reverse_lookup.enumerated_count == 0
+        reverse_again = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, source, reverse)
+        Test.@test reverse_again.successors === reverse_lookup.successors
+        Test.@test length(cache) == 2
+
+        sink = only(
+            label for label in MetaGraphsNext.labels(weighted_graph)
+            if string(label) == "TGCGA"
+        )
+        sink_lookup = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, sink, forward)
+        sink_again = Mycelia._indel_decode_successors!(
+            cache, weighted_graph, sink, forward)
+        Test.@test isempty(sink_lookup.successors)
+        Test.@test sink_again.successors === sink_lookup.successors
+        Test.@test sink_lookup.enumerated_count == 0
+        Test.@test length(cache) == 3
+        Test.@test Set(keys(cache)) == Set([
+            (source, forward),
+            (source, reverse),
+            (sink, forward),
+        ])
+
+        observation = [source, sink]
+        result = Mycelia.correct_observations(
+            raw_graph,
+            [observation];
+            config = config,
+            weighted_graph = weighted_graph,
+        )
+        path_result = only(result.paths)
+        diagnostics = path_result.diagnostics
+        sink_loge = only(
+            loge for ((vertex, strand), loge) in expected
+            if vertex == sink && strand == forward
+        )
+        start_emission = Mycelia._call_viterbi_state_emission_logp(
+            raw_graph,
+            config,
+            source,
+            source,
+            :DNA,
+            :singlestrand;
+            count_length_penalty = false,
+        )
+        end_emission = Mycelia._call_viterbi_state_emission_logp(
+            raw_graph,
+            config,
+            sink,
+            sink,
+            :DNA,
+            :singlestrand;
+            count_length_penalty = false,
+        )
+        match_transition = log(
+            1.0 - config.error_rate * config.insertion_fraction -
+            config.error_rate * config.deletion_fraction
+        )
+        expected_score = ((start_emission + match_transition) + sink_loge) +
+                         end_emission
+
+        Test.@test indel_decoded_label_strings(result) == ["ATGCG", "TGCGA"]
+        Test.@test path_result.path !== nothing
+        Test.@test [
+            string(step.vertex_label) for step in path_result.path.steps
+        ] == ["ATGCG", "TGCGA"]
+        Test.@test all(
+            step.strand == forward for step in path_result.path.steps)
+        Test.@test path_result.score == expected_score
+        Test.@test diagnostics[:move_trace] == [:M, :M]
+        Test.@test diagnostics[:read_index_trace] == [1, 2]
+        Test.@test diagnostics[:move_counts] ==
+                   Dict{Symbol, Int}(:M => 2, :I => 0, :D => 0)
+        Test.@test diagnostics[:decoded_read_index] == 2
+        Test.@test diagnostics[:completed_columns] == 2
+        Test.@test !diagnostics[:truncated]
+        Test.@test diagnostics[:reached_target]
+        Test.@test diagnostics[:frontier_area] == 6
+        Test.@test diagnostics[:peak_frontier] == 3
+        # This is the pre-cache logical count: the two-way branch is expanded
+        # twice even though its scored successor vector is resolved only once.
+        Test.@test diagnostics[:edge_expansions] == 4
+        Test.@test diagnostics[:transition_resolutions] == 3
+
+        directed = MetaGraphsNext.MetaGraph(
+            Graphs.DiGraph();
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0,
+        )
+        for vertex in ("S", "A", "B", "T")
+            directed[vertex] = nothing
+        end
+        directed["S", "A"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            2.0, forward, reverse)
+        directed["S", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            1.0, forward, forward)
+        directed["A", "T"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            5.0, reverse, reverse)
+        directed_cache = Dict{
+            Tuple{String, Mycelia.Rhizomorph.StrandOrientation},
+            Mycelia._IndelDecodeSuccessorBatch{String},
+        }()
+        directed_s = Mycelia._indel_decode_successors!(
+            directed_cache, directed, "S", forward)
+        directed_a_reverse = Mycelia._indel_decode_successors!(
+            directed_cache, directed, "A", reverse)
+        directed_a_forward = Mycelia._indel_decode_successors!(
+            directed_cache, directed, "A", forward)
+        Test.@test directed_s.successors ==
+                   _legacy_scored_successors(directed, "S", forward)
+        Test.@test directed_s.successors == [
+            (("A", reverse), log(2.0 / 3.0)),
+            (("B", forward), log(1.0 / 3.0)),
+        ]
+        Test.@test directed_s.enumerated_count == 2
+        Test.@test directed_a_reverse.successors ==
+                   _legacy_scored_successors(directed, "A", reverse)
+        Test.@test directed_a_reverse.successors ==
+                   [(("T", reverse), 0.0)]
+        Test.@test directed_a_reverse.enumerated_count == 1
+        Test.@test isempty(directed_a_forward.successors)
+        Test.@test directed_a_forward.enumerated_count == 0
+        Test.@test Mycelia._indel_decode_successors!(
+            directed_cache, directed, "S", forward).successors ===
+                   directed_s.successors
+        Test.@test length(directed_cache) == 3
+
+        undirected = MetaGraphsNext.MetaGraph(
+            Graphs.Graph();
+            label_type = String,
+            vertex_data_type = Any,
+            edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+            weight_function = Mycelia.Rhizomorph.edge_data_weight,
+            default_weight = 0.0,
+        )
+        for vertex in ("A", "B", "C")
+            undirected[vertex] = nothing
+        end
+        undirected["A", "B"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            2.0, forward, forward)
+        undirected["B", "C"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+            3.0, forward, forward)
+        undirected_cache = Dict{
+            Tuple{String, Mycelia.Rhizomorph.StrandOrientation},
+            Mycelia._IndelDecodeSuccessorBatch{String},
+        }()
+        undirected_batches = Dict(
+            vertex => Mycelia._indel_decode_successors!(
+                undirected_cache, undirected, vertex, forward)
+            for vertex in ("A", "B", "C")
+        )
+        for vertex in ("A", "B", "C")
+            Test.@test undirected_batches[vertex].successors ==
+                       _legacy_scored_successors(
+                           undirected, vertex, forward)
+        end
+        Test.@test undirected_batches["A"].successors ==
+                   [(("B", forward), 0.0)]
+        Test.@test undirected_batches["B"].successors ==
+                   [(("C", forward), 0.0)]
+        Test.@test isempty(undirected_batches["C"].successors)
+        Test.@test (
+            undirected_batches["A"].enumerated_count,
+            undirected_batches["B"].enumerated_count,
+            undirected_batches["C"].enumerated_count,
+        ) == (1, 1, 0)
+        Test.@test Mycelia._indel_decode_successors!(
+            undirected_cache, undirected, "C", forward).successors ===
+                   undirected_batches["C"].successors
+        Test.@test length(undirected_cache) == 3
     end
 
     Test.@testset "Milestone B: deletion-shifted read corrects back to reference" begin

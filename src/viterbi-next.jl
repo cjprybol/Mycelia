@@ -1790,6 +1790,60 @@ struct _IndelFrontierSuccessorBatch{V}
     overflowed::Bool
 end
 
+struct _IndelDecodeSuccessorBatch{V}
+    successors::Vector{
+        Tuple{Tuple{V, Rhizomorph.StrandOrientation}, Float64}
+    }
+    enumerated_count::Int
+end
+
+function _indel_decode_successors!(
+        cache::Dict{
+            Tuple{V, Rhizomorph.StrandOrientation},
+            _IndelDecodeSuccessorBatch{V},
+        },
+        graph::MetaGraphsNext.MetaGraph,
+        vertex::V,
+        strand::Rhizomorph.StrandOrientation,
+)::_IndelDecodeSuccessorBatch{V} where {V}
+    key = (vertex, strand)
+    return get!(cache, key) do
+        transitions = Rhizomorph._get_valid_transitions(
+            graph, vertex, strand)
+        successors = Tuple{
+            Tuple{V, Rhizomorph.StrandOrientation}, Float64
+        }[]
+        if isempty(transitions)
+            return _IndelDecodeSuccessorBatch{V}(
+                successors, length(transitions))
+        end
+
+        total_out = Rhizomorph._total_outgoing_weight(
+            graph, vertex, strand)
+        if !isfinite(total_out) || total_out <= 0.0
+            return _IndelDecodeSuccessorBatch{V}(
+                successors, length(transitions))
+        end
+        for transition in transitions
+            next_vertex = convert(V, transition[:target_vertex])
+            next_strand = Rhizomorph._normalize_strand(
+                transition[:target_strand])
+            edge_weight = Rhizomorph._edge_transition_weight(
+                transition[:edge_data])
+            edge_weight <= 0.0 && continue
+            push!(
+                successors,
+                (
+                    (next_vertex, next_strand),
+                    log(edge_weight / total_out),
+                ),
+            )
+        end
+        return _IndelDecodeSuccessorBatch{V}(
+            successors, length(transitions))
+    end
+end
+
 function _indel_frontier_successor_limit(
         work_limit::Int,
         frontier_area::Int,
@@ -2213,8 +2267,11 @@ path — Illumina falls out as the special case.
 
 The result diagnostics include `:move_counts`, the ordered `:move_trace`, and the
 parallel `:read_index_trace`. The latter two preserve the exact pair-HMM traceback
-used to reconstruct length-changing per-base qualities. `:decoded_read_index` and
-`:truncated` report whether the frontier consumed the complete observation.
+used to reconstruct length-changing per-base qualities. `:edge_expansions` keeps
+the logical pre-cache work count, while `:transition_resolutions` reports unique
+scored `(vertex, strand)` successor batches resolved during this decode.
+`:decoded_read_index` and `:truncated` report whether the frontier consumed the
+complete observation.
 """
 function _viterbi_correct_observation_indel(
         graph::MetaGraphsNext.MetaGraph,
@@ -2233,6 +2290,7 @@ function _viterbi_correct_observation_indel(
     State = _IndelFrontierCell{label_type}
     Cell = Tuple{Int, State}
     PathState = Tuple{label_type, Rhizomorph.StrandOrientation}
+    SuccessorBatch = _IndelDecodeSuccessorBatch{label_type}
     n = length(observation)
 
     start_observed = first(observation)
@@ -2290,6 +2348,7 @@ function _viterbi_correct_observation_indel(
         # score, tie-break, traceback, or returned correction.
         :frontier_area => 0,
         :edge_expansions => 0,
+        :transition_resolutions => 0,
         :peak_frontier => 0,
         :completed_columns => 0
     )
@@ -2301,28 +2360,17 @@ function _viterbi_correct_observation_indel(
 
     # Outgoing (target-state, logE) expansion for one state, matching the
     # substitution decoder's normalization (log of edge_weight / total_out).
-    # NOTE: these nested helpers are closures, so their signatures/locals must not
-    # annotate with the enclosing `State`/`label_type` locals (Julia forbids a local
-    # variable in a closure type position). Untyped collections are correctness-
-    # equivalent here.
-    function _expand(state::Any)::Vector{Tuple{Any, Float64}}
-        vertex = state.vertex
-        strand = state.strand
-        transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
+    # Complete M/I/D cells that share `(vertex, strand)` have identical scored
+    # successors, so resolve that immutable transition set once per decode.
+    transition_cache = Dict{PathState, SuccessorBatch}()
+    # NOTE: this nested closure cannot use the enclosing local type aliases in its
+    # signature, so its return annotation uses the parametric batch UnionAll.
+    function _expand(state::Any)::_IndelDecodeSuccessorBatch
+        batch = _indel_decode_successors!(
+            transition_cache, graph, state.vertex, state.strand)
         diagnostics[:edge_expansions] = _saturating_indel_frontier_add(
-            diagnostics[:edge_expansions], length(transitions))
-        out = Tuple{Any, Float64}[]
-        isempty(transitions) && return out
-        total_out = Rhizomorph._total_outgoing_weight(graph, vertex, strand)
-        (!isfinite(total_out) || total_out <= 0.0) && return out
-        for transition in transitions
-            next_vertex = convert(label_type, transition[:target_vertex])
-            next_strand = Rhizomorph._normalize_strand(transition[:target_strand])
-            edge_w = Rhizomorph._edge_transition_weight(transition[:edge_data])
-            edge_w <= 0.0 && continue
-            push!(out, ((next_vertex, next_strand), log(edge_w / total_out)))
-        end
-        return out
+            diagnostics[:edge_expansions], batch.enumerated_count)
+        return batch
     end
 
     # Bounded Bellman-Ford deletion relaxation WITHIN one read column: open a
@@ -2336,7 +2384,8 @@ function _viterbi_correct_observation_indel(
     )::Nothing
         deletion_max_run <= 0 && return nothing
         for (state, score) in match_scores
-            for ((next_vertex, next_strand), logE) in _expand(state)
+            for ((next_vertex, next_strand), logE) in
+                _expand(state).successors
                 cand = score + T_MD + logE
                 isfinite(cand) || continue
                 next_state = State(
@@ -2358,7 +2407,8 @@ function _viterbi_correct_observation_indel(
             ]
             for state in frontier
                 score = del_scores[state]
-                for ((next_vertex, next_strand), logE) in _expand(state)
+                for ((next_vertex, next_strand), logE) in
+                    _expand(state).successors
                     cand = score + T_DD + logE
                     isfinite(cand) || continue
                     next_state = State(
@@ -2432,7 +2482,8 @@ function _viterbi_correct_observation_indel(
             for (state, score) in prev_scores
                 base = score + trans
                 isfinite(base) || continue
-                for ((next_vertex, next_strand), logE) in _expand(state)
+                for ((next_vertex, next_strand), logE) in
+                    _expand(state).successors
                     emission = _call_viterbi_state_emission_logp(
                         quality_graph, config, observed_unit, next_vertex,
                         alphabet, strand_mode; count_length_penalty = false)
@@ -2560,6 +2611,7 @@ function _viterbi_correct_observation_indel(
     end
 
     if best_cell === nothing
+        diagnostics[:transition_resolutions] = length(transition_cache)
         diagnostics[:reason] = target_vertex === nothing ? :no_surviving_path :
                                :target_unreachable
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
@@ -2610,6 +2662,7 @@ function _viterbi_correct_observation_indel(
     if target_vertex !== nothing
         diagnostics[:reached_target] = true
     end
+    diagnostics[:transition_resolutions] = length(transition_cache)
     return Rhizomorph.ViterbiDecodingResult(path, best_score, diagnostics)
 end
 
