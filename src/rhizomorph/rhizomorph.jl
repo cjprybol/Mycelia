@@ -41,6 +41,8 @@ import ..Mycelia
 
 # Import necessary packages for Rhizomorph functionality
 import BioSequences
+import CSV
+import DataFrames
 import DataStructures
 import Distributions
 import DocStringExtensions
@@ -89,5 +91,7 @@ include("variable-length/fasta-graphs.jl")
 include("variable-length/fastq-graphs.jl")
 include("variable-length/strand-conversions.jl")
 include("assembly.jl")
+include("stage2-inference.jl")
+include("stage2-deconvolution.jl")
 
 end  # module Rhizomorph

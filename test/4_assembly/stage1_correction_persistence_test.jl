@@ -5,8 +5,8 @@
 # outlived the call — a public accessor for just the corrected reads did not
 # exist. The hybrid-OLC route (Stage-2 route (a)) needs those corrected reads to
 # survive so an external OLC assembler can consume them. The reusable helper
-# `_run_stage1_correction(reads, config)` now materializes the corrected reads AND
-# persists the corrected FASTQ to a caller-owned location.
+# `_run_stage1_correction(reads, config)` now optionally materializes corrected
+# reads and always persists the corrected FASTQ to a caller-owned location.
 #
 # These tests prove:
 #   (1) With config.output_dir set, the corrected FASTQ exists AFTER the call
@@ -63,6 +63,80 @@ function _read_fastq(path)
     end
 end
 
+Test.@testset "corrected FASTQ validates before atomic promotion" begin
+    dir = mktempdir()
+    destination = joinpath(dir, "corrected.fastq")
+    prior = "@prior\nACGT\n+\nIIII\n"
+    write(destination, prior)
+    empty_source = joinpath(dir, "empty.fastq")
+    touch(empty_source)
+    message = try
+        R._validate_and_promote_corrected_fastq!(
+            empty_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 1,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin("produced 0 corrected reads", message)
+    Test.@test read(destination, String) == prior
+
+    malformed_source = joinpath(dir, "malformed.fastq")
+    write(malformed_source, "@malformed\nACGT\n+\nIII\n")
+    malformed_message = try
+        R._validate_and_promote_corrected_fastq!(
+            malformed_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 1,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin(
+        "Length of quality must be identical to length of sequence",
+        malformed_message,
+    )
+    Test.@test read(destination, String) == prior
+
+    partial_source = joinpath(dir, "partial.fastq")
+    write(partial_source, "@only_one\nACGT\n+\nIIII\n")
+    partial_message = try
+        R._validate_and_promote_corrected_fastq!(
+            partial_source,
+            destination;
+            materialize_corrected_reads = false,
+            expected_record_count = 2,
+        )
+        ""
+    catch error
+        sprint(showerror, error)
+    end
+    Test.@test occursin(
+        "produced 1 corrected reads; expected 2",
+        partial_message,
+    )
+    Test.@test read(destination, String) == prior
+
+    valid_source = joinpath(dir, "valid.fastq")
+    replacement = "@replacement\nTGCA\n+\nJJJJ\n"
+    write(valid_source, replacement)
+    promoted = R._validate_and_promote_corrected_fastq!(
+        valid_source,
+        destination;
+        materialize_corrected_reads = true,
+        expected_record_count = 1,
+    )
+    Test.@test promoted.n_corrected == 1
+    Test.@test length(something(promoted.corrected_reads)) == 1
+    Test.@test promoted.corrected_fastq == abspath(destination)
+    Test.@test read(destination, String) == replacement
+end
+
 Test.@testset "Stage-1 correction persistence (td-ohob)" begin
     # Mycelia.observe draws error/quality from the GLOBAL RNG (bare rand()), so
     # seed it for reproducibility — matching reassembly_graph_reuse_test.jl's
@@ -97,6 +171,8 @@ Test.@testset "Stage-1 correction persistence (td-ohob)" begin
         Test.@test length(reread) == length(res.corrected_reads)
         Test.@test [FASTX.sequence(String, r) for r in reread] ==
                    [FASTX.sequence(String, r) for r in res.corrected_reads]
+        Test.@test res.result_dict[:final_assembly] ==
+                   [FASTX.sequence(String, r) for r in res.corrected_reads]
 
         # The tail-consumed pieces are present so the native path needs no recompute.
         Test.@test haskey(res.result_dict, :metadata)
@@ -120,6 +196,23 @@ Test.@testset "Stage-1 correction persistence (td-ohob)" begin
         # We own it here (as the native caller would); clean up.
         rm(res.corrected_fastq; force = true)
         Test.@test !isfile(res.corrected_fastq)
+    end
+
+    Test.@testset "disk-only Stage-2 handoff avoids corrected-read materialization" begin
+        outdir = mktempdir()
+        config = R.AssemblyConfig(; k = 13, corrector = :iterative,
+            strategy = :scalable, output_dir = outdir)
+        res = R._run_stage1_correction(
+            reads, config; materialize_corrected_reads = false)
+        Test.@test res.corrected_reads === nothing
+        Test.@test res.result_dict[:final_assembly] === nothing
+        Test.@test isfile(res.corrected_fastq)
+        Test.@test res.result_dict[:metadata][:final_fastq_file] == res.corrected_fastq
+        reread_count = open(FASTX.FASTQ.Reader, res.corrected_fastq) do reader
+            count(_ -> true, reader)
+        end
+        Test.@test reread_count > 0
+        Test.@test res.corrected_read_count == reread_count
     end
 
     Test.@testset "end-to-end corrector wiring intact" begin
