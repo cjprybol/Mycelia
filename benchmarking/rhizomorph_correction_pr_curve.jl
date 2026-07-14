@@ -78,8 +78,15 @@ end
 Correct `records` with an explicit knob preset `pt` (a PR_OPERATING_POINTS entry),
 returning `corrected_by_id`. Mirrors correct_reads_scalable but with the point's
 knobs instead of the hardwired :scalable set.
+
+`return_corrector_errors=true` returns `(corrected_by_id, corrector_errors)` where
+`corrector_errors` is the corrector's contract-failure counter dict (e.g.
+`:substitution_length_divergences`). Completeness regression tests use it to assert
+the fail-open guard actually fired, so their non-vacuity is self-certified rather
+than trusting a seed to truncate.
 """
-function correct_reads_at_point(records::Vector{FASTX.FASTQ.Record}, k::Int, pt)
+function correct_reads_at_point(records::Vector{FASTX.FASTQ.Record}, k::Int, pt;
+        return_corrector_errors::Bool = false)
     input_dir = mktempdir()
     output_dir = mktempdir()
     temp_fastq = joinpath(input_dir, "corrector_input.fastq")
@@ -112,6 +119,10 @@ function correct_reads_at_point(records::Vector{FASTX.FASTQ.Record}, k::Int, pt)
         for rec in reader
             corrected_by_id[FASTX.identifier(rec)] = String(FASTX.sequence(BioSequences.LongDNA{4}, rec))
         end
+    end
+    if return_corrector_errors
+        corrector_errors = get(result[:metadata], :corrector_errors, Dict{Symbol, Int}())
+        return corrected_by_id, corrector_errors
     end
     return corrected_by_id
 end
