@@ -926,6 +926,8 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         Test.@test checkpoint["run_complete"]
         Test.@test checkpoint["current_iteration"] == 1
         Test.@test checkpoint["resume_configuration"]["version"] == 2
+        Test.@test checkpoint["resume_configuration"][
+            "substitution_error_rate"] === nothing
         Test.@test checkpoint["resume_configuration"]["input_fastq_path"] ==
                    Base.realpath(input_fastq)
         Test.@test checkpoint["resume_configuration"]["input_fastq_sha256"] ==
@@ -1395,6 +1397,21 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
                 checkpoint_interval = 1,
                 output_dir = output_directory,
             )
+        end
+
+        mismatched_substitution_rate = Base.deepcopy(valid_checkpoint)
+        mismatched_substitution_rate["resume_configuration"][
+            "substitution_error_rate"] = 0.001
+        open(checkpoint_file, "w") do io
+            JSON.print(io, mismatched_substitution_rate, 2)
+        end
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: " *
+            "substitution_error_rate",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
         end
 
         boolean_as_integer_configuration = Base.deepcopy(valid_checkpoint)
