@@ -1,227 +1,160 @@
-# Hybrid OLC: handing the accurized graph to an established layout assembler
+# Corrected multi-input hybrid assembly
 
-- **Type:** Design draft (Stage-2 deconvolution route 1). Implementation is
-  handed off to the `src/`-owning session; this document is the plan, not the
-  code.
-- **Date:** 2026-07-11
-- **Scope:** `src/rhizomorph/assembly.jl` (entry point + config + iterative-corrector
-  bridge), the external-assembler wrappers in `src/assembly.jl`, GFA export in
-  `src/rhizomorph/algorithms/io.jl`, and the benchmark harness under
-  `benchmarking/`.
-- **Status:** Proposed. Grounded in the current `master` foundation (verified
-  read-only). No `src/` changes are made by this document.
-- **Companion:** `docs/design/2026-07-graph-as-hmm-corrector-methods.md` (Stage 1,
-  the corrector this route consumes). The Rhizomorph manuscript's Methods §"Stage 2
-  deconvolution" describes both native traversal and this reuse route.
+**Status:** implemented for Unicycler and Autocycler-polished workflows
 
-## Thesis
+## Purpose
 
-Rhizomorph's Stage 1 (the graph-as-HMM corrector) produces **accurized reads**.
-Stage 2 must turn those into a contiguous assembly. The native route
-(Viterbi/`K`-shortest-path traversal) is one option; this document specifies the
-**reuse route** — hand the accurized output to an established
-overlap-layout-consensus (OLC) / long-read assembler so contiguity is inherited
-from a tool already tuned for it, while the per-base accuracy gain is contributed
-by Stage 1. The design goal from the manuscript is that accuracy and contiguity
-need not trade off: correction happens first, layout second.
+Mycelia needs comparable assembly workflows for benchmarking Rhizomorph against
+external methods and for building later ensemble, pangenome, and variation
+analyses. This route supplies corrected inputs and explicit provenance without
+asserting that any assembler is universally best.
 
-The key observation is that **most of this route already exists as foundation**.
-The corrector already materializes corrected reads; the external assemblers are
-already wrapped and tested. The route is therefore a thin adapter plus one small
-plumbing change, not new machinery.
+The existing single-input `AssemblyConfig(layout = :olc)` route remains a
+one-corrected-FASTQ contract. Multi-input workflows use the separate
+`_run_multi_input_assembler` adapter and do not widen `_run_olc_tool`.
 
-## Foundation already in place (verified on `master`)
+## Supported contracts
 
-- **Corrected-reads bridge.** `_assemble_with_iterative_corrector(reads, config)`
-  (`src/rhizomorph/assembly.jl:842`) writes reads to a temp FASTQ, runs
-  `mycelia_iterative_assemble` (`src/iterative-assembly.jl:233`, which returns
-  `:final_fastq_file` under `:metadata`, plus the in-memory corrected reads as
-  `:final_assembly`), reads the corrected reads back (`~:900`/`:912`), then
-  **re-assembles** them via `assemble_genome(corrected_reads; corrector=:none)`
-  (`~:979`). The hybrid route diverges exactly at this last step.
-- **External-assembler wrappers** (`src/assembly.jl`). The **long-read** wrappers
-  `run_hifiasm` (`:948`, + `hifiasm_primary_contigs` `:1021`), `run_flye`
-  (`:647`, emits `assembly_graph.gfa`), `run_metaflye` (`:744`), and `run_canu`
-  (`:854`) share a convention: keyword-only, `add_bioconda_env("<tool>")` at
-  entry, take a `fastq` path, return a NamedTuple of output paths. **This
-  convention is not universal** — `run_metamdbg` (`:2713`) takes
-  `hifi_reads`/`ont_reads`, and `run_autocycler` (`src/autocycler.jl:58`) takes
-  `long_reads` and provisions via its own installer (not `add_bioconda_env`), so
-  both need per-tool argument adapters rather than a `fastq=` call. **Short-read**
-  wrappers for Illumina data exist separately: `run_megahit` (`:27`),
-  `run_metaspades` (`:325`), `run_spades` (`:421`), `run_skesa` (`:514`). Tested
-  under `test/4_assembly/` (gated by `MYCELIA_RUN_EXTERNAL=true`).
-- **GFA export** (for route b): `Mycelia.write_gfa(result, path)`
-  (`src/rhizomorph/assembly.jl:416`) / `Rhizomorph.write_gfa_next`
-  (`src/rhizomorph/algorithms/io.jl:51`). `AssemblyResult` carries `graph`,
-  `simplified_graph`, `gfa_compatible::Bool`.
-- **Entry point + config.** `assemble_genome(reads, config)`
-  (`src/rhizomorph/assembly.jl:648`) dispatches on `corrector`; `AssemblyConfig`
-  keyword constructor (`:182`) with validation (`~:256`).
-- **Tool provisioning.** `add_bioconda_env("<tool>")` (`src/bioconda.jl:780`) —
-  adding a new assembler is a bioconda recipe name.
-- **Benchmark harness.** `benchmarking/phix174_assembler_comparison.jl`,
-  `mode_comparison.jl`, `real_data_corrector_validation.jl`, and the manifest
-  `rhizomorph_benchmark_manifest.toml`.
+| Workflow | Corrected inputs | External contract | Final sequence |
+| --- | --- | --- | --- |
+| Unicycler hybrid | paired short R1/R2 plus long reads | one combined `-1`, `-2`, `-l` run | Unicycler assembly FASTA |
+| Autocycler-polished | long reads, then paired short R1/R2 | long-only Autocycler; separate R1/R2 polishing | careful Pypolca FASTA |
 
-## The one real gap
+Unicycler receives corrected R1, corrected R2, and corrected long reads in the
+same hybrid assembly call.
 
-The corrected FASTQ produced inside `_assemble_with_iterative_corrector` lives in
-an `mktempdir` that is deleted in the function's `finally` block, and no public
-accessor returns just the corrected reads — the function always re-assembles
-internally. The hybrid route needs the corrected reads to **outlive that cleanup**
-so an external wrapper can consume them. This is the single genuine code change;
-everything else is composition of existing functions.
+Autocycler itself remains long-read-only. The pinned upstream script receives
+one corrected long FASTQ, threads per job, concurrent jobs, and an explicit
+`ont_r9`, `ont_r10`, `pacbio_clr`, or `pacbio_hifi` chemistry. Its consensus is
+then polished by aligning corrected R1 and R2 separately with `bwa mem -a`,
+filtering the paired alignments with Polypolish, running Polypolish, and finally
+running Pypolca in `--careful` mode. The raw Autocycler GFA is never described as
+a sequence-polished graph. It is retained only when the caller supplies a
+persistent output directory; ephemeral high-level runs delete route-owned tool
+outputs after wrapping the final assembly.
 
-There is also a **dead-code stub to reconcile**: `_assemble_hybrid_olc(observations,
-config)` already exists at `src/rhizomorph/assembly.jl:1585` as an unreachable
-placeholder (`@warn "Hybrid OLC not fully implemented"` → falls back to
-`_assemble_kmer_graph`; never dispatched, since `strategy` validation admits only
-`:scalable`/`:exhaustive`). The implementer should **repurpose or remove this
-stub** rather than add a confusingly-named sibling — prefer wiring the real route
-into the existing `_assemble_hybrid_olc` name.
+## Explicit metaMDBG exclusion
 
-## Route (a): corrected-reads bridge (primary — "possible with our foundation")
+metaMDBG v1.4 accepts exactly one platform input: `--in-hifi` or `--in-ont`.
+Upstream rejects a command that supplies both flags and selects one platform
+parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
+assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
+remains available for a single HiFi *or* single ONT input and fails before
+provisioning when both, neither, or an empty path set is supplied.
 
-### Control flow
+This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
+false dual-long workflow would make benchmark comparisons invalid.
 
-1. Run Stage-1 correction exactly as today, up to the point where
-   `corrected_reads` / `corrected_fastq` are in hand
-   (`src/rhizomorph/assembly.jl:~900–912`).
-2. **Persist** the corrected reads to a caller-visible path (see plumbing below)
-   instead of letting the temp dir delete them.
-3. Call the **read-type-appropriate** wrapper on that FASTQ through a per-tool
-   argument adapter, e.g. `run_megahit(fastq = corrected_fastq)` /
-   `run_metaspades(...)` for short-read-corrected data, or
-   `run_hifiasm(fastq = corrected_fastq)` / `run_flye(fastq = corrected_fastq,
-   read_type = ...)` for long-read-corrected data. (Do not feed short reads to a
-   long-read assembler — see Read-type mapping.)
-4. Read the wrapper's primary contigs (`hifiasm_primary_contigs(result)` /
-   the wrapper's `graph`/contig path) and wrap them into an `AssemblyResult` (or a
-   thin hybrid result type) so downstream code and metrics are uniform.
+## Correction and pairing model
 
-### Config surface
+Each read set is corrected independently before assembly:
 
-Add an explicit layout selector rather than overloading `corrector`:
+1. R1 uses the configured short-read correction profile.
+2. R2 uses the same short-read profile in a separate correction call.
+3. Long reads use their own profile.
+
+PacBio CLR and HiFi are exact correction boundaries. Autocycler's read type
+selects `:pacbio_clr` or `:pacbio_hifi`; HiFi does not inherit the CLR-like
+11% indel-heavy profile. The high-accuracy HiFi profile remains on the
+substitution-only path, with its nominal 0.001 fallback error rate, until a
+validated HiFi insertion/deletion composition is modeled. The legacy
+`long_read_tech = :pacbio` alias remains CLR-like and resolves to
+`:pacbio_clr`; HiFi callers must select `:pacbio_hifi` explicitly. Likewise,
+new single-input hifiasm callers should use the exact `:pacbio_hifi` symbol.
+Its historical `:pacbio` contract remains accepted only as a deprecated alias
+that is normalized to `:pacbio_hifi` before correction.
+
+Every corrected read set must preserve its input count and identifier order.
+Pair synchronization and normalized identifiers are also checked before and
+after correction. Explicit `/1` and `/2` mate roles are checked when present,
+so reversed libraries fail loudly. R1, R2, and long reads must also be distinct
+in-memory and physical sources. The direct `run_autocycler_polished` wrapper
+performs its input mate and output-directory checks before dependency
+provisioning or long-read assembly.
+
+## Public entry points
 
 ```julia
-AssemblyConfig(;
-    ...,
-    layout::Symbol   = :native,    # :native (current behavior) | :olc
-    olc_tool::Symbol = :auto,      # :auto (pick by read type) | short-read
-                                   # :megahit|:metaspades | long-read
-                                   # :hifiasm|:flye|:canu|:metaflye
-    olc_options      = (;),        # pass-through NamedTuple to the wrapper
+unicycler_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+    output_dir = "results/unicycler",
+)
+unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
+    ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+    "reads_ont.fastq.gz";
+    config = unicycler_config,
+)
+
+autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
+    long_read_tech = :pacbio_hifi,
+    autocycler_read_type = :pacbio_hifi,
+    output_dir = "results/autocycler-polished",
+)
+autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
+    ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+    "reads_hifi.fastq.gz";
+    config = autocycler_config,
 )
 ```
 
-Validate `layout ∈ (:native, :olc)`, and validate `olc_tool` **against the
-corrected read type** (see Read-type mapping): short-read layout assemblers
-(`:megahit`, `:metaspades`) for Illumina-corrected reads, long-read assemblers
-(`:hifiasm`, `:flye`, `:canu`, `:metaflye`) for long-read-corrected reads;
-`:auto` picks by read type. `layout = :olc` requires `corrector = :iterative` (an
-OLC layout with no correction is just the plain external assembler, already
-reachable via the wrapper directly). Branch in `assemble_genome(reads, config)`
-(`:648`): when `layout == :olc`, dispatch by **repurposing the existing dead
-`_assemble_hybrid_olc` stub** (`:1585`) — reuse the Stage-1 half of
-`_assemble_with_iterative_corrector` and replace the internal re-assembly with a
-read-type-appropriate wrapper call routed through a per-tool argument adapter
-(`fastq` / `hifi_reads` / `long_reads`).
+Convenience aliases `assemble_unicycler_hybrid` and
+`assemble_autocycler_polished` accept R1, R2, and long reads as separate
+arguments.
 
-### Plumbing change (the gap)
+## Ownership and failure behavior
 
-Refactor `_assemble_with_iterative_corrector` so the "materialize corrected
-reads" half is a reusable helper (e.g. `_run_stage1_correction(reads, config) ->
-(corrected_reads, corrected_fastq_path)`) that writes the corrected FASTQ to a
-persistent location owned by the caller (config `output_dir`, or a returned
-tempfile the caller is responsible for). Both the existing native re-assembly and
-the new hybrid route call this helper; only their tail differs. This keeps the
-corrected-FASTQ lifetime explicit and testable, and avoids duplicating the
-correction call.
+With `output_dir = nothing`, the route owns a temporary workflow root and every
+corrected FASTQ. It deletes those artifacts on success and failure. With a
+caller-supplied output directory, corrected FASTQs and final tool artifacts are
+preserved for auditing. A non-empty persistent output directory is rejected so
+stale assemblies cannot be mistaken for current results. Large alignment SAMs,
+filtered SAMs, and BWA index files are removed after successful polishing by
+default and after polishing failures. `keep_intermediates = true` retains and
+records them explicitly and therefore requires a persistent `output_dir`.
 
-### Read-type mapping
+Missing, empty, malformed, reordered, or count-changing inputs and corrected
+read sets fail before the combined assembler. Missing/empty corrected FASTQs,
+zero corrected read counts, absent assemblies, and absent Autocycler graphs
+also fail loudly.
 
-The OLC tool must match the type of the corrected reads. `run_hifiasm` /
-`run_flye` / `run_canu` / `run_metaflye` are **long-read** assemblers (hifiasm
-assumes HiFi; flye/canu need a chemistry flag) and must **not** be handed Illumina
-short reads — doing so errors or yields garbage. Short-read-corrected output must
-route to `run_megahit` / `run_metaspades` instead. Derive the read type from the
-same input-type detection `_auto_configure_assembly` already performs, and reject
-(fail fast) an `olc_tool` incompatible with it rather than silently feeding a HiFi
-assembler 150 bp reads. Because the committed validation corrects ART HS25
-**Illumina** reads (see Validation plan), the first hybrid arm pairs the corrector
-with a short-read layout assembler, not hifiasm/flye; the long-read tools come in
-with a long-read validation dataset.
+## Provenance and reproducibility
 
-## Route (b): GFA-substrate bridge (stretch)
+Every `AssemblyResult` records the workflow, exact correction technologies,
+input and corrected read counts, correction settings, polishing order, and
+caller-owned artifacts. Autocycler additionally records:
 
-Instead of round-tripping through corrected reads, emit the accurized graph as
-GFA (`Mycelia.write_gfa(result, path)`) and hand it to an engine that accepts a
-graph as its layout substrate (Flye-family `assembly_graph.gfa` consumers). This
-avoids re-deriving overlaps from reads but is higher-risk: (1) external tools vary
-in whether they accept an externally supplied GFA as input vs. only emit one;
-(2) preserving the Stage-1 accuracy gain through the tool's own graph-cleaning is
-unproven. Stage this behind Route (a); it is not required for a first hybrid arm.
+- the immutable upstream script revision and verified SHA-256;
+- the bundled environment specification SHA-256; and
+- the installed versions of required conda packages.
 
-## Validation plan (handed to the `benchmarking/`-owning session)
+The installer recreates a stale pre-existing `autocycler` environment before
+assembly when a required assembly/polishing package is absent or violates the
+version constraint in the bundled environment specification.
 
-- Extend `benchmarking/phix174_assembler_comparison.jl` (or
-  `real_data_corrector_validation.jl`) with a **`hybrid`/`olc` arm** alongside the
-  existing `naive` and `scalable` arms, on phiX174 + lambda (same ART HS25 50×
-  simulated reads, MUMmer `dnadiff` metrics), so the three arms are directly
-  comparable in one committed CSV. Because these are **Illumina** reads, the
-  hybrid arm pairs the `:scalable` corrector with a short-read layout assembler
-  (`run_megahit` / `run_metaspades`), not a long-read tool; add a long-read hybrid
-  arm only once a long-read validation dataset is introduced.
-- Register the arm in `rhizomorph_benchmark_manifest.toml`.
-- The manuscript's pre-registered **H5** (state-of-the-art contiguity) is the
-  eventual home for the cross-assembler comparison; the interim CSV is engineering
-  validation only and must be labelled as such, exactly like the existing
-  `real_data_corrector_validation` result.
+## Verification
 
-## Missing wrappers (optional, Conda-only)
+Default tests cover typed contracts, independent correction, pair preservation,
+sibling-adapter argument mapping, provenance, persistent and ephemeral cleanup,
+stale-output rejection, and fail-loud artifacts. The existing single-input OLC
+suite remains part of the regression gate.
 
-`run_verkko`, `run_raven`, `run_miniasm`, `run_wtdbg2`, `run_shasta`,
-`run_nextdenovo` do not exist yet (`raven`/`miniasm`/`wtdbg2`/`shasta`/`nextdenovo`
-appear only as strings in `benchmarking/03_assembly_benchmark.jl`; `verkko`
-appears nowhere). None is required for a first hybrid arm — the Illumina arm uses
-the existing short-read wrappers, and hifiasm/flye cover the long-read case. Each
-is a small addition following the `add_bioconda_env` + `CONDA_RUNNER run -n <env>`
-pattern; file separately if a benchmark tier needs them.
+Real Autocycler execution is opt-in because it is compute intensive. Set
+`MYCELIA_RUN_EXTERNAL=true` and provide the documented FASTQ environment
+variables to run the gated smoke test.
 
-## Risks and open questions
+## Downstream benchmark and ensemble boundary
 
-- **Correction→OLC accuracy transfer.** Whether feeding corrected reads to an OLC
-  assembler retains the Stage-1 per-base gain (vs. the assembler's own correction
-  undoing or duplicating it) is exactly what the benchmark must measure; do not
-  assert parity in advance (mirrors the manuscript's H5 hedge).
-- **Double correction.** hifiasm/canu perform their own error correction; running
-  them on already-corrected reads may be redundant or counterproductive. The
-  validation arm should include a "corrected-reads → assembler-with-its-own-
-  correction-disabled" variant where the tool supports it.
-- **Cost.** Route (a) pays for correction + a full external assembly. Report
-  wall-clock alongside quality (the corrector already costs 5–10× naive on the
-  committed phiX174/lambda run).
+This route is an assembly-side foundation. A downstream benchmark matrix can
+run Rhizomorph, Unicycler, Autocycler-polished, and other compatible assemblers,
+then score assemblies empirically. Pangenome/variation logic can compare
+supported sequence or graph features across methods to identify agreement,
+high-confidence consensus, and divergent low-confidence regions. That scoring
+and ensemble inference is not claimed as part of this adapter.
 
-## Work breakdown (handoff beads)
+## Upstream references
 
-Filed as `[B]` beads in the todo control plane (src/+benchmarking work routes to
-the `src/`-owning session; this doc is the spec):
-
-1. **Plumbing:** refactor `_assemble_with_iterative_corrector` to expose a
-   persistent corrected-FASTQ helper (`_run_stage1_correction`), with a unit test
-   asserting the corrected FASTQ exists and round-trips.
-2. **Route (a) wiring:** add `layout`/`olc_tool` config + read-type-aware
-   validation, and repurpose the dead `_assemble_hybrid_olc` stub (`:1585`),
-   dispatching to a read-type-appropriate wrapper (short-read
-   `run_megahit`/`run_metaspades` for the Illumina arm; hifiasm/flye for
-   long-read) through a per-tool argument adapter; gated real-run test under
-   `test/4_assembly/`.
-3. **Validation arm:** add the `hybrid` arm to the phiX174/lambda harness; commit
-   the comparison CSV.
-4. **Manuscript update (docs, this session's domain):** once (2)–(3) land, tighten
-   the Methods §"Stage 2 deconvolution" wording from "designed" to
-   "implemented, benchmark pending," and add the hybrid arm to the interim
-   validation table in Results.
-5. **Stretch:** Route (b) GFA-substrate bridge; missing long-read wrappers as
-   needed.
+- [Autocycler automated script](https://github.com/rrwick/Autocycler/blob/c98b126eb45727584623041db1bfdbdaf7aa0923/pipelines/Automated_Autocycler_Bash_script_by_Ryan_Wick/autocycler_full.sh)
+- [Autocycler combine outputs](https://github.com/rrwick/Autocycler/wiki/Autocycler-combine)
+- [Polypolish workflow](https://github.com/rrwick/Polypolish/wiki/How-to-run-Polypolish)
+- [Pypolca v0.3.1](https://github.com/gbouras13/pypolca/tree/v0.3.1)
+- [Unicycler quick usage](https://github.com/rrwick/Unicycler#quick-usage)
+- [metaMDBG v1.4 input validation](https://github.com/GaetanBenoitDev/metaMDBG/blob/62951a74ca03d044ba520d118b9de4f65eba85fd/src/Commons.hpp#L1805-L1834)

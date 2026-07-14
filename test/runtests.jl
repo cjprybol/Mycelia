@@ -303,8 +303,9 @@ include(joinpath(@__DIR__, "8_tool_integration", "bioconda.jl"))
 if MYCELIA_RUN_EXTERNAL
     include_all_tests(joinpath(@__DIR__, "8_tool_integration"); skip_files = Set(["bioconda.jl"]))
 else
-    # Execution backend tests are pure-Julia and run without external tools
+    # These suites are pure-Julia/fake-runner coverage and need no external tools.
     include(joinpath(@__DIR__, "8_tool_integration", "execution_backends_test.jl"))
+    include(joinpath(@__DIR__, "8_tool_integration", "autocycler.jl"))
     @info "Skipping remaining tool integration tests; set MYCELIA_RUN_EXTERNAL=true to enable."
 end
 # for file in (
