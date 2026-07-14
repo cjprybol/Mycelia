@@ -1,15 +1,14 @@
 # Hybrid OLC: handing the accurized graph to an established layout assembler
 
-- **Type:** Design draft (Stage-2 deconvolution route 1). Implementation is
-  handed off to the `src/`-owning session; this document is the plan, not the
-  code.
+- **Type:** Design and implementation note (Stage-2 deconvolution route 1).
 - **Date:** 2026-07-11
-- **Scope:** `src/rhizomorph/assembly.jl` (entry point + config + iterative-corrector
-  bridge), the external-assembler wrappers in `src/assembly.jl`, GFA export in
+- **Scope:** `src/rhizomorph/assembly.jl` (entry points, configs, and
+  iterative-corrector bridge), `src/autocycler.jl`, the external-assembler
+  wrappers in `src/assembly.jl`, GFA export in
   `src/rhizomorph/algorithms/io.jl`, and the benchmark harness under
   `benchmarking/`.
-- **Status:** Proposed. Grounded in the current `master` foundation (verified
-  read-only). No `src/` changes are made by this document.
+- **Status:** Route (a) and the td-06er multi-read-set workflows are
+  implemented, with external-tool smoke tests gated.
 - **Companion:** `docs/design/2026-07-graph-as-hmm-corrector-methods.md` (Stage 1,
   the corrector this route consumes). The Rhizomorph manuscript's Methods §"Stage 2
   deconvolution" describes both native traversal and this reuse route.
@@ -152,6 +151,53 @@ assembler 150 bp reads. Because the committed validation corrects ART HS25
 **Illumina** reads (see Validation plan), the first hybrid arm pairs the corrector
 with a short-read layout assembler, not hifiasm/flye; the long-read tools come in
 with a long-read validation dataset.
+
+## Multi-read-set workflows (td-06er)
+
+The single-FASTQ route above remains intentionally unchanged. Multi-read-set
+workflows use a sibling adapter and correct each input independently before the
+combined-input assembler runs:
+
+```julia
+Mycelia.Rhizomorph.assemble_hybrid((short_r1, short_r2), long_reads;
+    config = Mycelia.Rhizomorph.UnicyclerHybridConfig())
+
+Mycelia.Rhizomorph.assemble_hybrid((short_r1, short_r2), long_reads;
+    config = Mycelia.Rhizomorph.AutocyclerPolishConfig())
+
+Mycelia.Rhizomorph.assemble_dual_long(hifi_reads, ont_reads;
+    config = Mycelia.Rhizomorph.MetaMDBGHybridConfig())
+```
+
+The paired-short inputs use their short-read error profile and the long input
+uses its Nanopore or PacBio profile. Mate count, order, and normalized
+identifiers are checked before and after correction so independent correction
+cannot silently drop or reorder one mate. Persistent runs store each corrected
+set in its own subdirectory; ephemeral runs clean every corrected FASTQ and tool
+directory on both success and failure.
+
+The contracts are deliberately non-uniform:
+
+- **Unicycler** consumes corrected R1, corrected R2, and corrected long reads in
+  one hybrid assembly call.
+- **Autocycler is long-read-only.** Its upstream full-pipeline script receives
+  only the corrected long FASTQ (`threads`, `jobs`, and an explicit
+  `ont_r9`/`ont_r10`/`pacbio_clr`/`pacbio_hifi` type). The resulting consensus
+  FASTA is then polished with the corrected paired-short reads: R1 and R2 are
+  aligned separately with `bwa mem -a`, followed by Polypolish and careful
+  Pypolca. The raw Autocycler GFA is retained as provenance and is never
+  mislabeled as a sequence-polished graph.
+- **metaMDBG** is a separate HiFi-plus-ONT dual-long workflow, not an
+  Illumina-plus-long assembler. Its compressed contigs output is read through
+  the normal gzip-aware FASTX path.
+
+Every result records the workflow, technologies, input and corrected read
+counts, correction settings, polishers, and caller-owned artifacts. This common
+provenance surface is the assembly-side foundation for benchmark matrices and
+ensemble comparison (method agreement, disagreement, and confidence strata).
+Pangenome/variation consensus logic remains a downstream analysis layer; this
+route supplies comparable, explicitly attributed assemblies without asserting
+in advance which method is empirically best.
 
 ## Route (b): GFA-substrate bridge (stretch)
 

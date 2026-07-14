@@ -58,9 +58,15 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # Mycelia.install_autocycler()
 # Mycelia.run_autocycler(
 #     long_reads="reads.fastq",
-#     out_dir="autocycler_out";
+#     out_dir="autocycler_out",
+#     read_type="ont_r10",
+# )
+# Mycelia.run_autocycler_polished(
+#     long_reads="reads.fastq",
 #     short_reads_1="reads_R1.fastq",
 #     short_reads_2="reads_R2.fastq",
+#     out_dir="autocycler_polished_out",
+#     read_type="ont_r10",
 # )
 #
 # Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size=31)

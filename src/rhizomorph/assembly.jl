@@ -500,6 +500,248 @@ struct AssemblyConfig
 end
 
 """
+Common supertype for paired-short plus long-read assembly workflow configs.
+
+These configs are deliberately separate from `AssemblyConfig`: the existing
+single-read-set route has a one-FASTQ contract, whereas these workflows correct
+three inputs independently and dispatch them through a sibling multi-input
+adapter.
+"""
+abstract type AbstractPairedShortLongAssemblyConfig end
+
+const _HYBRID_CORRECTION_RESERVED_KEYS = (
+    :corrector,
+    :layout,
+    :sequencing_tech,
+    :output_dir,
+    :olc_tool,
+    :olc_options,
+)
+
+function _reject_route_managed_options(
+        options::NamedTuple,
+        reserved::Tuple,
+        label::AbstractString,
+)::Nothing
+    for key in keys(options)
+        if key in reserved
+            throw(ArgumentError(
+                "$(label) option :$(key) is managed by the multi-input route " *
+                "and cannot be overridden.",
+            ))
+        end
+    end
+    return nothing
+end
+
+function _validate_hybrid_technology(
+        technology::Symbol,
+        allowed::Tuple,
+        label::AbstractString,
+)::Nothing
+    if !(technology in allowed)
+        throw(ArgumentError(
+            "$(label) must be one of $(allowed), got :$(technology).",
+        ))
+    end
+    return nothing
+end
+
+function _validate_hybrid_output_dir(
+        output_dir::Union{Nothing, AbstractString},
+)::Union{Nothing, String}
+    if output_dir === nothing
+        return nothing
+    end
+    isempty(output_dir) && throw(ArgumentError(
+        "output_dir must be a non-empty path; pass nothing for ephemeral output.",
+    ))
+    return String(output_dir)
+end
+
+"""
+Configuration for independently corrected paired short reads plus long reads,
+assembled with Unicycler.
+"""
+struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
+    short_read_tech::Symbol
+    long_read_tech::Symbol
+    correction_options::NamedTuple
+    assembler_options::NamedTuple
+    output_dir::Union{Nothing, String}
+    threads::Int
+
+    function UnicyclerHybridConfig(;
+            short_read_tech::Symbol = :illumina,
+            long_read_tech::Symbol = :nanopore,
+            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            assembler_options::NamedTuple = (;),
+            output_dir::Union{Nothing, AbstractString} = nothing,
+            threads::Int = Mycelia.get_default_threads(),
+    )
+        _validate_hybrid_technology(
+            short_read_tech,
+            _olc_taxonomy().short_read_techs,
+            "short_read_tech",
+        )
+        _validate_hybrid_technology(
+            long_read_tech,
+            _olc_taxonomy().long_read_techs,
+            "long_read_tech",
+        )
+        _reject_route_managed_options(
+            correction_options,
+            _HYBRID_CORRECTION_RESERVED_KEYS,
+            "correction",
+        )
+        _reject_route_managed_options(
+            assembler_options,
+            (:short_1, :short_2, :long_reads, :outdir, :threads, :executor),
+            "Unicycler",
+        )
+        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        return new(
+            short_read_tech,
+            long_read_tech,
+            correction_options,
+            assembler_options,
+            _validate_hybrid_output_dir(output_dir),
+            threads,
+        )
+    end
+end
+
+"""
+Configuration for a corrected long-read Autocycler consensus followed by
+paired-short Polypolish and careful Pypolca polishing.
+
+`autocycler_read_type` is kept separate from the coarser corrector technology:
+the upstream script distinguishes ONT R9/R10 and PacBio CLR/HiFi.
+"""
+struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
+    short_read_tech::Symbol
+    long_read_tech::Symbol
+    autocycler_read_type::Symbol
+    correction_options::NamedTuple
+    output_dir::Union{Nothing, String}
+    threads::Int
+    jobs::Int
+    polypolish_careful::Bool
+
+    function AutocyclerPolishConfig(;
+            short_read_tech::Symbol = :illumina,
+            long_read_tech::Symbol = :nanopore,
+            autocycler_read_type::Union{Nothing, Symbol} = nothing,
+            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            output_dir::Union{Nothing, AbstractString} = nothing,
+            threads::Int = Mycelia.get_default_threads(),
+            jobs::Int = 1,
+            polypolish_careful::Bool = true,
+    )
+        _validate_hybrid_technology(
+            short_read_tech,
+            _olc_taxonomy().short_read_techs,
+            "short_read_tech",
+        )
+        _validate_hybrid_technology(
+            long_read_tech,
+            _olc_taxonomy().long_read_techs,
+            "long_read_tech",
+        )
+        resolved_read_type = if autocycler_read_type === nothing
+            long_read_tech == :nanopore ? :ont_r10 : :pacbio_hifi
+        else
+            autocycler_read_type
+        end
+        valid_read_types = (:ont_r9, :ont_r10, :pacbio_clr, :pacbio_hifi)
+        resolved_read_type in valid_read_types || throw(ArgumentError(
+            "autocycler_read_type must be one of $(valid_read_types), got " *
+            ":$(resolved_read_type).",
+        ))
+        compatible = long_read_tech == :nanopore ?
+                     resolved_read_type in (:ont_r9, :ont_r10) :
+                     resolved_read_type in (:pacbio_clr, :pacbio_hifi)
+        compatible || throw(ArgumentError(
+            "autocycler_read_type=:$(resolved_read_type) is incompatible with " *
+            "long_read_tech=:$(long_read_tech).",
+        ))
+        _reject_route_managed_options(
+            correction_options,
+            _HYBRID_CORRECTION_RESERVED_KEYS,
+            "correction",
+        )
+        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        jobs > 0 || throw(ArgumentError("jobs must be positive, got $(jobs)."))
+        return new(
+            short_read_tech,
+            long_read_tech,
+            resolved_read_type,
+            correction_options,
+            _validate_hybrid_output_dir(output_dir),
+            threads,
+            jobs,
+            polypolish_careful,
+        )
+    end
+end
+
+"""
+Configuration for the distinct metaMDBG HiFi-plus-ONT dual-long contract.
+
+This is intentionally not accepted by `assemble_hybrid`: metaMDBG consumes two
+long-read technologies, not Illumina plus long reads.
+"""
+struct MetaMDBGHybridConfig
+    correction_options::NamedTuple
+    assembler_options::NamedTuple
+    output_dir::Union{Nothing, String}
+    threads::Int
+    abundance_min::Int
+    graph_k::Int
+
+    function MetaMDBGHybridConfig(;
+            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            assembler_options::NamedTuple = (;),
+            output_dir::Union{Nothing, AbstractString} = nothing,
+            threads::Int = Mycelia.get_default_threads(),
+            abundance_min::Int = 3,
+            graph_k::Int = 21,
+    )
+        _reject_route_managed_options(
+            correction_options,
+            _HYBRID_CORRECTION_RESERVED_KEYS,
+            "correction",
+        )
+        _reject_route_managed_options(
+            assembler_options,
+            (
+                :hifi_reads,
+                :ont_reads,
+                :outdir,
+                :threads,
+                :abundance_min,
+                :graph_k,
+                :executor,
+            ),
+            "metaMDBG",
+        )
+        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        abundance_min > 0 || throw(ArgumentError(
+            "abundance_min must be positive, got $(abundance_min).",
+        ))
+        graph_k > 0 || throw(ArgumentError("graph_k must be positive, got $(graph_k)."))
+        return new(
+            correction_options,
+            assembler_options,
+            _validate_hybrid_output_dir(output_dir),
+            threads,
+            abundance_min,
+            graph_k,
+        )
+    end
+end
+
+"""
 Assembly result structure containing contigs and metadata.
 """
 struct AssemblyResult
@@ -878,24 +1120,27 @@ function _write_reads_to_fastq(reads, path::String)
     placeholder_used = Ref(false)
     open(path, "w") do io
         writer = FASTX.FASTQ.Writer(io)
-        if reads isa Vector{String}
+        if reads isa AbstractVector{<:AbstractString}
             for file_path in reads
-                if endswith(file_path, ".fastq") || endswith(file_path, ".fq")
-                    open(FASTX.FASTQ.Reader, file_path) do reader
-                        for record in reader
+                reader = Mycelia.open_fastx(file_path)
+                try
+                    for record in reader
+                        if record isa FASTX.FASTQ.Record
                             write(writer, record)
-                        end
-                    end
-                else
-                    open(FASTX.FASTA.Reader, file_path) do reader
-                        for record in reader
+                        elseif record isa FASTX.FASTA.Record
                             seq = FASTX.FASTA.sequence(String, record)
                             placeholder_used[] = true
                             write(writer,
                                 FASTX.FASTQ.Record(
-                                    FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                                    FASTX.FASTA.identifier(record), seq,
+                                    _placeholder_qual(length(seq))))
+                        else
+                            error("Unsupported read type for iterative corrector: " *
+                                  "$(typeof(record))")
                         end
                     end
+                finally
+                    close(reader)
                 end
             end
         else
@@ -2192,6 +2437,914 @@ function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
 end
 
 """
+One independently corrected read set supplied to a multi-input assembler.
+"""
+struct _CorrectedReadSet
+    path::String
+    count::Int
+    technology::Symbol
+end
+
+struct _CorrectedPairedShortLong
+    short_r1::_CorrectedReadSet
+    short_r2::_CorrectedReadSet
+    long_reads::_CorrectedReadSet
+end
+
+struct _CorrectedHiFiONT
+    hifi_reads::_CorrectedReadSet
+    ont_reads::_CorrectedReadSet
+end
+
+"""
+Minimal ownership record retained until multi-input workflow cleanup.
+
+Stage-1 correction results can contain full graphs and in-memory read vectors.
+Keeping only the corrected FASTQ path and its ownership bit prevents three
+independent correction graphs from remaining live while the external assembler
+runs.
+"""
+struct _Stage1CleanupToken
+    corrected_fastq::String
+    ephemeral::Bool
+end
+
+function _prepare_read_source(source::AbstractString)::Vector{String}
+    return [String(source)]
+end
+
+function _prepare_read_source(
+        sources::AbstractVector{<:AbstractString},
+)::Vector{String}
+    return String.(sources)
+end
+
+function _prepare_read_source(records::Any)::Any
+    return collect(records)
+end
+
+function _canonical_pair_identifier(identifier::AbstractString)::String
+    first_token = first(split(String(identifier)))
+    return replace(first_token, r"/[12]$" => "")
+end
+
+abstract type _AbstractReadIdentifierCursor end
+
+mutable struct _FileReadIdentifierCursor <: _AbstractReadIdentifierCursor
+    sources::Vector{String}
+    source_index::Int
+    reader::Any
+    reader_state::Any
+    reader_started::Bool
+end
+
+mutable struct _RecordReadIdentifierCursor <: _AbstractReadIdentifierCursor
+    records::Any
+    record_index::Int
+end
+
+function _read_identifier_cursor(
+        sources::AbstractVector{<:AbstractString},
+)::_FileReadIdentifierCursor
+    return _FileReadIdentifierCursor(String.(sources), 1, nothing, nothing, false)
+end
+
+function _read_identifier_cursor(records::Any)::_RecordReadIdentifierCursor
+    return _RecordReadIdentifierCursor(records, 1)
+end
+
+function _next_read_identifier!(
+        cursor::_RecordReadIdentifierCursor,
+)::Union{Nothing, String}
+    if cursor.record_index > length(cursor.records)
+        return nothing
+    end
+    record = cursor.records[cursor.record_index]
+    cursor.record_index += 1
+    return String(FASTX.identifier(record))
+end
+
+function _next_read_identifier!(
+        cursor::_FileReadIdentifierCursor,
+)::Union{Nothing, String}
+    while cursor.source_index <= length(cursor.sources)
+        if cursor.reader === nothing
+            cursor.reader = Mycelia.open_fastx(cursor.sources[cursor.source_index])
+            cursor.reader_state = nothing
+            cursor.reader_started = false
+        end
+
+        next_record = if cursor.reader_started
+            iterate(cursor.reader, cursor.reader_state)
+        else
+            cursor.reader_started = true
+            iterate(cursor.reader)
+        end
+        if next_record === nothing
+            close(cursor.reader)
+            cursor.reader = nothing
+            cursor.source_index += 1
+            continue
+        end
+
+        record, cursor.reader_state = next_record
+        return String(FASTX.identifier(record))
+    end
+    return nothing
+end
+
+function _close_read_identifier_cursor!(
+        cursor::_RecordReadIdentifierCursor,
+)::Nothing
+    return nothing
+end
+
+function _close_read_identifier_cursor!(
+        cursor::_FileReadIdentifierCursor,
+)::Nothing
+    if cursor.reader !== nothing
+        close(cursor.reader)
+        cursor.reader = nothing
+    end
+    return nothing
+end
+
+function _drain_read_identifier_cursor!(
+        cursor::_AbstractReadIdentifierCursor,
+        count::Int,
+)::Int
+    while _next_read_identifier!(cursor) !== nothing
+        count += 1
+    end
+    return count
+end
+
+function _validate_paired_reads(
+        short_r1::Any,
+        short_r2::Any,
+        stage::AbstractString,
+)::Int
+    r1_cursor = _read_identifier_cursor(short_r1)
+    r2_cursor = _read_identifier_cursor(short_r2)
+    paired_count = 0
+    try
+        while true
+            raw_r1_identifier = _next_read_identifier!(r1_cursor)
+            raw_r2_identifier = _next_read_identifier!(r2_cursor)
+            if raw_r1_identifier === nothing && raw_r2_identifier === nothing
+                paired_count > 0 || throw(ArgumentError(
+                    "$(stage) paired short reads must be non-empty; observed " *
+                    "R1=0, R2=0.",
+                ))
+                return paired_count
+            elseif raw_r1_identifier === nothing || raw_r2_identifier === nothing
+                r1_count = paired_count + (raw_r1_identifier === nothing ? 0 : 1)
+                r2_count = paired_count + (raw_r2_identifier === nothing ? 0 : 1)
+                r1_count = _drain_read_identifier_cursor!(r1_cursor, r1_count)
+                r2_count = _drain_read_identifier_cursor!(r2_cursor, r2_count)
+                throw(ArgumentError(
+                    "$(stage) paired short reads have different counts: " *
+                    "R1=$(r1_count), R2=$(r2_count).",
+                ))
+            end
+
+            paired_count += 1
+            r1_identifier = _canonical_pair_identifier(raw_r1_identifier)
+            r2_identifier = _canonical_pair_identifier(raw_r2_identifier)
+            if r1_identifier == r2_identifier
+                continue
+            end
+            throw(ArgumentError(
+                "$(stage) paired short reads are out of sync at record " *
+                "$(paired_count): R1=$(repr(raw_r1_identifier)), " *
+                "R2=$(repr(raw_r2_identifier)).",
+            ))
+        end
+    finally
+        _close_read_identifier_cursor!(r1_cursor)
+        _close_read_identifier_cursor!(r2_cursor)
+    end
+end
+
+function _count_nonempty_reads(
+        sources::AbstractVector{<:AbstractString},
+        label::AbstractString,
+)::Int
+    count = 0
+    for source in sources
+        reader = Mycelia.open_fastx(source)
+        try
+            for _ in reader
+                count += 1
+            end
+        finally
+            close(reader)
+        end
+    end
+    count > 0 || throw(ArgumentError("$(label) must contain at least one read."))
+    return count
+end
+
+function _count_nonempty_reads(reads::Any, label::AbstractString)::Int
+    count = length(reads)
+    count > 0 || throw(ArgumentError("$(label) must contain at least one read."))
+    return count
+end
+
+function _prepare_workflow_root(
+        output_dir::Union{Nothing, String},
+)::NamedTuple
+    if output_dir === nothing
+        return (; path = mktempdir(), ephemeral = true)
+    end
+    path = abspath(output_dir)
+    if ispath(path) && !isdir(path)
+        throw(ArgumentError("output_dir exists but is not a directory: $(path)"))
+    end
+    if isdir(path) && !isempty(readdir(path))
+        throw(ArgumentError(
+            "output_dir must be absent or empty to prevent stale hybrid " *
+            "assembly reuse: $(path)",
+        ))
+    end
+    mkpath(path)
+    return (; path, ephemeral = false)
+end
+
+function _stage1_multi_input_config(
+        correction_options::NamedTuple,
+        technology::Symbol,
+        output_dir::Union{Nothing, String},
+)::AssemblyConfig
+    return AssemblyConfig(;
+        correction_options...,
+        corrector = :iterative,
+        sequencing_tech = technology,
+        layout = :native,
+        output_dir = output_dir,
+    )
+end
+
+function _run_multi_input_stage1_correction(
+        reads::Any,
+        config::AssemblyConfig,
+)::NamedTuple
+    return _run_stage1_correction(
+        reads,
+        config;
+        materialize_corrected_reads = false,
+    )
+end
+
+function _correct_read_set!(
+        cleanup_tokens::Vector{_Stage1CleanupToken},
+        reads::Any,
+        technology::Symbol,
+        label::Symbol,
+        correction_options::NamedTuple,
+        workflow_root::AbstractString,
+        persist::Bool,
+        correction_runner::Function,
+)::_CorrectedReadSet
+    stage_output_dir = persist ?
+                       joinpath(workflow_root, "corrected", String(label)) :
+                       nothing
+    stage_config = _stage1_multi_input_config(
+        correction_options,
+        technology,
+        stage_output_dir,
+    )
+    stage = correction_runner(reads, stage_config)
+    hasproperty(stage, :corrected_fastq) || error(
+        "$(label) correction result is missing corrected_fastq.",
+    )
+    corrected_fastq = String(stage.corrected_fastq)
+    ephemeral = hasproperty(stage, :ephemeral) ? Bool(stage.ephemeral) : !persist
+    push!(cleanup_tokens, _Stage1CleanupToken(corrected_fastq, ephemeral))
+    if !isfile(corrected_fastq) || filesize(corrected_fastq) == 0
+        error(
+            "$(label) correction produced no non-empty corrected FASTQ at " *
+            "$(corrected_fastq).",
+        )
+    end
+    corrected_count = if hasproperty(stage, :corrected_read_count)
+        Int(stage.corrected_read_count)
+    elseif hasproperty(stage, :corrected_reads)
+        length(stage.corrected_reads)
+    else
+        error(
+            "$(label) correction result is missing corrected_read_count " *
+            "and corrected_reads.",
+        )
+    end
+    corrected_count > 0 || error("$(label) correction produced 0 corrected reads.")
+    return _CorrectedReadSet(corrected_fastq, corrected_count, technology)
+end
+
+function _cleanup_multi_input_stages!(
+        cleanup_tokens::Vector{_Stage1CleanupToken},
+)::Nothing
+    for token in cleanup_tokens
+        if token.ephemeral
+            try
+                rm(token.corrected_fastq; force = true)
+            catch cleanup_error
+                @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _run_multi_input_assembler(Val(:unicycler), inputs, outdir, config)
+
+Sibling adapter for corrected paired-short plus long inputs. This is separate
+from `_run_olc_tool`, whose contract remains exactly one corrected FASTQ.
+"""
+function _run_multi_input_assembler(
+        ::Val{:unicycler},
+        inputs::_CorrectedPairedShortLong,
+        outdir::AbstractString,
+        config::UnicyclerHybridConfig;
+        runner::Function = Mycelia.run_unicycler,
+)::NamedTuple
+    return runner(;
+        config.assembler_options...,
+        short_1 = inputs.short_r1.path,
+        short_2 = inputs.short_r2.path,
+        long_reads = inputs.long_reads.path,
+        outdir = String(outdir),
+        threads = config.threads,
+    )
+end
+
+function _run_multi_input_assembler(
+        ::Val{:autocycler_polished},
+        inputs::_CorrectedPairedShortLong,
+        outdir::AbstractString,
+        config::AutocyclerPolishConfig;
+        runner::Function = Mycelia.run_autocycler_polished,
+)::NamedTuple
+    return runner(;
+        long_reads = inputs.long_reads.path,
+        short_reads_1 = inputs.short_r1.path,
+        short_reads_2 = inputs.short_r2.path,
+        out_dir = String(outdir),
+        threads = config.threads,
+        jobs = config.jobs,
+        read_type = String(config.autocycler_read_type),
+        polypolish_careful = config.polypolish_careful,
+    )
+end
+
+function _run_multi_input_assembler(
+        ::Val{:metamdbg},
+        inputs::_CorrectedHiFiONT,
+        outdir::AbstractString,
+        config::MetaMDBGHybridConfig;
+        runner::Function = Mycelia.run_metamdbg,
+)::NamedTuple
+    return runner(;
+        config.assembler_options...,
+        hifi_reads = inputs.hifi_reads.path,
+        ont_reads = inputs.ont_reads.path,
+        outdir = String(outdir),
+        abundance_min = config.abundance_min,
+        threads = config.threads,
+        graph_k = config.graph_k,
+    )
+end
+
+function _primary_assembly_path(result::NamedTuple)::String
+    if hasproperty(result, :assembly)
+        return String(result.assembly)
+    elseif hasproperty(result, :contigs)
+        return String(result.contigs)
+    end
+    error("multi-input assembler result has neither :assembly nor :contigs.")
+end
+
+function _artifact_graph_path(result::NamedTuple)::Union{Nothing, String}
+    return hasproperty(result, :graph) ? String(result.graph) : nothing
+end
+
+function _normalize_provenance_value(value::Symbol)::String
+    return String(value)
+end
+
+function _normalize_provenance_value(value::NamedTuple)::Dict{String, Any}
+    normalized = Dict{String, Any}()
+    for key in sort!(collect(keys(value)); by = String)
+        normalized[String(key)] = _normalize_provenance_value(getproperty(value, key))
+    end
+    return normalized
+end
+
+function _normalize_provenance_value(value::Tuple)::Vector{Any}
+    return Any[_normalize_provenance_value(item) for item in value]
+end
+
+function _normalize_provenance_value(value::AbstractVector)::Vector{Any}
+    return Any[_normalize_provenance_value(item) for item in value]
+end
+
+function _normalize_provenance_value(value::Any)::Any
+    return value
+end
+
+function _normalized_workflow_settings(
+        config::UnicyclerHybridConfig,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "workflow" => "unicycler",
+        "assembler" => "unicycler",
+        "threads" => config.threads,
+        "correction_options" => _normalize_provenance_value(
+            config.correction_options,
+        ),
+        "assembler_options" => _normalize_provenance_value(
+            config.assembler_options,
+        ),
+    )
+end
+
+function _normalized_workflow_settings(
+        config::AutocyclerPolishConfig,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "workflow" => "autocycler_polished",
+        "assembler" => "autocycler",
+        "threads" => config.threads,
+        "jobs" => config.jobs,
+        "autocycler_read_type" => String(config.autocycler_read_type),
+        "polypolish_careful" => config.polypolish_careful,
+        "pypolca_careful" => true,
+        "correction_options" => _normalize_provenance_value(
+            config.correction_options,
+        ),
+    )
+end
+
+function _normalized_workflow_settings(
+        config::MetaMDBGHybridConfig,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "workflow" => "metamdbg",
+        "assembler" => "metamdbg",
+        "threads" => config.threads,
+        "abundance_min" => config.abundance_min,
+        "graph_k" => config.graph_k,
+        "correction_options" => _normalize_provenance_value(
+            config.correction_options,
+        ),
+        "assembler_options" => _normalize_provenance_value(
+            config.assembler_options,
+        ),
+    )
+end
+
+function _paired_input_technologies(
+        config::AbstractPairedShortLongAssemblyConfig,
+)::Dict{String, String}
+    return Dict(
+        "short_r1" => String(config.short_read_tech),
+        "short_r2" => String(config.short_read_tech),
+        "long_reads" => String(config.long_read_tech),
+    )
+end
+
+function _dual_long_input_technologies()::Dict{String, String}
+    return Dict(
+        "hifi_reads" => "pacbio_hifi",
+        "ont_reads" => "nanopore",
+    )
+end
+
+function _require_tool_artifact(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = String(path)
+    if !isfile(normalized_path) || filesize(normalized_path) == 0
+        error("multi-input assembler produced no non-empty $(label) at $(normalized_path).")
+    end
+    return normalized_path
+end
+
+function _persistent_tool_artifacts(
+        result::NamedTuple,
+        output_dir::Union{Nothing, String},
+)::Union{Nothing, Dict{String, String}}
+    output_dir === nothing && return nothing
+    artifacts = Dict{String, String}(
+        "final_assembly" => _require_tool_artifact(
+            _primary_assembly_path(result),
+            "final assembly",
+        ),
+    )
+    artifact_fields = (
+        :graph => "raw_graph",
+        :autocycler_assembly => "autocycler_assembly",
+        :polypolish_assembly => "polypolish_assembly",
+        :pypolca_report => "pypolca_report",
+    )
+    for (field, label) in artifact_fields
+        if hasproperty(result, field)
+            artifacts[label] = _require_tool_artifact(
+                String(getproperty(result, field)),
+                replace(label, '_' => ' '),
+            )
+        end
+    end
+    return artifacts
+end
+
+function _read_external_fasta(path::AbstractString)::Vector{FASTX.FASTA.Record}
+    if !isfile(path) || filesize(path) == 0
+        error("external assembler produced no non-empty contigs FASTA at $(path).")
+    end
+    reader = Mycelia.open_fastx(path)
+    try
+        records = collect(reader)
+        if !all(record -> record isa FASTX.FASTA.Record, records)
+            error("external assembler output is not FASTA: $(path).")
+        end
+        return FASTX.FASTA.Record[record for record in records]
+    finally
+        close(reader)
+    end
+end
+
+function _wrap_multi_input_assembly(
+        result::NamedTuple,
+        workflow::Symbol,
+        input_counts::Dict{String, Int},
+        corrected_counts::Dict{String, Int},
+        corrected_paths::Union{Nothing, Dict{String, String}},
+        short_read_tech::Union{Nothing, Symbol},
+        long_read_tech::Union{Nothing, Symbol},
+        correction_options::NamedTuple,
+        output_dir::Union{Nothing, String},
+        polishers::Vector{String},
+        workflow_settings::Dict{String, Any},
+        input_technologies::Dict{String, String},
+)::AssemblyResult
+    assembly_path = _primary_assembly_path(result)
+    records = _read_external_fasta(assembly_path)
+    isempty(records) && error(
+        "multi-input workflow :$(workflow) produced 0 contigs from corrected reads.",
+    )
+    contigs = [FASTX.sequence(String, record) for record in records]
+    contig_names = [String(FASTX.identifier(record)) for record in records]
+    graph_path = _artifact_graph_path(result)
+    if graph_path !== nothing && (!isfile(graph_path) || filesize(graph_path) == 0)
+        error("multi-input workflow :$(workflow) produced no graph at $(graph_path).")
+    end
+    is_dual_long = workflow == :metamdbg
+    assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
+    tool_artifacts = _persistent_tool_artifacts(result, output_dir)
+    stats = Dict{String, Any}(
+        "method" => is_dual_long ? "DualLongAssembly" : "HybridAssembly",
+        "workflow" => String(workflow),
+        "assembler" => assembler,
+        "input_contract" => is_dual_long ? "hifi_ont" : "paired_short_long",
+        "polishers" => polishers,
+        "workflow_settings" => workflow_settings,
+        "input_technologies" => input_technologies,
+        "tool_artifacts" => tool_artifacts,
+        "short_read_tech" => short_read_tech === nothing ? nothing :
+                             String(short_read_tech),
+        "long_read_tech" => long_read_tech === nothing ? nothing :
+                            String(long_read_tech),
+        "input_read_counts" => input_counts,
+        "corrected_read_counts" => corrected_counts,
+        "corrected_fastqs" => corrected_paths,
+        "correction_options" => correction_options,
+        "raw_graph" => output_dir === nothing ? nothing : graph_path,
+        "output_dir" => output_dir,
+        "num_contigs" => length(contigs),
+        "assembly_date" => string(Mycelia.Dates.now()),
+    )
+    return AssemblyResult(
+        contigs,
+        contig_names;
+        assembly_stats = stats,
+        gfa_compatible = false,
+    )
+end
+
+function _assemble_paired_short_long(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::AbstractPairedShortLongAssemblyConfig,
+        workflow::Symbol;
+        correction_runner::Function = _run_multi_input_stage1_correction,
+        assembler_runner::Function,
+)::AssemblyResult
+    short_r1 = _prepare_read_source(short_reads[1])
+    short_r2 = _prepare_read_source(short_reads[2])
+    prepared_long_reads = _prepare_read_source(long_reads)
+    paired_count = _validate_paired_reads(short_r1, short_r2, "input")
+    long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+    root = _prepare_workflow_root(config.output_dir)
+    cleanup_tokens = _Stage1CleanupToken[]
+    try
+        corrected_r1 = _correct_read_set!(
+            cleanup_tokens,
+            short_r1,
+            config.short_read_tech,
+            :short_r1,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_r2 = _correct_read_set!(
+            cleanup_tokens,
+            short_r2,
+            config.short_read_tech,
+            :short_r2,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_long = _correct_read_set!(
+            cleanup_tokens,
+            prepared_long_reads,
+            config.long_read_tech,
+            :long_reads,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_pair_count = _validate_paired_reads(
+            [corrected_r1.path],
+            [corrected_r2.path],
+            "corrected",
+        )
+        inputs = _CorrectedPairedShortLong(
+            corrected_r1,
+            corrected_r2,
+            corrected_long,
+        )
+        tool_result = assembler_runner(
+            inputs,
+            joinpath(root.path, "assembler_$(workflow)"),
+        )
+        corrected_paths = if root.ephemeral
+            nothing
+        else
+            Dict(
+                "short_r1" => corrected_r1.path,
+                "short_r2" => corrected_r2.path,
+                "long_reads" => corrected_long.path,
+            )
+        end
+        polishers = if workflow == :autocycler_polished
+            polypolish = config.polypolish_careful ?
+                         "polypolish-careful" : "polypolish"
+            [polypolish, "pypolca-careful"]
+        else
+            String[]
+        end
+        persistent_output_dir = root.ephemeral ? nothing : root.path
+        return _wrap_multi_input_assembly(
+            tool_result,
+            workflow,
+            Dict(
+                "short_r1" => paired_count,
+                "short_r2" => paired_count,
+                "long_reads" => long_count,
+            ),
+            Dict(
+                "short_r1" => corrected_pair_count,
+                "short_r2" => corrected_pair_count,
+                "long_reads" => corrected_long.count,
+            ),
+            corrected_paths,
+            config.short_read_tech,
+            config.long_read_tech,
+            config.correction_options,
+            persistent_output_dir,
+            polishers,
+            _normalized_workflow_settings(config),
+            _paired_input_technologies(config),
+        )
+    finally
+        _cleanup_multi_input_stages!(cleanup_tokens)
+        if root.ephemeral
+            try
+                rm(root.path; recursive = true, force = true)
+            catch cleanup_error
+                @warn "multi-input assembly: ephemeral output cleanup failed" cleanup_error
+            end
+        end
+    end
+end
+
+"""
+    assemble_hybrid((short_r1, short_r2), long_reads; config)
+
+Correct paired-short R1/R2 and long reads independently with their own
+sequencing-technology error profiles, validate mate preservation, and run the
+combined-input workflow selected by the typed config.
+"""
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any;
+        config::AbstractPairedShortLongAssemblyConfig = UnicyclerHybridConfig(),
+)::AssemblyResult
+    return assemble_hybrid(short_reads, long_reads, config)
+end
+
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::UnicyclerHybridConfig,
+)::AssemblyResult
+    function assembler_runner(
+            inputs::_CorrectedPairedShortLong,
+            outdir::AbstractString,
+    )::NamedTuple
+        return _run_multi_input_assembler(
+            Val(:unicycler),
+            inputs,
+            outdir,
+            config,
+        )
+    end
+    return _assemble_paired_short_long(
+        short_reads,
+        long_reads,
+        config,
+        :unicycler;
+        assembler_runner,
+    )
+end
+
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::AutocyclerPolishConfig,
+)::AssemblyResult
+    function assembler_runner(
+            inputs::_CorrectedPairedShortLong,
+            outdir::AbstractString,
+    )::NamedTuple
+        return _run_multi_input_assembler(
+            Val(:autocycler_polished),
+            inputs,
+            outdir,
+            config,
+        )
+    end
+    return _assemble_paired_short_long(
+        short_reads,
+        long_reads,
+        config,
+        :autocycler_polished;
+        assembler_runner,
+    )
+end
+
+function assemble_unicycler_hybrid(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any;
+        config::UnicyclerHybridConfig = UnicyclerHybridConfig(),
+)::AssemblyResult
+    return assemble_hybrid((short_r1, short_r2), long_reads, config)
+end
+
+function assemble_autocycler_polished(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any;
+        config::AutocyclerPolishConfig = AutocyclerPolishConfig(),
+)::AssemblyResult
+    return assemble_hybrid((short_r1, short_r2), long_reads, config)
+end
+
+function _assemble_metamdbg_dual_long(
+        hifi_reads::Any,
+        ont_reads::Any,
+        config::MetaMDBGHybridConfig;
+        correction_runner::Function = _run_multi_input_stage1_correction,
+        assembler_runner::Function,
+)::AssemblyResult
+    prepared_hifi = _prepare_read_source(hifi_reads)
+    prepared_ont = _prepare_read_source(ont_reads)
+    hifi_count = _count_nonempty_reads(prepared_hifi, "hifi_reads")
+    ont_count = _count_nonempty_reads(prepared_ont, "ont_reads")
+    root = _prepare_workflow_root(config.output_dir)
+    cleanup_tokens = _Stage1CleanupToken[]
+    try
+        corrected_hifi = _correct_read_set!(
+            cleanup_tokens,
+            prepared_hifi,
+            :pacbio,
+            :hifi_reads,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_ont = _correct_read_set!(
+            cleanup_tokens,
+            prepared_ont,
+            :nanopore,
+            :ont_reads,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        inputs = _CorrectedHiFiONT(corrected_hifi, corrected_ont)
+        tool_result = assembler_runner(
+            inputs,
+            joinpath(root.path, "assembler_metamdbg"),
+        )
+        corrected_paths = if root.ephemeral
+            nothing
+        else
+            Dict(
+                "hifi_reads" => corrected_hifi.path,
+                "ont_reads" => corrected_ont.path,
+            )
+        end
+        persistent_output_dir = root.ephemeral ? nothing : root.path
+        return _wrap_multi_input_assembly(
+            tool_result,
+            :metamdbg,
+            Dict("hifi_reads" => hifi_count, "ont_reads" => ont_count),
+            Dict(
+                "hifi_reads" => corrected_hifi.count,
+                "ont_reads" => corrected_ont.count,
+            ),
+            corrected_paths,
+            nothing,
+            nothing,
+            config.correction_options,
+            persistent_output_dir,
+            String[],
+            _normalized_workflow_settings(config),
+            _dual_long_input_technologies(),
+        )
+    finally
+        _cleanup_multi_input_stages!(cleanup_tokens)
+        if root.ephemeral
+            try
+                rm(root.path; recursive = true, force = true)
+            catch cleanup_error
+                @warn "metaMDBG dual-long: ephemeral output cleanup failed" cleanup_error
+            end
+        end
+    end
+end
+
+"""
+    assemble_dual_long(hifi_reads, ont_reads; config=MetaMDBGHybridConfig())
+
+Correct PacBio HiFi and Oxford Nanopore inputs independently, then supply both
+corrected long-read sets to metaMDBG. This separate entry prevents metaMDBG from
+being misrepresented as a paired-short plus long assembler.
+"""
+function assemble_dual_long(
+        hifi_reads::Any,
+        ont_reads::Any;
+        config::MetaMDBGHybridConfig = MetaMDBGHybridConfig(),
+)::AssemblyResult
+    function assembler_runner(
+            inputs::_CorrectedHiFiONT,
+            outdir::AbstractString,
+    )::NamedTuple
+        return _run_multi_input_assembler(
+            Val(:metamdbg),
+            inputs,
+            outdir,
+            config,
+        )
+    end
+    return _assemble_metamdbg_dual_long(
+        hifi_reads,
+        ont_reads,
+        config;
+        assembler_runner,
+    )
+end
+
+function assemble_metamdbg_dual_long(
+        hifi_reads::Any,
+        ont_reads::Any;
+        config::MetaMDBGHybridConfig = MetaMDBGHybridConfig(),
+)::AssemblyResult
+    return assemble_dual_long(hifi_reads, ont_reads; config)
+end
+
+"""
     _wrap_external_contigs(contigs_fasta, tool, config, stage1) -> AssemblyResult
 
 Read an external assembler's primary-contigs FASTA and wrap it in an
@@ -2203,9 +3356,7 @@ by `validate_assembly_structure`). Corrector + layout provenance is stamped into
 """
 function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         config::AssemblyConfig, stage1)
-    records = open(FASTX.FASTA.Reader, contigs_fasta) do reader
-        collect(reader)
-    end
+    records = _read_external_fasta(contigs_fasta)
     # FASTX.sequence(String, r) already yields a String; FASTX.identifier returns a
     # StringView, so wrap it — AssemblyResult requires Vector{String} for both.
     contigs = [FASTX.sequence(String, r) for r in records]

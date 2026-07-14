@@ -4,6 +4,7 @@ channels:
   - bioconda
 dependencies:
   - autocycler>=0.5.0            # https://github.com/rrwick/Autocycler
+  - bwa>=0.7.17                  # https://github.com/lh3/bwa
   - canu>=2.3                    # https://github.com/marbl/canu
   - flye>=2.9.6                  # https://github.com/mikolmogorov/Flye
 #  - lja>=0.2                     # https://github.com/AntonBankevich/LJA
@@ -15,7 +16,11 @@ dependencies:
   - necat>=0.0.1_update20200803  # https://github.com/xiaochuanle/NECAT
   - nextdenovo>=2.5.2            # https://github.com/Nextomics/NextDenovo
   - nextpolish>=1.4.1            # https://github.com/Nextomics/NextPolish
+  - parallel                     # https://www.gnu.org/software/parallel/
   - plassembler>=1.8.0           # https://github.com/gbouras13/plassembler
+  - polypolish>=0.6.0            # https://github.com/rrwick/Polypolish
+  - pypolca>=0.3.1               # https://github.com/gbouras13/pypolca
   - racon>=1.5.0                 # https://github.com/lbcb-sci/racon
   - raven-assembler>=1.8.3       # https://github.com/lbcb-sci/raven
+  - sed                          # https://www.gnu.org/software/sed/
   - wtdbg>=2.5                   # https://github.com/ruanjue/wtdbg2
