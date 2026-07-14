@@ -311,6 +311,8 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
                    Mycelia._stream_sha256_file(input_fastq)
         Test.@test checkpoint["corrector_diagnostics"][
             "window_anchor_rejections"] == 0
+        Test.@test checkpoint["corrector_diagnostics"][
+            "substitution_length_divergences"] == 0
         Test.@test first(checkpoint["iteration_history"]["3"]) isa
                    Dict{String, Any}
         Test.@test first_metadata[:k_progression] == [3]
@@ -323,6 +325,8 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         checkpoint["next_iteration"] = 2
         checkpoint["run_complete"] = false
         checkpoint["resume_configuration"]["max_iterations_per_k"] = 2
+        checkpoint["corrector_diagnostics"][
+            "substitution_length_divergences"] = 2
         open(checkpoint_file, "w") do io
             JSON.print(io, checkpoint, 2)
         end
@@ -355,6 +359,8 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         ] == [(1, 3, 1), (1, 3, 2)]
         Test.@test resumed_metadata[:indel_requested] ==
                    sum(Int(row[:requested]) for row in resumed_telemetry)
+        Test.@test resumed_metadata[:corrector_errors][
+            :substitution_length_divergences] == 2
         Test.@test Base.isfile(resumed_metadata[:final_fastq_file])
         Test.@test Base.occursin(
             "_iter2_", Base.basename(resumed_metadata[:final_fastq_file]))
@@ -986,6 +992,31 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         checkpoint_test_error(
             ArgumentError,
             "checkpoint corrector_diagnostics window_anchor_rejections must be nonnegative",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
+
+        invalid_substitution_divergences = Base.deepcopy(valid_checkpoint)
+        invalid_substitution_divergences["corrector_diagnostics"][
+            "substitution_length_divergences"] = -1
+        open(checkpoint_file, "w") do io
+            JSON.print(io, invalid_substitution_divergences, 2)
+        end
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint corrector_diagnostics " *
+            "substitution_length_divergences must be nonnegative",
         ) do
             Mycelia.mycelia_iterative_assemble(
                 input_fastq;

@@ -1504,6 +1504,13 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
             get(corrector_errors, :window_anchor_rejections, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
+        # Hoist fail-open contract counters to the flat telemetry surface used by
+        # completeness dashboards. Nonzero values reveal correction paths that
+        # preserved safety by skipping a gate or retaining an uncorrected read.
+        assembly.assembly_stats["gate_skipped"] =
+            get(corrector_errors, :gate_skipped, 0)
+        assembly.assembly_stats["substitution_length_divergences"] =
+            get(corrector_errors, :substitution_length_divergences, 0)
         # soft-EM v2 runs competing-path E- and support-floored M-steps, so the
         # stamped value is "v2-competing-paths-floor" (or false on
         # :exhaustive), never a bare `true`.
