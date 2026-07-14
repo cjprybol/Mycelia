@@ -58,6 +58,9 @@ import Dates
 import JSON
 import SHA
 
+# Pure dnadiff-derived contiguity metrics (NGA50 + misassembly proxy).
+include(joinpath(@__DIR__, "dnadiff_contiguity_metrics.jl"))
+
 # --- Config -----------------------------------------------------------------
 
 function _truthy(value::AbstractString)::Bool
@@ -75,6 +78,14 @@ const SMOKE = _truthy(get(ENV, "MYCELIA_RDV_SMOKE", "false"))
 const REGISTRY = Dict(
     "phix174" => ("NC_001422.1", 5386),   # phiX174 — classic Illumina control
     "lambda" => ("NC_001416.1", 48502),  # Enterobacteria phage lambda
+    # E. coli K-12 MG1655 — a REPEAT-BEARING reference (7 near-identical rRNA
+    # operons ~5 kb each) where short-read assemblers fragment, so arm-to-arm
+    # NGA50/misassembly actually spreads. Repeat-free phiX/lambda make "parity"
+    # trivial; this fixture makes it a meaningful claim. Heavy (4.64 Mb @ 50x),
+    # so it is NOT in DEFAULT_TARGETS — select it explicitly on HPC via
+    # MYCELIA_RDV_TARGETS=ecoli_k12. The ref_len == expected_length assertion in
+    # main() fails closed if this size is wrong.
+    "ecoli_k12" => ("NC_000913.3", 4641652)
 )
 
 const DEFAULT_TARGETS = ["phix174", "lambda"]
@@ -134,11 +145,11 @@ end
 function conda_package_record(environment::String, package::String)::String
     output = read(
         `$(Mycelia.CONDA_RUNNER) list -n $(environment) $(package) --json`,
-        String,
+        String
     )
     records = filter(
         record -> record["name"] == package,
-        JSON.parse(output),
+        JSON.parse(output)
     )
     length(records) == 1 || error(
         "expected one $(package) record in conda environment $(environment), " *
@@ -190,7 +201,7 @@ function parse_dnadiff_local(report::String)::NamedTuple
 
     function float_pair(
             fields::AbstractVector{<:AbstractString},
-        )::Union{Nothing, Tuple{Float64, Float64}}
+    )::Union{Nothing, Tuple{Float64, Float64}}
         length(fields) == 3 || return nothing
         ref_value = tryparse(Float64, fields[2])
         qry_value = tryparse(Float64, fields[3])
@@ -204,7 +215,7 @@ function parse_dnadiff_local(report::String)::NamedTuple
 
     function int_pair(
             fields::AbstractVector{<:AbstractString},
-        )::Union{Nothing, Tuple{Int, Int}}
+    )::Union{Nothing, Tuple{Int, Int}}
         length(fields) == 3 || return nothing
         ref_value = tryparse(Int, fields[2])
         qry_value = tryparse(Int, fields[3])
@@ -242,7 +253,7 @@ function parse_dnadiff_local(report::String)::NamedTuple
                 push!(
                     aligned_values,
                     ref_value === nothing || qry_value === nothing ?
-                    nothing : ref_value,
+                    nothing : ref_value
                 )
             else
                 push!(aligned_values, nothing)
@@ -270,15 +281,15 @@ function parse_dnadiff_local(report::String)::NamedTuple
         genome_fraction = aligned === nothing ? NaN : last(aligned),
         avg_identity = identities_valid ? first(identity_values[1]) : NaN,
         total_snps = snp_pair === nothing ? nothing : first(snp_pair),
-        total_indel_bases = indel_pair === nothing ? nothing : first(indel_pair),
+        total_indel_bases = indel_pair === nothing ? nothing : first(indel_pair)
     )
 end
 
 """Write a CSV through a same-directory temporary file and atomic rename."""
 function write_csv_atomically(
         path::String,
-        df::DataFrames.AbstractDataFrame,
-    )::String
+        df::DataFrames.AbstractDataFrame
+)::String
     ispath(path) && throw(ArgumentError("refusing to overwrite existing CSV: $(path)"))
     directory = dirname(path)
     mkpath(directory)
@@ -327,10 +338,11 @@ function run_arm(
         reads::AbstractVector{<:FASTX.FASTQ.Record},
         arm::Symbol,
         reference::String,
+        reference_length::Integer,
         outdir::String,
         report_staging_path::String,
-        report_relative_path::String,
-    )::NamedTuple
+        report_relative_path::String
+)::NamedTuple
     tag = arm_name(arm)
     mkpath(outdir)
     contigs_path = joinpath(outdir, "$(name)_$(tag)_contigs.fasta")
@@ -344,7 +356,7 @@ function run_arm(
                 k = K,
                 graph_mode = Mycelia.Rhizomorph.DoubleStrand,
                 corrector = :none,
-                verbose = false,
+                verbose = false
             )
         elseif arm == :scalable
             result = Mycelia.Rhizomorph.assemble_genome(
@@ -354,7 +366,7 @@ function run_arm(
                 corrector = :iterative,
                 strategy = :scalable,
                 sequencing_tech = :illumina,
-                verbose = false,
+                verbose = false
             )
         elseif arm == :hybrid_olc
             result = Mycelia.Rhizomorph.assemble_genome(
@@ -375,9 +387,9 @@ function run_arm(
                 olc_options = (;
                     k_list = string(K),
                     min_contig_len = MIN_CONTIG_LENGTH,
-                    threads = 1,
+                    threads = 1
                 ),
-                verbose = false,
+                verbose = false
             )
         else
             throw(ArgumentError("unsupported validation arm :$(arm)"))
@@ -390,6 +402,7 @@ function run_arm(
             ok = false, assembly_runtime_s = round(time() - t0; digits = 2),
             raw_n_contigs = 0, n_contigs = 0, total_length = 0,
             largest_contig = 0, n50 = 0,
+            nga50 = 0, misassembly_proxy = -1,
             genome_fraction = NaN, avg_identity = NaN,
             aligned_reference_bases = 0, total_snps = -1,
             total_indel_bases = -1,
@@ -423,6 +436,12 @@ function run_arm(
     total_indel_bases = -1
     indel_bases_100k = NaN
     dnadiff_report_sha256 = ""
+    # Contiguity signals beyond reference-free N50: NGA50 (from dnadiff .1coords
+    # aligned blocks vs the reference length) and a misassembly proxy (from the
+    # .report [Feature Estimates] block). Both dnadiff-derived — QUAST does not
+    # solve on osx-arm64. See benchmarking/dnadiff_contiguity_metrics.jl.
+    nga50_value = 0
+    misassembly_value = -1
     if n_contigs > 0 && total_length > 0
         dd_out = joinpath(outdir, "$(name)_$(tag)_dnadiff")
         try
@@ -431,6 +450,15 @@ function run_arm(
             p = parse_dnadiff_local(paths.report)
             cp(paths.report, report_staging_path; force = false)
             dnadiff_report_sha256 = sha256_file(report_staging_path)
+            report_text = read(paths.report, String)
+            misassembly_value = misassembly_proxy(parse_dnadiff_feature_estimates(report_text))
+            coords_path = joinpath(dd_out, "dnadiff.1coords")
+            if isfile(coords_path)
+                nga50_value = nga50(
+                    aligned_ref_block_lengths(read(coords_path, String)),
+                    reference_length
+                )
+            end
             gf = p.genome_fraction
             ident = p.avg_identity
             aligned_reference_bases = p.aligned_ref_bases
@@ -438,12 +466,12 @@ function run_arm(
             total_indel_bases = p.total_indel_bases === nothing ?
                                 -1 : p.total_indel_bases
             if p.aligned_ref_bases > 0 &&
-                    p.total_snps !== nothing &&
-                    p.total_indel_bases !== nothing
+               p.total_snps !== nothing &&
+               p.total_indel_bases !== nothing
                 mm = round(p.total_snps / p.aligned_ref_bases * 1e5; digits = 1)
                 indel_bases_100k = round(
                     p.total_indel_bases / p.aligned_ref_bases * 1e5;
-                    digits = 1,
+                    digits = 1
                 )
             end
         catch e
@@ -463,6 +491,7 @@ function run_arm(
         raw_n_contigs = raw_n_contigs, n_contigs = n_contigs,
         total_length = total_length,
         largest_contig = largest, n50 = n50,
+        nga50 = nga50_value, misassembly_proxy = misassembly_value,
         genome_fraction = gf, avg_identity = ident,
         aligned_reference_bases = aligned_reference_bases,
         total_snps = total_snps,
@@ -517,8 +546,9 @@ function validate_comparative_gate(
         hybrid.avg_identity >= scalable.avg_identity - IDENTITY_TOLERANCE || error(
             "hybrid-olc identity materially regressed from scalable for $(target)",
         )
-        hybrid.genome_fraction >= scalable.genome_fraction -
-                                  SCALABLE_GENOME_FRACTION_TOLERANCE || error(
+        hybrid.genome_fraction >=
+        scalable.genome_fraction -
+        SCALABLE_GENOME_FRACTION_TOLERANCE || error(
             "hybrid-olc genome fraction regressed by more than " *
             "$(SCALABLE_GENOME_FRACTION_TOLERANCE) point from scalable for $(target)",
         )
@@ -561,7 +591,7 @@ function validate_results(
         :genome_fraction,
         :avg_identity,
         :mismatches_per_100kbp,
-        :indel_bases_per_100kbp,
+        :indel_bases_per_100kbp
     ]
     for column in finite_columns
         all(isfinite, df[!, column]) || error("non-finite metric in column $(column)")
@@ -600,6 +630,11 @@ function validate_results(
     all(df.total_snps .>= 0) || error("total_snps must be non-negative")
     all(df.total_indel_bases .>= 0) ||
         error("total_indel_bases must be non-negative")
+    all(df.nga50 .>= 0) || error("nga50 must be non-negative")
+    all(df.nga50 .<= df.reference_length) ||
+        error("nga50 must not exceed reference_length")
+    all(df.misassembly_proxy .>= 0) ||
+        error("misassembly_proxy must be non-negative")
     all(value -> occursin(r"^[0-9a-f]{64}$", value), df.dnadiff_report_sha256) ||
         error("invalid dnadiff report SHA-256")
     all(value -> !isempty(value) && !isabspath(value), df.dnadiff_report_path) ||
@@ -607,12 +642,11 @@ function validate_results(
     all(
         value -> all(
             part -> !isempty(part) && part != "." && part != "..",
-            split(value, "/"; keepempty = true),
+            split(value, "/"; keepempty = true)
         ),
-        df.dnadiff_report_path,
+        df.dnadiff_report_path
     ) || error("dnadiff report paths must use canonical path components")
-    report_path_pattern =
-        r"^benchmarking/results/(real_data_corrector_validation_\d{8}_\d{6}_\d{3}_p\d+)/dnadiff_reports/([^/]+\.report)$"
+    report_path_pattern = r"^benchmarking/results/(real_data_corrector_validation_\d{8}_\d{6}_\d{3}_p\d+)/dnadiff_reports/([^/]+\.report)$"
     report_path_matches = match.(Ref(report_path_pattern), df.dnadiff_report_path)
     all(value -> value !== nothing, report_path_matches) ||
         error("dnadiff report paths must use the canonical validation artifact layout")
@@ -624,46 +658,44 @@ function validate_results(
         error("dnadiff reports must identify one retained bundle for the run")
     expected_report_names = Set(
         "$(String(target))_$(arm_name)_dnadiff.report"
-        for target in targets for arm_name in arm_names
+    for target in targets for arm_name in arm_names
     )
     report_names = [value.captures[2] for value in valid_report_matches]
     Set(report_names) == expected_report_names ||
         error("dnadiff report paths do not match the target-arm matrix")
-    expected_report_names_by_row = [
-        "$(row.name)_$(row.arm)_dnadiff.report"
-        for row in DataFrames.eachrow(df)
-    ]
+    expected_report_names_by_row = ["$(row.name)_$(row.arm)_dnadiff.report"
+                                    for row in DataFrames.eachrow(df)]
     report_names == expected_report_names_by_row ||
         error("dnadiff report filenames must match their target-arm rows")
     expected_mismatches = round.(
         df.total_snps ./ df.aligned_reference_bases .* 1e5;
-        digits = 1,
+        digits = 1
     )
     expected_indel_bases = round.(
         df.total_indel_bases ./ df.aligned_reference_bases .* 1e5;
-        digits = 1,
+        digits = 1
     )
     expected_genome_fraction = round.(
         df.aligned_reference_bases ./ df.reference_length .* 100.0;
-        digits = 2,
+        digits = 2
     )
     all(isapprox.(
         df.genome_fraction,
         expected_genome_fraction;
         atol = 1.0e-8,
-        rtol = 0.0,
+        rtol = 0.0
     )) || error("genome_fraction does not match aligned reference bases")
     all(isapprox.(
         df.mismatches_per_100kbp,
         expected_mismatches;
         atol = 1.0e-8,
-        rtol = 0.0,
+        rtol = 0.0
     )) || error("mismatches_per_100kbp does not match raw dnadiff counts")
     all(isapprox.(
         df.indel_bases_per_100kbp,
         expected_indel_bases;
         atol = 1.0e-8,
-        rtol = 0.0,
+        rtol = 0.0
     )) || error("indel_bases_per_100kbp does not match raw dnadiff counts")
 
     all(df.art_profile .== ART_PROFILE) ||
@@ -717,7 +749,7 @@ function validate_results(
         :read_count,
         :read_bases,
         :input_reads_sha256,
-        :input_reads_sha256_semantics,
+        :input_reads_sha256_semantics
     ]
     for target in targets
         target_rows = df[df.name .== String(target), :]
@@ -776,7 +808,7 @@ function main()::Nothing
     artifact_staging_dir = mktempdir(
         results_dir;
         prefix = ".rdv_artifact_staging_",
-        cleanup = true,
+        cleanup = true
     )
     report_staging_dir = joinpath(artifact_staging_dir, "dnadiff_reports")
     mkpath(report_staging_dir)
@@ -799,7 +831,7 @@ function main()::Nothing
         reference = Mycelia.download_genome_by_accession(
             accession = accession,
             outdir = target_dir,
-            compressed = false,
+            compressed = false
         )
         if !isfile(reference) || filesize(reference) == 0
             @warn "Reference download failed; skipping target" name accession
@@ -835,7 +867,7 @@ function main()::Nothing
             paired = true,
             errfree = false,
             rndSeed = SEED,
-            quiet = true,
+            quiet = true
         )
         r1 = replace(art.forward_reads, ".gz" => "")
         r2 = replace(art.reverse_reads, ".gz" => "")
@@ -870,7 +902,7 @@ function main()::Nothing
             read_bases = read_bases,
             input_reads_sha256 = input_reads_sha256,
             input_reads_sha256_semantics = INPUT_READS_SHA256_SEMANTICS,
-            promotion_eligible = PROMOTION_ELIGIBLE,
+            promotion_eligible = PROMOTION_ELIGIBLE
         )
 
         # 3. Every arm receives this exact `reads` vector. The common k+1
@@ -887,11 +919,12 @@ function main()::Nothing
                     reads,
                     arm,
                     reference,
+                    ref_len,
                     joinpath(target_dir, tag),
                     joinpath(report_staging_dir, report_filename),
-                    "$(artifact_relative)/dnadiff_reports/$(report_filename)",
+                    "$(artifact_relative)/dnadiff_reports/$(report_filename)"
                 ),
-                provenance,
+                provenance
             )
             push!(rows, row)
             push!(target_rows, row)
@@ -900,6 +933,7 @@ function main()::Nothing
         for row in target_rows
             println("   [$(row.arm)] contigs=$(row.n_contigs)/$(row.raw_n_contigs) " *
                     "total=$(row.total_length) N50=$(row.n50) " *
+                    "NGA50=$(row.nga50) misassembly=$(row.misassembly_proxy) " *
                     "largest=$(row.largest_contig) GF=$(row.genome_fraction)% " *
                     "ident=$(row.avg_identity)% " *
                     "mm/100kb=$(row.mismatches_per_100kbp) " *
