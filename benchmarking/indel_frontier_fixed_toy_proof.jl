@@ -30,6 +30,7 @@ const INDEL_TOY_FIXTURE_SEED = 42
 const INDEL_TOY_CORRECTOR_SEED = 1_042
 const INDEL_TOY_MAX_K = 31
 const INDEL_TOY_MAX_NANOPORE_WALL_SECONDS = 120.0
+const INDEL_TOY_MISSING_DEPENDENCY_SENTINEL = "MISSING"
 # Detached origin/master at the implementation base (548dc984) produced this
 # deterministic explicit-Illumina assembly byte stream. Keeping the golden hash
 # separate from the current default-profile comparison prevents both current arms
@@ -39,12 +40,25 @@ const INDEL_TOY_PREWIRING_ILLUMINA_SHA256 =
 const INDEL_TOY_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-fixed-toy"
 )
+const INDEL_TOY_ARTIFACT_NAMES = (
+    "fixed_toy_arm_summary.csv",
+    "fixed_toy_rung_telemetry.csv",
+    "fixed_toy_acceptance_checks.csv",
+    "fixed_toy_run_manifest.csv",
+)
 
 function main(args::Vector{String} = ARGS)::Nothing
+    options = _indel_toy_parse_args(args)
+    if !options.fixture_only
+        _indel_toy_remove_prior_artifacts(
+            options.output_dir, INDEL_TOY_ARTIFACT_NAMES
+        )
+    end
+    provenance = options.fixture_only ? nothing : _indel_toy_run_provenance()
     reads, reference = _indel_toy_make_fixture()
     observed_lengths = length.(FASTX.sequence.(String, reads))
     _indel_toy_print_fixture(reads, observed_lengths)
-    if "--fixture-only" in args
+    if options.fixture_only
         minimum(observed_lengths) >= INDEL_TOY_MIN_OBSERVED_READ_LENGTH || error(
             "fixed fixture produced a read below " *
             "$(INDEL_TOY_MIN_OBSERVED_READ_LENGTH) bp"
@@ -53,9 +67,6 @@ function main(args::Vector{String} = ARGS)::Nothing
         return nothing
     end
 
-    output_dir = _indel_toy_arg_value(
-        args, "--output-dir", INDEL_TOY_DEFAULT_OUTPUT_DIR
-    )
     nanopore = _indel_toy_run_arm(reads, reference, :nanopore, "nanopore")
     illumina = _indel_toy_run_arm(reads, reference, :illumina, "illumina")
     oracle = _indel_toy_run_arm(reads, reference, nothing, "default_illumina_oracle")
@@ -79,18 +90,57 @@ function main(args::Vector{String} = ARGS)::Nothing
         error("td-jt7r.2 fixed-toy proof failed: $(join(failed, ", "))")
     end
 
-    Base.Filesystem.mkpath(output_dir)
-    summary_path = joinpath(output_dir, "fixed_toy_arm_summary.csv")
-    telemetry_path = joinpath(output_dir, "fixed_toy_rung_telemetry.csv")
-    checks_path = joinpath(output_dir, "fixed_toy_acceptance_checks.csv")
-    CSV.write(summary_path, summary)
-    CSV.write(telemetry_path, telemetry)
-    CSV.write(checks_path, checks)
+    staging_dir = Base.Filesystem.mktempdir(
+        options.output_dir; prefix = ".fixed-toy-staging-"
+    )
+    try
+        summary_staging_path = joinpath(
+            staging_dir, INDEL_TOY_ARTIFACT_NAMES[1]
+        )
+        telemetry_staging_path = joinpath(
+            staging_dir, INDEL_TOY_ARTIFACT_NAMES[2]
+        )
+        checks_staging_path = joinpath(
+            staging_dir, INDEL_TOY_ARTIFACT_NAMES[3]
+        )
+        CSV.write(summary_staging_path, summary)
+        CSV.write(telemetry_staging_path, telemetry)
+        CSV.write(checks_staging_path, checks)
+        manifest = DataFrames.DataFrame([
+            merge(
+                provenance,
+                (
+                    summary_sha256 = _indel_toy_file_sha256(
+                        summary_staging_path
+                    ),
+                    telemetry_sha256 = _indel_toy_file_sha256(
+                        telemetry_staging_path
+                    ),
+                    checks_sha256 = _indel_toy_file_sha256(
+                        checks_staging_path
+                    ),
+                ),
+            ),
+        ])
+        CSV.write(joinpath(staging_dir, INDEL_TOY_ARTIFACT_NAMES[4]), manifest)
+        _indel_toy_assert_provenance_unchanged(something(provenance))
+        _indel_toy_publish_artifacts(
+            staging_dir, options.output_dir, INDEL_TOY_ARTIFACT_NAMES
+        )
+    finally
+        Base.rm(staging_dir; recursive = true, force = true)
+    end
+
+    summary_path = joinpath(options.output_dir, INDEL_TOY_ARTIFACT_NAMES[1])
+    telemetry_path = joinpath(options.output_dir, INDEL_TOY_ARTIFACT_NAMES[2])
+    checks_path = joinpath(options.output_dir, INDEL_TOY_ARTIFACT_NAMES[3])
+    manifest_path = joinpath(options.output_dir, INDEL_TOY_ARTIFACT_NAMES[4])
 
     println("\ntd-jt7r.2 fixed-toy/oracle proof: PASS")
     println("  summary:   $(summary_path)")
     println("  telemetry: $(telemetry_path)")
     println("  checks:    $(checks_path)")
+    println("  manifest:  $(manifest_path)")
     return nothing
 end
 
@@ -193,6 +243,8 @@ function _indel_toy_run_arm(
         indel_truncated = get(stats, "indel_truncated", 0),
         indel_engaged = get(stats, "indel_engaged", 0),
         trace_contract_errors = get(stats, "trace_contract_errors", 0),
+        window_anchor_rejections = get(
+            stats, "window_anchor_rejections", 0),
         window_divergences = get(stats, "window_divergences", 0),
         assembly_bytes = _indel_toy_assembly_bytes(assembly),
     )
@@ -288,6 +340,7 @@ function _indel_toy_summary_row(arm::NamedTuple)::NamedTuple
         indel_truncated = arm.indel_truncated,
         indel_engaged = arm.indel_engaged,
         trace_contract_errors = arm.trace_contract_errors,
+        window_anchor_rejections = arm.window_anchor_rejections,
         window_divergences = arm.window_divergences,
         assembly_sha256 = Base.bytes2hex(SHA.sha256(arm.assembly_bytes)),
     )
@@ -356,10 +409,71 @@ end
 function _indel_toy_telemetry_total(
         arm::NamedTuple,
         key::Symbol,
-)::Int
-    return sum(
-        Int(_indel_toy_rung_value(rung, key, 0)) for rung in arm.telemetry;
-        init = 0,
+)::Union{Int, Nothing}
+    values = Union{Int, Nothing}[
+        _indel_toy_rung_counter(rung, key) for rung in arm.telemetry
+    ]
+    any(isnothing, values) && return nothing
+    return sum(something(value) for value in values; init = 0)
+end
+
+function _indel_toy_rung_counter(
+        rung::Any,
+        key::Symbol,
+)::Union{Int, Nothing}
+    value = _indel_toy_rung_value(rung, key, nothing)
+    return value isa Int && value >= 0 ? value : nothing
+end
+
+function _indel_toy_validate_rung_telemetry(
+        arms::Tuple{Vararg{NamedTuple}}
+)::NamedTuple
+    required_keys = (:requested, :attempted, :completed, :truncated, :engaged)
+    for arm in arms
+        for (row_index, rung) in enumerate(arm.telemetry)
+            counters = Dict(
+                key => _indel_toy_rung_counter(rung, key)
+                for key in required_keys
+            )
+            invalid_keys = Symbol[
+                key for key in required_keys if isnothing(counters[key])
+            ]
+            if !isempty(invalid_keys)
+                return (
+                    passed = false,
+                    detail = "arm=$(arm.label), row=$(row_index): exact " *
+                             "nonnegative Int required for " *
+                             "$(join(invalid_keys, ","))",
+                )
+            end
+            requested = something(counters[:requested])
+            attempted = something(counters[:attempted])
+            completed = something(counters[:completed])
+            truncated = something(counters[:truncated])
+            engaged = something(counters[:engaged])
+            attempted <= requested || return (
+                passed = false,
+                detail = "arm=$(arm.label), row=$(row_index): " *
+                         "attempted=$(attempted) > requested=$(requested)",
+            )
+            completed + truncated <= attempted || return (
+                passed = false,
+                detail = "arm=$(arm.label), row=$(row_index): completed+" *
+                         "truncated=$(completed + truncated) > " *
+                         "attempted=$(attempted)",
+            )
+            engaged <= completed || return (
+                passed = false,
+                detail = "arm=$(arm.label), row=$(row_index): " *
+                         "engaged=$(engaged) > completed=$(completed)",
+            )
+        end
+    end
+    return (
+        passed = true,
+        detail = "all per-rung counters are exact nonnegative Int values " *
+                 "with requested/attempted/completed/truncated/engaged " *
+                 "inequalities satisfied",
     )
 end
 
@@ -399,9 +513,13 @@ function _indel_toy_checks(
         oracle::NamedTuple,
 )::DataFrames.DataFrame
     observed_lengths = length.(FASTX.sequence.(String, reads))
+    telemetry_validation = _indel_toy_validate_rung_telemetry(
+        (nanopore, illumina, oracle)
+    )
     initial_k = isempty(nanopore.k_progression) ?
                 nothing : first(nanopore.k_progression)
-    has_noninitial_completion = initial_k !== nothing && any(
+    has_noninitial_completion = telemetry_validation.passed &&
+                                initial_k !== nothing && any(
         Int(_indel_toy_rung_value(rung, :k, initial_k)) > initial_k &&
         Int(_indel_toy_rung_value(rung, :attempted, 0)) > 0 &&
         Int(_indel_toy_rung_value(rung, :completed, 0)) > 0
@@ -486,6 +604,11 @@ function _indel_toy_checks(
             detail = "required keys=requested/attempted/completed/truncated/engaged",
         ),
         (
+            check = "per_rung_telemetry_values_valid",
+            passed = telemetry_validation.passed,
+            detail = telemetry_validation.detail,
+        ),
+        (
             check = "nanopore_per_rung_totals_consistent",
             passed = _indel_toy_totals_consistent(nanopore),
             detail = _indel_toy_totals_detail(nanopore),
@@ -499,6 +622,14 @@ function _indel_toy_checks(
             check = "default_oracle_per_rung_totals_consistent",
             passed = _indel_toy_totals_consistent(oracle),
             detail = _indel_toy_totals_detail(oracle),
+        ),
+        (
+            check = "nanopore_attempts_all_classified",
+            passed = nanopore.indel_attempted ==
+                     nanopore.indel_completed + nanopore.indel_truncated,
+            detail = "attempted=$(nanopore.indel_attempted), " *
+                     "completed=$(nanopore.indel_completed), " *
+                     "truncated=$(nanopore.indel_truncated)",
         ),
         (
             check = "nanopore_trace_contract_clean",
@@ -555,6 +686,7 @@ function _indel_toy_print_arm(arm::NamedTuple)::Nothing
     println("  indel truncated:       $(arm.indel_truncated)")
     println("  indel engaged:         $(arm.indel_engaged)")
     println("  trace_contract_errors: $(arm.trace_contract_errors)")
+    println("  window anchor rejects: $(arm.window_anchor_rejections)")
     println("  window_divergences:    $(arm.window_divergences)")
     println("  per-rung telemetry:")
     if isempty(arm.telemetry)
@@ -577,16 +709,191 @@ function _indel_toy_print_arm(arm::NamedTuple)::Nothing
     return nothing
 end
 
-function _indel_toy_arg_value(
-        args::Vector{String},
-        flag::String,
-        default::String,
-)::String
-    index = findfirst(==(flag), args)
-    if isnothing(index) || index == length(args)
-        return default
+function _indel_toy_parse_args(args::Vector{String})::NamedTuple
+    fixture_only = false
+    output_dir = INDEL_TOY_DEFAULT_OUTPUT_DIR
+    seen = Set{String}()
+    index = 1
+    while index <= length(args)
+        flag = args[index]
+        flag in seen && throw(ArgumentError("duplicate argument: $(flag)"))
+        if flag == "--fixture-only"
+            fixture_only = true
+            push!(seen, flag)
+            index += 1
+        elseif flag == "--output-dir"
+            push!(seen, flag)
+            index == length(args) && throw(
+                ArgumentError("--output-dir requires a value")
+            )
+            value = args[index + 1]
+            (isempty(value) || startswith(value, "--")) && throw(
+                ArgumentError("--output-dir requires a nonempty value")
+            )
+            output_dir = value
+            index += 2
+        else
+            throw(ArgumentError("unknown argument: $(flag)"))
+        end
     end
-    return args[index + 1]
+    return (fixture_only = fixture_only, output_dir = output_dir)
+end
+
+function _indel_toy_remove_prior_artifacts(
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}},
+)::Nothing
+    Base.Filesystem.mkpath(output_dir)
+    # Invalidate the completion manifest and PASS-bearing checks before data.
+    for artifact_index in length(artifact_names):-1:1
+        artifact_name = artifact_names[artifact_index]
+        artifact_path = joinpath(output_dir, artifact_name)
+        isdir(artifact_path) && error(
+            "refusing to replace artifact directory: $(artifact_path)"
+        )
+        Base.rm(artifact_path; force = true)
+    end
+    return nothing
+end
+
+function _indel_toy_publish_artifacts(
+        staging_dir::String,
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}},
+)::Nothing
+    for artifact_name in artifact_names
+        staging_path = joinpath(staging_dir, artifact_name)
+        isfile(staging_path) || error(
+            "staged artifact is missing: $(staging_path)"
+        )
+    end
+    for artifact_name in artifact_names
+        Base.Filesystem.rename(
+            joinpath(staging_dir, artifact_name),
+            joinpath(output_dir, artifact_name),
+        )
+    end
+    return nothing
+end
+
+function _indel_toy_run_provenance()::NamedTuple
+    repository_root = normpath(joinpath(@__DIR__, ".."))
+    git_head_sha = strip(
+        Base.read(
+            `git -C $repository_root rev-parse HEAD`,
+            String,
+        ),
+    )
+    tracked_diff = Base.read(
+        `git -C $repository_root diff --binary --no-ext-diff HEAD --`
+    )
+    tracked_diff_sha256 = Base.bytes2hex(SHA.sha256(tracked_diff))
+    benchmark_source_sha256 = _indel_toy_file_sha256(@__FILE__)
+    dependency = _indel_toy_dependency_provenance()
+    code_environment_components = (
+        git_head_sha,
+        tracked_diff_sha256,
+        benchmark_source_sha256,
+        dependency.project_toml_sha256,
+        dependency.manifest_toml_sha256,
+        string(VERSION),
+        string(Threads.nthreads()),
+        string(Sys.CPU_NAME),
+        string(Sys.ARCH),
+        string(Sys.KERNEL),
+        string(Sys.CPU_THREADS),
+    )
+    code_environment_fingerprint = Base.bytes2hex(SHA.sha256(codeunits(join(
+        code_environment_components, ":"
+    ))))
+    run_fingerprint = join(
+        (
+            code_environment_fingerprint,
+            string(INDEL_TOY_FIXTURE_SEED),
+            string(INDEL_TOY_CORRECTOR_SEED),
+        ),
+        ":",
+    )
+    generation_id = Base.bytes2hex(SHA.sha256(codeunits(run_fingerprint)))
+    return (
+        manifest_schema_version = 1,
+        generation_id = generation_id,
+        code_environment_fingerprint = code_environment_fingerprint,
+        code_sha = git_head_sha,
+        git_tracked_worktree_dirty = !isempty(tracked_diff),
+        git_tracked_diff_sha256 = tracked_diff_sha256,
+        benchmark_source_sha256 = benchmark_source_sha256,
+        active_project_path = dependency.active_project_path,
+        project_toml_sha256 = dependency.project_toml_sha256,
+        manifest_toml_present = dependency.manifest_toml_present,
+        manifest_toml_sha256 = dependency.manifest_toml_sha256,
+        julia_version = string(VERSION),
+        julia_threads = Threads.nthreads(),
+        cpu_name = string(Sys.CPU_NAME),
+        architecture = string(Sys.ARCH),
+        kernel = string(Sys.KERNEL),
+        cpu_threads = Sys.CPU_THREADS,
+        genome_length = INDEL_TOY_GENOME_LENGTH,
+        source_read_length = INDEL_TOY_SOURCE_READ_LENGTH,
+        minimum_observed_read_length = INDEL_TOY_MIN_OBSERVED_READ_LENGTH,
+        coverage = INDEL_TOY_COVERAGE,
+        error_rate = INDEL_TOY_ERROR_RATE,
+        fixture_seed = INDEL_TOY_FIXTURE_SEED,
+        corrector_seed = INDEL_TOY_CORRECTOR_SEED,
+        max_k = INDEL_TOY_MAX_K,
+        nanopore_wall_ceiling_seconds = INDEL_TOY_MAX_NANOPORE_WALL_SECONDS,
+        prewiring_illumina_sha256 = INDEL_TOY_PREWIRING_ILLUMINA_SHA256,
+    )
+end
+
+function _indel_toy_assert_provenance_unchanged(
+        initial::NamedTuple
+)::Nothing
+    current = _indel_toy_run_provenance()
+    current.project_toml_sha256 == initial.project_toml_sha256 || error(
+        "active Project.toml changed during the fixed-toy run; refusing to " *
+        "publish artifacts"
+    )
+    current.manifest_toml_sha256 == initial.manifest_toml_sha256 || error(
+        "active Manifest.toml changed during the fixed-toy run; refusing to " *
+        "publish artifacts"
+    )
+    current.code_environment_fingerprint ==
+    initial.code_environment_fingerprint || error(
+        "code/worktree/environment fingerprint changed during the fixed-toy " *
+        "run; refusing to publish artifacts"
+    )
+    return nothing
+end
+
+function _indel_toy_dependency_provenance()::NamedTuple
+    active_project = Base.active_project()
+    active_project isa String || error(
+        "an active Project.toml is required for benchmark provenance"
+    )
+    isfile(active_project) || error(
+        "active Project.toml does not exist: $(active_project)"
+    )
+    manifest_path = joinpath(dirname(active_project), "Manifest.toml")
+    manifest_present = isfile(manifest_path)
+    return (
+        active_project_path = normpath(active_project),
+        project_toml_sha256 = _indel_toy_file_sha256(active_project),
+        manifest_toml_present = manifest_present,
+        manifest_toml_sha256 = _indel_toy_optional_dependency_sha256(
+            manifest_path
+        ),
+    )
+end
+
+function _indel_toy_optional_dependency_sha256(path::String)::String
+    return isfile(path) ?
+           _indel_toy_file_sha256(path) :
+           INDEL_TOY_MISSING_DEPENDENCY_SENTINEL
+end
+
+function _indel_toy_file_sha256(path::String)::String
+    return Base.bytes2hex(SHA.sha256(Base.read(path)))
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

@@ -181,7 +181,19 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         accepted = Tuple{UnitRange{Int}, String, String}[]
 
         first_window = first(windows)
-        first_decoded = String(sequence_chars[first_window]) * "A"
+        first_anchor_start = last(first_window) - k + 1
+        first_prefix = sequence_chars[first(first_window):(first_anchor_start - 1)]
+        first_anchor = sequence_chars[first_anchor_start:last(first_window)]
+        # Insert immediately BEFORE the terminal anchor. A length change is valid,
+        # but the decoded suffix must still name the graph state that anchors the
+        # next overlapping window.
+        first_decoded = String(vcat(first_prefix, ['A'], first_anchor))
+        Test.@test Mycelia._indel_window_terminal_anchor_matches(
+            sequence_chars,
+            collect(first_decoded),
+            last(first_window),
+            k,
+        )
         push!(accepted,
             (first_window, first_decoded, repeat("I", length(first_decoded))))
 
@@ -248,6 +260,15 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
             first(third_window),
             k,
         ) === nothing
+
+        mutated_terminal = collect(first_decoded)
+        mutated_terminal[end] = mutated_terminal[end] == 'A' ? 'C' : 'A'
+        Test.@test !Mycelia._indel_window_terminal_anchor_matches(
+            sequence_chars,
+            mutated_terminal,
+            last(first_window),
+            k,
+        )
     end
 
     Test.@testset "doublestrand windows use observed graph orientation" begin

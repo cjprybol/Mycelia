@@ -809,9 +809,14 @@ one row per actual k-rung iteration. Its counters have the following meanings:
   `:scalable`, or non-skipped reads under `:unrestricted` semantics.
 - `attempted`: pair-HMM kernel calls actually entered after scheduling.
 - `completed`: full, nontruncated, trace-valid pair-HMM decodes.
-- `truncated`: pair-HMM calls returning only a decoded prefix; these are rejected
-  before correction or soft-EM side effects.
+- `truncated`: pair-HMM calls that did not produce a full trace-valid completion
+  (decoded prefix, valid no-path, malformed result, or post-dispatch failure).
+  These are rejected before correction or soft-EM side effects.
 - `engaged`: completed traces containing at least one insertion or deletion move.
+
+Every attempted call is exactly one `completed` or `truncated` outcome.
+`trace_contract_errors` is an orthogonal cause flag on malformed/failed truncated
+outcomes and must not be added to those terminal counters.
 
 The aggregate `indel_requested`, `indel_attempted`, `indel_completed`,
 `indel_truncated`, and `indel_engaged` fields sum those counters over all rows.
@@ -1427,6 +1432,8 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["truncated_decodes"] = indel_truncated
         assembly.assembly_stats["trace_contract_errors"] =
             get(corrector_errors, :trace_contract_errors, 0)
+        assembly.assembly_stats["window_anchor_rejections"] =
+            get(corrector_errors, :window_anchor_rejections, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
         # Soft-EM metadata names the active v2 competing-path/support-floor

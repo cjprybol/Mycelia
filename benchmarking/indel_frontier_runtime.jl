@@ -19,6 +19,7 @@ import FASTX
 import Graphs
 import Mycelia
 import Random
+import SHA
 import Statistics
 
 const INDEL_FRONTIER_K = 9
@@ -30,8 +31,24 @@ const INDEL_FRONTIER_ERROR_RATE = 0.05
 const INDEL_FRONTIER_FIXTURE_SEED = 42
 const INDEL_FRONTIER_WINDOW_BASES = (250, 500, 1_200)
 const INDEL_FRONTIER_REPEATS = 5
+const INDEL_FRONTIER_MISSING_DEPENDENCY_SENTINEL = "MISSING"
+# A historical 200 ms value informed early topology calibration and remains
+# aspirational context only; it is not an executable or portable wall-clock
+# SLA. The executable runtime-only affordability gate requires the 10,001-
+# vertex/500 bp warmed p95 to be at most 1 s and at most 3x the same-run 2,001-
+# vertex control. The absolute backstop prevents a uniformly pathological host
+# from satisfying only the relative check.
+const INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN = 3.0
+const INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS = 1_000.0
 const INDEL_FRONTIER_DEFAULT_OUTPUT_DIR = joinpath(
     @__DIR__, "results", "td-jt7r-2-frontier-runtime"
+)
+const INDEL_FRONTIER_ARTIFACT_NAMES = (
+    "indel_frontier_runtime_summary.csv",
+    "indel_frontier_runtime_replicates.csv",
+    "indel_frontier_runtime.png",
+    "indel_frontier_runtime.svg",
+    "indel_frontier_runtime_manifest.csv",
 )
 
 struct IndelFrontierCalibrationGraph
@@ -45,40 +62,86 @@ struct IndelFrontierCalibrationGraph
 end
 
 function main(args::Vector{String} = ARGS)::Nothing
-    smoke = "--smoke" in args
-    output_dir = _indel_frontier_arg_value(
-        args, "--output-dir", INDEL_FRONTIER_DEFAULT_OUTPUT_DIR
+    options = _indel_frontier_parse_args(args)
+    repeats = something(
+        options.repeats,
+        options.smoke ? 1 : INDEL_FRONTIER_REPEATS,
     )
-    repeats = parse(
-        Int,
-        _indel_frontier_arg_value(
-            args, "--repeats", string(smoke ? 1 : INDEL_FRONTIER_REPEATS)
-        ),
+    _indel_frontier_remove_prior_artifacts(
+        options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES
     )
-    repeats > 0 || throw(ArgumentError("--repeats must be positive"))
+    run_provenance = _indel_frontier_run_provenance(options.smoke, repeats)
 
-    graph_cases = _indel_frontier_calibration_graphs(smoke)
-    window_bases = smoke ? (50,) : INDEL_FRONTIER_WINDOW_BASES
+    graph_cases = _indel_frontier_calibration_graphs(options.smoke)
+    window_bases = options.smoke ? (50,) : INDEL_FRONTIER_WINDOW_BASES
     summary, replicates = _indel_frontier_run_matrix(
         graph_cases, window_bases, repeats
     )
-    if !smoke
+    if !options.smoke
         _indel_frontier_assert_topology_controls(summary)
     end
 
-    Base.Filesystem.mkpath(output_dir)
-    summary_path = joinpath(output_dir, "indel_frontier_runtime_summary.csv")
-    replicates_path = joinpath(output_dir, "indel_frontier_runtime_replicates.csv")
-    CSV.write(summary_path, summary)
-    CSV.write(replicates_path, replicates)
+    provenance = merge(
+        run_provenance,
+        _indel_frontier_affordability_provenance(options.smoke, summary),
+    )
+    staging_dir = Base.Filesystem.mktempdir(
+        options.output_dir; prefix = ".frontier-runtime-staging-"
+    )
+    try
+        summary_staging_path = joinpath(
+            staging_dir, INDEL_FRONTIER_ARTIFACT_NAMES[1]
+        )
+        replicates_staging_path = joinpath(
+            staging_dir, INDEL_FRONTIER_ARTIFACT_NAMES[2]
+        )
+        CSV.write(summary_staging_path, summary)
+        CSV.write(replicates_staging_path, replicates)
+        figure_paths = _indel_frontier_write_figure(summary, staging_dir)
+        manifest = DataFrames.DataFrame([
+            merge(
+                provenance,
+                (
+                    summary_sha256 = _indel_frontier_file_sha256(
+                        summary_staging_path
+                    ),
+                    replicates_sha256 = _indel_frontier_file_sha256(
+                        replicates_staging_path
+                    ),
+                    png_sha256 = _indel_frontier_file_sha256(figure_paths.png),
+                    svg_sha256 = _indel_frontier_file_sha256(figure_paths.svg),
+                ),
+            ),
+        ])
+        CSV.write(
+            joinpath(staging_dir, INDEL_FRONTIER_ARTIFACT_NAMES[5]), manifest
+        )
+        _indel_frontier_assert_provenance_unchanged(
+            run_provenance, options.smoke, repeats
+        )
+        _indel_frontier_publish_artifacts(
+            staging_dir, options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES
+        )
+    finally
+        Base.rm(staging_dir; recursive = true, force = true)
+    end
 
-    figure_paths = _indel_frontier_write_figure(summary, output_dir)
+    summary_path = joinpath(options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES[1])
+    replicates_path = joinpath(
+        options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES[2]
+    )
+    png_path = joinpath(options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES[3])
+    svg_path = joinpath(options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES[4])
+    manifest_path = joinpath(
+        options.output_dir, INDEL_FRONTIER_ARTIFACT_NAMES[5]
+    )
 
     println("Wrote branching/frontier runtime calibration artifacts:")
     println("  summary:    $(summary_path)")
     println("  replicates: $(replicates_path)")
-    println("  png:        $(figure_paths.png)")
-    println("  svg:        $(figure_paths.svg)")
+    println("  png:        $(png_path)")
+    println("  svg:        $(svg_path)")
+    println("  manifest:   $(manifest_path)")
     println("No correction-accuracy metric was computed or used.")
     return nothing
 end
@@ -650,11 +713,19 @@ function _indel_frontier_assert_topology_controls(
         (summary.window_bases .== 500),
         :,
     ]
+    linear_reference = summary[
+        (summary.graph_id .== "linear_2001") .&
+        (summary.window_bases .== 500),
+        :,
+    ]
     DataFrames.nrow(branching) == 1 || error(
         "missing 500 bp highly-branching classifier control"
     )
     DataFrames.nrow(linear) == 1 || error(
         "missing 500 bp large-linear classifier control"
+    )
+    DataFrames.nrow(linear_reference) == 1 || error(
+        "missing 500 bp linear runtime reference control"
     )
     only(branching.probe_reason) == "work_limit" || error(
         "frontier classifier failed to reject the small highly-branching graph"
@@ -670,6 +741,27 @@ function _indel_frontier_assert_topology_controls(
     )
     !only(linear.pair_hmm_truncated) || error(
         "admitted 500 bp large-linear control was truncated"
+    )
+    linear_p95_ms = only(linear.p95_ms)
+    reference_p95_ms = only(linear_reference.p95_ms)
+    isfinite(linear_p95_ms) && linear_p95_ms > 0 || error(
+        "10,001-vertex/500 bp warmed p95 is not finite and positive: " *
+        "$(linear_p95_ms) ms"
+    )
+    isfinite(reference_p95_ms) && reference_p95_ms > 0 || error(
+        "2,001-vertex/500 bp reference p95 is not finite and positive: " *
+        "$(reference_p95_ms) ms"
+    )
+    linear_p95_ms <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS || error(
+        "10,001-vertex/500 bp warmed p95 $(linear_p95_ms) ms exceeds " *
+        "the $(INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS) ms " *
+        "affordability ceiling"
+    )
+    slowdown = linear_p95_ms / reference_p95_ms
+    slowdown <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN || error(
+        "10,001-vertex/500 bp warmed p95 slowdown $(slowdown)x exceeds " *
+        "the same-run $(INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN)x " *
+        "affordability ceiling"
     )
     return nothing
 end
@@ -792,16 +884,267 @@ function _indel_frontier_write_figure(
     return (png = png_path, svg = svg_path)
 end
 
-function _indel_frontier_arg_value(
-        args::Vector{String},
-        flag::String,
-        default::String,
-)::String
-    index = findfirst(==(flag), args)
-    if isnothing(index) || index == length(args)
-        return default
+function _indel_frontier_parse_args(args::Vector{String})::NamedTuple
+    smoke = false
+    output_dir = INDEL_FRONTIER_DEFAULT_OUTPUT_DIR
+    repeats::Union{Int, Nothing} = nothing
+    seen = Set{String}()
+    index = 1
+    while index <= length(args)
+        flag = args[index]
+        flag in seen && throw(ArgumentError("duplicate argument: $(flag)"))
+        if flag == "--smoke"
+            smoke = true
+            push!(seen, flag)
+            index += 1
+        elseif flag == "--output-dir" || flag == "--repeats"
+            push!(seen, flag)
+            index == length(args) && throw(
+                ArgumentError("$(flag) requires a value")
+            )
+            value = args[index + 1]
+            (isempty(value) || startswith(value, "--")) && throw(
+                ArgumentError("$(flag) requires a nonempty value")
+            )
+            if flag == "--output-dir"
+                output_dir = value
+            else
+                parsed_repeats = tryparse(Int, value)
+                isnothing(parsed_repeats) && throw(
+                    ArgumentError("--repeats must be an integer, got $(value)")
+                )
+                parsed_repeats > 0 || throw(
+                    ArgumentError("--repeats must be positive")
+                )
+                repeats = parsed_repeats
+            end
+            index += 2
+        else
+            throw(ArgumentError("unknown argument: $(flag)"))
+        end
     end
-    return args[index + 1]
+    if !smoke && repeats !== nothing && repeats < INDEL_FRONTIER_REPEATS
+        throw(
+            ArgumentError(
+                "non-smoke --repeats must be at least " *
+                "$(INDEL_FRONTIER_REPEATS)"
+            ),
+        )
+    end
+    return (smoke = smoke, output_dir = output_dir, repeats = repeats)
+end
+
+function _indel_frontier_remove_prior_artifacts(
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}},
+)::Nothing
+    Base.Filesystem.mkpath(output_dir)
+    # Invalidate the completion manifest before removing generation members.
+    for artifact_index in length(artifact_names):-1:1
+        artifact_name = artifact_names[artifact_index]
+        artifact_path = joinpath(output_dir, artifact_name)
+        isdir(artifact_path) && error(
+            "refusing to replace artifact directory: $(artifact_path)"
+        )
+        Base.rm(artifact_path; force = true)
+    end
+    return nothing
+end
+
+function _indel_frontier_publish_artifacts(
+        staging_dir::String,
+        output_dir::String,
+        artifact_names::Tuple{Vararg{String}},
+)::Nothing
+    for artifact_name in artifact_names
+        staging_path = joinpath(staging_dir, artifact_name)
+        isfile(staging_path) || error(
+            "staged artifact is missing: $(staging_path)"
+        )
+    end
+    for artifact_name in artifact_names
+        Base.Filesystem.rename(
+            joinpath(staging_dir, artifact_name),
+            joinpath(output_dir, artifact_name),
+        )
+    end
+    return nothing
+end
+
+function _indel_frontier_run_provenance(
+        smoke::Bool,
+        repeats::Int,
+)::NamedTuple
+    repository_root = normpath(joinpath(@__DIR__, ".."))
+    git_head_sha = strip(
+        Base.read(
+            `git -C $repository_root rev-parse HEAD`,
+            String,
+        ),
+    )
+    tracked_diff = Base.read(
+        `git -C $repository_root diff --binary --no-ext-diff HEAD --`
+    )
+    tracked_diff_sha256 = Base.bytes2hex(SHA.sha256(tracked_diff))
+    benchmark_source_sha256 = _indel_frontier_file_sha256(@__FILE__)
+    dependency = _indel_frontier_dependency_provenance()
+    code_environment_components = (
+        git_head_sha,
+        tracked_diff_sha256,
+        benchmark_source_sha256,
+        dependency.project_toml_sha256,
+        dependency.manifest_toml_sha256,
+        string(VERSION),
+        string(Threads.nthreads()),
+        string(Sys.CPU_NAME),
+        string(Sys.ARCH),
+        string(Sys.KERNEL),
+        string(Sys.CPU_THREADS),
+    )
+    code_environment_fingerprint = Base.bytes2hex(SHA.sha256(codeunits(join(
+        code_environment_components, ":"
+    ))))
+    run_fingerprint = join(
+        (
+            code_environment_fingerprint,
+            string(INDEL_FRONTIER_FIXTURE_SEED),
+            string(smoke),
+            string(repeats),
+        ),
+        ":",
+    )
+    generation_id = Base.bytes2hex(SHA.sha256(codeunits(run_fingerprint)))
+    return (
+        manifest_schema_version = 1,
+        generation_id = generation_id,
+        code_environment_fingerprint = code_environment_fingerprint,
+        code_sha = git_head_sha,
+        git_tracked_worktree_dirty = !isempty(tracked_diff),
+        git_tracked_diff_sha256 = tracked_diff_sha256,
+        benchmark_source_sha256 = benchmark_source_sha256,
+        active_project_path = dependency.active_project_path,
+        project_toml_sha256 = dependency.project_toml_sha256,
+        manifest_toml_present = dependency.manifest_toml_present,
+        manifest_toml_sha256 = dependency.manifest_toml_sha256,
+        julia_version = string(VERSION),
+        julia_threads = Threads.nthreads(),
+        cpu_name = string(Sys.CPU_NAME),
+        architecture = string(Sys.ARCH),
+        kernel = string(Sys.KERNEL),
+        cpu_threads = Sys.CPU_THREADS,
+        smoke = smoke,
+        repeats = repeats,
+        synthetic_k = INDEL_FRONTIER_K,
+        fixed_toy_k = INDEL_FRONTIER_TOY_K,
+        genome_length = INDEL_FRONTIER_GENOME_LENGTH,
+        source_read_length = INDEL_FRONTIER_SOURCE_READ_LENGTH,
+        coverage = INDEL_FRONTIER_COVERAGE,
+        error_rate = INDEL_FRONTIER_ERROR_RATE,
+        fixture_seed = INDEL_FRONTIER_FIXTURE_SEED,
+        window_bases = join(INDEL_FRONTIER_WINDOW_BASES, ";"),
+        frontier_work_limit = Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT,
+        linear_10k_500_max_p95_ms =
+            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS,
+        linear_10k_500_max_p95_slowdown =
+            INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN,
+        accuracy_metric_used = false,
+    )
+end
+
+function _indel_frontier_assert_provenance_unchanged(
+        initial::NamedTuple,
+        smoke::Bool,
+        repeats::Int,
+)::Nothing
+    current = _indel_frontier_run_provenance(smoke, repeats)
+    current.project_toml_sha256 == initial.project_toml_sha256 || error(
+        "active Project.toml changed during the frontier runtime run; " *
+        "refusing to publish artifacts"
+    )
+    current.manifest_toml_sha256 == initial.manifest_toml_sha256 || error(
+        "active Manifest.toml changed during the frontier runtime run; " *
+        "refusing to publish artifacts"
+    )
+    current.code_environment_fingerprint ==
+    initial.code_environment_fingerprint || error(
+        "code/worktree/environment fingerprint changed during the frontier " *
+        "runtime run; refusing to publish artifacts"
+    )
+    return nothing
+end
+
+function _indel_frontier_dependency_provenance()::NamedTuple
+    active_project = Base.active_project()
+    active_project isa String || error(
+        "an active Project.toml is required for benchmark provenance"
+    )
+    isfile(active_project) || error(
+        "active Project.toml does not exist: $(active_project)"
+    )
+    manifest_path = joinpath(dirname(active_project), "Manifest.toml")
+    manifest_present = isfile(manifest_path)
+    return (
+        active_project_path = normpath(active_project),
+        project_toml_sha256 = _indel_frontier_file_sha256(active_project),
+        manifest_toml_present = manifest_present,
+        manifest_toml_sha256 = _indel_frontier_optional_dependency_sha256(
+            manifest_path
+        ),
+    )
+end
+
+function _indel_frontier_optional_dependency_sha256(path::String)::String
+    return isfile(path) ?
+           _indel_frontier_file_sha256(path) :
+           INDEL_FRONTIER_MISSING_DEPENDENCY_SENTINEL
+end
+
+function _indel_frontier_affordability_provenance(
+        smoke::Bool,
+        summary::DataFrames.DataFrame,
+)::NamedTuple
+    if smoke
+        return (
+            affordability_check_enforced = false,
+            linear_10k_500_p95_ms = missing,
+            linear_2001_500_p95_ms = missing,
+            linear_10k_500_p95_slowdown = missing,
+            linear_10k_500_affordable = missing,
+        )
+    end
+    linear = summary[
+        (summary.graph_id .== "linear_10001") .&
+        (summary.window_bases .== 500),
+        :,
+    ]
+    reference = summary[
+        (summary.graph_id .== "linear_2001") .&
+        (summary.window_bases .== 500),
+        :,
+    ]
+    DataFrames.nrow(linear) == 1 || error(
+        "missing 10,001-vertex/500 bp affordability row"
+    )
+    DataFrames.nrow(reference) == 1 || error(
+        "missing 2,001-vertex/500 bp affordability reference row"
+    )
+    linear_p95_ms = only(linear.p95_ms)
+    reference_p95_ms = only(reference.p95_ms)
+    slowdown = linear_p95_ms / reference_p95_ms
+    affordable =
+        linear_p95_ms <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_MS &&
+        slowdown <= INDEL_FRONTIER_LINEAR_10K_500_MAX_P95_SLOWDOWN
+    return (
+        affordability_check_enforced = true,
+        linear_10k_500_p95_ms = linear_p95_ms,
+        linear_2001_500_p95_ms = reference_p95_ms,
+        linear_10k_500_p95_slowdown = slowdown,
+        linear_10k_500_affordable = affordable,
+    )
+end
+
+function _indel_frontier_file_sha256(path::String)::String
+    return Base.bytes2hex(SHA.sha256(Base.read(path)))
 end
 
 if abspath(PROGRAM_FILE) == @__FILE__

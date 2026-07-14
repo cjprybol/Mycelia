@@ -54,6 +54,69 @@ function indel_string_kmer_units(seq_string::AbstractString, k::Int)
     return collect(Mycelia._record_kmer_iterator(sequence_type, k, sequence))
 end
 
+function indel_no_path_correction_kernel(
+        ::MetaGraphsNext.MetaGraph,
+        ::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => :viterbi_indel_pair_hmm,
+        :reason => :no_surviving_path,
+    )
+    path = Mycelia.Rhizomorph.ViterbiDecodingResult(
+        nothing, -Inf, diagnostics)
+    return Mycelia.ViterbiCorrectionResult(
+        Any[nothing],
+        Mycelia.Rhizomorph.ViterbiDecodingResult[path],
+        Dict{Symbol, Any}(),
+    )
+end
+
+function indel_empty_path_correction_kernel(
+        ::MetaGraphsNext.MetaGraph,
+        ::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => :viterbi_indel_pair_hmm,
+    )
+    path = Mycelia.Rhizomorph.ViterbiDecodingResult(
+        nothing, -Inf, diagnostics)
+    return Mycelia.ViterbiCorrectionResult(
+        Any[Any[]],
+        Mycelia.Rhizomorph.ViterbiDecodingResult[path],
+        Dict{Symbol, Any}(),
+    )
+end
+
+function indel_partial_complete_correction_kernel(
+        graph::MetaGraphsNext.MetaGraph,
+        observations::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    @assert length(only(observations)) == 5
+    diagnostics = Dict{Symbol, Any}(
+        :algorithm => :viterbi_indel_pair_hmm,
+        :truncated => false,
+        :completed_columns => 1,
+        :decoded_read_index => 1,
+        :move_trace => Symbol[:M],
+        :read_index_trace => Int[1],
+        :move_counts => Dict{Symbol, Int}(:M => 1, :I => 0, :D => 0),
+    )
+    path = Mycelia.Rhizomorph.ViterbiDecodingResult(
+        nothing, 0.0, diagnostics)
+    partial_label = first(MetaGraphsNext.labels(graph))
+    return Mycelia.ViterbiCorrectionResult(
+        Any[Any[partial_label]],
+        Mycelia.Rhizomorph.ViterbiDecodingResult[path],
+        Dict{Symbol, Any}(),
+    )
+end
+
 Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
     Test.@testset "Milestone A: config indel fields default to substitution-collapse" begin
         cfg = Mycelia.ViterbiCorrectionConfig()
@@ -277,6 +340,79 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         yes_ins = Mycelia.correct_observations(
             graph, [insertion_observed]; config = _cfg(max_insertion_run = 1))
         Test.@test indel_decoded_label_strings(yes_ins) == ["ATGCG", "GCGTA", "GTACC"]
+    end
+
+    Test.@testset "pair-HMM preserves distinct insertion-run states" begin
+        graph = Mycelia.Rhizomorph.build_fasta_graph_olc(
+            [
+                FASTX.FASTA.Record("state_a", BioSequences.dna"ATGCG"),
+                FASTX.FASTA.Record("state_b", BioSequences.dna"GCGTA"),
+            ];
+            min_overlap = 3,
+        )
+        observations = [
+            BioSequences.dna"ATGCG",
+            BioSequences.dna"GCGTA",
+            BioSequences.dna"GCGTA",
+            BioSequences.dna"AAAAA",
+            BioSequences.dna"GCGTA",
+        ]
+
+        function state_alias_emission(
+                observed_unit::Any,
+                _node::Any,
+                _alphabet::Symbol;
+                quality::Any = nothing,
+                error_rate::Float64 = 0.10,
+        )::Float64
+            return string(observed_unit) == "AAAAA" ? -Inf : 0.0
+        end
+
+        function state_alias_insertion_emission(
+                _observed_unit::Any,
+                _alphabet::Symbol,
+        )::Float64
+            return 0.0
+        end
+
+        config = Mycelia.ViterbiCorrectionConfig(
+            error_rate = 0.10,
+            emission_logp = state_alias_emission,
+            strand_mode = :singlestrand,
+            indel_moves = true,
+            insertion_fraction = 0.30,
+            deletion_fraction = 0.0,
+            insertion_extend_probability = 0.10,
+            deletion_extend_probability = 0.0,
+            deletion_max_run = 0,
+            max_insertion_run = 2,
+            band_width = nothing,
+            beam_width = typemax(Int),
+            insertion_emission_logp = state_alias_insertion_emission,
+        )
+
+        result = Mycelia.correct_observations(
+            graph,
+            [observations];
+            config = config,
+        )
+        path_result = only(result.paths)
+        diagnostics = path_result.diagnostics
+
+        # The only complete trace is M,I,M,I,I. At column 4, the I state reached
+        # by opening a fresh run has run_length=1, while a higher-scoring competing
+        # I state at the same vertex has run_length=2. They must remain distinct:
+        # the run-2 state cannot consume column 5, but the run-1 state can.
+        Test.@test !diagnostics[:truncated]
+        Test.@test diagnostics[:decoded_read_index] == length(observations)
+        Test.@test diagnostics[:completed_columns] == length(observations)
+        Test.@test diagnostics[:move_trace] == [:M, :I, :M, :I, :I]
+        Test.@test diagnostics[:read_index_trace] == collect(eachindex(observations))
+        Test.@test diagnostics[:move_counts] ==
+                   Dict{Symbol, Int}(:M => 2, :I => 3, :D => 0)
+        Test.@test [
+            string(step.vertex_label) for step in path_result.path.steps
+        ] == ["ATGCG", "GCGTA"]
     end
 
     Test.@testset "Milestone C: nanopore-style read decodes through the kernel" begin
@@ -537,8 +673,101 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test result === nothing
         Test.@test isempty(soft_weights.weights)
         Test.@test diagnostics.structural_errors[] == 0
+        Test.@test diagnostics.indel_attempts[] == 1
         Test.@test diagnostics.truncated_decodes[] == 1
         Test.@test diagnostics.trace_contract_errors[] == 0
         Test.@test diagnostics.indel_decodes[] == 0
+        Test.@test diagnostics.truncated_decodes[] ==
+                   diagnostics.indel_attempts[] - diagnostics.indel_decodes[]
+    end
+
+    Test.@testset "no-path and malformed results have terminal outcomes" begin
+        reference = indel_quality_record("ref", "CGTAA", fill(40, 5))
+        graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [reference], 5; mode = :doublestrand)
+        observed = indel_quality_record("obs", "CGTAA", fill(40, 5))
+        params = Mycelia.IndelDecodeParams(
+            0.10, 0.30, 0.30, 0.10, 0.10, 1, 1, 16)
+
+        no_path_diagnostics = Mycelia.CorrectorDiagnostics()
+        no_path = Mycelia.try_viterbi_path_improvement(
+            observed,
+            graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = no_path_diagnostics,
+            indel_params = params,
+            correction_kernel = indel_no_path_correction_kernel,
+        )
+        Test.@test no_path === nothing
+        Test.@test no_path_diagnostics.indel_attempts[] == 1
+        Test.@test no_path_diagnostics.indel_decodes[] == 0
+        Test.@test no_path_diagnostics.truncated_decodes[] == 1
+        Test.@test no_path_diagnostics.trace_contract_errors[] == 0
+
+        empty_path_diagnostics = Mycelia.CorrectorDiagnostics()
+        empty_path = Mycelia.try_viterbi_path_improvement(
+            observed,
+            graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = empty_path_diagnostics,
+            indel_params = params,
+            correction_kernel = indel_empty_path_correction_kernel,
+        )
+        Test.@test empty_path === nothing
+        Test.@test empty_path_diagnostics.indel_attempts[] == 1
+        Test.@test empty_path_diagnostics.indel_decodes[] == 0
+        Test.@test empty_path_diagnostics.truncated_decodes[] == 1
+        Test.@test empty_path_diagnostics.trace_contract_errors[] == 1
+
+        # Reviewer regression: a kernel can return a nonempty one-column path
+        # while falsely declaring `truncated=false` for a five-column request.
+        # Reject it before path reconstruction, quality mapping, or soft-EM.
+        partial_reference = indel_quality_record(
+            "partial_ref", "ACGTACGTA", fill(40, 9))
+        partial_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+            [partial_reference], 5; mode = :doublestrand)
+        partial_diagnostics = Mycelia.CorrectorDiagnostics()
+        partial_soft_weights = Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        partial_result = Mycelia.try_viterbi_path_improvement(
+            partial_reference,
+            partial_graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = partial_diagnostics,
+            soft_weights = partial_soft_weights,
+            indel_params = params,
+            correction_kernel = indel_partial_complete_correction_kernel,
+        )
+        Test.@test partial_result === nothing
+        Test.@test isempty(partial_soft_weights.weights)
+        Test.@test partial_diagnostics.indel_attempts[] == 1
+        Test.@test partial_diagnostics.indel_decodes[] == 0
+        Test.@test partial_diagnostics.truncated_decodes[] == 1
+        Test.@test partial_diagnostics.trace_contract_errors[] == 1
+        Test.@test partial_diagnostics.indel_engaged[] == 0
+        Test.@test Mycelia._quality_from_indel_trace(
+            repeat("I", 9), Symbol[:M], Int[1], 5, 5) === nothing
+
+        empty_graph = deepcopy(graph)
+        while !isempty(collect(MetaGraphsNext.labels(empty_graph)))
+            MetaGraphsNext.rem_vertex!(empty_graph, 1)
+        end
+        exception_diagnostics = Mycelia.CorrectorDiagnostics()
+        exception_result = Mycelia.try_viterbi_path_improvement(
+            observed,
+            empty_graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = exception_diagnostics,
+            indel_params = params,
+        )
+        Test.@test exception_result === nothing
+        Test.@test exception_diagnostics.indel_attempts[] == 1
+        Test.@test exception_diagnostics.indel_decodes[] == 0
+        Test.@test exception_diagnostics.truncated_decodes[] == 1
+        Test.@test exception_diagnostics.trace_contract_errors[] == 1
+        Test.@test exception_diagnostics.structural_errors[] == 1
     end
 end

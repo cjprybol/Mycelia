@@ -574,6 +574,40 @@ end
 # Weight/Coverage Computation (On-Demand, Not Stored)
 # ============================================================================
 
+# Julia 1.10 task-local storage is not inherited by child tasks. Production
+# child-task boundaries therefore capture and explicitly re-bind this snapshot
+# (see the threaded read loop in iterative-assembly.jl). The IdDict is populated
+# before installation and never mutated afterwards: nested registrations use
+# copy-on-write, so an installed snapshot is safe for concurrent read-only use.
+struct _SoftEdgeWeightSnapshot
+    weights::Base.IdDict{Any, Float64}
+end
+
+struct _SoftEdgeWeightSnapshotKey end
+
+const _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY = _SoftEdgeWeightSnapshotKey()
+
+function _current_soft_edge_weight_snapshot()::Union{Nothing, _SoftEdgeWeightSnapshot}
+    snapshot = get(
+        Base.task_local_storage(),
+        _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY,
+        nothing,
+    )
+    snapshot === nothing && return nothing
+    return snapshot::_SoftEdgeWeightSnapshot
+end
+
+function _with_soft_edge_weight_snapshot(
+        f::Function,
+        snapshot::Union{Nothing, _SoftEdgeWeightSnapshot},
+)::Any
+    return Base.task_local_storage(
+        f,
+        _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY,
+        snapshot,
+    )
+end
+
 """
     compute_edge_weight(edge)
 
@@ -586,13 +620,13 @@ Weight is based on number of observations (coverage).
 weight = compute_edge_weight(edge)
 ```
 """
-function compute_edge_weight(edge)
-    # Soft-EM consumption (td-e70t): when this edge was registered with a soft
-    # (probability-weighted) weight for the current pass, return it. The registry
-    # is empty on every non-soft-EM path, so this is a single `isempty` check and
-    # the raw-count behavior is byte-for-byte unchanged elsewhere.
-    if !isempty(_SOFT_EDGE_WEIGHT_REGISTRY)
-        soft = get(_SOFT_EDGE_WEIGHT_REGISTRY, edge, nothing)
+function compute_edge_weight(edge::Any)::Float64
+    # Soft-EM consumption (td-e70t): only the current task's scoped snapshot can
+    # override this edge. Unrelated and unscoped tasks always retain raw-count
+    # behavior, even while another task owns a soft-EM pass.
+    snapshot = _current_soft_edge_weight_snapshot()
+    if snapshot !== nothing
+        soft = get(snapshot.weights, edge, nothing)
         soft === nothing || return soft::Float64
     end
     # Simple weight: count of unique observations
@@ -614,15 +648,13 @@ function compute_edge_coverage(edge)
 end
 
 # ============================================================================
-# Soft-EM edge weighting (SCAFFOLD, td-e70t)
+# Soft-EM edge weighting (ACTIVE, td-e70t)
 # ============================================================================
 #
-# Design note (graph-as-HMM correction redesign). Today the M-step is a HARD
-# assignment: `compute_edge_weight` returns `count_total_observations(edge)` — a
-# raw integer coverage count — and each EM iteration rebuilds the graph from the
-# corrected *sequences*. The graph keeps no path-probability memory, so cleaning
-# only happens because corrected reads stop emitting error k-mers, not because
-# low-probability edges decay on their own.
+# Design note (graph-as-HMM correction redesign). The non-soft baseline uses a
+# HARD assignment: `compute_edge_weight` returns raw observation coverage and each
+# iteration rebuilds from corrected sequences. With `soft_em=true`, the active
+# path below carries probability-weighted responsibilities into the next pass.
 #
 # The soft-EM thesis replaces the hard count with probability-weighted evidence:
 # after Viterbi returns a path + likelihood, the path's RESPONSIBILITY (posterior
@@ -651,7 +683,7 @@ end
     SoftEdgeWeightAccumulator
 
 Probability-weighted (soft) edge-evidence accumulator for soft-EM correction
-(td-e70t scaffold). Maps an edge identity (e.g. an ordered `(src_label,
+(td-e70t). Maps an edge identity (e.g. an ordered `(src_label,
 dst_label)` tuple) to the sum of the responsibilities of the decoded paths that
 traversed it. Unlike `count_total_observations` (a hard integer count), the
 accumulated value is a real-valued soft weight in which a low-probability error
@@ -737,28 +769,25 @@ function path_responsibility(
 end
 
 # ----------------------------------------------------------------------------
-# Soft-EM M-step consumption: identity-keyed edge-weight registry (td-e70t)
+# Soft-EM M-step consumption: task-local identity-keyed snapshots (td-e70t)
 # ----------------------------------------------------------------------------
 #
 # `compute_edge_weight(edge)` (the graph `weight_function`, and the Viterbi
 # transition weight via `edge_data_weight`) receives ONLY the edge payload — not
-# its `(src, dst)` vertex labels — so it cannot look up a soft weight keyed by
-# label pair directly. This registry bridges that gap: after a graph is built,
-# the corrector registers each edge-data OBJECT (by identity) -> the soft weight
+# its `(src, dst)` vertex labels — so it cannot look up a soft weight keyed by a
+# label pair directly. A task-local snapshot bridges that gap: after a graph is
+# built, the corrector maps each edge-data OBJECT (by identity) to the soft weight
 # computed from the accumulator's `(src, dst)` key (see
-# `register_soft_edge_weights!`). `compute_edge_weight` then consults the registry
+# `register_soft_edge_weights!`). `compute_edge_weight` then consults the snapshot
 # by object identity, falling back to the raw coverage count for any edge absent
 # from it.
 #
-# Invariant preserved: a scoped owner restores the registry to its exact prior
-# contents after every soft-EM `:scalable` pass, including exceptional exits, so
-# every unrelated code path — and the whole `:exhaustive` tier — computes raw
-# counts unchanged. A reentrant process lock serializes those scoped owners; the
-# lock is reentrant because frontier scheduling temporarily registers private
-# cleaned-copy edges inside the read-set owner's wider raw-graph scope.
-
-const _SOFT_EDGE_WEIGHT_REGISTRY = Base.IdDict{Any, Float64}()
-const _SOFT_EDGE_WEIGHT_REGISTRY_LOCK = Base.ReentrantLock()
+# Invariant preserved: dynamic task-local scoping restores the exact prior
+# snapshot after every soft-EM `:scalable` pass, including exceptional exits.
+# Unrelated tasks and the whole `:exhaustive` tier therefore compute raw counts
+# unchanged. Nested raw/cleaned scopes create copy-on-write snapshots rather than
+# mutating installed state, so children can read a captured snapshot without a
+# process-global lock or parent/child deadlock.
 
 # ----------------------------------------------------------------------------
 # Soft-EM SUPPORT FLOOR (variation preservation, td-h6w9)
@@ -785,13 +814,37 @@ const _SOFT_EDGE_WEIGHT_REGISTRY_LOCK = Base.ReentrantLock()
 # decay is thus UNSUPPORTED-based, not less-than-sibling.
 const SOFT_EM_MIN_SUPPORT = 3
 
+function _soft_edge_weight_snapshot_with_graph(
+        graph::Any,
+        acc::SoftEdgeWeightAccumulator;
+        min_support::Integer = SOFT_EM_MIN_SUPPORT,
+)::_SoftEdgeWeightSnapshot
+    current = _current_soft_edge_weight_snapshot()
+    weights = current === nothing ?
+              Base.IdDict{Any, Float64}() : copy(current.weights)
+    for (src, dst) in MetaGraphsNext.edge_labels(graph)
+        weight = soft_edge_weight(acc, (src, dst); prior = NaN)
+        isnan(weight) && continue   # unvisited edge => retain raw count
+        edge = graph[src, dst]
+        raw = Float64(count_total_observations(edge))
+        # Support floor: raw for a well-supported edge (never decays below its
+        # own coverage), 0 for a near-zero-support edge (free to decay to zero).
+        floor = raw >= min_support ? raw : 0.0
+        weights[edge] = max(weight, floor)
+    end
+    return _SoftEdgeWeightSnapshot(weights)
+end
+
 """
     register_soft_edge_weights!(graph, acc; min_support = SOFT_EM_MIN_SUPPORT) -> graph
 
-Register each of `graph`'s edges (by edge-data object identity) with its soft
-weight from `acc`, so a subsequent `compute_edge_weight(edge_data)` returns the
-probability-weighted value instead of the raw coverage count. Edges NOT visited
-by any decoded path in `acc` are left unregistered and keep their raw count.
+Register each of `graph`'s edges (by edge-data object identity) in the current
+task's copy-on-write snapshot, so a subsequent
+`compute_edge_weight(edge_data)` in that task returns the probability-weighted
+value instead of the raw coverage count. Edges NOT visited by any decoded path
+in `acc` are left unregistered and keep their raw count. Julia 1.10 does not
+inherit task-local storage in child tasks; production task boundaries explicitly
+propagate the captured snapshot.
 
 Applies the SUPPORT FLOOR (td-h6w9): the registered weight is
 `max(responsibility_weighted_value, floor)` where `floor == raw_coverage` for an
@@ -803,72 +856,49 @@ free to decay toward zero via its responsibility weight. This decouples variatio
 preservation (supported edges held at raw) from error decay (unsupported edges
 allowed to fall below the cleaning gate).
 """
-function register_soft_edge_weights!(graph, acc::SoftEdgeWeightAccumulator;
-        min_support::Integer = SOFT_EM_MIN_SUPPORT)
-    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    try
-        for (src, dst) in MetaGraphsNext.edge_labels(graph)
-            w = soft_edge_weight(acc, (src, dst); prior = NaN)
-            isnan(w) && continue   # unvisited edge ⇒ retain raw count
-            edge = graph[src, dst]
-            raw = Float64(count_total_observations(edge))
-            # Support floor: raw for a well-supported edge (never decays below its
-            # own coverage), 0 for a near-zero-support edge (free to decay to zero).
-            floor = raw >= min_support ? raw : 0.0
-            _SOFT_EDGE_WEIGHT_REGISTRY[edge] = max(w, floor)
-        end
-    finally
-        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    end
+function register_soft_edge_weights!(
+        graph::GRAPH,
+        acc::SoftEdgeWeightAccumulator;
+        min_support::Integer = SOFT_EM_MIN_SUPPORT,
+)::GRAPH where {GRAPH}
+    snapshot = _soft_edge_weight_snapshot_with_graph(
+        graph,
+        acc;
+        min_support = min_support,
+    )
+    Base.task_local_storage(_SOFT_EDGE_WEIGHT_SNAPSHOT_KEY, snapshot)
     return graph
 end
 
 """
     clear_soft_edge_weights!() -> nothing
 
-Empty the soft-edge-weight registry so `compute_edge_weight` reverts to raw
-coverage counts. Called after each soft-EM decode pass so no unrelated caller
-(or the `:exhaustive` tier) ever sees registered soft weights.
+Remove the current task's soft-edge-weight snapshot so `compute_edge_weight`
+reverts to raw coverage counts. Other tasks' scoped snapshots are unaffected.
 """
-function clear_soft_edge_weights!()
-    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    try
-        empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
-    finally
-        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    end
+function clear_soft_edge_weights!()::Nothing
+    delete!(Base.task_local_storage(), _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY)
     return nothing
 end
 
 """
     _with_soft_edge_weight_scope(f, graph, acc) -> Any
 
-Run `f()` with `acc` registered on `graph`, then restore the exact registry state
-that existed on entry. When `acc === nothing`, no weights are registered, but the
-same reentrant lock still covers the complete operation. This makes an
-unrestricted/raw-count decode wait for any concurrent soft-weight owner rather
-than reading its temporary registry entries. The lock also keeps nested
-raw/cleaned graph scopes deterministic.
+Run `f()` with `acc` registered on `graph` in a task-local copy-on-write
+snapshot, then restore the exact task-local state that existed on entry. When
+`acc === nothing`, no weights are added and the current task's snapshot is bound
+unchanged. Unrelated tasks remain raw and never wait for a soft owner; nested
+raw/cleaned graph scopes remain deterministic without a process-global lock.
 """
 function _with_soft_edge_weight_scope(
         f::Function,
         graph::Any,
         acc::Union{Nothing, SoftEdgeWeightAccumulator},
 )::Any
-    Base.lock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    try
-        acc === nothing && return f()
-        snapshot = copy(_SOFT_EDGE_WEIGHT_REGISTRY)
-        try
-            register_soft_edge_weights!(graph, acc)
-            return f()
-        finally
-            empty!(_SOFT_EDGE_WEIGHT_REGISTRY)
-            merge!(_SOFT_EDGE_WEIGHT_REGISTRY, snapshot)
-        end
-    finally
-        Base.unlock(_SOFT_EDGE_WEIGHT_REGISTRY_LOCK)
-    end
+    snapshot = acc === nothing ?
+               _current_soft_edge_weight_snapshot() :
+               _soft_edge_weight_snapshot_with_graph(graph, acc)
+    return _with_soft_edge_weight_snapshot(f, snapshot)
 end
 
 # ============================================================================

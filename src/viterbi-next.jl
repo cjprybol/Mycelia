@@ -1623,10 +1623,15 @@ struct IndelFrontierMetrics
     reason::Symbol
 end
 
-# A score-free reachability cell. The scored pair-HMM keeps only the best score
-# for each (vertex, strand, phase) state. The probe cannot make that score-based
-# choice, so it conservatively retains distinct net-gap/run-length variants. It
-# therefore upper-bounds the pre-beam topology work without consulting emissions.
+# Complete pair-HMM state identity shared by the score-free reachability probe and
+# the scored decoder. `net_gap` controls band eligibility and `run_length` controls
+# affine-gap extension eligibility, so neither may live in mutable side state or be
+# collapsed solely because two paths reach the same `(vertex, strand, phase)`.
+# The scored decoder keeps the best score only for an identical COMPLETE cell; the
+# probe retains every reachable complete cell without consulting emissions and
+# therefore upper-bounds pre-beam topology work. When the scored decoder has no
+# net-gap band, it canonicalizes `net_gap` to zero because that coordinate has no
+# effect on future legality; run length remains distinct under every gap-run cap.
 struct _IndelFrontierCell{V}
     vertex::V
     strand::Rhizomorph.StrandOrientation
@@ -1723,21 +1728,44 @@ function _indel_frontier_edge_strands(
     return strand_pairs
 end
 
+struct _IndelFrontierSuccessorBatch{V}
+    successors::Vector{Tuple{V, Rhizomorph.StrandOrientation}}
+    overflowed::Bool
+end
+
+function _indel_frontier_successor_limit(
+        work_limit::Int,
+        frontier_area::Int,
+        edge_expansions::Int,
+)::Int
+    work_limit == typemax(Int) && return typemax(Int)
+    current_work = _saturating_indel_frontier_add(
+        frontier_area, edge_expansions)
+    current_work >= work_limit && return 0
+    return work_limit - current_work
+end
+
 function _indel_frontier_successors(
         graph::MetaGraphsNext.MetaGraph,
-        cell::_IndelFrontierCell{V}
-)::Vector{Tuple{V, Rhizomorph.StrandOrientation}} where {V}
+        cell::_IndelFrontierCell{V},
+        maximum_successors::Int,
+)::_IndelFrontierSuccessorBatch{V} where {V}
+    maximum_successors < 0 && throw(ArgumentError(
+        "maximum_successors must be non-negative, got $maximum_successors"))
     successors = Tuple{V, Rhizomorph.StrandOrientation}[]
     if Graphs.is_directed(graph.graph)
         source_code = MetaGraphsNext.code_for(graph, cell.vertex)
         neighbors = Graphs.outneighbors(graph.graph, source_code)
-        sizehint!(successors, length(neighbors))
+        sizehint!(successors, min(length(neighbors), maximum_successors))
         for target_code in neighbors
             target_vertex = convert(V, MetaGraphsNext.label_for(graph, target_code))
             edge_data = graph[cell.vertex, target_vertex]
             for (source_strand, target_strand) in
                 _indel_frontier_edge_strands(edge_data)
                 source_strand == cell.strand || continue
+                if length(successors) >= maximum_successors
+                    return _IndelFrontierSuccessorBatch(successors, true)
+                end
                 push!(successors, (target_vertex, target_strand))
             end
         end
@@ -1751,12 +1779,15 @@ function _indel_frontier_successors(
                 for (source_strand, target_strand) in
                     _indel_frontier_edge_strands(edge_data)
                     source_strand == cell.strand || continue
+                    if length(successors) >= maximum_successors
+                        return _IndelFrontierSuccessorBatch(successors, true)
+                    end
                     push!(successors, (target_vertex, target_strand))
                 end
             end
         end
     end
-    return successors
+    return _IndelFrontierSuccessorBatch(successors, false)
 end
 
 function _indel_frontier_start_strands(
@@ -1818,6 +1849,10 @@ modeled because both require likelihood scores; the resulting frontier work is a
 conservative pre-beam topology bound.
 
 The probe stops as soon as its saturating `frontier_work` exceeds `work_limit`.
+Successor collection is capped by the remaining work allowance, so a single
+high-degree vertex cannot materialize an over-budget transition vector. On that
+bounded early exit, `edge_expansions` records the first transition beyond the
+limit rather than scanning the vertex's complete out-neighborhood.
 `completed_columns` counts only fully constructed nonempty read columns, so a
 limit hit during expansion never reports a partial column as complete.
 
@@ -1904,9 +1939,21 @@ function _probe_indel_frontier(
             hop > 1 && !deletion_extend && break
             next_deletions = Set{Cell}()
             for cell in deletion_hop
-                successors = _indel_frontier_successors(graph, cell)
+                successor_limit = _indel_frontier_successor_limit(
+                    work_limit, frontier_area, edge_expansions)
+                successor_batch = _indel_frontier_successors(
+                    graph, cell, successor_limit)
+                successors = successor_batch.successors
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
+                if successor_batch.overflowed
+                    edge_expansions = _saturating_indel_frontier_add(
+                        edge_expansions, 1)
+                    return _indel_frontier_metrics(
+                        summary, true, window_length, frontier_area,
+                        edge_expansions, peak_frontier, completed_columns,
+                        :work_limit)
+                end
                 if _saturating_indel_frontier_add(
                         frontier_area, edge_expansions) > work_limit
                     return _indel_frontier_metrics(
@@ -1952,9 +1999,21 @@ function _probe_indel_frontier(
         # prior phase. The topology probe does not inspect the observed emission.
         for frontier in (match_frontier, insertion_frontier, deletion_frontier)
             for cell in frontier
-                successors = _indel_frontier_successors(graph, cell)
+                successor_limit = _indel_frontier_successor_limit(
+                    work_limit, frontier_area, edge_expansions)
+                successor_batch = _indel_frontier_successors(
+                    graph, cell, successor_limit)
+                successors = successor_batch.successors
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
+                if successor_batch.overflowed
+                    edge_expansions = _saturating_indel_frontier_add(
+                        edge_expansions, 1)
+                    return _indel_frontier_metrics(
+                        summary, true, window_length, frontier_area,
+                        edge_expansions, peak_frontier, completed_columns,
+                        :work_limit)
+                end
                 if _saturating_indel_frontier_add(
                         frontier_area, edge_expansions) > work_limit
                     return _indel_frontier_metrics(
@@ -1998,9 +2057,21 @@ function _probe_indel_frontier(
                 hop > 1 && !deletion_extend && break
                 next_deletions = Set{Cell}()
                 for cell in deletion_hop
-                    successors = _indel_frontier_successors(graph, cell)
+                    successor_limit = _indel_frontier_successor_limit(
+                        work_limit, frontier_area, edge_expansions)
+                    successor_batch = _indel_frontier_successors(
+                        graph, cell, successor_limit)
+                    successors = successor_batch.successors
                     edge_expansions = _saturating_indel_frontier_add(
                         edge_expansions, length(successors))
+                    if successor_batch.overflowed
+                        edge_expansions = _saturating_indel_frontier_add(
+                            edge_expansions, 1)
+                        return _indel_frontier_metrics(
+                            summary, true, window_length, frontier_area,
+                            edge_expansions, peak_frontier, completed_columns,
+                            :work_limit)
+                    end
                     if _saturating_indel_frontier_add(
                             frontier_area, edge_expansions) > work_limit
                         return _indel_frontier_metrics(
@@ -2069,10 +2140,13 @@ Indel-aware pair-HMM decode of one observation against a Rhizomorph weighted
 graph. This is the gap-move counterpart of `_viterbi_correct_observation`,
 selected when `config.indel_moves` is set.
 
-The DP promotes the read index `i` AND an alignment phase `φ ∈ {M, I, D}` into the
-state key `(vertex, strand, φ)` (the substitution decoder carries `i` implicitly
-in its depth loop and has no phase), so length changes between the read and the
-graph walk are scored by TRUE moves rather than a flat frameshift penalty:
+The DP promotes the read index `i`, alignment phase `φ ∈ {M, I, D}`, net gap `g`,
+and current affine-gap run length `r` into the complete state key
+`(vertex, strand, φ, g, r)` (the substitution decoder carries `i` implicitly in
+its depth loop and has no gap state), so length changes between the read and the
+graph walk are scored by TRUE moves rather than a flat frameshift penalty. Two
+paths at the same vertex and phase remain distinct when their band or run-cap
+eligibility differs; only cells with identical future behavior compete by score:
 
   * **M** (match/mismatch) consumes one read unit AND advances one graph edge,
     scoring the existing Phred-aware emission `e_M`.
@@ -2108,8 +2182,9 @@ function _viterbi_correct_observation_indel(
     end
 
     label_type = _viterbi_graph_label_type(graph)
-    State = Tuple{label_type, Rhizomorph.StrandOrientation}
-    Cell = Tuple{Int, State, Symbol}
+    State = _IndelFrontierCell{label_type}
+    Cell = Tuple{Int, State}
+    PathState = Tuple{label_type, Rhizomorph.StrandOrientation}
     n = length(observation)
 
     start_observed = first(observation)
@@ -2171,7 +2246,9 @@ function _viterbi_correct_observation_indel(
         :completed_columns => 0
     )
 
-    # Global backpointer: (read_index, state, phase) -> predecessor cell or nothing.
+    # Global backpointer: (read_index, complete state) -> predecessor cell or
+    # nothing. Phase, net gap, and run length all participate in identity so a
+    # traceback cannot be overwritten by an algorithmically distinct variant.
     backpointers = Dict{Cell, Union{Nothing, Cell}}()
 
     # Outgoing (target-state, logE) expansion for one state, matching the
@@ -2180,8 +2257,9 @@ function _viterbi_correct_observation_indel(
     # annotate with the enclosing `State`/`label_type` locals (Julia forbids a local
     # variable in a closure type position). Untyped collections are correctness-
     # equivalent here.
-    function _expand(state)
-        vertex, strand = state
+    function _expand(state::Any)::Vector{Tuple{Any, Float64}}
+        vertex = state.vertex
+        strand = state.strand
         transitions = Rhizomorph._get_valid_transitions(graph, vertex, strand)
         diagnostics[:edge_expansions] = _saturating_indel_frontier_add(
             diagnostics[:edge_expansions], length(transitions))
@@ -2204,42 +2282,52 @@ function _viterbi_correct_observation_indel(
     # `deletion_max_run` hops. `deletion_max_run` + negative `log γ_D` guard against
     # unbounded no-progress loops on graph cycles.
     function _relax_deletions!(
-            read_index,
-            match_scores,
-            match_net,
-            del_scores,
-            del_net,
-            del_run
-    )
-        deletion_max_run <= 0 && return
+            read_index::Int,
+            match_scores::AbstractDict,
+            del_scores::AbstractDict,
+    )::Nothing
+        deletion_max_run <= 0 && return nothing
         for (state, score) in match_scores
-            for (next_state, logE) in _expand(state)
+            for ((next_vertex, next_strand), logE) in _expand(state)
                 cand = score + T_MD + logE
                 isfinite(cand) || continue
+                next_state = State(
+                    next_vertex,
+                    next_strand,
+                    :D,
+                    band === nothing ? 0 : state.net_gap + 1,
+                    1,
+                )
                 if !haskey(del_scores, next_state) || cand > del_scores[next_state]
                     del_scores[next_state] = cand
-                    del_run[next_state] = 1
-                    del_net[next_state] = match_net[state] + 1
-                    backpointers[(read_index, next_state, :D)] = (read_index, state, :M)
+                    backpointers[(read_index, next_state)] = (read_index, state)
                 end
             end
         end
         for hop in 2:deletion_max_run
-            frontier = [state for (state, run) in del_run if run == hop - 1]
+            frontier = [
+                state for state in keys(del_scores) if state.run_length == hop - 1
+            ]
             for state in frontier
                 score = del_scores[state]
-                for (next_state, logE) in _expand(state)
+                for ((next_vertex, next_strand), logE) in _expand(state)
                     cand = score + T_DD + logE
                     isfinite(cand) || continue
+                    next_state = State(
+                        next_vertex,
+                        next_strand,
+                        :D,
+                        band === nothing ? 0 : state.net_gap + 1,
+                        hop,
+                    )
                     if !haskey(del_scores, next_state) || cand > del_scores[next_state]
                         del_scores[next_state] = cand
-                        del_run[next_state] = hop
-                        del_net[next_state] = del_net[state] + 1
-                        backpointers[(read_index, next_state, :D)] = (read_index, state, :D)
+                        backpointers[(read_index, next_state)] = (read_index, state)
                     end
                 end
             end
         end
+        return nothing
     end
 
     # Layer 1: seed the match phase from the start candidates (no gap at the very
@@ -2248,24 +2336,18 @@ function _viterbi_correct_observation_indel(
     match_scores = Dict{State, Float64}()
     ins_scores = Dict{State, Float64}()
     del_scores = Dict{State, Float64}()
-    match_net = Dict{State, Int}()
-    ins_net = Dict{State, Int}()
-    del_net = Dict{State, Int}()
-    ins_run = Dict{State, Int}()
-    del_run = Dict{State, Int}()
 
     for vertex in start_candidates
         for strand in
             _viterbi_start_strands(graph, vertex, strand_mode, config.start_strand)
-            state = (vertex, strand)
+            state = State(vertex, strand, :M, 0, 0)
             score = _call_viterbi_state_emission_logp(
                 quality_graph, config, start_observed, vertex, alphabet, strand_mode;
                 count_length_penalty = false)
             if isfinite(score) &&
                (!haskey(match_scores, state) || score > match_scores[state])
                 match_scores[state] = score
-                match_net[state] = 0
-                backpointers[(1, state, :M)] = nothing
+                backpointers[(1, state)] = nothing
             end
         end
     end
@@ -2273,7 +2355,7 @@ function _viterbi_correct_observation_indel(
         diagnostics[:reason] = :no_finite_start_emission
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
-    _relax_deletions!(1, match_scores, match_net, del_scores, del_net, del_run)
+    _relax_deletions!(1, match_scores, del_scores)
 
     initial_frontier = length(match_scores) + length(ins_scores) + length(del_scores)
     diagnostics[:frontier_area] = initial_frontier
@@ -2291,33 +2373,34 @@ function _viterbi_correct_observation_indel(
         new_match = Dict{State, Float64}()
         new_ins = Dict{State, Float64}()
         new_del = Dict{State, Float64}()
-        new_match_net = Dict{State, Int}()
-        new_ins_net = Dict{State, Int}()
-        new_del_net = Dict{State, Int}()
-        new_ins_run = Dict{State, Int}()
-        new_del_run = Dict{State, Int}()
 
         # M into (i, v): consume a read unit AND advance an edge, from any phase of
         # the previous column.
-        for (phase, prev_scores, prev_net, trans) in (
-            (:M, match_scores, match_net, T_MM),
-            (:I, ins_scores, ins_net, T_IM),
-            (:D, del_scores, del_net, T_DM)
+        for (prev_scores, trans) in (
+            (match_scores, T_MM),
+            (ins_scores, T_IM),
+            (del_scores, T_DM),
         )
             for (state, score) in prev_scores
                 base = score + trans
                 isfinite(base) || continue
-                for (next_state, logE) in _expand(state)
+                for ((next_vertex, next_strand), logE) in _expand(state)
                     emission = _call_viterbi_state_emission_logp(
-                        quality_graph, config, observed_unit, next_state[1],
+                        quality_graph, config, observed_unit, next_vertex,
                         alphabet, strand_mode; count_length_penalty = false)
                     cand = base + logE + emission
                     isfinite(cand) || continue
+                    next_state = State(
+                        next_vertex,
+                        next_strand,
+                        :M,
+                        state.net_gap,
+                        0,
+                    )
                     if !haskey(new_match, next_state) || cand > new_match[next_state]
                         new_match[next_state] = cand
-                        new_match_net[next_state] = prev_net[state]
-                        backpointers[(read_index, next_state, :M)] = (
-                            read_index - 1, state, phase)
+                        backpointers[(read_index, next_state)] =
+                            (read_index - 1, state)
                     end
                 end
             end
@@ -2330,39 +2413,49 @@ function _viterbi_correct_observation_indel(
             for (state, score) in match_scores
                 cand = score + T_MI + emission_ins
                 isfinite(cand) || continue
-                if !haskey(new_ins, state) || cand > new_ins[state]
-                    new_ins[state] = cand
-                    new_ins_net[state] = match_net[state] - 1
-                    new_ins_run[state] = 1
-                    backpointers[(read_index, state, :I)] = (read_index - 1, state, :M)
+                next_state = State(
+                    state.vertex,
+                    state.strand,
+                    :I,
+                    band === nothing ? 0 : state.net_gap - 1,
+                    1,
+                )
+                if !haskey(new_ins, next_state) || cand > new_ins[next_state]
+                    new_ins[next_state] = cand
+                    backpointers[(read_index, next_state)] =
+                        (read_index - 1, state)
                 end
             end
             for (state, score) in ins_scores
-                ins_run[state] >= max_insertion_run && continue
+                state.run_length >= max_insertion_run && continue
                 cand = score + T_II + emission_ins
                 isfinite(cand) || continue
-                if !haskey(new_ins, state) || cand > new_ins[state]
-                    new_ins[state] = cand
-                    new_ins_net[state] = ins_net[state] - 1
-                    new_ins_run[state] = ins_run[state] + 1
-                    backpointers[(read_index, state, :I)] = (read_index - 1, state, :I)
+                next_state = State(
+                    state.vertex,
+                    state.strand,
+                    :I,
+                    band === nothing ? 0 : state.net_gap - 1,
+                    state.run_length + 1,
+                )
+                if !haskey(new_ins, next_state) || cand > new_ins[next_state]
+                    new_ins[next_state] = cand
+                    backpointers[(read_index, next_state)] =
+                        (read_index - 1, state)
                 end
             end
         end
 
         # D within (i, v): relax deletions from the freshly-built match layer.
-        _relax_deletions!(
-            read_index, new_match, new_match_net, new_del, new_del_net, new_del_run)
+        _relax_deletions!(read_index, new_match, new_del)
 
         # Adaptive band: drop states whose net gap (graph-steps − read-index =
         # #deletions − #insertions) exceeds the half-width. `nothing` = unbounded
         # (exact). Applied AFTER the deletion relaxation so a banded state cannot
         # seed a new column.
         if band !== nothing
-            for (scores, nets) in (
-                (new_match, new_match_net), (new_ins, new_ins_net), (new_del, new_del_net))
+            for scores in (new_match, new_ins, new_del)
                 for state in collect(keys(scores))
-                    if abs(nets[state]) > band
+                    if abs(state.net_gap) > band
                         delete!(scores, state)
                     end
                 end
@@ -2389,25 +2482,30 @@ function _viterbi_correct_observation_indel(
         diagnostics[:completed_columns] = read_index
 
         match_scores, ins_scores, del_scores = new_match, new_ins, new_del
-        match_net, ins_net, del_net = new_match_net, new_ins_net, new_del_net
-        ins_run, del_run = new_ins_run, new_del_run
         last_index = read_index
     end
 
-    # Endpoint: the best-scoring (state, phase) at the final read index. When a
+    # Endpoint: the best-scoring complete state at the final read index. When a
     # target vertex is pinned, restrict to states on it. Deterministic tie-break by
-    # (score, vertex string, phase) so a beam tie is reproducible.
+    # score, vertex, phase, net gap, and run length keeps equal-score variants
+    # reproducible.
     best_score = -Inf
     best_cell::Union{Nothing, Cell} = nothing
-    best_key = (-Inf, "", "")
-    for (phase, scores) in ((:M, match_scores), (:I, ins_scores), (:D, del_scores))
+    best_key = (-Inf, "", "", typemin(Int), typemin(Int))
+    for scores in (match_scores, ins_scores, del_scores)
         for (state, score) in scores
-            (target_vertex !== nothing && state[1] != target_vertex) && continue
-            key = (score, string(state[1]), string(phase))
+            (target_vertex !== nothing && state.vertex != target_vertex) && continue
+            key = (
+                score,
+                string(state.vertex),
+                string(state.phase),
+                state.net_gap,
+                state.run_length,
+            )
             if best_cell === nothing || score > best_score ||
                (score == best_score && key < best_key)
                 best_score = score
-                best_cell = (last_index, state, phase)
+                best_cell = (last_index, state)
                 best_key = key
             end
         end
@@ -2430,15 +2528,16 @@ function _viterbi_correct_observation_indel(
     end
     reverse!(chain)
 
-    path_states = State[]
+    path_states = PathState[]
     move_trace = Symbol[]
     read_index_trace = Int[]
-    for (index, (read_index, state, phase)) in enumerate(chain)
+    for (index, (read_index, state)) in enumerate(chain)
+        phase = state.phase
         diagnostics[:move_counts][phase] += 1
         push!(move_trace, phase)
         push!(read_index_trace, read_index)
         if index == 1 || phase != :I
-            push!(path_states, state)
+            push!(path_states, (state.vertex, state.strand))
         end
     end
     diagnostics[:move_trace] = move_trace
