@@ -40,6 +40,21 @@ function multi_input_write_fastq(
     return String(path)
 end
 
+function multi_input_gzip_file(
+        source::AbstractString,
+        destination::AbstractString,
+)::String
+    open(destination, "w") do io
+        gzip_stream = CodecZlib.GzipCompressorStream(io)
+        try
+            write(gzip_stream, read(source))
+        finally
+            close(gzip_stream)
+        end
+    end
+    return String(destination)
+end
+
 function multi_input_collect_fastq(reads::Any)::Vector{FASTX.FASTQ.Record}
     values = collect(reads)
     if all(value -> value isa AbstractString, values)
@@ -189,22 +204,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             threads = 4,
             jobs = 2,
             polypolish_careful = false,
+            keep_intermediates = true,
         )
         Test.@test autocycler.autocycler_read_type == :ont_r9
         Test.@test !autocycler.polypolish_careful
+        Test.@test autocycler.keep_intermediates
         Test.@test Mycelia.Rhizomorph.AutocyclerPolishConfig(
             long_read_tech = :pacbio,
         ).autocycler_read_type == :pacbio_hifi
-
-        metamdbg = Mycelia.Rhizomorph.MetaMDBGHybridConfig(
-            threads = 5,
-            abundance_min = 4,
-            graph_k = 31,
-        )
-        Test.@test !(metamdbg isa Mycelia.Rhizomorph.AbstractPairedShortLongAssemblyConfig)
-        Test.@test metamdbg.threads == 5
-        Test.@test metamdbg.abundance_min == 4
-        Test.@test metamdbg.graph_k == 31
+        Test.@test Mycelia.Rhizomorph.AutocyclerPolishConfig(
+            long_read_tech = :pacbio_clr,
+        ).autocycler_read_type == :pacbio_clr
+        Test.@test Mycelia.Rhizomorph.AutocyclerPolishConfig(
+            long_read_tech = :pacbio_hifi,
+        ).autocycler_read_type == :pacbio_hifi
 
         test_throws_message(ArgumentError, "short_read_tech") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(short_read_tech = :nanopore)
@@ -229,11 +242,11 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         test_throws_message(ArgumentError, "jobs must be positive") do
             Mycelia.Rhizomorph.AutocyclerPolishConfig(jobs = 0)
         end
-        test_throws_message(ArgumentError, "abundance_min must be positive") do
-            Mycelia.Rhizomorph.MetaMDBGHybridConfig(abundance_min = 0)
-        end
-        test_throws_message(ArgumentError, "graph_k must be positive") do
-            Mycelia.Rhizomorph.MetaMDBGHybridConfig(graph_k = 0)
+        test_throws_message(ArgumentError, "incompatible") do
+            Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                long_read_tech = :pacbio_hifi,
+                autocycler_read_type = :pacbio_clr,
+            )
         end
         test_throws_message(ArgumentError, "managed by the multi-input route") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(
@@ -245,18 +258,8 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 assembler_options = (; short_1 = "bypass.fastq"),
             )
         end
-        test_throws_message(ArgumentError, "metaMDBG option :hifi_reads") do
-            Mycelia.Rhizomorph.MetaMDBGHybridConfig(
-                assembler_options = (; hifi_reads = "bypass.fastq"),
-            )
-        end
         test_throws_message(ArgumentError, "Unicycler option :executor") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(
-                assembler_options = (; executor = :async),
-            )
-        end
-        test_throws_message(ArgumentError, "metaMDBG option :executor") do
-            Mycelia.Rhizomorph.MetaMDBGHybridConfig(
                 assembler_options = (; executor = :async),
             )
         end
@@ -361,6 +364,46 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
     end
 
+    Test.@testset "gzip inputs reach independent correction" begin
+        mktempdir() do temp_dir
+            r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "R1.fastq"),
+                MULTI_INPUT_R1,
+            )
+            r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "R2.fastq"),
+                MULTI_INPUT_R2,
+            )
+            long_reads = multi_input_write_fastq(
+                joinpath(temp_dir, "long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            r1_gzip = multi_input_gzip_file(r1, "$(r1).gz")
+            r2_gzip = multi_input_gzip_file(r2, "$(r2).gz")
+            long_gzip = multi_input_gzip_file(long_reads, "$(long_reads).gz")
+            correction_calls = NamedTuple[]
+            result = Mycelia.Rhizomorph._assemble_paired_short_long(
+                (r1_gzip, r2_gzip),
+                long_gzip,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                ),
+                assembler_runner = (inputs, outdir) ->
+                    multi_input_fake_assembler_result(outdir),
+            )
+            Test.@test [call.technology for call in correction_calls] ==
+                       [:illumina, :illumina, :nanopore]
+            Test.@test result.assembly_stats["input_read_counts"] == Dict(
+                "short_r1" => 2,
+                "short_r2" => 2,
+                "long_reads" => 1,
+            )
+            Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
+        end
+    end
+
     Test.@testset "lightweight Stage-1 cleanup ownership" begin
         Test.@test fieldnames(Mycelia.Rhizomorph._Stage1CleanupToken) ==
                    (:corrected_fastq, :ephemeral)
@@ -413,6 +456,63 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         ]
         Mycelia.Rhizomorph._cleanup_multi_input_stages!(cleanup_tokens)
         Test.@test !isfile(counted_fastq)
+
+        valid_fastq = multi_input_write_fastq(
+            tempname() * ".fastq",
+            MULTI_INPUT_LONG,
+        )
+        empty_fastq = tempname() * ".fastq"
+        touch(empty_fastq)
+        malformed_stages = [
+            ("missing corrected_fastq", (; ephemeral = true)),
+            (
+                "no non-empty corrected FASTQ",
+                (;
+                    corrected_fastq = tempname() * ".fastq",
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                ),
+            ),
+            (
+                "no non-empty corrected FASTQ",
+                (;
+                    corrected_fastq = empty_fastq,
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                ),
+            ),
+            (
+                "missing corrected_read_count",
+                (; corrected_fastq = valid_fastq, ephemeral = false),
+            ),
+            (
+                "produced 0 corrected reads",
+                (;
+                    corrected_fastq = valid_fastq,
+                    corrected_read_count = 0,
+                    ephemeral = false,
+                ),
+            ),
+        ]
+        for (message, stage) in malformed_stages
+            tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
+            bad_runner = (reads, config) -> stage
+            test_throws_message(ErrorException, message) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    tokens,
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    mktempdir(),
+                    false,
+                    bad_runner,
+                )
+            end
+            Mycelia.Rhizomorph._cleanup_multi_input_stages!(tokens)
+        end
+        rm(valid_fastq; force = true)
+        rm(empty_fastq; force = true)
     end
 
     Test.@testset "independent correction profiles and ephemeral cleanup" begin
@@ -541,39 +641,9 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             jobs = 2,
             read_type = "ont_r9",
             polypolish_careful = false,
+            keep_intermediates = false,
         )
 
-        dual_inputs = Mycelia.Rhizomorph._CorrectedHiFiONT(
-            Mycelia.Rhizomorph._CorrectedReadSet("/corrected/hifi.fastq", 1, :pacbio),
-            Mycelia.Rhizomorph._CorrectedReadSet("/corrected/ont.fastq", 1, :nanopore),
-        )
-        metamdbg_kwargs = Ref{Any}()
-        metamdbg_runner = function (; kwargs...)
-            metamdbg_kwargs[] = (; kwargs...)
-            return (; contigs = "contigs.fasta", graph = "graph.gfa")
-        end
-        metamdbg_config = Mycelia.Rhizomorph.MetaMDBGHybridConfig(
-            assembler_options = (; site = :local),
-            threads = 10,
-            abundance_min = 5,
-            graph_k = 41,
-        )
-        Mycelia.Rhizomorph._run_multi_input_assembler(
-            Val(:metamdbg),
-            dual_inputs,
-            "/workflow/metamdbg",
-            metamdbg_config;
-            runner = metamdbg_runner,
-        )
-        Test.@test metamdbg_kwargs[] == (
-            site = :local,
-            hifi_reads = "/corrected/hifi.fastq",
-            ont_reads = "/corrected/ont.fastq",
-            outdir = "/workflow/metamdbg",
-            abundance_min = 5,
-            threads = 10,
-            graph_k = 41,
-        )
     end
 
     Test.@testset "Autocycler-polished workflow provenance" begin
@@ -581,11 +651,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         correction_runner = multi_input_fake_correction_runner(correction_calls)
         output_dir = mktempdir()
         assembler_runner = function (inputs::Any, outdir::AbstractString)
-            Test.@test inputs.long_reads.technology == :pacbio
-            return multi_input_fake_assembler_result(
+            Test.@test inputs.long_reads.technology == :pacbio_hifi
+            result = multi_input_fake_assembler_result(
                 outdir;
                 include_graph = true,
                 include_polishing_artifacts = true,
+            )
+            return merge(
+                result,
+                (;
+                    toolchain = Dict(
+                        "autocycler_script_revision" => "immutable-test-revision",
+                        "packages" => Dict("autocycler" => "0.5.2"),
+                    ),
+                ),
             )
         end
         config = Mycelia.Rhizomorph.AutocyclerPolishConfig(;
@@ -604,7 +683,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             assembler_runner,
         )
         Test.@test [call.technology for call in correction_calls] ==
-                   [:illumina, :illumina, :pacbio]
+                   [:illumina, :illumina, :pacbio_hifi]
         Test.@test result.assembly_stats["workflow"] == "autocycler_polished"
         Test.@test result.assembly_stats["method"] == "HybridAssembly"
         Test.@test result.assembly_stats["assembler"] == "autocycler"
@@ -614,7 +693,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test result.assembly_stats["input_technologies"] == Dict(
             "short_r1" => "illumina",
             "short_r2" => "illumina",
-            "long_reads" => "pacbio",
+            "long_reads" => "pacbio_hifi",
         )
         Test.@test result.assembly_stats["workflow_settings"] == Dict(
             "workflow" => "autocycler_polished",
@@ -622,8 +701,10 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             "threads" => 4,
             "jobs" => 2,
             "autocycler_read_type" => "pacbio_hifi",
+            "long_read_correction_tech" => "pacbio_hifi",
             "polypolish_careful" => true,
             "pypolca_careful" => true,
+            "keep_intermediates" => false,
             "correction_options" => Dict(
                 "k" => 13,
                 "strategy" => "scalable",
@@ -639,6 +720,11 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         ])
         Test.@test all(isfile, values(tool_artifacts))
         Test.@test result.assembly_stats["raw_graph"] == tool_artifacts["raw_graph"]
+        Test.@test result.assembly_stats["toolchain"] == Dict(
+            "autocycler_script_revision" => "immutable-test-revision",
+            "packages" => Dict{String, Any}("autocycler" => "0.5.2"),
+        )
+        Test.@test isempty(result.assembly_stats["retained_intermediates"])
 
         noncareful_calls = NamedTuple[]
         noncareful_result = Mycelia.Rhizomorph._assemble_paired_short_long(
@@ -653,65 +739,6 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test noncareful_result.assembly_stats["polishers"] ==
                    ["polypolish", "pypolca-careful"]
         Test.@test noncareful_result.assembly_stats["tool_artifacts"] === nothing
-    end
-
-    Test.@testset "metaMDBG dual-long correction remains separate" begin
-        correction_calls = NamedTuple[]
-        correction_runner = multi_input_fake_correction_runner(correction_calls)
-        captured_inputs = Ref{Any}()
-        assembler_runner = function (
-                inputs::Mycelia.Rhizomorph._CorrectedHiFiONT,
-                outdir::AbstractString,
-        )
-            captured_inputs[] = inputs
-            return multi_input_fake_assembler_result(
-                outdir;
-                gzip = true,
-                use_contigs_key = true,
-            )
-        end
-        config = Mycelia.Rhizomorph.MetaMDBGHybridConfig()
-        result = Mycelia.Rhizomorph._assemble_metamdbg_dual_long(
-            MULTI_INPUT_LONG,
-            [multi_input_fastq_record("ont_a", "TGCATGCATGCA")],
-            config;
-            correction_runner,
-            assembler_runner,
-        )
-
-        Test.@test [call.technology for call in correction_calls] ==
-                   [:pacbio, :nanopore]
-        Test.@test captured_inputs[].hifi_reads.path ==
-                   correction_calls[1].corrected_fastq
-        Test.@test captured_inputs[].ont_reads.path ==
-                   correction_calls[2].corrected_fastq
-        Test.@test result.assembly_stats["workflow"] == "metamdbg"
-        Test.@test result.assembly_stats["method"] == "DualLongAssembly"
-        Test.@test result.assembly_stats["assembler"] == "metamdbg"
-        Test.@test result.assembly_stats["input_contract"] == "hifi_ont"
-        Test.@test result.assembly_stats["short_read_tech"] === nothing
-        Test.@test result.assembly_stats["long_read_tech"] === nothing
-        Test.@test result.assembly_stats["input_technologies"] == Dict(
-            "hifi_reads" => "pacbio_hifi",
-            "ont_reads" => "nanopore",
-        )
-        Test.@test result.assembly_stats["workflow_settings"] == Dict(
-            "workflow" => "metamdbg",
-            "assembler" => "metamdbg",
-            "threads" => config.threads,
-            "abundance_min" => 3,
-            "graph_k" => 21,
-            "correction_options" => Dict(
-                "k" => 13,
-                "strategy" => "scalable",
-            ),
-            "assembler_options" => Dict{String, Any}(),
-        )
-        Test.@test result.assembly_stats["tool_artifacts"] === nothing
-        Test.@test result.assembly_stats["input_read_counts"] == Dict(
-            "hifi_reads" => 1,
-            "ont_reads" => 1,
-        )
     end
 
     Test.@testset "cleanup on assembler failure" begin
@@ -735,6 +762,32 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test length(correction_calls) == 3
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         Test.@test !isdir(workflow_root[])
+
+        interrupted_correction_calls = NamedTuple[]
+        successful_correction = multi_input_fake_correction_runner(
+            interrupted_correction_calls,
+        )
+        correction_runner = function (
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )
+            if length(interrupted_correction_calls) == 1
+                error("synthetic second-correction failure")
+            end
+            return successful_correction(reads, config)
+        end
+        test_throws_message(ErrorException, "second-correction failure") do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner,
+                assembler_runner,
+            )
+        end
+        Test.@test length(interrupted_correction_calls) == 1
+        Test.@test !isfile(interrupted_correction_calls[1].corrected_fastq)
     end
 
     Test.@testset "caller-owned artifacts persist" begin
@@ -809,22 +862,23 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
 
         wrapped = Mycelia.Rhizomorph._wrap_multi_input_assembly(
             (; contigs = gzip_fasta),
-            :metamdbg,
-            Dict("hifi_reads" => 1, "ont_reads" => 1),
-            Dict("hifi_reads" => 1, "ont_reads" => 1),
+            :unicycler,
+            Dict("short_r1" => 1, "short_r2" => 1, "long_reads" => 1),
+            Dict("short_r1" => 1, "short_r2" => 1, "long_reads" => 1),
             nothing,
-            nothing,
-            nothing,
+            :illumina,
+            :nanopore,
             (; k = 13),
             nothing,
             String[],
             Dict{String, Any}(
-                "workflow" => "metamdbg",
-                "assembler" => "metamdbg",
+                "workflow" => "unicycler",
+                "assembler" => "unicycler",
             ),
             Dict(
-                "hifi_reads" => "pacbio_hifi",
-                "ont_reads" => "nanopore",
+                "short_r1" => "illumina",
+                "short_r2" => "illumina",
+                "long_reads" => "nanopore",
             ),
         )
         Test.@test wrapped.contig_names == ["alpha", "beta"]
@@ -876,19 +930,23 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
             )
         end
-        test_throws_message(ArgumentError, "hifi_reads must contain") do
-            Mycelia.Rhizomorph.assemble_dual_long(
-                FASTX.FASTQ.Record[],
-                MULTI_INPUT_LONG;
-                config = Mycelia.Rhizomorph.MetaMDBGHybridConfig(),
-            )
-        end
-        test_throws_message(ArgumentError, "ont_reads must contain") do
-            Mycelia.Rhizomorph.assemble_metamdbg_dual_long(
-                MULTI_INPUT_LONG,
-                FASTX.FASTQ.Record[];
-                config = Mycelia.Rhizomorph.MetaMDBGHybridConfig(),
-            )
+        Test.@test !isdefined(Mycelia.Rhizomorph, :assemble_dual_long)
+        mktempdir() do temp_dir
+            excluded_outdir = joinpath(temp_dir, "excluded-mixed-metamdbg")
+            test_throws_message(ArgumentError, "exactly one input technology") do
+                Mycelia.run_metamdbg(
+                    hifi_reads = "hifi.fastq",
+                    ont_reads = "ont.fastq",
+                    outdir = excluded_outdir,
+                )
+            end
+            Test.@test !ispath(excluded_outdir)
+
+            missing_outdir = joinpath(temp_dir, "missing-input-metamdbg")
+            test_throws_message(ArgumentError, "exactly one input technology") do
+                Mycelia.run_metamdbg(outdir = missing_outdir)
+            end
+            Test.@test !ispath(missing_outdir)
         end
     end
 end

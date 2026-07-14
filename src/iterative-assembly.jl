@@ -295,18 +295,27 @@ probabilities (`insertion_extend_probability` / `deletion_extend_probability`) �
 nanopore/PacBio indels cluster in homopolymer runs, so a one-time gap-open then a
 cheaper extend models the geometric run lengths.
 
-All four presets carry their real conditional fractions (no hand-zeroing). The
-DECODE gate ([`profile_enables_indels`](@ref)) multiplies `base_error_rate` by the
-summed fractions to decide, so substitution-dominated technologies (`:illumina`,
-`:ultima`) — whose ABSOLUTE indel rate is negligible — gate OFF and stay on the
-substitution-only oracle path, while `:nanopore`/`:pacbio` gate ON. The
+The simulation-backed presets carry their conditional fractions. PacBio HiFi is
+modeled separately from CLR: PacBio reports HiFi reads at 99.9% accuracy, so its
+nominal error rate is 0.001. Until a validated HiFi insertion/deletion composition
+is available, its indel fractions are deliberately zero to keep the CLR-like
+pair-HMM OFF rather than over-correcting high-accuracy reads. These zeros are a
+routing sentinel, not an empirical claim about HiFi error composition.
+
+The DECODE gate ([`profile_enables_indels`](@ref)) multiplies `base_error_rate`
+by the summed fractions to decide, so substitution-dominated technologies
+(`:illumina`, `:ultima`, `:pacbio_hifi`) gate OFF and stay on the
+substitution-only oracle path, while `:nanopore`/`:pacbio_clr` gate ON. The
 `base_error_rate` is threaded into `ViterbiCorrectionConfig.error_rate` so the
 kernel's gap-open masses (`δ_I = error_rate·f_ins`, `δ_D = error_rate·f_del`) are
 scaled to the real per-base rate.
 
-Supported: `:illumina`, `:nanopore`, `:pacbio`, `:ultima`.
+`:pacbio` remains a compatibility alias for the CLR-like profile. Supported:
+`:illumina`, `:nanopore`, `:pacbio`, `:pacbio_clr`, `:pacbio_hifi`, `:ultima`.
+
+HiFi accuracy reference: https://www.pacb.com/technology/hifi-sequencing/
 """
-function indel_error_profile(tech::Symbol)
+function indel_error_profile(tech::Symbol)::NamedTuple
     if tech == :illumina
         # observe(): base 0.005, conditional insertion/deletion 0.05/0.05. Absolute
         # indel rate ≈ 5e-4 (< INDEL_PROFILE_THRESHOLD) ⇒ gate OFF ⇒ the corrector
@@ -322,13 +331,21 @@ function indel_error_profile(tech::Symbol)
         return (base_error_rate = 0.10,
             insertion_fraction = 0.30, deletion_fraction = 0.30,
             insertion_extend_probability = 0.30, deletion_extend_probability = 0.30)
-    elseif tech == :pacbio
+    elseif tech in (:pacbio, :pacbio_clr)
         # observe(): base 0.11, split (mismatch 0.20 / insertion 0.40 / deletion
         # 0.40). Absolute indel rate ≈ 0.11 × 0.80 = 0.088 ⇒ gate ON. Indel-
-        # dominated ⇒ stronger extend.
+        # dominated ⇒ stronger extend. :pacbio is the legacy CLR-like alias.
         return (base_error_rate = 0.11,
             insertion_fraction = 0.40, deletion_fraction = 0.40,
             insertion_extend_probability = 0.40, deletion_extend_probability = 0.40)
+    elseif tech == :pacbio_hifi
+        # HiFi is an exact chemistry boundary, not the raw/CLR PacBio model.
+        # PacBio reports 99.9% read accuracy (nominal error 0.001). The validated
+        # conditional indel composition needed for this pair-HMM is unavailable,
+        # so keep indel moves OFF instead of importing CLR's 0.40/0.40 split.
+        return (base_error_rate = 0.001,
+            insertion_fraction = 0.0, deletion_fraction = 0.0,
+            insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
     elseif tech == :ultima
         # observe(): base 1e-6, conditional insertion/deletion 0.025/0.025. Absolute
         # indel rate ≈ 5e-8 (≪ threshold) ⇒ gate OFF ⇒ substitution-only. Extend
@@ -338,7 +355,8 @@ function indel_error_profile(tech::Symbol)
             insertion_extend_probability = 0.0, deletion_extend_probability = 0.0)
     else
         error("unknown sequencing technology :$(tech); expected one of " *
-              ":illumina, :nanopore, :pacbio, :ultima")
+              ":illumina, :nanopore, :pacbio, :pacbio_clr, " *
+              ":pacbio_hifi, :ultima")
     end
 end
 
@@ -349,12 +367,12 @@ Decide whether a sequencing-technology profile enables the indel-aware decode:
 `true` iff the ABSOLUTE per-base indel rate — `base_error_rate ×
 (insertion_fraction + deletion_fraction)` — exceeds `threshold` (default
 [`INDEL_PROFILE_THRESHOLD`]). Keying on the absolute rate (not the conditional
-fractions) means `:illumina` (≈ 5e-4) and `:ultima` (≈ 5e-8) return `false` ⇒
-substitution-only, while `:nanopore` (≈ 0.06) and `:pacbio` (≈ 0.088) return
-`true` — each profile decides from its own arithmetic, with no hand-tuned zeroing.
+fractions) means `:illumina` (≈ 5e-4), `:ultima` (≈ 5e-8), and the deliberately
+substitution-only `:pacbio_hifi` profile return `false`, while `:nanopore`
+(≈ 0.06) and `:pacbio_clr`/`:pacbio` (≈ 0.088) return `true`.
 """
 function profile_enables_indels(tech::Symbol;
-        threshold::Float64 = INDEL_PROFILE_THRESHOLD)
+        threshold::Float64 = INDEL_PROFILE_THRESHOLD)::Bool
     p = indel_error_profile(tech)
     return p.base_error_rate * (p.insertion_fraction + p.deletion_fraction) > threshold
 end

@@ -2700,7 +2700,9 @@ Run metaMDBG assembler for metagenomic long-read assembly.
 - `threads::Int`: Number of threads to use (default: get_default_threads())
 - `graph_k::Int`: K-mer resolution level for graph generation (default: 21)
 
-Note: Must provide either `hifi_reads`, `ont_reads`, or both. Cannot be both nothing.
+Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
+`--in-hifi` and `--in-ont`; mixed HiFi-plus-ONT assembly is therefore excluded
+from this wrapper rather than advertised as a false combined-input contract.
 Graph generation: Automatically generates assembly graphs using the specified k-mer resolution.
 
 # Returns
@@ -2733,9 +2735,15 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing)
 
-    # Validate input - must have at least one read type
-    if isnothing(hifi_reads) && isnothing(ont_reads)
-        error("Must provide either hifi_reads, ont_reads, or both")
+    has_hifi_reads = !isnothing(hifi_reads)
+    has_ont_reads = !isnothing(ont_reads)
+    if has_hifi_reads == has_ont_reads
+        throw(
+            ArgumentError(
+                "metaMDBG requires exactly one input technology: provide " *
+                "either hifi_reads or ont_reads, but not both.",
+            ),
+        )
     end
 
     Mycelia.add_bioconda_env("metamdbg")

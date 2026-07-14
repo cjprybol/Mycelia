@@ -191,10 +191,10 @@ struct AssemblyConfig
     # Sequencing-technology ERROR PROFILE driving the corrector's indel-aware decode
     # (td-9q84 / 4a). Only consulted when corrector=:iterative. The profile maps to
     # per-base indel fractions (see `Mycelia.indel_error_profile`); indel-prone
-    # technologies (:nanopore, :pacbio) enable the pair-HMM gap moves, while the
-    # DEFAULT :illumina (and :ultima) carry ~0 indel fractions and stay on the
-    # substitution-only path byte-for-byte. Wiring the profile — not read length or
-    # a hardcoded tech — keeps "correct with the profile you'd simulate".
+    # technologies (:nanopore, :pacbio_clr, and legacy :pacbio) enable the pair-HMM
+    # gap moves, while the DEFAULT :illumina, :ultima, and high-accuracy
+    # :pacbio_hifi profiles stay on the substitution-only path. Wiring the profile
+    # — not read length or a hardcoded tech — keeps the chemistry boundary explicit.
     sequencing_tech::Symbol
 
     # Stage-2 layout selector (hybrid-OLC route (a), td-yymj). `:native` (default)
@@ -207,7 +207,7 @@ struct AssemblyConfig
 
     # Which external assembler the `:olc` layout dispatches to. `:auto` (default)
     # picks by read type (sequencing_tech): short-read techs (:illumina, :ultima)
-    # → :megahit, long-read techs (:nanopore, :pacbio) → :flye. Explicit tools:
+    # → :megahit, long-read techs (:nanopore and PacBio profiles) → :flye. Tools:
     # short-read :megahit/:metaspades (td-yymj), long-read :flye/:metaflye/:canu/
     # :hifiasm (td-wvto). An explicit tool must match the corrected read type
     # (hifiasm is PacBio-HiFi only; canu also needs an olc_options genome_size).
@@ -312,13 +312,11 @@ struct AssemblyConfig
             error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
         end
 
-        # Validation: sequencing_tech must be a recognized error profile (validate
-        # unconditionally so a typo is caught at construction, even for
-        # corrector=:none where it is not consulted). Derived from the OLC taxonomy
-        # so the short/long partition `:auto` resolution depends on stays a single
-        # source of truth — adding a tech in one place can't silently mislabel it.
-        _seq_tax = _olc_taxonomy()
-        _valid_seq_techs = (_seq_tax.short_read_techs..., _seq_tax.long_read_techs...)
+        # Validation: sequencing_tech selects a correction ERROR PROFILE, not an
+        # assembler family. Keep its exact-chemistry taxonomy independent from the
+        # OLC short/long adapter taxonomy so PacBio CLR and HiFi cannot collapse to
+        # the same corrector merely because both use long-read assemblers.
+        _valid_seq_techs = _correction_profile_technologies()
         if !(sequencing_tech in _valid_seq_techs)
             error("sequencing_tech must be one of $(_valid_seq_techs), got :$(sequencing_tech)")
         end
@@ -430,12 +428,14 @@ struct AssemblyConfig
                 sequencing_tech in _tax.long_read_techs ||
                     error("olc_tool=:$(olc_tool) is a " *
                           "long-read assembler but sequencing_tech=:$(sequencing_tech) is a short-read " *
-                          "tech; pair a long-read tool with :nanopore or :pacbio.")
+                          "tech; pair a long-read tool with a long-read profile.")
                 # hifiasm assembles PacBio HiFi reads specifically — not Nanopore.
-                if olc_tool == :hifiasm && sequencing_tech != :pacbio
+                if olc_tool == :hifiasm &&
+                   !(sequencing_tech in (:pacbio, :pacbio_hifi))
                     error("olc_tool=:hifiasm assembles PacBio HiFi reads; " *
-                          "sequencing_tech=:$(sequencing_tech) is not HiFi. Use :flye or :canu " *
-                          "for :nanopore.")
+                          "sequencing_tech=:$(sequencing_tech) is not HiFi. " *
+                          "Use :pacbio_hifi (or legacy :pacbio), or select " *
+                          ":flye/:canu for other long reads.")
                 end
                 # canu requires an estimated genome size (the wrapper has no default).
                 if olc_tool == :canu && !haskey(olc_options, :genome_size)
@@ -615,8 +615,9 @@ end
 Configuration for a corrected long-read Autocycler consensus followed by
 paired-short Polypolish and careful Pypolca polishing.
 
-`autocycler_read_type` is kept separate from the coarser corrector technology:
-the upstream script distinguishes ONT R9/R10 and PacBio CLR/HiFi.
+`autocycler_read_type` controls both the upstream assembler chemistry and the
+exact long-read correction profile. In particular, PacBio CLR and HiFi never
+share a correction model.
 """
 struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
     short_read_tech::Symbol
@@ -627,6 +628,7 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
     threads::Int
     jobs::Int
     polypolish_careful::Bool
+    keep_intermediates::Bool
 
     function AutocyclerPolishConfig(;
             short_read_tech::Symbol = :illumina,
@@ -637,6 +639,7 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             threads::Int = Mycelia.get_default_threads(),
             jobs::Int = 1,
             polypolish_careful::Bool = true,
+            keep_intermediates::Bool = false,
     )
         _validate_hybrid_technology(
             short_read_tech,
@@ -649,7 +652,13 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             "long_read_tech",
         )
         resolved_read_type = if autocycler_read_type === nothing
-            long_read_tech == :nanopore ? :ont_r10 : :pacbio_hifi
+            if long_read_tech == :nanopore
+                :ont_r10
+            elseif long_read_tech == :pacbio_clr
+                :pacbio_clr
+            else
+                :pacbio_hifi
+            end
         else
             autocycler_read_type
         end
@@ -658,9 +667,15 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             "autocycler_read_type must be one of $(valid_read_types), got " *
             ":$(resolved_read_type).",
         ))
-        compatible = long_read_tech == :nanopore ?
-                     resolved_read_type in (:ont_r9, :ont_r10) :
-                     resolved_read_type in (:pacbio_clr, :pacbio_hifi)
+        compatible = if long_read_tech == :nanopore
+            resolved_read_type in (:ont_r9, :ont_r10)
+        elseif long_read_tech == :pacbio_clr
+            resolved_read_type == :pacbio_clr
+        elseif long_read_tech == :pacbio_hifi
+            resolved_read_type == :pacbio_hifi
+        else
+            resolved_read_type in (:pacbio_clr, :pacbio_hifi)
+        end
         compatible || throw(ArgumentError(
             "autocycler_read_type=:$(resolved_read_type) is incompatible with " *
             "long_read_tech=:$(long_read_tech).",
@@ -681,62 +696,7 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             threads,
             jobs,
             polypolish_careful,
-        )
-    end
-end
-
-"""
-Configuration for the distinct metaMDBG HiFi-plus-ONT dual-long contract.
-
-This is intentionally not accepted by `assemble_hybrid`: metaMDBG consumes two
-long-read technologies, not Illumina plus long reads.
-"""
-struct MetaMDBGHybridConfig
-    correction_options::NamedTuple
-    assembler_options::NamedTuple
-    output_dir::Union{Nothing, String}
-    threads::Int
-    abundance_min::Int
-    graph_k::Int
-
-    function MetaMDBGHybridConfig(;
-            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
-            assembler_options::NamedTuple = (;),
-            output_dir::Union{Nothing, AbstractString} = nothing,
-            threads::Int = Mycelia.get_default_threads(),
-            abundance_min::Int = 3,
-            graph_k::Int = 21,
-    )
-        _reject_route_managed_options(
-            correction_options,
-            _HYBRID_CORRECTION_RESERVED_KEYS,
-            "correction",
-        )
-        _reject_route_managed_options(
-            assembler_options,
-            (
-                :hifi_reads,
-                :ont_reads,
-                :outdir,
-                :threads,
-                :abundance_min,
-                :graph_k,
-                :executor,
-            ),
-            "metaMDBG",
-        )
-        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
-        abundance_min > 0 || throw(ArgumentError(
-            "abundance_min must be positive, got $(abundance_min).",
-        ))
-        graph_k > 0 || throw(ArgumentError("graph_k must be positive, got $(graph_k)."))
-        return new(
-            correction_options,
-            assembler_options,
-            _validate_hybrid_output_dir(output_dir),
-            threads,
-            abundance_min,
-            graph_k,
+            keep_intermediates,
         )
     end
 end
@@ -1014,12 +974,11 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
 - `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
   (route through the iterative maximum-likelihood read corrector before assembly)
-- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
-  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
-  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
-  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
-  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
-  `:illumina` leaves their indels uncorrected.
+- `sequencing_tech`: exact error profile driving iterative correction. Default
+  `:illumina` is substitution-only. `:nanopore`, `:pacbio_clr`, and legacy
+  `:pacbio` enable indel-aware correction; `:pacbio_hifi` and `:ultima` remain
+  substitution-only because their absolute error rates do not justify the
+  CLR-like pair-HMM.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -1361,13 +1320,14 @@ function _run_stage1_correction(
 
     # Discoverability nudge (PR #408 review, FIX 3): the corrector defaults to the
     # substitution-only :illumina profile, so a user correcting long / indel-prone
-    # reads (nanopore/pacbio) without setting sequencing_tech silently gets NO indel
+    # reads (Nanopore/CLR) without setting sequencing_tech silently gets NO indel
     # correction. Surface it once (@info, not @warn — :illumina is a valid, common
     # choice) so the off-by-default indel path is discoverable.
     if config.sequencing_tech == :illumina
         @info "corrector=:iterative is running with sequencing_tech=:illumina " *
               "(substitution-only correction). For long / indel-prone reads set " *
-              "sequencing_tech=:nanopore or :pacbio to enable indel-aware correction." maxlog = 1
+              "sequencing_tech=:nanopore or :pacbio_clr to enable indel-aware " *
+              "correction." maxlog = 1
     end
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
@@ -1424,13 +1384,14 @@ function _run_stage1_correction(
                                _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
         # Indel-aware correction wiring (td-9q84 / 4a): map the sequencing-tech error
         # profile to indel fractions and gate on the ABSOLUTE indel rate
-        # (base_error_rate × summed fractions). Only indel-prone profiles (:nanopore,
-        # :pacbio) build a non-nothing IndelDecodeParams; the DEFAULT :illumina (and
-        # :ultima) resolve to `nothing`, so the corrector threads NO indel params and
-        # runs the substitution decode byte-for-byte (oracle preservation). The
+        # (base_error_rate × summed fractions). Only indel-prone profiles
+        # (:nanopore, :pacbio_clr, and legacy :pacbio) build a non-nothing
+        # IndelDecodeParams; :illumina, :ultima, and :pacbio_hifi resolve to
+        # `nothing`, so the corrector threads NO indel params. The
         # base_error_rate (threaded into ViterbiCorrectionConfig.error_rate to scale
         # the gap masses), gap-open fractions, and extend probabilities come from the
-        # profile; the run caps + band from the tier knobs above.
+        # profile; the run caps + band from the tier knobs above. HiFi is a
+        # separate low-error profile and deliberately does not inherit CLR moves.
         indel_params = if Mycelia.profile_enables_indels(config.sequencing_tech)
             profile = Mycelia.indel_error_profile(config.sequencing_tech)
             Mycelia.IndelDecodeParams(
@@ -2311,6 +2272,24 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
 end
 
 """
+    _correction_profile_technologies() -> Tuple
+
+Exact sequencing-technology profiles understood by the read corrector. This is
+intentionally distinct from assembler-family routing: PacBio CLR and HiFi are
+both long reads, but they must not share an error model.
+"""
+function _correction_profile_technologies()::Tuple
+    return (
+        :illumina,
+        :ultima,
+        :nanopore,
+        :pacbio,
+        :pacbio_clr,
+        :pacbio_hifi,
+    )
+end
+
+"""
     _olc_taxonomy() -> NamedTuple
 
 Single source of truth for the hybrid-OLC tool taxonomy: which sequencing techs
@@ -2326,7 +2305,12 @@ tool through `_run_olc_tool` needs an external-wrapper stub — a follow-up.)
 function _olc_taxonomy()
     return (
         short_read_techs = (:illumina, :ultima),
-        long_read_techs = (:nanopore, :pacbio),
+        long_read_techs = (
+            :nanopore,
+            :pacbio,
+            :pacbio_clr,
+            :pacbio_hifi,
+        ),
         short_read_tools = (:megahit, :metaspades),
         long_read_tools = (:flye, :metaflye, :canu, :hifiasm)
     )
@@ -2350,19 +2334,20 @@ end
     _flye_read_type(sequencing_tech::Symbol) -> String
 
 Map the corrector's read tech to a Flye/metaFlye `--read-type` flag. The reads are
-Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit. NOTE this
-means a native PacBio-HiFi set is assembled as `pacbio-corr`, not `pacbio-hifi` —
-`:pacbio` does not distinguish HiFi from CLR (finer tech granularity is a
-follow-up). Fails loud on an unexpected tech rather than silently defaulting.
+Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit for
+Nanopore and CLR. HiFi retains Flye's exact `pacbio-hifi` chemistry flag.
+Fails loud on an unexpected tech rather than silently defaulting.
 """
-function _flye_read_type(sequencing_tech::Symbol)
+function _flye_read_type(sequencing_tech::Symbol)::String
     if sequencing_tech == :nanopore
         return "nano-corr"
-    elseif sequencing_tech == :pacbio
+    elseif sequencing_tech in (:pacbio, :pacbio_clr)
         return "pacbio-corr"
+    elseif sequencing_tech == :pacbio_hifi
+        return "pacbio-hifi"
     else
         error("_flye_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
-              "(expected :nanopore or :pacbio).")
+              "(expected :nanopore, :pacbio, :pacbio_clr, or :pacbio_hifi).")
     end
 end
 
@@ -2372,14 +2357,14 @@ end
 Canu's coarse read-type flag (`nanopore` | `pacbio`). Fails loud on an unexpected
 tech rather than silently defaulting to PacBio.
 """
-function _canu_read_type(sequencing_tech::Symbol)
+function _canu_read_type(sequencing_tech::Symbol)::String
     if sequencing_tech == :nanopore
         return "nanopore"
-    elseif sequencing_tech == :pacbio
+    elseif sequencing_tech in (:pacbio, :pacbio_clr, :pacbio_hifi)
         return "pacbio"
     else
         error("_canu_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
-              "(expected :nanopore or :pacbio).")
+              "(expected :nanopore or a PacBio profile).")
     end
 end
 
@@ -2449,11 +2434,6 @@ struct _CorrectedPairedShortLong
     short_r1::_CorrectedReadSet
     short_r2::_CorrectedReadSet
     long_reads::_CorrectedReadSet
-end
-
-struct _CorrectedHiFiONT
-    hifi_reads::_CorrectedReadSet
-    ont_reads::_CorrectedReadSet
 end
 
 """
@@ -2795,24 +2775,7 @@ function _run_multi_input_assembler(
         jobs = config.jobs,
         read_type = String(config.autocycler_read_type),
         polypolish_careful = config.polypolish_careful,
-    )
-end
-
-function _run_multi_input_assembler(
-        ::Val{:metamdbg},
-        inputs::_CorrectedHiFiONT,
-        outdir::AbstractString,
-        config::MetaMDBGHybridConfig;
-        runner::Function = Mycelia.run_metamdbg,
-)::NamedTuple
-    return runner(;
-        config.assembler_options...,
-        hifi_reads = inputs.hifi_reads.path,
-        ont_reads = inputs.ont_reads.path,
-        outdir = String(outdir),
-        abundance_min = config.abundance_min,
-        threads = config.threads,
-        graph_k = config.graph_k,
+        keep_intermediates = config.keep_intermediates,
     )
 end
 
@@ -2849,6 +2812,16 @@ function _normalize_provenance_value(value::AbstractVector)::Vector{Any}
     return Any[_normalize_provenance_value(item) for item in value]
 end
 
+function _normalize_provenance_value(
+        value::AbstractDict,
+)::Dict{String, Any}
+    normalized = Dict{String, Any}()
+    for key in sort!(collect(keys(value)); by = String)
+        normalized[String(key)] = _normalize_provenance_value(value[key])
+    end
+    return normalized
+end
+
 function _normalize_provenance_value(value::Any)::Any
     return value
 end
@@ -2872,52 +2845,48 @@ end
 function _normalized_workflow_settings(
         config::AutocyclerPolishConfig,
 )::Dict{String, Any}
+    correction_technology = _long_read_correction_technology(config)
     return Dict{String, Any}(
         "workflow" => "autocycler_polished",
         "assembler" => "autocycler",
         "threads" => config.threads,
         "jobs" => config.jobs,
         "autocycler_read_type" => String(config.autocycler_read_type),
+        "long_read_correction_tech" => String(correction_technology),
         "polypolish_careful" => config.polypolish_careful,
         "pypolca_careful" => true,
+        "keep_intermediates" => config.keep_intermediates,
         "correction_options" => _normalize_provenance_value(
             config.correction_options,
         ),
     )
 end
 
-function _normalized_workflow_settings(
-        config::MetaMDBGHybridConfig,
-)::Dict{String, Any}
-    return Dict{String, Any}(
-        "workflow" => "metamdbg",
-        "assembler" => "metamdbg",
-        "threads" => config.threads,
-        "abundance_min" => config.abundance_min,
-        "graph_k" => config.graph_k,
-        "correction_options" => _normalize_provenance_value(
-            config.correction_options,
-        ),
-        "assembler_options" => _normalize_provenance_value(
-            config.assembler_options,
-        ),
-    )
+function _long_read_correction_technology(
+        config::UnicyclerHybridConfig,
+)::Symbol
+    return config.long_read_tech
+end
+
+function _long_read_correction_technology(
+        config::AutocyclerPolishConfig,
+)::Symbol
+    if config.autocycler_read_type in (:ont_r9, :ont_r10)
+        return :nanopore
+    elseif config.autocycler_read_type == :pacbio_clr
+        return :pacbio_clr
+    end
+    return :pacbio_hifi
 end
 
 function _paired_input_technologies(
         config::AbstractPairedShortLongAssemblyConfig,
 )::Dict{String, String}
+    long_read_technology = _long_read_correction_technology(config)
     return Dict(
         "short_r1" => String(config.short_read_tech),
         "short_r2" => String(config.short_read_tech),
-        "long_reads" => String(config.long_read_tech),
-    )
-end
-
-function _dual_long_input_technologies()::Dict{String, String}
-    return Dict(
-        "hifi_reads" => "pacbio_hifi",
-        "ont_reads" => "nanopore",
+        "long_reads" => String(long_read_technology),
     )
 end
 
@@ -3001,16 +2970,21 @@ function _wrap_multi_input_assembly(
     if graph_path !== nothing && (!isfile(graph_path) || filesize(graph_path) == 0)
         error("multi-input workflow :$(workflow) produced no graph at $(graph_path).")
     end
-    is_dual_long = workflow == :metamdbg
     assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
     tool_artifacts = _persistent_tool_artifacts(result, output_dir)
+    toolchain = hasproperty(result, :toolchain) ?
+                _normalize_provenance_value(result.toolchain) : nothing
+    retained_intermediates = hasproperty(result, :intermediates) ?
+                             String.(result.intermediates) : String[]
     stats = Dict{String, Any}(
-        "method" => is_dual_long ? "DualLongAssembly" : "HybridAssembly",
+        "method" => "HybridAssembly",
         "workflow" => String(workflow),
         "assembler" => assembler,
-        "input_contract" => is_dual_long ? "hifi_ont" : "paired_short_long",
+        "input_contract" => "paired_short_long",
         "polishers" => polishers,
         "workflow_settings" => workflow_settings,
+        "toolchain" => toolchain,
+        "retained_intermediates" => retained_intermediates,
         "input_technologies" => input_technologies,
         "tool_artifacts" => tool_artifacts,
         "short_read_tech" => short_read_tech === nothing ? nothing :
@@ -3047,6 +3021,7 @@ function _assemble_paired_short_long(
     prepared_long_reads = _prepare_read_source(long_reads)
     paired_count = _validate_paired_reads(short_r1, short_r2, "input")
     long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+    long_read_correction_technology = _long_read_correction_technology(config)
     root = _prepare_workflow_root(config.output_dir)
     cleanup_tokens = _Stage1CleanupToken[]
     try
@@ -3073,7 +3048,7 @@ function _assemble_paired_short_long(
         corrected_long = _correct_read_set!(
             cleanup_tokens,
             prepared_long_reads,
-            config.long_read_tech,
+            long_read_correction_technology,
             :long_reads,
             config.correction_options,
             root.path,
@@ -3126,7 +3101,7 @@ function _assemble_paired_short_long(
             ),
             corrected_paths,
             config.short_read_tech,
-            config.long_read_tech,
+            long_read_correction_technology,
             config.correction_options,
             persistent_output_dir,
             polishers,
@@ -3226,122 +3201,6 @@ function assemble_autocycler_polished(
         config::AutocyclerPolishConfig = AutocyclerPolishConfig(),
 )::AssemblyResult
     return assemble_hybrid((short_r1, short_r2), long_reads, config)
-end
-
-function _assemble_metamdbg_dual_long(
-        hifi_reads::Any,
-        ont_reads::Any,
-        config::MetaMDBGHybridConfig;
-        correction_runner::Function = _run_multi_input_stage1_correction,
-        assembler_runner::Function,
-)::AssemblyResult
-    prepared_hifi = _prepare_read_source(hifi_reads)
-    prepared_ont = _prepare_read_source(ont_reads)
-    hifi_count = _count_nonempty_reads(prepared_hifi, "hifi_reads")
-    ont_count = _count_nonempty_reads(prepared_ont, "ont_reads")
-    root = _prepare_workflow_root(config.output_dir)
-    cleanup_tokens = _Stage1CleanupToken[]
-    try
-        corrected_hifi = _correct_read_set!(
-            cleanup_tokens,
-            prepared_hifi,
-            :pacbio,
-            :hifi_reads,
-            config.correction_options,
-            root.path,
-            !root.ephemeral,
-            correction_runner,
-        )
-        corrected_ont = _correct_read_set!(
-            cleanup_tokens,
-            prepared_ont,
-            :nanopore,
-            :ont_reads,
-            config.correction_options,
-            root.path,
-            !root.ephemeral,
-            correction_runner,
-        )
-        inputs = _CorrectedHiFiONT(corrected_hifi, corrected_ont)
-        tool_result = assembler_runner(
-            inputs,
-            joinpath(root.path, "assembler_metamdbg"),
-        )
-        corrected_paths = if root.ephemeral
-            nothing
-        else
-            Dict(
-                "hifi_reads" => corrected_hifi.path,
-                "ont_reads" => corrected_ont.path,
-            )
-        end
-        persistent_output_dir = root.ephemeral ? nothing : root.path
-        return _wrap_multi_input_assembly(
-            tool_result,
-            :metamdbg,
-            Dict("hifi_reads" => hifi_count, "ont_reads" => ont_count),
-            Dict(
-                "hifi_reads" => corrected_hifi.count,
-                "ont_reads" => corrected_ont.count,
-            ),
-            corrected_paths,
-            nothing,
-            nothing,
-            config.correction_options,
-            persistent_output_dir,
-            String[],
-            _normalized_workflow_settings(config),
-            _dual_long_input_technologies(),
-        )
-    finally
-        _cleanup_multi_input_stages!(cleanup_tokens)
-        if root.ephemeral
-            try
-                rm(root.path; recursive = true, force = true)
-            catch cleanup_error
-                @warn "metaMDBG dual-long: ephemeral output cleanup failed" cleanup_error
-            end
-        end
-    end
-end
-
-"""
-    assemble_dual_long(hifi_reads, ont_reads; config=MetaMDBGHybridConfig())
-
-Correct PacBio HiFi and Oxford Nanopore inputs independently, then supply both
-corrected long-read sets to metaMDBG. This separate entry prevents metaMDBG from
-being misrepresented as a paired-short plus long assembler.
-"""
-function assemble_dual_long(
-        hifi_reads::Any,
-        ont_reads::Any;
-        config::MetaMDBGHybridConfig = MetaMDBGHybridConfig(),
-)::AssemblyResult
-    function assembler_runner(
-            inputs::_CorrectedHiFiONT,
-            outdir::AbstractString,
-    )::NamedTuple
-        return _run_multi_input_assembler(
-            Val(:metamdbg),
-            inputs,
-            outdir,
-            config,
-        )
-    end
-    return _assemble_metamdbg_dual_long(
-        hifi_reads,
-        ont_reads,
-        config;
-        assembler_runner,
-    )
-end
-
-function assemble_metamdbg_dual_long(
-        hifi_reads::Any,
-        ont_reads::Any;
-        config::MetaMDBGHybridConfig = MetaMDBGHybridConfig(),
-)::AssemblyResult
-    return assemble_dual_long(hifi_reads, ont_reads; config)
 end
 
 """

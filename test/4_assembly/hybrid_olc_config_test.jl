@@ -58,9 +58,13 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
             olc_tool = :megahit, sequencing_tech = :nanopore)
 
         # Long-read tools (td-wvto) are accepted with a compatible long-read tech.
-        for (tool, tech, opts) in ((:flye, :nanopore, (;)), (:flye, :pacbio, (;)),
-            (:metaflye, :nanopore, (;)), (:hifiasm, :pacbio, (;)),
-            (:canu, :pacbio, (; genome_size = "5m")))
+        for (tool, tech, opts) in (
+            (:flye, :nanopore, (;)),
+            (:flye, :pacbio_clr, (;)),
+            (:metaflye, :nanopore, (;)),
+            (:hifiasm, :pacbio_hifi, (;)),
+            (:canu, :pacbio_clr, (; genome_size = "5m")),
+        )
             cfg = R.AssemblyConfig(; k = 13, corrector = :iterative,
                 strategy = :scalable, layout = :olc, olc_tool = tool,
                 sequencing_tech = tech, olc_options = opts)
@@ -76,6 +80,9 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
         Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
             corrector = :iterative, strategy = :scalable, layout = :olc,
             olc_tool = :hifiasm, sequencing_tech = :nanopore)
+        Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
+            corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :hifiasm, sequencing_tech = :pacbio_clr)
 
         # canu requires an estimated genome_size in olc_options.
         Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
@@ -89,7 +96,7 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
             strategy = :scalable, layout = :olc, olc_tool = :auto,
             sequencing_tech = :illumina)
         Test.@test R._resolve_olc_tool(cfg_short) == :megahit
-        for tech in (:nanopore, :pacbio)
+        for tech in (:nanopore, :pacbio, :pacbio_clr, :pacbio_hifi)
             cfg_long = R.AssemblyConfig(; k = 13, corrector = :iterative,
                 strategy = :scalable, layout = :olc, olc_tool = :auto,
                 sequencing_tech = tech)
@@ -128,16 +135,19 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
         # the gated flye run never exercises. Fail loud on an unexpected tech.
         Test.@test R._flye_read_type(:nanopore) == "nano-corr"
         Test.@test R._flye_read_type(:pacbio) == "pacbio-corr"
+        Test.@test R._flye_read_type(:pacbio_clr) == "pacbio-corr"
+        Test.@test R._flye_read_type(:pacbio_hifi) == "pacbio-hifi"
         Test.@test_throws ErrorException R._flye_read_type(:illumina)
         Test.@test R._canu_read_type(:nanopore) == "nanopore"
         Test.@test R._canu_read_type(:pacbio) == "pacbio"
+        Test.@test R._canu_read_type(:pacbio_clr) == "pacbio"
+        Test.@test R._canu_read_type(:pacbio_hifi) == "pacbio"
         Test.@test_throws ErrorException R._canu_read_type(:illumina)
 
-        # Partition invariant (single source of truth): the corrector's accepted
-        # techs are exactly the taxonomy's short ∪ long, so :auto can never see a
-        # tech the resolver/read-type maps don't classify.
+        # The correction-profile and OLC-family taxonomies are intentionally
+        # independent, but every accepted profile must still have an adapter family.
         Test.@test Set((tax.short_read_techs..., tax.long_read_techs...)) ==
-                   Set((:illumina, :ultima, :nanopore, :pacbio))
+                   Set(R._correction_profile_technologies())
     end
 
     Test.@testset "read_type is a reserved olc_options key" begin

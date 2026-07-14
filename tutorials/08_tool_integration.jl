@@ -69,6 +69,29 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #     read_type="ont_r10",
 # )
 #
+# # High-level corrected multi-input workflows use typed sibling adapters.
+# unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
+#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+#     "reads_ont.fastq.gz";
+#     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+#         output_dir = "hybrid_unicycler_out",
+#     ),
+# )
+# autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
+#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+#     "reads_hifi.fastq.gz";
+#     config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
+#         long_read_tech = :pacbio_hifi,
+#         autocycler_read_type = :pacbio_hifi,
+#         output_dir = "hybrid_autocycler_out",
+#     ),
+# )
+# autocycler_result.assembly_stats["toolchain"]
+#
+# metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
+# combined HiFi-plus-ONT adapter.
+# Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
+#
 # Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size=31)
 # Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)
 # Mycelia.ggcat_query("graph.lz4", "queries.fasta", "ggcat_hits.tsv", 31)

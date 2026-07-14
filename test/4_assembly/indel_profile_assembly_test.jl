@@ -86,10 +86,18 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
                    0.02
 
         pb = Mycelia.indel_error_profile(:pacbio)
-        # PacBio: base 0.11, split 0.40 / 0.40 ⇒ absolute indel rate ≈ 0.088.
+        # Legacy :pacbio remains the CLR-like compatibility alias.
         Test.@test pb.base_error_rate ≈ 0.11
         Test.@test pb.base_error_rate * (pb.insertion_fraction + pb.deletion_fraction) >
                    0.02
+        Test.@test Mycelia.indel_error_profile(:pacbio_clr) == pb
+
+        hifi = Mycelia.indel_error_profile(:pacbio_hifi)
+        # HiFi has an exact high-accuracy profile and deliberately stays off the
+        # CLR-like indel pair-HMM until a validated HiFi indel split is modeled.
+        Test.@test hifi.base_error_rate ≈ 0.001
+        Test.@test hifi.insertion_fraction == 0.0
+        Test.@test hifi.deletion_fraction == 0.0
 
         ul = Mycelia.indel_error_profile(:ultima)
         # Ultima carries its TRUE conditional fractions (observe(): base 1e-6,
@@ -106,6 +114,8 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # Above threshold => indel-aware; negligible => substitution-only.
         Test.@test Mycelia.profile_enables_indels(:nanopore) == true
         Test.@test Mycelia.profile_enables_indels(:pacbio) == true
+        Test.@test Mycelia.profile_enables_indels(:pacbio_clr) == true
+        Test.@test Mycelia.profile_enables_indels(:pacbio_hifi) == false
         Test.@test Mycelia.profile_enables_indels(:illumina) == false
         Test.@test Mycelia.profile_enables_indels(:ultima) == false
         # The gate is a strict threshold on the ABSOLUTE indel rate
@@ -123,6 +133,10 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test R.AssemblyConfig(k = 13).sequencing_tech == :illumina
         Test.@test R.AssemblyConfig(k = 13, sequencing_tech = :nanopore).sequencing_tech ==
                    :nanopore
+        Test.@test R.AssemblyConfig(
+            k = 13,
+            sequencing_tech = :pacbio_hifi,
+        ).sequencing_tech == :pacbio_hifi
         Test.@test_throws Exception R.AssemblyConfig(k = 13, sequencing_tech = :bogus)
     end
 
