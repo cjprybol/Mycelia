@@ -10,8 +10,8 @@
 #   MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz
 #
 # Optional technology selectors are `MYCELIA_HYBRID_SHORT_TECH` (`illumina` or
-# `ultima`) and `MYCELIA_HYBRID_LONG_TECH` (`nanopore` or `pacbio`). The defaults
-# are `illumina` and `nanopore`.
+# `ultima`) and `MYCELIA_HYBRID_LONG_TECH` (`nanopore`, `pacbio_clr`, or
+# `pacbio_hifi`). The defaults are `illumina` and `nanopore`.
 #
 # Autocycler plus Polypolish/Pypolca is substantially more expensive and may
 # provision its conda environment. Opt in separately only when that tooling is
@@ -175,7 +175,7 @@ Test.@testset "multi-input hybrid external smoke" begin
             long_read_tech = _hybrid_env_symbol(
                 "MYCELIA_HYBRID_LONG_TECH",
                 :nanopore,
-                (:nanopore, :pacbio),
+                (:nanopore, :pacbio_clr, :pacbio_hifi),
             )
             threads = clamp(
                 something(
@@ -270,12 +270,16 @@ Test.@testset "multi-input hybrid external smoke" begin
                                 inputs.long_reads;
                                 config,
                             )
+                            resolved_long_read_tech =
+                                Mycelia.Rhizomorph._long_read_correction_technology(
+                                    config,
+                                )
                             _assert_persistent_hybrid_result(
                                 result,
                                 "autocycler_polished",
                                 output_dir,
                                 short_read_tech,
-                                long_read_tech,
+                                resolved_long_read_tech,
                                 ["polypolish-careful", "pypolca-careful"],
                             )
                         end

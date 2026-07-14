@@ -17,14 +17,34 @@ const AUTOCYCLER_SCRIPT_URL =
     AUTOCYCLER_SCRIPT_REVISION *
     "/pipelines/Automated_Autocycler_Bash_script_by_Ryan_Wick/" *
     "autocycler_full.sh"
-const AUTOCYCLER_REQUIRED_PACKAGES = (
-    "autocycler",
-    "bwa",
-    "parallel",
-    "polypolish",
-    "pypolca",
-    "sed",
+const AUTOCYCLER_REQUIRED_PACKAGE_SPECS = (
+    (name = "autocycler", constraint = :exact, version = "0.5.2"),
+    (name = "bwa", constraint = :minimum, version = "0.7.17"),
+    (name = "canu", constraint = :minimum, version = "2.3"),
+    (name = "flye", constraint = :minimum, version = "2.9.6"),
+    (name = "metamdbg", constraint = :minimum, version = "1.0"),
+    (name = "miniasm", constraint = :minimum, version = "0.3"),
+    (name = "minimap2", constraint = :minimum, version = "2.28"),
+    (name = "minipolish", constraint = :minimum, version = "0.2.0"),
+    (name = "myloasm", constraint = :minimum, version = "0.1.0"),
+    (
+        name = "necat",
+        constraint = :minimum,
+        version = "0.0.1_update20200803",
+    ),
+    (name = "nextdenovo", constraint = :minimum, version = "2.5.2"),
+    (name = "nextpolish", constraint = :minimum, version = "1.4.1"),
+    (name = "parallel", constraint = :present, version = ""),
+    (name = "plassembler", constraint = :minimum, version = "1.8.0"),
+    (name = "polypolish", constraint = :minimum, version = "0.6.0"),
+    (name = "pypolca", constraint = :minimum, version = "0.3.1"),
+    (name = "racon", constraint = :minimum, version = "1.5.0"),
+    (name = "raven-assembler", constraint = :minimum, version = "1.8.3"),
+    (name = "sed", constraint = :present, version = ""),
+    (name = "wtdbg", constraint = :minimum, version = "2.5"),
 )
+const AUTOCYCLER_REQUIRED_PACKAGES =
+    map(specification -> specification.name, AUTOCYCLER_REQUIRED_PACKAGE_SPECS)
 const AUTOCYCLER_READ_TYPES = (
     "ont_r9",
     "ont_r10",
@@ -81,6 +101,7 @@ end
 
 function _autocycler_environment_packages(;
         conda_runner::AbstractString = CONDA_RUNNER,
+        command_reader::Function = command -> read(command, String),
 )::Dict{String, String}
     command = Cmd(
         String[
@@ -91,7 +112,7 @@ function _autocycler_environment_packages(;
             "--json",
         ],
     )
-    package_records = JSON.parse(read(command, String))
+    package_records = JSON.parse(command_reader(command))
     package_records isa AbstractVector || throw(
         ErrorException("Conda package inventory was not a JSON array."),
     )
@@ -116,22 +137,84 @@ function _missing_autocycler_packages(
     ]
 end
 
+function _autocycler_numeric_version(
+        version::AbstractString,
+)::Union{Nothing, VersionNumber}
+    version_match = match(r"^\d+(?:\.\d+){0,2}", String(version))
+    version_match === nothing && return nothing
+    return try
+        VersionNumber(version_match.match)
+    catch
+        nothing
+    end
+end
+
+function _autocycler_version_at_least(
+        actual::AbstractString,
+        minimum::AbstractString,
+)::Bool
+    actual_version = _autocycler_numeric_version(actual)
+    minimum_version = _autocycler_numeric_version(minimum)
+    if actual_version === nothing || minimum_version === nothing
+        return false
+    elseif actual_version != minimum_version
+        return actual_version > minimum_version
+    end
+
+    minimum_match = match(r"^\d+(?:\.\d+){0,2}(.*)$", String(minimum))
+    actual_match = match(r"^\d+(?:\.\d+){0,2}(.*)$", String(actual))
+    minimum_suffix = something(only(minimum_match.captures))
+    isempty(minimum_suffix) && return true
+    actual_suffix = something(only(actual_match.captures))
+    return !isempty(actual_suffix) && !isless(actual_suffix, minimum_suffix)
+end
+
+function _autocycler_package_issues(
+        versions::AbstractDict{<:AbstractString, <:AbstractString},
+)::Vector{String}
+    issues = String[]
+    for specification in AUTOCYCLER_REQUIRED_PACKAGE_SPECS
+        if !haskey(versions, specification.name)
+            push!(issues, "$(specification.name) is missing")
+            continue
+        end
+        specification.constraint == :present && continue
+
+        actual = String(versions[specification.name])
+        if specification.constraint == :exact
+            actual == specification.version || push!(
+                issues,
+                "$(specification.name) must equal $(specification.version), " *
+                "got $(actual)",
+            )
+            continue
+        end
+
+        _autocycler_version_at_least(actual, specification.version) || push!(
+            issues,
+            "$(specification.name) must be at least $(specification.version), " *
+            "got $(actual)",
+        )
+    end
+    return issues
+end
+
 function _ensure_autocycler_packages!(
         package_inspector::Function,
         installer::Function,
 )::Dict{String, String}
     versions = package_inspector()
-    missing_packages = _missing_autocycler_packages(versions)
-    if !isempty(missing_packages)
-        @warn "Autocycler environment is stale; recreating it before assembly" missing_packages
+    package_issues = _autocycler_package_issues(versions)
+    if !isempty(package_issues)
+        @warn "Autocycler environment is stale; recreating it before assembly" package_issues
         installer(; force = true)
         versions = package_inspector()
-        missing_packages = _missing_autocycler_packages(versions)
+        package_issues = _autocycler_package_issues(versions)
     end
-    isempty(missing_packages) || throw(
+    isempty(package_issues) || throw(
         ErrorException(
-            "Autocycler environment is missing required packages after " *
-            "recreation: $(join(missing_packages, ", ")).",
+            "Autocycler environment has missing or incompatible required " *
+            "packages after recreation: $(join(package_issues, "; ")).",
         ),
     )
     return Dict{String, String}(versions)
@@ -168,8 +251,9 @@ environment specification.
 function install_autocycler(;
         force::Bool = false,
         downloader::Function = Downloads.download,
+        paths::Tuple{String, String, String} = _autocycler_paths(),
 )::String
-    install_dir, script_path, env_file_path = _autocycler_paths()
+    install_dir, script_path, env_file_path = paths
     mkpath(install_dir)
 
     if !isfile(env_file_path) || filesize(env_file_path) == 0
@@ -227,10 +311,40 @@ function _autocycler_pair_identifier(identifier::AbstractString)::String
     return replace(first_token, r"/[12]$" => "")
 end
 
+function _autocycler_pair_role(identifier::AbstractString)::Union{Nothing, Int}
+    first_token = first(split(String(identifier)))
+    role_match = match(r"/([12])$", first_token)
+    return role_match === nothing ? nothing :
+           parse(Int, something(only(role_match.captures)))
+end
+
+function _validate_autocycler_fastq(
+        path::AbstractString,
+        label::AbstractString,
+)::Int
+    reader = Mycelia.open_fastx(path)
+    record_count = 0
+    try
+        for record in reader
+            record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                "$(label) must be a FASTQ file: $(abspath(path))",
+            ))
+            record_count += 1
+        end
+    finally
+        close(reader)
+    end
+    record_count > 0 || throw(ArgumentError("$(label) must be non-empty."))
+    return record_count
+end
+
 function _validate_autocycler_paired_fastqs(
         short_reads_1::AbstractString,
         short_reads_2::AbstractString,
 )::Int
+    !Base.Filesystem.samefile(short_reads_1, short_reads_2) || throw(ArgumentError(
+        "Autocycler paired short-read R1 and R2 must be distinct files.",
+    ))
     reader_1 = Mycelia.open_fastx(short_reads_1)
     reader_2 = Mycelia.open_fastx(short_reads_2)
     pair_count = 0
@@ -259,6 +373,16 @@ function _validate_autocycler_paired_fastqs(
             end
             identifier_1 = String(FASTX.identifier(record_1))
             identifier_2 = String(FASTX.identifier(record_2))
+            role_1 = _autocycler_pair_role(identifier_1)
+            role_2 = _autocycler_pair_role(identifier_2)
+            roles_valid = (role_1 === nothing && role_2 === nothing) ||
+                          (role_1 == 1 && role_2 == 2)
+            roles_valid || throw(ArgumentError(
+                "Autocycler paired short reads have invalid explicit mate " *
+                "roles at record $(pair_count): " *
+                "R1=$(repr(identifier_1)), R2=$(repr(identifier_2)); " *
+                "expected /1 then /2.",
+            ))
             if _autocycler_pair_identifier(identifier_1) !=
                _autocycler_pair_identifier(identifier_2)
                 throw(
@@ -657,11 +781,14 @@ function _run_autocycler(
         read_type::AbstractString = "ont_r10",
         dependency_checker::Function = _ensure_autocycler_installed,
         runner::Function = _default_autocycler_step_runner,
+        validate_long_reads::Bool = true,
 )::NamedTuple
     normalized_long_reads = _require_nonempty_autocycler_file(
         long_reads,
         "Long-read FASTQ",
     )
+    validate_long_reads &&
+        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     normalized_read_type = _validate_autocycler_parameters(
         threads,
         jobs,
@@ -758,6 +885,7 @@ function _run_autocycler_polished(
         short_reads_2,
         "Paired short-read R2 FASTQ",
     )
+    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     _validate_autocycler_paired_fastqs(
         normalized_short_reads_1,
         normalized_short_reads_2,
@@ -777,6 +905,7 @@ function _run_autocycler_polished(
         read_type = normalized_read_type,
         dependency_checker = () -> toolchain,
         runner = runner,
+        validate_long_reads = false,
     )
     normalized_out_dir = autocycler_result.outdir
 
@@ -800,11 +929,24 @@ function _run_autocycler_polished(
     mkpath(polishing_plan.polishing_dir)
 
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
-    _execute_autocycler_steps(polishing_plan.steps; runner = runner)
-    final_assembly = _require_nonempty_autocycler_file(
-        polishing_plan.assembly,
-        "Pypolca-polished Autocycler assembly",
-    )
+    final_assembly = try
+        _execute_autocycler_steps(polishing_plan.steps; runner = runner)
+        _require_nonempty_autocycler_file(
+            polishing_plan.assembly,
+            "Pypolca-polished Autocycler assembly",
+        )
+    catch
+        if !keep_intermediates
+            try
+                _cleanup_autocycler_polishing_intermediates!(
+                    polishing_plan.intermediate_files,
+                )
+            catch cleanup_error
+                @warn "Autocycler failure cleanup could not remove intermediates" cleanup_error
+            end
+        end
+        rethrow()
+    end
     retained_intermediates = if keep_intermediates
         polishing_plan.intermediate_files
     else
@@ -841,6 +983,19 @@ Autocycler GFA and unpolished FASTA are preserved alongside both polishing
 stages. Mate count/order/identifiers and all required environment packages are
 validated before long-read assembly starts. Large SAM, filtered-SAM, and BWA
 index intermediates are removed after success unless `keep_intermediates=true`.
+Route-owned BWA/SAM intermediates are also cleaned after a failed polishing run
+unless explicit retention was requested; diagnostic assembly artifacts remain.
+
+# Keywords
+- `long_reads::AbstractString`: Nonempty long-read FASTQ.
+- `short_reads_1::AbstractString`: Corrected paired-short R1 FASTQ.
+- `short_reads_2::AbstractString`: Corrected paired-short R2 FASTQ.
+- `out_dir::AbstractString`: Empty isolated working/output directory.
+- `threads::Integer`: Threads per assembly/alignment job.
+- `jobs::Integer`: Number of simultaneous Autocycler assembler jobs.
+- `read_type::AbstractString`: Exact Autocycler long-read chemistry.
+- `polypolish_careful::Bool`: Enable conservative Polypolish filtering.
+- `keep_intermediates::Bool`: Retain BWA indices and SAM intermediates.
 
 # Returns
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,

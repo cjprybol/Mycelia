@@ -40,7 +40,7 @@ Upstream rejects a command that supplies both flags and selects one platform
 parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
 assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
 remains available for a single HiFi *or* single ONT input and fails before
-provisioning when both or neither are supplied.
+provisioning when both, neither, or an empty path set is supplied.
 
 This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
 false dual-long workflow would make benchmark comparisons invalid.
@@ -56,12 +56,20 @@ Each read set is corrected independently before assembly:
 PacBio CLR and HiFi are exact correction boundaries. Autocycler's read type
 selects `:pacbio_clr` or `:pacbio_hifi`; HiFi does not inherit the CLR-like
 11% indel-heavy profile. The high-accuracy HiFi profile remains on the
-substitution-only path until a validated HiFi insertion/deletion composition is
-modeled.
+substitution-only path, with its nominal 0.001 fallback error rate, until a
+validated HiFi insertion/deletion composition is modeled. The legacy
+`long_read_tech = :pacbio` alias remains CLR-like and resolves to
+`:pacbio_clr`; HiFi callers must select `:pacbio_hifi` explicitly. Likewise,
+new single-input hifiasm callers should use the exact `:pacbio_hifi` symbol.
+Its historical `:pacbio` contract remains accepted only as a deprecated alias
+that is normalized to `:pacbio_hifi` before correction.
 
-Pair count, order, and normalized identifiers are checked before and after
-correction. The direct `run_autocycler_polished` wrapper performs the same input
-mate check before dependency provisioning or long-read assembly.
+Every corrected read set must preserve its input count and identifier order.
+Pair synchronization and normalized identifiers are also checked before and
+after correction. Explicit `/1` and `/2` mate roles are checked when present,
+so reversed libraries fail loudly. The direct `run_autocycler_polished` wrapper
+performs the same input mate check before dependency provisioning or long-read
+assembly.
 
 ## Public entry points
 
@@ -99,11 +107,13 @@ caller-supplied output directory, corrected FASTQs and final tool artifacts are
 preserved for auditing. A non-empty persistent output directory is rejected so
 stale assemblies cannot be mistaken for current results. Large alignment SAMs,
 filtered SAMs, and BWA index files are removed after successful polishing by
-default; `keep_intermediates = true` retains and records them explicitly.
+default and after polishing failures. `keep_intermediates = true` retains and
+records them explicitly and therefore requires a persistent `output_dir`.
 
-Missing, empty, malformed, reordered, or count-changing paired inputs fail
-before the combined assembler. Missing/empty corrected FASTQs, zero corrected
-read counts, absent assemblies, and absent Autocycler graphs also fail loudly.
+Missing, empty, malformed, reordered, or count-changing inputs and corrected
+read sets fail before the combined assembler. Missing/empty corrected FASTQs,
+zero corrected read counts, absent assemblies, and absent Autocycler graphs
+also fail loudly.
 
 ## Provenance and reproducibility
 
@@ -116,7 +126,8 @@ caller-owned artifacts. Autocycler additionally records:
 - the installed versions of required conda packages.
 
 The installer recreates a stale pre-existing `autocycler` environment before
-assembly when any newly required polishing package is absent.
+assembly when a required assembly/polishing package is absent or violates the
+version constraint in the bundled environment specification.
 
 ## Verification
 

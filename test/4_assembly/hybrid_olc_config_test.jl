@@ -83,6 +83,10 @@ Test.@testset "hybrid-OLC route (a) config + routing (td-yymj)" begin
         Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,
             corrector = :iterative, strategy = :scalable, layout = :olc,
             olc_tool = :hifiasm, sequencing_tech = :pacbio_clr)
+        legacy_hifiasm = R.AssemblyConfig(; k = 13,
+            corrector = :iterative, strategy = :scalable, layout = :olc,
+            olc_tool = :hifiasm, sequencing_tech = :pacbio)
+        Test.@test legacy_hifiasm.sequencing_tech == :pacbio_hifi
 
         # canu requires an estimated genome_size in olc_options.
         Test.@test_throws ErrorException R.AssemblyConfig(; k = 13,

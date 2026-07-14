@@ -196,6 +196,8 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test unicycler isa Mycelia.Rhizomorph.AbstractPairedShortLongAssemblyConfig
         Test.@test unicycler.short_read_tech == :ultima
         Test.@test unicycler.long_read_tech == :pacbio
+        Test.@test Mycelia.Rhizomorph._long_read_correction_technology(unicycler) ==
+                   :pacbio_clr
         Test.@test unicycler.threads == 3
 
         autocycler = Mycelia.Rhizomorph.AutocyclerPolishConfig(
@@ -205,13 +207,14 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             jobs = 2,
             polypolish_careful = false,
             keep_intermediates = true,
+            output_dir = tempname(),
         )
         Test.@test autocycler.autocycler_read_type == :ont_r9
         Test.@test !autocycler.polypolish_careful
         Test.@test autocycler.keep_intermediates
         Test.@test Mycelia.Rhizomorph.AutocyclerPolishConfig(
             long_read_tech = :pacbio,
-        ).autocycler_read_type == :pacbio_hifi
+        ).autocycler_read_type == :pacbio_clr
         Test.@test Mycelia.Rhizomorph.AutocyclerPolishConfig(
             long_read_tech = :pacbio_clr,
         ).autocycler_read_type == :pacbio_clr
@@ -247,6 +250,15 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 long_read_tech = :pacbio_hifi,
                 autocycler_read_type = :pacbio_clr,
             )
+        end
+        test_throws_message(ArgumentError, "incompatible") do
+            Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                long_read_tech = :pacbio,
+                autocycler_read_type = :pacbio_hifi,
+            )
+        end
+        test_throws_message(ArgumentError, "requires a persistent output_dir") do
+            Mycelia.Rhizomorph.AutocyclerPolishConfig(keep_intermediates = true)
         end
         test_throws_message(ArgumentError, "managed by the multi-input route") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(
@@ -289,10 +301,26 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "input",
             )
         end
+        reversed_r1 = [multi_input_fastq_record("pair_1/2")]
+        reversed_r2 = [multi_input_fastq_record("pair_1/1")]
+        test_throws_message(ArgumentError, "invalid explicit mate roles") do
+            Mycelia.Rhizomorph._validate_paired_reads(
+                reversed_r1,
+                reversed_r2,
+                "input",
+            )
+        end
         test_throws_message(ArgumentError, "must be non-empty") do
             Mycelia.Rhizomorph._validate_paired_reads(
                 FASTX.FASTQ.Record[],
                 FASTX.FASTQ.Record[],
+                "input",
+            )
+        end
+        test_throws_message(ArgumentError, "sources must be distinct") do
+            Mycelia.Rhizomorph._validate_paired_reads(
+                MULTI_INPUT_R1,
+                MULTI_INPUT_R1,
                 "input",
             )
         end
@@ -305,6 +333,13 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             [r2_path],
             "input",
         ) == 2
+        test_throws_message(ArgumentError, "sources must be distinct") do
+            Mycelia.Rhizomorph._validate_paired_reads(
+                [r1_path],
+                [r1_path],
+                "input",
+            )
+        end
 
         split_r1_paths = [
             multi_input_write_fastq(
@@ -323,6 +358,13 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             split_r2_paths,
             "input",
         ) == 2
+        test_throws_message(ArgumentError, "sources must be distinct") do
+            Mycelia.Rhizomorph._validate_paired_reads(
+                split_r1_paths,
+                [split_r2_paths[1], split_r1_paths[2]],
+                "input",
+            )
+        end
         test_throws_message(ArgumentError, "R1=2, R2=1") do
             Mycelia.Rhizomorph._validate_paired_reads(
                 split_r1_paths,
@@ -362,6 +404,72 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test !assembler_called[]
         Test.@test length(correction_calls) == 3
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
+
+        for (message, transform) in (
+                (
+                    "short_r1 correction changed read count",
+                    (records::Vector{FASTX.FASTQ.Record}) -> records[1:1],
+                ),
+                (
+                    "short_r1 correction changed read order or identifier",
+                    (records::Vector{FASTX.FASTQ.Record}) -> reverse(records),
+                ),
+        )
+            identical_change_calls = NamedTuple[]
+            identical_change_runner = multi_input_fake_correction_runner(
+                identical_change_calls;
+                transform = (index, records) -> index in (1, 2) ?
+                                                transform(records) : records,
+            )
+            identical_change_assembler_called = Ref(false)
+            test_throws_message(ArgumentError, message) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    config,
+                    :unicycler;
+                    correction_runner = identical_change_runner,
+                    assembler_runner = (inputs, outdir) -> begin
+                        identical_change_assembler_called[] = true
+                        multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test !identical_change_assembler_called[]
+            Test.@test length(identical_change_calls) == 3
+            Test.@test all(
+                call -> !isfile(call.corrected_fastq),
+                identical_change_calls,
+            )
+        end
+
+        two_long_reads = [
+            multi_input_fastq_record("long_a", "ACGTACGTACGT"),
+            multi_input_fastq_record("long_b", "TGCATGCATGCA"),
+        ]
+        reordered_long_calls = NamedTuple[]
+        reordered_long_runner = multi_input_fake_correction_runner(
+            reordered_long_calls;
+            transform = (index, records) -> index == 3 ? reverse(records) : records,
+        )
+        test_throws_message(
+            ArgumentError,
+            "long_reads correction changed read order or identifier",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                two_long_reads,
+                config,
+                :unicycler;
+                correction_runner = reordered_long_runner,
+                assembler_runner = (inputs, outdir) ->
+                    multi_input_fake_assembler_result(outdir),
+            )
+        end
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            reordered_long_calls,
+        )
     end
 
     Test.@testset "gzip inputs reach independent correction" begin
@@ -434,7 +542,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )::NamedTuple
             return (;
                 corrected_fastq = counted_fastq,
-                corrected_read_count = 7,
+                corrected_read_count = 1,
                 ephemeral = true,
                 correction_graph = fill(1, 10),
             )
@@ -450,7 +558,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             false,
             counted_runner,
         )
-        Test.@test corrected_from_count.count == 7
+        Test.@test corrected_from_count.count == 1
         Test.@test cleanup_tokens == [
             Mycelia.Rhizomorph._Stage1CleanupToken(counted_fastq, true),
         ]
@@ -463,6 +571,8 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         )
         empty_fastq = tempname() * ".fastq"
         touch(empty_fastq)
+        fasta_output = tempname() * ".fasta"
+        write(fasta_output, ">not_fastq\nACGT\n")
         malformed_stages = [
             ("missing corrected_fastq", (; ephemeral = true)),
             (
@@ -493,6 +603,22 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                     ephemeral = false,
                 ),
             ),
+            (
+                "reported 7 corrected reads",
+                (;
+                    corrected_fastq = valid_fastq,
+                    corrected_read_count = 7,
+                    ephemeral = false,
+                ),
+            ),
+            (
+                "correction output is not FASTQ",
+                (;
+                    corrected_fastq = fasta_output,
+                    corrected_read_count = 1,
+                    ephemeral = false,
+                ),
+            ),
         ]
         for (message, stage) in malformed_stages
             tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
@@ -513,6 +639,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         end
         rm(valid_fastq; force = true)
         rm(empty_fastq; force = true)
+        rm(fasta_output; force = true)
     end
 
     Test.@testset "independent correction profiles and ephemeral cleanup" begin
@@ -576,6 +703,10 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "strategy" => "scalable",
             ),
             "assembler_options" => Dict{String, Any}(),
+        )
+        Test.@test result.assembly_stats["correction_options"] == Dict(
+            "k" => 17,
+            "strategy" => "scalable",
         )
         Test.@test !result.gfa_compatible
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
@@ -668,7 +799,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             )
         end
         config = Mycelia.Rhizomorph.AutocyclerPolishConfig(;
-            long_read_tech = :pacbio,
+            long_read_tech = :pacbio_hifi,
             autocycler_read_type = :pacbio_hifi,
             output_dir,
             threads = 4,
@@ -862,20 +993,28 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
 
         wrapped = Mycelia.Rhizomorph._wrap_multi_input_assembly(
             (; contigs = gzip_fasta),
-            :unicycler,
-            Dict("short_r1" => 1, "short_r2" => 1, "long_reads" => 1),
-            Dict("short_r1" => 1, "short_r2" => 1, "long_reads" => 1),
-            nothing,
-            :illumina,
-            :nanopore,
-            (; k = 13),
-            nothing,
-            String[],
-            Dict{String, Any}(
+            :unicycler;
+            input_counts = Dict(
+                "short_r1" => 1,
+                "short_r2" => 1,
+                "long_reads" => 1,
+            ),
+            corrected_counts = Dict(
+                "short_r1" => 1,
+                "short_r2" => 1,
+                "long_reads" => 1,
+            ),
+            corrected_paths = nothing,
+            short_read_tech = :illumina,
+            long_read_tech = :nanopore,
+            correction_options = (; k = 13),
+            output_dir = nothing,
+            polishers = String[],
+            workflow_settings = Dict{String, Any}(
                 "workflow" => "unicycler",
                 "assembler" => "unicycler",
             ),
-            Dict(
+            input_technologies = Dict(
                 "short_r1" => "illumina",
                 "short_r2" => "illumina",
                 "long_reads" => "nanopore",
@@ -900,20 +1039,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         test_throws_message(ErrorException, "produced no graph") do
             Mycelia.Rhizomorph._wrap_multi_input_assembly(
                 (; assembly = gzip_fasta, graph = joinpath(artifact_dir, "missing.gfa")),
-                :autocycler_polished,
-                Dict{String, Int}(),
-                Dict{String, Int}(),
-                nothing,
-                :illumina,
-                :nanopore,
-                (;),
-                nothing,
-                ["polypolish", "pypolca-careful"],
-                Dict{String, Any}(
+                :autocycler_polished;
+                input_counts = Dict{String, Int}(),
+                corrected_counts = Dict{String, Int}(),
+                corrected_paths = nothing,
+                short_read_tech = :illumina,
+                long_read_tech = :nanopore,
+                correction_options = (;),
+                output_dir = nothing,
+                polishers = ["polypolish", "pypolca-careful"],
+                workflow_settings = Dict{String, Any}(
                     "workflow" => "autocycler_polished",
                     "assembler" => "autocycler",
                 ),
-                Dict(
+                input_technologies = Dict(
                     "short_r1" => "illumina",
                     "short_r2" => "illumina",
                     "long_reads" => "nanopore",
@@ -923,6 +1062,14 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
     end
 
     Test.@testset "public dispatch fails before external tools" begin
+        no_role_pairs = [multi_input_fastq_record("same_pair")]
+        test_throws_message(ArgumentError, "sources must be distinct") do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (no_role_pairs, no_role_pairs),
+                MULTI_INPUT_LONG;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
         test_throws_message(ArgumentError, "different counts") do
             Mycelia.Rhizomorph.assemble_hybrid(
                 (MULTI_INPUT_R1, MULTI_INPUT_R2[1:1]),
@@ -932,6 +1079,20 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         end
         Test.@test !isdefined(Mycelia.Rhizomorph, :assemble_dual_long)
         mktempdir() do temp_dir
+            paired_path = multi_input_write_fastq(
+                joinpath(temp_dir, "same-physical.fastq"),
+                no_role_pairs,
+            )
+            paired_alias = joinpath(temp_dir, "same-physical-alias.fastq")
+            symlink(paired_path, paired_alias)
+            test_throws_message(ArgumentError, "sources must be distinct") do
+                Mycelia.Rhizomorph.assemble_hybrid(
+                    ([paired_path], [paired_alias]),
+                    MULTI_INPUT_LONG;
+                    config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                )
+            end
+
             excluded_outdir = joinpath(temp_dir, "excluded-mixed-metamdbg")
             test_throws_message(ArgumentError, "exactly one input technology") do
                 Mycelia.run_metamdbg(
@@ -947,6 +1108,21 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 Mycelia.run_metamdbg(outdir = missing_outdir)
             end
             Test.@test !ispath(missing_outdir)
+
+            for (label, keyword_arguments) in (
+                    ("hifi_reads", (; hifi_reads = String[])),
+                    ("ont_reads", (; ont_reads = "")),
+                    ("ont_reads", (; ont_reads = [" "])),
+            )
+                empty_outdir = joinpath(temp_dir, "empty-$(label)-$(gensym())")
+                test_throws_message(ArgumentError, "at least one non-empty path") do
+                    Mycelia.run_metamdbg(;
+                        keyword_arguments...,
+                        outdir = empty_outdir,
+                    )
+                end
+                Test.@test !ispath(empty_outdir)
+            end
         end
     end
 end

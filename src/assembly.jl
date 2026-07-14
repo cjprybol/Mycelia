@@ -2745,6 +2745,14 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
             ),
         )
     end
+    selected_reads = has_hifi_reads ? hifi_reads : ont_reads
+    selected_paths = selected_reads isa String ? [selected_reads] : selected_reads
+    if isempty(selected_paths) || any(path -> isempty(strip(path)), selected_paths)
+        technology = has_hifi_reads ? "hifi_reads" : "ont_reads"
+        throw(ArgumentError(
+            "metaMDBG $(technology) must contain at least one non-empty path.",
+        ))
+    end
 
     Mycelia.add_bioconda_env("metamdbg")
     mkpath(outdir)
