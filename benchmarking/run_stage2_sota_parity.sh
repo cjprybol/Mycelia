@@ -9,23 +9,15 @@
 # (4.64 Mb @ 50x + assembly + dnadiff), so this is intended for an HPC node, not
 # the CPU-only laptop.
 #
-# This is a thin, cluster-agnostic runner. The SLURM header below is a TEMPLATE:
-# fill in --account / --partition / resource limits for the target cluster
-# (Lawrencium or NERSC) before `sbatch`-ing it. Verify partition names with
-# `sinfo` on the cluster first — do NOT assume. Run interactively with:
+# This is a thin, cluster-agnostic runner for LOCAL / interactive use:
 #   bash benchmarking/run_stage2_sota_parity.sh
 #
-# --- SLURM template (edit before use; values below are PLACEHOLDERS) ----------
-# #SBATCH --job-name=rhizo-stage2-parity
-# #SBATCH --account=<FILL_IN>
-# #SBATCH --partition=<FILL_IN>
-# #SBATCH --nodes=1
-# #SBATCH --ntasks=1
-# #SBATCH --cpus-per-task=16
-# #SBATCH --mem=64G
-# #SBATCH --time=08:00:00
-# #SBATCH --output=rhizo-stage2-parity-%j.log
-# -----------------------------------------------------------------------------
+# For the real Lawrencium submission (the intended venue — E. coli @ 50x is HPC
+# work) use the ready sbatch instead, which carries the verified allocation
+# (account pc_mfnanofabio, partition lr6, qos lr_normal), the group depot, and
+# the module load:
+#   sbatch benchmarking/run_stage2_sota_parity_lrc.sbatch
+# Prereq once on a login node: benchmarking/hpc-setup.sh (instantiates deps).
 
 set -euo pipefail
 
