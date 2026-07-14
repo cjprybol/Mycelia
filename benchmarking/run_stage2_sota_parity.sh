@@ -41,6 +41,7 @@ Options (all have env-var equivalents consumed by the harness):
   --coverage N     fold coverage for ART        (default: 50)
   --seed N         ART rndSeed                   (default: 42)
   --smoke          quick plumbing check (phix174 only, coverage 30)
+  --no-sota        disable the standalone SPAdes SOTA arm (on by default here)
   --help           show this help
 
 The harness self-verifies each reference length (fail-closed) and asserts every
@@ -54,6 +55,7 @@ TARGETS="ecoli_k12"
 COVERAGE="50"
 SEED="42"
 SMOKE="false"
+SOTA="true"   # this runner IS the SOTA-parity run; the independent SPAdes arm is on
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -61,6 +63,7 @@ while [[ $# -gt 0 ]]; do
         --coverage) COVERAGE="$2"; shift 2 ;;
         --seed)     SEED="$2"; shift 2 ;;
         --smoke)    SMOKE="true"; shift ;;
+        --no-sota)  SOTA="false"; shift ;;
         --help)     usage; exit 0 ;;
         *)          echo "unknown argument: $1" >&2; usage; exit 2 ;;
     esac
@@ -68,7 +71,7 @@ done
 
 echo "Repo         : ${REPO_ROOT}"
 echo "Targets      : ${TARGETS}"
-echo "Coverage     : ${COVERAGE}x  seed=${SEED}  smoke=${SMOKE}"
+echo "Coverage     : ${COVERAGE}x  seed=${SEED}  smoke=${SMOKE}  sota-arm=${SOTA}"
 echo "Julia        : $(command -v julia)"
 
 # LD_LIBRARY_PATH="" is required for Julia on HPC (see global CLAUDE.md).
@@ -78,5 +81,6 @@ MYCELIA_RDV_TARGETS="${TARGETS}" \
 MYCELIA_RDV_COVERAGE="${COVERAGE}" \
 MYCELIA_RDV_SEED="${SEED}" \
 MYCELIA_RDV_SMOKE="${SMOKE}" \
+MYCELIA_RDV_SOTA="${SOTA}" \
     julia --project="${REPO_ROOT}" \
         benchmarking/real_data_corrector_validation.jl

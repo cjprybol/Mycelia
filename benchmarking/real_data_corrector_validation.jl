@@ -97,7 +97,14 @@ end
 const COVERAGE = parse(Int, get(ENV, "MYCELIA_RDV_COVERAGE", SMOKE ? "30" : "50"))
 const K = parse(Int, get(ENV, "MYCELIA_RDV_K", "21"))
 const SEED = parse(Int, get(ENV, "MYCELIA_RDV_SEED", "42"))
-const ARMS = (:naive, :scalable, :hybrid_olc)
+# The standalone SOTA assembler arm (SPAdes on RAW reads) is an independent
+# contiguity anchor for the parity comparison. It is OPT-IN (MYCELIA_RDV_SOTA)
+# so the fast phix/lambda default and SMOKE path do not pay a full SPAdes run or
+# require the spades conda env; enable it for the repeat-bearing parity run.
+const ENABLE_SOTA = _truthy(get(ENV, "MYCELIA_RDV_SOTA", "false"))
+const ARMS = ENABLE_SOTA ?
+             (:naive, :scalable, :hybrid_olc, :sota_spades) :
+             (:naive, :scalable, :hybrid_olc)
 const VALIDATION_SCOPE = "interim_engineering_validation"
 const ART_PROFILE = "HS25"
 const READ_LENGTH = 150
@@ -120,7 +127,9 @@ const IDENTITY_TOLERANCE = 0.02
 function arm_name(arm::Symbol)::String
     arm in ARMS || throw(ArgumentError(
         "unknown validation arm :$(arm); expected one of $(ARMS)"))
-    return arm == :hybrid_olc ? "hybrid-olc" : String(arm)
+    arm == :hybrid_olc && return "hybrid-olc"
+    arm == :sota_spades && return "sota-spades"
+    return String(arm)
 end
 
 """Load a FASTQ file into a `Vector{FASTX.FASTQ.Record}`."""
@@ -391,6 +400,27 @@ function run_arm(
                 ),
                 verbose = false
             )
+        elseif arm == :sota_spades
+            # Independent SOTA contiguity anchor: SPAdes on the RAW (uncorrected)
+            # reads, using the same single-stream input as every other arm. Run
+            # as a standalone assembler baseline — NOT routed through
+            # assemble_genome, whose :olc layout requires the Stage-1 corrector,
+            # so a raw (uncorrected) external assembly cannot go through it. This
+            # answers "are we at the field's contiguity level?", distinct from
+            # the hybrid arm's accurization ablation.
+            raw_fastq = joinpath(outdir, "$(name)_raw.fastq")
+            Mycelia.write_fastq(records = reads, filename = raw_fastq)
+            spades = Mycelia.run_spades(
+                fastq1 = raw_fastq,
+                outdir = joinpath(outdir, "spades")
+            )
+            contig_strings = String[]
+            open(FASTX.FASTA.Reader, spades.contigs) do reader
+                for record in reader
+                    push!(contig_strings, FASTX.sequence(String, record))
+                end
+            end
+            result = (; contigs = contig_strings)
         else
             throw(ArgumentError("unsupported validation arm :$(arm)"))
         end
@@ -948,6 +978,11 @@ function main()::Nothing
     n_rows = DataFrames.nrow(df)
     df.art_build = fill(conda_package_record("art", "art"), n_rows)
     df.megahit_build = fill(conda_package_record("megahit", "megahit"), n_rows)
+    if ENABLE_SOTA
+        # Only query the spades env when the SOTA arm actually ran (otherwise the
+        # env may not exist and conda_package_record would error).
+        df.spades_build = fill(conda_package_record("spades", "spades"), n_rows)
+    end
     df.mummer_build = fill(conda_package_record("mummer", "mummer"), n_rows)
     df.gfatools_build = fill(conda_package_record("gfatools", "gfatools"), n_rows)
     df.run_platform = fill(Sys.MACHINE, n_rows)
