@@ -9,6 +9,27 @@ import JSON
 import Mycelia
 import Test
 
+function checkpoint_test_error(
+        operation::F,
+        expected_type::Type{T},
+        expected_fragment::AbstractString,
+)::Nothing where {F <: Function, T <: Exception}
+    observed_exception = try
+        operation()
+        nothing
+    catch exception
+        exception
+    end
+    Test.@test typeof(observed_exception) === expected_type
+    if typeof(observed_exception) === expected_type
+        Test.@test Base.occursin(
+            expected_fragment,
+            Base.sprint(Base.showerror, observed_exception),
+        )
+    end
+    return nothing
+end
+
 function checkpoint_resume_reads()::Vector{FASTX.FASTQ.Record}
     sequence = "ACGTACGTACGTACGTACGTACGTACGTACGT"
     quality = repeat("I", length(sequence))
@@ -119,12 +140,17 @@ Test.@testset "Fresh input hash and FASTQ parse share one descriptor" begin
             filename = replacement_bytes_path,
         )
         replacement_bytes = Base.read(replacement_bytes_path)
-        Test.@test_throws ArgumentError Mycelia._load_hashed_input_fastq(
-            input_fastq;
-            after_initial_hash = () -> Base.open(input_fastq, "w") do io
-                Base.write(io, replacement_bytes)
-            end,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "input FASTQ changed while it was being hashed and parsed",
+        ) do
+            Mycelia._load_hashed_input_fastq(
+                input_fastq;
+                after_initial_hash = () -> Base.open(input_fastq, "w") do io
+                    Base.write(io, replacement_bytes)
+                end,
+            )
+        end
     end
 end
 
@@ -146,16 +172,21 @@ Test.@testset "Checkpoint FASTQ rejects in-place mutation during parse" begin
         expected_sha256 = Mycelia._stream_sha256_file(checkpoint_fastq)
         replacement_bytes = Base.read(replacement_fastq)
 
-        Test.@test_throws ArgumentError Mycelia._load_validated_checkpoint_fastq(
-            checkpoint_fastq,
-            expected_sha256,
-            Base.realpath(temporary_directory),
-            checkpoint_basename;
-            after_initial_hash = () -> Base.open(
-                checkpoint_fastq, "w") do io
-                Base.write(io, replacement_bytes)
-            end,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint current_fastq_file changed while it was being parsed",
+        ) do
+            Mycelia._load_validated_checkpoint_fastq(
+                checkpoint_fastq,
+                expected_sha256,
+                Base.realpath(temporary_directory),
+                checkpoint_basename;
+                after_initial_hash = () -> Base.open(
+                    checkpoint_fastq, "w") do io
+                    Base.write(io, replacement_bytes)
+                end,
+            )
+        end
     end
 end
 
@@ -363,8 +394,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, partial_root, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint root does not match schema v2",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         missing_profile_disabled_telemetry = Base.deepcopy(valid_checkpoint)
         delete!(
@@ -374,16 +410,26 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, missing_profile_disabled_telemetry, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint root does not match schema v2",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         partial_row = Base.deepcopy(valid_checkpoint)
         delete!(first(partial_row["indel_rung_telemetry"]), "requested")
         open(checkpoint_file, "w") do io
             JSON.print(io, partial_row, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry row lacks mandatory fields: requested",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         missing_full_row_field = Base.deepcopy(valid_checkpoint)
         delete!(
@@ -393,32 +439,52 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, missing_full_row_field, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry row lacks mandatory fields: graph_cleanup",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         invalid_root_timestamp = Base.deepcopy(valid_checkpoint)
         invalid_root_timestamp["timestamp"] = 0
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_root_timestamp, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint timestamp must be a string",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         missing_diagnostic = Base.deepcopy(valid_checkpoint)
         delete!(missing_diagnostic["corrector_diagnostics"], "structural")
         open(checkpoint_file, "w") do io
             JSON.print(io, missing_diagnostic, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint corrector_diagnostics must contain exactly",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         invalid_diagnostic_type = Base.deepcopy(valid_checkpoint)
         invalid_diagnostic_type["corrector_diagnostics"]["structural"] = 0.0
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_diagnostic_type, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint corrector_diagnostics structural must be an integer",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         mismatched_profile_request = Base.deepcopy(valid_checkpoint)
         first(mismatched_profile_request["indel_rung_telemetry"])[
@@ -426,8 +492,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, mismatched_profile_request, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry profile_requested does not match invocation indel_params",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # Every aggregate uses checked arithmetic; individually valid counters
         # cannot wrap while their checkpoint total is reconstructed.
@@ -439,8 +510,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, improvement_overflow, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint total_improvements exceeds Int range",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         window_counter_overflow = Base.deepcopy(valid_checkpoint)
         overflow_row = first(window_counter_overflow["indel_rung_telemetry"])
@@ -450,8 +526,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, window_counter_overflow, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry admitted + rejected exceeds Int range",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # A valid, hash-matching FASTQ from another completed pass in the same
         # output directory cannot be substituted for the checkpoint cursor.
@@ -469,8 +550,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, wrong_pass_checkpoint, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint current_fastq_file does not match the completed pass",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # The output directory is bound to both the canonical path and content of
         # the original input. Even byte-identical reads at another path cannot
@@ -481,8 +567,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
             records = checkpoint_resume_reads(),
             filename = wrong_input_fastq,
         )
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            wrong_input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: input_fastq_path",
+        ) do
+            checkpoint_resume_invocation(
+                wrong_input_fastq, output_directory)
+        end
 
         original_input_bytes = Base.read(input_fastq)
         Mycelia.write_fastq(
@@ -491,8 +582,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
             ],
             filename = input_fastq,
         )
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: input_fastq_sha256",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
         Base.write(input_fastq, original_input_bytes)
 
         excessive_metric_samples = Base.deepcopy(valid_checkpoint)
@@ -506,8 +602,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, excessive_metric_samples, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry raw_frontier_metrics exceeds the sample limit",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # A checkpoint-selected FASTQ must resolve inside the canonical output
         # directory, even if its forged digest is otherwise correct.
@@ -523,8 +624,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, outside_checkpoint, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint current_fastq_file must resolve as a direct child of output_dir",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # Hash success is insufficient: the resumed FASTQ is parsed through the
         # same descriptor and malformed records fail closed.
@@ -537,8 +643,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, malformed_fastq_checkpoint, 2)
         end
-        Test.@test_throws Exception checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ErrorException,
+            "Length of quality must be identical to length of sequence",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
         Base.write(malformed_fastq, valid_final_fastq_bytes)
 
         # All serialized names are whitelisted before conversion to Symbol, so an
@@ -549,8 +660,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, unsupported_history_field, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint iteration history row contains too many fields",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         unsupported_metric_field = Base.deepcopy(valid_checkpoint)
         first(unsupported_metric_field["indel_rung_telemetry"])[
@@ -564,8 +680,14 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, unsupported_metric_field, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel frontier metric contains unsupported field " *
+            "attacker_controlled_symbol",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # The fixed-toy anchor-loss decision is a supported, round-trippable
         # production enum rather than an arbitrary Symbol conversion.
@@ -586,23 +708,38 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, boolean_diagnostic, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint corrector_diagnostics structural must be an integer",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         negative_auxiliary = Base.deepcopy(valid_checkpoint)
         negative_auxiliary["cheap_correction_counts"][1] = -1
         open(checkpoint_file, "w") do io
             JSON.print(io, negative_auxiliary, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint cheap_correction_counts[1] must be nonnegative",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # Size is checked from the open checkpoint descriptor before JSON parsing.
         open(checkpoint_file, "w") do io
             Base.truncate(io, Mycelia._ITERATIVE_CHECKPOINT_MAX_BYTES + 1)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "maximum is $(Mycelia._ITERATIVE_CHECKPOINT_MAX_BYTES) bytes",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
         open(checkpoint_file, "w") do io
             JSON.print(io, valid_checkpoint, 2)
         end
@@ -615,18 +752,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, mismatched_configuration, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: indel_schedule",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
         boolean_as_integer_configuration = Base.deepcopy(valid_checkpoint)
         boolean_as_integer_configuration["resume_configuration"][
@@ -634,16 +776,26 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, boolean_as_integer_configuration, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: stop_on_no_change",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         integer_as_float_configuration = Base.deepcopy(valid_checkpoint)
         integer_as_float_configuration["resume_configuration"]["max_k"] = 3.0
         open(checkpoint_file, "w") do io
             JSON.print(io, integer_as_float_configuration, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: max_k",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
 
         # JSON arrays deserialize to a different concrete container type than the
         # invocation's Vector{Int}; equal scalar leaves remain compatible.
@@ -664,8 +816,13 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_nested_ladder_type, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory; k_ladder = [3])
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: k_ladder",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory; k_ladder = [3])
+        end
 
         indel_params = Mycelia.IndelDecodeParams(
             0.05, 0.2, 0.2, 0.1, 0.1, 3, 3, 16)
@@ -686,24 +843,34 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_nested_indel_type, 2)
         end
-        Test.@test_throws ArgumentError checkpoint_resume_invocation(
-            input_fastq, output_directory; indel_params = indel_params)
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint resume_configuration does not match this invocation: indel_params",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory; indel_params = indel_params)
+        end
 
         # Existing-but-corrupt JSON is never treated as permission to restart
         # fresh and silently replay completed work.
         Base.write(checkpoint_file, "{")
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "is invalid; refusing an implicit fresh restart",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
         open(checkpoint_file, "w") do io
             JSON.print(io, valid_checkpoint, 2)
         end
@@ -713,18 +880,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_fastq_hash, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint current_fastq_file SHA-256 does not match saved provenance",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
         # A corrupt explicit cursor must not replay pass 2.
         invalid_cursor = Base.deepcopy(valid_checkpoint)
@@ -734,18 +906,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_cursor, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "same-rung checkpoint next_iteration must equal",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
         # Impossible telemetry cannot seed resumed aggregate diagnostics.
         invalid_telemetry = Base.deepcopy(valid_checkpoint)
@@ -758,18 +935,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_telemetry, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry attempted=3 exceeds requested=1",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
         invalid_metric = Base.deepcopy(valid_checkpoint)
         first(invalid_metric["indel_rung_telemetry"])["raw_frontier_metrics"] =
@@ -777,18 +959,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_metric, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint indel telemetry raw_frontier_metrics contains a non-object metric",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
         invalid_anchor_rejections = Base.deepcopy(valid_checkpoint)
         invalid_anchor_rejections["corrector_diagnostics"][
@@ -796,18 +983,23 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         open(checkpoint_file, "w") do io
             JSON.print(io, invalid_anchor_rejections, 2)
         end
-        Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-            input_fastq;
-            max_k = 3,
-            max_iterations_per_k = 2,
-            improvement_threshold = 0.0,
-            stop_on_no_change = false,
-            graph_mode = :singlestrand,
-            verbose = false,
-            enable_checkpointing = true,
-            checkpoint_interval = 1,
-            output_dir = output_directory,
-        )
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint corrector_diagnostics window_anchor_rejections must be nonnegative",
+        ) do
+            Mycelia.mycelia_iterative_assemble(
+                input_fastq;
+                max_k = 3,
+                max_iterations_per_k = 2,
+                improvement_threshold = 0.0,
+                stop_on_no_change = false,
+                graph_mode = :singlestrand,
+                verbose = false,
+                enable_checkpointing = true,
+                checkpoint_interval = 1,
+                output_dir = output_directory,
+            )
+        end
 
     end
 end
@@ -830,18 +1022,23 @@ Test.@testset "Checkpoint subdirectories cannot escape output_dir" begin
                 outside_directory,
                 Base.joinpath(output_directory, subdirectory),
             )
-            Test.@test_throws ArgumentError Mycelia.mycelia_iterative_assemble(
-                input_fastq;
-                max_k = 3,
-                max_iterations_per_k = 1,
-                improvement_threshold = 0.0,
-                stop_on_no_change = false,
-                graph_mode = :singlestrand,
-                verbose = false,
-                enable_checkpointing = true,
-                checkpoint_interval = 1,
-                output_dir = output_directory,
-            )
+            checkpoint_test_error(
+                ArgumentError,
+                "output $(subdirectory) directory must resolve inside output_dir",
+            ) do
+                Mycelia.mycelia_iterative_assemble(
+                    input_fastq;
+                    max_k = 3,
+                    max_iterations_per_k = 1,
+                    improvement_threshold = 0.0,
+                    stop_on_no_change = false,
+                    graph_mode = :singlestrand,
+                    verbose = false,
+                    enable_checkpointing = true,
+                    checkpoint_interval = 1,
+                    output_dir = output_directory,
+                )
+            end
         end
     end
 end

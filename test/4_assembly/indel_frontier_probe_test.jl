@@ -11,6 +11,24 @@ import MetaGraphsNext
 import Mycelia
 import Test
 
+function indel_frontier_test_throws_message(
+        callable::F,
+        exception_type::Type{E},
+        message_fragment::AbstractString,
+)::Nothing where {F, E <: Exception}
+    thrown::Union{Exception, Nothing} = nothing
+    try
+        callable()
+    catch exception
+        thrown = exception
+    end
+    Test.@test thrown isa E
+    rendered = thrown isa Exception ?
+               Base.sprint(Base.showerror, thrown) : ""
+    Test.@test Base.occursin(message_fragment, rendered)
+    return nothing
+end
+
 function indel_frontier_probe_graph()::MetaGraphsNext.MetaGraph
     records = [
         FASTX.FASTA.Record("read_1", BioSequences.dna"ATGCG"),
@@ -95,8 +113,11 @@ Test.@testset "Checkpoint restores complete per-pass indel telemetry" begin
 
     missing_outcome = Base.deepcopy(serialized)
     first(missing_outcome["indel_rung_telemetry"])["truncated"] = 0
-    Test.@test_throws ArgumentError Mycelia._restore_indel_rung_telemetry(
-        missing_outcome)
+    indel_frontier_test_throws_message(
+        () -> Mycelia._restore_indel_rung_telemetry(missing_outcome),
+        ArgumentError,
+        "checkpoint indel telemetry completed + truncated must equal attempted",
+    )
 end
 
 function indel_frontier_probe_config()::Mycelia.ViterbiCorrectionConfig
@@ -872,11 +893,15 @@ Test.@testset "Unrestricted indel schedule preserves exhaustive semantics" begin
         FASTX.FASTQ.Record[read], 7; mode = :singlestrand)
     diagnostics = Mycelia.CorrectorDiagnostics()
     telemetry = Dict{Symbol, Any}()
-    Test.@test_throws ArgumentError Mycelia.improve_read_set_likelihood(
-        FASTX.FASTQ.Record[read],
-        graph,
-        7;
-        indel_schedule = :bogus,
+    indel_frontier_test_throws_message(
+        () -> Mycelia.improve_read_set_likelihood(
+            FASTX.FASTQ.Record[read],
+            graph,
+            7;
+            indel_schedule = :bogus,
+        ),
+        ArgumentError,
+        "indel_schedule must be :unrestricted or :frontier_budgeted",
     )
 
     Mycelia.improve_read_set_likelihood(
@@ -957,8 +982,11 @@ Test.@testset "Unrestricted indel schedule preserves exhaustive semantics" begin
 
     inexact_telemetry = copy(long_telemetry)
     inexact_telemetry[:requested] = Float64(inexact_telemetry[:requested])
-    Test.@test_throws ArgumentError Mycelia._validate_indel_telemetry_counters(
-        inexact_telemetry)
+    indel_frontier_test_throws_message(
+        () -> Mycelia._validate_indel_telemetry_counters(inexact_telemetry),
+        ArgumentError,
+        "indel telemetry requested must be an exact Int",
+    )
 end
 
 

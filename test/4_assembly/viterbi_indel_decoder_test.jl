@@ -1157,16 +1157,28 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         transaction_diagnostics = Mycelia.CorrectorDiagnostics()
         transaction_soft_weights =
             Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
-        Test.@test_throws ErrorException Mycelia.try_viterbi_path_improvement(
-            partial_reference,
-            partial_graph,
-            5;
-            graph_mode = :doublestrand,
-            diagnostics = transaction_diagnostics,
-            soft_weights = transaction_soft_weights,
-            indel_params = params,
-            likelihood_calculator = indel_throwing_likelihood_calculator,
-        )
+        transaction_error = nothing
+        try
+            Mycelia.try_viterbi_path_improvement(
+                partial_reference,
+                partial_graph,
+                5;
+                graph_mode = :doublestrand,
+                diagnostics = transaction_diagnostics,
+                soft_weights = transaction_soft_weights,
+                indel_params = params,
+                likelihood_calculator = indel_throwing_likelihood_calculator,
+            )
+        catch error
+            transaction_error = error
+        end
+        Test.@test transaction_error isa ErrorException
+        if transaction_error isa ErrorException
+            Test.@test Base.occursin(
+                "forced post-soft-accumulation failure for transaction test",
+                Base.sprint(Base.showerror, transaction_error),
+            )
+        end
         Test.@test isempty(transaction_soft_weights.weights)
         Test.@test transaction_diagnostics.indel_attempts[] == 1
         Test.@test transaction_diagnostics.indel_decodes[] == 0
