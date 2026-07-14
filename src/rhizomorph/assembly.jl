@@ -1348,14 +1348,20 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
         corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
         assembly.assembly_stats["corrector_errors"] = corrector_errors
-        assembly.assembly_stats["indel_decodes"] =
-            get(corrector_errors, :indel_decodes, 0)
-        assembly.assembly_stats["truncated_decodes"] =
-            get(corrector_errors, :truncated_decodes, 0)
-        assembly.assembly_stats["trace_contract_errors"] =
-            get(corrector_errors, :trace_contract_errors, 0)
-        assembly.assembly_stats["window_divergences"] =
-            get(corrector_errors, :window_divergences, 0)
+        assembly.assembly_stats["indel_decodes"] = get(corrector_errors, :indel_decodes, 0)
+        assembly.assembly_stats["truncated_decodes"] = get(corrector_errors, :truncated_decodes, 0)
+        assembly.assembly_stats["trace_contract_errors"] = get(corrector_errors, :trace_contract_errors, 0)
+        assembly.assembly_stats["window_divergences"] = get(corrector_errors, :window_divergences, 0)
+        # Fail-open contract-failure counters, hoisted to flat keys so completeness
+        # dashboards that poll the flat surface (as they do for `window_divergences`)
+        # see them — not just the nested `corrector_errors` dict. `gate_skipped` = an
+        # opt-in calibrated gate that silently disabled itself; `substitution_length_
+        # divergences` = substitution decodes that failed open (uncorrected) to keep
+        # the length contract. A nonzero value on either is a "looks healthy but
+        # isn't" signal that must be visible at the flat telemetry surface.
+        assembly.assembly_stats["gate_skipped"] = get(corrector_errors, :gate_skipped, 0)
+        assembly.assembly_stats["substitution_length_divergences"] = get(
+            corrector_errors, :substitution_length_divergences, 0)
         # soft-EM v1 is record-only ⇒ "scaffold-v1-record-only" (or false on
         # :exhaustive), never a bare `true` (FIX 1/5).
         assembly.assembly_stats["soft_em"] = get(_corr_meta, :soft_em, false)
