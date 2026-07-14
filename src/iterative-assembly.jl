@@ -470,6 +470,16 @@ const _CHECKPOINT_INDEL_METRIC_KEYS = Dict{String, Symbol}(
         :admitted,
     )
 )
+const _CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS =
+    Base.Set{Symbol}(values(_CHECKPOINT_INDEL_METRIC_KEYS))
+const _CHECKPOINT_ENCODE_ERROR_INDEL_METRIC_KEYS = Base.Set{Symbol}((
+    :anchored,
+    :reason,
+    :read_index,
+    :window_start,
+    :window_stop,
+    :admitted,
+))
 const _CHECKPOINT_GRAPH_SOURCES = Dict{String, Symbol}(
     "raw" => :raw,
     "cleaned" => :cleaned,
@@ -496,6 +506,19 @@ const _CHECKPOINT_DECISION_REASONS = Dict{String, Symbol}(
         :frontier_budget_exceeded,
     )
 )
+const _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS = Base.Set{Symbol}((
+    :no_candidate_windows,
+    :weighted_graph_memory_limit,
+    :weighted_graph_out_of_memory,
+    :raw_frontier_affordable,
+    :cleaning_out_of_memory,
+    :cleaning_memory_limit,
+    :cleaning_lost_window_anchor,
+    :sparse_frontier_affordable,
+    :mixed_frontier_affordable,
+    :cleaned_frontier_affordable,
+    :frontier_budget_exceeded,
+))
 const _CHECKPOINT_FRONTIER_REASONS = Dict{String, Symbol}(
     string(reason) => reason for reason in (
         :complete,
@@ -975,12 +998,38 @@ function _validate_indel_telemetry_counters(
     return nothing
 end
 
-function _symbolize_indel_frontier_metric(metric::AbstractDict)::Dict{Symbol, Any}
+function _symbolize_indel_frontier_metric(
+        metric::AbstractDict,
+        require_schema_v2::Bool = false,
+)::Dict{Symbol, Any}
     normalized = _checkpoint_symbolized_dict(
         metric,
         _CHECKPOINT_INDEL_METRIC_KEYS,
         "checkpoint indel frontier metric",
     )
+    if haskey(normalized, :reason)
+        normalized[:reason] = _checkpoint_enum_symbol(
+            normalized[:reason],
+            _CHECKPOINT_FRONTIER_REASONS,
+            "indel frontier metric reason",
+        )
+    elseif require_schema_v2
+        throw(ArgumentError(
+            "checkpoint indel frontier metric lacks mandatory field reason"))
+    end
+    if require_schema_v2
+        reason = normalized[:reason]
+        expected_keys = reason == :encode_error ?
+                        _CHECKPOINT_ENCODE_ERROR_INDEL_METRIC_KEYS :
+                        _CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS
+        observed_keys = Base.Set{Symbol}(keys(normalized))
+        missing = sort!(string.(collect(setdiff(expected_keys, observed_keys))))
+        unsupported = sort!(string.(collect(setdiff(observed_keys, expected_keys))))
+        isempty(missing) && isempty(unsupported) || throw(ArgumentError(
+            "checkpoint indel frontier metric reason=$reason does not match " *
+            "schema v2; missing=$(join(missing, ", ")); unsupported=" *
+            join(unsupported, ", ")))
+    end
     for key in (:anchored, :admitted)
         haskey(normalized, key) || continue
         normalized[key] = _checkpoint_bool(
@@ -1016,14 +1065,145 @@ function _symbolize_indel_frontier_metric(metric::AbstractDict)::Dict{Symbol, An
             "checkpoint indel frontier metric $key must be within [0, 1]"))
         normalized[key] = fraction
     end
-    if haskey(normalized, :reason)
-        normalized[:reason] = _checkpoint_enum_symbol(
-            normalized[:reason],
-            _CHECKPOINT_FRONTIER_REASONS,
-            "indel frontier metric reason",
-        )
-    end
     return normalized
+end
+
+function _validate_indel_frontier_metric(
+        metric::Dict{Symbol, Any},
+        k::Int,
+        work_limit::Int,
+)::Nothing
+    read_index = metric[:read_index]
+    window_start = metric[:window_start]
+    window_stop = metric[:window_stop]
+    read_index >= 1 || throw(ArgumentError(
+        "checkpoint indel frontier metric read_index must be positive"))
+    window_start >= 1 && window_stop >= window_start || throw(ArgumentError(
+        "checkpoint indel frontier metric window bounds must be positive and ordered"))
+    k >= 1 || throw(ArgumentError(
+        "checkpoint indel frontier metric k must be positive"))
+    window_span = window_stop - window_start + 1
+    window_span >= k || throw(ArgumentError(
+        "checkpoint indel frontier metric window span must be at least k=$k"))
+    window_span <= _INDEL_FRONTIER_MAX_WINDOW || throw(ArgumentError(
+        "checkpoint indel frontier metric window span exceeds " *
+        "$_INDEL_FRONTIER_MAX_WINDOW bases"))
+
+    reason = metric[:reason]
+    if reason == :encode_error
+        !metric[:anchored] && !metric[:admitted] || throw(ArgumentError(
+            "checkpoint indel frontier metric reason=encode_error requires " *
+            "anchored=false and admitted=false"))
+        return nothing
+    end
+
+    window_length = metric[:window_length]
+    maximum_window_length = window_span - k + 1
+    window_length <= maximum_window_length || throw(ArgumentError(
+        "checkpoint indel frontier metric window_length must be nonnegative and " *
+        "not exceed window span - k + 1"))
+    completed_columns = metric[:completed_columns]
+    completed_columns <= window_length || throw(ArgumentError(
+        "checkpoint indel frontier metric completed_columns exceeds window_length"))
+    metric[:peak_frontier] <= metric[:frontier_area] || throw(ArgumentError(
+        "checkpoint indel frontier metric peak_frontier exceeds frontier_area"))
+    if completed_columns > 0
+        metric[:frontier_area] >= completed_columns || throw(ArgumentError(
+            "checkpoint indel frontier metric frontier_area is smaller than " *
+            "completed_columns"))
+        metric[:peak_frontier] >= 1 || throw(ArgumentError(
+            "checkpoint indel frontier metric positive completed_columns " *
+            "requires a positive peak_frontier"))
+        maximum_frontier_area = if completed_columns <= div(
+                typemax(Int), metric[:peak_frontier])
+            completed_columns * metric[:peak_frontier]
+        else
+            typemax(Int)
+        end
+        metric[:frontier_area] <= maximum_frontier_area || throw(ArgumentError(
+            "checkpoint indel frontier metric frontier_area exceeds the " *
+            "completed_columns * peak_frontier bound"))
+    else
+        metric[:frontier_area] == 0 && metric[:peak_frontier] == 0 ||
+            throw(ArgumentError(
+                "checkpoint indel frontier metric zero completed_columns " *
+                "requires zero frontier_area and peak_frontier"))
+    end
+
+    expected_frontier_work = _saturating_indel_frontier_add(
+        metric[:frontier_area], metric[:edge_expansions])
+    metric[:frontier_work] == expected_frontier_work || throw(ArgumentError(
+        "checkpoint indel frontier metric frontier_work must equal saturating " *
+        "frontier_area + edge_expansions"))
+
+    vertex_count = metric[:vertex_count]
+    branch_vertices = metric[:branch_vertices]
+    join_vertices = metric[:join_vertices]
+    branch_vertices <= vertex_count || throw(ArgumentError(
+        "checkpoint indel frontier metric branch_vertices exceeds vertex_count"))
+    join_vertices <= vertex_count || throw(ArgumentError(
+        "checkpoint indel frontier metric join_vertices exceeds vertex_count"))
+    denominator = max(vertex_count, 1)
+    metric[:branch_fraction] == branch_vertices / denominator ||
+        throw(ArgumentError(
+            "checkpoint indel frontier metric branch_fraction does not match " *
+            "branch_vertices / vertex_count"))
+    metric[:join_fraction] == join_vertices / denominator ||
+        throw(ArgumentError(
+            "checkpoint indel frontier metric join_fraction does not match " *
+            "join_vertices / vertex_count"))
+    if reason == :empty_graph
+        empty_graph_topology = vertex_count == 0 &&
+                               metric[:edge_count] == 0 &&
+                               branch_vertices == 0 &&
+                               join_vertices == 0 &&
+                               metric[:branch_fraction] == 0.0 &&
+                               metric[:join_fraction] == 0.0 &&
+                               metric[:max_out_degree] == 0
+        empty_graph_topology || throw(ArgumentError(
+            "checkpoint indel frontier metric reason=empty_graph requires " *
+            "zero graph topology fields"))
+    else
+        vertex_count > 0 || throw(ArgumentError(
+            "checkpoint indel frontier metric reason=$reason requires a " *
+            "positive vertex_count"))
+    end
+
+    anchored = metric[:anchored]
+    no_frontier_work = completed_columns == 0 &&
+                       metric[:frontier_area] == 0 &&
+                       metric[:edge_expansions] == 0 &&
+                       metric[:peak_frontier] == 0 &&
+                       metric[:frontier_work] == 0
+    reason_consistent = if reason == :complete
+        window_length > 0 && anchored && completed_columns == window_length &&
+            metric[:frontier_work] <= work_limit
+    elseif reason == :empty_graph
+        !anchored && no_frontier_work && vertex_count == 0
+    elseif reason == :empty_observation
+        !anchored && no_frontier_work && window_length == 0
+    elseif reason == :unanchored_start
+        !anchored && no_frontier_work && window_length > 0
+    elseif reason == :no_start_state
+        window_length > 0 && anchored && no_frontier_work
+    elseif reason == :work_limit
+        window_length > 0 && anchored && metric[:frontier_work] > work_limit
+    elseif reason == :frontier_exhausted
+        anchored && 1 <= completed_columns < window_length &&
+            metric[:frontier_work] <= work_limit
+    else
+        false
+    end
+    reason_consistent || throw(ArgumentError(
+        "checkpoint indel frontier metric reason=$reason is inconsistent with " *
+        "anchor and completion fields"))
+
+    expected_admitted = anchored && reason == :complete &&
+                        completed_columns == window_length &&
+                        metric[:frontier_work] <= work_limit
+    metric[:admitted] == expected_admitted || throw(ArgumentError(
+        "checkpoint indel frontier metric admitted does not match frontier predicate"))
+    return nothing
 end
 
 function _normalize_indel_rung_telemetry(
@@ -1067,6 +1247,38 @@ function _normalize_indel_rung_telemetry(
         normalized[key] = _checkpoint_bool(
             normalized[key], "indel telemetry $key")
     end
+    counter_keys = (
+        :requested,
+        :attempted,
+        :completed,
+        :truncated,
+        :engaged,
+        :admitted_windows,
+        :rejected_windows,
+        :frontier_work_limit,
+        :frontier_metric_sample_limit,
+        :raw_frontier_evaluated,
+        :cleaned_frontier_evaluated,
+    )
+    for key in counter_keys
+        normalized[key] = _checkpoint_nonnegative_int(
+            get(normalized, key, 0), "indel telemetry $key")
+    end
+    for key in (:ladder_index, :k, :iteration)
+        haskey(normalized, key) || continue
+        normalized[key] = _checkpoint_nonnegative_int(
+            normalized[key], "indel telemetry $key")
+    end
+    if require_schema_v2
+        normalized[:frontier_work_limit] ==
+            _DEFAULT_INDEL_FRONTIER_WORK_LIMIT || throw(ArgumentError(
+            "checkpoint indel telemetry frontier_work_limit must equal " *
+            "$_DEFAULT_INDEL_FRONTIER_WORK_LIMIT"))
+        normalized[:frontier_metric_sample_limit] ==
+            _INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT || throw(ArgumentError(
+            "checkpoint indel telemetry frontier_metric_sample_limit must " *
+            "equal $_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT"))
+    end
     for key in (:raw_frontier_metrics, :cleaned_frontier_metrics)
         metrics = get(normalized, key, Any[])
         metrics isa AbstractVector || throw(ArgumentError(
@@ -1078,9 +1290,31 @@ function _normalize_indel_rung_telemetry(
             throw(ArgumentError(
                 "checkpoint indel telemetry $key contains a non-object metric"))
         normalized[key] = Dict{Symbol, Any}[
-            _symbolize_indel_frontier_metric(metric)
+            _symbolize_indel_frontier_metric(metric, require_schema_v2)
             for metric in metrics
         ]
+        if require_schema_v2
+            for metric in normalized[key]
+                _validate_indel_frontier_metric(
+                    metric,
+                    normalized[:k],
+                    normalized[:frontier_work_limit],
+                )
+            end
+        end
+    end
+    if require_schema_v2
+        sample_limit = normalized[:frontier_metric_sample_limit]
+        for (metric_key, evaluated_key) in (
+                (:raw_frontier_metrics, :raw_frontier_evaluated),
+                (:cleaned_frontier_metrics, :cleaned_frontier_evaluated),
+        )
+            expected_samples = min(normalized[evaluated_key], sample_limit)
+            length(normalized[metric_key]) == expected_samples ||
+                throw(ArgumentError(
+                    "checkpoint indel telemetry $metric_key sample count does " *
+                    "not match $evaluated_key"))
+        end
     end
     cleanup = get(normalized, :graph_cleanup, Dict{String, Any}())
     cleanup isa AbstractDict || throw(ArgumentError(
@@ -1124,28 +1358,6 @@ function _normalize_indel_rung_telemetry(
     end
     normalized[:graph_cleanup] = serialized_cleanup
 
-    counter_keys = (
-        :requested,
-        :attempted,
-        :completed,
-        :truncated,
-        :engaged,
-        :admitted_windows,
-        :rejected_windows,
-        :frontier_work_limit,
-        :frontier_metric_sample_limit,
-        :raw_frontier_evaluated,
-        :cleaned_frontier_evaluated,
-    )
-    for key in counter_keys
-        normalized[key] = _checkpoint_nonnegative_int(
-            get(normalized, key, 0), "indel telemetry $key")
-    end
-    for key in (:ladder_index, :k, :iteration)
-        haskey(normalized, key) || continue
-        normalized[key] = _checkpoint_nonnegative_int(
-            normalized[key], "indel telemetry $key")
-    end
     _validate_indel_telemetry_counters(
         normalized; context = "checkpoint indel telemetry")
     requested = normalized[:requested]
@@ -1162,6 +1374,24 @@ function _normalize_indel_rung_telemetry(
         "checkpoint raw frontier evaluations exceed requested windows"))
     normalized[:cleaned_frontier_evaluated] <= requested || throw(ArgumentError(
         "checkpoint cleaned frontier evaluations exceed requested windows"))
+    if require_schema_v2
+        if normalized[:decision_reason] in
+           _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS
+            normalized[:raw_frontier_evaluated] == requested || throw(ArgumentError(
+                "checkpoint raw frontier evaluations must equal requested windows " *
+                "for a frontier-evaluated decision"))
+            admitted_and_rejected == requested || throw(ArgumentError(
+                "checkpoint indel telemetry admitted + rejected must equal " *
+                "requested for a frontier-evaluated decision"))
+            normalized[:admitted] == (admitted_windows > 0) ||
+                throw(ArgumentError(
+                    "checkpoint indel telemetry admitted does not match " *
+                    "admitted_windows for a frontier-evaluated decision"))
+        end
+        normalized[:cleaned_frontier_evaluated] <=
+            normalized[:raw_frontier_evaluated] || throw(ArgumentError(
+            "checkpoint cleaned frontier evaluations exceed raw evaluations"))
+    end
     if !profile_requested && any(
             normalized[key] != 0 for key in (
                 :requested,

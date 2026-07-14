@@ -30,6 +30,28 @@ function checkpoint_test_error(
     return nothing
 end
 
+function checkpoint_frontier_metric_error(
+        mutation::F,
+        valid_checkpoint::AbstractDict,
+        checkpoint_file::String,
+        input_fastq::String,
+        output_directory::String,
+        expected_fragment::AbstractString,
+)::Nothing where {F <: Function}
+    corrupted_checkpoint = Base.deepcopy(valid_checkpoint)
+    telemetry_row = Base.first(
+        corrupted_checkpoint["indel_rung_telemetry"])
+    mutation(telemetry_row)
+    Base.open(checkpoint_file, "w") do io
+        JSON.print(io, corrupted_checkpoint, 2)
+    end
+    checkpoint_test_error(ArgumentError, expected_fragment) do
+        checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+    end
+    return nothing
+end
+
 function checkpoint_resume_reads()::Vector{FASTX.FASTQ.Record}
     sequence = "ACGTACGTACGTACGTACGTACGTACGTACGT"
     quality = repeat("I", length(sequence))
@@ -190,6 +212,48 @@ Test.@testset "Checkpoint FASTQ rejects in-place mutation during parse" begin
     end
 end
 
+Test.@testset "Legacy frontier telemetry remains permissive" begin
+    legacy_metric = Mycelia._symbolize_indel_frontier_metric(
+        Dict{String, Any}(
+            "anchored" => true,
+            "reason" => "complete",
+        ),
+    )
+    Test.@test legacy_metric == Dict{Symbol, Any}(
+        :anchored => true,
+        :reason => :complete,
+    )
+
+    legacy_checkpoint = Dict{String, Any}(
+        "indel_rung_telemetry" => Any[
+            Dict{String, Any}(
+                "profile_requested" => true,
+                "requested" => 5,
+                "attempted" => 3,
+                "completed" => 2,
+                "truncated" => 1,
+                "engaged" => 1,
+                "graph_source" => "mixed",
+                "decision_reason" => "sparse_frontier_affordable",
+                "cleaned_frontier_evaluated" => 1,
+                "raw_frontier_metrics" => Any[Dict{String, Any}(
+                    "anchored" => true,
+                    "reason" => "complete",
+                )],
+            ),
+        ],
+    )
+    restored_row = Base.only(
+        Mycelia._restore_indel_rung_telemetry(legacy_checkpoint))
+    Test.@test restored_row[:requested] == 5
+    Test.@test restored_row[:raw_frontier_evaluated] == 0
+    Test.@test restored_row[:cleaned_frontier_evaluated] == 1
+    Test.@test restored_row[:admitted_windows] == 0
+    Test.@test restored_row[:rejected_windows] == 0
+    Test.@test restored_row[:decision_reason] == :sparse_frontier_affordable
+    Test.@test Base.only(restored_row[:raw_frontier_metrics]) == legacy_metric
+end
+
 Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
     Base.mktempdir() do temporary_directory
         sequence = "AAAGCTTAGGGAGAGTAGAAATAATATAGA"
@@ -232,6 +296,563 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
         Test.@test !isempty(
             first(checkpoint["indel_rung_telemetry"])[
                 "cleaned_frontier_metrics"])
+
+        # Schema-v2 frontier samples are exact scientific evidence, not open-ended
+        # metadata. Normal probes restore every generated field and the one partial
+        # producer shape (`:encode_error`) restores exactly its six context fields.
+        normal_roundtrip = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        normal_metric = Base.first(
+            Base.first(normal_roundtrip[:metadata][:indel_rung_telemetry])[
+                :raw_frontier_metrics])
+        Test.@test Base.Set(Base.keys(normal_metric)) ==
+                   Mycelia._CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS
+
+        template_row = Base.first(checkpoint["indel_rung_telemetry"])
+        template_metric = Base.first(template_row["raw_frontier_metrics"])
+        truncated_sample_row = Base.deepcopy(template_row)
+        truncated_sample_row["requested"] = 65
+        truncated_sample_row["attempted"] = 0
+        truncated_sample_row["completed"] = 0
+        truncated_sample_row["truncated"] = 0
+        truncated_sample_row["engaged"] = 0
+        truncated_sample_row["admitted"] = false
+        truncated_sample_row["admitted_windows"] = 0
+        truncated_sample_row["rejected_windows"] = 65
+        truncated_sample_row["graph_source"] = "substitution"
+        truncated_sample_row["decision_reason"] = "frontier_budget_exceeded"
+        truncated_sample_row["raw_frontier_evaluated"] = 65
+        truncated_sample_row["cleaned_frontier_evaluated"] = 0
+        truncated_sample_row["raw_frontier_metrics"] = Any[
+            Base.deepcopy(template_metric) for _ in 1:64
+        ]
+        truncated_sample_row["cleaned_frontier_metrics"] = Any[]
+        normalized_truncated_sample = Mycelia._normalize_indel_rung_telemetry(
+            truncated_sample_row, true)
+        Test.@test normalized_truncated_sample[:raw_frontier_evaluated] == 65
+        Test.@test Base.length(
+            normalized_truncated_sample[:raw_frontier_metrics]) == 64
+
+        independent_samples_row = Base.deepcopy(truncated_sample_row)
+        independent_samples_row["requested"] = 64
+        independent_samples_row["rejected_windows"] = 64
+        independent_samples_row["raw_frontier_evaluated"] = 64
+        independent_samples_row["cleaned_frontier_evaluated"] = 64
+        independent_samples_row["cleaned_frontier_metrics"] = Any[
+            Base.deepcopy(template_metric) for _ in 1:64
+        ]
+        normalized_independent_samples =
+            Mycelia._normalize_indel_rung_telemetry(
+                independent_samples_row, true)
+        Test.@test Base.length(
+            normalized_independent_samples[:raw_frontier_metrics]) == 64
+        Test.@test Base.length(
+            normalized_independent_samples[:cleaned_frontier_metrics]) == 64
+
+        boundary_row = Base.deepcopy(template_row)
+        boundary_k = boundary_row["k"]
+        minimum_span_metric = Base.deepcopy(template_metric)
+        minimum_span_metric["window_start"] = 1
+        minimum_span_metric["window_stop"] = boundary_k
+        minimum_span_metric["window_length"] = 1
+        minimum_span_metric["reason"] = "complete"
+        minimum_span_metric["anchored"] = true
+        minimum_span_metric["admitted"] = true
+        minimum_span_metric["completed_columns"] = 1
+        minimum_span_metric["frontier_area"] = 1
+        minimum_span_metric["edge_expansions"] = 0
+        minimum_span_metric["peak_frontier"] = 1
+        minimum_span_metric["frontier_work"] = 1
+        maximum_span_metric = Base.deepcopy(minimum_span_metric)
+        maximum_span_metric["window_stop"] =
+            Mycelia._INDEL_FRONTIER_MAX_WINDOW
+        maximum_span_metric["window_length"] =
+            Mycelia._INDEL_FRONTIER_MAX_WINDOW - boundary_k + 1
+        maximum_span_metric["completed_columns"] =
+            maximum_span_metric["window_length"]
+        maximum_span_metric["frontier_area"] =
+            maximum_span_metric["window_length"]
+        maximum_span_metric["frontier_work"] =
+            maximum_span_metric["window_length"]
+        boundary_row["requested"] = 2
+        boundary_row["attempted"] = 2
+        boundary_row["completed"] = 2
+        boundary_row["truncated"] = 0
+        boundary_row["engaged"] = 0
+        boundary_row["admitted"] = true
+        boundary_row["admitted_windows"] = 2
+        boundary_row["rejected_windows"] = 0
+        boundary_row["graph_source"] = "raw"
+        boundary_row["decision_reason"] = "raw_frontier_affordable"
+        boundary_row["raw_frontier_evaluated"] = 2
+        boundary_row["cleaned_frontier_evaluated"] = 0
+        boundary_row["raw_frontier_metrics"] = Any[
+            minimum_span_metric,
+            maximum_span_metric,
+        ]
+        boundary_row["cleaned_frontier_metrics"] = Any[]
+        normalized_boundaries = Mycelia._normalize_indel_rung_telemetry(
+            boundary_row, true)
+        Test.@test Base.first(normalized_boundaries[:raw_frontier_metrics])[
+            :window_stop] == boundary_k
+        Test.@test Base.last(normalized_boundaries[:raw_frontier_metrics])[
+            :window_stop] == Mycelia._INDEL_FRONTIER_MAX_WINDOW
+
+        reduced_window_checkpoint = Base.deepcopy(checkpoint)
+        reduced_window_row = Base.first(
+            reduced_window_checkpoint["indel_rung_telemetry"])
+        reduced_window_metric = Base.first(
+            reduced_window_row["raw_frontier_metrics"])
+        maximum_window_length =
+            reduced_window_metric["window_stop"] -
+            reduced_window_metric["window_start"] -
+            reduced_window_row["k"] + 2
+        Test.@test maximum_window_length > 1
+        reduced_window_length = maximum_window_length - 1
+        reduced_window_metric["window_length"] = reduced_window_length
+        reduced_window_metric["reason"] = "no_start_state"
+        reduced_window_metric["anchored"] = true
+        reduced_window_metric["admitted"] = false
+        reduced_window_metric["completed_columns"] = 0
+        reduced_window_metric["frontier_area"] = 0
+        reduced_window_metric["edge_expansions"] = 0
+        reduced_window_metric["peak_frontier"] = 0
+        reduced_window_metric["frontier_work"] = 0
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, reduced_window_checkpoint, 2)
+        end
+        reduced_window_roundtrip = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        restored_reduced_window_metric = Base.first(
+            Base.first(
+                reduced_window_roundtrip[:metadata][:indel_rung_telemetry],
+            )[:raw_frontier_metrics],
+        )
+        Test.@test restored_reduced_window_metric[:window_length] ==
+                   reduced_window_length
+        Test.@test restored_reduced_window_metric[:reason] == :no_start_state
+
+        empty_observation_checkpoint = Base.deepcopy(checkpoint)
+        empty_observation_row = Base.first(
+            empty_observation_checkpoint["indel_rung_telemetry"])
+        empty_observation_metric = Base.first(
+            empty_observation_row["raw_frontier_metrics"])
+        empty_observation_metric["window_length"] = 0
+        empty_observation_metric["reason"] = "empty_observation"
+        empty_observation_metric["anchored"] = false
+        empty_observation_metric["admitted"] = false
+        empty_observation_metric["completed_columns"] = 0
+        empty_observation_metric["frontier_area"] = 0
+        empty_observation_metric["edge_expansions"] = 0
+        empty_observation_metric["peak_frontier"] = 0
+        empty_observation_metric["frontier_work"] = 0
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, empty_observation_checkpoint, 2)
+        end
+        empty_observation_roundtrip = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        restored_empty_observation_metric = Base.first(
+            Base.first(
+                empty_observation_roundtrip[:metadata][:indel_rung_telemetry],
+            )[:raw_frontier_metrics],
+        )
+        Test.@test restored_empty_observation_metric[:window_length] == 0
+        Test.@test restored_empty_observation_metric[:reason] == :empty_observation
+
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "checkpoint indel frontier metric lacks mandatory field reason",
+        ) do telemetry_row
+            telemetry_row["raw_frontier_metrics"] = Any[Dict{String, Any}()]
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "does not match schema v2; missing=frontier_work",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            Base.delete!(metric, "frontier_work")
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "window bounds must be positive and ordered",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["window_start"] = metric["window_stop"] + 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "window span exceeds $(Mycelia._INDEL_FRONTIER_MAX_WINDOW) bases",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["window_stop"] = metric["window_start"] +
+                                    Mycelia._INDEL_FRONTIER_MAX_WINDOW
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "window_length must be nonnegative and not exceed " *
+            "window span - k + 1",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["window_length"] += 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "frontier_work must equal saturating frontier_area + edge_expansions",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["frontier_work"] += 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "admitted does not match frontier predicate",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["admitted"] = !metric["admitted"]
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=complete is inconsistent with anchor and completion fields",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "complete"
+            metric["anchored"] = false
+            metric["admitted"] = false
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "completed_columns exceeds window_length",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["completed_columns"] = metric["window_length"] + 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "frontier_area is smaller than completed_columns",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "work_limit"
+            metric["anchored"] = true
+            metric["admitted"] = false
+            metric["completed_columns"] = 1
+            metric["frontier_area"] = 0
+            metric["edge_expansions"] =
+                telemetry_row["frontier_work_limit"] + 1
+            metric["frontier_work"] = metric["edge_expansions"]
+            metric["peak_frontier"] = 0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "branch_vertices exceeds vertex_count",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["branch_vertices"] = metric["vertex_count"] + 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "branch_fraction does not match branch_vertices / vertex_count",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["branch_fraction"] = metric["branch_fraction"] == 0.0 ?
+                                        0.5 : 0.0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "peak_frontier exceeds frontier_area",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["peak_frontier"] = metric["frontier_area"] + 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=complete is inconsistent with anchor and completion fields",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            over_limit = telemetry_row["frontier_work_limit"] + 1
+            metric["reason"] = "complete"
+            metric["anchored"] = true
+            metric["admitted"] = false
+            metric["completed_columns"] = metric["window_length"]
+            metric["frontier_area"] = metric["window_length"]
+            metric["edge_expansions"] =
+                over_limit - metric["frontier_area"]
+            metric["frontier_work"] = over_limit
+            metric["peak_frontier"] = 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=complete requires a positive vertex_count",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "complete"
+            metric["anchored"] = true
+            metric["admitted"] = true
+            metric["completed_columns"] = metric["window_length"]
+            metric["frontier_area"] = metric["window_length"]
+            metric["edge_expansions"] = 0
+            metric["frontier_work"] = metric["window_length"]
+            metric["peak_frontier"] = 1
+            metric["vertex_count"] = 0
+            metric["edge_count"] = 0
+            metric["branch_vertices"] = 0
+            metric["join_vertices"] = 0
+            metric["branch_fraction"] = 0.0
+            metric["join_fraction"] = 0.0
+            metric["max_out_degree"] = 0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "zero completed_columns requires zero frontier_area and peak_frontier",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "unanchored_start"
+            metric["anchored"] = false
+            metric["admitted"] = false
+            metric["completed_columns"] = 0
+            metric["frontier_area"] = 1
+            metric["edge_expansions"] = 0
+            metric["frontier_work"] = 1
+            metric["peak_frontier"] = 0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=frontier_exhausted is inconsistent with anchor and completion fields",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "frontier_exhausted"
+            metric["anchored"] = true
+            metric["admitted"] = false
+            metric["completed_columns"] = 0
+            metric["frontier_area"] = 0
+            metric["edge_expansions"] = 0
+            metric["frontier_work"] = 0
+            metric["peak_frontier"] = 0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=frontier_exhausted is inconsistent with anchor and completion fields",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            over_limit = telemetry_row["frontier_work_limit"] + 1
+            metric["reason"] = "frontier_exhausted"
+            metric["anchored"] = true
+            metric["admitted"] = false
+            metric["completed_columns"] = 1
+            metric["frontier_area"] = 1
+            metric["edge_expansions"] = over_limit - 1
+            metric["frontier_work"] = over_limit
+            metric["peak_frontier"] = 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "raw_frontier_metrics sample count does not match " *
+            "raw_frontier_evaluated",
+        ) do telemetry_row
+            Base.empty!(telemetry_row["raw_frontier_metrics"])
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "raw frontier evaluations must equal requested windows",
+        ) do telemetry_row
+            telemetry_row["requested"] += 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "admitted + rejected must equal requested for a " *
+            "frontier-evaluated decision",
+        ) do telemetry_row
+            telemetry_row["admitted_windows"] = 0
+            telemetry_row["rejected_windows"] = 0
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "admitted does not match admitted_windows for a " *
+            "frontier-evaluated decision",
+        ) do telemetry_row
+            telemetry_row["admitted"] = !telemetry_row["admitted"]
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "cleaned frontier evaluations exceed raw evaluations",
+        ) do telemetry_row
+            original_metric = Base.first(
+                telemetry_row["raw_frontier_metrics"])
+            telemetry_row["decision_reason"] = "unrestricted_semantics"
+            telemetry_row["raw_frontier_evaluated"] = 0
+            Base.empty!(telemetry_row["raw_frontier_metrics"])
+            telemetry_row["cleaned_frontier_evaluated"] = 1
+            telemetry_row["cleaned_frontier_metrics"] = Any[
+                Base.deepcopy(original_metric),
+            ]
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "frontier_work_limit must equal " *
+            "$(Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT)",
+        ) do telemetry_row
+            telemetry_row["frontier_work_limit"] =
+                Mycelia._DEFAULT_INDEL_FRONTIER_WORK_LIMIT - 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "frontier_metric_sample_limit must equal " *
+            "$(Mycelia._INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT)",
+        ) do telemetry_row
+            telemetry_row["frontier_metric_sample_limit"] =
+                Mycelia._INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT - 1
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "profile-disabled checkpoint indel telemetry must have zero counters",
+        ) do telemetry_row
+            telemetry_row["profile_requested"] = false
+        end
+        checkpoint_frontier_metric_error(
+            checkpoint,
+            checkpoint_file,
+            input_fastq,
+            output_directory,
+            "reason=encode_error does not match schema v2",
+        ) do telemetry_row
+            metric = Base.first(telemetry_row["raw_frontier_metrics"])
+            metric["reason"] = "encode_error"
+            metric["anchored"] = false
+            metric["admitted"] = false
+        end
+
+        saturating_checkpoint = Base.deepcopy(checkpoint)
+        saturating_row = Base.first(
+            saturating_checkpoint["indel_rung_telemetry"])
+        saturating_metric = Base.first(
+            saturating_row["raw_frontier_metrics"])
+        saturating_metric["reason"] = "work_limit"
+        saturating_metric["anchored"] = true
+        saturating_metric["admitted"] = false
+        saturating_metric["completed_columns"] = 1
+        saturating_metric["frontier_area"] = typemax(Int)
+        saturating_metric["edge_expansions"] = 1
+        saturating_metric["frontier_work"] = typemax(Int)
+        saturating_metric["peak_frontier"] = typemax(Int)
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, saturating_checkpoint, 2)
+        end
+        saturating_roundtrip = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        restored_saturating_metric = Base.first(
+            Base.first(saturating_roundtrip[:metadata][:indel_rung_telemetry])[
+                :raw_frontier_metrics])
+        Test.@test restored_saturating_metric[:frontier_area] == typemax(Int)
+        Test.@test restored_saturating_metric[:edge_expansions] == 1
+        Test.@test restored_saturating_metric[:peak_frontier] == typemax(Int)
+        Test.@test restored_saturating_metric[:frontier_work] == typemax(Int)
+
+        encode_error_checkpoint = Base.deepcopy(checkpoint)
+        encode_error_row = Base.first(
+            encode_error_checkpoint["indel_rung_telemetry"])
+        original_metric = Base.first(encode_error_row["raw_frontier_metrics"])
+        encode_error_row["raw_frontier_metrics"][1] = Dict{String, Any}(
+            "anchored" => false,
+            "reason" => "encode_error",
+            "read_index" => original_metric["read_index"],
+            "window_start" => original_metric["window_start"],
+            "window_stop" => original_metric["window_stop"],
+            "admitted" => false,
+        )
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, encode_error_checkpoint, 2)
+        end
+        encode_error_roundtrip = checkpoint_frontier_invocation(
+            input_fastq, output_directory, 1)
+        restored_encode_error = Base.first(
+            Base.first(encode_error_roundtrip[:metadata][:indel_rung_telemetry])[
+                :raw_frontier_metrics])
+        Test.@test Base.Set(Base.keys(restored_encode_error)) ==
+                   Mycelia._CHECKPOINT_ENCODE_ERROR_INDEL_METRIC_KEYS
+        Test.@test restored_encode_error[:reason] == :encode_error
+        Test.@test !restored_encode_error[:anchored]
+        Test.@test !restored_encode_error[:admitted]
+
+        # Restore the producer-written checkpoint before exercising cursor resume.
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, checkpoint, 2)
+        end
         checkpoint["next_k"] = checkpoint["current_k"]
         checkpoint["next_iteration"] = 2
         checkpoint["run_complete"] = false
