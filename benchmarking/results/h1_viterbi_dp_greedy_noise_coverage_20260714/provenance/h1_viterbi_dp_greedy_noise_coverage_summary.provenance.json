@@ -1,0 +1,58 @@
+{
+  "columns": [
+    "benchmark_schema_version",
+    "benchmark_run_id",
+    "benchmark_scale",
+    "benchmark_dataset_ids",
+    "benchmark_git_commit",
+    "benchmark_dataset_id",
+    "benchmark_hypothesis_id",
+    "hypothesis_id",
+    "dataset_id",
+    "fixture_id",
+    "fixture_name",
+    "noise_rate",
+    "coverage",
+    "n_seeds",
+    "n_rows",
+    "exact_match_rate",
+    "mean_vertex_edit_distance",
+    "dp_exact_match_rate",
+    "greedy_exact_match_rate",
+    "dp_minus_greedy_exact_match_gap"
+  ],
+  "command_args": [],
+  "dataset_ids": [
+    "rhizomorph_graph_unit_fixtures"
+  ],
+  "generated_at": "2026-07-14T16:01:00.102Z",
+  "git": {
+    "commit": "0838eb6e7dfd6c15c82fbe14af5391c1d3211f2f",
+    "is_dirty": true
+  },
+  "metadata": {
+    "artifact_kind": "h1_viterbi_dp_greedy_noise_coverage_path_metrics",
+    "claim_ledger_path": "rhizomorph-paper/manuscript/review-notes/2026-06-28-rhizomorph-claim-ledger.md",
+    "coverage_levels": "5,10,20,40",
+    "does_not_graduate_h1": "this sweep remains Smoke-only per the claim ledger; it does not call Mycelia.Rhizomorph.viterbi_decode_next and is not the pre-registered real-data H1 assembly-quality decision rule",
+    "empty_layout_directory_semantics": "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact.",
+    "fixtures": "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+    "noise_model": "per-fork decoy edge at nominal probability noise_rate plus Binomial(coverage, edge_probability) per-edge read-count resampling at every fork vertex, local MersenneTwister(seed) RNG, weight=(count+epsilon)/sum(count+epsilon)",
+    "noise_rate_levels": "0.0,0.01,0.05,0.1,0.2",
+    "non_finite_metric_semantics": "Inf/-Inf log_probability values indicate a failed/incomplete path (e.g. greedy trapped at a decoy dead-end vertex); see failure_code.",
+    "peak_rss_mib_semantics": "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
+    "plan_path": "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
+    "scope": "clean+noise synthetic local sweep; still no real-data H1 decision rule",
+    "seeds": "42,123,456"
+  },
+  "row_count": 100,
+  "run_id": "h1_viterbi_dp_greedy_noise_coverage_sweep",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "table_name": "h1_viterbi_dp_greedy_noise_coverage_summary",
+  "table_path": "tables/h1_viterbi_dp_greedy_noise_coverage_summary.csv",
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.12.6"
+  }
+}

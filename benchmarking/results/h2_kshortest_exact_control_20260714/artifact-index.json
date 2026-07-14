@@ -1,0 +1,89 @@
+{
+  "directories": {
+    "logs": "logs",
+    "plots": "plots",
+    "provenance": "provenance",
+    "tables": "tables"
+  },
+  "run_id": "h2_kshortest_exact_control_20260714",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tables": {
+    "h2_kshortest_exact_control_baseline": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_graph_id",
+        "graph_id",
+        "seed",
+        "n_walks",
+        "n_walks_reaching_sink",
+        "best_walk_recovers_true_alt",
+        "best_walk_score"
+      ],
+      "provenance": "provenance/h2_kshortest_exact_control_baseline.provenance.json",
+      "rows": 6,
+      "table": "tables/h2_kshortest_exact_control_baseline.csv"
+    },
+    "h2_kshortest_exact_control_path_metrics": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_graph_id",
+        "graph_id",
+        "weighting",
+        "K",
+        "rank",
+        "path_vertices",
+        "sha_or_string_group_id",
+        "score",
+        "total_probability",
+        "delta_log_prob_from_top",
+        "probability_ratio_to_top",
+        "truth_label",
+        "is_true_alternative",
+        "is_decoy",
+        "tie_broken",
+        "runtime_s",
+        "peak_rss_mib"
+      ],
+      "provenance": "provenance/h2_kshortest_exact_control_path_metrics.provenance.json",
+      "rows": 56,
+      "table": "tables/h2_kshortest_exact_control_path_metrics.csv"
+    },
+    "h2_kshortest_exact_control_summary": {
+      "columns": [
+        "benchmark_schema_version",
+        "benchmark_run_id",
+        "benchmark_scale",
+        "benchmark_dataset_ids",
+        "benchmark_git_commit",
+        "benchmark_graph_id",
+        "graph_id",
+        "weighting",
+        "K",
+        "n_raw_paths",
+        "n_dedup_candidates",
+        "alt_recall_at_k",
+        "first_true_rank_A1",
+        "first_true_rank_A2",
+        "first_true_rank_R2",
+        "first_true_rank_R3",
+        "mrr",
+        "is_primary_decision_row",
+        "decision_rule_pass",
+        "runtime_s",
+        "peak_rss_mib"
+      ],
+      "provenance": "provenance/h2_kshortest_exact_control_summary.provenance.json",
+      "rows": 20,
+      "table": "tables/h2_kshortest_exact_control_summary.csv"
+    }
+  }
+}

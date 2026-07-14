@@ -1,0 +1,47 @@
+{
+  "command_args": [
+    "julia",
+    "--project=.",
+    "benchmarking/h2_kshortest_exact_control_benchmark.jl"
+  ],
+  "dataset_ids": [
+    "h2_bubble_graph_synthetic",
+    "h2_repeat_choice_graph_synthetic"
+  ],
+  "generated_at": "2026-07-14T17:01:08.579Z",
+  "git": {
+    "commit": "0838eb6e7dfd6c15c82fbe14af5391c1d3211f2f",
+    "is_dirty": true
+  },
+  "metadata": {
+    "baseline_seeds": [
+      42,
+      123,
+      456
+    ],
+    "decision_rule": "at K=10, evidence-weighted: ALL true alternatives recovered in dedup top-K AND ranked strictly above every decoy candidate AND outrank the random-walk baseline's best recovered score for a true alternative (trivially satisfied if baseline never recovers one)",
+    "dedup_simplification": "exact joined-vertex-label string match only (no SHA-256 / near-duplicate clustering); valid here because true/decoy arms are vertex-disjoint by construction",
+    "k_values": [
+      2,
+      5,
+      10,
+      50,
+      100
+    ],
+    "peak_rss_mib_semantics": "peak_rss_mib records process-level Sys.maxrss() sampled once per (graph_id, weighting, K) k_shortest_paths call; it is process-wide provenance, not per-algorithm incremental memory (same convention as the H1 Viterbi/DP/greedy smoke harness)",
+    "plan_path": "rhizomorph-paper/planning/PLAN-2026-04-28-h2-kshortest-alternative-assemblies.md",
+    "primary_k": 10,
+    "probabilistic_walk_next_finding": "GraphPath.total_probability returned by Rhizomorph.probabilistic_walk_next is NOT a valid probability (it stores the raw un-normalized edge-weight product, not the normalized transition-probability product used internally for sampling); this benchmark recomputes baseline walk scores independently via _h2_recompute_path_probability rather than trusting that field",
+    "scope": "exact-control tier ONLY (bubble graph + repeat-choice graph); realistic diploid and repeat-rich tiers are out of scope and unrun",
+    "score_definition": "score = -log(total_probability); re-derived and re-sorted independently of k_shortest_paths's internal ordering, with tie-break (path length asc, joined-vertex string lexicographic, original enumeration index)",
+    "walk_max_steps": 12,
+    "walks_per_seed": 1000
+  },
+  "run_id": "h2_kshortest_exact_control_20260714",
+  "scale": "local-smoke",
+  "schema_version": 1,
+  "tool_versions": {
+    "Mycelia": "0.1.0",
+    "julia": "1.10.11"
+  }
+}

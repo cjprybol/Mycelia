@@ -1,6 +1,8 @@
 #!/usr/bin/env julia
 
 import DataFrames
+import Distributions
+import Random
 import TOML
 
 include("benchmark_artifacts.jl")
@@ -457,6 +459,298 @@ function write_h1_viterbi_dp_greedy_artifacts(;
             "fixtures" => "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
             "scope" => "clean synthetic local-expanded smoke; no real-data H1 decision rule",
             "non_finite_metric_semantics" => "Inf/-Inf are permitted only in paired likelihood diagnostic columns when dp_failure_code, greedy_failure_code, or pair_failure_code documents an invalid or length-incompatible path; they are diagnostic sentinel values, not finite effect sizes.",
+            "peak_rss_mib_semantics" => "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
+            "empty_layout_directory_semantics" => "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact."
+        ),
+        table_context_columns = table_context_columns
+    )
+end
+
+# ---------------------------------------------------------------------------
+# H1 noise/coverage sweep (2026-07-14): expands the clean G0-G4 smoke gate with
+# stochastic per-fork decoy edges sampled at varying noise_rate and coverage.
+# This remains a fully synthetic, harness-local sweep over the same
+# exhaustive-enumeration oracle and greedy baseline above; it does NOT graduate
+# H1 support wording and does NOT call into Mycelia.Rhizomorph.viterbi_decode_next.
+# See rhizomorph-paper/manuscript/review-notes/2026-06-28-rhizomorph-claim-ledger.md
+# "Next evidence queue" item 1.
+# ---------------------------------------------------------------------------
+
+const _H1_NOISE_COVERAGE_READS_PER_POSITION_ESTIMATE = 1.0
+const _H1_NOISE_COVERAGE_WEIGHT_EPSILON = 1.0e-6
+
+"""
+    _h1_simulate_noisy_fixture(base_fixture, noise_rate, coverage, seed)
+
+Build a noisy variant of a clean H1 synthetic fixture. For every fork vertex
+(a vertex with more than one outgoing edge in `base_fixture`), add one
+synthetic decoy/error edge to a new dead-end vertex carrying nominal
+probability mass `noise_rate`. Then, for every outgoing edge at a fork vertex
+(the pre-existing true-arm edges plus the new decoy), draw a per-edge read
+count from a `Binomial(trials, edge_probability)` draw using a *local*
+`Random.MersenneTwister(seed)` RNG, and replace the edge's probability with
+`(count + epsilon) / sum(count + epsilon)` across that fork's outgoing edges.
+This makes low-coverage forks genuinely stochastic (including possible ties
+or reversals) instead of deterministic. Edges whose source is not a fork
+retain the base fixture's literal probability unchanged.
+"""
+function _h1_simulate_noisy_fixture(
+        base_fixture::H1SyntheticFixture,
+        noise_rate::Float64,
+        coverage::Int,
+        seed::Int)::H1SyntheticFixture
+    rng = Random.MersenneTwister(seed)
+    trials = max(round(Int, coverage * _H1_NOISE_COVERAGE_READS_PER_POSITION_ESTIMATE), 1)
+
+    outgoing = _h1_outgoing_edges(base_fixture)
+    fork_sources = Set(source for (source, edges) in outgoing if length(edges) > 1)
+
+    augmented_edges = H1SyntheticEdge[edge for edge in base_fixture.edges]
+    for source in sort(collect(fork_sources))
+        decoy_target = "$(source)_ERR"
+        push!(augmented_edges, H1SyntheticEdge(source, decoy_target, noise_rate))
+    end
+
+    edge_indices_by_fork = Dict{String, Vector{Int}}()
+    for (index, edge) in enumerate(augmented_edges)
+        if edge.source in fork_sources
+            push!(get!(() -> Int[], edge_indices_by_fork, edge.source), index)
+        end
+    end
+
+    resampled_edges = H1SyntheticEdge[edge for edge in augmented_edges]
+    for source in sort(collect(keys(edge_indices_by_fork)))
+        indices = edge_indices_by_fork[source]
+        counts = Int[
+            _h1_sample_binomial_count(rng, trials, clamp(augmented_edges[index].probability, 0.0, 1.0))
+            for index in indices
+        ]
+        weights = counts .+ _H1_NOISE_COVERAGE_WEIGHT_EPSILON
+        total_weight = sum(weights)
+        for (position, index) in enumerate(indices)
+            source_edge = augmented_edges[index]
+            resampled_edges[index] = H1SyntheticEdge(
+                source_edge.source,
+                source_edge.target,
+                weights[position] / total_weight
+            )
+        end
+    end
+
+    return H1SyntheticFixture(
+        base_fixture.id,
+        base_fixture.name,
+        base_fixture.source,
+        base_fixture.sink,
+        resampled_edges,
+        base_fixture.truth_path,
+        base_fixture.expected_greedy_path,
+        "noisy",
+        "coverage=$(coverage)",
+        seed,
+        base_fixture.ambiguity_margin,
+        base_fixture.observation_classes,
+        base_fixture.vertex_classes,
+        base_fixture.expected_greedy_failure_code
+    )
+end
+
+"""
+    _h1_sample_binomial_count(rng, trials, probability)
+
+Draw a single Binomial(trials, probability) count using `Distributions.jl`
+(already a Mycelia dependency) with the supplied local RNG.
+"""
+function _h1_sample_binomial_count(rng::Random.AbstractRNG, trials::Int, probability::Float64)::Int
+    clamped_probability = clamp(probability, 0.0, 1.0)
+    return rand(rng, Distributions.Binomial(trials, clamped_probability))
+end
+
+"""
+    _levenshtein(a, b)
+
+Standard O(length(a) * length(b)) dynamic-programming edit distance between
+two label sequences. Used to score approximate path recovery once noise can
+change a recovered path's length relative to `fixture.truth_path`, so the
+equal-length-only `hamming_distance` helper does not apply.
+"""
+function _levenshtein(a::Vector{String}, b::Vector{String})::Int
+    n = length(a)
+    m = length(b)
+    if n == 0
+        return m
+    end
+    if m == 0
+        return n
+    end
+
+    previous_row = collect(0:m)
+    current_row = zeros(Int, m + 1)
+    for i in 1:n
+        current_row[1] = i
+        for j in 1:m
+            deletion_cost = previous_row[j + 1] + 1
+            insertion_cost = current_row[j] + 1
+            substitution_cost = previous_row[j] + (a[i] == b[j] ? 0 : 1)
+            current_row[j + 1] = min(deletion_cost, insertion_cost, substitution_cost)
+        end
+        previous_row, current_row = current_row, previous_row
+    end
+    return previous_row[m + 1]
+end
+
+const H1_NOISE_COVERAGE_LEVELS = [5, 10, 20, 40]
+const H1_NOISE_RATE_LEVELS = [0.0, 0.01, 0.05, 0.10, 0.20]
+const H1_NOISE_COVERAGE_SEEDS = [42, 123, 456]
+
+"""
+    run_h1_viterbi_dp_greedy_noise_coverage_sweep()
+
+Run the H1 DP-vs-greedy comparison across a synthetic noise/coverage grid: the
+5 base fixtures (G0-G4) x coverage in `H1_NOISE_COVERAGE_LEVELS` x noise_rate
+in `H1_NOISE_RATE_LEVELS` x seed in `H1_NOISE_COVERAGE_SEEDS` (300 cells).
+For each cell, build a noisy fixture via `_h1_simulate_noisy_fixture`, run both
+the exhaustive-enumeration DP oracle and the greedy baseline, and record
+exact-path-match and vertex-level Levenshtein distance to `truth_path` for
+each algorithm. This is still a harness-local synthetic sweep, not a call into
+the production `Mycelia.Rhizomorph.viterbi_decode_next` strategy and not a
+real-data H1 decision rule.
+"""
+function run_h1_viterbi_dp_greedy_noise_coverage_sweep()::DataFrames.DataFrame
+    rows = NamedTuple[]
+    base_fixtures = h1_viterbi_dp_greedy_fixtures()
+
+    for base_fixture in base_fixtures
+        for coverage in H1_NOISE_COVERAGE_LEVELS
+            for noise_rate in H1_NOISE_RATE_LEVELS
+                for seed in H1_NOISE_COVERAGE_SEEDS
+                    noisy_fixture = _h1_simulate_noisy_fixture(base_fixture, noise_rate, coverage, seed)
+
+                    dp_start = time()
+                    dp_result = _h1_select_viterbi_dp_path(noisy_fixture)
+                    dp_runtime_s = time() - dp_start
+
+                    greedy_start = time()
+                    greedy_result = _h1_select_greedy_viterbi_path(noisy_fixture)
+                    greedy_runtime_s = time() - greedy_start
+
+                    for result in (
+                            (result = dp_result, runtime_s = dp_runtime_s),
+                            (result = greedy_result, runtime_s = greedy_runtime_s)
+                        )
+                        algorithm_result = result.result
+                        exact_match = algorithm_result.path == base_fixture.truth_path
+                        vertex_edit_distance = _levenshtein(algorithm_result.path, base_fixture.truth_path)
+                        push!(rows, (
+                            hypothesis_id = "H1",
+                            dataset_id = "rhizomorph_graph_unit_fixtures",
+                            fixture_id = base_fixture.id,
+                            fixture_name = base_fixture.name,
+                            organism = "synthetic",
+                            data_type = "noisy",
+                            coverage = coverage,
+                            noise_rate = noise_rate,
+                            seed = seed,
+                            algorithm = algorithm_result.algorithm,
+                            strategy_name = algorithm_result.strategy_name,
+                            implementation_scope = algorithm_result.implementation_scope,
+                            path_vertices = join(algorithm_result.path, ","),
+                            truth_vertices = join(base_fixture.truth_path, ","),
+                            exact_path_match = exact_match,
+                            vertex_edit_distance = vertex_edit_distance,
+                            path_accuracy = exact_match ? 1.0 : 0.0,
+                            log_probability = algorithm_result.log_probability,
+                            failure_code = algorithm_result.failure_code,
+                            runtime_s = result.runtime_s,
+                            peak_rss_mib = _current_peak_rss_mib()
+                        ))
+                    end
+                end
+            end
+        end
+    end
+
+    return DataFrames.DataFrame(rows)
+end
+
+"""
+    write_h1_viterbi_dp_greedy_noise_coverage_artifacts(; output_dir, kwargs...)
+
+Write the H1 noise/coverage sweep per-replicate path-metrics table and a
+grid-summary table (aggregated across seeds) plus provenance artifacts. Mirrors
+`write_h1_viterbi_dp_greedy_artifacts`'s structure/metadata conventions. This
+is a clean+noise synthetic local sweep and still does not graduate H1 beyond
+Smoke-only; it does not call into the production Rhizomorph Viterbi strategy
+and is not a real-data H1 decision rule.
+"""
+function write_h1_viterbi_dp_greedy_noise_coverage_artifacts(;
+        output_dir::AbstractString,
+        run_id::AbstractString = "h1_viterbi_dp_greedy_noise_coverage_sweep",
+        command_args = String[],
+        generated_at = nothing)
+    path_metrics = run_h1_viterbi_dp_greedy_noise_coverage_sweep()
+
+    grouped = DataFrames.groupby(path_metrics, [:fixture_id, :fixture_name, :noise_rate, :coverage])
+    summary_rows = NamedTuple[]
+    for group in grouped
+        dp_group = group[group.algorithm .== "viterbi_objective_oracle", :]
+        greedy_group = group[group.algorithm .== "greedy", :]
+        dp_exact_match_rate = DataFrames.nrow(dp_group) == 0 ? missing : sum(dp_group.exact_path_match) / DataFrames.nrow(dp_group)
+        greedy_exact_match_rate = DataFrames.nrow(greedy_group) == 0 ? missing : sum(greedy_group.exact_path_match) / DataFrames.nrow(greedy_group)
+        push!(summary_rows, (
+            hypothesis_id = "H1",
+            dataset_id = "rhizomorph_graph_unit_fixtures",
+            fixture_id = first(group.fixture_id),
+            fixture_name = first(group.fixture_name),
+            noise_rate = first(group.noise_rate),
+            coverage = first(group.coverage),
+            n_seeds = length(unique(group.seed)),
+            n_rows = DataFrames.nrow(group),
+            exact_match_rate = sum(group.exact_path_match) / DataFrames.nrow(group),
+            mean_vertex_edit_distance = sum(group.vertex_edit_distance) / DataFrames.nrow(group),
+            dp_exact_match_rate = dp_exact_match_rate,
+            greedy_exact_match_rate = greedy_exact_match_rate,
+            dp_minus_greedy_exact_match_gap = (dp_exact_match_rate === missing || greedy_exact_match_rate === missing) ?
+                                              missing : (dp_exact_match_rate - greedy_exact_match_rate)
+        ))
+    end
+    summary = DataFrames.DataFrame(summary_rows)
+
+    tables = [
+        "h1_viterbi_dp_greedy_noise_coverage_path_metrics" => path_metrics,
+        "h1_viterbi_dp_greedy_noise_coverage_summary" => summary
+    ]
+    table_context_columns = Dict{String, Dict{String, String}}(
+        "h1_viterbi_dp_greedy_noise_coverage_path_metrics" => Dict(
+            "benchmark_dataset_id" => "dataset_id",
+            "benchmark_hypothesis_id" => "hypothesis_id"
+        ),
+        "h1_viterbi_dp_greedy_noise_coverage_summary" => Dict(
+            "benchmark_dataset_id" => "dataset_id",
+            "benchmark_hypothesis_id" => "hypothesis_id"
+        )
+    )
+
+    return write_benchmark_artifacts(
+        tables,
+        output_dir = output_dir,
+        run_id = run_id,
+        scale = "local-smoke",
+        dataset_ids = unique(string.(path_metrics.dataset_id)),
+        command_args = command_args,
+        generated_at = generated_at,
+        metadata = Dict{String, Any}(
+            "artifact_kind" => "h1_viterbi_dp_greedy_noise_coverage_path_metrics",
+            "plan_path" => "rhizomorph-paper/planning/PLAN-2026-06-02-h1-viterbi-dp-greedy-benchmark.md",
+            "claim_ledger_path" => "rhizomorph-paper/manuscript/review-notes/2026-06-28-rhizomorph-claim-ledger.md",
+            "fixtures" => "H1-G0,H1-G1,H1-G2,H1-G3,H1-G4",
+            "noise_rate_levels" => join(string.(H1_NOISE_RATE_LEVELS), ","),
+            "coverage_levels" => join(string.(H1_NOISE_COVERAGE_LEVELS), ","),
+            "seeds" => join(string.(H1_NOISE_COVERAGE_SEEDS), ","),
+            "scope" => "clean+noise synthetic local sweep; still no real-data H1 decision rule",
+            "does_not_graduate_h1" => "this sweep remains Smoke-only per the claim ledger; it does not call Mycelia.Rhizomorph.viterbi_decode_next and is not the pre-registered real-data H1 assembly-quality decision rule",
+            "noise_model" => "per-fork decoy edge at nominal probability noise_rate plus Binomial(coverage, edge_probability) per-edge read-count resampling at every fork vertex, local MersenneTwister(seed) RNG, weight=(count+epsilon)/sum(count+epsilon)",
+            "non_finite_metric_semantics" => "Inf/-Inf log_probability values indicate a failed/incomplete path (e.g. greedy trapped at a decoy dead-end vertex); see failure_code.",
             "peak_rss_mib_semantics" => "peak_rss_mib records process-level Sys.maxrss() smoke-run provenance sampled per result row; it is not per-algorithm incremental memory.",
             "empty_layout_directory_semantics" => "plots/ and logs/ are reserved public-record layout directories and may be empty for this table-only smoke artifact."
         ),
