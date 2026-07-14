@@ -664,20 +664,22 @@ end
 # (`register_soft_edge_weights!`), so the next iteration's `compute_edge_weight`
 # — and therefore the Viterbi TRANSITION scoring (`edge_data_weight`) and the
 # competing-path enumeration — sees the decayed weight. An error edge, traversed
-# only by low-probability paths, accrues little soft weight; the next iteration's
-# decode is biased against it and rebuilding from the corrected reads drops it —
-# so cleaning is an emergent property of the EM, not a bolted-on heuristic. NOTE:
-# the decay acts through `compute_edge_weight` / the Viterbi transition score, NOT
-# through the vertex `weight > 0.01` gate in `generate_alternative_qualmer_paths`
+# only by low-probability paths, accrues little soft weight, so the next iteration's
+# decode is biased against it and rebuilding from corrected reads may reduce its
+# support. Explicit graph-cleaning passes are separate configured heuristics. The
+# soft-weight signal acts through `compute_edge_weight` / the Viterbi transition
+# score, NOT through the vertex `weight > 0.01` gate in
+# `generate_alternative_qualmer_paths`
 # (that gate filters vertex candidates; the soft weights govern edge/transition
-# scoring). Variation is preserved by the SUPPORT FLOOR in
-# `register_soft_edge_weights!`: an edge with >= `SOFT_EM_MIN_SUPPORT` reads is
-# clamped to at least its raw coverage, so a real skewed minority allele never
-# decays, while only near-zero-support (error) edges fall toward zero.
+# scoring). The support floor in `register_soft_edge_weights!` clamps an edge with
+# >= `SOFT_EM_MIN_SUPPORT` reads to at least its raw coverage, so its registered
+# transition weight does not decay below raw support; edges below that threshold
+# may decay toward zero.
 #
 # This block is the ACCUMULATION HOOK (the primitive + math); the M-step
-# consumption is wired in `mycelia_iterative_assemble` (register the prior
-# iteration's accumulator onto the freshly-built graph, decode, clear).
+# consumption is wired in `mycelia_iterative_assemble`. The read-set helper binds
+# the prior iteration's accumulator to the freshly-built graph in a task-local
+# scope, decodes, and then restores the exact snapshot that existed on entry.
 
 """
     SoftEdgeWeightAccumulator
@@ -721,10 +723,10 @@ end
 
 The soft (probability-weighted) weight for `edge_id`: the accumulated path
 responsibility, or `prior` when no soft evidence exists yet. This is the
-probability-weighted replacement for `compute_edge_weight`'s raw coverage count;
-the M-step consumes it so that emergent cleaning (low-weight error edges falling
-below the `generate_alternative_qualmer_paths` gate) replaces heuristic
-tip-clipping.
+probability-weighted replacement for `compute_edge_weight`'s raw coverage count.
+The M-step uses it in transition scoring; it does not control the vertex gate in
+`generate_alternative_qualmer_paths` or replace separately configured graph
+cleaning.
 """
 function soft_edge_weight(
         acc::SoftEdgeWeightAccumulator,
@@ -804,14 +806,15 @@ end
 # is variation collapse (bead td-h6w9 / PR #363 review C1).
 #
 # The FIX ties the floor to an edge's OWN raw support, not to whether a sibling
-# is heavier. An edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is REAL and is
-# clamped so its soft weight never falls below its raw coverage, no matter how
-# heavy a sibling branch is — so a 10x minority in a 20x/10x bubble (and a 15x
-# in a 30x/15x bubble) survives every EM iteration. Only edges with near-zero
-# support (coverage < `SOFT_EM_MIN_SUPPORT`, e.g. a coverage-1 error) keep a
+# is heavier. An edge backed by >= `SOFT_EM_MIN_SUPPORT` reads is treated as
+# supported and clamped so its soft weight never falls below its raw coverage,
+# regardless of sibling-branch weight. The registered weight of a 10x minority in a
+# 20x/10x bubble (or a 15x minority in a 30x/15x bubble) stays at least at raw
+# coverage across EM iterations. Only edges with near-zero support (coverage <
+# `SOFT_EM_MIN_SUPPORT`, e.g. a coverage-1 error) keep a
 # floor of 0 and are allowed to decay toward zero via the responsibility weight,
-# so an unsupported error edge still falls below the emergent-cleaning gate. The
-# decay is thus UNSUPPORTED-based, not less-than-sibling.
+# so a below-threshold edge may retain a transition weight below raw coverage.
+# The decay rule is thus support-threshold-based, not less-than-sibling.
 const SOFT_EM_MIN_SUPPORT = 3
 
 function _soft_edge_weight_snapshot_with_graph(
@@ -849,12 +852,11 @@ propagate the captured snapshot.
 Applies the SUPPORT FLOOR (td-h6w9): the registered weight is
 `max(responsibility_weighted_value, floor)` where `floor == raw_coverage` for an
 edge backed by `>= min_support` reads and `0.0` otherwise. A well-supported edge
-therefore never decays below its own raw coverage — a real skewed minority allele
-(coverage >= `min_support`) is retained across EM iterations regardless of a
-heavier sibling — while a near-zero-support (error) edge keeps a floor of 0 and is
-free to decay toward zero via its responsibility weight. This decouples variation
-preservation (supported edges held at raw) from error decay (unsupported edges
-allowed to fall below the cleaning gate).
+therefore never receives a registered weight below its raw coverage, regardless
+of a heavier sibling, while a below-threshold edge keeps a floor of 0 and is free
+to decay toward zero via its responsibility weight. This separates the supported
+edge floor from below-threshold transition-weight decay; it is not a biological
+classification guarantee or a replacement for configured graph cleaning.
 """
 function register_soft_edge_weights!(
         graph::GRAPH,

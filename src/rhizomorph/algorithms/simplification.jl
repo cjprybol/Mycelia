@@ -1109,16 +1109,17 @@ end
 # The scalable corrector's final graph retains error-induced BRANCH POINTS
 # (dead-end tips + low-coverage bubbles). find_contigs_next breaks a unitig at
 # every branch vertex, so each residual branch point becomes a contig boundary
-# (~6 contigs for a 1kb genome after RC-dedup). This module removes ONLY the
-# unambiguous errors before contig extraction, in O(V+E), while never collapsing
-# a data-supported variant (the td-h6w9 variation-preservation invariant).
+# (~6 contigs for a 1kb genome after RC-dedup). This module removes low-support,
+# error-like structures before contig extraction, in O(V+E), under explicit
+# support, length, and topology guards. These guards are conservative heuristics,
+# not proof that every removed structure is a sequencing error.
 #
-# Two safe passes:
+# Two guarded passes:
 #   1. clip_error_tips!        — coverage-1 dead-end branches dangling off a
-#                                junction (never a stand-alone run / genome
-#                                terminus, never a rejoining variant).
-#   2. collapse_error_bubbles! — a bubble branch collapsed ONLY when its mean
-#                                coverage is ~1 (error) AND the sibling is well
+#                                junction (not a stand-alone run / genome
+#                                terminus or a rejoining bubble).
+#   2. collapse_error_bubbles! — a bubble branch collapsed only when its mean
+#                                coverage is ~1 AND the sibling is well
 #                                supported. Both-supported bubbles (balanced or
 #                                skewed) retain BOTH branches.
 
@@ -1201,15 +1202,16 @@ end
 Remove short, low-coverage dead-end branches ("tips") that dangle off a branch
 vertex. Runs in `O(V+E)` per round using prebuilt in/out adjacency indices.
 
-A tip is clipped only when BOTH unambiguous-error conditions hold:
+A tip is clipped only when BOTH configured error-like conditions hold:
   * every vertex on the tip has coverage `<= max_tip_support` (coverage-1 error
     support), and
   * the tip has at most `max_tip_length` vertices.
 
 A maximal dead-end chain that reaches the OTHER dead end (a stand-alone linear
-run or genome terminus) WITHOUT passing a junction is NEVER clipped. Real variants
-rejoin (bubbles) and are never dead ends, so tip clipping structurally cannot
-collapse a real variant — this is the safe subset of the cleanup.
+run or genome terminus) WITHOUT passing a junction is never clipped. Rejoining
+bubbles are outside this pass, but a genuinely low-support branch ending at a
+dead end can satisfy the same predicates as an error tip; callers should treat
+the support and length thresholds as conservative heuristics.
 
 Iterates up to `max_rounds` times because removing a tip can turn a former
 junction into a linear vertex and expose a nested tip one layer up.
@@ -1293,12 +1295,15 @@ end
 """
     collapse_error_bubbles!(graph; max_error_support=2, min_real_support=3, ...) -> (; collapsed)
 
-Collapse a bubble branch ONLY when it is an unambiguous error: its mean per-vertex
-coverage `<= max_error_support` (≈ coverage-1) AND the sibling branch's mean
-per-vertex coverage `>= min_real_support`. When both branches are data-supported —
+Collapse a bubble branch only when it satisfies conservative error-like
+predicates: its mean per-vertex coverage `<= max_error_support` (≈ coverage-1)
+AND the sibling branch's mean per-vertex coverage `>= min_real_support`. When
+both branches are data-supported —
 a balanced (e.g. 15x/15x) or skewed-but-supported (e.g. 20x/10x) bubble — BOTH
-branches are retained (neither branch coverage is `<= max_error_support`), so real
-variation is preserved (the td-h6w9 invariant).
+branches are retained because neither branch coverage is
+`<= max_error_support`. A true branch below the configured support floor can
+still resemble an error branch, so this is a thresholded heuristic rather than
+an absolute variation-preservation guarantee.
 
 Bubble detection is the `O(V+E)` `detect_bubbles_next`; each error branch is
 removed with [`remove_path_from_graph!`](@ref).
@@ -1347,7 +1352,7 @@ end
 # A standalone linear run is deliberately protected by the terminus guard in
 # clip_error_tips! (it reaches its other dead end without a junction), so tip
 # clipping cannot remove these islands — hence this dedicated pass. It removes a
-# whole component ONLY when it is provably error under ALL of:
+# whole component only when it satisfies all configured error-like predicates:
 #   * SEPARATE component (never the main/largest component),
 #   * SMALL (span <= max_component_length),
 #   * uniformly LOW coverage (MAX per-vertex coverage <= max_component_support,
@@ -1436,13 +1441,14 @@ end
     prune_disconnected_error_components!(graph; k, max_component_length=2000,
         max_component_support=2, min_real_support=3) -> (; removed, components_pruned)
 
-Remove standalone DISCONNECTED components that are provably sequencing-error
-debris, in `O(V+E)`. A component is pruned ONLY when it is NOT the main (largest)
-component AND its span `<= max_component_length` AND its MAXIMUM per-vertex
+Remove standalone DISCONNECTED components that satisfy conservative
+sequencing-error heuristics, in `O(V+E)`. A component is pruned only when it is
+not the main (largest) component AND its span `<= max_component_length` AND its
+MAXIMUM per-vertex
 coverage `<= max_component_support` (uniformly at the ~1-2 error floor) AND it
 shares no canonical k-mer with any well-supported (`coverage >= min_real_support`)
 vertex (the real-sequence guard). Any component failing even one condition —
-including a data-supported genome that happens to be disconnected — is RETAINED.
+including a component above the configured support floor — is RETAINED.
 
 The design deliberately UNDER-prunes (td-h6w9): the coverage gate keys on the
 component MAXIMUM (not mean), so a single supported k-mer anywhere in the
@@ -1451,14 +1457,16 @@ re-uses real sequence content. Span is estimated as `n_vertices + k - 1` (the
 length of a linear k-mer chain), an over-estimate for branchy components, which
 only makes the size cap MORE conservative.
 
-The two SAFETY proofs are the coverage floor (`<= max_component_support`) and the
-real-sequence guard (no shared canonical k-mer with a `>= min_real_support`
-vertex). The size cap is a separate, OPTIONAL conservatism knob whose only job is
+The two primary guards are the coverage threshold (`<= max_component_support`)
+and the shared-content check (no canonical k-mer shared with a
+`>= min_real_support` vertex). These guards reduce the risk of removing supported
+sequence but cannot prove that every shallow, novel component is erroneous. The
+size cap is a separate, OPTIONAL conservatism knob whose only job is
 to spare a large but shallow island that might be a genuinely under-sequenced
 real replicon; pass `max_component_length = nothing` to disable it and prune
-large provably-error islands too (td-byva). Disabling the size cap never weakens
-the two safety proofs — a well-supported or real-content-sharing component is
-retained regardless of span.
+large error-like islands too (td-byva). Disabling the size cap leaves the support
+and shared-content guards unchanged; a well-supported or shared-content component
+is retained regardless of span.
 
 # Empirical scope note (td-byva, 10-48 kb toy genomes at 20x illumina)
 This pass removes only SEPARATE components; on the corrector's final k=21 graph at
@@ -1509,16 +1517,17 @@ function prune_disconnected_error_components!(graph::MetaGraphsNext.MetaGraph;
     components_pruned = 0
     for (ci, comp) in enumerate(components)
         ci == main_idx && continue
-        # Size gate: an OPTIONAL conservatism knob (not one of the two safety
-        # proofs). Its sole job is to spare a LARGE low-coverage island that might
+        # Size gate: an OPTIONAL conservatism knob, separate from the support and
+        # shared-content guards. Its sole job is to spare a LARGE low-coverage
+        # island that might
         # be a genuinely under-sequenced real replicon (a real plasmid/segment can
         # be big yet shallow). `max_component_length === nothing` disables it, for
         # callers that know their input carries no low-coverage real replicon
         # (e.g. single high-coverage isolate) and want large error islands pruned.
-        # The coverage floor and the real-sequence guard below remain binding
-        # either way, so disabling the span gate never removes real sequence that
-        # is well-supported OR shares canonical k-mer content with supported
-        # sequence — it only widens the reach over provably-error debris.
+        # The coverage threshold and shared-content guard below remain binding
+        # either way, so disabling the span gate widens removal only to additional
+        # low-support, nonshared components. Those predicates are conservative
+        # error heuristics, not proof that the component is biologically spurious.
         if max_component_length !== nothing
             span = length(comp) + k - 1
             span <= max_component_length || continue
@@ -1550,11 +1559,12 @@ because this function mutates its argument. It combines low-support dead-end tip
 clipping (coverage up to 2 by default), guarded low-coverage bubble collapse, and
 disconnected error-component pruning (td-byva): first tips/bubbles are alternated
 to a fixpoint (re-clipping any tips exposed by a collapse), then whole standalone
-error-debris components are pruned. Every removal targets an unambiguous error; a
-data-supported variant is never collapsed (the td-h6w9
-variation-preservation invariant is enforced by
-[`clip_error_tips!`](@ref), [`collapse_error_bubbles!`](@ref), and
-[`prune_disconnected_error_components!`](@ref)).
+error-debris components are pruned. Every removal must satisfy the configured
+support, length, and topology guards in [`clip_error_tips!`](@ref),
+[`collapse_error_bubbles!`](@ref), or
+[`prune_disconnected_error_components!`](@ref). These deliberately conservative
+predicates protect higher-supported alternatives, but low-support true sequence
+can resemble sequencing-error debris and is not ruled out by structure alone.
 
 # Keywords
 - `k::Int=21`: k-mer size; the tip-length ceiling is `tip_length_multiple * k`.
@@ -1569,7 +1579,7 @@ variation-preservation invariant is enforced by
 - `max_rounds::Int=10`: max tip-clipping rounds per invocation.
 - `max_component_length::Union{Int,Nothing}=2000`: max span of a prunable
   disconnected component, or `nothing` to disable the span gate and prune large
-  provably-error islands too (the coverage floor + real-sequence guard stay
+  error-like islands too (the support threshold + shared-content guard stay
   binding). Default retains large shallow islands as possible under-sequenced
   real replicons.
 - `max_component_support::Real=2`: max per-vertex coverage in a prunable component.
@@ -1602,9 +1612,9 @@ function clean_corrector_graph!(graph::MetaGraphsNext.MetaGraph;
     # Alternate tip clipping and guarded bubble collapse to a fixpoint: clipping a
     # tip can expose a bubble whose error branch is now reachable, and collapsing a
     # bubble can turn a former junction into a linear vertex that exposes a nested
-    # tip. Each pass only removes unambiguous errors, so iterating to convergence
-    # cannot cross into real-variant territory (the td-h6w9 invariant holds
-    # per-pass). Bounded by max_outer_rounds.
+    # tip. Each pass reapplies the same conservative support/topology predicates;
+    # convergence does not turn those heuristics into a biological guarantee.
+    # Bounded by max_outer_rounds.
     for _ in 1:max_outer_rounds
         round_tips = 0
         round_bubbles = 0

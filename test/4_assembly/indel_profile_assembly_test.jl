@@ -196,7 +196,7 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         end
         Test.@test np.assembly_stats["indel_requested"] >=
                    np.assembly_stats["indel_attempted"]
-        Test.@test np.assembly_stats["indel_attempted"] >=
+        Test.@test np.assembly_stats["indel_attempted"] ==
                    np.assembly_stats["indel_completed"] +
                    np.assembly_stats["indel_truncated"]
         Test.@test np.assembly_stats["indel_completed"] >=

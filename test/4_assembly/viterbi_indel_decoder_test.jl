@@ -117,6 +117,103 @@ function indel_partial_complete_correction_kernel(
     )
 end
 
+function indel_corrupted_trace_correction_kernel(
+        graph::MetaGraphsNext.MetaGraph,
+        observations::AbstractVector,
+        corruption::Symbol;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    result = Mycelia.correct_observations(
+        graph,
+        observations;
+        config = config,
+        weighted_graph = weighted_graph,
+    )
+    path_result = only(result.paths)
+    diagnostics = copy(path_result.diagnostics)
+    if corruption == :trace_types
+        diagnostics[:move_trace] = Any[
+            move for move in diagnostics[:move_trace]]
+        diagnostics[:read_index_trace] = Any[
+            index for index in diagnostics[:read_index_trace]]
+    elseif corruption == :move_count_type
+        diagnostics[:move_counts] = Dict{Symbol, Any}(
+            move => count for (move, count) in diagnostics[:move_counts])
+    elseif corruption == :move_count_value
+        move_counts = copy(diagnostics[:move_counts])
+        move_counts[:M] += 1
+        diagnostics[:move_counts] = move_counts
+    else
+        throw(ArgumentError("unsupported trace corruption: $(corruption)"))
+    end
+    corrupted_path = Mycelia.Rhizomorph.ViterbiDecodingResult(
+        path_result.path,
+        path_result.score,
+        diagnostics,
+    )
+    return Mycelia.ViterbiCorrectionResult(
+        result.corrected_observations,
+        Mycelia.Rhizomorph.ViterbiDecodingResult[corrupted_path],
+        result.diagnostics,
+    )
+end
+
+function indel_wrong_trace_types_correction_kernel(
+        graph::MetaGraphsNext.MetaGraph,
+        observations::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    return indel_corrupted_trace_correction_kernel(
+        graph,
+        observations,
+        :trace_types;
+        config = config,
+        weighted_graph = weighted_graph,
+    )
+end
+
+function indel_wrong_move_count_type_correction_kernel(
+        graph::MetaGraphsNext.MetaGraph,
+        observations::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    return indel_corrupted_trace_correction_kernel(
+        graph,
+        observations,
+        :move_count_type;
+        config = config,
+        weighted_graph = weighted_graph,
+    )
+end
+
+function indel_wrong_move_count_value_correction_kernel(
+        graph::MetaGraphsNext.MetaGraph,
+        observations::AbstractVector;
+        config::Mycelia.ViterbiCorrectionConfig,
+        weighted_graph::Any = nothing,
+)::Mycelia.ViterbiCorrectionResult
+    return indel_corrupted_trace_correction_kernel(
+        graph,
+        observations,
+        :move_count_value;
+        config = config,
+        weighted_graph = weighted_graph,
+    )
+end
+
+function indel_throwing_likelihood_calculator(
+        ::AbstractString,
+        ::AbstractVector,
+        ::MetaGraphsNext.MetaGraph,
+        ::Int;
+        graph_mode::Symbol,
+)::Float64
+    error("forced post-soft-accumulation failure for transaction test")
+end
+
 Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
     Test.@testset "Milestone A: config indel fields default to substitution-collapse" begin
         cfg = Mycelia.ViterbiCorrectionConfig()
@@ -749,6 +846,78 @@ Test.@testset "Indel-aware pair-HMM Viterbi correction" begin
         Test.@test partial_diagnostics.indel_engaged[] == 0
         Test.@test Mycelia._quality_from_indel_trace(
             repeat("I", 9), Symbol[:M], Int[1], 5, 5) === nothing
+
+        for (label, correction_kernel) in (
+                "wrong trace concrete types" =>
+                    indel_wrong_trace_types_correction_kernel,
+                "wrong move-count concrete type" =>
+                    indel_wrong_move_count_type_correction_kernel,
+                "inconsistent move-count values" =>
+                    indel_wrong_move_count_value_correction_kernel,
+        )
+            Test.@testset "$(label) fails closed" begin
+                malformed_diagnostics = Mycelia.CorrectorDiagnostics()
+                malformed_soft_weights =
+                    Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+                malformed_result = Mycelia.try_viterbi_path_improvement(
+                    observed,
+                    graph,
+                    5;
+                    graph_mode = :doublestrand,
+                    diagnostics = malformed_diagnostics,
+                    soft_weights = malformed_soft_weights,
+                    indel_params = params,
+                    correction_kernel = correction_kernel,
+                )
+                Test.@test malformed_result === nothing
+                Test.@test isempty(malformed_soft_weights.weights)
+                Test.@test malformed_diagnostics.indel_attempts[] == 1
+                Test.@test malformed_diagnostics.indel_decodes[] == 0
+                Test.@test malformed_diagnostics.truncated_decodes[] == 1
+                Test.@test malformed_diagnostics.indel_engaged[] == 0
+                Test.@test malformed_diagnostics.trace_contract_errors[] == 1
+                Test.@test malformed_diagnostics.indel_attempts[] ==
+                           malformed_diagnostics.indel_decodes[] +
+                           malformed_diagnostics.truncated_decodes[]
+            end
+        end
+
+        # Responsibilities are staged inside the direct read corrector too, not
+        # only by the outer window splicer. A post-decode failure must therefore
+        # classify as truncated without leaking partial soft-EM state.
+        expected_soft_weights =
+            Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        Mycelia.accumulate_competing_paths!(
+            expected_soft_weights,
+            partial_reference,
+            partial_graph,
+            5;
+            graph_mode = :doublestrand,
+        )
+        Test.@test !isempty(expected_soft_weights.weights)
+
+        transaction_diagnostics = Mycelia.CorrectorDiagnostics()
+        transaction_soft_weights =
+            Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
+        Test.@test_throws ErrorException Mycelia.try_viterbi_path_improvement(
+            partial_reference,
+            partial_graph,
+            5;
+            graph_mode = :doublestrand,
+            diagnostics = transaction_diagnostics,
+            soft_weights = transaction_soft_weights,
+            indel_params = params,
+            likelihood_calculator = indel_throwing_likelihood_calculator,
+        )
+        Test.@test isempty(transaction_soft_weights.weights)
+        Test.@test transaction_diagnostics.indel_attempts[] == 1
+        Test.@test transaction_diagnostics.indel_decodes[] == 0
+        Test.@test transaction_diagnostics.truncated_decodes[] == 1
+        Test.@test transaction_diagnostics.indel_engaged[] == 0
+        Test.@test transaction_diagnostics.trace_contract_errors[] == 1
+        Test.@test transaction_diagnostics.indel_attempts[] ==
+                   transaction_diagnostics.indel_decodes[] +
+                   transaction_diagnostics.truncated_decodes[]
 
         empty_graph = deepcopy(graph)
         while !isempty(collect(MetaGraphsNext.labels(empty_graph)))

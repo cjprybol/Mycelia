@@ -149,6 +149,8 @@ Test.@testset "Indel topology-frontier probe" begin
                metrics.frontier_area + metrics.edge_expansions
 
     graph_summary = Mycelia._indel_frontier_graph_summary(graph)
+    Test.@test graph_summary.successor_index isa
+               Mycelia._IndelFrontierSuccessorIndex
     cached_metrics = Mycelia._probe_indel_frontier(
         graph,
         observation,
@@ -203,9 +205,46 @@ Test.@testset "Indel topology-frontier probe" begin
     Test.@test occursin("work_limit must be non-negative", sprint(showerror, caught))
 end
 
+Test.@testset "Frontier successor topology is indexed once" begin
+    graph = indel_frontier_probe_graph()
+    resolved_edges = Ref(0)
+    strand_resolver = function (edge_data::Any)
+        resolved_edges[] += 1
+        return Mycelia._indel_frontier_edge_strands(edge_data)
+    end
+    successor_index = Mycelia._indel_frontier_successor_index(
+        graph; strand_resolver = strand_resolver)
+    Test.@test resolved_edges[] == Graphs.ne(graph.graph)
+
+    source_vertex = first(first(MetaGraphsNext.edge_labels(graph)))
+    cell = Mycelia._IndelFrontierCell(
+        source_vertex,
+        Mycelia.Rhizomorph.Forward,
+        :M,
+        0,
+        0,
+    )
+    expected = Mycelia._indel_frontier_successors(
+        successor_index, cell, typemax(Int))
+    for _ in 1:10
+        observed = Mycelia._indel_frontier_successors(
+            successor_index, cell, typemax(Int))
+        Test.@test observed.successors == expected.successors
+        Test.@test observed.overflowed == expected.overflowed
+    end
+    Mycelia._indel_frontier_start_strands(
+        successor_index,
+        source_vertex,
+        :singlestrand,
+        Mycelia.Rhizomorph.Forward,
+    )
+    Test.@test resolved_edges[] == Graphs.ne(graph.graph)
+end
+
 Test.@testset "High-degree frontier expansion is work-bounded" begin
     degree = 10_000
     graph = indel_frontier_high_degree_graph(degree)
+    successor_index = Mycelia._indel_frontier_successor_index(graph)
     cell = Mycelia._IndelFrontierCell(
         "root",
         Mycelia.Rhizomorph.Forward,
@@ -214,12 +253,12 @@ Test.@testset "High-degree frontier expansion is work-bounded" begin
         0,
     )
 
-    bounded = Mycelia._indel_frontier_successors(graph, cell, 3)
+    bounded = Mycelia._indel_frontier_successors(successor_index, cell, 3)
     Test.@test bounded.overflowed
     Test.@test length(bounded.successors) == 3
 
     unrestricted = Mycelia._indel_frontier_successors(
-        graph, cell, typemax(Int))
+        successor_index, cell, typemax(Int))
     Test.@test !unrestricted.overflowed
     Test.@test length(unrestricted.successors) == degree
 

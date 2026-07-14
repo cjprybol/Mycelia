@@ -170,12 +170,13 @@ struct AssemblyConfig
     token_sequences::Union{Nothing, Vector{Vector{String}}}
 
     # Linear-time defragmentation of the (qualmer) assembly graph BEFORE contig
-    # extraction (td-969e): coverage-1 dead-end tip clipping + guarded low-coverage
-    # bubble collapse. Three-state sentinel so the DEFAULT can differ by context
-    # (see _qualmer_graph_to_assembly): `nothing` = context default (ON for the
-    # iterative corrector's re-assembly, OFF for a plain qualmer assembly), `true`
-    # / `false` = force. Removes only unambiguous errors; never collapses a
-    # data-supported variant (td-h6w9), so it cannot lose real sequence.
+    # extraction (td-969e): conservative support/length/topology heuristics for
+    # tips, bubbles, and disconnected components. Three-state sentinel so the
+    # DEFAULT can differ by context (see _qualmer_graph_to_assembly): `nothing` =
+    # context default (ON for the iterative corrector's re-assembly, OFF for a
+    # plain qualmer assembly), `true` / `false` = force. These heuristics can
+    # remove genuine low-coverage structures that meet the configured thresholds;
+    # cleanup therefore runs on a private copy and remains explicitly disableable.
     graph_cleanup::Union{Bool, Nothing}
 
     # Persistent directory for the Stage-1 corrector handoff (hybrid-OLC route,
@@ -815,8 +816,10 @@ one row per actual k-rung iteration. Its counters have the following meanings:
 - `engaged`: completed traces containing at least one insertion or deletion move.
 
 Every attempted call is exactly one `completed` or `truncated` outcome.
-`trace_contract_errors` is an orthogonal cause flag on malformed/failed truncated
-outcomes and must not be added to those terminal counters.
+`trace_contract_errors` is an orthogonal contract-failure flag, not another
+terminal outcome. It can accompany a malformed/failed truncated call or a
+completed kernel decode that is later rejected by the window-splice contract,
+and must not be added to the terminal counters.
 
 The aggregate `indel_requested`, `indel_attempted`, `indel_completed`,
 `indel_truncated`, and `indel_engaged` fields sum those counters over all rows.
@@ -1859,15 +1862,14 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
-    # Linear-time graph defragmentation BEFORE contig extraction (td-969e). The
-    # scalable corrector's final graph keeps error-induced branch points (dead-end
-    # tips + coverage-1 bubbles); find_contigs_next breaks a unitig at every branch
-    # vertex, so each residual branch point is a contig boundary. clean_corrector_
-    # graph! removes ONLY unambiguous errors (coverage-1 dead-end tips + guarded
-    # low-coverage bubble collapse) in O(V+E), never collapsing a data-supported
-    # variant (the td-h6w9 invariant). Operate on a deepcopy so a REUSED corrector
-    # final-pass graph (td-04tb) is not mutated for other consumers; the cleaned
-    # copy is what we both extract contigs from AND return in the AssemblyResult.
+    # Linear-time graph defragmentation BEFORE contig extraction (td-969e).
+    # find_contigs_next breaks a unitig at every residual branch vertex, so the
+    # configured support/length/topology heuristics remove qualifying tips,
+    # bubbles, and components before extraction. These are conservative assembly
+    # heuristics, not biological proofs: genuine low-coverage structures can meet
+    # their thresholds. Operate on a deepcopy so a REUSED corrector final-pass
+    # graph (td-04tb) is not mutated for other consumers; the cleaned copy is what
+    # we both extract contigs from AND return in the AssemblyResult.
     cleanup_stats = nothing
     if graph_cleanup
         graph = deepcopy(graph)

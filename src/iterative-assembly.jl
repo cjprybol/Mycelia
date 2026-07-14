@@ -776,8 +776,9 @@ function _load_validated_checkpoint_fastq(
         serialized_path::AbstractString,
         expected_sha256::AbstractString,
         canonical_output_dir::String,
-        expected_basename::String,
-)::Tuple{String, Vector{FASTX.FASTQ.Record}}
+        expected_basename::String;
+        after_initial_hash::F = () -> nothing,
+)::Tuple{String, Vector{FASTX.FASTQ.Record}} where {F}
     occursin(r"^[0-9a-f]{64}$", expected_sha256) || throw(ArgumentError(
         "checkpoint current_fastq_sha256 must be a lowercase SHA-256 digest"))
     isfile(serialized_path) || throw(ArgumentError(
@@ -790,13 +791,20 @@ function _load_validated_checkpoint_fastq(
         "expected $expected_basename"))
 
     reads = open(canonical_fastq, "r") do io
-        observed_sha256 = SHA.bytes2hex(SHA.sha256(io))
-        observed_sha256 == expected_sha256 || throw(ArgumentError(
+        initial_sha256 = SHA.bytes2hex(SHA.sha256(io))
+        initial_sha256 == expected_sha256 || throw(ArgumentError(
             "checkpoint current_fastq_file SHA-256 does not match saved provenance"))
+        after_initial_hash()
         seekstart(io)
-        # Hash and FASTQ parse share this descriptor: a path replacement between
-        # the two operations cannot substitute different content after validation.
-        collect(FASTX.FASTQ.Reader(io))
+        # Hash and FASTQ parse share this descriptor, so a path replacement cannot
+        # substitute different content. Rehash after parsing as well: another
+        # writer can still mutate the already-open inode in place.
+        parsed_reads = collect(FASTX.FASTQ.Reader(io))
+        seekstart(io)
+        final_sha256 = SHA.bytes2hex(SHA.sha256(io))
+        initial_sha256 == final_sha256 || throw(ArgumentError(
+            "checkpoint current_fastq_file changed while it was being parsed"))
+        parsed_reads
     end
     return canonical_fastq, reads
 end
@@ -2712,11 +2720,31 @@ function _hard_window_ranges(read::FASTX.FASTQ.Record, k::Int, hard_vertices::Ab
         max_window::Int = 500,
         graph_mode::Symbol = :canonical,
         complete_span::Bool = false)::Vector{UnitRange{Int}}
+    sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
+    return _hard_window_ranges(
+        sequence,
+        k,
+        hard_vertices;
+        pad = pad,
+        max_window = max_window,
+        graph_mode = graph_mode,
+        complete_span = complete_span,
+    )
+end
+
+function _hard_window_ranges(
+        sequence::BioSequences.LongDNA{4},
+        k::Int,
+        hard_vertices::AbstractSet;
+        pad::Int = 1,
+        max_window::Int = 500,
+        graph_mode::Symbol = :canonical,
+        complete_span::Bool = false,
+)::Vector{UnitRange{Int}}
     max_window >= k || throw(ArgumentError(
         "max_window must be at least k=$k, got $max_window"))
     ranges = UnitRange{Int}[]
     isempty(hard_vertices) && return ranges
-    sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
     n = length(sequence)
     n < k && return ranges
     for (km, kpos) in Kmers.UnambiguousDNAMers{k}(sequence)
@@ -2830,21 +2858,29 @@ function _indel_candidate_windows(
         hard_vertices::AbstractSet,
         skip_flags::Vector{Bool},
         graph_mode::Symbol,
-)::Vector{Tuple{Int, UnitRange{Int}}}
+)::Tuple{
+        Vector{Tuple{Int, UnitRange{Int}}},
+        Dict{Int, BioSequences.LongDNA{4}},
+}
     candidates = Tuple{Int, UnitRange{Int}}[]
+    read_sequences = Dict{Int, BioSequences.LongDNA{4}}()
     @inbounds for i in eachindex(reads)
         skip_flags[i] && continue
+        sequence = FASTX.sequence(BioSequences.LongDNA{4}, reads[i])
         windows = _hard_window_ranges(
-            reads[i], k, hard_vertices;
+            sequence, k, hard_vertices;
             pad = k,
             max_window = _INDEL_FRONTIER_MAX_WINDOW,
             graph_mode = graph_mode,
             complete_span = true)
         for window in windows
-            length(window) >= k && push!(candidates, (i, window))
+            if length(window) >= k
+                read_sequences[i] = sequence
+                push!(candidates, (i, window))
+            end
         end
     end
-    return candidates
+    return candidates, read_sequences
 end
 
 function _indel_probe_config(
@@ -2870,7 +2906,7 @@ end
 
 function _probe_indel_window(
         graph::MetaGraphsNext.MetaGraph,
-        read::FASTX.FASTQ.Record,
+        sequence::BioSequences.LongDNA{4},
         window::UnitRange{Int},
         k::Int,
         config::Any,
@@ -2878,7 +2914,6 @@ function _probe_indel_window(
         work_limit::Int,
         graph_summary::NamedTuple,
 )::Any
-    sequence = FASTX.sequence(BioSequences.LongDNA{4}, read)
     window_sequence = sequence[window]
     observations = [kmer for (kmer, _) in Kmers.UnambiguousDNAMers{k}(window_sequence)]
     return Mycelia._probe_indel_frontier(
@@ -2892,7 +2927,7 @@ end
 
 function _probe_indel_window_metric(
         graph::MetaGraphsNext.MetaGraph,
-        read::FASTX.FASTQ.Record,
+        sequence::BioSequences.LongDNA{4},
         window::UnitRange{Int},
         k::Int,
         config::Any,
@@ -2902,7 +2937,7 @@ function _probe_indel_window_metric(
 )::Tuple{Dict{Symbol, Any}, Bool}
     try
         metrics = _probe_indel_window(
-            graph, read, window, k, config, graph_mode, work_limit,
+            graph, sequence, window, k, config, graph_mode, work_limit,
             graph_summary)
         return (
             _indel_frontier_metrics_dict(metrics),
@@ -3044,7 +3079,7 @@ function _evaluate_indel_frontier_schedule_impl(
         clean_graph!::C,
         weighted_graph_builder::W,
 )::NamedTuple where {C, W}
-    candidates = _indel_candidate_windows(
+    candidates, read_sequences = _indel_candidate_windows(
         reads, k, hard_vertices, skip_flags, graph_mode)
     requested = length(candidates)
     window_sources = Dict{Int, Dict{UnitRange{Int}, Symbol}}()
@@ -3082,7 +3117,7 @@ function _evaluate_indel_frontier_schedule_impl(
     for (candidate_index, (read_index, window)) in enumerate(candidates)
         metric, admitted = _probe_indel_window_metric(
             raw_graph,
-            reads[read_index],
+            read_sequences[read_index],
             window,
             k,
             config,
@@ -3205,7 +3240,7 @@ function _evaluate_indel_frontier_schedule_impl(
                     raw_admitted[candidate_index] && continue
                     metric, admitted = _probe_indel_window_metric(
                         cleaned_graph,
-                        reads[read_index],
+                        read_sequences[read_index],
                         window,
                         k,
                         config,
@@ -3871,8 +3906,9 @@ parallel (`@threads`) read loop increments them race-free.
   truncated outcome.
 - `indel_engaged`      : completed traces containing at least one I or D move.
 - `trace_contract_errors` : malformed/missing pair-HMM traceback telemetry or a
-  post-dispatch exception. This is an orthogonal cause flag on a truncated
-  outcome, not another terminal outcome, and must not be added to completed plus
+  post-dispatch exception. This cause flag is orthogonal to terminal outcomes:
+  it can accompany a truncated kernel outcome or a completed kernel decode later
+  rejected by a splice/anchor contract. It must not be added to completed plus
   truncated counts.
 - `window_anchor_rejections` : otherwise-valid indel windows rejected because
   an independently decoded terminal overlap no longer matches the original
@@ -5723,9 +5759,13 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         correction_kernel::F = Mycelia.correct_observations,
-)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing} where {F}
+        likelihood_calculator::L = Mycelia.calculate_sequence_likelihood,
+)::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing} where {F, L}
     indel_attempt_started = false
     indel_outcome_recorded = false
+    staged_soft_weights = soft_weights === nothing ?
+                          nothing :
+                          Mycelia.Rhizomorph.SoftEdgeWeightAccumulator()
     try
         sequence_string = FASTX.sequence(String, read)
         alphabet = Mycelia.detect_alphabet(sequence_string)
@@ -5833,7 +5873,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         end
         correction = correction_kernel(
             graph, [observations]; config = config, weighted_graph = weighted_graph)
-        path_diagnostics = only(correction.paths).diagnostics
+        path_result = only(correction.paths)
+        path_diagnostics = path_result.diagnostics
         corrected_path = only(correction.corrected_observations)
         if indel_params !== nothing &&
            get(path_diagnostics, :algorithm, nothing) != :viterbi_indel_pair_hmm
@@ -5876,6 +5917,11 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.structural_errors, 1)
             return nothing
         end
+        validated_move_trace::Union{
+            Nothing, AbstractVector{Symbol}} = nothing
+        validated_read_index_trace::Union{
+            Nothing, AbstractVector{Int}} = nothing
+        indel_trace_engaged = false
         if indel_params !== nothing
             truncated = get(path_diagnostics, :truncated, nothing)
             if truncated === true
@@ -5902,6 +5948,56 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 end
                 return nothing
             end
+            move_trace = get(path_diagnostics, :move_trace, nothing)
+            read_index_trace = get(
+                path_diagnostics, :read_index_trace, nothing)
+            move_counts = get(path_diagnostics, :move_counts, nothing)
+            decoded_graph_path = path_result.path
+            trace_field_types_valid =
+                move_trace isa AbstractVector{Symbol} &&
+                read_index_trace isa AbstractVector{Int} &&
+                move_counts isa AbstractDict{Symbol, Int} &&
+                decoded_graph_path !== nothing
+            move_count_contract =
+                trace_field_types_valid &&
+                length(move_counts) == 3 &&
+                all(haskey(move_counts, phase) for phase in (:M, :I, :D)) &&
+                all(
+                    typeof(move_counts[phase]) === Int &&
+                    move_counts[phase] >= 0
+                    for phase in (:M, :I, :D)
+                ) &&
+                all(
+                    move_counts[phase] == count(==(phase), move_trace)
+                    for phase in (:M, :I, :D)
+                )
+            graph_trace_contract =
+                trace_field_types_valid &&
+                typeof(get(path_diagnostics, :path_length, nothing)) === Int &&
+                path_diagnostics[:path_length] ==
+                length(decoded_graph_path.steps) &&
+                length(decoded_graph_path.steps) ==
+                count(!=(:I), move_trace) &&
+                length(corrected_path) == length(decoded_graph_path.steps) &&
+                all(
+                    isequal(
+                        corrected_path[index],
+                        decoded_graph_path.steps[index].vertex_label,
+                    )
+                    for index in eachindex(corrected_path)
+                )
+            if !(move_count_contract && graph_trace_contract)
+                if diagnostics !== nothing
+                    Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
+                    Threads.atomic_add!(diagnostics.truncated_decodes, 1)
+                    indel_outcome_recorded = true
+                end
+                return nothing
+            end
+            validated_move_trace = move_trace
+            validated_read_index_trace = read_index_trace
+            indel_trace_engaged =
+                move_counts[:I] + move_counts[:D] > 0
         end
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
         corrected_sequence_string = corrected_sequence isa AbstractString ?
@@ -5909,10 +6005,12 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                                     string(corrected_sequence)
         aligned_indel_quality::Union{Nothing, String} = nothing
         if indel_params !== nothing
+            move_trace = something(validated_move_trace)
+            read_index_trace = something(validated_read_index_trace)
             aligned_indel_quality = Mycelia._quality_from_indel_trace(
                 String(FASTX.quality(read)),
-                get(path_diagnostics, :move_trace, Symbol[]),
-                get(path_diagnostics, :read_index_trace, Int[]),
+                move_trace,
+                read_index_trace,
                 k,
                 length(corrected_sequence_string))
             if aligned_indel_quality === nothing
@@ -5922,16 +6020,6 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                     indel_outcome_recorded = true
                 end
                 return nothing
-            end
-            if diagnostics !== nothing
-                Threads.atomic_add!(diagnostics.indel_decodes, 1)
-                indel_outcome_recorded = true
-                move_counts = get(
-                    path_diagnostics, :move_counts,
-                    Dict{Symbol, Int}(:M => 0, :I => 0, :D => 0))
-                if get(move_counts, :I, 0) + get(move_counts, :D, 0) > 0
-                    Threads.atomic_add!(diagnostics.indel_engaged, 1)
-                end
             end
         end
 
@@ -5962,7 +6050,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             # unbounded (byte-identical) generation. The rejoin test precedes the
             # band cutoff, so no real variant's read-consistent competing path drops.
             accumulate_competing_paths!(
-                soft_weights, read, graph, k; graph_mode = graph_mode,
+                something(staged_soft_weights), read, graph, k;
+                graph_mode = graph_mode,
                 walk_band = beam_is_exact ? typemax(Int) : _soft_em_walk_band(k),
                 successor_bound = beam_is_exact ? typemax(Int) :
                                   _SOFT_EM_ALT_SUCCESSOR_BOUND)
@@ -6007,7 +6096,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             end
         end
         improved_quality, improved_likelihood = if indel_params === nothing
-            likelihood = Mycelia.calculate_sequence_likelihood(
+            likelihood = likelihood_calculator(
                 corrected_sequence_string, quality_scores, graph, k;
                 graph_mode = graph_mode)
             quality = Mycelia.adjust_quality_scores(
@@ -6016,12 +6105,28 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         else
             aligned_quality = aligned_indel_quality::String
             scores = Int8.(Int.(collect(codeunits(aligned_quality))) .- 33)
-            likelihood = Mycelia.calculate_sequence_likelihood(
+            likelihood = likelihood_calculator(
                 corrected_sequence_string, scores, graph, k; graph_mode = graph_mode)
             aligned_quality, likelihood
         end
         improved_record = FASTX.FASTQ.Record(
             FASTX.identifier(read), corrected_sequence_string, improved_quality)
+        if soft_weights !== nothing
+            _merge_soft_edge_weights!(
+                soft_weights,
+                something(staged_soft_weights),
+            )
+        end
+        if indel_params !== nothing && diagnostics !== nothing
+            # Classify completion only after every post-dispatch transformation
+            # succeeded. An exception before this point falls through `finally`
+            # as one truncated, trace-contract-error outcome.
+            Threads.atomic_add!(diagnostics.indel_decodes, 1)
+            indel_outcome_recorded = true
+            if indel_trace_engaged
+                Threads.atomic_add!(diagnostics.indel_engaged, 1)
+            end
+        end
         return (improved_record, improved_likelihood)
     catch error
         if error isa ArgumentError

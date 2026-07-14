@@ -128,6 +128,37 @@ Test.@testset "Fresh input hash and FASTQ parse share one descriptor" begin
     end
 end
 
+Test.@testset "Checkpoint FASTQ rejects in-place mutation during parse" begin
+    Base.mktempdir() do temporary_directory
+        checkpoint_basename = "reads_k3_iter1_20260714T000000.fastq"
+        checkpoint_fastq = Base.joinpath(
+            temporary_directory, checkpoint_basename)
+        original_reads = checkpoint_resume_reads()
+        replacement_fastq = Base.joinpath(
+            temporary_directory, "replacement.fastq")
+        replacement_reads = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("replacement", "TGCATGCA", "IIIIIIII"),
+        ]
+        Mycelia.write_fastq(
+            records = original_reads, filename = checkpoint_fastq)
+        Mycelia.write_fastq(
+            records = replacement_reads, filename = replacement_fastq)
+        expected_sha256 = Mycelia._stream_sha256_file(checkpoint_fastq)
+        replacement_bytes = Base.read(replacement_fastq)
+
+        Test.@test_throws ArgumentError Mycelia._load_validated_checkpoint_fastq(
+            checkpoint_fastq,
+            expected_sha256,
+            Base.realpath(temporary_directory),
+            checkpoint_basename;
+            after_initial_hash = () -> Base.open(
+                checkpoint_fastq, "w") do io
+                Base.write(io, replacement_bytes)
+            end,
+        )
+    end
+end
+
 Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
     Base.mktempdir() do temporary_directory
         sequence = "AAAGCTTAGGGAGAGTAGAAATAATATAGA"

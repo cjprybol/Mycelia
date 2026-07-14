@@ -1640,6 +1640,17 @@ struct _IndelFrontierCell{V}
     run_length::Int
 end
 
+struct _IndelFrontierIndexedEdge{V}
+    target::V
+    strand_pairs::Vector{
+        Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}
+    }
+end
+
+struct _IndelFrontierSuccessorIndex{V}
+    outgoing::Dict{V, Vector{_IndelFrontierIndexedEdge{V}}}
+end
+
 function _saturating_indel_frontier_add(lhs::Int, rhs::Int)::Int
     rhs <= typemax(Int) - lhs && return lhs + rhs
     return typemax(Int)
@@ -1669,7 +1680,8 @@ function _indel_frontier_graph_summary(
         join_vertices = join_vertices,
         branch_fraction = branch_vertices / denominator,
         join_fraction = join_vertices / denominator,
-        max_out_degree = max_out_degree
+        max_out_degree = max_out_degree,
+        successor_index = _indel_frontier_successor_index(graph),
     )
 end
 
@@ -1706,7 +1718,7 @@ end
 
 function _indel_frontier_edge_strands(
         edge_data::Any
-)::Set{Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}}
+)::Vector{Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}}
     strand_pairs = Set{
         Tuple{Rhizomorph.StrandOrientation, Rhizomorph.StrandOrientation}
     }()
@@ -1716,16 +1728,61 @@ function _indel_frontier_edge_strands(
             Rhizomorph._normalize_strand(edge_data.dst_strand),
         ))
     elseif hasproperty(edge_data, :evidence)
-        strands = Rhizomorph.collect_evidence_strands(
-            getproperty(edge_data, :evidence))
-        for strand in strands
-            normalized = Rhizomorph._normalize_strand(strand)
-            push!(strand_pairs, (normalized, normalized))
+        evidence = getproperty(edge_data, :evidence)
+        for dataset_evidence in values(evidence)
+            for observation_evidence in values(dataset_evidence)
+                for entry in observation_evidence
+                    normalized = Rhizomorph._normalize_strand(entry.strand)
+                    push!(strand_pairs, (normalized, normalized))
+                    length(strand_pairs) == 2 && break
+                end
+                length(strand_pairs) == 2 && break
+            end
+            length(strand_pairs) == 2 && break
         end
     end
     isempty(strand_pairs) && push!(
         strand_pairs, (Rhizomorph.Forward, Rhizomorph.Forward))
-    return strand_pairs
+    return collect(strand_pairs)
+end
+
+function _indel_frontier_successor_index(
+        graph::MetaGraphsNext.MetaGraph;
+        strand_resolver::F = _indel_frontier_edge_strands,
+)::_IndelFrontierSuccessorIndex where {F}
+    label_type = _viterbi_graph_label_type(graph)
+    IndexedEdge = _IndelFrontierIndexedEdge{label_type}
+    outgoing = Dict{label_type, Vector{IndexedEdge}}()
+    if Graphs.is_directed(graph.graph)
+        for source_code in Graphs.vertices(graph.graph)
+            source_vertex = convert(
+                label_type, MetaGraphsNext.label_for(graph, source_code))
+            indexed_edges = get!(outgoing, source_vertex, IndexedEdge[])
+            for target_code in Graphs.outneighbors(graph.graph, source_code)
+                target_vertex = convert(
+                    label_type, MetaGraphsNext.label_for(graph, target_code))
+                edge_data = graph[source_vertex, target_vertex]
+                push!(indexed_edges, IndexedEdge(
+                    target_vertex,
+                    strand_resolver(edge_data),
+                ))
+            end
+        end
+    else
+        # Preserve `_get_valid_transitions`' stored-source convention while
+        # indexing the edge-label scan once for the immutable probe graph.
+        for edge_labels in MetaGraphsNext.edge_labels(graph)
+            length(edge_labels) == 2 || continue
+            source_vertex = convert(label_type, edge_labels[1])
+            target_vertex = convert(label_type, edge_labels[2])
+            indexed_edges = get!(outgoing, source_vertex, IndexedEdge[])
+            push!(indexed_edges, IndexedEdge(
+                target_vertex,
+                strand_resolver(graph[edge_labels...]),
+            ))
+        end
+    end
+    return _IndelFrontierSuccessorIndex(outgoing)
 end
 
 struct _IndelFrontierSuccessorBatch{V}
@@ -1746,52 +1803,41 @@ function _indel_frontier_successor_limit(
 end
 
 function _indel_frontier_successors(
-        graph::MetaGraphsNext.MetaGraph,
+        successor_index::_IndelFrontierSuccessorIndex{V},
         cell::_IndelFrontierCell{V},
         maximum_successors::Int,
 )::_IndelFrontierSuccessorBatch{V} where {V}
     maximum_successors < 0 && throw(ArgumentError(
         "maximum_successors must be non-negative, got $maximum_successors"))
     successors = Tuple{V, Rhizomorph.StrandOrientation}[]
-    if Graphs.is_directed(graph.graph)
-        source_code = MetaGraphsNext.code_for(graph, cell.vertex)
-        neighbors = Graphs.outneighbors(graph.graph, source_code)
-        sizehint!(successors, min(length(neighbors), maximum_successors))
-        for target_code in neighbors
-            target_vertex = convert(V, MetaGraphsNext.label_for(graph, target_code))
-            edge_data = graph[cell.vertex, target_vertex]
-            for (source_strand, target_strand) in
-                _indel_frontier_edge_strands(edge_data)
-                source_strand == cell.strand || continue
-                if length(successors) >= maximum_successors
-                    return _IndelFrontierSuccessorBatch(successors, true)
-                end
-                push!(successors, (target_vertex, target_strand))
+    indexed_edges = get(
+        successor_index.outgoing, cell.vertex,
+        _IndelFrontierIndexedEdge{V}[])
+    sizehint!(successors, min(length(indexed_edges), maximum_successors))
+    for indexed_edge in indexed_edges
+        for (source_strand, target_strand) in indexed_edge.strand_pairs
+            source_strand == cell.strand || continue
+            if length(successors) >= maximum_successors
+                return _IndelFrontierSuccessorBatch(successors, true)
             end
-        end
-    else
-        # Match `_get_valid_transitions`' stored-source convention for undirected
-        # MetaGraphs rather than traversing symmetric adjacency in both directions.
-        for edge_labels in MetaGraphsNext.edge_labels(graph)
-            if length(edge_labels) == 2 && edge_labels[1] == cell.vertex
-                target_vertex = convert(V, edge_labels[2])
-                edge_data = graph[edge_labels...]
-                for (source_strand, target_strand) in
-                    _indel_frontier_edge_strands(edge_data)
-                    source_strand == cell.strand || continue
-                    if length(successors) >= maximum_successors
-                        return _IndelFrontierSuccessorBatch(successors, true)
-                    end
-                    push!(successors, (target_vertex, target_strand))
-                end
-            end
+            push!(successors, (indexed_edge.target, target_strand))
         end
     end
     return _IndelFrontierSuccessorBatch(successors, false)
 end
 
-function _indel_frontier_start_strands(
+function _indel_frontier_successors(
         graph::MetaGraphsNext.MetaGraph,
+        cell::_IndelFrontierCell{V},
+        maximum_successors::Int,
+)::_IndelFrontierSuccessorBatch{V} where {V}
+    successor_index = _indel_frontier_successor_index(graph)
+    return _indel_frontier_successors(
+        successor_index, cell, maximum_successors)
+end
+
+function _indel_frontier_start_strands(
+        successor_index::_IndelFrontierSuccessorIndex{V},
         vertex::V,
         strand_mode::Symbol,
         configured_start::Rhizomorph.StrandOrientation
@@ -1800,23 +1846,11 @@ function _indel_frontier_start_strands(
     strand_mode == :singlestrand && return [configured]
 
     outgoing = Set{Rhizomorph.StrandOrientation}()
-    if Graphs.is_directed(graph.graph)
-        source_code = MetaGraphsNext.code_for(graph, vertex)
-        for target_code in Graphs.outneighbors(graph.graph, source_code)
-            target_vertex = MetaGraphsNext.label_for(graph, target_code)
-            edge_data = graph[vertex, target_vertex]
-            for (source_strand, _) in _indel_frontier_edge_strands(edge_data)
-                push!(outgoing, source_strand)
-            end
-        end
-    else
-        for edge_labels in MetaGraphsNext.edge_labels(graph)
-            if length(edge_labels) == 2 && edge_labels[1] == vertex
-                for (source_strand, _) in
-                    _indel_frontier_edge_strands(graph[edge_labels...])
-                    push!(outgoing, source_strand)
-                end
-            end
+    for indexed_edge in get(
+            successor_index.outgoing, vertex,
+            _IndelFrontierIndexedEdge{V}[])
+        for (source_strand, _) in indexed_edge.strand_pairs
+            push!(outgoing, source_strand)
         end
     end
 
@@ -1832,6 +1866,17 @@ function _indel_frontier_start_strands(
         return [configured, other]
     end
     return collect(outgoing)
+end
+
+function _indel_frontier_start_strands(
+        graph::MetaGraphsNext.MetaGraph,
+        vertex::V,
+        strand_mode::Symbol,
+        configured_start::Rhizomorph.StrandOrientation
+)::Vector{Rhizomorph.StrandOrientation} where {V}
+    successor_index = _indel_frontier_successor_index(graph)
+    return _indel_frontier_start_strands(
+        successor_index, vertex, strand_mode, configured_start)
 end
 
 """
@@ -1874,6 +1919,9 @@ function _probe_indel_frontier(
 
     summary = graph_summary === nothing ?
               _indel_frontier_graph_summary(graph) : graph_summary
+    successor_index = hasproperty(summary, :successor_index) ?
+                      summary.successor_index :
+                      _indel_frontier_successor_index(graph)
     window_length = length(observation)
     frontier_area = 0
     edge_expansions = 0
@@ -1913,7 +1961,7 @@ function _probe_indel_frontier(
     # orientation without consulting its weight or likelihood.
     match_frontier = Set{Cell}()
     for start_strand in _indel_frontier_start_strands(
-            graph, start_vertex, strand_mode, config.start_strand)
+            successor_index, start_vertex, strand_mode, config.start_strand)
         push!(match_frontier, Cell(start_vertex, start_strand, :M, 0, 0))
     end
     if isempty(match_frontier)
@@ -1942,7 +1990,7 @@ function _probe_indel_frontier(
                 successor_limit = _indel_frontier_successor_limit(
                     work_limit, frontier_area, edge_expansions)
                 successor_batch = _indel_frontier_successors(
-                    graph, cell, successor_limit)
+                    successor_index, cell, successor_limit)
                 successors = successor_batch.successors
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
@@ -2002,7 +2050,7 @@ function _probe_indel_frontier(
                 successor_limit = _indel_frontier_successor_limit(
                     work_limit, frontier_area, edge_expansions)
                 successor_batch = _indel_frontier_successors(
-                    graph, cell, successor_limit)
+                    successor_index, cell, successor_limit)
                 successors = successor_batch.successors
                 edge_expansions = _saturating_indel_frontier_add(
                     edge_expansions, length(successors))
@@ -2060,7 +2108,7 @@ function _probe_indel_frontier(
                     successor_limit = _indel_frontier_successor_limit(
                         work_limit, frontier_area, edge_expansions)
                     successor_batch = _indel_frontier_successors(
-                        graph, cell, successor_limit)
+                        successor_index, cell, successor_limit)
                     successors = successor_batch.successors
                     edge_expansions = _saturating_indel_frontier_add(
                         edge_expansions, length(successors))

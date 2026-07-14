@@ -400,6 +400,12 @@ function _indel_frontier_run_matrix(
                         completed_columns = row.completed_columns,
                         decoded_read_index = row.decoded_read_index,
                         terminal_contract_valid = row.terminal_contract_valid,
+                        graph_step_trace_aligned =
+                            row.graph_step_trace_aligned,
+                        path_length_aligned = row.path_length_aligned,
+                        corrected_path_aligned = row.corrected_path_aligned,
+                        move_counts_aligned = row.move_counts_aligned,
+                        path_trace_aligned = row.path_trace_aligned,
                         trace_complete = row.trace_complete,
                         complete = row.complete,
                         full_decode = row.full_decode,
@@ -450,6 +456,8 @@ function _indel_frontier_run_matrix(
                     pair_hmm_valid = measurement.valid,
                     pair_hmm_terminal_contract_valid =
                         measurement.terminal_contract_valid,
+                    pair_hmm_path_trace_aligned =
+                        measurement.path_trace_aligned,
                     pair_hmm_trace_complete = measurement.trace_complete,
                     pair_hmm_truncated = measurement.truncated,
                     pair_hmm_truncated_samples = measurement.truncated_samples,
@@ -614,9 +622,15 @@ function _indel_frontier_measure_decode(
     )
     warmup_ms = (time_ns() - warm_start) / 1.0e6
     warm_path = only(warm.paths)
+    warm_corrected = only(warm.corrected_observations)
     rows = NamedTuple[
         _indel_frontier_replicate_row(
-            "warmup", 0, warmup_ms, warm_path, length(observations)
+            "warmup",
+            0,
+            warmup_ms,
+            warm_path,
+            warm_corrected,
+            length(observations),
         ),
     ]
     elapsed_ms = Float64[]
@@ -631,6 +645,7 @@ function _indel_frontier_measure_decode(
         )
         elapsed = (time_ns() - start_ns) / 1.0e6
         path = only(result.paths)
+        corrected = only(result.corrected_observations)
         push!(elapsed_ms, elapsed)
         push!(
             rows,
@@ -639,6 +654,7 @@ function _indel_frontier_measure_decode(
                 replicate,
                 elapsed,
                 path,
+                corrected,
                 length(observations),
             ),
         )
@@ -648,6 +664,7 @@ function _indel_frontier_measure_decode(
     valid = all(row.pair_hmm_valid for row in rows)
     terminal_contract_valid = all(
         row.terminal_contract_valid for row in rows)
+    path_trace_aligned = all(row.path_trace_aligned for row in rows)
     trace_complete = all(row.trace_complete for row in rows)
     truncated_samples = count(row.truncated for row in rows)
     complete_samples = count(row.complete for row in rows)
@@ -664,6 +681,7 @@ function _indel_frontier_measure_decode(
         path_valid = path_valid,
         valid = valid,
         terminal_contract_valid = terminal_contract_valid,
+        path_trace_aligned = path_trace_aligned,
         trace_complete = trace_complete,
         truncated = truncated,
         truncated_samples = truncated_samples,
@@ -705,6 +723,7 @@ function _indel_frontier_replicate_row(
         replicate::Int,
         elapsed_ms::Float64,
         path::Any,
+        corrected_observations::Any,
         expected_columns::Int,
 )::NamedTuple
     diagnostics = path.diagnostics
@@ -725,17 +744,61 @@ function _indel_frontier_replicate_row(
         completed_columns_field == expected_columns &&
         typeof(decoded_read_index_field) === Int &&
         decoded_read_index_field == expected_columns
-    trace_complete = _indel_frontier_trace_complete(
-        get(diagnostics, :move_trace, nothing),
+    move_trace = get(diagnostics, :move_trace, nothing)
+    trace_indices_complete = _indel_frontier_trace_complete(
+        move_trace,
         get(diagnostics, :read_index_trace, nothing),
         expected_columns,
     )
+    decoded_path = path.path
+    decoded_steps =
+        decoded_path !== nothing && hasproperty(decoded_path, :steps) ?
+        getproperty(decoded_path, :steps) : nothing
+    graph_step_trace_aligned =
+        decoded_steps isa AbstractVector &&
+        move_trace isa AbstractVector{Symbol} &&
+        length(decoded_steps) == count(!=(:I), move_trace)
+    path_length_field = get(diagnostics, :path_length, nothing)
+    path_length_aligned =
+        decoded_steps isa AbstractVector &&
+        typeof(path_length_field) === Int &&
+        path_length_field == length(decoded_steps)
+    corrected_path_aligned =
+        decoded_steps isa AbstractVector &&
+        corrected_observations isa AbstractVector &&
+        length(corrected_observations) == length(decoded_steps) &&
+        all(
+            hasproperty(decoded_steps[index], :vertex_label) &&
+            isequal(
+                corrected_observations[index],
+                getproperty(decoded_steps[index], :vertex_label),
+            )
+            for index in eachindex(decoded_steps)
+        )
+    move_counts = get(diagnostics, :move_counts, nothing)
+    move_counts_aligned =
+        move_trace isa AbstractVector{Symbol} &&
+        move_counts isa AbstractDict{Symbol, Int} &&
+        length(move_counts) == 3 &&
+        all(haskey(move_counts, move) for move in (:M, :I, :D)) &&
+        all(
+            move_counts[move] >= 0 &&
+            move_counts[move] == count(==(move), move_trace)
+            for move in (:M, :I, :D)
+        )
+    path_trace_aligned =
+        graph_step_trace_aligned &&
+        path_length_aligned &&
+        corrected_path_aligned &&
+        move_counts_aligned
+    trace_complete = trace_indices_complete
     truncated = truncated_field === true
     completed_columns = typeof(completed_columns_field) === Int ?
                         completed_columns_field : 0
     decoded_read_index = typeof(decoded_read_index_field) === Int ?
                          decoded_read_index_field : 0
-    complete = terminal_contract_valid && trace_complete
+    complete =
+        terminal_contract_valid && trace_complete && path_trace_aligned
     pair_hmm_valid = pair_hmm_path_valid && complete
     return (
         phase = phase,
@@ -749,6 +812,11 @@ function _indel_frontier_replicate_row(
         completed_columns = completed_columns,
         decoded_read_index = decoded_read_index,
         terminal_contract_valid = terminal_contract_valid,
+        graph_step_trace_aligned = graph_step_trace_aligned,
+        path_length_aligned = path_length_aligned,
+        corrected_path_aligned = corrected_path_aligned,
+        move_counts_aligned = move_counts_aligned,
+        path_trace_aligned = path_trace_aligned,
         trace_complete = trace_complete,
         complete = complete,
         full_decode = pair_hmm_valid && complete,
@@ -872,7 +940,9 @@ function _indel_frontier_write_figure(
         plotted_color = runtime_evidence_valid ? color : :gray45
         plotted_marker = runtime_evidence_valid ? marker : :xcross
         plotted_size = runtime_evidence_valid ? 13 : 16
-        !runtime_evidence_valid && (censored_index += 1)
+        frontier_work_censored = row.probe_reason == "work_limit"
+        (!runtime_evidence_valid || frontier_work_censored) &&
+            (censored_index += 1)
         label_vertical_offset = runtime_evidence_valid ?
                                 5 : 5 + 12 * (censored_index - 1)
         status_label = if runtime_evidence_valid
@@ -905,15 +975,18 @@ function _indel_frontier_write_figure(
             frontier_axis,
             [max(row.probe_frontier_work, 1)],
             [row.p95_ms];
-            color = plotted_color,
-            marker = plotted_marker,
-            markersize = plotted_size,
+            color = frontier_work_censored ? :gray45 : plotted_color,
+            marker = frontier_work_censored ? :rtriangle : plotted_marker,
+            markersize = frontier_work_censored ? 16 : plotted_size,
         )
+        frontier_status = frontier_work_censored ?
+                          "$(status_label) [work_limit; x is lower bound]" :
+                          "$(status_label) [$(row.probe_reason)]"
         CairoMakie.text!(
             frontier_axis,
             max(row.probe_frontier_work, 1),
             row.p95_ms;
-            text = "$(status_label) [$(row.probe_reason)]",
+            text = frontier_status,
             fontsize = 8,
             align = (frontier_on_left ? :left : :right, :bottom),
             offset = (frontier_on_left ? 5 : -5, label_vertical_offset),
@@ -930,7 +1003,8 @@ function _indel_frontier_write_figure(
         figure[2, 1:2],
         "Colored symbols are complete, non-truncated pair-HMM decodes. Gray " *
         "× symbols are explicitly censored timing diagnostics and are not " *
-        "full-decode runtime evidence.";
+        "full-decode runtime evidence. Gray right triangles hit the frontier " *
+        "work limit, so their x positions are censored lower bounds.";
         fontsize = 12,
         color = :gray30,
     )
