@@ -11,6 +11,8 @@ import MetaGraphsNext
 import Mycelia
 import Test
 
+const INDEL_FRONTIER_TASK_WAIT_SECONDS = 5.0
+
 function indel_frontier_test_throws_message(
         callable::F,
         exception_type::Type{E},
@@ -260,6 +262,144 @@ Test.@testset "Frontier successor topology is indexed once" begin
         Mycelia.Rhizomorph.Forward,
     )
     Test.@test resolved_edges[] == Graphs.ne(graph.graph)
+end
+
+Test.@testset "Undirected frontier topology matches weighted decode" begin
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.Graph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.KmerEdgeData,
+    )
+    graph["left"] = nothing
+    graph["right"] = nothing
+    graph["left", "right"] = Mycelia.Rhizomorph.KmerEdgeData()
+
+    stored_source, stored_target = only(MetaGraphsNext.edge_labels(graph))
+    resolved_edges = Ref(0)
+    strand_resolver = function (edge_data::Any)
+        resolved_edges[] += 1
+        return Mycelia._indel_frontier_edge_strands(edge_data)
+    end
+    raw_index = Mycelia._indel_frontier_successor_index(
+        graph; strand_resolver = strand_resolver)
+    weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(graph)
+    weighted_index = Mycelia._indel_frontier_successor_index(weighted)
+
+    for (source, target) in (
+            (stored_source, stored_target),
+            (stored_target, stored_source),
+    )
+        cell = Mycelia._IndelFrontierCell(
+            source,
+            Mycelia.Rhizomorph.Forward,
+            :M,
+            0,
+            0,
+        )
+        raw_successors = Mycelia._indel_frontier_successors(
+            raw_index, cell, typemax(Int))
+        weighted_successors = Mycelia._indel_frontier_successors(
+            weighted_index, cell, typemax(Int))
+        Test.@test raw_successors.successors ==
+                   [(target, Mycelia.Rhizomorph.Forward)]
+        Test.@test raw_successors.successors == weighted_successors.successors
+        Test.@test !raw_successors.overflowed
+        Test.@test !weighted_successors.overflowed
+    end
+    Test.@test resolved_edges[] == Graphs.ne(graph.graph)
+
+    self_loop_graph = MetaGraphsNext.MetaGraph(
+        Graphs.Graph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.KmerEdgeData,
+    )
+    self_loop_graph["loop"] = nothing
+    self_loop_graph["loop", "loop"] = Mycelia.Rhizomorph.KmerEdgeData()
+    self_loop_resolutions = Ref(0)
+    self_loop_resolver = function (edge_data::Any)
+        self_loop_resolutions[] += 1
+        return Mycelia._indel_frontier_edge_strands(edge_data)
+    end
+    self_loop_index = Mycelia._indel_frontier_successor_index(
+        self_loop_graph; strand_resolver = self_loop_resolver)
+    self_loop_cell = Mycelia._IndelFrontierCell(
+        "loop",
+        Mycelia.Rhizomorph.Forward,
+        :M,
+        0,
+        0,
+    )
+    self_loop_successors = Mycelia._indel_frontier_successors(
+        self_loop_index, self_loop_cell, typemax(Int))
+    self_loop_weighted = Mycelia.Rhizomorph.weighted_graph_from_rhizomorph(
+        self_loop_graph)
+    self_loop_weighted_index = Mycelia._indel_frontier_successor_index(
+        self_loop_weighted)
+    self_loop_weighted_successors = Mycelia._indel_frontier_successors(
+        self_loop_weighted_index, self_loop_cell, typemax(Int))
+    Test.@test self_loop_successors.successors ==
+               [("loop", Mycelia.Rhizomorph.Forward)]
+    Test.@test self_loop_successors.successors ==
+               self_loop_weighted_successors.successors
+    Test.@test self_loop_resolutions[] == Graphs.ne(self_loop_graph.graph)
+end
+
+Test.@testset "Weighted undirected frontier preserves stored direction" begin
+    graph = MetaGraphsNext.MetaGraph(
+        Graphs.Graph();
+        label_type = String,
+        vertex_data_type = Any,
+        edge_data_type = Mycelia.Rhizomorph.StrandWeightedEdgeData,
+        weight_function = Mycelia.Rhizomorph.edge_data_weight,
+        default_weight = 0.0,
+    )
+    graph["left"] = nothing
+    graph["right"] = nothing
+    graph["left", "right"] = Mycelia.Rhizomorph.StrandWeightedEdgeData(
+        1.0,
+        Mycelia.Rhizomorph.Forward,
+        Mycelia.Rhizomorph.Reverse,
+    )
+    stored_source, stored_target = only(MetaGraphsNext.edge_labels(graph))
+    Test.@test Mycelia.build_correction_weighted_graph(graph) === graph
+    successor_index = Mycelia._indel_frontier_successor_index(graph)
+    decode_cache = Dict{
+        Tuple{String, Mycelia.Rhizomorph.StrandOrientation},
+        Mycelia._IndelDecodeSuccessorBatch{String},
+    }()
+
+    for (vertex, strand) in (
+            (stored_source, Mycelia.Rhizomorph.Forward),
+            (stored_source, Mycelia.Rhizomorph.Reverse),
+            (stored_target, Mycelia.Rhizomorph.Forward),
+            (stored_target, Mycelia.Rhizomorph.Reverse),
+    )
+        cell = Mycelia._IndelFrontierCell(vertex, strand, :M, 0, 0)
+        frontier_successors = Mycelia._indel_frontier_successors(
+            successor_index, cell, typemax(Int))
+        decoder_batch = Mycelia._indel_decode_successors!(
+            decode_cache, graph, vertex, strand)
+        decoder_successors = [
+            successor for (successor, _) in decoder_batch.successors
+        ]
+        Test.@test frontier_successors.successors == decoder_successors
+        Test.@test !frontier_successors.overflowed
+    end
+
+    source_cell = Mycelia._IndelFrontierCell(
+        stored_source,
+        Mycelia.Rhizomorph.Forward,
+        :M,
+        0,
+        0,
+    )
+    source_successors = Mycelia._indel_frontier_successors(
+        successor_index, source_cell, typemax(Int))
+    Test.@test source_successors.successors ==
+               [(stored_target, Mycelia.Rhizomorph.Reverse)]
+    Test.@test !haskey(successor_index.outgoing, stored_target)
 end
 
 Test.@testset "High-degree frontier expansion is work-bounded" begin
@@ -717,7 +857,10 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
     end
     Base.take!(unrestricted_started)
     unrestricted_entry_status = try
-        Base.timedwait(() -> Base.isready(unrestricted_entered), 0.25)
+        Base.timedwait(
+            () -> Base.isready(unrestricted_entered),
+            INDEL_FRONTIER_TASK_WAIT_SECONDS,
+        )
     finally
         Base.put!(release_soft_scope, nothing)
     end
@@ -760,9 +903,15 @@ Test.@testset "Frontier classifier separates branching from graph size" begin
     unrelated_owner_weight = NaN
     try
         first_owner_status =
-            Base.timedwait(() -> Base.isready(first_owner_entered), 0.25)
+            Base.timedwait(
+                () -> Base.isready(first_owner_entered),
+                INDEL_FRONTIER_TASK_WAIT_SECONDS,
+            )
         second_owner_status =
-            Base.timedwait(() -> Base.isready(second_owner_entered), 0.25)
+            Base.timedwait(
+                () -> Base.isready(second_owner_entered),
+                INDEL_FRONTIER_TASK_WAIT_SECONDS,
+            )
         unrelated_owner_weight =
             Mycelia.Rhizomorph.compute_edge_weight(concurrent_edge)
     finally

@@ -739,13 +739,25 @@ function _validate_checkpoint_root_types(parsed::AbstractDict)::Nothing
     return nothing
 end
 
-function _parse_iterative_checkpoint(path::String)::AbstractDict
-    parsed = open(path, "r") do io
-        checkpoint_bytes = stat(io).size
-        checkpoint_bytes <= _ITERATIVE_CHECKPOINT_MAX_BYTES || throw(ArgumentError(
-            "checkpoint is $checkpoint_bytes bytes; maximum is " *
-            "$_ITERATIVE_CHECKPOINT_MAX_BYTES bytes"))
-        JSON.parse(io)
+function _validate_iterative_checkpoint_size(
+        checkpoint_bytes::Integer,
+)::Nothing
+    checkpoint_bytes <= _ITERATIVE_CHECKPOINT_MAX_BYTES || throw(ArgumentError(
+        "checkpoint is $checkpoint_bytes bytes; maximum is " *
+        "$_ITERATIVE_CHECKPOINT_MAX_BYTES bytes"))
+    return nothing
+end
+
+function _parse_iterative_checkpoint(
+        path::String;
+        after_initial_size_check::F = () -> nothing,
+)::AbstractDict where {F}
+    parsed = Base.open(path, "r") do io
+        _validate_iterative_checkpoint_size(Base.stat(io).size)
+        after_initial_size_check()
+        serialized = Base.read(io, _ITERATIVE_CHECKPOINT_MAX_BYTES + 1)
+        _validate_iterative_checkpoint_size(Base.length(serialized))
+        JSON.parse(Base.IOBuffer(serialized))
     end
     parsed isa AbstractDict || throw(ArgumentError(
         "checkpoint root must be a JSON object"))

@@ -275,13 +275,17 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
         first_telemetry = Base.deepcopy(
             first_result[:metadata][:indel_rung_telemetry])
         Test.@test length(first_telemetry) == 2
-        rejected_row, completed_row = first_telemetry
-        Test.@test rejected_row[:k] == 3
-        Test.@test rejected_row[:requested] > 0
-        Test.@test rejected_row[:cleaned_frontier_evaluated] > 0
-        Test.@test !isempty(rejected_row[:raw_frontier_metrics])
-        Test.@test !isempty(rejected_row[:cleaned_frontier_metrics])
-        Test.@test !isempty(rejected_row[:graph_cleanup])
+        raw_admitted_row, completed_row = first_telemetry
+        Test.@test raw_admitted_row[:k] == 3
+        Test.@test raw_admitted_row[:requested] > 0
+        Test.@test raw_admitted_row[:admitted]
+        Test.@test raw_admitted_row[:decision_reason] == :raw_frontier_affordable
+        Test.@test raw_admitted_row[:graph_source] == :raw
+        Test.@test raw_admitted_row[:raw_frontier_evaluated] > 0
+        Test.@test !isempty(raw_admitted_row[:raw_frontier_metrics])
+        Test.@test raw_admitted_row[:cleaned_frontier_evaluated] == 0
+        Test.@test isempty(raw_admitted_row[:cleaned_frontier_metrics])
+        Test.@test isempty(raw_admitted_row[:graph_cleanup])
         Test.@test completed_row[:k] == 5
         Test.@test completed_row[:requested] > 0
         Test.@test completed_row[:attempted] > 0
@@ -293,9 +297,17 @@ Test.@testset "Schema-v2 resumes nonzero frontier telemetry exactly" begin
             output_directory, "checkpoints", "latest_checkpoint.json")
         checkpoint = JSON.parsefile(checkpoint_file)
         Test.@test checkpoint["resume_configuration"]["version"] == 2
-        Test.@test !isempty(
-            first(checkpoint["indel_rung_telemetry"])[
-                "cleaned_frontier_metrics"])
+        serialized_raw_admitted = Base.first(
+            checkpoint["indel_rung_telemetry"])
+        Test.@test serialized_raw_admitted["admitted"]
+        Test.@test serialized_raw_admitted["decision_reason"] ==
+                   "raw_frontier_affordable"
+        Test.@test serialized_raw_admitted["graph_source"] == "raw"
+        Test.@test serialized_raw_admitted["raw_frontier_evaluated"] > 0
+        Test.@test !isempty(serialized_raw_admitted["raw_frontier_metrics"])
+        Test.@test serialized_raw_admitted["cleaned_frontier_evaluated"] == 0
+        Test.@test isempty(serialized_raw_admitted["cleaned_frontier_metrics"])
+        Test.@test isempty(serialized_raw_admitted["graph_cleanup"])
 
         # Schema-v2 frontier samples are exact scientific evidence, not open-ended
         # metadata. Normal probes restore every generated field and the one partial
@@ -1369,7 +1381,36 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
             checkpoint_resume_invocation(
                 input_fastq, output_directory)
         end
-        open(checkpoint_file, "w") do io
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, valid_checkpoint, 2)
+        end
+
+        # The parse input remains bounded if the already-open file grows after
+        # the initial descriptor size check.
+        expected_growth_error =
+            "ArgumentError: checkpoint is " *
+            "$(Mycelia._ITERATIVE_CHECKPOINT_MAX_BYTES + 1) " *
+            "bytes; maximum is " *
+            "$(Mycelia._ITERATIVE_CHECKPOINT_MAX_BYTES) bytes"
+        growth_exception = try
+            Mycelia._parse_iterative_checkpoint(
+                checkpoint_file;
+                after_initial_size_check = () -> Base.open(
+                    checkpoint_file, "r+") do io
+                    Base.truncate(
+                        io, Mycelia._ITERATIVE_CHECKPOINT_MAX_BYTES + 1)
+                end,
+            )
+            nothing
+        catch exception
+            exception
+        end
+        Test.@test typeof(growth_exception) === ArgumentError
+        if typeof(growth_exception) === ArgumentError
+            Test.@test Base.sprint(Base.showerror, growth_exception) ==
+                       expected_growth_error
+        end
+        Base.open(checkpoint_file, "w") do io
             JSON.print(io, valid_checkpoint, 2)
         end
 

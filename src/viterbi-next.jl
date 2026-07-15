@@ -1769,17 +1769,26 @@ function _indel_frontier_successor_index(
             end
         end
     else
-        # Preserve `_get_valid_transitions`' stored-source convention while
-        # indexing the edge-label scan once for the immutable probe graph.
+        # Raw undirected evidence graphs are expanded in both directions by
+        # `weighted_graph_from_rhizomorph`, so mirror that decode topology here.
+        # Already-weighted undirected graphs bypass conversion and retain
+        # `_get_valid_transitions`' stored-source semantics. Resolve strand evidence
+        # once per stored edge in either case.
+        expand_reverse = !(_correction_edge_data_type(graph) <:
+                           Rhizomorph.StrandWeightedEdgeData)
         for edge_labels in MetaGraphsNext.edge_labels(graph)
             length(edge_labels) == 2 || continue
             source_vertex = convert(label_type, edge_labels[1])
             target_vertex = convert(label_type, edge_labels[2])
+            strand_pairs = strand_resolver(graph[edge_labels...])
             indexed_edges = get!(outgoing, source_vertex, IndexedEdge[])
             push!(indexed_edges, IndexedEdge(
                 target_vertex,
-                strand_resolver(graph[edge_labels...]),
+                strand_pairs,
             ))
+            (!expand_reverse || source_vertex == target_vertex) && continue
+            reverse_edges = get!(outgoing, target_vertex, IndexedEdge[])
+            push!(reverse_edges, IndexedEdge(source_vertex, strand_pairs))
         end
     end
     return _IndelFrontierSuccessorIndex(outgoing)
