@@ -1,0 +1,14 @@
+arm,ladder_index,k,iteration,profile_requested,requested,attempted,completed,truncated,engaged,admitted,graph_source,decision_reason,frontier_work_limit
+nanopore,1,3,1,true,0,0,0,0,0,false,raw,no_candidate_windows,300000
+nanopore,2,11,1,true,49,1,1,0,1,true,mixed,sparse_frontier_affordable,300000
+nanopore,2,11,2,true,48,0,0,0,0,false,substitution,cleaning_lost_window_anchor,300000
+nanopore,3,31,1,true,55,12,12,0,7,true,mixed,sparse_frontier_affordable,300000
+nanopore,3,31,2,true,55,13,13,0,7,true,mixed,sparse_frontier_affordable,300000
+illumina,1,3,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
+illumina,2,11,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
+illumina,2,11,2,false,0,0,0,0,0,false,raw,profile_disabled,300000
+illumina,3,31,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
+default_illumina_oracle,1,3,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
+default_illumina_oracle,2,11,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
+default_illumina_oracle,2,11,2,false,0,0,0,0,0,false,raw,profile_disabled,300000
+default_illumina_oracle,3,31,1,false,0,0,0,0,0,false,raw,profile_disabled,300000
