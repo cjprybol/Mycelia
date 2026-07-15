@@ -715,6 +715,151 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
     end
 end
 
+const _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS = (
+    "MYCELIA_HYBRID_SHORT_R1",
+    "MYCELIA_HYBRID_SHORT_R2",
+    "MYCELIA_HYBRID_LONG_READS",
+)
+
+function _multi_input_hybrid_smoke_env_enabled(
+        environment::AbstractDict,
+        name::AbstractString,
+)::Bool
+    return lowercase(strip(String(get(environment, name, "false")))) == "true"
+end
+
+function _multi_input_hybrid_smoke_symbol(
+        environment::AbstractDict,
+        name::AbstractString,
+        default::Symbol,
+        allowed::Tuple,
+)::Symbol
+    configured = get(environment, name, String(default))
+    value = Symbol(lowercase(strip(String(configured))))
+    value in allowed || throw(ArgumentError(
+        "$(name) must be one of $(allowed), got :$(value).",
+    ))
+    return value
+end
+
+function _multi_input_hybrid_smoke_integer(
+        environment::AbstractDict,
+        name::AbstractString,
+        default::Int,
+        minimum::Int,
+        maximum::Int,
+)::Int
+    text = strip(String(get(environment, name, string(default))))
+    value = tryparse(Int, text)
+    value === nothing && throw(ArgumentError(
+        "$(name) must be an integer, got $(repr(text)).",
+    ))
+    minimum <= value <= maximum || throw(ArgumentError(
+        "$(name) must be between $(minimum) and $(maximum), got $(value).",
+    ))
+    return value
+end
+
+function _multi_input_hybrid_smoke_prerequisites(
+        environment::AbstractDict,
+)::NamedTuple
+    run_external =
+        _multi_input_hybrid_smoke_env_enabled(environment, "MYCELIA_RUN_ALL") ||
+        _multi_input_hybrid_smoke_env_enabled(
+            environment,
+            "MYCELIA_RUN_EXTERNAL",
+        )
+    run_autocycler = _multi_input_hybrid_smoke_env_enabled(
+        environment,
+        "MYCELIA_RUN_AUTOCYCLER_POLISHED",
+    )
+    if run_autocycler && !run_external
+        throw(ArgumentError(
+            "MYCELIA_RUN_AUTOCYCLER_POLISHED=true also requires " *
+            "MYCELIA_RUN_EXTERNAL=true (or MYCELIA_RUN_ALL=true).",
+        ))
+    end
+    run_external || return (;
+        run_external = false,
+        run_autocycler = false,
+    )
+
+    missing_inputs = String[
+        name for name in _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS
+        if isempty(strip(String(get(environment, name, ""))))
+    ]
+    isempty(missing_inputs) || throw(ArgumentError(
+        "Enabled multi-input hybrid smoke requires all FASTQ variables; " *
+        "missing: $(join(missing_inputs, ", ")).",
+    ))
+    input_paths = (
+        short_r1 = abspath(String(environment[
+            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[1]
+        ])),
+        short_r2 = abspath(String(environment[
+            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[2]
+        ])),
+        long_reads = abspath(String(environment[
+            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[3]
+        ])),
+    )
+    for (label, path) in pairs(input_paths)
+        isfile(path) || throw(ArgumentError(
+            "Hybrid smoke $(label) FASTQ not found: $(path)",
+        ))
+        filesize(path) > 0 || throw(ArgumentError(
+            "Hybrid smoke $(label) FASTQ is empty: $(path)",
+        ))
+    end
+    short_read_tech = _multi_input_hybrid_smoke_symbol(
+        environment,
+        "MYCELIA_HYBRID_SHORT_TECH",
+        :illumina,
+        (:illumina, :ultima),
+    )
+    long_read_tech = _multi_input_hybrid_smoke_symbol(
+        environment,
+        "MYCELIA_HYBRID_LONG_TECH",
+        :nanopore,
+        (:nanopore, :pacbio_clr, :pacbio_hifi),
+    )
+    autocycler_read_type = nothing
+    autocycler_jobs = nothing
+    if run_autocycler
+        read_type_text = strip(String(get(
+            environment,
+            "MYCELIA_AUTOCYCLER_READ_TYPE",
+            "",
+        )))
+        isempty(read_type_text) && throw(ArgumentError(
+            "MYCELIA_AUTOCYCLER_READ_TYPE is required when " *
+            "MYCELIA_RUN_AUTOCYCLER_POLISHED=true.",
+        ))
+        autocycler_read_type = _multi_input_hybrid_smoke_symbol(
+            environment,
+            "MYCELIA_AUTOCYCLER_READ_TYPE",
+            :ont_r10,
+            (:ont_r9, :ont_r10, :pacbio_clr, :pacbio_hifi),
+        )
+        autocycler_jobs = _multi_input_hybrid_smoke_integer(
+            environment,
+            "MYCELIA_AUTOCYCLER_TEST_JOBS",
+            1,
+            1,
+            4,
+        )
+    end
+    return (;
+        run_external,
+        run_autocycler,
+        input_paths,
+        short_read_tech,
+        long_read_tech,
+        autocycler_read_type,
+        autocycler_jobs,
+    )
+end
+
 """
 Assembly result structure containing contigs and metadata.
 """
@@ -2864,6 +3009,47 @@ function _read_source_paths(reads::Any)::Union{Nothing, Vector{String}}
     return nothing
 end
 
+function _require_path_backed_fastq_sources(
+        reads::Any,
+        label::AbstractString,
+)::Nothing
+    paths = _read_source_paths(reads)
+    paths === nothing && return nothing
+    for (source_index, path) in enumerate(paths)
+        normalized_path = abspath(path)
+        isfile(normalized_path) || throw(ArgumentError(
+            "$(label) source $(source_index) is not a file: " *
+            "$(normalized_path).",
+        ))
+        reader = try
+            Mycelia.open_fastx(normalized_path)
+        catch caught
+            caught isa InterruptException && rethrow()
+            throw(ArgumentError(
+                "$(label) source $(source_index) is not valid FASTQ: " *
+                "$(normalized_path). Cause: $(sprint(showerror, caught))",
+            ))
+        end
+        try
+            for (record_index, record) in enumerate(reader)
+                record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                    "$(label) source $(source_index) record " *
+                    "$(record_index) is not FASTQ: $(normalized_path).",
+                ))
+            end
+        catch caught
+            caught isa InterruptException && rethrow()
+            throw(ArgumentError(
+                "$(label) source $(source_index) is not valid FASTQ: " *
+                "$(normalized_path). Cause: $(sprint(showerror, caught))",
+            ))
+        finally
+            close(reader)
+        end
+    end
+    return nothing
+end
+
 function _validate_unique_read_source_paths(
         reads::Any,
         label::AbstractString,
@@ -3478,39 +3664,64 @@ function _canonical_planned_workflow_path(
            normpath(joinpath(canonical_ancestor, relative_path))
 end
 
-function _validate_workflow_root(
+function _validate_workflow_root_shape(
+        requested_path::AbstractString,
+)::Nothing
+    normalized_path = abspath(String(requested_path))
+    if _workflow_path_entry_exists(normalized_path) && !isdir(normalized_path)
+        throw(ArgumentError(
+            "output_dir exists but is not a directory: $(normalized_path)",
+        ))
+    end
+    ancestor = _nearest_existing_workflow_ancestor(normalized_path)
+    isdir(ancestor) || throw(ArgumentError(
+        "output_dir has a non-directory ancestor: $(ancestor)",
+    ))
+    return nothing
+end
+
+function _plan_workflow_root(
         output_dir::Union{Nothing, String},
 )::NamedTuple
     if output_dir === nothing
         return (; path = nothing, ephemeral = true)
     end
     requested_path = abspath(output_dir)
-    if _workflow_path_entry_exists(requested_path) && !isdir(requested_path)
-        throw(ArgumentError(
-            "output_dir exists but is not a directory: $(requested_path)",
-        ))
-    end
-    if isdir(requested_path) && !isempty(readdir(requested_path))
-        throw(ArgumentError(
-            "output_dir must be absent or empty to prevent stale hybrid " *
-            "assembly reuse: $(requested_path)",
-        ))
-    end
-    ancestor = _nearest_existing_workflow_ancestor(requested_path)
-    isdir(ancestor) || throw(ArgumentError(
-        "output_dir has a non-directory ancestor: $(ancestor)",
-    ))
+    _validate_workflow_root_shape(requested_path)
     path = _canonical_planned_workflow_path(requested_path)
     return (; path, ephemeral = false)
+end
+
+function _validate_workflow_root(
+        output_dir::Union{Nothing, String},
+)::NamedTuple
+    root_plan = _plan_workflow_root(output_dir)
+    root_plan.ephemeral && return root_plan
+    path = String(root_plan.path)
+    if isdir(path) && !isempty(readdir(path))
+        throw(ArgumentError(
+            "output_dir must be absent or empty to prevent stale hybrid " *
+            "assembly reuse: $(path)",
+        ))
+    end
+    return root_plan
 end
 
 function _prepare_workflow_root(root_plan::NamedTuple)::NamedTuple
     if root_plan.ephemeral
         return (; path = mktempdir(), ephemeral = true)
     end
-    validated_plan = _validate_workflow_root(String(root_plan.path))
-    path = String(validated_plan.path)
+    path = abspath(String(root_plan.path))
+    validated_plan = _validate_workflow_root(path)
+    String(validated_plan.path) == path || throw(ArgumentError(
+        "Persistent output_dir changed physical identity after reservation: " *
+        "planned $(path), observed $(validated_plan.path).",
+    ))
     mkpath(path)
+    realpath(path) == path || throw(ArgumentError(
+        "Persistent output_dir changed physical identity while being created: " *
+        "$(path).",
+    ))
     return (; path, ephemeral = false)
 end
 
@@ -3548,10 +3759,11 @@ function _correct_read_set!(
         workflow_root::AbstractString,
         persist::Bool,
         correction_runner::Function,
+        protected_paths::Vector{String} = String[],
 )::_CorrectedReadSet
-    stage_output_dir = persist ?
-                       joinpath(workflow_root, "corrected", String(label)) :
-                       nothing
+    stage_output_dir = joinpath(workflow_root, "corrected", String(label))
+    mkpath(stage_output_dir)
+    canonical_stage_output_dir = realpath(stage_output_dir)
     stage_config = _stage1_multi_input_config(
         correction_options,
         technology,
@@ -3561,10 +3773,53 @@ function _correct_read_set!(
     hasproperty(stage, :corrected_fastq) || error(
         "$(label) correction result is missing corrected_fastq.",
     )
-    corrected_fastq = String(stage.corrected_fastq)
-    ephemeral = hasproperty(stage, :ephemeral) ? Bool(stage.ephemeral) : !persist
-    push!(cleanup_tokens, _Stage1CleanupToken(corrected_fastq, ephemeral))
-    if !isfile(corrected_fastq) || filesize(corrected_fastq) == 0
+    corrected_fastq = abspath(String(stage.corrected_fastq))
+    if islink(corrected_fastq) || !isfile(corrected_fastq)
+        error(
+            "$(label) correction must produce a regular, non-symlink FASTQ " *
+            "inside its reserved stage directory: $(corrected_fastq).",
+        )
+    end
+    canonical_corrected_fastq = realpath(corrected_fastq)
+    relative_corrected_path = relpath(
+        canonical_corrected_fastq,
+        canonical_stage_output_dir,
+    )
+    relative_parts = splitpath(relative_corrected_path)
+    if relative_corrected_path == "." ||
+       (!isempty(relative_parts) && first(relative_parts) == "..")
+        error(
+            "$(label) correction output is outside its reserved stage " *
+            "directory $(canonical_stage_output_dir): $(corrected_fastq).",
+        )
+    end
+    for protected_path in protected_paths
+        if ispath(protected_path) &&
+           Base.Filesystem.samefile(corrected_fastq, protected_path)
+            error(
+                "$(label) correction output aliases an input source and " *
+                "cannot be accepted for cleanup ownership: " *
+                "$(corrected_fastq).",
+            )
+        end
+    end
+    for cleanup_token in cleanup_tokens
+        if ispath(cleanup_token.corrected_fastq) &&
+           Base.Filesystem.samefile(
+               corrected_fastq,
+               cleanup_token.corrected_fastq,
+           )
+            error(
+                "$(label) correction output aliases another corrected read " *
+                "set: $(corrected_fastq).",
+            )
+        end
+    end
+    push!(
+        cleanup_tokens,
+        _Stage1CleanupToken(corrected_fastq, !persist),
+    )
+    if filesize(corrected_fastq) == 0
         error(
             "$(label) correction produced no non-empty corrected FASTQ at " *
             "$(corrected_fastq).",
@@ -3647,181 +3902,48 @@ end
 function _normalize_unicycler_package_inventory(
         package_records::Any,
 )::Vector{NamedTuple}
-    package_records isa AbstractVector || error(
-        "Unicycler Conda package inventory was not a JSON array.",
-    )
-    packages = NamedTuple[]
-    for (record_index, package_record) in enumerate(package_records)
-        package_record isa AbstractDict || error(
-            "Unicycler Conda package inventory record $(record_index) is not an object.",
-        )
-        name = get(package_record, "name", nothing)
-        version = get(package_record, "version", nothing)
-        build = get(
-            package_record,
-            "build_string",
-            get(package_record, "build", nothing),
-        )
-        channel = get(package_record, "channel", nothing)
-        all(
-            value -> value isa AbstractString && !isempty(value),
-            (name, version, build, channel),
-        ) || error(
-            "Unicycler Conda package inventory record $(record_index) must " *
-            "report non-empty name, version, build, and channel fields.",
-        )
-        push!(packages, (
-            name = String(name),
-            version = String(version),
-            build = String(build),
-            channel = String(channel),
-        ))
-    end
-    isempty(packages) && error("Unicycler Conda package inventory is empty.")
-    sort!(
-        packages;
-        by = package -> (
-            package.name,
-            package.version,
-            package.build,
-            package.channel,
-        ),
-    )
-    length(unique(package.name for package in packages)) == length(packages) ||
-        error("Unicycler Conda package inventory contains duplicate package names.")
-    return packages
+    return Mycelia._normalize_unicycler_package_inventory(package_records)
 end
 
 function _unicycler_conda_package_inventory(;
         conda_runner::AbstractString = Mycelia.CONDA_RUNNER,
         command_reader::Function = command -> read(command, String),
 )::Vector{NamedTuple}
-    command = Cmd(String[
-        String(conda_runner),
-        "list",
-        "-n",
-        "unicycler",
-        "--json",
-    ])
-    package_records = Mycelia.JSON.parse(command_reader(command))
-    return _normalize_unicycler_package_inventory(package_records)
+    return Mycelia._unicycler_conda_package_inventory(;
+        conda_runner,
+        command_reader,
+    )
 end
 
 function _unicycler_package_inventory_sha256(
-        packages::Vector{NamedTuple},
+        package_records::Any,
 )::String
-    context = Mycelia.SHA.SHA2_256_CTX()
-    _update_multi_input_digest_field!(
-        context,
-        "mycelia-conda-package-inventory-v1",
-    )
-    _update_multi_input_digest_uint64!(context, UInt64(length(packages)))
-    for package in packages
-        for field in (
-                package.name,
-                package.version,
-                package.build,
-                package.channel,
-        )
-            _update_multi_input_digest_field!(context, field)
-        end
-    end
-    return bytes2hex(Mycelia.SHA.digest!(context))
+    return Mycelia._unicycler_package_inventory_sha256(package_records)
 end
 
 function _unicycler_toolchain_provenance(;
         inventory_reader::Function = _unicycler_conda_package_inventory,
 )::Dict{String, Any}
-    packages = inventory_reader()
-    package_names = Set(package.name for package in packages)
-    for required_package in ("unicycler", "spades")
-        required_package in package_names || error(
-            "Unicycler realized Conda package inventory is missing required " *
-            "package $(repr(required_package)).",
-        )
-    end
-    normalized_packages = Dict{String, Any}[
-        Dict{String, Any}(
-            "name" => package.name,
-            "version" => package.version,
-            "build" => package.build,
-            "channel" => package.channel,
-        ) for package in packages
-    ]
-    return Dict{String, Any}(
-        "environment_name" => "unicycler",
-        "inventory_schema" => "conda-name-version-build-channel-v1",
-        "package_inventory_sha256" =>
-            _unicycler_package_inventory_sha256(packages),
-        "packages" => normalized_packages,
+    return Mycelia._unicycler_toolchain_provenance(;
+        inventory_reader,
     )
 end
 
 function _require_unicycler_toolchain_provenance(
         toolchain::Any,
 )::Dict{String, Any}
-    toolchain isa AbstractDict || error(
-        "Unicycler workflow did not report realized toolchain provenance.",
-    )
-    normalized = _normalize_provenance_value(toolchain)
-    get(normalized, "environment_name", nothing) == "unicycler" || error(
-        "Unicycler workflow toolchain provenance has the wrong environment name.",
-    )
-    get(normalized, "inventory_schema", nothing) ==
-        "conda-name-version-build-channel-v1" || error(
-        "Unicycler workflow toolchain provenance has an unsupported inventory schema.",
-    )
-    digest = get(normalized, "package_inventory_sha256", nothing)
-    packages = get(normalized, "packages", nothing)
-    digest isa AbstractString && occursin(r"^[0-9a-f]{64}$", digest) || error(
-        "Unicycler workflow toolchain provenance is missing a valid package " *
-        "inventory SHA-256 digest.",
-    )
-    packages isa AbstractVector && !isempty(packages) || error(
-        "Unicycler workflow toolchain provenance has no realized package inventory.",
-    )
-    normalized_packages = _normalize_unicycler_package_inventory(packages)
-    package_names = Set(package.name for package in normalized_packages)
-    for required_package in ("unicycler", "spades")
-        required_package in package_names || error(
-            "Unicycler workflow toolchain provenance is missing required " *
-            "package $(repr(required_package)).",
-        )
-    end
-    expected_digest = _unicycler_package_inventory_sha256(normalized_packages)
-    digest == expected_digest || error(
-        "Unicycler workflow package inventory digest does not match its " *
-        "reported name/version/build/channel inventory.",
-    )
-    return _unicycler_toolchain_provenance(
-        inventory_reader = () -> normalized_packages,
-    )
+    return Mycelia._require_unicycler_toolchain_provenance(toolchain)
 end
 
-const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
-const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
-
 function _unicycler_environment_lock_path()::String
-    return joinpath(
-        first(Base.DEPOT_PATH),
-        "locks",
-        "mycelia-unicycler-environment.pid",
-    )
+    return Mycelia._unicycler_environment_lock_path()
 end
 
 function _with_unicycler_environment_lock(
         action::Function,
         lock_path::AbstractString,
 )::Any
-    normalized_lock_path = abspath(String(lock_path))
-    mkpath(dirname(normalized_lock_path))
-    return Mycelia.FileWatching.Pidfile.mkpidlock(
-        normalized_lock_path;
-        stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
-        refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
-    ) do
-        action()
-    end
+    return Mycelia._with_unicycler_environment_lock(action, lock_path)
 end
 
 """
@@ -3836,35 +3958,22 @@ function _run_multi_input_assembler(
         outdir::AbstractString,
         config::UnicyclerHybridConfig;
         runner::Function = Mycelia.run_unicycler,
-        toolchain_inspector::Function = _unicycler_toolchain_provenance,
-        environment_preparer::Function = () ->
-            Mycelia.add_bioconda_env("unicycler"),
-        environment_lock_path::AbstractString =
-            _unicycler_environment_lock_path(),
-        environment_lock_runner::Function = _with_unicycler_environment_lock,
 )::NamedTuple
-    return environment_lock_runner(String(environment_lock_path)) do
-        environment_preparer()
-        toolchain_before = _require_unicycler_toolchain_provenance(
-            toolchain_inspector(),
-        )
-        result = runner(;
-            config.assembler_options...,
-            short_1 = inputs.short_r1.path,
-            short_2 = inputs.short_r2.path,
-            long_reads = inputs.long_reads.path,
-            outdir = String(outdir),
-            threads = config.threads,
-        )
-        toolchain_after = _require_unicycler_toolchain_provenance(
-            toolchain_inspector(),
-        )
-        toolchain_before == toolchain_after || error(
-            "Unicycler realized Conda package inventory changed while the " *
-            "assembler ran; refusing stale toolchain provenance.",
-        )
-        return merge(result, (; toolchain = toolchain_after))
-    end
+    result = runner(;
+        config.assembler_options...,
+        short_1 = inputs.short_r1.path,
+        short_2 = inputs.short_r2.path,
+        long_reads = inputs.long_reads.path,
+        outdir = String(outdir),
+        threads = config.threads,
+    )
+    hasproperty(result, :toolchain) || error(
+        "Unicycler workflow did not report realized toolchain provenance.",
+    )
+    toolchain = Mycelia._require_unicycler_toolchain_provenance(
+        result.toolchain,
+    )
+    return merge(result, (; toolchain))
 end
 
 function _run_multi_input_assembler(
@@ -4060,11 +4169,125 @@ function _require_tool_artifact(
         path::AbstractString,
         label::AbstractString,
 )::String
-    normalized_path = String(path)
+    normalized_path = abspath(String(path))
     if !isfile(normalized_path) || filesize(normalized_path) == 0
         error("multi-input assembler produced no non-empty $(label) at $(normalized_path).")
     end
     return normalized_path
+end
+
+function _require_reserved_multi_input_artifact(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString,
+)::String
+    normalized_outdir = abspath(String(reserved_outdir))
+    if islink(normalized_outdir) || !isdir(normalized_outdir) ||
+       realpath(normalized_outdir) != normalized_outdir
+        error(
+            "multi-input assembler did not preserve its exact reserved " *
+            "output directory: $(normalized_outdir).",
+        )
+    end
+    normalized_path = _require_tool_artifact(path, label)
+    islink(normalized_path) && error(
+        "multi-input assembler $(label) must be a regular, non-symlink " *
+        "file: $(normalized_path).",
+    )
+    canonical_path = realpath(normalized_path)
+    relative_path = relpath(canonical_path, normalized_outdir)
+    relative_parts = splitpath(relative_path)
+    if relative_path == "." ||
+       (!isempty(relative_parts) && first(relative_parts) == "..")
+        error(
+            "multi-input assembler $(label) is outside its exact reserved " *
+            "output directory $(normalized_outdir): $(normalized_path).",
+        )
+    end
+    return normalized_path
+end
+
+function _validate_multi_input_assembler_result(
+        result::NamedTuple,
+        workflow::Symbol,
+        reserved_outdir::AbstractString,
+)::Nothing
+    primary_fields = Symbol[]
+    hasproperty(result, :assembly) && push!(primary_fields, :assembly)
+    hasproperty(result, :contigs) && push!(primary_fields, :contigs)
+    isempty(primary_fields) && error(
+        "multi-input assembler result has neither :assembly nor :contigs.",
+    )
+    for field in primary_fields
+        path = _required_multi_input_result_path(
+            result,
+            workflow,
+            field,
+            replace(String(field), '_' => ' '),
+        )
+        _require_reserved_multi_input_artifact(
+            path,
+            replace(String(field), '_' => ' '),
+            reserved_outdir,
+        )
+    end
+
+    required_fields = if workflow == :autocycler_polished
+        (
+            :graph => "graph",
+            :autocycler_assembly => "Autocycler consensus FASTA",
+            :polypolish_assembly => "Polypolish assembly FASTA",
+            :pypolca_report => "Pypolca report",
+        )
+    else
+        (:graph => "graph",)
+    end
+    for (field, label) in required_fields
+        path = _required_multi_input_result_path(
+            result,
+            workflow,
+            field,
+            label,
+        )
+        _require_reserved_multi_input_artifact(path, label, reserved_outdir)
+    end
+
+    optional_fields = (
+        :autocycler_assembly => "Autocycler consensus FASTA",
+        :polypolish_assembly => "Polypolish assembly FASTA",
+        :pypolca_report => "Pypolca report",
+    )
+    for (field, label) in optional_fields
+        field in first.(required_fields) && continue
+        hasproperty(result, field) || continue
+        path = _required_multi_input_result_path(
+            result,
+            workflow,
+            field,
+            label,
+        )
+        _require_reserved_multi_input_artifact(path, label, reserved_outdir)
+    end
+
+    if hasproperty(result, :intermediates)
+        intermediates = result.intermediates
+        (intermediates isa AbstractVector || intermediates isa Tuple) || error(
+            "multi-input workflow :$(workflow) reported non-collection " *
+            "intermediates.",
+        )
+        for (intermediate_index, intermediate) in enumerate(intermediates)
+            intermediate isa AbstractString || error(
+                "multi-input workflow :$(workflow) reported a non-path " *
+                "intermediate at index $(intermediate_index).",
+            )
+            _require_reserved_multi_input_artifact(
+                intermediate,
+                "intermediate $(intermediate_index)",
+                reserved_outdir,
+            )
+        end
+    end
+    return nothing
 end
 
 function _is_multi_input_iupac_dna(sequence::AbstractString)::Bool
@@ -4142,6 +4365,30 @@ function _require_valid_multi_input_fasta(
         "$(label) contains no FASTA records: $(normalized_path).",
     )
     return records
+end
+
+function _require_matching_multi_input_contig_identifiers(
+        records::Vector{FASTX.FASTA.Record},
+        expected_identifiers::Set{String},
+        label::AbstractString,
+)::Nothing
+    observed_identifiers = Set(
+        String(FASTX.identifier(record)) for record in records
+    )
+    observed_identifiers == expected_identifiers && return nothing
+    missing_identifiers = sort!(collect(setdiff(
+        expected_identifiers,
+        observed_identifiers,
+    )))
+    unexpected_identifiers = sort!(collect(setdiff(
+        observed_identifiers,
+        expected_identifiers,
+    )))
+    error(
+        "$(label) contig identifier set does not match final assembly; " *
+        "missing identifiers: $(repr(missing_identifiers)); unexpected " *
+        "identifiers: $(repr(unexpected_identifiers)).",
+    )
 end
 
 function _require_valid_multi_input_gfa(
@@ -4225,7 +4472,15 @@ function _wrap_multi_input_assembly(
         retained_cleanup_roots::Vector{String},
         source_content_contract::Dict{String, Any} = Dict{String, Any}(),
         corrected_content_contract::Dict{String, Any} = Dict{String, Any}(),
+        assembler_output_dir::Union{Nothing, String} = nothing,
 )::AssemblyResult
+    if assembler_output_dir !== nothing
+        _validate_multi_input_assembler_result(
+            result,
+            workflow,
+            assembler_output_dir,
+        )
+    end
     assembly_path = _primary_assembly_path(result)
     records = _read_external_fasta(assembly_path)
     isempty(records) && error(
@@ -4255,12 +4510,14 @@ function _wrap_multi_input_assembly(
             "multi-input workflow :$(workflow) graph",
         )
     end
-    for (field, label) in (
-            :autocycler_assembly => "Autocycler consensus FASTA",
-            :polypolish_assembly => "Polypolish assembly FASTA",
+    intermediate_fasta_fields = (
+        :autocycler_assembly => "Autocycler consensus FASTA",
+        :polypolish_assembly => "Polypolish assembly FASTA",
     )
-        if workflow == :autocycler_polished
-            _require_valid_multi_input_fasta(
+    if workflow == :autocycler_polished
+        final_identifiers = Set(contig_names)
+        for (field, label) in intermediate_fasta_fields
+            intermediate_records = _require_valid_multi_input_fasta(
                 _required_multi_input_result_path(
                     result,
                     workflow,
@@ -4269,7 +4526,15 @@ function _wrap_multi_input_assembly(
                 ),
                 label,
             )
-        elseif hasproperty(result, field)
+            _require_matching_multi_input_contig_identifiers(
+                intermediate_records,
+                final_identifiers,
+                label,
+            )
+        end
+    else
+        for (field, label) in intermediate_fasta_fields
+            hasproperty(result, field) || continue
             _require_valid_multi_input_fasta(
                 String(getproperty(result, field)),
                 label,
@@ -4299,6 +4564,12 @@ function _wrap_multi_input_assembly(
             "Unicycler workflow did not report realized toolchain provenance.",
         )
         _require_unicycler_toolchain_provenance(result.toolchain)
+    elseif workflow == :autocycler_polished
+        hasproperty(result, :toolchain) || error(
+            "Autocycler-polished workflow did not report realized toolchain " *
+            "provenance.",
+        )
+        Mycelia._require_autocycler_toolchain_provenance(result.toolchain)
     elseif hasproperty(result, :toolchain)
         _normalize_provenance_value(result.toolchain)
     else
@@ -4365,7 +4636,6 @@ function _assemble_paired_short_long(
         short_reads[2],
         long_reads,
     )
-    root_plan = _validate_workflow_root(config.output_dir)
     function run_reserved_workflow(
             reserved_root_plan::NamedTuple,
     )::AssemblyResult
@@ -4385,6 +4655,12 @@ function _assemble_paired_short_long(
                 "R1 and R2 sources.",
             ))
         end
+        _require_path_backed_fastq_sources(short_r1, "short_r1")
+        _require_path_backed_fastq_sources(short_r2, "short_r2")
+        _require_path_backed_fastq_sources(
+            prepared_long_reads,
+            "long_reads",
+        )
         source_content_contract = _multi_input_source_content_contract(
             short_r1,
             short_r2,
@@ -4392,6 +4668,11 @@ function _assemble_paired_short_long(
         )
         paired_count = _validate_paired_reads(short_r1, short_r2, "input")
         long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+        protected_source_paths = String[]
+        for read_set in (short_r1, short_r2, prepared_long_reads)
+            paths = _read_source_paths(read_set)
+            paths === nothing || append!(protected_source_paths, paths)
+        end
         long_read_correction_technology = _long_read_correction_technology(config)
         root = _prepare_workflow_root(reserved_root_plan)
         cleanup_tokens = _Stage1CleanupToken[]
@@ -4409,6 +4690,7 @@ function _assemble_paired_short_long(
                 root.path,
                 !root.ephemeral,
                 correction_runner,
+                protected_source_paths,
             )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
@@ -4419,6 +4701,7 @@ function _assemble_paired_short_long(
                 root.path,
                 !root.ephemeral,
                 correction_runner,
+                protected_source_paths,
             )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
@@ -4429,6 +4712,7 @@ function _assemble_paired_short_long(
                 root.path,
                 !root.ephemeral,
                 correction_runner,
+                protected_source_paths,
             )
             corrected_pair_count = _validate_corrected_pair_preserved(
                 short_r1,
@@ -4458,10 +4742,10 @@ function _assemble_paired_short_long(
                 short_r2,
                 prepared_long_reads,
             )
-            tool_result = assembler_runner(
-                inputs,
+            assembler_output_dir = _canonical_planned_workflow_path(
                 joinpath(root.path, "assembler_$(workflow)"),
             )
+            tool_result = assembler_runner(inputs, assembler_output_dir)
             _verify_multi_input_corrected_content_contract(
                 corrected_content_contract,
                 inputs,
@@ -4514,6 +4798,7 @@ function _assemble_paired_short_long(
                 retained_cleanup_roots = retained_cleanup_roots,
                 source_content_contract,
                 corrected_content_contract,
+                assembler_output_dir,
             )
         finally
             append!(
@@ -4538,12 +4823,22 @@ function _assemble_paired_short_long(
         end
     end
 
-    if root_plan.ephemeral
-        return run_reserved_workflow(root_plan)
+    if config.output_dir === nothing
+        return run_reserved_workflow((; path = nothing, ephemeral = true))
     end
-    lock_path = _multi_input_workflow_lock_path(String(root_plan.path))
+    reserved_root_plan = _plan_workflow_root(String(config.output_dir))
+    lock_path = _multi_input_workflow_lock_path(
+        String(reserved_root_plan.path),
+    )
     return workflow_lock_runner(lock_path) do
-        reserved_root_plan = _validate_workflow_root(String(root_plan.path))
+        validated_root_plan = _validate_workflow_root(
+            String(reserved_root_plan.path),
+        )
+        validated_root_plan == reserved_root_plan || throw(ArgumentError(
+            "Persistent output_dir changed physical identity after " *
+            "reservation: planned $(reserved_root_plan.path), observed " *
+            "$(validated_root_plan.path).",
+        ))
         return run_reserved_workflow(reserved_root_plan)
     end
 end

@@ -1151,6 +1151,422 @@ function run_hifiasm_meta(;
     return (; outdir, hifiasm_outprefix)
 end
 
+const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
+const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
+
+function _normalize_unicycler_package_inventory(
+        package_records::Any,
+)::Vector{NamedTuple}
+    package_records isa AbstractVector || error(
+        "Unicycler Conda package inventory was not a JSON array.",
+    )
+    packages = NamedTuple[]
+    for (record_index, package_record) in enumerate(package_records)
+        if package_record isa AbstractDict
+            name = get(package_record, "name", nothing)
+            version = get(package_record, "version", nothing)
+            build = get(
+                package_record,
+                "build_string",
+                get(package_record, "build", nothing),
+            )
+            channel = get(package_record, "channel", nothing)
+        elseif package_record isa NamedTuple
+            name = hasproperty(package_record, :name) ?
+                   package_record.name : nothing
+            version = hasproperty(package_record, :version) ?
+                      package_record.version : nothing
+            build = if hasproperty(package_record, :build_string)
+                package_record.build_string
+            elseif hasproperty(package_record, :build)
+                package_record.build
+            else
+                nothing
+            end
+            channel = hasproperty(package_record, :channel) ?
+                      package_record.channel : nothing
+        else
+            error(
+                "Unicycler Conda package inventory record $(record_index) " *
+                "is not an object.",
+            )
+        end
+        all(
+            value -> value isa AbstractString && !isempty(value),
+            (name, version, build, channel),
+        ) || error(
+            "Unicycler Conda package inventory record $(record_index) must " *
+            "report non-empty name, version, build, and channel fields.",
+        )
+        push!(packages, (
+            name = String(name),
+            version = String(version),
+            build = String(build),
+            channel = String(channel),
+        ))
+    end
+    isempty(packages) && error("Unicycler Conda package inventory is empty.")
+    sort!(
+        packages;
+        by = package -> (
+            package.name,
+            package.version,
+            package.build,
+            package.channel,
+        ),
+    )
+    length(unique(package.name for package in packages)) == length(packages) ||
+        error("Unicycler Conda package inventory contains duplicate package names.")
+    return packages
+end
+
+function _unicycler_conda_package_inventory(;
+        conda_runner::AbstractString = _conda_runner(),
+        command_reader::Function = command -> read(command, String),
+)::Vector{NamedTuple}
+    command = Cmd(String[
+        String(conda_runner),
+        "list",
+        "-n",
+        "unicycler",
+        "--json",
+    ])
+    package_records = JSON.parse(command_reader(command))
+    return _normalize_unicycler_package_inventory(package_records)
+end
+
+function _unicycler_package_inventory_sha256(package_records::Any)::String
+    packages = _normalize_unicycler_package_inventory(package_records)
+    canonical = IOBuffer()
+    write(canonical, "mycelia-conda-package-inventory-v1")
+    print(canonical, length(packages), ':')
+    for package in packages
+        for field in (
+                package.name,
+                package.version,
+                package.build,
+                package.channel,
+        )
+            print(canonical, ncodeunits(field), ':')
+            write(canonical, field)
+        end
+    end
+    return bytes2hex(SHA.sha256(take!(canonical)))
+end
+
+function _unicycler_toolchain_metadata(
+        package_records::Any,
+)::Dict{String, Any}
+    packages = _normalize_unicycler_package_inventory(package_records)
+    package_names = Set(package.name for package in packages)
+    for required_package in ("unicycler", "spades")
+        required_package in package_names || error(
+            "Unicycler realized Conda package inventory is missing required " *
+            "package $(repr(required_package)).",
+        )
+    end
+    return Dict{String, Any}(
+        "environment_name" => "unicycler",
+        "inventory_schema" => "conda-name-version-build-channel-v1",
+        "package_inventory_sha256" =>
+            _unicycler_package_inventory_sha256(packages),
+        "packages" => Dict{String, Any}[
+            Dict{String, Any}(
+                "name" => package.name,
+                "version" => package.version,
+                "build" => package.build,
+                "channel" => package.channel,
+            ) for package in packages
+        ],
+    )
+end
+
+function _unicycler_toolchain_provenance(;
+        inventory_reader::Function = _unicycler_conda_package_inventory,
+)::Dict{String, Any}
+    return _unicycler_toolchain_metadata(inventory_reader())
+end
+
+function _require_unicycler_toolchain_provenance(
+        toolchain::Any,
+)::Dict{String, Any}
+    toolchain isa AbstractDict || error(
+        "Unicycler workflow did not report realized toolchain provenance.",
+    )
+    normalized = Dict{String, Any}(
+        String(key) => value for (key, value) in pairs(toolchain)
+    )
+    get(normalized, "environment_name", nothing) == "unicycler" || error(
+        "Unicycler workflow toolchain provenance has the wrong environment name.",
+    )
+    get(normalized, "inventory_schema", nothing) ==
+        "conda-name-version-build-channel-v1" || error(
+        "Unicycler workflow toolchain provenance has an unsupported inventory schema.",
+    )
+    digest = get(normalized, "package_inventory_sha256", nothing)
+    packages = get(normalized, "packages", nothing)
+    digest isa AbstractString && occursin(r"^[0-9a-f]{64}$", digest) || error(
+        "Unicycler workflow toolchain provenance is missing a valid package " *
+        "inventory SHA-256 digest.",
+    )
+    packages isa AbstractVector && !isempty(packages) || error(
+        "Unicycler workflow toolchain provenance has no realized package inventory.",
+    )
+    normalized_packages = _normalize_unicycler_package_inventory(packages)
+    expected = _unicycler_toolchain_metadata(normalized_packages)
+    digest == expected["package_inventory_sha256"] || error(
+        "Unicycler workflow package inventory digest does not match its " *
+        "reported name/version/build/channel inventory.",
+    )
+    return expected
+end
+
+function _canonical_unicycler_conda_runner(
+        conda_runner::AbstractString,
+)::String
+    executable = Sys.which(String(conda_runner))
+    candidate = executable === nothing ?
+                abspath(String(conda_runner)) : String(executable)
+    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+end
+
+function _unicycler_environment_prefix(
+        conda_runner::AbstractString,
+)::String
+    canonical_runner = _canonical_unicycler_conda_runner(conda_runner)
+    conda_root = normpath(joinpath(dirname(canonical_runner), ".."))
+    return joinpath(conda_root, "envs", "unicycler")
+end
+
+function _unicycler_environment_lock_path(
+        conda_runner::AbstractString = _conda_runner(),
+)::String
+    environment_prefix = _unicycler_environment_prefix(conda_runner)
+    conda_root = dirname(dirname(environment_prefix))
+    return joinpath(
+        conda_root,
+        ".mycelia-locks",
+        "unicycler.pid",
+    )
+end
+
+function _with_unicycler_environment_lock(
+        action::Function,
+        lock_path::AbstractString = _unicycler_environment_lock_path();
+        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
+)::Any
+    normalized_lock_path = abspath(String(lock_path))
+    mkpath(dirname(normalized_lock_path))
+    return pidlock_runner(
+        normalized_lock_path;
+        stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+        refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
+    ) do
+        action()
+    end
+end
+
+function _unicycler_command(;
+        conda_runner::AbstractString,
+        short_1::AbstractString,
+        short_2::Union{Nothing, AbstractString},
+        long_reads::AbstractString,
+        outdir::AbstractString,
+        threads::Int,
+        spades_options::Union{Nothing, String},
+        kmers::Union{Nothing, String},
+)::Cmd
+    arguments = String[
+        String(conda_runner),
+        "run",
+        "--live-stream",
+        "-n",
+        "unicycler",
+        "unicycler",
+    ]
+    if isnothing(short_2)
+        append!(arguments, ["-s", String(short_1)])
+    else
+        append!(arguments, ["-1", String(short_1), "-2", String(short_2)])
+    end
+    append!(arguments, [
+        "-l",
+        String(long_reads),
+        "-o",
+        String(outdir),
+        "-t",
+        string(threads),
+    ])
+    isnothing(kmers) || push!(arguments, "--kmers=$(kmers)")
+    isnothing(spades_options) ||
+        push!(arguments, "--spades_options=$(spades_options)")
+    return Cmd(arguments)
+end
+
+function _prepare_unicycler_environment(
+        conda_runner::AbstractString,
+)::Nothing
+    resolved_runner = _canonical_unicycler_conda_runner(conda_runner)
+    environment_prefix = _unicycler_environment_prefix(resolved_runner)
+    environment_names = _conda_environment_names(
+        resolved_runner,
+        dirname(environment_prefix),
+    )
+    if !("unicycler" in environment_names)
+        run(Cmd([
+            resolved_runner,
+            "create",
+            "-c",
+            "conda-forge",
+            "-c",
+            "bioconda",
+            "-c",
+            "defaults",
+            "--strict-channel-priority",
+            "-n",
+            "unicycler",
+            "unicycler",
+            "-y",
+        ]))
+        run(Cmd([resolved_runner, "clean", "--all", "-y"]))
+    end
+    return nothing
+end
+
+function _require_unicycler_artifact(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = String(path)
+    islink(normalized_path) && error(
+        "Unicycler $(label) must be a regular non-symlink file: " *
+        repr(normalized_path),
+    )
+    isfile(normalized_path) && filesize(normalized_path) > 0 || error(
+        "Unicycler did not produce a non-empty $(label) at " *
+        repr(normalized_path),
+    )
+    return normalized_path
+end
+
+function _run_unicycler_with_contract(;
+        short_1::AbstractString,
+        short_2::Union{Nothing, AbstractString} = nothing,
+        long_reads::AbstractString,
+        outdir::AbstractString = "unicycler_output",
+        threads::Int = get_default_threads(),
+        spades_options::Union{Nothing, String} = nothing,
+        kmers::Union{Nothing, String} = nothing,
+        executor::Any = nothing,
+        site::Symbol = :local,
+        job_name::String = "unicycler",
+        time_limit::String = "2-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_preparer::Function = _prepare_unicycler_environment,
+        toolchain_inspector::Function = runner ->
+            _unicycler_toolchain_provenance(
+                inventory_reader = () ->
+                    _unicycler_conda_package_inventory(
+                        conda_runner = runner,
+                    ),
+            ),
+        environment_lock_path::Union{Nothing, AbstractString} = nothing,
+        environment_lock_runner::Function = _with_unicycler_environment_lock,
+        command_runner::Function = run,
+)::NamedTuple
+    reported_outdir = String(outdir)
+    isempty(strip(reported_outdir)) && throw(ArgumentError(
+        "Unicycler outdir must be a non-empty path.",
+    ))
+    reported_assembly = joinpath(reported_outdir, "assembly.fasta")
+    reported_graph = joinpath(reported_outdir, "assembly.gfa")
+    normalized_outdir = abspath(String(outdir))
+    assembly = joinpath(normalized_outdir, "assembly.fasta")
+    resolved_conda_runner = _canonical_unicycler_conda_runner(conda_runner)
+    resolved_executor = resolve_executor(executor)
+    resolved_executor isa LocalExecutor || throw(ArgumentError(
+        "Unicycler exact toolchain provenance supports only synchronous " *
+        "local execution; refusing $(typeof(resolved_executor)).",
+    ))
+    lock_path = environment_lock_path === nothing ?
+                _unicycler_environment_lock_path(resolved_conda_runner) :
+                String(environment_lock_path)
+    return environment_lock_runner(lock_path) do
+        environment_preparer(resolved_conda_runner)
+        toolchain_before = _require_unicycler_toolchain_provenance(
+            toolchain_inspector(resolved_conda_runner),
+        )
+        graph = joinpath(normalized_outdir, "assembly.gfa")
+        if ispath(assembly) || islink(assembly) ||
+           ispath(graph) || islink(graph)
+            _require_unicycler_artifact(assembly, "assembly FASTA")
+            _require_unicycler_artifact(graph, "assembly GFA")
+            return (;
+                outdir = reported_outdir,
+                assembly = reported_assembly,
+                graph = reported_graph,
+                toolchain = nothing,
+                provenance_status = "unavailable-reused-output",
+            )
+        end
+
+        command = _unicycler_command(;
+            conda_runner = resolved_conda_runner,
+            short_1,
+            short_2,
+            long_reads,
+            outdir = normalized_outdir,
+            threads,
+            spades_options,
+            kmers,
+        )
+        if islink(normalized_outdir) || (ispath(normalized_outdir) &&
+                                        !isdir(normalized_outdir))
+            throw(ArgumentError(
+                "Unicycler outdir must be absent or an empty directory: " *
+                repr(normalized_outdir),
+            ))
+        end
+        if isdir(normalized_outdir)
+            isempty(readdir(normalized_outdir)) || throw(ArgumentError(
+                "Refusing to remove non-empty Unicycler outdir without a " *
+                "completed assembly: $(repr(normalized_outdir)).",
+            ))
+            try
+                rm(normalized_outdir)
+            catch removal_error
+                removal_error isa InterruptException && rethrow()
+                throw(ArgumentError(
+                    "Unicycler outdir changed or was not empty during " *
+                    "nonrecursive removal: $(repr(normalized_outdir)).",
+                ))
+            end
+        end
+        command_runner(command)
+        _require_unicycler_artifact(assembly, "assembly FASTA")
+        _require_unicycler_artifact(graph, "assembly GFA")
+        toolchain_after = _require_unicycler_toolchain_provenance(
+            toolchain_inspector(resolved_conda_runner),
+        )
+        toolchain_before == toolchain_after || error(
+            "Unicycler realized Conda package inventory changed while the " *
+            "assembler ran; refusing stale toolchain provenance.",
+        )
+        return (;
+            outdir = reported_outdir,
+            assembly = reported_assembly,
+            graph = reported_graph,
+            toolchain = toolchain_after,
+            provenance_status = "realized-local-exact",
+        )
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1170,22 +1586,33 @@ Named tuple containing:
 - `outdir::String`: Path to output directory
 - `assembly::String`: Path to final assembly file
 - `graph::String`: Path to assembly graph in GFA format
+- `toolchain::Union{Nothing,Dict}`: Exact realized package inventory for a
+  fresh local run; `nothing` for reused work
+- `provenance_status::String`: Why exact toolchain provenance is available or
+  intentionally unavailable
 
 # Details
 - Automatically creates and uses a conda environment with unicycler
 - Combines short read accuracy with long read scaffolding
-- Skips assembly if output directory already exists
+- Reuses output only when both the assembly FASTA and GFA are regular,
+  non-symlink, non-empty files. Reused outputs report no realized toolchain
+  provenance; partial artifacts fail loudly. Fresh local runs report a locked
+  before/after package inventory. Nonlocal executors are rejected because their
+  execution would outlive the mutable-environment lock.
+- Rejects an incomplete non-empty output directory instead of deleting
+  caller-owned contents. An empty output directory may be removed because
+  Unicycler requires the output path to be absent.
 - Utilizes all available CPU threads
 """
 function run_unicycler(;
-        short_1,
-        short_2 = nothing,
-        long_reads,
-        outdir = "unicycler_output",
+        short_1::AbstractString,
+        short_2::Union{Nothing, AbstractString} = nothing,
+        long_reads::AbstractString,
+        outdir::AbstractString = "unicycler_output",
         threads::Int = get_default_threads(),
         spades_options::Union{Nothing, String} = nothing,
         kmers::Union{Nothing, String} = nothing,
-        executor = nothing,
+        executor::Any = nothing,
         site::Symbol = :local,
         job_name::String = "unicycler",
         time_limit::String = "2-00:00:00",
@@ -1193,68 +1620,25 @@ function run_unicycler(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
-    Mycelia.add_bioconda_env("unicycler")
-
-    if executor !== nothing
-        spades_args = isnothing(spades_options) ? String[] :
-                      ["--spades_options=$(spades_options)"]
-        kmer_args = isnothing(kmers) ? String[] : ["--kmers=$(kmers)"]
-        cmd = if isnothing(short_2)
-            Mycelia.command_string(
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`
-            )
-        else
-            Mycelia.command_string(
-                `$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -1 $(short_1) -2 $(short_2) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`
-            )
-        end
-        script = join([
-            "set -euo pipefail",
-            "if [ ! -f \"$(joinpath(outdir, "assembly.fasta"))\" ]; then",
-            "  rm -rf \"$(outdir)\" || true",
-            "  $(cmd)",
-            "fi",
-            "mkdir -p \"$(outdir)\""
-        ], "\n")
-        job = Mycelia.build_execution_job(
-            cmd = script,
-            job_name = job_name,
-            site = site,
-            time_limit = time_limit,
-            cpus_per_task = threads,
-            mem_gb = mem_gb,
-            partition = partition,
-            qos = qos,
-            account = account,
-            mail_user = mail_user
-        )
-        Mycelia.execute(job, Mycelia.resolve_executor(executor))
-        return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
-            graph = joinpath(outdir, "assembly.gfa"))
-    end
-
-    # Unicycler requires the output directory to not exist, so check output file first
-    if !isfile(joinpath(outdir, "assembly.fasta"))
-        # Remove output directory if it exists (Unicycler will create it)
-        if isdir(outdir)
-            rm(outdir, recursive = true)
-        end
-
-        spades_args = isnothing(spades_options) ? String[] :
-                      ["--spades_options=$(spades_options)"]
-        kmer_args = isnothing(kmers) ? String[] : ["--kmers=$(kmers)"]
-        if isnothing(short_2)
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -s $(short_1) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`)
-        else
-            run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n unicycler unicycler -1 $(short_1) -2 $(short_2) -l $(long_reads) -o $(outdir) -t $(threads) $(kmer_args...) $(spades_args...)`)
-        end
-    else
-        # If output already exists, ensure directory exists for return value
-        mkpath(outdir)
-    end
-    return (; outdir, assembly = joinpath(outdir, "assembly.fasta"),
-        graph = joinpath(outdir, "assembly.gfa"))
+        mail_user::Union{Nothing, String} = nothing)::NamedTuple
+    return _run_unicycler_with_contract(;
+        short_1,
+        short_2,
+        long_reads,
+        outdir,
+        threads,
+        spades_options,
+        kmers,
+        executor,
+        site,
+        job_name,
+        time_limit,
+        partition,
+        account,
+        mem_gb,
+        qos,
+        mail_user,
+    )
 end
 
 # ============================================================================
@@ -2736,7 +3120,7 @@ end
 
 const METAMDBG_VERSION = "1.4"
 const METAMDBG_ENVIRONMENT_SPEC_SHA256 =
-    "c6fbbb3c2e85ffae22764424333cda0937bfcf13187f9a40c20282c40736db3f"
+    "3b51b282e8aa768da12e253af01dee43fa96a320baee96755ebb3c123723ff87"
 const METAMDBG_ENV_NAME =
     "metamdbg-$(METAMDBG_VERSION)-$(first(METAMDBG_ENVIRONMENT_SPEC_SHA256, 16))"
 const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
@@ -2760,8 +3144,14 @@ const _METAMDBG_GFA_TAG_FLOAT_REGEX =
     r"^[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?$"
 const _METAMDBG_GFA_TAG_PRINTABLE_REGEX = r"^[ -~]+$"
 const _METAMDBG_GFA_TAG_HEX_REGEX = r"^[0-9A-F]+$"
-const _METAMDBG_GFA_TAG_ARRAY_REGEX =
-    r"^[cCsSiIf](?:,[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)+$"
+const _METAMDBG_GFA_B_INTEGER_RANGES = (
+    c = (Int64(-128), Int64(127)),
+    C = (Int64(0), Int64(255)),
+    s = (Int64(-32_768), Int64(32_767)),
+    S = (Int64(0), Int64(65_535)),
+    i = (Int64(-2_147_483_648), Int64(2_147_483_647)),
+    I = (Int64(0), Int64(4_294_967_295)),
+)
 
 function _metamdbg_paths()::Tuple{String, String}
     install_dir = joinpath(dirname(dirname(pathof(Mycelia))), "deps", "metamdbg")
@@ -2894,6 +3284,289 @@ function _metamdbg_package_inventory_sha256(
     return SHA.bytes2hex(SHA.sha256(contents))
 end
 
+function _metamdbg_runtime_inventory_canonicalizer_python()::String
+    return raw"""
+import json
+import pathlib
+import sys
+
+
+def fail(message: str) -> None:
+    raise ValueError(message)
+
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+with source.open("r", encoding="utf-8") as stream:
+    records = json.load(stream)
+if not isinstance(records, list) or not records:
+    fail("package inventory must be a nonempty JSON array")
+inventory = []
+for index, record in enumerate(records, start=1):
+    if not isinstance(record, dict):
+        fail(f"package record {index} is not an object")
+    build = record.get("build_string")
+    if build is None:
+        build = record.get("build")
+    values = (
+        record.get("name"),
+        record.get("version"),
+        build,
+        record.get("channel"),
+    )
+    if any(
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in "\t\r\n")
+        for value in values
+    ):
+        fail(f"package record {index} has missing or noncanonical fields")
+    inventory.append(values)
+inventory.sort()
+names = [record[0] for record in inventory]
+if len(names) != len(set(names)):
+    fail("package inventory contains duplicate package names")
+with destination.open("w", encoding="utf-8", newline="\n") as stream:
+    for record in inventory:
+        stream.write("\t".join(record) + "\n")
+"""
+end
+
+function _metamdbg_runtime_gfa_validator_python()::String
+    return raw"""
+import json
+import math
+import pathlib
+import re
+import struct
+import sys
+
+
+INTEGER_RE = re.compile(r"^[-+]?[0-9]+$")
+FLOAT_RE = re.compile(r"^[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?$")
+CIGAR_RE = re.compile(r"^(?:\*|(?:[0-9]+[MIDNSHPX=])+)$")
+DNA_RE = re.compile(r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$")
+B_RANGES = {
+    "c": (-128, 127),
+    "C": (0, 255),
+    "s": (-32768, 32767),
+    "S": (0, 65535),
+    "i": (-2147483648, 2147483647),
+    "I": (0, 4294967295),
+}
+
+
+def fail(message: str) -> None:
+    raise ValueError(message)
+
+
+def valid_name(name: str) -> bool:
+    return (
+        bool(name)
+        and all(33 <= ord(character) <= 126 for character in name)
+        and name[0] not in "*="
+        and "+," not in name
+        and "-," not in name
+    )
+
+
+def valid_float(value: str, *, single_precision: bool = False) -> bool:
+    if not FLOAT_RE.fullmatch(value):
+        return False
+    try:
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            return False
+        if single_precision:
+            parsed = struct.unpack("!f", struct.pack("!f", parsed))[0]
+            return math.isfinite(parsed)
+        return True
+    except (OverflowError, ValueError):
+        return False
+
+
+def valid_b_array(value: str) -> bool:
+    components = value.split(",")
+    if len(components) < 2 or len(components[0]) != 1:
+        return False
+    subtype = components[0]
+    values = components[1:]
+    if subtype == "f":
+        return all(valid_float(item, single_precision=True) for item in values)
+    if subtype not in B_RANGES:
+        return False
+    lower, upper = B_RANGES[subtype]
+    for item in values:
+        if not INTEGER_RE.fullmatch(item):
+            return False
+        try:
+            parsed = int(item)
+        except ValueError:
+            return False
+        if not lower <= parsed <= upper:
+            return False
+    return True
+
+
+def valid_tag_value(tag_type: str, value: str) -> bool:
+    if tag_type == "A":
+        return len(value) == 1 and 33 <= ord(value) <= 126
+    if tag_type == "i":
+        if not INTEGER_RE.fullmatch(value):
+            return False
+        try:
+            parsed = int(value)
+        except ValueError:
+            return False
+        return -(2**63) <= parsed <= 2**63 - 1
+    if tag_type == "f":
+        return valid_float(value)
+    if tag_type == "Z":
+        return bool(value) and all(
+            32 <= ord(character) <= 126 for character in value
+        )
+    if tag_type == "J":
+        if not value or not all(32 <= ord(character) <= 126 for character in value):
+            return False
+        try:
+            json.loads(
+                value,
+                parse_constant=lambda constant: fail(
+                    f"nonstandard JSON constant: {constant}"
+                ),
+            )
+        except (json.JSONDecodeError, ValueError):
+            return False
+        return True
+    if tag_type == "H":
+        return bool(value) and len(value) % 2 == 0 and bool(re.fullmatch(r"[0-9A-F]+", value))
+    if tag_type == "B":
+        return valid_b_array(value)
+    return False
+
+
+def validate_tags(fields: list[str], first_index: int) -> dict[str, tuple[str, str]]:
+    tags = {}
+    for tag in fields[first_index:]:
+        components = tag.split(":", 2)
+        if len(components) != 3:
+            fail("invalid optional tag")
+        name, tag_type, value = components
+        if not re.fullmatch(r"[A-Za-z][A-Za-z0-9]", name):
+            fail("invalid optional tag name")
+        if name in tags:
+            fail("duplicate optional tag name")
+        if not valid_tag_value(tag_type, value):
+            fail("invalid optional tag value")
+        tags[name] = (tag_type, value)
+    return tags
+
+
+def path_steps(field: str) -> list[str]:
+    if not field:
+        fail("empty path step list")
+    identifiers = []
+    step_start = 0
+    position = 0
+    field_length = len(field)
+    while position < field_length:
+        character = field[position]
+        ends_step = character in "+-" and (
+            position + 1 == field_length or field[position + 1] == ","
+        )
+        if not ends_step:
+            position += 1
+            continue
+        if position == step_start:
+            fail("empty path step identifier")
+        identifier = field[step_start:position]
+        if not valid_name(identifier):
+            fail("invalid path step identifier")
+        identifiers.append(identifier)
+        if position + 1 == field_length:
+            step_start = field_length
+            break
+        step_start = position + 2
+        if step_start >= field_length:
+            fail("trailing path step separator")
+        position = step_start
+    if step_start != field_length:
+        fail("unterminated path step")
+    return identifiers
+
+
+def records(path: pathlib.Path):
+    with path.open("r", encoding="utf-8", newline=None) as stream:
+        for line_number, raw_line in enumerate(stream, start=1):
+            line = raw_line.rstrip("\r\n")
+            if not line.strip() or line.startswith("#"):
+                continue
+            yield line_number, line.split("\t")
+
+
+path = pathlib.Path(sys.argv[1])
+segments = set()
+record_names = set()
+for line_number, fields in records(path):
+    record_type = fields[0]
+    if record_type == "H":
+        tags = validate_tags(fields, 1)
+        if "VN" in tags:
+            tag_type, value = tags["VN"]
+            if tag_type != "Z" or not re.fullmatch(r"1\.[0-9]+", value):
+                fail(f"non-GFA1 VN header at line {line_number}")
+    elif record_type == "S":
+        if len(fields) < 3 or not valid_name(fields[1]):
+            fail(f"invalid segment at line {line_number}")
+        identifier = fields[1]
+        if identifier in record_names:
+            fail(f"duplicate segment/path name at line {line_number}")
+        if not DNA_RE.fullmatch(fields[2]) or fields[2] == "*":
+            fail(f"invalid segment sequence at line {line_number}")
+        validate_tags(fields, 3)
+        segments.add(identifier)
+        record_names.add(identifier)
+    elif record_type == "L":
+        if len(fields) < 6:
+            fail(f"malformed link at line {line_number}")
+        if not valid_name(fields[1]) or not valid_name(fields[3]):
+            fail(f"invalid link identifier at line {line_number}")
+        if fields[2] not in ("+", "-") or fields[4] not in ("+", "-"):
+            fail(f"invalid link orientation at line {line_number}")
+        if not CIGAR_RE.fullmatch(fields[5]):
+            fail(f"invalid link CIGAR at line {line_number}")
+        validate_tags(fields, 6)
+    elif record_type == "P":
+        if len(fields) < 4 or not valid_name(fields[1]):
+            fail(f"invalid path at line {line_number}")
+        identifier = fields[1]
+        if identifier in record_names:
+            fail(f"duplicate segment/path name at line {line_number}")
+        steps = path_steps(fields[2])
+        if fields[3] != "*":
+            overlaps = fields[3].split(",")
+            if len(overlaps) != len(steps) - 1:
+                fail(f"wrong path overlap count at line {line_number}")
+            if any(not CIGAR_RE.fullmatch(overlap) for overlap in overlaps):
+                fail(f"invalid path overlap at line {line_number}")
+        validate_tags(fields, 4)
+        record_names.add(identifier)
+    else:
+        fail(f"unknown GFA record type at line {line_number}")
+if not segments:
+    fail("no sequence-bearing segments")
+for line_number, fields in records(path):
+    if fields[0] == "L":
+        references = (fields[1], fields[3])
+    elif fields[0] == "P":
+        references = path_steps(fields[2])
+    else:
+        continue
+    if any(identifier not in segments for identifier in references):
+        fail(f"dangling segment reference at line {line_number}")
+"""
+end
+
 function _metamdbg_environment_packages(;
         conda_runner::AbstractString = CONDA_RUNNER,
         command_reader::Function = command -> read(command, String),
@@ -2981,6 +3654,19 @@ function _require_expected_metamdbg_toolchain(toolchain::Any)::NamedTuple
         "metaMDBG dependency validation returned unexpected toolchain fields.",
     )
     return realized
+end
+
+function _require_unchanged_metamdbg_toolchain(
+        before::NamedTuple,
+        after::NamedTuple,
+)::NamedTuple
+    normalized_before = _require_expected_metamdbg_toolchain(before)
+    normalized_after = _require_expected_metamdbg_toolchain(after)
+    normalized_after == normalized_before || error(
+        "metaMDBG resolved package inventory changed while assembly tools " *
+        "were running. Refusing to publish mixed-toolchain provenance.",
+    )
+    return normalized_after
 end
 
 function _metamdbg_install_lock_path()::String
@@ -3275,6 +3961,87 @@ function _require_current_metamdbg_input_contract!(
     return current_contract
 end
 
+function _copy_metamdbg_input!(
+        source::AbstractString,
+        destination::AbstractString,
+)::String
+    open(source, "r") do input
+        open(destination, "w") do output
+            buffer = Vector{UInt8}(undef, 1024 * 1024)
+            while !eof(input)
+                bytes_read = readbytes!(input, buffer)
+                bytes_read == 0 && break
+                write(output, view(buffer, 1:bytes_read))
+            end
+            flush(output)
+        end
+    end
+    chmod(destination, 0o400)
+    return String(destination)
+end
+
+function _stage_metamdbg_inputs!(
+        selected_input::NamedTuple,
+        input_contract::NamedTuple,
+        staging_parent::AbstractString,
+)::NamedTuple
+    staging_root = mktempdir(
+        staging_parent;
+        prefix = ".mycelia-metamdbg-inputs.",
+    )
+    chmod(staging_root, 0o700)
+    staged_paths = String[]
+    try
+        for (input_index, input) in enumerate(input_contract.contract.inputs)
+            input.path == selected_input.paths[input_index] || error(
+                "metaMDBG staged-input contract path mismatch.",
+            )
+            staged_path = joinpath(
+                staging_root,
+                "$(lpad(input_index, 6, '0'))--$(basename(input.path))",
+            )
+            _copy_metamdbg_input!(input.path, staged_path)
+            if !isfile(staged_path) || islink(staged_path) ||
+               filesize(staged_path) != input.size_bytes ||
+               _metamdbg_sha256(staged_path) != input.sha256
+                error(
+                    "metaMDBG staged input does not match its captured size " *
+                    "and SHA-256 contract: $(input.path).",
+                )
+            end
+            push!(staged_paths, staged_path)
+        end
+    catch
+        rm(staging_root; recursive = true, force = true)
+        rethrow()
+    end
+    return (;
+        root = staging_root,
+        selected_input = (;
+            flag = selected_input.flag,
+            paths = staged_paths,
+        ),
+    )
+end
+
+function _require_unchanged_staged_metamdbg_inputs!(
+        staged::NamedTuple,
+        input_contract::NamedTuple,
+)::Nothing
+    for (staged_path, input) in
+        zip(staged.selected_input.paths, input_contract.contract.inputs)
+        if !isfile(staged_path) || islink(staged_path) ||
+           filesize(staged_path) != input.size_bytes ||
+           _metamdbg_sha256(staged_path) != input.sha256
+            error(
+                "metaMDBG staged input changed while assembly tools were " *
+                "running: $(staged_path).",
+            )
+        end
+    end
+    return nothing
+end
+
 function _metamdbg_submission_reservation_prefix(
         outdir::AbstractString,
 )::String
@@ -3401,6 +4168,15 @@ function _require_metamdbg_submission_reservation!(
             "directory: $(reservation_path).",
         )
     end
+    reservation_status = stat(reservation_path)
+    reservation_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG submission reservation is not owned by the current user: " *
+        "$(reservation_path).",
+    )
+    (reservation_status.mode & 0o777) == 0o700 || error(
+        "metaMDBG submission reservation directory must have mode 0700: " *
+        "$(reservation_path).",
+    )
     expected_entries = String[
         _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
     ]
@@ -3415,6 +4191,15 @@ function _require_metamdbg_submission_reservation!(
             "regular, non-symlink file: $(marker).",
         )
     end
+    marker_status = stat(marker)
+    marker_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG submission reservation contract is not owned by the " *
+        "current user: $(marker).",
+    )
+    (marker_status.mode & 0o777) == 0o600 || error(
+        "metaMDBG submission reservation contract must have mode 0600: " *
+        "$(marker).",
+    )
     read(marker, String) == reservation.contents || error(
         "metaMDBG submission reservation contract does not match this " *
         "invocation: $(marker).",
@@ -3860,6 +4645,27 @@ function _require_valid_metamdbg_gfa_cigar(
     return normalized_cigar
 end
 
+function _metamdbg_gfa_json_value_is_finite(value::Any)::Bool
+    if value isa AbstractFloat
+        return isfinite(value)
+    elseif value isa AbstractVector
+        return all(_metamdbg_gfa_json_value_is_finite, value)
+    elseif value isa AbstractDict
+        return all(_metamdbg_gfa_json_value_is_finite, values(value))
+    end
+    return true
+end
+
+function _is_valid_metamdbg_gfa_json(value::AbstractString)::Bool
+    return try
+        parsed = JSON.parse(String(value))
+        _metamdbg_gfa_json_value_is_finite(parsed)
+    catch caught
+        caught isa InterruptException && rethrow()
+        false
+    end
+end
+
 function _require_valid_metamdbg_gfa_tag_value(
         tag_type::AbstractString,
         value::AbstractString,
@@ -3874,15 +4680,22 @@ function _require_valid_metamdbg_gfa_tag_value(
         ncodeunits(normalized_value) == 1 &&
             occursin(r"^[!-~]$", normalized_value)
     elseif normalized_type == "i"
-        occursin(_METAMDBG_GFA_TAG_INTEGER_REGEX, normalized_value)
+        occursin(_METAMDBG_GFA_TAG_INTEGER_REGEX, normalized_value) &&
+            tryparse(Int64, normalized_value) !== nothing
     elseif normalized_type == "f"
-        occursin(_METAMDBG_GFA_TAG_FLOAT_REGEX, normalized_value)
-    elseif normalized_type in ("Z", "J")
+        parsed = tryparse(Float64, normalized_value)
+        occursin(_METAMDBG_GFA_TAG_FLOAT_REGEX, normalized_value) &&
+            parsed !== nothing && isfinite(parsed)
+    elseif normalized_type == "Z"
         occursin(_METAMDBG_GFA_TAG_PRINTABLE_REGEX, normalized_value)
+    elseif normalized_type == "J"
+        occursin(_METAMDBG_GFA_TAG_PRINTABLE_REGEX, normalized_value) &&
+            _is_valid_metamdbg_gfa_json(normalized_value)
     elseif normalized_type == "H"
-        occursin(_METAMDBG_GFA_TAG_HEX_REGEX, normalized_value)
+        iseven(ncodeunits(normalized_value)) &&
+            occursin(_METAMDBG_GFA_TAG_HEX_REGEX, normalized_value)
     elseif normalized_type == "B"
-        occursin(_METAMDBG_GFA_TAG_ARRAY_REGEX, normalized_value)
+        _is_valid_metamdbg_gfa_b_array(normalized_value)
     else
         false
     end
@@ -3891,6 +4704,32 @@ function _require_valid_metamdbg_gfa_tag_value(
         "value at line $(line_number): $(path).",
     )
     return nothing
+end
+
+function _is_valid_metamdbg_gfa_b_array(value::AbstractString)::Bool
+    components = split(String(value), ','; keepempty = true)
+    length(components) >= 2 || return false
+    subtype = first(components)
+    ncodeunits(subtype) == 1 || return false
+    values = @view components[2:end]
+    if subtype == "f"
+        return all(values) do item
+            parsed = tryparse(Float32, item)
+            return occursin(_METAMDBG_GFA_TAG_FLOAT_REGEX, item) &&
+                   parsed !== nothing && isfinite(parsed)
+        end
+    end
+    subtype_symbol = Symbol(subtype)
+    hasproperty(_METAMDBG_GFA_B_INTEGER_RANGES, subtype_symbol) || return false
+    lower, upper = getproperty(
+        _METAMDBG_GFA_B_INTEGER_RANGES,
+        subtype_symbol,
+    )
+    return all(values) do item
+        occursin(_METAMDBG_GFA_TAG_INTEGER_REGEX, item) || return false
+        parsed = tryparse(Int64, item)
+        return parsed !== nothing && lower <= parsed <= upper
+    end
 end
 
 function _require_valid_metamdbg_gfa_tags(
@@ -3937,47 +4776,53 @@ function _metamdbg_gfa_path_step_identifiers(
         label::AbstractString,
         path::AbstractString,
 )::Vector{String}
-    remaining = String(field)
-    isempty(remaining) && error(
+    normalized_field = String(field)
+    isempty(normalized_field) && error(
         "$(label) has an empty GFA path step list at line $(line_number): " *
         "$(path).",
     )
+    bytes = codeunits(normalized_field)
+    byte_count = length(bytes)
     identifiers = String[]
-    while !isempty(remaining)
-        step_match = match(r"^([!-~]+?)([+-])(?:,|$)", remaining)
-        step_match === nothing && error(
+    step_start = 1
+    position = 1
+    while position <= byte_count
+        byte = bytes[position]
+        is_orientation = byte == UInt8('+') || byte == UInt8('-')
+        ends_step = is_orientation &&
+                    (position == byte_count ||
+                     bytes[position + 1] == UInt8(','))
+        if !ends_step
+            position += 1
+            continue
+        end
+        position > step_start || error(
             "$(label) has a malformed GFA path step at line $(line_number): " *
             "$(path).",
         )
-        identifier_capture = step_match.captures[1]
-        identifier_capture isa AbstractString || error(
-            "$(label) has a malformed GFA path step at line " *
-            "$(line_number): $(path).",
-        )
-        identifier = _require_valid_metamdbg_gfa_identifier(
-            identifier_capture,
+        identifier = String(Vector{UInt8}(bytes[step_start:(position - 1)]))
+        push!(identifiers, _require_valid_metamdbg_gfa_identifier(
+            identifier,
             "GFA path step",
             line_number,
             label,
             path,
-        )
-        push!(identifiers, identifier)
-        consumed_bytes = ncodeunits(step_match.match)
-        has_separator = endswith(step_match.match, ",")
-        if consumed_bytes == ncodeunits(remaining)
-            has_separator && error(
-                "$(label) has a trailing GFA path-step separator at line " *
-                "$(line_number): $(path).",
-            )
-            remaining = ""
-        else
-            has_separator || error(
-                "$(label) has malformed GFA path-step separation at line " *
-                "$(line_number): $(path).",
-            )
-            remaining = remaining[(consumed_bytes + 1):end]
+        ))
+        if position == byte_count
+            step_start = byte_count + 1
+            break
         end
+        step_start = position + 2
+        step_start <= byte_count || error(
+            "$(label) has a trailing GFA path-step separator at line " *
+            "$(line_number): $(path).",
+        )
+        position = step_start
     end
+    step_start == byte_count + 1 || error(
+        "$(label) has a malformed GFA path step at line $(line_number): " *
+        "$(path).",
+    )
     return identifiers
 end
 
@@ -4004,6 +4849,16 @@ function _require_valid_metamdbg_gfa(
                     label,
                     normalized_path,
                 )
+                for tag in @view fields[2:end]
+                    components = split(tag, ':'; limit = 3, keepempty = true)
+                    if first(components) == "VN"
+                        components[2] == "Z" &&
+                            occursin(r"^1\.[0-9]+$", components[3]) || error(
+                            "$(label) declares a non-GFA1 VN header at line " *
+                            "$(line_number): $(normalized_path).",
+                        )
+                    end
+                end
             elseif record_type == "S"
                 length(fields) >= 3 || error(
                     "$(label) has a malformed GFA segment at line " *
@@ -4270,6 +5125,19 @@ function _metamdbg_graph_candidates(
             filename = basename(path)
             startswith(filename, prefix) && endswith(filename, "bps.gfa")
         end,
+        readdir(outputs.outdir; join = true),
+    ))
+end
+
+function _metamdbg_all_graph_candidates(
+        outputs::NamedTuple,
+)::Vector{String}
+    isdir(outputs.outdir) || return String[]
+    return sort!(filter(
+        path -> occursin(
+            r"^assemblyGraph_k[0-9]+_.*bps\.gfa$",
+            basename(path),
+        ),
         readdir(outputs.outdir; join = true),
     ))
 end
@@ -4552,6 +5420,13 @@ function _require_metamdbg_completion_manifest!(
     return expected
 end
 
+function _metamdbg_shell_literal(value::AbstractString)::String
+    occursin('\0', value) && throw(ArgumentError(
+        "metaMDBG cannot embed a NUL byte in generated shell source.",
+    ))
+    return "'$(replace(String(value), "'" => "'\"'\"'"))'"
+end
+
 function _metamdbg_executor_script(
         asm_cmd::String,
         gfa_cmd::String,
@@ -4562,6 +5437,8 @@ function _metamdbg_executor_script(
         conda_runner::AbstractString = CONDA_RUNNER,
         environment_path::AbstractString = last(_metamdbg_paths()),
         submission_reservation::Union{Nothing, NamedTuple} = nothing,
+        threads::Union{Nothing, Int} = nothing,
+        post_completion_publication_hook::Union{Nothing, String} = nothing,
         lock_retry_attempts::Int = _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS,
         lock_retry_delay_seconds::Real =
             _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS,
@@ -4574,6 +5451,9 @@ function _metamdbg_executor_script(
             "metaMDBG executor lock_retry_delay_seconds must be finite and " *
             "nonnegative.",
         ))
+    threads === nothing || threads > 0 || throw(ArgumentError(
+        "metaMDBG executor threads must be positive when provided.",
+    ))
     verified_environment_path =
         _require_verified_metamdbg_environment_spec(environment_path)
     outdir_parent = dirname(outputs.outdir)
@@ -4593,8 +5473,8 @@ function _metamdbg_executor_script(
         expected_digest_variable = "expected_input_sha256_$(input_index)"
         actual_digest_variable = "actual_input_sha256_$(input_index)"
         append!(input_declaration_lines, String[
-            "$(input_path_variable)=$(Base.shell_escape(input.path))",
-            "$(expected_digest_variable)=$(Base.shell_escape(input.sha256))",
+            "$(input_path_variable)=$(_metamdbg_shell_literal(input.path))",
+            "$(expected_digest_variable)=$(_metamdbg_shell_literal(input.sha256))",
         ])
         append!(input_validation_function_lines, String[
             "if [ ! -f \"\$$(input_path_variable)\" ]; then",
@@ -4609,18 +5489,104 @@ function _metamdbg_executor_script(
         ])
     end
     push!(input_validation_function_lines, "}")
+    staged_input_declaration_lines = String[]
+    staged_input_creation_lines = String[
+        "staged_inputs_dir=\"\$secure_tmpdir/inputs\"",
+        "mkdir -m 700 -- \"\$staged_inputs_dir\"",
+    ]
+    staged_input_validation_lines = String[
+        "validate_staged_metamdbg_inputs() {",
+    ]
+    staged_input_references = String[]
+    for (input_index, input) in enumerate(input_contract.contract.inputs)
+        input_path_variable = "input_path_$(input_index)"
+        expected_digest_variable = "expected_input_sha256_$(input_index)"
+        staged_path_variable = "staged_input_path_$(input_index)"
+        staged_digest_variable = "staged_input_sha256_$(input_index)"
+        staged_name =
+            "$(lpad(input_index, 6, '0'))--$(basename(input.path))"
+        push!(staged_input_declaration_lines,
+            "$(staged_path_variable)=\"\$staged_inputs_dir/\"$(_metamdbg_shell_literal(staged_name))",
+        )
+        append!(staged_input_creation_lines, String[
+            "cp -- \"\$$(input_path_variable)\" \"\$$(staged_path_variable)\"",
+            "chmod 400 \"\$$(staged_path_variable)\"",
+            "$(staged_digest_variable)=\$(sha256_file \"\$$(staged_path_variable)\")",
+            "if [ \"\$$(staged_digest_variable)\" != \"\$$(expected_digest_variable)\" ]; then",
+            "  echo \"metaMDBG staged input does not match its SHA-256 contract\" >&2",
+            "  exit 1",
+            "fi",
+        ])
+        append!(staged_input_validation_lines, String[
+            "if [ ! -f \"\$$(staged_path_variable)\" ] || [ -L \"\$$(staged_path_variable)\" ]; then",
+            "  echo \"metaMDBG staged input is missing or not regular\" >&2",
+            "  return 1",
+            "fi",
+            "$(staged_digest_variable)=\$(sha256_file \"\$$(staged_path_variable)\")",
+            "if [ \"\$$(staged_digest_variable)\" != \"\$$(expected_digest_variable)\" ]; then",
+            "  echo \"metaMDBG staged input changed during execution\" >&2",
+            "  return 1",
+            "fi",
+        ])
+        push!(staged_input_references, "\"\$$(staged_path_variable)\"")
+    end
+    push!(staged_input_validation_lines, "}")
+    runtime_asm_cmd = if threads === nothing
+        asm_cmd
+    else
+        join(String[
+            "\"\$conda_runner\" run --live-stream -n \"\$environment_name\"",
+            "metaMDBG asm --out-dir \"\$outdir\"",
+            input_contract.contract.input_flag,
+            staged_input_references...,
+            "--min-abundance $(input_contract.contract.abundance_min)",
+            "--threads $(threads)",
+        ], " ")
+    end
+    runtime_gfa_cmd = if threads === nothing
+        gfa_cmd
+    else
+        join(String[
+            "\"\$conda_runner\" run --live-stream -n \"\$environment_name\"",
+            "metaMDBG gfa --assembly-dir \"\$outdir\"",
+            "--k $(graph_k)",
+            "--threads $(threads)",
+        ], " ")
+    end
     reservation_declaration_lines = String[
-        "submission_reservation_dir=$(Base.shell_escape(effective_submission_reservation.path))",
-        "submission_reservation_contract=$(Base.shell_escape(effective_submission_reservation.contract_marker))",
+        "submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.path))",
+        "submission_reservation_contract=$(_metamdbg_shell_literal(effective_submission_reservation.contract_marker))",
     ]
     reservation_validation_function_lines = String[
+        "metamdbg_file_mode() {",
+        "if stat -c '%a' -- \"\$1\" >/dev/null 2>&1; then",
+        "  stat -c '%a' -- \"\$1\"",
+        "else",
+        "  stat -f '%Lp' -- \"\$1\"",
+        "fi",
+        "}",
+        "metamdbg_file_uid() {",
+        "if stat -c '%u' -- \"\$1\" >/dev/null 2>&1; then",
+        "  stat -c '%u' -- \"\$1\"",
+        "else",
+        "  stat -f '%u' -- \"\$1\"",
+        "fi",
+        "}",
         "validate_submission_reservation() {",
         "if [ ! -d \"\$submission_reservation_dir\" ] || [ -L \"\$submission_reservation_dir\" ]; then",
         "  echo \"metaMDBG submission reservation is missing or not a regular directory\" >&2",
         "  return 1",
         "fi",
+        "if [ \"\$(metamdbg_file_uid \"\$submission_reservation_dir\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$submission_reservation_dir\")\" != \"700\" ]; then",
+        "  echo \"metaMDBG submission reservation owner or mode is invalid\" >&2",
+        "  return 1",
+        "fi",
         "if [ ! -f \"\$submission_reservation_contract\" ] || [ -L \"\$submission_reservation_contract\" ] || [ ! -s \"\$submission_reservation_contract\" ]; then",
         "  echo \"metaMDBG submission reservation contract is missing, empty, or not regular\" >&2",
+        "  return 1",
+        "fi",
+        "if [ \"\$(metamdbg_file_uid \"\$submission_reservation_contract\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$submission_reservation_contract\")\" != \"600\" ]; then",
+        "  echo \"metaMDBG submission reservation contract owner or mode is invalid\" >&2",
         "  return 1",
         "fi",
         "reservation_entry_count=\$(find \"\$submission_reservation_dir\" -mindepth 1 -maxdepth 1 -print | awk 'END { print NR }')",
@@ -4640,25 +5606,33 @@ function _metamdbg_executor_script(
         "mv -- \"\$submission_reservation_dir\" \"\$reservation_tombstone\"",
         "rm -rf -- \"\$reservation_tombstone\"",
     ]
+    inventory_canonicalizer = _metamdbg_shell_literal(
+        _metamdbg_runtime_inventory_canonicalizer_python(),
+    )
+    gfa_validator =
+        _metamdbg_shell_literal(_metamdbg_runtime_gfa_validator_python())
+    completion_publication_hook = post_completion_publication_hook === nothing ?
+                                  String[] :
+                                  String[post_completion_publication_hook]
     lines = String[
         "set -euo pipefail",
         "umask 077",
-        "outdir=$(Base.shell_escape(outputs.outdir))",
-        "outdir_parent=$(Base.shell_escape(outdir_parent))",
-        "outdir_base=$(Base.shell_escape(outdir_base))",
-        "lock_dir=$(Base.shell_escape(lock_path))",
+        "outdir=$(_metamdbg_shell_literal(outputs.outdir))",
+        "outdir_parent=$(_metamdbg_shell_literal(outdir_parent))",
+        "outdir_base=$(_metamdbg_shell_literal(outdir_base))",
+        "lock_dir=$(_metamdbg_shell_literal(lock_path))",
         "contigs_plain=\"\$outdir/contigs.fasta\"",
         "contigs_gz=\"\$outdir/contigs.fasta.gz\"",
         "graph_alias=\"\$outdir/assemblyGraph_k$(graph_k).gfa\"",
         "contract_marker=\"\$outdir/$(_METAMDBG_CONTRACT_FILENAME)\"",
         "completion_marker=\"\$outdir/$(_METAMDBG_COMPLETION_FILENAME)\"",
-        "environment_spec=$(Base.shell_escape(verified_environment_path))",
-        "expected_spec_sha256=$(Base.shell_escape(METAMDBG_ENVIRONMENT_SPEC_SHA256))",
-        "expected_metamdbg_version=$(Base.shell_escape(METAMDBG_VERSION))",
-        "environment_name=$(Base.shell_escape(METAMDBG_ENV_NAME))",
-        "conda_runner=$(Base.shell_escape(conda_runner))",
-        "expected_input_contract_signature=$(Base.shell_escape(input_contract.signature))",
-        "expected_workflow_signature=$(Base.shell_escape(effective_submission_reservation.workflow_signature))",
+        "environment_spec=$(_metamdbg_shell_literal(verified_environment_path))",
+        "expected_spec_sha256=$(_metamdbg_shell_literal(METAMDBG_ENVIRONMENT_SPEC_SHA256))",
+        "expected_metamdbg_version=$(_metamdbg_shell_literal(METAMDBG_VERSION))",
+        "environment_name=$(_metamdbg_shell_literal(METAMDBG_ENV_NAME))",
+        "conda_runner=$(_metamdbg_shell_literal(conda_runner))",
+        "expected_input_contract_signature=$(_metamdbg_shell_literal(input_contract.signature))",
+        "expected_workflow_signature=$(_metamdbg_shell_literal(effective_submission_reservation.workflow_signature))",
         reservation_declaration_lines...,
         input_declaration_lines...,
         "secure_tmpdir=",
@@ -4723,15 +5697,16 @@ function _metamdbg_executor_script(
         "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
         "contract_new=\"\$secure_tmpdir/contract.new\"",
         "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
-        "package_inventory=\"\$secure_tmpdir/conda-packages.json\"",
-        "package_inventory_unsorted=\"\$secure_tmpdir/conda-packages.unsorted.tsv\"",
-        "package_inventory_normalized=\"\$secure_tmpdir/conda-packages.tsv\"",
+        "package_inventory_before=\"\$secure_tmpdir/conda-packages.before.json\"",
+        "package_inventory_normalized=\"\$secure_tmpdir/conda-packages.before.tsv\"",
+        "package_inventory_after=\"\$secure_tmpdir/conda-packages.after.json\"",
+        "package_inventory_after_normalized=\"\$secure_tmpdir/conda-packages.after.tsv\"",
         "completion_payload=\"\$secure_tmpdir/completion-payload.json\"",
         "completion_new=\"\$secure_tmpdir/completion.new\"",
-        "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
+        "printf '%s' $(_metamdbg_shell_literal(input_contract.contents)) > \"\$expected_contract\"",
         "chmod 600 \"\$expected_contract\"",
         "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
-        "printf '%s' $(Base.shell_escape(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
+        "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
         "chmod 600 \"\$expected_reservation\"",
         "validate_submission_reservation",
         "lock_attempt=1",
@@ -4772,6 +5747,13 @@ function _metamdbg_executor_script(
         "  }",
         "  contract_exists=1",
         "fi",
+        "if [ \"\$contract_exists\" -eq 1 ] && [ ! -e \"\$completion_marker\" ]; then",
+        "  partial_entry=\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 ! -name '$(_METAMDBG_CONTRACT_FILENAME)' -print -quit)",
+        "  if [ -n \"\$partial_entry\" ]; then",
+        "    echo \"metaMDBG refuses partial contracted output without realized-stage completion provenance; use a fresh output root\" >&2",
+        "    exit 1",
+        "  fi",
+        "fi",
         "if [ ! -f \"\$environment_spec\" ] || [ -L \"\$environment_spec\" ]; then",
         "  echo \"metaMDBG environment specification is missing or not regular\" >&2",
         "  exit 1",
@@ -4781,44 +5763,16 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG environment specification checksum mismatch\" >&2",
         "  exit 1",
         "fi",
-        "\"\$conda_runner\" list -n \"\$environment_name\" --json > \"\$package_inventory\"",
-        "awk '",
-        "  function json_field(object, key, marker, start, remainder, finish) {",
-        "    marker = \"\\\"\" key \"\\\":\\\"\"",
-        "    start = index(object, marker)",
-        "    if (start == 0) return \"\"",
-        "    remainder = substr(object, start + length(marker))",
-        "    finish = index(remainder, \"\\\"\")",
-        "    if (finish == 0) return \"\"",
-        "    return substr(remainder, 1, finish - 1)",
+        "capture_package_inventory() {",
+        "  local json_path=\"\$1\"",
+        "  local normalized_path=\"\$2\"",
+        "  \"\$conda_runner\" list -n \"\$environment_name\" --json > \"\$json_path\"",
+        "  \"\$conda_runner\" run -n \"\$environment_name\" python -c $(inventory_canonicalizer) \"\$json_path\" \"\$normalized_path\" || {",
+        "    echo \"metaMDBG environment package inventory is incomplete or malformed\" >&2",
+        "    return 1",
         "  }",
-        "  { inventory = inventory \$0 }",
-        "  END {",
-        "    compact = inventory",
-        "    gsub(/[[:space:]]+/, \"\", compact)",
-        "    sub(/^\\[/, \"\", compact)",
-        "    sub(/\\]\$/, \"\", compact)",
-        "    if (compact == \"\") exit 2",
-        "    object_count = split(compact, objects, /\\},\\{/)",
-        "    for (object_index = 1; object_index <= object_count; object_index += 1) {",
-        "      object = objects[object_index]",
-        "      sub(/^\\{/, \"\", object)",
-        "      sub(/\\}\$/, \"\", object)",
-        "      name = json_field(object, \"name\")",
-        "      version = json_field(object, \"version\")",
-        "      build = json_field(object, \"build_string\")",
-        "      if (build == \"\") build = json_field(object, \"build\")",
-        "      channel = json_field(object, \"channel\")",
-        "      if (name == \"\" || version == \"\" || build == \"\" || channel == \"\") exit 3",
-        "      if (name ~ /[\\t\\r\\n]/ || version ~ /[\\t\\r\\n]/ || build ~ /[\\t\\r\\n]/ || channel ~ /[\\t\\r\\n]/) exit 4",
-        "      print name \"\\t\" version \"\\t\" build \"\\t\" channel",
-        "    }",
-        "  }",
-        "' \"\$package_inventory\" > \"\$package_inventory_unsorted\" || {",
-        "  echo \"metaMDBG environment package inventory is incomplete or malformed\" >&2",
-        "  exit 1",
         "}",
-        "LC_ALL=C sort \"\$package_inventory_unsorted\" > \"\$package_inventory_normalized\"",
+        "capture_package_inventory \"\$package_inventory_before\" \"\$package_inventory_normalized\"",
         "package_count=\$(awk 'END { print NR }' \"\$package_inventory_normalized\")",
         "if [ \"\$package_count\" -le 0 ]; then",
         "  echo \"metaMDBG normalized package inventory is empty\" >&2",
@@ -4836,6 +5790,10 @@ function _metamdbg_executor_script(
         "  exit 1",
         "}",
         "package_inventory_sha256=\$(sha256_file \"\$package_inventory_normalized\")",
+        staged_input_creation_lines[1:2]...,
+        staged_input_declaration_lines...,
+        staged_input_creation_lines[3:end]...,
+        staged_input_validation_lines...,
         "validate_fasta_stream() {",
         "  awk '",
         "    BEGIN { records = 0; sequence_bases = 0 }",
@@ -4883,114 +5841,8 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG graph is missing, empty, or not regular: \$path\" >&2",
         "    return 1",
         "  fi",
-        "  awk -F '\\t' '",
-        "    function fail(code) { validation_error = code; exit code }",
-        "    function valid_name(name) {",
-        "      return name ~ /^[!-)+-<>-~][!-~]*\$/ && index(name, \"+,\") == 0 && index(name, \"-,\") == 0",
-        "    }",
-        "    function valid_tag_value(type, value) {",
-        "      if (type == \"A\") return value ~ /^[!-~]\$/",
-        "      if (type == \"i\") return value ~ /^[-+]?[0-9]+\$/",
-        "      if (type == \"f\") return value ~ /^[-+]?[0-9]*[.]?[0-9]+([eE][-+]?[0-9]+)?\$/",
-        "      if (type == \"Z\" || type == \"J\") return value ~ /^[ -~]+\$/",
-        "      if (type == \"H\") return value ~ /^[0-9A-F]+\$/",
-        "      if (type == \"B\") return value ~ /^[cCsSiIf](,[-+]?[0-9]*[.]?[0-9]+([eE][-+]?[0-9]+)?)+\$/",
-        "      return 0",
-        "    }",
-        "    function validate_tags(first_field, code, field, tag, name, type, value) {",
-        "      for (name in tag_seen) delete tag_seen[name]",
-        "      for (field = first_field; field <= NF; field += 1) {",
-        "        tag = \$field",
-        "        if (length(tag) < 6 || substr(tag, 3, 1) != \":\" || substr(tag, 5, 1) != \":\") fail(code)",
-        "        name = substr(tag, 1, 2)",
-        "        type = substr(tag, 4, 1)",
-        "        value = substr(tag, 6)",
-        "        if (name !~ /^[A-Za-z][A-Za-z0-9]\$/) fail(code)",
-        "        if (tag_seen[name]++) fail(code)",
-        "        if (!valid_tag_value(type, value)) fail(code)",
-        "      }",
-        "    }",
-        "    function validate_path_steps(field, check_references, code, start, position, character, following, name, found, count) {",
-        "      if (field == \"\") fail(code)",
-        "      start = 1",
-        "      count = 0",
-        "      while (start <= length(field)) {",
-        "        found = 0",
-        "        for (position = start; position <= length(field); position += 1) {",
-        "          character = substr(field, position, 1)",
-        "          following = position == length(field) ? \"\" : substr(field, position + 1, 1)",
-        "          if ((character == \"+\" || character == \"-\") && (following == \",\" || following == \"\")) {",
-        "            name = substr(field, start, position - start)",
-        "            if (!valid_name(name)) fail(code)",
-        "            if (check_references && !(name in seen)) fail(52)",
-        "            count += 1",
-        "            start = following == \",\" ? position + 2 : length(field) + 1",
-        "            if (following == \",\" && start > length(field)) fail(code)",
-        "            found = 1",
-        "            break",
-        "          }",
-        "        }",
-        "        if (!found) fail(code)",
-        "      }",
-        "      return count",
-        "    }",
-        "    { sub(/\\r\$/, \"\", \$NF) }",
-        "    NR != FNR {",
-        "      if (\$0 ~ /^[[:space:]]*\$/ || substr(\$0, 1, 1) == \"#\") next",
-        "      if (\$1 == \"L\") {",
-        "        if (!(\$2 in seen)) fail(50)",
-        "        if (!(\$4 in seen)) fail(51)",
-        "      } else if (\$1 == \"P\") {",
-        "        validate_path_steps(\$3, 1, 52)",
-        "      }",
-        "      next",
-        "    }",
-        "    /^[[:space:]]*\$/ { next }",
-        "    substr(\$0, 1, 1) == \"#\" { next }",
-        "    \$1 == \"H\" {",
-        "      validate_tags(2, 30)",
-        "      next",
-        "    }",
-        "    \$1 == \"S\" {",
-        "      if (NF < 3 || !valid_name(\$2)) fail(31)",
-        "      if (\$3 == \"\" || \$3 == \"*\") fail(32)",
-        "      if (\$3 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) fail(33)",
-        "      if (name_seen[\$2]++) fail(34)",
-        "      seen[\$2] = 1",
-        "      validate_tags(4, 35)",
-        "      segments += 1",
-        "      next",
-        "    }",
-        "    \$1 == \"L\" {",
-        "      if (NF < 6) fail(36)",
-        "      if (!valid_name(\$2) || !valid_name(\$4)) fail(37)",
-        "      if (\$3 !~ /^[+-]\$/ || \$5 !~ /^[+-]\$/) fail(38)",
-        "      if (\$6 !~ /^(\\*|([0-9]+[MIDNSHPX=])+)\$/) fail(39)",
-        "      validate_tags(7, 40)",
-        "      next",
-        "    }",
-        "    \$1 == \"P\" {",
-        "      if (NF < 4 || !valid_name(\$2)) fail(41)",
-        "      if (name_seen[\$2]++) fail(42)",
-        "      step_count = validate_path_steps(\$3, 0, 43)",
-        "      if (\$4 != \"*\") {",
-        "        for (overlap_index in overlaps) delete overlaps[overlap_index]",
-        "        overlap_count = split(\$4, overlaps, \",\")",
-        "        if (overlap_count != step_count - 1) fail(45)",
-        "        for (overlap_index = 1; overlap_index <= overlap_count; overlap_index += 1) {",
-        "          if (overlaps[overlap_index] !~ /^(\\*|([0-9]+[MIDNSHPX=])+)\$/) fail(46)",
-        "        }",
-        "      }",
-        "      validate_tags(5, 47)",
-        "      next",
-        "    }",
-        "    { fail(48) }",
-        "    END {",
-        "      if (validation_error) exit validation_error",
-        "      if (segments == 0) exit 49",
-        "    }",
-        "  ' \"\$path\" \"\$path\" || {",
-        "    echo \"metaMDBG graph has malformed, unknown, duplicate, or dangling GFA records: \$path\" >&2",
+        "  \"\$conda_runner\" run -n \"\$environment_name\" python -c $(gfa_validator) \"\$path\" || {",
+        "    echo \"metaMDBG graph has malformed, unknown, duplicate, typed-tag, version, or dangling GFA1 records: \$path\" >&2",
         "    return 1",
         "  }",
         "}",
@@ -5020,7 +5872,7 @@ function _metamdbg_executor_script(
         "elif [ -e \"\$contigs_plain\" ] || [ -L \"\$contigs_plain\" ]; then",
         "  validate_contigs \"\$contigs_plain\"",
         "else",
-        "  $(asm_cmd)",
+        "  $(runtime_asm_cmd)",
         "fi",
         "if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
         "  validate_contigs \"\$contigs_gz\"",
@@ -5036,7 +5888,7 @@ function _metamdbg_executor_script(
         "graph_source=\"\"",
         "graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
         "if [ \"\$graph_status\" -eq 1 ]; then",
-        "  $(gfa_cmd)",
+        "  $(runtime_gfa_cmd)",
         "  graph_status=0",
         "  graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
         "fi",
@@ -5050,6 +5902,13 @@ function _metamdbg_executor_script(
         "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
         "validate_contigs \"\$contigs_gz\"",
         "validate_gfa \"\$graph_source\"",
+        "validate_staged_metamdbg_inputs",
+        "validate_metamdbg_inputs",
+        "capture_package_inventory \"\$package_inventory_after\" \"\$package_inventory_after_normalized\"",
+        "cmp -s -- \"\$package_inventory_normalized\" \"\$package_inventory_after_normalized\" || {",
+        "  echo \"metaMDBG resolved package inventory changed while assembly tools were running\" >&2",
+        "  exit 1",
+        "}",
         "if [ -e \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ]; then",
         "  echo \"metaMDBG refuses to overwrite an existing completion manifest\" >&2",
         "  exit 1",
@@ -5115,9 +5974,22 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG failed to publish a regular completion manifest\" >&2",
         "  exit 1",
         "fi",
+        completion_publication_hook...,
         "actual_completion_sha256=\$(sha256_file \"\$completion_marker\")",
         "if [ \"\$actual_completion_sha256\" != \"\$expected_completion_sha256\" ]; then",
+        "  rm -f -- \"\$completion_marker\"",
         "  echo \"metaMDBG published completion manifest changed unexpectedly\" >&2",
+        "  exit 1",
+        "fi",
+        "published_graph_source_parent=\$(cd -- \"\$(dirname -- \"\$graph_alias\")\" && pwd -P)",
+        "published_graph_source_canonical=\"\$published_graph_source_parent/\$(readlink -- \"\$graph_alias\")\"",
+        "published_contigs_size=\$(wc -c < \"\$contigs_canonical\" | tr -d '[:space:]')",
+        "published_graph_size=\$(wc -c < \"\$published_graph_source_canonical\" | tr -d '[:space:]')",
+        "published_contigs_sha256=\$(sha256_file \"\$contigs_canonical\")",
+        "published_graph_sha256=\$(sha256_file \"\$published_graph_source_canonical\")",
+        "if [ \"\$published_graph_source_canonical\" != \"\$graph_source_canonical\" ] || [ \"\$published_contigs_size\" != \"\$contigs_size\" ] || [ \"\$published_graph_size\" != \"\$graph_size\" ] || [ \"\$published_contigs_sha256\" != \"\$contigs_sha256\" ] || [ \"\$published_graph_sha256\" != \"\$graph_sha256\" ]; then",
+        "  rm -f -- \"\$completion_marker\"",
+        "  echo \"metaMDBG artifacts changed after completion publication; removed stale completion manifest\" >&2",
         "  exit 1",
         "fi",
     ]
@@ -5246,6 +6118,20 @@ function _metamdbg_existing_artifacts(
         error(
             "metaMDBG output is inconsistent: graph exists without contigs in " *
             outputs.outdir,
+        )
+    elseif existing_contigs !== nothing
+        other_graphs = _metamdbg_all_graph_candidates(outputs)
+        if !isempty(other_graphs)
+            error(
+                "metaMDBG supports exactly one graph_k lifecycle per output " *
+                "root. Existing graph artifacts do not match the requested " *
+                "graph_k; choose a fresh output root.",
+            )
+        end
+        error(
+            "metaMDBG refuses to adopt partial contracted contigs without a " *
+            "realized-stage completion manifest. Remove the partial output " *
+            "root and rerun from clean staged inputs.",
         )
     end
     if ispath(outputs.completion_marker) || islink(outputs.completion_marker)
@@ -5416,30 +6302,57 @@ function _run_metamdbg(;
                 )
             end
 
-            realized_toolchain =
+            realized_toolchain_before =
                 _require_expected_metamdbg_toolchain(dependency_checker())
-            existing_contigs = _normalize_metamdbg_contigs!(outputs)
-            if existing_contigs === nothing
+            staged = _stage_metamdbg_inputs!(
+                selected_input,
+                input_contract,
+                dirname(outputs.outdir),
+            )
+            artifacts, realized_toolchain = try
+                staged_asm_args = String[
+                    "metaMDBG",
+                    "asm",
+                    "--out-dir",
+                    outputs.outdir,
+                    staged.selected_input.flag,
+                    staged.selected_input.paths...,
+                    "--min-abundance",
+                    string(abundance_min),
+                    "--threads",
+                    string(threads),
+                ]
+                staged_asm_command =
+                    `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(staged_asm_args)`
                 _require_current_metamdbg_input_snapshot!(
                     selected_input,
                     input_contract.input_snapshot,
                 )
-                local_runner(asm_command)
+                local_runner(staged_asm_command)
                 existing_contigs = _normalize_metamdbg_contigs!(outputs)
                 existing_contigs === nothing && error(
                     "metaMDBG assembly produced no sequence-bearing contigs " *
                     "artifact in $(outputs.outdir).",
                 )
-            end
-            existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
-            if existing_graph === nothing
                 _require_current_metamdbg_input_snapshot!(
                     selected_input,
                     input_contract.input_snapshot,
                 )
                 local_runner(gfa_command)
+                _require_unchanged_staged_metamdbg_inputs!(
+                    staged,
+                    input_contract,
+                )
+                completed_artifacts =
+                    _require_metamdbg_artifacts!(outputs, graph_k)
+                toolchain_after = _require_unchanged_metamdbg_toolchain(
+                    realized_toolchain_before,
+                    dependency_checker(),
+                )
+                completed_artifacts, toolchain_after
+            finally
+                rm(staged.root; recursive = true, force = true)
             end
-            artifacts = _require_metamdbg_artifacts!(outputs, graph_k)
             completion = _metamdbg_completion_manifest(
                 outputs,
                 artifacts,
@@ -5561,6 +6474,7 @@ function _run_metamdbg(;
         graph_k,
         input_contract;
         submission_reservation,
+        threads,
     )
     job = Mycelia.build_execution_job(
         cmd = script,
@@ -5711,8 +6625,11 @@ This is an explicit cancellation capability, not an expiry mechanism. Pass the
 that the job cannot start. For a process death before submission, first call
 `inspect_metamdbg_submission_reservations`, independently confirm that no job
 was submitted, then pass that inspected record, its exact owner token, and
-`confirm_not_submitted = true`. The two confirmation modes are mutually
-exclusive. The reservation is removed under the output lock only when the
+`confirm_not_submitted = true`. The confirmation modes are mutually exclusive.
+If the exact submitted job instead reaches a terminal failed state,
+pass its exact `job_id` and `confirm_terminal = :failed` after independently
+confirming that scheduler state. The reservation is removed under the output
+lock only when the
 on-disk owner record still matches exactly. Missing, consumed, or
 replacement-owner reservations fail loudly and are never removed automatically.
 """
@@ -5723,12 +6640,23 @@ function reclaim_metamdbg_submission_reservation!(
         job_id::Union{Nothing, AbstractString} = nothing,
         confirm_cancelled::Bool = false,
         confirm_not_submitted::Bool = false,
+        confirm_terminal::Union{Nothing, Symbol} = nothing,
 )::NamedTuple
-    confirm_cancelled != confirm_not_submitted || throw(ArgumentError(
-        "Set exactly one of confirm_cancelled=true or " *
-        "confirm_not_submitted=true after independently verifying the " *
-        "corresponding scheduler state.",
+    confirmation_count = count(identity, Bool[
+        confirm_cancelled,
+        confirm_not_submitted,
+        confirm_terminal !== nothing,
+    ])
+    confirmation_count == 1 || throw(ArgumentError(
+        "Set exactly one of confirm_cancelled=true, " *
+        "confirm_not_submitted=true, or confirm_terminal=:failed after " *
+        "independently verifying the corresponding scheduler state.",
     ))
+    confirm_terminal === nothing || confirm_terminal == :failed || throw(
+        ArgumentError(
+            "metaMDBG confirm_terminal currently accepts only :failed.",
+        ),
+    )
     required_fields = (
         :canonical_outdir,
         :path,
@@ -5752,7 +6680,7 @@ function reclaim_metamdbg_submission_reservation!(
         "metaMDBG reservation owner token does not match the durable " *
         "reservation capability.",
     )
-    normalized_job_id = if confirm_cancelled
+    normalized_job_id = if confirm_cancelled || confirm_terminal !== nothing
         job_id isa AbstractString || throw(ArgumentError(
             "metaMDBG cancelled scheduler job_id must be provided.",
         ))
@@ -5809,7 +6737,13 @@ function reclaim_metamdbg_submission_reservation!(
     return (;
         status = :reclaimed,
         job_id = normalized_job_id,
-        recovery_reason = confirm_cancelled ? :cancelled : :not_submitted,
+        recovery_reason = if confirm_cancelled
+            :cancelled
+        elseif confirm_terminal !== nothing
+            confirm_terminal
+        else
+            :not_submitted
+        end,
         path = expected_reservation.path,
     )
 end
@@ -5851,20 +6785,24 @@ The graph alias resolves to metaMDBG's validated dynamic
 - Accepts both upstream `contigs.fasta.gz` and legacy plain `contigs.fasta`; a
   plain artifact is retained and normalized to `contigs.fasta.gz`.
 - Reuses a complete contigs-plus-requested-graph result without provisioning or
-  rerunning metaMDBG. If contigs exist but the requested graph does not, only
-  graph generation runs. Complete and partial reuse require an exact durable
+  rerunning metaMDBG. Partial contigs or graphs are never resumed because they
+  lack realized-stage provenance. Complete reuse requires an exact durable
   contract marker for the normalized input paths, technology flag, input file
   sizes and SHA-256 content digests, `abundance_min`, metaMDBG 1.4, the
   spec-addressed environment name, and the bundled environment-spec checksum.
   Modification times exist only in the invocation snapshot and are never
-  serialized into the durable schema-v4 contract. Local execution hashes each
-  input once at capture and once at the final boundary; intermediate checks use
-  the cheap invocation size/mtime snapshot. Nonlocal callers hash once, while
-  runtime jobs hash at queued start and immediately before finalization. Any
+  serialized into the durable schema-v4 contract. Tool execution uses private,
+  mode-0400 staged input copies verified against that contract, so transient
+  source mutation cannot affect assembled bytes. Local and runtime lifecycles
+  compare the complete normalized Conda inventory before and after all tool
+  commands. Nonlocal callers hash once, while runtime jobs hash source inputs at
+  queued start and immediately before finalization. Any
   nonempty uncontracted output root fails before provisioning. Complete reuse
   additionally verifies the atomic completion manifest against `graph_k`, the
   workflow signature, normalized resolved package-inventory digest, and current
   canonical artifact identities, sizes, and SHA-256 digests.
+  One output root owns exactly one `graph_k`; request another graph in a fresh
+  output root.
 - Every nonlocal job embeds an adjacent, contract-addressed submission
   reservation. Real submissions create it atomically before submission and the
   runtime consumes it under the output lock; collected and dry-run jobs persist
@@ -5881,6 +6819,8 @@ The graph alias resolves to metaMDBG's validated dynamic
   recover the durable capability with
   `inspect_metamdbg_submission_reservations` and reclaim it only after explicit
   independent confirmation that no job was submitted.
+  A submitted job confirmed terminal-failed can be reclaimed with its exact job
+  id and `confirm_terminal = :failed`.
 - Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
   environment and records a normalized digest over every resolved package's
   name, version, build, and channel before execution.

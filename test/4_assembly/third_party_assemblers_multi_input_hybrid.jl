@@ -1,8 +1,9 @@
 # Real smoke coverage for the Rhizomorph multi-input hybrid workflows.
 #
 # This file is excluded from default CI by the `third_party_assemblers` filename
-# and repeats the external-test gate so direct includes remain safe. Supply a
-# small, already paired real-data fixture with:
+# and delegates its external-test gate to the shared prerequisite parser so
+# direct includes remain safe. Supply a small, already paired real-data fixture
+# with:
 #
 #   MYCELIA_RUN_EXTERNAL=true
 #   MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz
@@ -29,85 +30,6 @@
 
 import Test
 import Mycelia
-
-const _HYBRID_INPUT_ENV_VARS = (
-    "MYCELIA_HYBRID_SHORT_R1",
-    "MYCELIA_HYBRID_SHORT_R2",
-    "MYCELIA_HYBRID_LONG_READS",
-)
-const _HYBRID_AUTOCYCLER_READ_TYPES = (
-    :ont_r9,
-    :ont_r10,
-    :pacbio_clr,
-    :pacbio_hifi,
-)
-
-function _hybrid_env_enabled(name::AbstractString)::Bool
-    return lowercase(strip(get(ENV, name, "false"))) == "true"
-end
-
-function _hybrid_env_symbol(
-        name::AbstractString,
-        default::Symbol,
-        allowed::Tuple,
-)::Symbol
-    value = Symbol(lowercase(strip(get(ENV, name, String(default)))))
-    if !(value in allowed)
-        throw(ArgumentError(
-            "$(name) must be one of $(allowed), got :$(value).",
-        ))
-    end
-    return value
-end
-
-function _hybrid_required_env_symbol(
-        name::AbstractString,
-        allowed::Tuple,
-)::Symbol
-    text = strip(get(ENV, name, ""))
-    isempty(text) && throw(ArgumentError(
-        "$(name) is required when MYCELIA_RUN_AUTOCYCLER_POLISHED=true.",
-    ))
-    value = Symbol(lowercase(text))
-    value in allowed || throw(ArgumentError(
-        "$(name) must be one of $(allowed), got :$(value).",
-    ))
-    return value
-end
-
-function _hybrid_env_integer(
-        name::AbstractString,
-        default::Int,
-        minimum::Int,
-        maximum::Int,
-)::Int
-    text = strip(get(ENV, name, string(default)))
-    value = tryparse(Int, text)
-    value === nothing && throw(ArgumentError(
-        "$(name) must be an integer, got $(repr(text)).",
-    ))
-    minimum <= value <= maximum || throw(ArgumentError(
-        "$(name) must be between $(minimum) and $(maximum), got $(value).",
-    ))
-    return value
-end
-
-function _hybrid_input_paths()::NamedTuple
-    paths = (
-        short_r1 = abspath(ENV[_HYBRID_INPUT_ENV_VARS[1]]),
-        short_r2 = abspath(ENV[_HYBRID_INPUT_ENV_VARS[2]]),
-        long_reads = abspath(ENV[_HYBRID_INPUT_ENV_VARS[3]]),
-    )
-    for (label, path) in pairs(paths)
-        if !isfile(path)
-            throw(ArgumentError("Hybrid smoke $(label) FASTQ not found: $(path)"))
-        end
-        if filesize(path) == 0
-            throw(ArgumentError("Hybrid smoke $(label) FASTQ is empty: $(path)"))
-        end
-    end
-    return paths
-end
 
 function _assert_persistent_hybrid_result(
         result::Mycelia.Rhizomorph.AssemblyResult,
@@ -313,6 +235,8 @@ function _assert_autocycler_toolchain(
     toolchain isa AbstractDict || error(
         "Autocycler smoke result is missing toolchain provenance.",
     )
+    Test.@test toolchain["toolchain_schema"] ==
+               Mycelia.AUTOCYCLER_TOOLCHAIN_SCHEMA
     Test.@test toolchain["autocycler_script_revision"] ==
                Mycelia.AUTOCYCLER_SCRIPT_REVISION
     Test.@test toolchain["autocycler_script_sha256"] ==
@@ -336,156 +260,130 @@ function _assert_autocycler_toolchain(
         String(toolchain["environment_spec_sha256"]),
     ) !== nothing
 
+    Test.@test toolchain["inventory_schema"] ==
+               Mycelia.AUTOCYCLER_PACKAGE_INVENTORY_SCHEMA
     packages = toolchain["packages"]
-    packages isa AbstractDict || error(
+    packages isa AbstractVector || error(
         "Autocycler smoke result is missing installed package provenance.",
     )
-    installed_versions = Dict{String, String}()
+    normalized_packages =
+        Mycelia._normalize_autocycler_package_inventory(packages)
+    Test.@test toolchain["package_count"] == length(normalized_packages)
+    inventory_sha256 = _assert_hybrid_sha256(
+        toolchain["package_inventory_sha256"],
+        "Autocycler package inventory",
+    )
+    expected_inventory_sha256 =
+        Mycelia._autocycler_package_inventory_sha256(
+            normalized_packages,
+        )
+    Test.@test inventory_sha256 == expected_inventory_sha256
+    package_names = Set(record.name for record in normalized_packages)
     for specification in Mycelia.AUTOCYCLER_REQUIRED_PACKAGE_SPECS
-        Test.@test haskey(packages, specification.name)
-        haskey(packages, specification.name) || continue
-        version = String(packages[specification.name])
-        Test.@test !isempty(version)
-        installed_versions[specification.name] = version
+        Test.@test specification.name in package_names
     end
-    Test.@test isempty(Mycelia._autocycler_package_issues(installed_versions))
+    Test.@test isempty(Mycelia._autocycler_package_issues(normalized_packages))
+    Test.@test Mycelia._require_autocycler_toolchain_provenance(toolchain) ==
+               toolchain
     return nothing
 end
 
 Test.@testset "multi-input hybrid external smoke" begin
-    run_external = _hybrid_env_enabled("MYCELIA_RUN_ALL") ||
-                   _hybrid_env_enabled("MYCELIA_RUN_EXTERNAL")
-    run_autocycler = _hybrid_env_enabled("MYCELIA_RUN_AUTOCYCLER_POLISHED")
+    prerequisites =
+        Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(ENV)
 
-    if run_autocycler && !run_external
-        throw(ArgumentError(
-            "MYCELIA_RUN_AUTOCYCLER_POLISHED=true also requires " *
-            "MYCELIA_RUN_EXTERNAL=true (or MYCELIA_RUN_ALL=true).",
-        ))
-    end
-
-    if !run_external
+    if !prerequisites.run_external
         @info (
             "Multi-input hybrid smoke skipped: set " *
             "MYCELIA_RUN_EXTERNAL=true to enable external tools."
         )
         Test.@test_skip false
     else
-        missing_inputs = [
-            name for name in _HYBRID_INPUT_ENV_VARS if isempty(strip(get(ENV, name, "")))
-        ]
-        if !isempty(missing_inputs)
-            throw(ArgumentError(
-                "Enabled multi-input hybrid smoke requires all FASTQ " *
-                "variables; missing: $(join(missing_inputs, ", ")).",
-            ))
-        else
-            inputs = _hybrid_input_paths()
-            short_read_tech = _hybrid_env_symbol(
-                "MYCELIA_HYBRID_SHORT_TECH",
-                :illumina,
-                (:illumina, :ultima),
-            )
-            long_read_tech = _hybrid_env_symbol(
-                "MYCELIA_HYBRID_LONG_TECH",
-                :nanopore,
-                (:nanopore, :pacbio_clr, :pacbio_hifi),
-            )
-            threads = clamp(
-                something(
-                    tryparse(
-                        Int,
-                        get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2"),
-                    ),
-                    2,
+        inputs = prerequisites.input_paths
+        short_read_tech = prerequisites.short_read_tech
+        long_read_tech = prerequisites.long_read_tech
+        threads = clamp(
+            something(
+                tryparse(
+                    Int,
+                    get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2"),
                 ),
-                1,
-                4,
-            )
-            autocycler_read_type = nothing
-            autocycler_jobs = nothing
-            if run_autocycler
-                autocycler_read_type = _hybrid_required_env_symbol(
-                    "MYCELIA_AUTOCYCLER_READ_TYPE",
-                    _HYBRID_AUTOCYCLER_READ_TYPES,
+                2,
+            ),
+            1,
+            4,
+        )
+
+        mktempdir() do temporary_root
+            Test.@testset "corrected paired-short plus long to Unicycler" begin
+                output_dir = joinpath(temporary_root, "unicycler")
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(;
+                    short_read_tech,
+                    long_read_tech,
+                    output_dir,
+                    threads,
                 )
-                autocycler_jobs = _hybrid_env_integer(
-                    "MYCELIA_AUTOCYCLER_TEST_JOBS",
-                    1,
-                    1,
-                    4,
+                result = Mycelia.Rhizomorph.assemble_hybrid(
+                    (inputs.short_r1, inputs.short_r2),
+                    inputs.long_reads;
+                    config,
                 )
+                _assert_persistent_hybrid_result(
+                    result,
+                    "unicycler",
+                    output_dir,
+                    inputs,
+                    short_read_tech,
+                    long_read_tech,
+                    String[],
+                )
+                _assert_unicycler_toolchain(result.assembly_stats)
             end
 
-            mktempdir() do temporary_root
-                Test.@testset "corrected paired-short plus long to Unicycler" begin
-                    output_dir = joinpath(temporary_root, "unicycler")
-                    config = Mycelia.Rhizomorph.UnicyclerHybridConfig(;
+            if !prerequisites.run_autocycler
+                @info (
+                    "Autocycler-polished smoke skipped: set " *
+                    "MYCELIA_RUN_AUTOCYCLER_POLISHED=true only when the " *
+                    "Autocycler/Polypolish/Pypolca environment is available."
+                )
+                Test.@test_skip false
+            else
+                Test.@testset (
+                    "Autocycler consensus plus paired-short polishing"
+                ) begin
+                    output_dir = joinpath(
+                        temporary_root,
+                        "autocycler_polished",
+                    )
+                    config = Mycelia.Rhizomorph.AutocyclerPolishConfig(;
                         short_read_tech,
                         long_read_tech,
+                        autocycler_read_type = something(
+                            prerequisites.autocycler_read_type,
+                        ),
                         output_dir,
                         threads,
+                        jobs = something(prerequisites.autocycler_jobs),
                     )
                     result = Mycelia.Rhizomorph.assemble_hybrid(
                         (inputs.short_r1, inputs.short_r2),
                         inputs.long_reads;
                         config,
                     )
+                    resolved_long_read_tech =
+                        Mycelia.Rhizomorph._long_read_correction_technology(
+                            config,
+                        )
                     _assert_persistent_hybrid_result(
                         result,
-                        "unicycler",
+                        "autocycler_polished",
                         output_dir,
                         inputs,
                         short_read_tech,
-                        long_read_tech,
-                        String[],
+                        resolved_long_read_tech,
+                        ["polypolish-careful", "pypolca-careful"],
                     )
-                    _assert_unicycler_toolchain(result.assembly_stats)
-                end
-
-                if !run_autocycler
-                    @info (
-                        "Autocycler-polished smoke skipped: set " *
-                        "MYCELIA_RUN_AUTOCYCLER_POLISHED=true only when the " *
-                        "Autocycler/Polypolish/Pypolca environment is available."
-                    )
-                    Test.@test_skip false
-                else
-                    Test.@testset (
-                        "Autocycler consensus plus paired-short polishing"
-                    ) begin
-                        output_dir = joinpath(
-                            temporary_root,
-                            "autocycler_polished",
-                        )
-                        config = Mycelia.Rhizomorph.AutocyclerPolishConfig(;
-                            short_read_tech,
-                            long_read_tech,
-                            autocycler_read_type = something(autocycler_read_type),
-                            output_dir,
-                            threads,
-                            jobs = something(autocycler_jobs),
-                        )
-                        result = Mycelia.Rhizomorph.assemble_hybrid(
-                            (inputs.short_r1, inputs.short_r2),
-                            inputs.long_reads;
-                            config,
-                        )
-                        resolved_long_read_tech =
-                            Mycelia.Rhizomorph._long_read_correction_technology(
-                                config,
-                            )
-                        _assert_persistent_hybrid_result(
-                            result,
-                            "autocycler_polished",
-                            output_dir,
-                            inputs,
-                            short_read_tech,
-                            resolved_long_read_tech,
-                            ["polypolish-careful", "pypolca-careful"],
-                        )
-                        _assert_autocycler_toolchain(result.assembly_stats)
-                    end
+                    _assert_autocycler_toolchain(result.assembly_stats)
                 end
             end
         end

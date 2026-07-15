@@ -53,6 +53,9 @@ const AUTOCYCLER_REQUIRED_PACKAGE_SPECS = (
 )
 const AUTOCYCLER_REQUIRED_PACKAGES =
     map(specification -> specification.name, AUTOCYCLER_REQUIRED_PACKAGE_SPECS)
+const AUTOCYCLER_PACKAGE_INVENTORY_SCHEMA =
+    "conda-name-version-build-channel-v1"
+const AUTOCYCLER_TOOLCHAIN_SCHEMA = "mycelia-autocycler-toolchain-v1"
 const AUTOCYCLER_READ_TYPES = (
     "ont_r9",
     "ont_r10",
@@ -76,7 +79,9 @@ function _autocycler_install_lock_path()::String
 end
 
 function _autocycler_sha256(path::AbstractString)::String
-    return SHA.bytes2hex(SHA.sha256(read(path)))
+    return open(path, "r") do input
+        SHA.bytes2hex(SHA.sha256(input))
+    end
 end
 
 function _require_verified_autocycler_environment_spec(
@@ -141,10 +146,120 @@ function _install_verified_autocycler_script!(
     return normalized_script_path
 end
 
+function _autocycler_package_record_field(
+        package_record::Union{NamedTuple, AbstractDict},
+        field::Symbol,
+)::Any
+    if package_record isa NamedTuple
+        return hasproperty(package_record, field) ?
+               getproperty(package_record, field) : nothing
+    end
+    return get(
+        package_record,
+        String(field),
+        get(package_record, field, nothing),
+    )
+end
+
+function _normalize_autocycler_package_inventory(
+        package_records::AbstractVector,
+)::Vector{NamedTuple}
+    isempty(package_records) && throw(
+        ErrorException(
+            "Autocycler Conda package inventory must contain at least one package.",
+        ),
+    )
+    inventory = NamedTuple[]
+    for (record_index, package_record) in enumerate(package_records)
+        package_record isa Union{NamedTuple, AbstractDict} || throw(
+            ErrorException(
+                "Autocycler Conda package inventory record $(record_index) " *
+                "is not an object.",
+            ),
+        )
+        name = _autocycler_package_record_field(package_record, :name)
+        version = _autocycler_package_record_field(package_record, :version)
+        build = _autocycler_package_record_field(package_record, :build_string)
+        build === nothing &&
+            (build = _autocycler_package_record_field(package_record, :build))
+        channel = _autocycler_package_record_field(package_record, :channel)
+        fields = (; name, version, build, channel)
+        for (field_name, value) in pairs(fields)
+            value isa AbstractString && !isempty(value) || throw(
+                ErrorException(
+                    "Autocycler Conda package inventory record " *
+                    "$(record_index) has a missing or empty $(field_name) field.",
+                ),
+            )
+            occursin(r"[\t\r\n]", value) && throw(
+                ErrorException(
+                    "Autocycler Conda package inventory record " *
+                    "$(record_index) has a noncanonical $(field_name) field.",
+                ),
+            )
+        end
+        push!(inventory, (;
+            name = String(name),
+            version = String(version),
+            build = String(build),
+            channel = String(channel),
+        ))
+    end
+    sort!(
+        inventory;
+        by = record -> (
+            record.name,
+            record.version,
+            record.build,
+            record.channel,
+        ),
+    )
+    names = getproperty.(inventory, :name)
+    allunique(names) || throw(
+        ErrorException(
+            "Autocycler Conda package inventory contains duplicate package names.",
+        ),
+    )
+    return inventory
+end
+
+function _normalize_autocycler_package_inventory(
+        package_records::Any,
+)::Vector{NamedTuple}
+    throw(
+        ErrorException(
+            "Autocycler Conda package inventory was not a JSON array.",
+        ),
+    )
+end
+
+function _autocycler_package_inventory_contents(
+        package_records::AbstractVector,
+)::String
+    inventory = _normalize_autocycler_package_inventory(package_records)
+    return join(
+        map(inventory) do record
+            join(
+                (record.name, record.version, record.build, record.channel),
+                '\t',
+            )
+        end,
+        '\n',
+    ) * "\n"
+end
+
+function _autocycler_package_inventory_sha256(
+        package_records::AbstractVector,
+)::String
+    return SHA.bytes2hex(
+        SHA.sha256(_autocycler_package_inventory_contents(package_records)),
+    )
+end
+
 function _autocycler_environment_packages(;
         conda_runner::AbstractString = CONDA_RUNNER,
         command_reader::Function = command -> read(command, String),
-)::Dict{String, String}
+)::Vector{NamedTuple}
     command = Cmd(
         String[
             String(conda_runner),
@@ -158,24 +273,17 @@ function _autocycler_environment_packages(;
     package_records isa AbstractVector || throw(
         ErrorException("Conda package inventory was not a JSON array."),
     )
-    versions = Dict{String, String}()
-    for package_record in package_records
-        package_record isa AbstractDict || continue
-        name = get(package_record, "name", nothing)
-        version = get(package_record, "version", nothing)
-        if name isa AbstractString && version isa AbstractString
-            versions[String(name)] = String(version)
-        end
-    end
-    return versions
+    return _normalize_autocycler_package_inventory(package_records)
 end
 
 function _missing_autocycler_packages(
-        versions::AbstractDict{<:AbstractString, <:AbstractString},
+        package_records::AbstractVector,
 )::Vector{String}
+    inventory = _normalize_autocycler_package_inventory(package_records)
+    names = Set(record.name for record in inventory)
     return String[
         package for package in AUTOCYCLER_REQUIRED_PACKAGES if
-        !haskey(versions, package)
+        !(package in names)
     ]
 end
 
@@ -212,8 +320,10 @@ function _autocycler_version_at_least(
 end
 
 function _autocycler_package_issues(
-        versions::AbstractDict{<:AbstractString, <:AbstractString},
+        package_records::AbstractVector,
 )::Vector{String}
+    inventory = _normalize_autocycler_package_inventory(package_records)
+    versions = Dict(record.name => record.version for record in inventory)
     issues = String[]
     for specification in AUTOCYCLER_REQUIRED_PACKAGE_SPECS
         if !haskey(versions, specification.name)
@@ -243,9 +353,9 @@ end
 
 function _ensure_autocycler_packages!(
         package_inspector::Function,
-)::Dict{String, String}
-    versions = package_inspector()
-    package_issues = _autocycler_package_issues(versions)
+)::Vector{NamedTuple}
+    inventory = _normalize_autocycler_package_inventory(package_inspector())
+    package_issues = _autocycler_package_issues(inventory)
     isempty(package_issues) || throw(
         ErrorException(
             "Autocycler immutable spec-hash-addressed environment " *
@@ -257,16 +367,26 @@ function _ensure_autocycler_packages!(
             "specification.",
         ),
     )
-    return Dict{String, String}(versions)
+    return inventory
 end
 
 function _autocycler_toolchain_metadata(
-        versions::AbstractDict{<:AbstractString, <:AbstractString},
+        package_records::AbstractVector,
 )::Dict{String, Any}
+    inventory = _normalize_autocycler_package_inventory(package_records)
+    package_issues = _autocycler_package_issues(inventory)
+    package_issue_summary = join(package_issues, "; ")
+    isempty(package_issues) || throw(
+        ErrorException(
+            "Autocycler toolchain provenance contains incompatible required " *
+            "packages: $(package_issue_summary).",
+        ),
+    )
     _, script_path, env_file_path = _autocycler_paths()
     verified_env_file_path =
         _require_verified_autocycler_environment_spec(env_file_path)
     return Dict{String, Any}(
+        "toolchain_schema" => AUTOCYCLER_TOOLCHAIN_SCHEMA,
         "autocycler_script_revision" => AUTOCYCLER_SCRIPT_REVISION,
         "autocycler_script_sha256" => _autocycler_sha256(script_path),
         "environment_name" => AUTOCYCLER_ENV_NAME,
@@ -274,7 +394,123 @@ function _autocycler_toolchain_metadata(
             AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
         "environment_spec_sha256" =>
             _autocycler_sha256(verified_env_file_path),
-        "packages" => Dict{String, String}(versions),
+        "inventory_schema" => AUTOCYCLER_PACKAGE_INVENTORY_SCHEMA,
+        "package_inventory_sha256" =>
+            _autocycler_package_inventory_sha256(inventory),
+        "package_count" => length(inventory),
+        "packages" => Dict{String, Any}[
+            Dict{String, Any}(
+                "name" => record.name,
+                "version" => record.version,
+                "build" => record.build,
+                "channel" => record.channel,
+            ) for record in inventory
+        ],
+    )
+end
+
+function _require_autocycler_toolchain_provenance(
+        toolchain::Any,
+)::Dict{String, Any}
+    toolchain isa AbstractDict || throw(
+        ErrorException(
+            "Autocycler workflow did not report realized toolchain provenance.",
+        ),
+    )
+    required_scalars = Dict{String, String}(
+        "toolchain_schema" => AUTOCYCLER_TOOLCHAIN_SCHEMA,
+        "autocycler_script_revision" => AUTOCYCLER_SCRIPT_REVISION,
+        "autocycler_script_sha256" => AUTOCYCLER_SCRIPT_SHA256,
+        "environment_name" => AUTOCYCLER_ENV_NAME,
+        "environment_spec_expected_sha256" =>
+            AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
+        "environment_spec_sha256" => AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
+        "inventory_schema" => AUTOCYCLER_PACKAGE_INVENTORY_SCHEMA,
+    )
+    for (field, expected_value) in required_scalars
+        actual_value = get(toolchain, field, nothing)
+        actual_value == expected_value || throw(
+            ErrorException(
+                "Autocycler workflow toolchain provenance has incompatible " *
+                "$(field): expected $(repr(expected_value)), got " *
+                "$(repr(actual_value)).",
+            ),
+        )
+    end
+    packages = get(toolchain, "packages", nothing)
+    packages isa AbstractVector || throw(
+        ErrorException(
+            "Autocycler workflow toolchain provenance has no realized package " *
+            "inventory.",
+        ),
+    )
+    inventory = _normalize_autocycler_package_inventory(packages)
+    package_issues = _autocycler_package_issues(inventory)
+    package_issue_summary = join(package_issues, "; ")
+    isempty(package_issues) || throw(
+        ErrorException(
+            "Autocycler workflow toolchain provenance has incompatible " *
+            "required packages: $(package_issue_summary).",
+        ),
+    )
+    package_count = get(toolchain, "package_count", nothing)
+    package_count isa Integer && !(package_count isa Bool) &&
+        package_count == length(inventory) || throw(
+        ErrorException(
+            "Autocycler workflow toolchain package count does not match its " *
+            "realized package inventory.",
+        ),
+    )
+    digest = get(toolchain, "package_inventory_sha256", nothing)
+    digest isa AbstractString && occursin(r"^[0-9a-f]{64}$", digest) || throw(
+        ErrorException(
+            "Autocycler workflow toolchain provenance is missing a valid " *
+            "package inventory SHA-256 digest.",
+        ),
+    )
+    expected_digest = _autocycler_package_inventory_sha256(inventory)
+    digest == expected_digest || throw(
+        ErrorException(
+            "Autocycler workflow package inventory digest does not match its " *
+            "reported name/version/build/channel inventory.",
+        ),
+    )
+    expected_fields = Set([
+        "toolchain_schema",
+        "autocycler_script_revision",
+        "autocycler_script_sha256",
+        "environment_name",
+        "environment_spec_expected_sha256",
+        "environment_spec_sha256",
+        "inventory_schema",
+        "package_inventory_sha256",
+        "package_count",
+        "packages",
+    ])
+    Set(String.(keys(toolchain))) == expected_fields || throw(
+        ErrorException(
+            "Autocycler workflow toolchain provenance has unexpected fields.",
+        ),
+    )
+    return Dict{String, Any}(
+        "toolchain_schema" => AUTOCYCLER_TOOLCHAIN_SCHEMA,
+        "autocycler_script_revision" => AUTOCYCLER_SCRIPT_REVISION,
+        "autocycler_script_sha256" => AUTOCYCLER_SCRIPT_SHA256,
+        "environment_name" => AUTOCYCLER_ENV_NAME,
+        "environment_spec_expected_sha256" =>
+            AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
+        "environment_spec_sha256" => AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
+        "inventory_schema" => AUTOCYCLER_PACKAGE_INVENTORY_SCHEMA,
+        "package_inventory_sha256" => String(digest),
+        "package_count" => Int(package_count),
+        "packages" => Dict{String, Any}[
+            Dict{String, Any}(
+                "name" => record.name,
+                "version" => record.version,
+                "build" => record.build,
+                "channel" => record.channel,
+            ) for record in inventory
+        ],
     )
 end
 
@@ -378,8 +614,8 @@ when the spec-hash-addressed environment already exists. A stale or incompatible
 environment must not be repaired in place; stop all workflows using it before
 manually removing and reinstalling it, or use a Mycelia release with a corrected
 environment specification. Direct calls serialize the environment check and
-first-use creation under the same per-environment installation lock used by the
-assembly preflight.
+first-use creation under the same per-environment lock held by assembly and
+polishing workflows for their complete command lifecycles.
 
 Compatibility is deliberately pinned to Autocycler 0.5.2. This wrapper targets
 Autocycler's bacterial-isolate use case, where the alternative input assemblies
@@ -424,6 +660,114 @@ function _require_nonempty_autocycler_file(
         throw(ArgumentError("$(label) is empty: $(normalized_path)"))
     end
     return normalized_path
+end
+
+function _require_contained_regular_autocycler_artifact(
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_root = normpath(abspath(workflow_root))
+    isdir(normalized_root) || throw(
+        ErrorException(
+            "Autocycler workflow root is not a directory while validating " *
+            "$(label): $(normalized_root).",
+        ),
+    )
+    islink(normalized_root) && throw(
+        ErrorException(
+            "Autocycler workflow root became a symbolic link while validating " *
+            "$(label): $(normalized_root).",
+        ),
+    )
+    canonical_root = realpath(normalized_root)
+    canonical_root == normalized_root || throw(
+        ErrorException(
+            "Autocycler workflow root is no longer canonical while validating " *
+            "$(label): expected $(normalized_root), resolved $(canonical_root).",
+        ),
+    )
+
+    normalized_path = normpath(abspath(path))
+    lexical_relative_path = relpath(normalized_path, normalized_root)
+    lexical_components = splitpath(lexical_relative_path)
+    if isabspath(lexical_relative_path) || isempty(lexical_components) ||
+       first(lexical_components) == ".."
+        throw(
+            ErrorException(
+                "$(label) escapes the reserved Autocycler workflow root: " *
+                "$(normalized_path) is not contained by $(normalized_root).",
+            ),
+        )
+    end
+    normalized_path = _require_nonempty_autocycler_file(path, label)
+    islink(normalized_path) && throw(
+        ErrorException(
+            "$(label) must be a regular, non-symlink artifact: " *
+            "$(normalized_path).",
+        ),
+    )
+    canonical_path = realpath(normalized_path)
+    canonical_path == normalized_path || throw(
+        ErrorException(
+            "$(label) resolves through a symbolic-link component: " *
+            "$(normalized_path) resolves to $(canonical_path).",
+        ),
+    )
+    canonical_relative_path = relpath(canonical_path, canonical_root)
+    canonical_components = splitpath(canonical_relative_path)
+    if isabspath(canonical_relative_path) || isempty(canonical_components) ||
+       first(canonical_components) == ".."
+        throw(
+            ErrorException(
+                "$(label) resolves outside the reserved Autocycler workflow " *
+                "root: $(canonical_path) is not contained by " *
+                "$(canonical_root).",
+            ),
+        )
+    end
+    return normalized_path
+end
+
+function _autocycler_artifact_snapshot(
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = _require_contained_regular_autocycler_artifact(
+        path,
+        workflow_root,
+        label,
+    )
+    return (
+        path = normalized_path,
+        size_bytes = filesize(normalized_path),
+        sha256 = _autocycler_sha256(normalized_path),
+    )
+end
+
+function _require_unchanged_autocycler_artifact(
+        expected_snapshot::NamedTuple,
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    observed_snapshot = _autocycler_artifact_snapshot(
+        path,
+        workflow_root,
+        label,
+    )
+    observed_snapshot == expected_snapshot || throw(
+        ErrorException(
+            "$(label) changed after its validated Autocycler snapshot: " *
+            "expected size=$(expected_snapshot.size_bytes), " *
+            "sha256=$(expected_snapshot.sha256); observed " *
+            "size=$(observed_snapshot.size_bytes), " *
+            "sha256=$(observed_snapshot.sha256). Refusing to return mutated " *
+            "assembly artifacts.",
+        ),
+    )
+    return observed_snapshot
 end
 
 function _require_valid_autocycler_fasta(
@@ -519,6 +863,42 @@ function _require_valid_autocycler_fasta(
         ErrorException("$(label) contains no FASTA records: $(normalized_path)."),
     )
     return normalized_path
+end
+
+function _autocycler_fasta_identifier_set(
+        path::AbstractString,
+        label::AbstractString,
+)::Set{String}
+    normalized_path = _require_valid_autocycler_fasta(path, label)
+    identifiers = Set{String}()
+    reader = Mycelia.open_fastx(normalized_path)
+    try
+        for record in reader
+            push!(identifiers, String(FASTX.identifier(record)))
+        end
+    finally
+        close(reader)
+    end
+    return identifiers
+end
+
+function _require_matching_autocycler_contig_identifiers(
+        source_identifiers::Set{String},
+        target_identifiers::Set{String},
+        source_label::AbstractString,
+        target_label::AbstractString,
+)::Nothing
+    source_identifiers == target_identifiers && return nothing
+    missing = sort!(collect(setdiff(source_identifiers, target_identifiers)))
+    added = sort!(collect(setdiff(target_identifiers, source_identifiers)))
+    throw(
+        ErrorException(
+            "Autocycler polishing changed contig identifiers between " *
+            "$(source_label) and $(target_label): missing=$(repr(missing)), " *
+            "added=$(repr(added)). Refusing to run or return a downstream " *
+            "stage with dropped, added, or renamed contigs.",
+        ),
+    )
 end
 
 function _require_valid_autocycler_gfa(
@@ -1090,7 +1470,7 @@ function _cleanup_autocycler_polishing_intermediates!(
                 "Autocycler could not remove a polishing intermediate"
             @warn cleanup_message path = normalized_path cleanup_error
         end
-        if ispath(normalized_path)
+        if ispath(normalized_path) || islink(normalized_path)
             push!(retained, normalized_path)
             if cleanup_error === nothing
                 retained_message =
@@ -1188,8 +1568,64 @@ function _ensure_autocycler_installed_locked(
             ),
         )
     end
-    versions = _ensure_autocycler_packages!(package_inspector)
-    return _autocycler_toolchain_metadata(versions)
+    inventory = _ensure_autocycler_packages!(package_inspector)
+    return _autocycler_toolchain_metadata(inventory)
+end
+
+function _ensure_autocycler_installed_locked_default()::Dict{String, Any}
+    return _ensure_autocycler_installed_locked(
+        _autocycler_environment_packages,
+        _install_autocycler_locked,
+        _autocycler_environment_is_installed,
+    )
+end
+
+function _inspect_autocycler_toolchain_locked()::Dict{String, Any}
+    Bool(_autocycler_environment_is_installed()) || throw(
+        ErrorException(
+            "Autocycler environment disappeared while its shared lock was held.",
+        ),
+    )
+    _, script_path, env_file_path = _autocycler_paths()
+    _require_verified_autocycler_environment_spec(env_file_path)
+    _autocycler_script_is_verified(script_path) || throw(
+        ErrorException(
+            "Autocycler script changed or disappeared while its shared lock " *
+            "was held.",
+        ),
+    )
+    inventory =
+        _ensure_autocycler_packages!(_autocycler_environment_packages)
+    return _autocycler_toolchain_metadata(inventory)
+end
+
+function _autocycler_toolchain_snapshotter(
+        dependency_checker::Function,
+)::Function
+    return dependency_checker === _ensure_autocycler_installed_locked_default ?
+           _inspect_autocycler_toolchain_locked : dependency_checker
+end
+
+function _require_unchanged_autocycler_toolchain(
+        expected_toolchain::AbstractDict,
+        observed_toolchain::Any,
+        boundary::AbstractString,
+)::Dict{String, Any}
+    normalized_expected =
+        _require_autocycler_toolchain_provenance(expected_toolchain)
+    normalized_observed =
+        _require_autocycler_toolchain_provenance(observed_toolchain)
+    expected_digest = normalized_expected["package_inventory_sha256"]
+    observed_digest = normalized_observed["package_inventory_sha256"]
+    normalized_observed == normalized_expected || throw(
+        ErrorException(
+            "Autocycler realized toolchain changed across $(boundary) while " *
+            "the shared environment lock was held. Expected package inventory " *
+            "$(expected_digest), observed $(observed_digest). Refusing " *
+            "to return artifacts with ambiguous provenance.",
+        ),
+    )
+    return normalized_observed
 end
 
 function _ensure_autocycler_installed(;
@@ -1214,11 +1650,12 @@ function _run_autocycler_with_reserved_output(
         threads::Integer,
         jobs::Integer,
         read_type::AbstractString,
-        dependency_checker::Function,
+        toolchain::AbstractDict,
         runner::Function,
 )::NamedTuple
     validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
-    toolchain = dependency_checker()
+    normalized_toolchain =
+        _require_autocycler_toolchain_provenance(toolchain)
     prepared_out_dir = _prepare_autocycler_output_dir(validated_out_dir)
     _, script_path, _ = _autocycler_paths()
     plan = _autocycler_command_plan(
@@ -1232,12 +1669,22 @@ function _run_autocycler_with_reserved_output(
 
     @info "Starting long-read-only Autocycler pipeline..."
     _execute_autocycler_steps(plan.steps; runner = runner)
-    assembly = _require_valid_autocycler_fasta(
+    contained_assembly = _require_contained_regular_autocycler_artifact(
         plan.assembly,
+        prepared_out_dir,
         "Autocycler consensus FASTA",
     )
-    graph = _require_valid_autocycler_gfa(
+    assembly = _require_valid_autocycler_fasta(
+        contained_assembly,
+        "Autocycler consensus FASTA",
+    )
+    contained_graph = _require_contained_regular_autocycler_artifact(
         plan.graph,
+        prepared_out_dir,
+        "Autocycler consensus GFA",
+    )
+    graph = _require_valid_autocycler_gfa(
+        contained_graph,
         "Autocycler consensus GFA",
     )
     @info "Autocycler pipeline complete" out_dir = prepared_out_dir
@@ -1246,7 +1693,7 @@ function _run_autocycler_with_reserved_output(
         outdir = prepared_out_dir,
         assembly = assembly,
         graph = graph,
-        toolchain = toolchain,
+        toolchain = normalized_toolchain,
         requested_threads = plan.requested_threads,
         autocycler_assembly_threads = plan.autocycler_assembly_threads,
     )
@@ -1258,10 +1705,14 @@ function _run_autocycler(
         threads::Integer = max(Sys.CPU_THREADS, 1),
         jobs::Integer = 1,
         read_type::AbstractString = "ont_r10",
-        dependency_checker::Function = _ensure_autocycler_installed,
+        dependency_checker::Function =
+            _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         validate_long_reads::Bool = true,
         output_lock_runner::Function = _with_autocycler_output_lock,
+        environment_lock_path::AbstractString =
+            _autocycler_install_lock_path(),
+        environment_lock_runner::Function = _with_autocycler_install_lock,
 )::NamedTuple
     normalized_read_type = _validate_autocycler_parameters(
         threads,
@@ -1276,15 +1727,28 @@ function _run_autocycler(
     validate_long_reads &&
         _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
-        _run_autocycler_with_reserved_output(
-            normalized_long_reads,
-            reserved_out_dir;
-            threads,
-            jobs,
-            read_type = normalized_read_type,
-            dependency_checker,
-            runner,
-        )
+        environment_lock_runner(String(environment_lock_path)) do
+            toolchain_snapshotter =
+                _autocycler_toolchain_snapshotter(dependency_checker)
+            initial_toolchain = _require_autocycler_toolchain_provenance(
+                dependency_checker(),
+            )
+            result = _run_autocycler_with_reserved_output(
+                normalized_long_reads,
+                reserved_out_dir;
+                threads,
+                jobs,
+                read_type = normalized_read_type,
+                toolchain = initial_toolchain,
+                runner,
+            )
+            _require_unchanged_autocycler_toolchain(
+                initial_toolchain,
+                toolchain_snapshotter(),
+                "long-read assembly",
+            )
+            return result
+        end
     end
 end
 
@@ -1298,6 +1762,12 @@ directory relative to the isolated `out_dir` working directory. Its authoritativ
 consensus FASTA and companion GFA are both validated and returned without
 rewriting either artifact. The output directory must be absent or empty and is
 reserved by an adjacent interprocess lock for the full workflow lifecycle.
+Returned artifacts must remain regular non-symlink files contained by that
+canonical reserved directory.
+The shared Autocycler environment/install lock is also held from the initial
+dependency snapshot through artifact validation. The normalized full Conda
+inventory (name, version, build, and channel for every package) is checked before
+and after execution; any drift fails rather than returning ambiguous provenance.
 
 The verified script and environment are compatibility-pinned to Autocycler 0.5.2.
 The upstream consensus model is intended for bacterial isolates whose alternative
@@ -1313,8 +1783,9 @@ to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies
   `pacbio_hifi`.
 
 # Returns
-A named tuple with `outdir`, `assembly`, `graph`, and exact `toolchain`
-provenance. `requested_threads` records the caller request and
+A named tuple with `outdir`, `assembly`, `graph`, and exact realized `toolchain`
+provenance, including the deterministic full Conda inventory and its SHA-256.
+`requested_threads` records the caller request and
 `autocycler_assembly_threads` records the explicit effective cap used by the
 alternative-assembly stage.
 """
@@ -1344,6 +1815,7 @@ function _run_autocycler_polished_with_reserved_output(
         read_type::AbstractString,
         polypolish_careful::Bool,
         keep_intermediates::Bool,
+        toolchain::AbstractDict,
         dependency_checker::Function,
         runner::Function,
         intermediate_remover::Function,
@@ -1354,10 +1826,29 @@ function _run_autocycler_polished_with_reserved_output(
         threads,
         jobs,
         read_type,
-        dependency_checker,
+        toolchain,
         runner,
     )
     normalized_out_dir = autocycler_result.outdir
+    _require_unchanged_autocycler_toolchain(
+        autocycler_result.toolchain,
+        dependency_checker(),
+        "long-read assembly within the polished workflow",
+    )
+    autocycler_identifiers = _autocycler_fasta_identifier_set(
+        autocycler_result.assembly,
+        "Autocycler consensus FASTA",
+    )
+    autocycler_assembly_snapshot = _autocycler_artifact_snapshot(
+        autocycler_result.assembly,
+        normalized_out_dir,
+        "Autocycler consensus FASTA",
+    )
+    autocycler_graph_snapshot = _autocycler_artifact_snapshot(
+        autocycler_result.graph,
+        normalized_out_dir,
+        "Autocycler consensus GFA",
+    )
 
     polishing_plan = _autocycler_polishing_command_plan(
         autocycler_result.assembly,
@@ -1379,24 +1870,165 @@ function _run_autocycler_polished_with_reserved_output(
     mkpath(polishing_plan.polishing_dir)
 
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
-    polypolish_assembly, final_assembly = try
+    autocycler_assembly, graph, polypolish_assembly, final_assembly,
+        pypolca_report, final_assembly_snapshot, pypolca_report_snapshot,
+        polypolish_snapshot = try
         _execute_autocycler_steps(
             polishing_plan.steps[1:(end - 1)];
             runner = runner,
         )
+        contained_polypolish_assembly =
+            _require_contained_regular_autocycler_artifact(
+                polishing_plan.polypolish_assembly,
+                normalized_out_dir,
+                "Polypolish Autocycler assembly",
+            )
         validated_polypolish_assembly = _require_valid_autocycler_fasta(
-            polishing_plan.polypolish_assembly,
+            contained_polypolish_assembly,
+            "Polypolish Autocycler assembly",
+        )
+        _require_unchanged_autocycler_artifact(
+            autocycler_assembly_snapshot,
+            autocycler_result.assembly,
+            normalized_out_dir,
+            "Autocycler consensus FASTA",
+        )
+        _require_unchanged_autocycler_artifact(
+            autocycler_graph_snapshot,
+            autocycler_result.graph,
+            normalized_out_dir,
+            "Autocycler consensus GFA",
+        )
+        polypolish_identifiers = _autocycler_fasta_identifier_set(
+            validated_polypolish_assembly,
+            "Polypolish Autocycler assembly",
+        )
+        _require_matching_autocycler_contig_identifiers(
+            autocycler_identifiers,
+            polypolish_identifiers,
+            "Autocycler consensus",
+            "Polypolish",
+        )
+        polypolish_snapshot = _autocycler_artifact_snapshot(
+            validated_polypolish_assembly,
+            normalized_out_dir,
             "Polypolish Autocycler assembly",
         )
         _execute_autocycler_steps(
             (last(polishing_plan.steps),);
             runner = runner,
         )
+        contained_final_assembly =
+            _require_contained_regular_autocycler_artifact(
+                polishing_plan.assembly,
+                normalized_out_dir,
+                "Pypolca-polished Autocycler assembly",
+            )
         validated_final_assembly = _require_valid_autocycler_fasta(
-            polishing_plan.assembly,
+            contained_final_assembly,
             "Pypolca-polished Autocycler assembly",
         )
-        (validated_polypolish_assembly, validated_final_assembly)
+
+        final_contained_autocycler_assembly =
+            _require_contained_regular_autocycler_artifact(
+                autocycler_result.assembly,
+                normalized_out_dir,
+                "Autocycler consensus FASTA",
+            )
+        validated_autocycler_assembly = _require_valid_autocycler_fasta(
+            final_contained_autocycler_assembly,
+            "Autocycler consensus FASTA",
+        )
+        final_contained_graph =
+            _require_contained_regular_autocycler_artifact(
+                autocycler_result.graph,
+                normalized_out_dir,
+                "Autocycler consensus GFA",
+            )
+        validated_graph = _require_valid_autocycler_gfa(
+            final_contained_graph,
+            "Autocycler consensus GFA",
+        )
+        final_contained_polypolish_assembly =
+            _require_contained_regular_autocycler_artifact(
+                validated_polypolish_assembly,
+                normalized_out_dir,
+                "Polypolish Autocycler assembly",
+            )
+        validated_polypolish_assembly = _require_valid_autocycler_fasta(
+            final_contained_polypolish_assembly,
+            "Polypolish Autocycler assembly",
+        )
+        validated_pypolca_report =
+            _require_contained_regular_autocycler_artifact(
+                polishing_plan.pypolca_report,
+                normalized_out_dir,
+                "Pypolca report",
+            )
+        final_assembly_snapshot = _autocycler_artifact_snapshot(
+            validated_final_assembly,
+            normalized_out_dir,
+            "Pypolca-polished Autocycler assembly",
+        )
+        pypolca_report_snapshot = _autocycler_artifact_snapshot(
+            validated_pypolca_report,
+            normalized_out_dir,
+            "Pypolca report",
+        )
+
+        _require_unchanged_autocycler_artifact(
+            autocycler_assembly_snapshot,
+            validated_autocycler_assembly,
+            normalized_out_dir,
+            "Autocycler consensus FASTA",
+        )
+        _require_unchanged_autocycler_artifact(
+            autocycler_graph_snapshot,
+            validated_graph,
+            normalized_out_dir,
+            "Autocycler consensus GFA",
+        )
+        _require_unchanged_autocycler_artifact(
+            polypolish_snapshot,
+            validated_polypolish_assembly,
+            normalized_out_dir,
+            "Polypolish Autocycler assembly",
+        )
+
+        final_autocycler_identifiers = _autocycler_fasta_identifier_set(
+            validated_autocycler_assembly,
+            "Autocycler consensus FASTA",
+        )
+        final_polypolish_identifiers = _autocycler_fasta_identifier_set(
+            validated_polypolish_assembly,
+            "Polypolish Autocycler assembly",
+        )
+        final_identifiers = _autocycler_fasta_identifier_set(
+            validated_final_assembly,
+            "Pypolca-polished Autocycler assembly",
+        )
+        _require_matching_autocycler_contig_identifiers(
+            final_autocycler_identifiers,
+            final_polypolish_identifiers,
+            "Autocycler consensus",
+            "Polypolish",
+        )
+        _require_matching_autocycler_contig_identifiers(
+            final_polypolish_identifiers,
+            final_identifiers,
+            "Polypolish",
+            "Pypolca",
+        )
+        (
+            validated_autocycler_assembly,
+            validated_graph,
+            validated_polypolish_assembly,
+            validated_final_assembly,
+            validated_pypolca_report,
+            final_assembly_snapshot,
+            pypolca_report_snapshot,
+            polypolish_snapshot,
+        )
     catch
         if !keep_intermediates
             _cleanup_autocycler_polishing_intermediates!(
@@ -1414,15 +2046,107 @@ function _run_autocycler_polished_with_reserved_output(
             remover = intermediate_remover,
         )
     end
+
+    autocycler_assembly = _require_valid_autocycler_fasta(
+        _require_contained_regular_autocycler_artifact(
+            autocycler_assembly,
+            normalized_out_dir,
+            "Autocycler consensus FASTA",
+        ),
+        "Autocycler consensus FASTA",
+    )
+    graph = _require_valid_autocycler_gfa(
+        _require_contained_regular_autocycler_artifact(
+            graph,
+            normalized_out_dir,
+            "Autocycler consensus GFA",
+        ),
+        "Autocycler consensus GFA",
+    )
+    polypolish_assembly = _require_valid_autocycler_fasta(
+        _require_contained_regular_autocycler_artifact(
+            polypolish_assembly,
+            normalized_out_dir,
+            "Polypolish Autocycler assembly",
+        ),
+        "Polypolish Autocycler assembly",
+    )
+    final_assembly = _require_valid_autocycler_fasta(
+        _require_contained_regular_autocycler_artifact(
+            final_assembly,
+            normalized_out_dir,
+            "Pypolca-polished Autocycler assembly",
+        ),
+        "Pypolca-polished Autocycler assembly",
+    )
+    pypolca_report = _require_contained_regular_autocycler_artifact(
+        pypolca_report,
+        normalized_out_dir,
+        "Pypolca report",
+    )
+    _require_unchanged_autocycler_artifact(
+        autocycler_assembly_snapshot,
+        autocycler_assembly,
+        normalized_out_dir,
+        "Autocycler consensus FASTA",
+    )
+    _require_unchanged_autocycler_artifact(
+        autocycler_graph_snapshot,
+        graph,
+        normalized_out_dir,
+        "Autocycler consensus GFA",
+    )
+    _require_unchanged_autocycler_artifact(
+        polypolish_snapshot,
+        polypolish_assembly,
+        normalized_out_dir,
+        "Polypolish Autocycler assembly",
+    )
+    _require_unchanged_autocycler_artifact(
+        final_assembly_snapshot,
+        final_assembly,
+        normalized_out_dir,
+        "Pypolca-polished Autocycler assembly",
+    )
+    _require_unchanged_autocycler_artifact(
+        pypolca_report_snapshot,
+        pypolca_report,
+        normalized_out_dir,
+        "Pypolca report",
+    )
+    final_autocycler_identifiers = _autocycler_fasta_identifier_set(
+        autocycler_assembly,
+        "Autocycler consensus FASTA",
+    )
+    final_polypolish_identifiers = _autocycler_fasta_identifier_set(
+        polypolish_assembly,
+        "Polypolish Autocycler assembly",
+    )
+    final_identifiers = _autocycler_fasta_identifier_set(
+        final_assembly,
+        "Pypolca-polished Autocycler assembly",
+    )
+    _require_matching_autocycler_contig_identifiers(
+        final_autocycler_identifiers,
+        final_polypolish_identifiers,
+        "Autocycler consensus",
+        "Polypolish",
+    )
+    _require_matching_autocycler_contig_identifiers(
+        final_polypolish_identifiers,
+        final_identifiers,
+        "Polypolish",
+        "Pypolca",
+    )
     @info "Autocycler paired-short polishing complete" assembly = final_assembly
 
     return (
         outdir = normalized_out_dir,
         assembly = final_assembly,
-        graph = autocycler_result.graph,
-        autocycler_assembly = autocycler_result.assembly,
+        graph = graph,
+        autocycler_assembly = autocycler_assembly,
         polypolish_assembly = polypolish_assembly,
-        pypolca_report = polishing_plan.pypolca_report,
+        pypolca_report = pypolca_report,
         intermediates = retained_intermediates,
         toolchain = autocycler_result.toolchain,
         requested_threads = autocycler_result.requested_threads,
@@ -1442,10 +2166,14 @@ function _run_autocycler_polished(
         read_type::AbstractString = "ont_r10",
         polypolish_careful::Bool = true,
         keep_intermediates::Bool = false,
-        dependency_checker::Function = _ensure_autocycler_installed,
+        dependency_checker::Function =
+            _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         intermediate_remover::Function = path -> rm(path; force = true),
         output_lock_runner::Function = _with_autocycler_output_lock,
+        environment_lock_path::AbstractString =
+            _autocycler_install_lock_path(),
+        environment_lock_runner::Function = _with_autocycler_install_lock,
 )::NamedTuple
     normalized_read_type = _validate_autocycler_parameters(
         threads,
@@ -1476,20 +2204,34 @@ function _run_autocycler_polished(
         normalized_short_reads_2,
     )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
-        _run_autocycler_polished_with_reserved_output(
-            normalized_long_reads,
-            normalized_short_reads_1,
-            normalized_short_reads_2,
-            reserved_out_dir;
-            threads,
-            jobs,
-            read_type = normalized_read_type,
-            polypolish_careful,
-            keep_intermediates,
-            dependency_checker,
-            runner,
-            intermediate_remover,
-        )
+        environment_lock_runner(String(environment_lock_path)) do
+            toolchain_snapshotter =
+                _autocycler_toolchain_snapshotter(dependency_checker)
+            initial_toolchain = _require_autocycler_toolchain_provenance(
+                dependency_checker(),
+            )
+            result = _run_autocycler_polished_with_reserved_output(
+                normalized_long_reads,
+                normalized_short_reads_1,
+                normalized_short_reads_2,
+                reserved_out_dir;
+                threads,
+                jobs,
+                read_type = normalized_read_type,
+                polypolish_careful,
+                keep_intermediates,
+                toolchain = initial_toolchain,
+                dependency_checker = toolchain_snapshotter,
+                runner,
+                intermediate_remover,
+            )
+            _require_unchanged_autocycler_toolchain(
+                initial_toolchain,
+                toolchain_snapshotter(),
+                "the complete Autocycler and paired-short polishing lifecycle",
+            )
+            return result
+        end
     end
 end
 
@@ -1510,7 +2252,16 @@ index intermediates are removed after success unless `keep_intermediates=true`.
 Route-owned BWA/SAM intermediates are also cleaned after a failed polishing run
 unless explicit retention was requested; diagnostic assembly artifacts remain.
 An adjacent interprocess lock reserves the output directory continuously across
-both long-read assembly and paired-short polishing.
+both long-read assembly and paired-short polishing. The shared environment/install
+lock is held across that same lifecycle. Full normalized Conda inventory snapshots
+must match after long-read assembly and again after polishing. Polypolish and
+Pypolca must also preserve the exact unique Autocycler contig-identifier set;
+renamed, dropped, or added contigs fail before the next stage or before return.
+The raw graph, raw consensus, and Polypolish FASTA are content-snapshotted and
+must remain byte-identical through every downstream command. Immediately before
+return, every reported artifact is revalidated as a contained regular non-symlink
+file; all FASTAs/GFA are parsed again, all three identifier sets are compared
+again, and the Pypolca report must still be nonempty.
 
 This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
 same bacterial-isolate/mostly-complete-alternative-assemblies applicability
@@ -1531,8 +2282,9 @@ ensemble method.
 
 # Returns
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
-`polypolish_assembly`, `pypolca_report`, `outdir`, and exact `toolchain`
-provenance. `intermediates` lists files retained by an explicit
+`polypolish_assembly`, `pypolca_report`, `outdir`, and exact realized `toolchain`
+provenance, including the deterministic full Conda inventory and its SHA-256.
+`intermediates` lists files retained by an explicit
 `keep_intermediates=true` request or because best-effort cleanup could not remove
 them. `requested_threads` and `autocycler_assembly_threads` distinguish the caller
 request from Autocycler's effective assembly cap; `polishing_threads` records the

@@ -60,10 +60,17 @@ same-invocation race snapshot only and is intentionally absent from the durable
 schema-v4 contract. A separate atomic completion manifest binds `graph_k`, the
 workflow signature, the realized package-inventory digest, and canonical
 artifact identities, sizes, and SHA-256 digests. Legacy plain contigs are
-normalized to `contigs.fasta.gz`. Submitted jobs recompute every input digest
-after acquiring the runtime output lock and before reuse or execution. Any
+normalized to `contigs.fasta.gz`. Each tool-execution lifecycle stages mode-0400
+private input copies, verifies them against the captured SHA-256 contract, and
+runs metaMDBG only against those staged paths. Local and submitted lifecycles
+capture the full normalized Conda inventory before and after all tool commands
+and reject any drift. Submitted jobs also recompute every source input digest
+after acquiring the runtime output lock and immediately before publication. Any
 nonempty output directory without the input contract, or any complete artifact
 set without its matching completion manifest, is rejected rather than adopted.
+Partial contracted contigs are likewise never resumed because they lack
+realized-stage provenance. One output root owns exactly one `graph_k` lifecycle;
+a different requested graph requires a fresh output root.
 
 This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
 false dual-long workflow would make benchmark comparisons invalid.
@@ -75,6 +82,10 @@ Each read set is corrected independently before assembly:
 1. R1 uses the configured short-read correction profile.
 2. R2 uses the same short-read profile in a separate correction call.
 3. Long reads use their own profile.
+
+Every source must be FASTQ, whether supplied as a path or as in-memory records.
+FASTA input is rejected before correction; the route never converts FASTA to
+FASTQ or synthesizes Q40 qualities.
 
 PacBio CLR and HiFi are exact correction boundaries. Autocycler's read type
 selects `:pacbio_clr` or `:pacbio_hifi`; HiFi does not inherit the CLR-like
@@ -161,30 +172,39 @@ canonical path, size, and SHA-256. Path-backed sources record per-file canonical
 paths, sizes, and SHA-256 digests; in-memory sources record their read count,
 identifier digest, and full record-content digest.
 
-The Unicycler arm uses the realized `unicycler` Conda environment rather than
-claiming a spec-pinned solve. Under an interprocess environment lock, it records
+The common `run_unicycler` wrapper, and therefore the Unicycler hybrid arm, uses
+the realized `unicycler` Conda environment rather than claiming a spec-pinned
+solve. It owns one interprocess environment lock across environment preparation,
 the complete normalized package inventory (name, version, build, and channel),
-requires both Unicycler and SPAdes, and verifies that the inventory and its
-SHA-256 digest are identical immediately before and after assembly. Autocycler
+and fresh local assembly. It requires both Unicycler and SPAdes and verifies
+that the inventory and its SHA-256 digest are identical immediately before and
+after assembly. Reused historical outputs do not claim current realized-
+execution provenance, and nonlocal executors are rejected because their work
+would outlive the mutable-environment lock; the higher-level exact hybrid route
+therefore receives only a fresh local exact result. Incomplete non-empty legacy
+output directories are preserved and rejected rather than deleted. Autocycler
 additionally records:
 
 - the immutable upstream script revision and verified SHA-256;
 - the bundled environment specification SHA-256; and
-- the installed versions of required conda packages.
+- the complete realized name/version/build/channel package inventory and its
+  SHA-256 digest.
 
 The installer uses the immutable environment name
 `autocycler-0.5.2-d6aef758986db23c`, derived from the compatibility version and
 the first 16 hexadecimal characters of the pinned bundled-environment SHA-256.
 A same-version interprocess lock serializes direct installation, first-use
-creation, and revalidation. An existing spec-hash-addressed environment is
-never recreated in place. Missing or
+creation, revalidation, assembly, polishing, cleanup, and final artifact audit.
+The final audit rechecks artifact bytes, FASTA/GFA semantics, and contig-ID
+identity across the Autocycler, Polypolish, and Pypolca stages. An existing
+spec-hash-addressed environment is never recreated in place. Missing or
 incompatible packages fail closed with instructions to stop active workflows
 before manually removing and reinstalling the environment, while a future
 spec/version receives a different name and cannot replace an environment that
 an older workflow is actively using.
 
 The single-input metaMDBG wrapper applies the same fail-closed principles with
-the separate `metamdbg-1.4-c6fbbb3c2e85ffae` environment specification. Local
+the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification. Local
 execution returns
 `status = :complete` only after semantic FASTA/GFA validation and durable
 contract finalization. A nonlocal executor returns `status = :planned` for a
@@ -196,6 +216,10 @@ completion provenance. Real nonlocal execution is limited to the verifiable
 Slurm backend. Durable pre-submit reservations never expire automatically; a
 crashed caller can inspect the on-disk capability and reclaim it only with the
 exact owner token plus explicit confirmation that submission never occurred.
+Submitted jobs can be reclaimed only with the exact recorded scheduler job ID
+after explicit cancellation or terminal-failed confirmation. Reservation
+directories and owner records must remain current-user-owned mode 0700 and 0600,
+respectively.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream
@@ -210,10 +234,10 @@ sibling-adapter argument mapping, provenance, persistent and ephemeral cleanup,
 stale-output rejection, and fail-loud artifacts. The existing single-input OLC
 suite remains part of the regression gate.
 
-Real Autocycler execution is opt-in because it is compute intensive. The fixture
-must be a bacterial isolate for which mostly complete alternative long-read
-assemblies are expected. Set both external-tool gates, provide all three FASTQs,
-and select the exact Autocycler chemistry:
+The real **multi-input Autocycler-polished** smoke is opt-in because it is
+compute intensive. The fixture must be a bacterial isolate for which mostly
+complete alternative long-read assemblies are expected. Set both external-tool
+gates, provide all three FASTQs, and select the exact Autocycler chemistry:
 
 ```bash
 MYCELIA_RUN_EXTERNAL=true \
@@ -229,6 +253,11 @@ julia --project=. -e \
 Default CI leaves the dedicated Autocycler gate disabled. Once it is enabled,
 missing or invalid gate prerequisites fail loudly rather than producing a green
 skip.
+
+The lower-level direct-wrapper smoke in
+`test/8_tool_integration/autocycler.jl` is a separate gate: it uses
+`MYCELIA_RUN_EXTERNAL=true` with `MYCELIA_AUTOCYCLER_LONG_READS` and optional
+paired `MYCELIA_AUTOCYCLER_SHORT_READS_1` / `_2` fixtures.
 
 ## Downstream benchmark and ensemble boundary
 

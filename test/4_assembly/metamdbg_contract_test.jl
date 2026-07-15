@@ -220,7 +220,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             outdir = joinpath(temporary_root, "local")
             output_lock_path = Mycelia._metamdbg_output_lock_path(outdir)
             command_count = Ref(0)
-            local_runner = function (_command::Cmd)
+            local_runner = function (command::Cmd)
                 command_count[] += 1
                 Test.@test isdir(output_lock_path)
                 Test.@test !ispath(joinpath(
@@ -228,6 +228,19 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     "mycelia_metamdbg_contract.json",
                 ))
                 if command_count[] == 1
+                    input_flag_index = only(findall(
+                        ==("--in-ont"),
+                        command.exec,
+                    ))
+                    staged_input = command.exec[input_flag_index + 1]
+                    Test.@test staged_input != valid_reads
+                    Test.@test occursin(
+                        ".mycelia-metamdbg-inputs.",
+                        staged_input,
+                    )
+                    Test.@test read(staged_input, String) ==
+                               read(valid_reads, String)
+                    Test.@test (stat(staged_input).mode & 0o777) == 0o400
                     write(
                         joinpath(outdir, "contigs.fasta"),
                         ">contig-1\nACGT\n",
@@ -255,7 +268,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
 
             Test.@test command_count[] == 2
-            Test.@test local_provisioning_calls[] == 1
+            Test.@test local_provisioning_calls[] == 2
             Test.@test result.status == :complete
             Test.@test result.contigs == joinpath(outdir, "contigs.fasta.gz")
             Test.@test isfile(result.contigs)
@@ -487,7 +500,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 ErrorException,
                 r"existing output contract does not match",
             )
-            Test.@test local_provisioning_calls[] == 1
+            Test.@test local_provisioning_calls[] == 2
             Test.@test command_count[] == 2
         end
 
@@ -531,6 +544,100 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !ispath(outputs.contract_marker)
             Test.@test !ispath(outputs.completion_marker)
             Test.@test !ispath(Mycelia._metamdbg_output_lock_path(outdir))
+
+            restored_reads =
+                joinpath(temporary_root, "local-mutate-restore.fastq")
+            original_reads = "@local-mutate-restore\nACGT\n+\nIIII\n"
+            write(restored_reads, original_reads)
+            restored_metadata =
+                joinpath(temporary_root, "local-mutate-restore-metadata.fastq")
+            cp(restored_reads, restored_metadata)
+            run(`touch -r $(restored_reads) $(restored_metadata)`)
+            restored_outdir =
+                joinpath(temporary_root, "local-mutate-restore-output")
+            restored_commands = Ref(0)
+            restored_result = Mycelia._run_metamdbg(;
+                hifi_reads = restored_reads,
+                outdir = restored_outdir,
+                dependency_checker = _test_metamdbg_toolchain,
+                local_runner = function (command::Cmd)
+                    restored_commands[] += 1
+                    if restored_commands[] == 1
+                        input_flag_index = only(findall(
+                            ==("--in-hifi"),
+                            command.exec,
+                        ))
+                        staged_input = command.exec[input_flag_index + 1]
+                        Test.@test staged_input != restored_reads
+                        Test.@test read(staged_input, String) == original_reads
+                        write(
+                            restored_reads,
+                            "@local-mutate-restore\nTGCA\n+\nIIII\n",
+                        )
+                        Test.@test read(staged_input, String) == original_reads
+                        write(restored_reads, original_reads)
+                        run(`touch -r $(restored_metadata) $(restored_reads)`)
+                        write(
+                            joinpath(restored_outdir, "contigs.fasta"),
+                            ">contig-1\nACGT\n",
+                        )
+                    else
+                        _write_test_metamdbg_gfa!(joinpath(
+                            restored_outdir,
+                            "assemblyGraph_k21_4bps.gfa",
+                        ))
+                    end
+                    return nothing
+                end,
+            )
+            Test.@test restored_result.status == :complete
+            Test.@test restored_commands[] == 2
+            Test.@test read(restored_reads, String) == original_reads
+
+            drift_reads = joinpath(temporary_root, "toolchain-drift.fastq")
+            write(drift_reads, "@toolchain-drift\nACGT\n+\nIIII\n")
+            drift_outdir = joinpath(temporary_root, "toolchain-drift-output")
+            dependency_calls = Ref(0)
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = drift_reads,
+                    outdir = drift_outdir,
+                    dependency_checker = () -> begin
+                        dependency_calls[] += 1
+                        toolchain = _test_metamdbg_toolchain()
+                        dependency_calls[] == 1 && return toolchain
+                        changed_inventory = copy(toolchain.package_inventory)
+                        changed_inventory[1] = merge(
+                            changed_inventory[1],
+                            (; build = "changed-after-tools"),
+                        )
+                        return Mycelia._require_metamdbg_package_version(
+                            changed_inventory,
+                        )
+                    end,
+                    local_runner = function (_command::Cmd)
+                        if !ispath(joinpath(drift_outdir, "contigs.fasta"))
+                            write(
+                                joinpath(drift_outdir, "contigs.fasta"),
+                                ">contig-1\nACGT\n",
+                            )
+                        else
+                            _write_test_metamdbg_gfa!(joinpath(
+                                drift_outdir,
+                                "assemblyGraph_k21_4bps.gfa",
+                            ))
+                        end
+                        return nothing
+                    end,
+                ),
+                ErrorException,
+                r"resolved package inventory changed",
+            )
+            Test.@test dependency_calls[] == 2
+            drift_outputs =
+                Mycelia._metamdbg_output_paths(drift_outdir, 21)
+            Test.@test !ispath(drift_outputs.contract_marker)
+            Test.@test !ispath(drift_outputs.completion_marker)
         end
 
         Test.@testset "input hashing is bounded at lifecycle boundaries" begin
@@ -639,6 +746,27 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         end
 
         Test.@testset "exact graph-k discovery and ambiguity failure" begin
+            partial_outdir =
+                joinpath(temporary_root, "contracted-partial-contigs")
+            mkpath(partial_outdir)
+            _write_test_metamdbg_gzip_fasta!(joinpath(
+                partial_outdir,
+                "contigs.fasta.gz",
+            ))
+            _write_test_metamdbg_contract!(partial_outdir, valid_reads)
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = valid_reads,
+                    outdir = partial_outdir,
+                    dependency_checker = () -> error(
+                        "partial output must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"partial contracted contigs without a realized-stage completion manifest",
+            )
+
             legacy_complete_outdir =
                 joinpath(temporary_root, "legacy-unbound-complete")
             mkpath(legacy_complete_outdir)
@@ -677,24 +805,19 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 joinpath(outdir, "assemblyGraph_k20_4bps.gfa"),
             )
             _write_test_metamdbg_contract!(outdir, valid_reads)
-            graph_calls = Ref(0)
-            result = Mycelia._run_metamdbg(;
-                hifi_reads = valid_reads,
-                outdir,
-                graph_k = 21,
-                dependency_checker = _test_metamdbg_toolchain,
-                local_runner = function (command::Cmd)
-                    graph_calls[] += 1
-                    Test.@test occursin(" gfa ", string(command))
-                    _write_test_metamdbg_gfa!(
-                        joinpath(outdir, "assemblyGraph_k21_4bps.gfa"),
-                    )
-                    return nothing
-                end,
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = valid_reads,
+                    outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "different graph_k must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"exactly one graph_k lifecycle per output root",
             )
-            Test.@test graph_calls[] == 1
-            Test.@test read(result.graph, String) ==
-                       "H\tVN:Z:1.0\nS\tcontig-1\tACGT\n"
 
             ambiguous_outdir = joinpath(temporary_root, "ambiguous")
             mkpath(ambiguous_outdir)
@@ -730,6 +853,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        Mycelia.METAMDBG_ENVIRONMENT_SPEC_SHA256
             Test.@test occursin(
                 "metamdbg==1.4",
+                read(bundled_environment, String),
+            )
+            Test.@test occursin(
+                "python=3.11",
                 read(bundled_environment, String),
             )
             Test.@test Mycelia._METAMDBG_INSTALL_LOCK_STALE_SECONDS > 0
@@ -781,6 +908,54 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        realized_toolchain.metamdbg_version
             Test.@test changed_build_toolchain.package_inventory_sha256 !=
                        realized_toolchain.package_inventory_sha256
+
+            escaped_inventory = Any[
+                Dict(
+                    "channel" => "bio\"conda",
+                    "build_string" => "h43eeafb_2",
+                    "version" => "1.4",
+                    "name" => "metamdbg",
+                ),
+                Dict(
+                    "version" => "1.3.1",
+                    "name" => "libzlib",
+                    "channel" => "conda-forge",
+                    "build" => "h8359307_2",
+                ),
+            ]
+            inventory_json = joinpath(
+                temporary_root,
+                "escaped-reordered-inventory.json",
+            )
+            inventory_tsv = joinpath(
+                temporary_root,
+                "escaped-reordered-inventory.tsv",
+            )
+            serialized_inventory = JSON.json(reverse(escaped_inventory))
+            write(
+                inventory_json,
+                "  \n" * replace(serialized_inventory, "},{" => "},\n {") *
+                "\n",
+            )
+            run(`python3 -c $(Mycelia._metamdbg_runtime_inventory_canonicalizer_python()) $(inventory_json) $(inventory_tsv)`)
+            Test.@test read(inventory_tsv, String) ==
+                       Mycelia._metamdbg_package_inventory_contents(
+                escaped_inventory,
+            )
+            escaped_changed = deepcopy(escaped_inventory)
+            escaped_changed[1]["build_string"] = "h43eeafb_3"
+            changed_inventory_json = joinpath(
+                temporary_root,
+                "changed-build-inventory.json",
+            )
+            changed_inventory_tsv = joinpath(
+                temporary_root,
+                "changed-build-inventory.tsv",
+            )
+            write(changed_inventory_json, JSON.json(escaped_changed))
+            run(`python3 -c $(Mycelia._metamdbg_runtime_inventory_canonicalizer_python()) $(changed_inventory_json) $(changed_inventory_tsv)`)
+            Test.@test Mycelia._metamdbg_sha256(changed_inventory_tsv) !=
+                       Mycelia._metamdbg_sha256(inventory_tsv)
             _test_metamdbg_error(
                 () -> Mycelia._require_metamdbg_package_version(Any[
                     Dict("name" => "metamdbg", "version" => "1.4"),
@@ -950,6 +1125,21 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "structured fixture GFA",
             ) == structured_gfa
 
+            typed_tags_gfa = joinpath(temporary_root, "typed-tags.gfa")
+            write(
+                typed_tags_gfa,
+                "H\tVN:Z:1.2\n" *
+                "S\tcontig-1\tACGT\tZA:Z:text\tJA:J:{\"ok\":[1,true]}" *
+                "\tHA:H:0AFF\tBc:B:c,-128,127\tBC:B:C,0,255" *
+                "\tBs:B:s,-32768,32767\tBS:B:S,0,65535" *
+                "\tBi:B:i,-2147483648,2147483647" *
+                "\tBI:B:I,0,4294967295\tBf:B:f,-1.5,3e2\n",
+            )
+            Test.@test Mycelia._require_valid_metamdbg_gfa(
+                typed_tags_gfa,
+                "typed tags fixture GFA",
+            ) == typed_tags_gfa
+
             many_link_gfa = joinpath(temporary_root, "many-forward-links.gfa")
             open(many_link_gfa, "w") do output
                 write(output, "H\tVN:Z:1.0\n")
@@ -962,6 +1152,52 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 many_link_gfa,
                 "many-link fixture GFA",
             ) == many_link_gfa
+
+            small_path_field = join(
+                ("segment-$(index)+" for index in 1:2_000),
+                ',',
+            )
+            large_path_field = join(
+                ("segment-$(index)+" for index in 1:4_000),
+                ',',
+            )
+            Mycelia._metamdbg_gfa_path_step_identifiers(
+                small_path_field,
+                1,
+                "allocation warmup",
+                "fixture.gfa",
+            )
+            GC.gc()
+            small_path_allocations = @allocated begin
+                Mycelia._metamdbg_gfa_path_step_identifiers(
+                    small_path_field,
+                    1,
+                    "small allocation fixture",
+                    "fixture.gfa",
+                )
+            end
+            GC.gc()
+            large_path_allocations = @allocated begin
+                Mycelia._metamdbg_gfa_path_step_identifiers(
+                    large_path_field,
+                    1,
+                    "large allocation fixture",
+                    "fixture.gfa",
+                )
+            end
+            Test.@test large_path_allocations <=
+                       3 * small_path_allocations + 1_000_000
+            long_path_gfa = joinpath(temporary_root, "long-path.gfa")
+            long_steps = join(fill("contig-1+", 10_000), ',')
+            write(
+                long_path_gfa,
+                "H\tVN:Z:1.0\nS\tcontig-1\tACGT\n" *
+                "P\tlong-path\t$(long_steps)\t*\n",
+            )
+            Test.@test Mycelia._require_valid_metamdbg_gfa(
+                long_path_gfa,
+                "long path fixture GFA",
+            ) == long_path_gfa
 
             invalid_gfa_semantics = (
                 leading_star = (
@@ -984,6 +1220,58 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 invalid_integer_tag = (
                     "S\tcontig-1\tACGT\tLN:i:not-an-integer\n",
                     r"invalid or unsupported GFA segment optional tag value",
+                ),
+                empty_z_tag = (
+                    "S\tcontig-1\tACGT\tZZ:Z:\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                invalid_json_tag = (
+                    "S\tcontig-1\tACGT\tJJ:J:{not-json}\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                nonstandard_json_constant = (
+                    "S\tcontig-1\tACGT\tJJ:J:NaN\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                odd_hex_tag = (
+                    "S\tcontig-1\tACGT\tHH:H:ABC\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_signed_range = (
+                    "S\tcontig-1\tACGT\tBB:B:c,-129\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_unsigned_byte_range = (
+                    "S\tcontig-1\tACGT\tBB:B:C,-1\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_signed_short_range = (
+                    "S\tcontig-1\tACGT\tBB:B:s,32768\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_unsigned_short_range = (
+                    "S\tcontig-1\tACGT\tBB:B:S,65536\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_signed_int_range = (
+                    "S\tcontig-1\tACGT\tBB:B:i,2147483648\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_unsigned_range = (
+                    "S\tcontig-1\tACGT\tBB:B:I,4294967296\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_float_range = (
+                    "S\tcontig-1\tACGT\tBB:B:f,1e400\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                b_unknown_subtype = (
+                    "S\tcontig-1\tACGT\tBB:B:d,1\n",
+                    r"invalid or unsupported GFA segment optional tag value",
+                ),
+                non_gfa1_version = (
+                    "H\tVN:Z:2.0\nS\tcontig-1\tACGT\n",
+                    r"non-GFA1 VN header",
                 ),
                 leading_whitespace_pseudo_comment = (
                     " #not-a-comment\nS\tcontig-1\tACGT\n",
@@ -1495,7 +1783,18 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test occursin("validate_gfa", script)
             Test.@test !occursin("link_from", script)
             Test.@test !occursin("path_reference", script)
-            Test.@test occursin("object_count = split", script)
+            Test.@test !occursin("object_count = split", script)
+            Test.@test occursin("json.load", script)
+            Test.@test !occursin("lines = list", script)
+            Test.@test occursin(
+                "for line_number, fields in records(path)",
+                script,
+            )
+            Test.@test occursin("capture_package_inventory", script)
+            Test.@test occursin(
+                "resolved package inventory changed",
+                script,
+            )
             Test.@test !occursin("grep -Eq", script)
             Test.@test occursin("reservation_tombstone=", script)
             Test.@test occursin(
@@ -1533,9 +1832,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 ==("if [ \"\$contract_exists\" -eq 1 ]; then"),
                 script_lines,
             )
-            Test.@test length(validation_positions) == 2
+            Test.@test length(validation_positions) == 3
             Test.@test lock_position < first(validation_positions) <
-                       reuse_position < last(validation_positions) <
+                       reuse_position < validation_positions[2] <
+                       last(validation_positions) <
                        finalization_position
             Test.@test !occursin("\$\$", script)
             Test.@test !occursin("\${contigs_gz}.tmp", script)
@@ -1550,7 +1850,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 fake_conda,
                 "#!/usr/bin/env bash\n" *
                 "set -euo pipefail\n" *
-                "if [ \"\$1\" != \"list\" ]; then exit 90; fi\n" *
+                "if [ \"\$1\" = \"run\" ]; then\n" *
+                "  shift\n" *
+                "  while [ \"\$#\" -gt 0 ] && [ \"\$1\" != \"python\" ]; do shift; done\n" *
+                "  [ \"\$#\" -gt 0 ] || exit 90\n" *
+                "  shift\n" *
+                "  exec python3 \"\$@\"\n" *
+                "fi\n" *
+                "[ \"\$1\" = \"list\" ] || exit 90\n" *
                 "printf '%s\\n' " *
                 "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"," *
                 "\"build_string\":\"h43eeafb_2\"," *
@@ -1564,13 +1871,59 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "printf '>contig-1\\nACGT\\n' > \"\$outdir/contigs.fasta\""
             fake_gfa =
                 "printf 'H\\tVN:Z:1.0\\n" *
-                "S\\tcontig-1\\tACGT\\n" *
+                "S\\tcontig-1\\tACGT\\tJA:J:{\"ok\":true}" *
+                "\\tBc:B:c,-128,127\\tBI:B:I,0,4294967295" *
+                "\\tBf:B:f,-1.5,3e2\\n" *
                 "S\\tcontig-2\\tTGCA\\n" *
                 "S\\tcontig,with,comma\\tGATTACA\\tLN:i:7\\n" *
                 "L\\tcontig-1\\t+\\tcontig-2\\t-\\t4M\\n" *
                 "P\\tpath-1\\tcontig-1+,contig-2-\\t4M\\n" *
                 "P\\tcomma-path\\tcontig,with,comma+\\t*\\n' " *
                 "> \"\$outdir/assemblyGraph_k21_4bps.gfa\""
+
+            partial_runtime_outdir =
+                joinpath(temporary_root, "executor-partial-contracted")
+            mkpath(partial_runtime_outdir)
+            _write_test_metamdbg_gzip_fasta!(joinpath(
+                partial_runtime_outdir,
+                "contigs.fasta.gz",
+            ))
+            _write_test_metamdbg_contract!(
+                partial_runtime_outdir,
+                valid_reads,
+            )
+            partial_runtime_outputs = Mycelia._metamdbg_output_paths(
+                partial_runtime_outdir,
+                21,
+            )
+            partial_runtime_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    partial_runtime_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "executor-partial-contracted-fixture",
+                )
+            Mycelia._with_metamdbg_output_lock(partial_runtime_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    partial_runtime_reservation,
+                    partial_runtime_outdir,
+                )
+            end
+            partial_runtime_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                partial_runtime_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = partial_runtime_reservation,
+            )
+            partial_runtime_script_path =
+                joinpath(temporary_root, "executor-partial-contracted.sh")
+            write(partial_runtime_script_path, partial_runtime_script)
+            Test.@test !success(`bash $(partial_runtime_script_path)`)
+            Test.@test !ispath(partial_runtime_outputs.completion_marker)
+            Test.@test !ispath(partial_runtime_reservation.path)
 
             retry_outdir = joinpath(temporary_root, "executor-lock-retry")
             retry_outputs = Mycelia._metamdbg_output_paths(retry_outdir, 21)
@@ -1649,11 +2002,20 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test isdir(timeout_lock)
             Test.@test !ispath(timeout_outputs.contract_marker)
             rm(timeout_lock)
-            Mycelia._with_metamdbg_output_lock(timeout_outdir) do
-                Mycelia._remove_metamdbg_submission_reservation!(
-                    timeout_reservation,
+            timeout_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    timeout_outdir,
+                ),
+            )
+            timeout_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    timeout_metadata;
+                    owner_token = timeout_metadata.owner_token,
+                    confirm_not_submitted = true,
                 )
-            end
+            Test.@test timeout_reclaimed.status == :reclaimed
+            Test.@test timeout_reclaimed.recovery_reason == :not_submitted
+            Test.@test !ispath(timeout_reservation.path)
 
             invalid_executor_fastas = (
                 empty_identifier =
@@ -1737,6 +2099,27 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 invalid_integer_tag =
                     "printf 'S\\tcontig-1\\tACGT\\t" *
                     "LN:i:not-an-integer\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                empty_z_tag =
+                    "printf 'S\\tcontig-1\\tACGT\\tZZ:Z:\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                invalid_json_tag =
+                    "printf 'S\\tcontig-1\\tACGT\\tJJ:J:{bad}\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                nonstandard_json_constant =
+                    "printf 'S\\tcontig-1\\tACGT\\tJJ:J:NaN\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                b_signed_range =
+                    "printf 'S\\tcontig-1\\tACGT\\tBB:B:c,-129\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                b_unsigned_range =
+                    "printf 'S\\tcontig-1\\tACGT\\tBB:B:I,4294967296\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                b_float_range =
+                    "printf 'S\\tcontig-1\\tACGT\\tBB:B:f,1e400\\n' " *
+                    "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
+                non_gfa1_version =
+                    "printf 'H\\tVN:Z:2.0\\nS\\tcontig-1\\tACGT\\n' " *
                     "> \"\$outdir/assemblyGraph_k21_4bps.gfa\"",
                 leading_whitespace_pseudo_comment =
                     "printf ' #not-a-comment\\n" *
@@ -2030,23 +2413,113 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 readdir(dirname(executable_outdir)),
             ))
 
-            sentinel_outdir = joinpath(temporary_root, "executor-sentinel")
-            mkpath(sentinel_outdir)
-            write(
-                joinpath(sentinel_outdir, "contigs.fasta"),
-                ">contig-1\nACGT\n",
+            drift_runtime_outdir =
+                joinpath(temporary_root, "executor-inventory-drift")
+            drift_runtime_outputs = Mycelia._metamdbg_output_paths(
+                drift_runtime_outdir,
+                21,
             )
-            _write_test_metamdbg_contract!(sentinel_outdir, valid_reads)
+            drift_runtime_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    drift_runtime_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "executor-inventory-drift-fixture",
+                )
+            Mycelia._with_metamdbg_output_lock(drift_runtime_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    drift_runtime_reservation,
+                    drift_runtime_outdir,
+                )
+            end
+            drift_conda = joinpath(temporary_root, "drifting-fake-conda")
+            drift_state = joinpath(temporary_root, "drifting-conda-state")
+            write(
+                drift_conda,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "if [ \"\$1\" = \"run\" ]; then exec $(Base.shell_escape(fake_conda)) \"\$@\"; fi\n" *
+                "count=0; [ ! -f $(Base.shell_escape(drift_state)) ] || count=\$(cat $(Base.shell_escape(drift_state)))\n" *
+                "count=\$((count + 1)); printf '%s' \"\$count\" > $(Base.shell_escape(drift_state))\n" *
+                "build=h8359307_2; [ \"\$count\" -eq 1 ] || build=h8359307_3\n" *
+                "printf '[{\"name\":\"metamdbg\",\"version\":\"1.4\",\"build_string\":\"h43eeafb_2\",\"channel\":\"bioconda\"},{\"name\":\"libzlib\",\"version\":\"1.3.1\",\"build_string\":\"%s\",\"channel\":\"conda-forge\"}]\\n' \"\$build\"\n",
+            )
+            chmod(drift_conda, 0o700)
+            drift_runtime_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                drift_runtime_outputs,
+                21,
+                input_contract;
+                conda_runner = drift_conda,
+                submission_reservation = drift_runtime_reservation,
+            )
+            drift_runtime_script_path =
+                joinpath(temporary_root, "drifting-runtime.sh")
+            write(drift_runtime_script_path, drift_runtime_script)
+            Test.@test !success(`bash $(drift_runtime_script_path)`)
+            Test.@test !ispath(drift_runtime_outputs.contract_marker)
+            Test.@test !ispath(drift_runtime_outputs.completion_marker)
+            Test.@test !ispath(drift_runtime_reservation.path)
+
+            publication_race_outdir =
+                joinpath(temporary_root, "executor-publication-race")
+            publication_race_outputs = Mycelia._metamdbg_output_paths(
+                publication_race_outdir,
+                21,
+            )
+            publication_race_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    publication_race_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "executor-publication-race-fixture",
+                )
+            Mycelia._with_metamdbg_output_lock(publication_race_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    publication_race_reservation,
+                    publication_race_outdir,
+                )
+            end
+            publication_race_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                publication_race_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = publication_race_reservation,
+                post_completion_publication_hook =
+                    "printf '>contig-1\\nTGCA\\n' | gzip -c > \"\$contigs_gz\"",
+            )
+            publication_race_script_path =
+                joinpath(temporary_root, "publication-race.sh")
+            write(publication_race_script_path, publication_race_script)
+            Test.@test !success(`bash $(publication_race_script_path)`)
+            Test.@test !ispath(publication_race_outputs.completion_marker)
+            Test.@test isfile(publication_race_outputs.contract_marker)
+            Test.@test !ispath(publication_race_reservation.path)
+
             sentinel_victim = joinpath(temporary_root, "sentinel-victim")
             write(sentinel_victim, "must-remain-unchanged\n")
-            predictable_sentinel =
-                joinpath(sentinel_outdir, "contigs.fasta.gz.tmp")
-            symlink(sentinel_victim, predictable_sentinel)
+            adversarial_reads = joinpath(
+                temporary_root,
+                "reads;printf PWNED>sentinel-victim;#'\"\$(x).fastq",
+            )
+            write(adversarial_reads, "@adversarial\nACGT\n+\nIIII\n")
+            sentinel_outdir = joinpath(
+                temporary_root,
+                "executor;printf PWNED>sentinel-victim;#'\"\$(x)",
+            )
             sentinel_outputs =
                 Mycelia._metamdbg_output_paths(sentinel_outdir, 21)
+            sentinel_input_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(adversarial_reads, nothing),
+                3,
+            )
             sentinel_reservation = Mycelia._metamdbg_submission_reservation(
                 sentinel_outputs,
-                input_contract,
+                sentinel_input_contract,
                 21;
                 owner_token = "sentinel-executor-fixture",
             )
@@ -2057,35 +2530,46 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             end
             sentinel_script = Mycelia._metamdbg_executor_script(
-                "echo 'unexpected assembly invocation' >&2; exit 91",
+                fake_asm,
                 fake_gfa,
                 sentinel_outputs,
                 21,
-                input_contract;
+                sentinel_input_contract;
                 conda_runner = fake_conda,
                 submission_reservation = sentinel_reservation,
             )
             sentinel_script_path =
                 joinpath(temporary_root, "metamdbg-sentinel-fixture.sh")
             write(sentinel_script_path, sentinel_script)
-            Test.@test success(`bash $(sentinel_script_path)`)
+            sentinel_log = joinpath(temporary_root, "sentinel-runtime.log")
+            sentinel_success = open(sentinel_log, "w") do log_io
+                success(pipeline(
+                    Cmd(
+                        `bash $(sentinel_script_path)`;
+                        dir = temporary_root,
+                    );
+                    stderr = log_io,
+                ))
+            end
+            sentinel_success || @info "sentinel runtime failure" log = read(
+                sentinel_log,
+                String,
+            )
+            Test.@test sentinel_success
             Test.@test read(sentinel_victim, String) ==
-                       "must-remain-unchanged\n"
-            Test.@test islink(predictable_sentinel)
-            Test.@test read(predictable_sentinel, String) ==
                        "must-remain-unchanged\n"
             Test.@test Mycelia._require_valid_metamdbg_fasta(
                 sentinel_outputs.contigs_gz,
                 "sentinel fixture contigs",
             ) == sentinel_outputs.contigs_gz
             Test.@test read(sentinel_outputs.contract_marker, String) ==
-                       input_contract.contents
+                       sentinel_input_contract.contents
             sentinel_artifacts =
                 Mycelia._require_metamdbg_artifacts!(sentinel_outputs, 21)
             Test.@test Mycelia._require_metamdbg_completion_manifest!(
                 sentinel_outputs,
                 sentinel_artifacts,
-                input_contract,
+                sentinel_input_contract,
                 21,
             ).manifest.workflow.graph_k == 21
             Test.@test !ispath(sentinel_reservation.path)
@@ -2337,6 +2821,59 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test reclaimed.recovery_reason == :cancelled
             Test.@test !ispath(reserved_path[])
 
+            terminal_outdir =
+                joinpath(temporary_root, "terminal-failed-submission")
+            terminal_outputs =
+                Mycelia._metamdbg_output_paths(terminal_outdir, 21)
+            terminal_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            terminal_reservation = Mycelia._metamdbg_submission_reservation(
+                terminal_outputs,
+                terminal_contract,
+                21;
+                owner_token = "terminal-failed-owner",
+            )
+            Mycelia._with_metamdbg_output_lock(terminal_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    terminal_reservation,
+                    terminal_outdir,
+                )
+            end
+            terminal_metadata = (;
+                canonical_outdir = terminal_reservation.canonical_outdir,
+                path = terminal_reservation.path,
+                workflow_signature = terminal_reservation.workflow_signature,
+                input_contract_signature =
+                    terminal_reservation.input_contract_signature,
+                graph_k = terminal_reservation.graph_k,
+                owner_token = terminal_reservation.owner_token,
+                job_id = "fixture-terminal-789",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    terminal_metadata;
+                    owner_token = terminal_metadata.owner_token,
+                    job_id = terminal_metadata.job_id,
+                    confirm_terminal = :completed,
+                ),
+                ArgumentError,
+                r"accepts only :failed",
+            )
+            Test.@test isdir(terminal_reservation.path)
+            terminal_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    terminal_metadata;
+                    owner_token = terminal_metadata.owner_token,
+                    job_id = terminal_metadata.job_id,
+                    confirm_terminal = :failed,
+                )
+            Test.@test terminal_reclaimed.status == :reclaimed
+            Test.@test terminal_reclaimed.job_id == "fixture-terminal-789"
+            Test.@test terminal_reclaimed.recovery_reason == :failed
+            Test.@test !ispath(terminal_reservation.path)
+
             crashed_outdir =
                 joinpath(temporary_root, "pre-submit-process-death")
             crashed_outputs =
@@ -2357,6 +2894,19 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     crashed_outdir,
                 )
             end
+            Test.@test (stat(crashed_reservation.path).mode & 0o777) == 0o700
+            Test.@test (
+                stat(crashed_reservation.contract_marker).mode & 0o777
+            ) == 0o600
+            chmod(crashed_reservation.contract_marker, 0o640)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    crashed_outdir,
+                ),
+                ErrorException,
+                r"must have mode 0600",
+            )
+            chmod(crashed_reservation.contract_marker, 0o600)
             run(`touch -t 200001010101 $(crashed_reservation.contract_marker)`)
             inspected =
                 Mycelia.inspect_metamdbg_submission_reservations(crashed_outdir)
@@ -2420,11 +2970,48 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 temporary_root,
                 "immediate-start-fake-conda",
             )
+            immediate_staged_observed = joinpath(
+                temporary_root,
+                "immediate-staged-input-observed.fastq",
+            )
+            immediate_original_reads = read(valid_reads, String)
+            immediate_mutated_reads = replace(
+                immediate_original_reads,
+                "ACGT" => "TGCA";
+                count = 1,
+            )
             write(
                 immediate_fake_conda,
                 "#!/usr/bin/env bash\n" *
                 "set -euo pipefail\n" *
-                "if [ \"\$1\" != \"list\" ]; then exit 90; fi\n" *
+                "if [ \"\$1\" = \"run\" ]; then\n" *
+                "  shift\n" *
+                "  while [ \"\$#\" -gt 0 ] && [ \"\$1\" != \"python\" ] && [ \"\$1\" != \"metaMDBG\" ]; do shift; done\n" *
+                "  [ \"\$#\" -gt 0 ] || exit 90\n" *
+                "  tool=\$1; shift\n" *
+                "  if [ \"\$tool\" = \"python\" ]; then exec python3 \"\$@\"; fi\n" *
+                "  operation=\$1; shift\n" *
+                "  output=; staged=; graph_k=\n" *
+                "  while [ \"\$#\" -gt 0 ]; do\n" *
+                "    case \"\$1\" in\n" *
+                "      --out-dir|--assembly-dir) output=\$2; shift 2;;\n" *
+                "      --in-hifi|--in-ont) staged=\$2; shift 2;;\n" *
+                "      --k) graph_k=\$2; shift 2;;\n" *
+                "      *) shift;;\n" *
+                "    esac\n" *
+                "  done\n" *
+                "  if [ \"\$operation\" = \"asm\" ]; then\n" *
+                "    [ -f \"\$staged\" ] && [ \"\$staged\" != $(Base.shell_escape(valid_reads)) ]\n" *
+                "    printf '%s' $(Base.shell_escape(immediate_mutated_reads)) > $(Base.shell_escape(valid_reads))\n" *
+                "    cp -- \"\$staged\" $(Base.shell_escape(immediate_staged_observed))\n" *
+                "    printf '%s' $(Base.shell_escape(immediate_original_reads)) > $(Base.shell_escape(valid_reads))\n" *
+                "    printf '>contig-1\\nACGT\\n' > \"\$output/contigs.fasta\"\n" *
+                "  elif [ \"\$operation\" = \"gfa\" ]; then\n" *
+                "    printf 'H\\tVN:Z:1.0\\nS\\tcontig-1\\tACGT\\n' > \"\$output/assemblyGraph_k\${graph_k}_4bps.gfa\"\n" *
+                "  else exit 91; fi\n" *
+                "  exit 0\n" *
+                "fi\n" *
+                "[ \"\$1\" = \"list\" ] || exit 90\n" *
                 "printf '%s\\n' " *
                 "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"," *
                 "\"build_string\":\"h43eeafb_2\"," *
@@ -2447,16 +3034,11 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                         immediate_outdir,
                     ),
                 ) == 1
-                _write_test_metamdbg_gzip_fasta!(
-                    immediate_outputs.contigs_gz,
-                )
-                _write_test_metamdbg_gfa!(joinpath(
-                    immediate_outdir,
-                    "assemblyGraph_k21_4bps.gfa",
-                ))
-                _write_test_metamdbg_contract!(
-                    immediate_outdir,
-                    valid_reads,
+                Test.@test occursin("staged_input_path_1", job.cmd)
+                Test.@test occursin(
+                    "metaMDBG asm --out-dir \"\$outdir\" --in-hifi " *
+                    "\"\$staged_input_path_1\"",
+                    job.cmd,
                 )
                 runtime_script = replace(
                     job.cmd,
@@ -2492,6 +3074,9 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        "fixture-immediate-456"
             Test.@test isfile(immediate_outputs.contract_marker)
             Test.@test isfile(immediate_outputs.completion_marker)
+            Test.@test read(immediate_staged_observed, String) ==
+                       immediate_original_reads
+            Test.@test read(valid_reads, String) == immediate_original_reads
             Test.@test Mycelia._require_valid_metamdbg_fasta(
                 immediate_outputs.contigs_gz,
                 "immediate-start contigs",

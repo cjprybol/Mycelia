@@ -4,3 +4,4 @@ channels:
   - bioconda
 dependencies:
   - metamdbg==1.4
+  - python=3.11
