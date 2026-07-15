@@ -53,8 +53,10 @@ is supplied. The wrapper uses an exact metaMDBG 1.4, spec-hash-addressed
 environment and validates its package inventory before execution. It reuses only
 structurally valid, sequence-bearing contigs plus the exact requested-k dynamic
 graph when the durable provenance contract matches the normalized input
-technology, ordered paths, file size/mtime metadata, `abundance_min`, and pinned
-toolchain identity; legacy plain contigs are normalized to `contigs.fasta.gz`.
+technology, ordered paths, file size/mtime metadata, input SHA-256 digests,
+`abundance_min`, and pinned top-level toolchain identity; legacy plain contigs
+are normalized to `contigs.fasta.gz`. Submitted jobs recompute every input
+digest after acquiring the runtime output lock and before reuse or execution.
 Any nonempty output directory without that contract is rejected rather than
 adopted as partial state.
 
@@ -94,8 +96,9 @@ provisioning or long-read assembly.
 unicycler_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
     output_dir = "results/unicycler",
 )
-unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-    ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
+    "reads_R1.fastq.gz",
+    "reads_R2.fastq.gz",
     "reads_ont.fastq.gz";
     config = unicycler_config,
 )
@@ -105,16 +108,17 @@ autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
     autocycler_read_type = :pacbio_hifi,
     output_dir = "results/autocycler-polished",
 )
-autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-    ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
+    "reads_R1.fastq.gz",
+    "reads_R2.fastq.gz",
     "reads_hifi.fastq.gz";
     config = autocycler_config,
 )
 ```
 
-Convenience aliases `assemble_unicycler_hybrid` and
-`assemble_autocycler_polished` accept R1, R2, and long reads as separate
-arguments.
+These documented convenience aliases accept R1, R2, and long reads as separate
+arguments. The typed `assemble_hybrid((r1, r2), long_reads; config)` entry point
+remains available when selecting workflows dynamically.
 
 ## Ownership and failure behavior
 
@@ -131,10 +135,12 @@ records them explicitly and therefore requires a persistent `output_dir`.
 
 Missing, empty, malformed, reordered, or count-changing inputs and corrected
 read sets fail before the combined assembler. Missing/empty corrected FASTQs,
-zero corrected read counts, absent assemblies, and absent Autocycler graphs
-also fail loudly. Persistent workflow and tool output roots are protected by
-adjacent interprocess locks held from output validation through artifact
-finalization and cleanup, so concurrent invocations cannot share a lifecycle.
+zero corrected read counts, absent assemblies, empty or invalid-DNA FASTA
+sequences, and malformed, duplicate-segment, or sequence-free reported GFAs
+also fail loudly before result provenance is built. Persistent workflow and tool
+output roots are protected by adjacent interprocess locks held from output
+validation through artifact finalization and cleanup, so concurrent invocations
+cannot share a lifecycle.
 
 ## Provenance and reproducibility
 

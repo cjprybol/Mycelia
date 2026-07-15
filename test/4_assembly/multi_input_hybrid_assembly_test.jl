@@ -1,4 +1,4 @@
-# td-06er: default-CI contract tests for multi-read-set hybrid assembly.
+# Default-CI contract tests for multi-read-set hybrid assembly.
 #
 # These tests use injected correction and assembler runners, so they exercise
 # pairing, routing, provenance, and cleanup without installing external tools.
@@ -226,7 +226,7 @@ const MULTI_INPUT_LONG = [
     multi_input_fastq_record("long_a", "ACGTACGTACGT"),
 ]
 
-Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
+Test.@testset "multi-input hybrid assembly contracts" begin
     Test.@testset "typed config validation and distinct contracts" begin
         unicycler = Mycelia.Rhizomorph.UnicyclerHybridConfig(
             short_read_tech = :ultima,
@@ -1464,6 +1464,174 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 retained_cleanup_roots = String[],
             )
         end
+    end
+
+    Test.@testset "semantic assembler artifacts fail loud" begin
+        mktempdir() do temp_dir
+            function wrap_semantic_result(
+                    result::NamedTuple,
+                    workflow::Symbol,
+            )::Mycelia.Rhizomorph.AssemblyResult
+                assembler = workflow == :autocycler_polished ?
+                            "autocycler" : "unicycler"
+                polishers = workflow == :autocycler_polished ?
+                            ["polypolish-careful", "pypolca-careful"] :
+                            String[]
+                return Mycelia.Rhizomorph._wrap_multi_input_assembly(
+                    result,
+                    workflow;
+                    input_counts = Dict(
+                        "short_r1" => 1,
+                        "short_r2" => 1,
+                        "long_reads" => 1,
+                    ),
+                    corrected_counts = Dict(
+                        "short_r1" => 1,
+                        "short_r2" => 1,
+                        "long_reads" => 1,
+                    ),
+                    corrected_paths = nothing,
+                    short_read_tech = :illumina,
+                    long_read_tech = :nanopore,
+                    correction_options = (; k = 13),
+                    correction_provenance = Dict{String, Any}(),
+                    output_dir = nothing,
+                    polishers,
+                    workflow_settings = Dict{String, Any}(
+                        "workflow" => String(workflow),
+                        "assembler" => assembler,
+                    ),
+                    input_technologies = Dict(
+                        "short_r1" => "illumina",
+                        "short_r2" => "illumina",
+                        "long_reads" => "nanopore",
+                    ),
+                    retained_cleanup_files = String[],
+                    retained_cleanup_roots = String[],
+                )
+            end
+
+            function semantic_result_shape(
+                    workflow::Symbol,
+                    outdir::AbstractString;
+                    assembly_records::Vector{Pair{String, String}} =
+                        ["contig_1" => "ACGT"],
+                    graph_contents::AbstractString =
+                        "H\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                    autocycler_records::Vector{Pair{String, String}} =
+                        ["autocycler" => "ACGT"],
+                    polypolish_records::Vector{Pair{String, String}} =
+                        ["polypolish" => "ACGT"],
+            )::NamedTuple
+                assembly = multi_input_write_fasta(
+                    joinpath(outdir, "assembly.fasta");
+                    records = assembly_records,
+                )
+                graph = joinpath(outdir, "assembly.gfa")
+                write(graph, graph_contents)
+                if workflow == :unicycler
+                    return (; assembly, graph)
+                end
+                autocycler_assembly = multi_input_write_fasta(
+                    joinpath(outdir, "autocycler_assembly.fasta");
+                    records = autocycler_records,
+                )
+                polypolish_assembly = multi_input_write_fasta(
+                    joinpath(outdir, "polypolish_assembly.fasta");
+                    records = polypolish_records,
+                )
+                pypolca_report = joinpath(outdir, "pypolca.report")
+                write(pypolca_report, "corrected_bases\t0\n")
+                return (;
+                    assembly,
+                    graph,
+                    autocycler_assembly,
+                    polypolish_assembly,
+                    pypolca_report,
+                )
+            end
+
+            semantic_cases = (
+                (
+                    message = "empty FASTA sequence",
+                    assembly_records = ["empty" => ""],
+                    graph_contents = "H\tVN:Z:1.0\nS\tempty\tACGT\n",
+                ),
+                (
+                    message = "invalid DNA at FASTA record",
+                    assembly_records = ["invalid" => "ACGTZ"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tinvalid\tACGT\n",
+                ),
+                (
+                    message = "malformed GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tbroken\n",
+                ),
+                (
+                    message = "no sequence-bearing GFA segments",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\n",
+                ),
+                (
+                    message = "duplicate GFA segment identifier",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tduplicate\tACGT\nS\tduplicate\tTGCA\n",
+                ),
+                (
+                    message = "invalid DNA for GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tinvalid\tACGTZ\n",
+                ),
+            )
+            for workflow in (:unicycler, :autocycler_polished)
+                for (case_index, semantic_case) in enumerate(semantic_cases)
+                    outdir = joinpath(
+                        temp_dir,
+                        "$(workflow)-semantic-case-$(case_index)",
+                    )
+                    result = semantic_result_shape(
+                        workflow,
+                        outdir;
+                        assembly_records = semantic_case.assembly_records,
+                        graph_contents = semantic_case.graph_contents,
+                    )
+                    test_throws_message(ErrorException, semantic_case.message) do
+                        wrap_semantic_result(result, workflow)
+                    end
+                end
+            end
+
+            invalid_autocycler = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "invalid-autocycler-intermediate");
+                autocycler_records = ["empty" => ""],
+            )
+            test_throws_message(ErrorException, "empty FASTA sequence") do
+                wrap_semantic_result(invalid_autocycler, :autocycler_polished)
+            end
+            invalid_polypolish = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "invalid-polypolish-intermediate");
+                polypolish_records = ["invalid" => "ACGTZ"],
+            )
+            test_throws_message(ErrorException, "invalid DNA at FASTA record") do
+                wrap_semantic_result(invalid_polypolish, :autocycler_polished)
+            end
+        end
+    end
+
+    Test.@testset "public hybrid aliases are documented" begin
+        unicycler_binding = Base.Docs.Binding(
+            Mycelia.Rhizomorph,
+            :assemble_unicycler_hybrid,
+        )
+        autocycler_binding = Base.Docs.Binding(
+            Mycelia.Rhizomorph,
+            :assemble_autocycler_polished,
+        )
+        Test.@test Base.Docs.doc(unicycler_binding) !== nothing
+        Test.@test Base.Docs.doc(autocycler_binding) !== nothing
     end
 
     Test.@testset "public dispatch fails before external tools" begin

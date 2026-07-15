@@ -2339,9 +2339,10 @@ after reading the contigs; when the caller supplied `output_dir`, both are left 
 place under it. Dispatched only via `assemble_genome` when `config.layout == :olc`
 (the constructor guarantees that implies `corrector == :iterative`).
 
-Both arms are wired: short-read (:megahit/:metaspades, td-yymj) and long-read
-(:flye/:metaflye/:canu/:hifiasm, td-wvto), routed by sequencing_tech. The
-two-read-set hybrid arm (short+long combined) is td-06er.
+Both single-input arms are wired: short-read (:megahit/:metaspades, td-yymj)
+and long-read (:flye/:metaflye/:canu/:hifiasm, td-wvto), routed by
+sequencing_tech. Paired-short R1/R2 plus long reads use the separate
+three-input `assemble_hybrid` contract below.
 """
 function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     tool = _resolve_olc_tool(config)
@@ -3537,6 +3538,118 @@ function _require_tool_artifact(
     return normalized_path
 end
 
+function _require_valid_multi_input_fasta(
+        path::AbstractString,
+        label::AbstractString,
+)::Vector{FASTX.FASTA.Record}
+    normalized_path = _require_tool_artifact(path, label)
+    islink(normalized_path) && error(
+        "$(label) must be a regular, non-symlink FASTA file: $(normalized_path).",
+    )
+    reader = try
+        Mycelia.open_fastx(normalized_path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    records = FASTX.FASTA.Record[]
+    try
+        for (record_number, record) in enumerate(reader)
+            record isa FASTX.FASTA.Record || error(
+                "$(label) is not valid FASTA: $(normalized_path).",
+            )
+            sequence = FASTX.sequence(String, record)
+            isempty(sequence) && error(
+                "$(label) contains an empty FASTA sequence at record " *
+                "$(record_number): $(normalized_path).",
+            )
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch caught
+                caught isa InterruptException && rethrow()
+                error(
+                    "$(label) contains invalid DNA at FASTA record " *
+                    "$(record_number): $(normalized_path). Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            push!(records, record)
+        end
+    catch caught
+        caught isa InterruptException && rethrow()
+        if caught isa ErrorException && startswith(caught.msg, String(label))
+            rethrow()
+        end
+        error(
+            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+            sprint(showerror, caught),
+        )
+    finally
+        close(reader)
+    end
+    isempty(records) && error(
+        "$(label) contains no FASTA records: $(normalized_path).",
+    )
+    return records
+end
+
+function _require_valid_multi_input_gfa(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_tool_artifact(path, label)
+    islink(normalized_path) && error(
+        "$(label) must be a regular, non-symlink GFA file: $(normalized_path).",
+    )
+    segment_identifiers = Set{String}()
+    open(normalized_path, "r") do input
+        for (line_number, line) in enumerate(eachline(input))
+            isempty(line) && continue
+            fields = split(line, '\t'; keepempty = true)
+            first(fields) == "S" || continue
+            length(fields) >= 3 || error(
+                "$(label) has a malformed GFA segment at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            identifier = String(fields[2])
+            sequence = String(fields[3])
+            isempty(identifier) && error(
+                "$(label) has an empty GFA segment identifier at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            identifier in segment_identifiers && error(
+                "$(label) has duplicate GFA segment identifier " *
+                "$(repr(identifier)): $(normalized_path).",
+            )
+            if isempty(sequence) || sequence == "*"
+                error(
+                    "$(label) has no sequence for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path).",
+                )
+            end
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch caught
+                caught isa InterruptException && rethrow()
+                error(
+                    "$(label) has invalid DNA for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path). Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            push!(segment_identifiers, identifier)
+        end
+    end
+    isempty(segment_identifiers) && error(
+        "$(label) contains no sequence-bearing GFA segments: " *
+        "$(normalized_path).",
+    )
+    return normalized_path
+end
+
 function _persistent_tool_artifacts(
         result::NamedTuple,
         output_dir::Union{Nothing, String},
@@ -3569,16 +3682,10 @@ function _read_external_fasta(path::AbstractString)::Vector{FASTX.FASTA.Record}
     if !isfile(path) || filesize(path) == 0
         error("external assembler produced no non-empty contigs FASTA at $(path).")
     end
-    reader = Mycelia.open_fastx(path)
-    try
-        records = collect(reader)
-        if !all(record -> record isa FASTX.FASTA.Record, records)
-            error("external assembler output is not FASTA: $(path).")
-        end
-        return FASTX.FASTA.Record[record for record in records]
-    finally
-        close(reader)
-    end
+    return _require_valid_multi_input_fasta(
+        path,
+        "external assembler contigs FASTA",
+    )
 end
 
 function _wrap_multi_input_assembly(
@@ -3606,8 +3713,28 @@ function _wrap_multi_input_assembly(
     contigs = [FASTX.sequence(String, record) for record in records]
     contig_names = [String(FASTX.identifier(record)) for record in records]
     graph_path = _artifact_graph_path(result)
-    if graph_path !== nothing && (!isfile(graph_path) || filesize(graph_path) == 0)
-        error("multi-input workflow :$(workflow) produced no graph at $(graph_path).")
+    if graph_path !== nothing
+        if !isfile(graph_path) || filesize(graph_path) == 0
+            error(
+                "multi-input workflow :$(workflow) produced no graph at " *
+                "$(graph_path).",
+            )
+        end
+        _require_valid_multi_input_gfa(
+            graph_path,
+            "multi-input workflow :$(workflow) graph",
+        )
+    end
+    for (field, label) in (
+            :autocycler_assembly => "Autocycler consensus FASTA",
+            :polypolish_assembly => "Polypolish assembly FASTA",
+    )
+        if hasproperty(result, field)
+            _require_valid_multi_input_fasta(
+                String(getproperty(result, field)),
+                label,
+            )
+        end
     end
     assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
     tool_artifacts = _persistent_tool_artifacts(result, output_dir)
@@ -3892,6 +4019,18 @@ function assemble_hybrid(
     )
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Correct paired-short R1/R2 and long reads independently, then assemble all
+three corrected FASTQs with Unicycler.
+
+This convenience entry point is equivalent to `assemble_hybrid` with an
+`UnicyclerHybridConfig`. Inputs may be FASTQ paths, collections of FASTQ paths,
+or in-memory FASTQ records. Mate identifiers and counts are validated before
+Unicycler runs. Use `config.output_dir = nothing` for ephemeral artifacts or a
+new, empty persistent directory to retain corrected FASTQs and tool outputs.
+"""
 function assemble_unicycler_hybrid(
         short_r1::Any,
         short_r2::Any,
@@ -3901,6 +4040,17 @@ function assemble_unicycler_hybrid(
     return assemble_hybrid((short_r1, short_r2), long_reads, config)
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Correct paired-short R1/R2 and long reads independently, build an Autocycler
+long-read consensus, and polish it with Polypolish followed by careful Pypolca.
+
+This convenience entry point is equivalent to `assemble_hybrid` with an
+`AutocyclerPolishConfig`. `config.autocycler_read_type` selects the long-read
+assembly and correction chemistry. Use a new, empty persistent `output_dir`
+when retaining corrected FASTQs or polishing intermediates.
+"""
 function assemble_autocycler_polished(
         short_r1::Any,
         short_r2::Any,
