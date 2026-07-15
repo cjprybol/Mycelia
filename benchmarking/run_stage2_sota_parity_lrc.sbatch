@@ -27,6 +27,14 @@
 # run. 24h is generous for 4 arms on a 4.64 Mb genome @ 50x plus first-run conda
 # installs; SPAdes is the long pole. Re-submit to restart from scratch.
 #
+# MEMORY: the ecoli_k12 @ 50x run OOM-killed on a standard lr6 node (~95 GB) at
+# MaxRSS ~95 GB — the Rhizomorph native arms do not fit E. coli at 50x in 95 GB
+# (tracked as a separate scaling finding). The #SBATCH partition below is lr6
+# (fine for phix/lambda). For the ecoli_k12 parity run, submit to a big-memory
+# node instead:
+#   sbatch --partition=lr_bigmem --mem=1400G run_stage2_sota_parity_lrc.sbatch
+# (pc_mfnanofabio has lr_bigmem [1.5 TB] and lr8 [773 GB] under qos lr_normal.)
+#
 # Prereq (once, on a login node): benchmarking/hpc-setup.sh instantiates deps so
 # Julia can load Mycelia (avoids the "Arrow not installed" first-run failure).
 # Run from benchmarking/:  sbatch run_stage2_sota_parity_lrc.sbatch
