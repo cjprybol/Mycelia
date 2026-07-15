@@ -1,0 +1,6 @@
+seed,nanopore_identity,illumina_identity,nanopore_wins_or_ties,identity_delta,mean_nanopore_identity,mean_illumina_identity,wins_or_ties,mean_nanopore_beats_illumina,majority_wins_or_ties,mean_nanopore_above_0_80,accuracy_used_for_classifier
+1,0.95,0.9666666666666667,false,-0.01666666666666672,0.9467759562841529,0.9334426229508196,4,true,true,true,false
+2,0.9672131147540983,0.9672131147540983,true,0.0,0.9467759562841529,0.9334426229508196,4,true,true,true,false
+3,1.0,1.0,true,0.0,0.9467759562841529,0.9334426229508196,4,true,true,true,false
+4,0.8166666666666667,0.7333333333333333,true,0.08333333333333337,0.9467759562841529,0.9334426229508196,4,true,true,true,false
+5,1.0,1.0,true,0.0,0.9467759562841529,0.9334426229508196,4,true,true,true,false
