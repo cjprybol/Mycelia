@@ -51,11 +51,50 @@ prior `d3a4ed00` measurements rather than extrapolating from them or the earlier
   `0.9334426230`, with nanopore
   winning or tying `4/5` seeds. Accuracy is a
   validation outcome only and is never an input to the runtime classifier.
-- `oracle_matrix_capture.jl` is canonical ignored generation tooling preserved
+- `oracle_matrix_capture.jl` is the exact capture-runner input preserved
   by the later artifact commit. Prior snapshot copies are evidence rather than
   benchmark implementation. The wrapper included the committed oracle test
   unchanged while running against `20400a02` and does not relabel the
   measured implementation.
+
+### Reproducing the oracle capture
+
+The preserved runner's relative paths are valid only from its original ignored
+canonical directory, `benchmarking/results/td-jt7r-2-oracle-matrix/`. **Do not
+run the archived copy in place:** it would try to replace the checked-in CSVs
+before its relocated path lookup fails. To reproduce the exact source-bound
+capture without changing this snapshot:
+
+```bash
+set -euo pipefail
+REPO=$(git rev-parse --show-toplevel)
+TMP_PARENT=$(mktemp -d "${TMPDIR:-/tmp}/mycelia-td-jt7r-2.XXXXXX")
+SOURCE_WT="$TMP_PARENT/source"
+test -f "$REPO/Manifest.toml"
+printf '%s  %s\n' \
+  bd814ac9d374e22d43fc391f243e1527041728f5cacf2ca7b071cc25b52e09e3 \
+  "$REPO/Manifest.toml" | shasum -a 256 -c -
+git -C "$REPO" worktree add "$SOURCE_WT" \
+  20400a02027daa3f8b8070ae8a25002ecb12a778
+cp "$REPO/Manifest.toml" "$SOURCE_WT/Manifest.toml"
+mkdir -p "$SOURCE_WT/benchmarking/results/td-jt7r-2-oracle-matrix"
+git -C "$REPO" show 438aeba3e59e469c7e1d8b43cd8ca494099bfa37:benchmarking/results/td_jt7r_2_evidence_20400a02/oracle-matrix/oracle_matrix_capture.jl \
+  > "$SOURCE_WT/benchmarking/results/td-jt7r-2-oracle-matrix/oracle_matrix_capture.jl"
+cd "$SOURCE_WT"
+LD_LIBRARY_PATH="" julia --project=. \
+  benchmarking/results/td-jt7r-2-oracle-matrix/oracle_matrix_capture.jl
+printf 'Reproduction worktree retained at %s\n' "$SOURCE_WT"
+# After inspecting the ignored outputs:
+# cd "$REPO"
+# git worktree remove --force "$SOURCE_WT"
+# rmdir "$TMP_PARENT"
+```
+
+This restores the hash-bound dependency manifest and runner to their original
+locations and writes only to the ignored canonical output directory in the
+clean `20400a02` worktree. The rerun manifest will still describe its actual
+host and Julia runtime. Exact reproduction therefore requires access to the
+ignored Manifest with the recorded SHA-256 above.
 
 ## Claim boundary
 
