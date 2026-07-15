@@ -2638,26 +2638,118 @@ function _canonical_pair_identifier(identifier::AbstractString)::String
     return replace(first_token, r"/[12]$" => "")
 end
 
-function _explicit_pair_role(identifier::AbstractString)::Union{Nothing, Int}
+function _identifier_pair_role(
+        identifier::AbstractString,
+)::Union{Nothing, Int}
     first_token = first(split(String(identifier)))
     role_match = match(r"/([12])$", first_token)
     return role_match === nothing ? nothing : parse(Int, only(role_match.captures))
 end
 
+function _casava_pair_role(
+        description::AbstractString,
+)::Union{Nothing, Int}
+    description_tokens = split(String(description))
+    length(description_tokens) >= 2 || return nothing
+    role_match = match(
+        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
+        description_tokens[2],
+    )
+    return role_match === nothing ? nothing :
+           parse(Int, something(only(role_match.captures)))
+end
+
+function _explicit_pair_role(
+        identifier::AbstractString,
+        description::AbstractString = "",
+)::Union{Nothing, Int}
+    identifier_role = _identifier_pair_role(identifier)
+    casava_role = _casava_pair_role(description)
+    if identifier_role !== nothing && casava_role !== nothing &&
+       identifier_role != casava_role
+        throw(ArgumentError(
+            "FASTQ identifier and CASAVA description contain conflicting " *
+            "explicit mate roles: identifier=$(repr(String(identifier))), " *
+            "description=$(repr(String(description))).",
+        ))
+    end
+    return identifier_role === nothing ? casava_role : identifier_role
+end
+
+struct _ReadIdentity
+    identifier::String
+    description::String
+end
+
+function _read_identity(record::Any)::_ReadIdentity
+    return _ReadIdentity(
+        String(FASTX.identifier(record)),
+        String(FASTX.description(record)),
+    )
+end
+
 function _validate_explicit_pair_roles(
-        r1_identifier::AbstractString,
-        r2_identifier::AbstractString,
+        r1_identity::_ReadIdentity,
+        r2_identity::_ReadIdentity,
         stage::AbstractString,
         record_number::Int,
 )::Nothing
-    r1_role = _explicit_pair_role(r1_identifier)
-    r2_role = _explicit_pair_role(r2_identifier)
+    r1_role = _explicit_pair_role(
+        r1_identity.identifier,
+        r1_identity.description,
+    )
+    r2_role = _explicit_pair_role(
+        r2_identity.identifier,
+        r2_identity.description,
+    )
     roles_valid = (r1_role === nothing && r2_role === nothing) ||
                   (r1_role == 1 && r2_role == 2)
     roles_valid || throw(ArgumentError(
         "$(stage) paired short reads have invalid explicit mate roles at " *
-        "record $(record_number): R1=$(repr(r1_identifier)), " *
-        "R2=$(repr(r2_identifier)); expected /1 then /2.",
+        "record $(record_number): R1=$(repr(r1_identity.identifier)), " *
+        "R2=$(repr(r2_identity.identifier)); expected R1 role 1 then R2 " *
+        "role 2 from /1,/2 suffixes or CASAVA descriptions.",
+    ))
+    return nothing
+end
+
+function _validate_corrected_explicit_pair_roles(
+        input_r1_identity::_ReadIdentity,
+        input_r2_identity::_ReadIdentity,
+        corrected_r1_identity::_ReadIdentity,
+        corrected_r2_identity::_ReadIdentity,
+        record_number::Int,
+)::Nothing
+    input_r1_role = _explicit_pair_role(
+        input_r1_identity.identifier,
+        input_r1_identity.description,
+    )
+    input_r2_role = _explicit_pair_role(
+        input_r2_identity.identifier,
+        input_r2_identity.description,
+    )
+    corrected_r1_role = _explicit_pair_role(
+        corrected_r1_identity.identifier,
+        corrected_r1_identity.description,
+    )
+    corrected_r2_role = _explicit_pair_role(
+        corrected_r2_identity.identifier,
+        corrected_r2_identity.description,
+    )
+    effective_r1_role = corrected_r1_role === nothing ?
+                        input_r1_role : corrected_r1_role
+    effective_r2_role = corrected_r2_role === nothing ?
+                        input_r2_role : corrected_r2_role
+    roles_valid =
+        (effective_r1_role === nothing && effective_r2_role === nothing) ||
+        (effective_r1_role == 1 && effective_r2_role == 2)
+    roles_valid || throw(ArgumentError(
+        "corrected paired short reads have invalid explicit mate roles at " *
+        "record $(record_number): " *
+        "R1=$(repr(corrected_r1_identity.identifier)), " *
+        "R2=$(repr(corrected_r2_identity.identifier)); expected R1 role 1 " *
+        "then R2 role 2, allowing omitted corrected descriptions to inherit " *
+        "their validated input roles.",
     ))
     return nothing
 end
@@ -2687,20 +2779,20 @@ function _read_identifier_cursor(records::Any)::_RecordReadIdentifierCursor
     return _RecordReadIdentifierCursor(records, 1)
 end
 
-function _next_read_identifier!(
+function _next_read_identity!(
         cursor::_RecordReadIdentifierCursor,
-)::Union{Nothing, String}
+)::Union{Nothing, _ReadIdentity}
     if cursor.record_index > length(cursor.records)
         return nothing
     end
     record = cursor.records[cursor.record_index]
     cursor.record_index += 1
-    return String(FASTX.identifier(record))
+    return _read_identity(record)
 end
 
-function _next_read_identifier!(
+function _next_read_identity!(
         cursor::_FileReadIdentifierCursor,
-)::Union{Nothing, String}
+)::Union{Nothing, _ReadIdentity}
     while cursor.source_index <= length(cursor.sources)
         if cursor.reader === nothing
             cursor.reader = Mycelia.open_fastx(cursor.sources[cursor.source_index])
@@ -2722,7 +2814,7 @@ function _next_read_identifier!(
         end
 
         record, cursor.reader_state = next_record
-        return String(FASTX.identifier(record))
+        return _read_identity(record)
     end
     return nothing
 end
@@ -2747,7 +2839,7 @@ function _drain_read_identifier_cursor!(
         cursor::_AbstractReadIdentifierCursor,
         count::Int,
 )::Int
-    while _next_read_identifier!(cursor) !== nothing
+    while _next_read_identity!(cursor) !== nothing
         count += 1
     end
     return count
@@ -2797,17 +2889,17 @@ function _validate_paired_reads(
     paired_count = 0
     try
         while true
-            raw_r1_identifier = _next_read_identifier!(r1_cursor)
-            raw_r2_identifier = _next_read_identifier!(r2_cursor)
-            if raw_r1_identifier === nothing && raw_r2_identifier === nothing
+            r1_identity = _next_read_identity!(r1_cursor)
+            r2_identity = _next_read_identity!(r2_cursor)
+            if r1_identity === nothing && r2_identity === nothing
                 paired_count > 0 || throw(ArgumentError(
                     "$(stage) paired short reads must be non-empty; observed " *
                     "R1=0, R2=0.",
                 ))
                 return paired_count
-            elseif raw_r1_identifier === nothing || raw_r2_identifier === nothing
-                r1_count = paired_count + (raw_r1_identifier === nothing ? 0 : 1)
-                r2_count = paired_count + (raw_r2_identifier === nothing ? 0 : 1)
+            elseif r1_identity === nothing || r2_identity === nothing
+                r1_count = paired_count + (r1_identity === nothing ? 0 : 1)
+                r2_count = paired_count + (r2_identity === nothing ? 0 : 1)
                 r1_count = _drain_read_identifier_cursor!(r1_cursor, r1_count)
                 r2_count = _drain_read_identifier_cursor!(r2_cursor, r2_count)
                 throw(ArgumentError(
@@ -2818,20 +2910,20 @@ function _validate_paired_reads(
 
             paired_count += 1
             _validate_explicit_pair_roles(
-                raw_r1_identifier,
-                raw_r2_identifier,
+                r1_identity,
+                r2_identity,
                 stage,
                 paired_count,
             )
-            r1_identifier = _canonical_pair_identifier(raw_r1_identifier)
-            r2_identifier = _canonical_pair_identifier(raw_r2_identifier)
+            r1_identifier = _canonical_pair_identifier(r1_identity.identifier)
+            r2_identifier = _canonical_pair_identifier(r2_identity.identifier)
             if r1_identifier == r2_identifier
                 continue
             end
             throw(ArgumentError(
                 "$(stage) paired short reads are out of sync at record " *
-                "$(paired_count): R1=$(repr(raw_r1_identifier)), " *
-                "R2=$(repr(raw_r2_identifier)).",
+                "$(paired_count): R1=$(repr(r1_identity.identifier)), " *
+                "R2=$(repr(r2_identity.identifier)).",
             ))
         end
     finally
@@ -2850,14 +2942,14 @@ function _validate_corrected_identifiers_preserved(
     record_count = 0
     try
         while true
-            input_identifier = _next_read_identifier!(input_cursor)
-            corrected_identifier = _next_read_identifier!(corrected_cursor)
-            if input_identifier === nothing && corrected_identifier === nothing
+            input_identity = _next_read_identity!(input_cursor)
+            corrected_identity = _next_read_identity!(corrected_cursor)
+            if input_identity === nothing && corrected_identity === nothing
                 return record_count
-            elseif input_identifier === nothing || corrected_identifier === nothing
-                input_count = record_count + (input_identifier === nothing ? 0 : 1)
+            elseif input_identity === nothing || corrected_identity === nothing
+                input_count = record_count + (input_identity === nothing ? 0 : 1)
                 corrected_count =
-                    record_count + (corrected_identifier === nothing ? 0 : 1)
+                    record_count + (corrected_identity === nothing ? 0 : 1)
                 input_count = _drain_read_identifier_cursor!(
                     input_cursor,
                     input_count,
@@ -2873,11 +2965,12 @@ function _validate_corrected_identifiers_preserved(
             end
 
             record_count += 1
-            input_identifier == corrected_identifier && continue
+            input_identity.identifier == corrected_identity.identifier && continue
             throw(ArgumentError(
                 "$(label) correction changed read order or identifier at " *
-                "record $(record_count): input=$(repr(input_identifier)), " *
-                "corrected=$(repr(corrected_identifier)).",
+                "record $(record_count): " *
+                "input=$(repr(input_identity.identifier)), " *
+                "corrected=$(repr(corrected_identity.identifier)).",
             ))
         end
     finally
@@ -2931,60 +3024,70 @@ function _validate_corrected_pair_preserved(
     first_r2_mismatch = nothing
     try
         while true
-            input_r1_identifier = _next_read_identifier!(input_r1_cursor)
-            input_r2_identifier = _next_read_identifier!(input_r2_cursor)
-            corrected_r1_identifier = _next_read_identifier!(corrected_r1_cursor)
-            corrected_r2_identifier = _next_read_identifier!(corrected_r2_cursor)
+            input_r1_identity = _next_read_identity!(input_r1_cursor)
+            input_r2_identity = _next_read_identity!(input_r2_cursor)
+            corrected_r1_identity = _next_read_identity!(corrected_r1_cursor)
+            corrected_r2_identity = _next_read_identity!(corrected_r2_cursor)
 
-            input_r1_identifier === nothing || (input_r1_count += 1)
-            input_r2_identifier === nothing || (input_r2_count += 1)
-            corrected_r1_identifier === nothing || (corrected_r1_count += 1)
-            corrected_r2_identifier === nothing || (corrected_r2_count += 1)
+            input_r1_identity === nothing || (input_r1_count += 1)
+            input_r2_identity === nothing || (input_r2_count += 1)
+            corrected_r1_identity === nothing || (corrected_r1_count += 1)
+            corrected_r2_identity === nothing || (corrected_r2_count += 1)
 
-            if corrected_r1_identifier !== nothing &&
-               corrected_r2_identifier !== nothing
-                _validate_explicit_pair_roles(
-                    corrected_r1_identifier,
-                    corrected_r2_identifier,
-                    "corrected",
-                    corrected_r1_count,
-                )
-                if _canonical_pair_identifier(corrected_r1_identifier) !=
-                   _canonical_pair_identifier(corrected_r2_identifier)
+            if corrected_r1_identity !== nothing &&
+               corrected_r2_identity !== nothing
+                if input_r1_identity !== nothing && input_r2_identity !== nothing
+                    _validate_corrected_explicit_pair_roles(
+                        input_r1_identity,
+                        input_r2_identity,
+                        corrected_r1_identity,
+                        corrected_r2_identity,
+                        corrected_r1_count,
+                    )
+                else
+                    _validate_explicit_pair_roles(
+                        corrected_r1_identity,
+                        corrected_r2_identity,
+                        "corrected",
+                        corrected_r1_count,
+                    )
+                end
+                if _canonical_pair_identifier(corrected_r1_identity.identifier) !=
+                   _canonical_pair_identifier(corrected_r2_identity.identifier)
                     throw(ArgumentError(
                         "corrected paired short reads are out of sync at record " *
                         "$(corrected_r1_count): " *
-                        "R1=$(repr(corrected_r1_identifier)), " *
-                        "R2=$(repr(corrected_r2_identifier)).",
+                        "R1=$(repr(corrected_r1_identity.identifier)), " *
+                        "R2=$(repr(corrected_r2_identity.identifier)).",
                     ))
                 end
             end
 
             if first_r1_mismatch === nothing &&
-               input_r1_identifier !== nothing &&
-               corrected_r1_identifier !== nothing &&
-               input_r1_identifier != corrected_r1_identifier
+               input_r1_identity !== nothing &&
+               corrected_r1_identity !== nothing &&
+               input_r1_identity.identifier != corrected_r1_identity.identifier
                 first_r1_mismatch = (
                     input_r1_count,
-                    input_r1_identifier,
-                    corrected_r1_identifier,
+                    input_r1_identity.identifier,
+                    corrected_r1_identity.identifier,
                 )
             end
             if first_r2_mismatch === nothing &&
-               input_r2_identifier !== nothing &&
-               corrected_r2_identifier !== nothing &&
-               input_r2_identifier != corrected_r2_identifier
+               input_r2_identity !== nothing &&
+               corrected_r2_identity !== nothing &&
+               input_r2_identity.identifier != corrected_r2_identity.identifier
                 first_r2_mismatch = (
                     input_r2_count,
-                    input_r2_identifier,
-                    corrected_r2_identifier,
+                    input_r2_identity.identifier,
+                    corrected_r2_identity.identifier,
                 )
             end
 
-            if input_r1_identifier === nothing &&
-               input_r2_identifier === nothing &&
-               corrected_r1_identifier === nothing &&
-               corrected_r2_identifier === nothing
+            if input_r1_identity === nothing &&
+               input_r2_identity === nothing &&
+               corrected_r1_identity === nothing &&
+               corrected_r2_identity === nothing
                 break
             end
         end
@@ -3538,6 +3641,10 @@ function _require_tool_artifact(
     return normalized_path
 end
 
+function _is_multi_input_iupac_dna(sequence::AbstractString)::Bool
+    return occursin(r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$", sequence)
+end
+
 function _require_valid_multi_input_fasta(
         path::AbstractString,
         label::AbstractString,
@@ -3556,14 +3663,28 @@ function _require_valid_multi_input_fasta(
         )
     end
     records = FASTX.FASTA.Record[]
+    contig_identifiers = Set{String}()
     try
         for (record_number, record) in enumerate(reader)
             record isa FASTX.FASTA.Record || error(
                 "$(label) is not valid FASTA: $(normalized_path).",
             )
+            identifier = String(FASTX.identifier(record))
+            isempty(identifier) && error(
+                "$(label) contains an empty FASTA identifier at record " *
+                "$(record_number): $(normalized_path).",
+            )
+            identifier in contig_identifiers && error(
+                "$(label) contains duplicate FASTA identifier " *
+                "$(repr(identifier)): $(normalized_path).",
+            )
             sequence = FASTX.sequence(String, record)
             isempty(sequence) && error(
                 "$(label) contains an empty FASTA sequence at record " *
+                "$(record_number): $(normalized_path).",
+            )
+            _is_multi_input_iupac_dna(sequence) || error(
+                "$(label) contains invalid DNA at FASTA record " *
                 "$(record_number): $(normalized_path).",
             )
             try
@@ -3576,6 +3697,7 @@ function _require_valid_multi_input_fasta(
                     sprint(showerror, caught),
                 )
             end
+            push!(contig_identifiers, identifier)
             push!(records, record)
         end
     catch caught
@@ -3596,6 +3718,31 @@ function _require_valid_multi_input_fasta(
     return records
 end
 
+function _is_valid_multi_input_gfa_overlap(overlap::AbstractString)::Bool
+    return overlap == "*" ||
+           occursin(r"^(?:[0-9]+[MIDNSHPX=])+$", overlap)
+end
+
+function _validate_multi_input_gfa_tags(
+        fields::AbstractVector{<:AbstractString},
+        first_tag_index::Int,
+        record_label::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::Nothing
+    for field_index in first_tag_index:length(fields)
+        occursin(
+            r"^[A-Za-z][A-Za-z0-9]:[A-Za-z]:.*$",
+            fields[field_index],
+        ) || error(
+            "$(label) has a malformed GFA $(record_label) tag at line " *
+            "$(line_number): $(path).",
+        )
+    end
+    return nothing
+end
+
 function _require_valid_multi_input_gfa(
         path::AbstractString,
         label::AbstractString,
@@ -3605,48 +3752,179 @@ function _require_valid_multi_input_gfa(
         "$(label) must be a regular, non-symlink GFA file: $(normalized_path).",
     )
     segment_identifiers = Set{String}()
+    path_identifiers = Set{String}()
+    segment_references = Tuple{String, Int, String}[]
     open(normalized_path, "r") do input
         for (line_number, line) in enumerate(eachline(input))
             isempty(line) && continue
+            startswith(line, '#') && continue
             fields = split(line, '\t'; keepempty = true)
-            first(fields) == "S" || continue
-            length(fields) >= 3 || error(
-                "$(label) has a malformed GFA segment at line " *
-                "$(line_number): $(normalized_path).",
-            )
-            identifier = String(fields[2])
-            sequence = String(fields[3])
-            isempty(identifier) && error(
-                "$(label) has an empty GFA segment identifier at line " *
-                "$(line_number): $(normalized_path).",
-            )
-            identifier in segment_identifiers && error(
-                "$(label) has duplicate GFA segment identifier " *
-                "$(repr(identifier)): $(normalized_path).",
-            )
-            if isempty(sequence) || sequence == "*"
-                error(
-                    "$(label) has no sequence for GFA segment " *
+            record_type = first(fields)
+            if record_type == "H"
+                _validate_multi_input_gfa_tags(
+                    fields,
+                    2,
+                    "header",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+            elseif record_type == "S"
+                length(fields) >= 3 || error(
+                    "$(label) has a malformed GFA segment at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                identifier = String(fields[2])
+                sequence = String(fields[3])
+                isempty(identifier) && error(
+                    "$(label) has an empty GFA segment identifier at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                identifier in segment_identifiers && error(
+                    "$(label) has duplicate GFA segment identifier " *
                     "$(repr(identifier)): $(normalized_path).",
                 )
-            end
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch caught
-                caught isa InterruptException && rethrow()
-                error(
+                if isempty(sequence) || sequence == "*"
+                    error(
+                        "$(label) has no sequence for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path).",
+                    )
+                end
+                _is_multi_input_iupac_dna(sequence) || error(
                     "$(label) has invalid DNA for GFA segment " *
-                    "$(repr(identifier)): $(normalized_path). Cause: " *
-                    sprint(showerror, caught),
+                    "$(repr(identifier)): $(normalized_path).",
+                )
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch caught
+                    caught isa InterruptException && rethrow()
+                    error(
+                        "$(label) has invalid DNA for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path). Cause: " *
+                        sprint(showerror, caught),
+                    )
+                end
+                _validate_multi_input_gfa_tags(
+                    fields,
+                    4,
+                    "segment",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(segment_identifiers, identifier)
+            elseif record_type == "L"
+                length(fields) >= 6 || error(
+                    "$(label) has a malformed GFA link at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                from_identifier = String(fields[2])
+                from_orientation = String(fields[3])
+                to_identifier = String(fields[4])
+                to_orientation = String(fields[5])
+                overlap = String(fields[6])
+                if isempty(from_identifier) || isempty(to_identifier) ||
+                   !(from_orientation in ("+", "-")) ||
+                   !(to_orientation in ("+", "-")) ||
+                   !_is_valid_multi_input_gfa_overlap(overlap)
+                    error(
+                        "$(label) has a malformed GFA link at line " *
+                        "$(line_number): $(normalized_path).",
+                    )
+                end
+                _validate_multi_input_gfa_tags(
+                    fields,
+                    7,
+                    "link",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(segment_references, (
+                    from_identifier,
+                    line_number,
+                    "link",
+                ))
+                push!(segment_references, (
+                    to_identifier,
+                    line_number,
+                    "link",
+                ))
+            elseif record_type == "P"
+                length(fields) >= 4 || error(
+                    "$(label) has a malformed GFA path at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                path_identifier = String(fields[2])
+                isempty(path_identifier) && error(
+                    "$(label) has a malformed GFA path at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                path_identifier in path_identifiers && error(
+                    "$(label) has duplicate GFA path identifier " *
+                    "$(repr(path_identifier)): $(normalized_path).",
+                )
+                path_segments = split(fields[3], ','; keepempty = true)
+                isempty(path_segments) && error(
+                    "$(label) has a malformed GFA path at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                for path_segment in path_segments
+                    segment_match = match(r"^(.+)[+-]$", path_segment)
+                    segment_match === nothing && error(
+                        "$(label) has a malformed GFA path at line " *
+                        "$(line_number): $(normalized_path).",
+                    )
+                    push!(segment_references, (
+                        String(only(segment_match.captures)),
+                        line_number,
+                        "path",
+                    ))
+                end
+                path_overlaps = String(fields[4])
+                if path_overlaps != "*"
+                    overlaps = split(path_overlaps, ','; keepempty = true)
+                    if length(overlaps) != max(length(path_segments) - 1, 0) ||
+                       any(
+                            overlap ->
+                                !_is_valid_multi_input_gfa_overlap(overlap),
+                            overlaps,
+                        )
+                        error(
+                            "$(label) has a malformed GFA path at line " *
+                            "$(line_number): $(normalized_path).",
+                        )
+                    end
+                end
+                _validate_multi_input_gfa_tags(
+                    fields,
+                    5,
+                    "path",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(path_identifiers, path_identifier)
+            else
+                error(
+                    "$(label) has unknown GFA record type " *
+                    "$(repr(record_type)) at line $(line_number): " *
+                    "$(normalized_path).",
                 )
             end
-            push!(segment_identifiers, identifier)
         end
     end
     isempty(segment_identifiers) && error(
         "$(label) contains no sequence-bearing GFA segments: " *
         "$(normalized_path).",
     )
+    for (identifier, line_number, record_label) in segment_references
+        identifier in segment_identifiers || error(
+            "$(label) has a dangling GFA $(record_label) reference to " *
+            "unknown segment $(repr(identifier)) at line " *
+            "$(line_number): $(normalized_path).",
+        )
+    end
     return normalized_path
 end
 
@@ -3688,6 +3966,24 @@ function _read_external_fasta(path::AbstractString)::Vector{FASTX.FASTA.Record}
     )
 end
 
+function _required_multi_input_result_path(
+        result::NamedTuple,
+        workflow::Symbol,
+        field::Symbol,
+        label::AbstractString,
+)::String
+    hasproperty(result, field) || error(
+        "multi-input workflow :$(workflow) did not report required $(label) " *
+        "field :$(field).",
+    )
+    path = getproperty(result, field)
+    path isa AbstractString || error(
+        "multi-input workflow :$(workflow) reported a non-path $(label) " *
+        "field :$(field).",
+    )
+    return String(path)
+end
+
 function _wrap_multi_input_assembly(
         result::NamedTuple,
         workflow::Symbol;
@@ -3712,7 +4008,16 @@ function _wrap_multi_input_assembly(
     )
     contigs = [FASTX.sequence(String, record) for record in records]
     contig_names = [String(FASTX.identifier(record)) for record in records]
-    graph_path = _artifact_graph_path(result)
+    graph_path = if workflow in (:unicycler, :autocycler_polished)
+        _required_multi_input_result_path(
+            result,
+            workflow,
+            :graph,
+            "graph",
+        )
+    else
+        _artifact_graph_path(result)
+    end
     if graph_path !== nothing
         if !isfile(graph_path) || filesize(graph_path) == 0
             error(
@@ -3729,12 +4034,38 @@ function _wrap_multi_input_assembly(
             :autocycler_assembly => "Autocycler consensus FASTA",
             :polypolish_assembly => "Polypolish assembly FASTA",
     )
-        if hasproperty(result, field)
+        if workflow == :autocycler_polished
+            _require_valid_multi_input_fasta(
+                _required_multi_input_result_path(
+                    result,
+                    workflow,
+                    field,
+                    label,
+                ),
+                label,
+            )
+        elseif hasproperty(result, field)
             _require_valid_multi_input_fasta(
                 String(getproperty(result, field)),
                 label,
             )
         end
+    end
+    if workflow == :autocycler_polished
+        _require_tool_artifact(
+            _required_multi_input_result_path(
+                result,
+                workflow,
+                :pypolca_report,
+                "Pypolca report",
+            ),
+            "Pypolca report",
+        )
+    elseif hasproperty(result, :pypolca_report)
+        _require_tool_artifact(
+            String(result.pypolca_report),
+            "Pypolca report",
+        )
     end
     assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
     tool_artifacts = _persistent_tool_artifacts(result, output_dir)

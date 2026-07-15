@@ -431,6 +431,12 @@ function _require_valid_autocycler_fasta(
         label::AbstractString,
 )::String
     normalized_path = _require_nonempty_autocycler_file(path, label)
+    islink(normalized_path) && throw(
+        ErrorException(
+            "$(label) must be a regular, non-symlink FASTA file: " *
+            "$(normalized_path).",
+        ),
+    )
     reader = try
         Mycelia.open_fastx(normalized_path)
     catch error
@@ -443,6 +449,7 @@ function _require_valid_autocycler_fasta(
         )
     end
     record_count = 0
+    identifiers = Set{String}()
     try
         for record in reader
             record isa FASTX.FASTA.Record || throw(
@@ -450,13 +457,35 @@ function _require_valid_autocycler_fasta(
                     "$(label) is not valid FASTA: $(normalized_path).",
                 ),
             )
-            isempty(FASTX.sequence(record)) && throw(
+            identifier = String(FASTX.identifier(record))
+            isempty(identifier) && throw(
+                ErrorException(
+                    "$(label) contains an empty FASTA identifier at record " *
+                    "$(record_count + 1): $(normalized_path).",
+                ),
+            )
+            identifier in identifiers && throw(
+                ErrorException(
+                    "$(label) contains duplicate FASTA identifier " *
+                    "$(repr(identifier)): $(normalized_path).",
+                ),
+            )
+            sequence = FASTX.sequence(String, record)
+            isempty(sequence) && throw(
                 ErrorException(
                     "$(label) contains an empty FASTA sequence at record " *
                     "$(record_count + 1): $(normalized_path).",
                 ),
             )
-            sequence = FASTX.sequence(String, record)
+            occursin(
+                r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$",
+                sequence,
+            ) || throw(
+                ErrorException(
+                    "$(label) contains invalid DNA at FASTA record " *
+                    "$(record_count + 1): $(normalized_path).",
+                ),
+            )
             try
                 BioSequences.LongDNA{4}(sequence)
             catch error
@@ -469,6 +498,7 @@ function _require_valid_autocycler_fasta(
                     ),
                 )
             end
+            push!(identifiers, identifier)
             record_count += 1
         end
     catch error
@@ -491,58 +521,238 @@ function _require_valid_autocycler_fasta(
     return normalized_path
 end
 
+function _is_valid_autocycler_gfa_overlap(overlap::AbstractString)::Bool
+    return overlap == "*" ||
+           occursin(r"^(?:[0-9]+[MIDNSHPX=])+$", overlap)
+end
+
+function _validate_autocycler_gfa_tags(
+        fields::AbstractVector{<:AbstractString},
+        first_tag_index::Int,
+        record_label::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::Nothing
+    for field_index in first_tag_index:length(fields)
+        occursin(
+            r"^[A-Za-z][A-Za-z0-9]:[A-Za-z]:.*$",
+            fields[field_index],
+        ) || throw(
+            ErrorException(
+                "$(label) has a malformed GFA $(record_label) tag at line " *
+                "$(line_number): $(path).",
+            ),
+        )
+    end
+    return nothing
+end
+
 function _require_valid_autocycler_gfa(
         path::AbstractString,
         label::AbstractString,
 )::String
     normalized_path = _require_nonempty_autocycler_file(path, label)
+    islink(normalized_path) && throw(
+        ErrorException(
+            "$(label) must be a regular, non-symlink GFA file: " *
+            "$(normalized_path).",
+        ),
+    )
     segment_identifiers = Set{String}()
+    path_identifiers = Set{String}()
+    segment_references = Tuple{String, Int, String}[]
     open(normalized_path, "r") do input
         for (line_number, line) in enumerate(eachline(input))
             isempty(line) && continue
+            startswith(line, '#') && continue
             fields = split(line, '\t'; keepempty = true)
-            first(fields) == "S" || continue
-            length(fields) >= 3 || throw(
-                ErrorException(
-                    "$(label) has a malformed GFA segment at line " *
-                    "$(line_number): $(normalized_path).",
-                ),
-            )
-            identifier = String(fields[2])
-            sequence = String(fields[3])
-            isempty(identifier) && throw(
-                ErrorException(
-                    "$(label) has an empty GFA segment identifier at line " *
-                    "$(line_number): $(normalized_path).",
-                ),
-            )
-            identifier in segment_identifiers && throw(
-                ErrorException(
-                    "$(label) has duplicate GFA segment identifier " *
-                    "$(repr(identifier)): $(normalized_path).",
-                ),
-            )
-            if isempty(sequence) || sequence == "*"
-                throw(
+            record_type = first(fields)
+            if record_type == "H"
+                _validate_autocycler_gfa_tags(
+                    fields,
+                    2,
+                    "header",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+            elseif record_type == "S"
+                length(fields) >= 3 || throw(
                     ErrorException(
-                        "$(label) has no sequence for GFA segment " *
+                        "$(label) has a malformed GFA segment at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                identifier = String(fields[2])
+                sequence = String(fields[3])
+                isempty(identifier) && throw(
+                    ErrorException(
+                        "$(label) has an empty GFA segment identifier at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                identifier in segment_identifiers && throw(
+                    ErrorException(
+                        "$(label) has duplicate GFA segment identifier " *
                         "$(repr(identifier)): $(normalized_path).",
                     ),
                 )
-            end
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch error
-                error isa InterruptException && rethrow()
-                throw(
+                if isempty(sequence) || sequence == "*"
+                    throw(
+                        ErrorException(
+                            "$(label) has no sequence for GFA segment " *
+                            "$(repr(identifier)): $(normalized_path).",
+                        ),
+                    )
+                end
+                occursin(
+                    r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$",
+                    sequence,
+                ) || throw(
                     ErrorException(
                         "$(label) has invalid DNA for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path). Cause: " *
-                        sprint(showerror, error),
+                        "$(repr(identifier)): $(normalized_path).",
+                    ),
+                )
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch error
+                    error isa InterruptException && rethrow()
+                    throw(
+                        ErrorException(
+                            "$(label) has invalid DNA for GFA segment " *
+                            "$(repr(identifier)): $(normalized_path). Cause: " *
+                            sprint(showerror, error),
+                        ),
+                    )
+                end
+                _validate_autocycler_gfa_tags(
+                    fields,
+                    4,
+                    "segment",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(segment_identifiers, identifier)
+            elseif record_type == "L"
+                length(fields) >= 6 || throw(
+                    ErrorException(
+                        "$(label) has a malformed GFA link at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                from_identifier = String(fields[2])
+                from_orientation = String(fields[3])
+                to_identifier = String(fields[4])
+                to_orientation = String(fields[5])
+                overlap = String(fields[6])
+                if isempty(from_identifier) || isempty(to_identifier) ||
+                   !(from_orientation in ("+", "-")) ||
+                   !(to_orientation in ("+", "-")) ||
+                   !_is_valid_autocycler_gfa_overlap(overlap)
+                    throw(
+                        ErrorException(
+                            "$(label) has a malformed GFA link at line " *
+                            "$(line_number): $(normalized_path).",
+                        ),
+                    )
+                end
+                _validate_autocycler_gfa_tags(
+                    fields,
+                    7,
+                    "link",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(segment_references, (
+                    from_identifier,
+                    line_number,
+                    "link",
+                ))
+                push!(segment_references, (
+                    to_identifier,
+                    line_number,
+                    "link",
+                ))
+            elseif record_type == "P"
+                length(fields) >= 4 || throw(
+                    ErrorException(
+                        "$(label) has a malformed GFA path at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                path_identifier = String(fields[2])
+                isempty(path_identifier) && throw(
+                    ErrorException(
+                        "$(label) has a malformed GFA path at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                path_identifier in path_identifiers && throw(
+                    ErrorException(
+                        "$(label) has duplicate GFA path identifier " *
+                        "$(repr(path_identifier)): $(normalized_path).",
+                    ),
+                )
+                path_segments = split(fields[3], ','; keepempty = true)
+                isempty(path_segments) && throw(
+                    ErrorException(
+                        "$(label) has a malformed GFA path at line " *
+                        "$(line_number): $(normalized_path).",
+                    ),
+                )
+                for path_segment in path_segments
+                    segment_match = match(r"^(.+)[+-]$", path_segment)
+                    segment_match === nothing && throw(
+                        ErrorException(
+                            "$(label) has a malformed GFA path at line " *
+                            "$(line_number): $(normalized_path).",
+                        ),
+                    )
+                    push!(segment_references, (
+                        String(only(segment_match.captures)),
+                        line_number,
+                        "path",
+                    ))
+                end
+                path_overlaps = String(fields[4])
+                if path_overlaps != "*"
+                    overlaps = split(path_overlaps, ','; keepempty = true)
+                    if length(overlaps) != max(length(path_segments) - 1, 0) ||
+                       any(
+                            overlap ->
+                                !_is_valid_autocycler_gfa_overlap(overlap),
+                            overlaps,
+                        )
+                        throw(
+                            ErrorException(
+                                "$(label) has a malformed GFA path at line " *
+                                "$(line_number): $(normalized_path).",
+                            ),
+                        )
+                    end
+                end
+                _validate_autocycler_gfa_tags(
+                    fields,
+                    5,
+                    "path",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(path_identifiers, path_identifier)
+            else
+                throw(
+                    ErrorException(
+                        "$(label) has unknown GFA record type " *
+                        "$(repr(record_type)) at line $(line_number): " *
+                        "$(normalized_path).",
                     ),
                 )
             end
-            push!(segment_identifiers, identifier)
         end
     end
     isempty(segment_identifiers) && throw(
@@ -551,6 +761,15 @@ function _require_valid_autocycler_gfa(
             "$(normalized_path).",
         ),
     )
+    for (identifier, line_number, record_label) in segment_references
+        identifier in segment_identifiers || throw(
+            ErrorException(
+                "$(label) has a dangling GFA $(record_label) reference to " *
+                "unknown segment $(repr(identifier)) at line " *
+                "$(line_number): $(normalized_path).",
+            ),
+        )
+    end
     return normalized_path
 end
 
@@ -571,22 +790,14 @@ end
 function _autocycler_casava_pair_role(
         description::AbstractString,
 )::Union{Nothing, Int}
-    detected_role::Union{Nothing, Int} = nothing
-    for token in split(String(description))
-        role_match = match(r"^([12]):[YN]:", token)
-        role_match === nothing && continue
-        role = parse(Int, something(only(role_match.captures)))
-        if detected_role !== nothing && detected_role != role
-            throw(
-                ArgumentError(
-                    "FASTQ description contains conflicting CASAVA mate roles: " *
-                    repr(String(description)),
-                ),
-            )
-        end
-        detected_role = role
-    end
-    return detected_role
+    description_tokens = split(String(description))
+    length(description_tokens) >= 2 || return nothing
+    role_match = match(
+        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
+        description_tokens[2],
+    )
+    return role_match === nothing ? nothing :
+           parse(Int, something(only(role_match.captures)))
 end
 
 function _autocycler_pair_role(

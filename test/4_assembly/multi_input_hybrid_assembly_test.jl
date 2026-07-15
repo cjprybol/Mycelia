@@ -180,7 +180,7 @@ end
 function multi_input_fake_assembler_result(
         outdir::AbstractString;
         gzip::Bool = false,
-        include_graph::Bool = false,
+        include_graph::Bool = true,
         use_contigs_key::Bool = false,
         include_polishing_artifacts::Bool = false,
 )::NamedTuple
@@ -212,6 +212,16 @@ function multi_input_fake_assembler_result(
         return use_contigs_key ? (; contigs = assembly, graph) : (; assembly, graph)
     end
     return use_contigs_key ? (; contigs = assembly) : (; assembly)
+end
+
+function multi_input_without_field(
+        result::NamedTuple,
+        field::Symbol,
+)::NamedTuple
+    retained_fields = Tuple(filter(candidate -> candidate != field, keys(result)))
+    return NamedTuple{retained_fields}(
+        Tuple(getproperty(result, candidate) for candidate in retained_fields),
+    )
 end
 
 const MULTI_INPUT_R1 = [
@@ -555,6 +565,200 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 reversed_r1,
                 reversed_r2,
                 "input",
+            )
+        end
+        casava_r1 = [
+            multi_input_fastq_record("casava_pair 1:N:0:ACGT"),
+        ]
+        casava_r2 = [
+            multi_input_fastq_record("casava_pair 2:Y:0:ACGT"),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            casava_r1,
+            casava_r2,
+            "input",
+        ) == 1
+        noted_r1 = [
+            multi_input_fastq_record(
+                "noted_pair/1 note 2:N:0:ACGT",
+            ),
+        ]
+        noted_r2 = [
+            multi_input_fastq_record(
+                "noted_pair/2 note 1:N:0:ACGT",
+            ),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            noted_r1,
+            noted_r2,
+            "input",
+        ) == 1
+        malformed_casava_r1 = [
+            multi_input_fastq_record(
+                "anchored_pair/1 2:N:0:ACGT:trailing",
+            ),
+        ]
+        malformed_casava_r2 = [
+            multi_input_fastq_record(
+                "anchored_pair/2 1:N:0:ACGT:trailing",
+            ),
+        ]
+        Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+            malformed_casava_r1,
+            malformed_casava_r2,
+            "input",
+        ) == 1
+
+        invalid_casava_pairs = (
+            (
+                message = "invalid explicit mate roles",
+                r1 = [multi_input_fastq_record("casava_pair 2:N:0:ACGT")],
+                r2 = [multi_input_fastq_record("casava_pair 1:N:0:ACGT")],
+            ),
+            (
+                message = "conflicting explicit mate roles",
+                r1 = [
+                    multi_input_fastq_record(
+                        "conflict_pair/1 2:N:0:ACGT",
+                    ),
+                ],
+                r2 = [
+                    multi_input_fastq_record(
+                        "conflict_pair/2 2:N:0:ACGT",
+                    ),
+                ],
+            ),
+        )
+        workflow_configs = (
+            (
+                workflow = :unicycler,
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            ),
+            (
+                workflow = :autocycler_polished,
+                config = Mycelia.Rhizomorph.AutocyclerPolishConfig(),
+            ),
+        )
+        mktempdir() do casava_dir
+            valid_r1_path = multi_input_write_fastq(
+                joinpath(casava_dir, "valid-r1.fastq"),
+                casava_r1,
+            )
+            valid_r2_path = multi_input_write_fastq(
+                joinpath(casava_dir, "valid-r2.fastq"),
+                casava_r2,
+            )
+            Test.@test Mycelia.Rhizomorph._validate_paired_reads(
+                [valid_r1_path],
+                [valid_r2_path],
+                "input",
+            ) == 1
+
+            for (workflow_index, workflow_config) in enumerate(workflow_configs)
+                for (pair_index, invalid_pair) in enumerate(invalid_casava_pairs)
+                    r1_path = multi_input_write_fastq(
+                        joinpath(
+                            casava_dir,
+                            "invalid-$(workflow_index)-$(pair_index)-r1.fastq",
+                        ),
+                        invalid_pair.r1,
+                    )
+                    r2_path = multi_input_write_fastq(
+                        joinpath(
+                            casava_dir,
+                            "invalid-$(workflow_index)-$(pair_index)-r2.fastq",
+                        ),
+                        invalid_pair.r2,
+                    )
+                    correction_calls = Ref(0)
+                    assembler_calls = Ref(0)
+                    correction_runner = function (
+                            reads::Any,
+                            correction_config::Mycelia.Rhizomorph.AssemblyConfig,
+                    )
+                        correction_calls[] += 1
+                        error("correction must not run")
+                    end
+                    assembler_runner = function (
+                            inputs::Any,
+                            outdir::AbstractString,
+                    )
+                        assembler_calls[] += 1
+                        error("assembler must not run")
+                    end
+                    test_throws_message(ArgumentError, invalid_pair.message) do
+                        Mycelia.Rhizomorph._assemble_paired_short_long(
+                            (r1_path, r2_path),
+                            MULTI_INPUT_LONG,
+                            workflow_config.config,
+                            workflow_config.workflow;
+                            correction_runner,
+                            assembler_runner,
+                        )
+                    end
+                    Test.@test correction_calls[] == 0
+                    Test.@test assembler_calls[] == 0
+                end
+            end
+        end
+        for workflow_config in workflow_configs
+            reconstructed_calls = NamedTuple[]
+            correction_runner = multi_input_fake_correction_runner(
+                reconstructed_calls;
+                transform = function (
+                        index::Int,
+                        records::Vector{FASTX.FASTQ.Record},
+                )
+                    index == 2 || return records
+                    return FASTX.FASTQ.Record[
+                        multi_input_fastq_record(
+                            String(FASTX.identifier(record)),
+                            FASTX.sequence(String, record),
+                        ) for record in records
+                    ]
+                end,
+            )
+            assembler_calls = Ref(0)
+            assembler_runner = function (
+                    inputs::Mycelia.Rhizomorph._CorrectedPairedShortLong,
+                    outdir::AbstractString,
+            )
+                assembler_calls[] += 1
+                corrected_r1_records = multi_input_collect_fastq([
+                    inputs.short_r1.path,
+                ])
+                corrected_r2_records = multi_input_collect_fastq([
+                    inputs.short_r2.path,
+                ])
+                Test.@test String(FASTX.description(only(corrected_r1_records))) ==
+                           "casava_pair 1:N:0:ACGT"
+                Test.@test String(FASTX.description(only(corrected_r2_records))) ==
+                           "casava_pair"
+                Test.@test String(FASTX.identifier(only(corrected_r1_records))) ==
+                           "casava_pair"
+                Test.@test String(FASTX.identifier(only(corrected_r2_records))) ==
+                           "casava_pair"
+                return multi_input_fake_assembler_result(
+                    outdir;
+                    include_polishing_artifacts =
+                        workflow_config.workflow == :autocycler_polished,
+                )
+            end
+            result = Mycelia.Rhizomorph._assemble_paired_short_long(
+                (casava_r1, casava_r2),
+                MULTI_INPUT_LONG,
+                workflow_config.config,
+                workflow_config.workflow;
+                correction_runner,
+                assembler_runner,
+            )
+            Test.@test result.assembly_stats["workflow"] ==
+                       String(workflow_config.workflow)
+            Test.@test length(reconstructed_calls) == 3
+            Test.@test assembler_calls[] == 1
+            Test.@test all(
+                call -> !isfile(call.corrected_fastq),
+                reconstructed_calls,
             )
         end
         test_throws_message(ArgumentError, "must be non-empty") do
@@ -1221,7 +1425,10 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             :autocycler_polished;
             correction_runner = multi_input_fake_correction_runner(noncareful_calls),
             assembler_runner = (inputs, outdir) ->
-                multi_input_fake_assembler_result(outdir),
+                multi_input_fake_assembler_result(
+                    outdir;
+                    include_polishing_artifacts = true,
+                ),
         )
         Test.@test noncareful_result.assembly_stats["polishers"] ==
                    ["polypolish", "pypolca-careful"]
@@ -1389,9 +1596,18 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         records = Mycelia.Rhizomorph._read_external_fasta(gzip_fasta)
         Test.@test [String(FASTX.identifier(record)) for record in records] ==
                    ["alpha", "beta"]
+        gzip_graph = joinpath(artifact_dir, "assembly.gfa")
+        write(
+            gzip_graph,
+            "H\tVN:Z:1.0\n" *
+            "S\talpha\tACGT\n" *
+            "S\tbeta\tTTAA\n" *
+            "L\talpha\t+\tbeta\t-\t1M\n" *
+            "P\tprimary\talpha+,beta-\t1M\n",
+        )
 
         wrapped = Mycelia.Rhizomorph._wrap_multi_input_assembly(
-            (; contigs = gzip_fasta),
+            (; contigs = gzip_fasta, graph = gzip_graph),
             :unicycler;
             input_counts = Dict(
                 "short_r1" => 1,
@@ -1553,6 +1769,19 @@ Test.@testset "multi-input hybrid assembly contracts" begin
 
             semantic_cases = (
                 (
+                    message = "empty FASTA identifier",
+                    assembly_records = ["" => "ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                ),
+                (
+                    message = "duplicate FASTA identifier",
+                    assembly_records = [
+                        "duplicate" => "ACGT",
+                        "duplicate" => "TGCA",
+                    ],
+                    graph_contents = "H\tVN:Z:1.0\nS\tduplicate\tACGT\n",
+                ),
+                (
                     message = "empty FASTA sequence",
                     assembly_records = ["empty" => ""],
                     graph_contents = "H\tVN:Z:1.0\nS\tempty\tACGT\n",
@@ -1563,9 +1792,41 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     graph_contents = "H\tVN:Z:1.0\nS\tinvalid\tACGT\n",
                 ),
                 (
+                    message = "invalid DNA at FASTA record",
+                    assembly_records = ["gapped" => "ACGT-ACGT"],
+                    graph_contents = "H\tVN:Z:1.0\nS\tgapped\tACGT\n",
+                ),
+                (
+                    message = "unknown GFA record type",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "not GFA\nH\tVN:Z:1.0\nS\tcontig_1\tACGT\n",
+                ),
+                (
                     message = "malformed GFA segment",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents = "H\tVN:Z:1.0\nS\tbroken\n",
+                ),
+                (
+                    message = "malformed GFA link",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\nS\tcontig_2\tTGCA\n" *
+                        "L\tcontig_1\t+\tcontig_2\t-\n",
+                ),
+                (
+                    message = "dangling GFA link reference",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\n" *
+                        "L\tcontig_1\t+\tmissing\t-\t1M\n",
+                ),
+                (
+                    message = "dangling GFA path reference",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tcontig_1\tACGT\n" *
+                        "P\tprimary\tcontig_1+,missing-\t1M\n",
                 ),
                 (
                     message = "no sequence-bearing GFA segments",
@@ -1582,6 +1843,11 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     message = "invalid DNA for GFA segment",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents = "S\tinvalid\tACGTZ\n",
+                ),
+                (
+                    message = "invalid DNA for GFA segment",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tgapped\tACGT-ACGT\n",
                 ),
             )
             for workflow in (:unicycler, :autocycler_polished)
@@ -1600,6 +1866,50 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                         wrap_semantic_result(result, workflow)
                     end
                 end
+            end
+
+            unicycler_without_graph = semantic_result_shape(
+                :unicycler,
+                joinpath(temp_dir, "unicycler-without-graph"),
+            )
+            test_throws_message(ErrorException, "field :graph") do
+                wrap_semantic_result(
+                    multi_input_without_field(
+                        unicycler_without_graph,
+                        :graph,
+                    ),
+                    :unicycler,
+                )
+            end
+
+            for field in (
+                    :graph,
+                    :autocycler_assembly,
+                    :polypolish_assembly,
+                    :pypolca_report,
+            )
+                complete_result = semantic_result_shape(
+                    :autocycler_polished,
+                    joinpath(temp_dir, "autocycler-without-$(field)"),
+                )
+                test_throws_message(ErrorException, "field :$(field)") do
+                    wrap_semantic_result(
+                        multi_input_without_field(complete_result, field),
+                        :autocycler_polished,
+                    )
+                end
+            end
+
+            empty_report_result = semantic_result_shape(
+                :autocycler_polished,
+                joinpath(temp_dir, "empty-pypolca-report"),
+            )
+            write(empty_report_result.pypolca_report, "")
+            test_throws_message(ErrorException, "no non-empty Pypolca report") do
+                wrap_semantic_result(
+                    empty_report_result,
+                    :autocycler_polished,
+                )
             end
 
             invalid_autocycler = semantic_result_shape(

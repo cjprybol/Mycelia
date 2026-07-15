@@ -1078,6 +1078,135 @@ Test.@testset "Autocycler wrapper" begin
                 sprint(showerror, invalid_dna_error),
             )
 
+            semantic_fasta_cases = (
+                (
+                    slug = "gapped-dna-fasta",
+                    contents = ">gapped\nAC-GT\n",
+                    message = "contains invalid DNA",
+                ),
+                (
+                    slug = "duplicate-fasta-identifier",
+                    contents =
+                        ">duplicate\nACGT\n>duplicate\nTGCA\n",
+                    message = "duplicate FASTA identifier",
+                ),
+            )
+            for semantic_case in semantic_fasta_cases
+                semantic_runner = function (step::NamedTuple)
+                    _autocycler_test_runner!(step)
+                    if step.name == :autocycler
+                        fasta_path = only(filter(
+                            path -> endswith(path, ".fasta"),
+                            step.expected_outputs,
+                        ))
+                        write(fasta_path, semantic_case.contents)
+                    end
+                    return nothing
+                end
+                semantic_error = _autocycler_test_error() do
+                    Mycelia._run_autocycler(
+                        long_reads,
+                        joinpath(temp_dir, semantic_case.slug);
+                        dependency_checker = () -> expected_toolchain,
+                        runner = semantic_runner,
+                    )
+                end
+                Test.@test semantic_error isa ErrorException
+                Test.@test occursin(
+                    semantic_case.message,
+                    sprint(showerror, semantic_error),
+                )
+            end
+
+            fasta_symlink_target = joinpath(temp_dir, "fasta-symlink-target")
+            write(fasta_symlink_target, ">symlinked\nACGT\n")
+            symlinked_fasta_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    fasta_path = only(filter(
+                        path -> endswith(path, ".fasta"),
+                        step.expected_outputs,
+                    ))
+                    rm(fasta_path)
+                    symlink(fasta_symlink_target, fasta_path)
+                end
+                return nothing
+            end
+            symlinked_fasta_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "symlinked-fasta");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = symlinked_fasta_runner,
+                )
+            end
+            Test.@test symlinked_fasta_error isa ErrorException
+            Test.@test occursin(
+                "non-symlink FASTA file",
+                sprint(showerror, symlinked_fasta_error),
+            )
+
+            structured_gfa = joinpath(temp_dir, "structured.gfa")
+            write(
+                structured_gfa,
+                "H\tVN:Z:1.0\n" *
+                "S\tleft\tACGT\tLN:i:4\n" *
+                "S\tright\tTGCA\n" *
+                "L\tleft\t+\tright\t-\t1M\n" *
+                "P\tprimary\tleft+,right-\t1M\n",
+            )
+            Test.@test Mycelia._require_valid_autocycler_gfa(
+                structured_gfa,
+                "Autocycler structured GFA",
+            ) == structured_gfa
+
+            malformed_gfa_cases = (
+                (
+                    name = "leading-garbage",
+                    contents = "not GFA\nS\tcontig_1\tACGT\n",
+                    message = "unknown GFA record type",
+                ),
+                (
+                    name = "malformed-link",
+                    contents =
+                        "S\tleft\tACGT\nS\tright\tTGCA\n" *
+                        "L\tleft\t+\tright\t-\n",
+                    message = "malformed GFA link",
+                ),
+                (
+                    name = "dangling-link",
+                    contents =
+                        "S\tleft\tACGT\n" *
+                        "L\tleft\t+\tmissing\t-\t1M\n",
+                    message = "dangling GFA link reference",
+                ),
+                (
+                    name = "dangling-path",
+                    contents =
+                        "S\tleft\tACGT\n" *
+                        "P\tprimary\tleft+,missing-\t1M\n",
+                    message = "dangling GFA path reference",
+                ),
+            )
+            for malformed_case in malformed_gfa_cases
+                malformed_path = joinpath(
+                    temp_dir,
+                    "$(malformed_case.name).gfa",
+                )
+                write(malformed_path, malformed_case.contents)
+                malformed_error = _autocycler_test_error() do
+                    Mycelia._require_valid_autocycler_gfa(
+                        malformed_path,
+                        "Autocycler malformed GFA",
+                    )
+                end
+                Test.@test malformed_error isa ErrorException
+                Test.@test occursin(
+                    malformed_case.message,
+                    sprint(showerror, malformed_error),
+                )
+            end
+
             malformed_gfa_runner = function (step::NamedTuple)
                 _autocycler_test_runner!(step)
                 if step.name == :autocycler
@@ -1099,8 +1228,61 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test malformed_gfa_error isa ErrorException
             Test.@test occursin(
-                "no sequence-bearing GFA segments",
+                "unknown GFA record type",
                 sprint(showerror, malformed_gfa_error),
+            )
+
+            gapped_gfa_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    gfa_path = only(filter(
+                        path -> endswith(path, ".gfa"),
+                        step.expected_outputs,
+                    ))
+                    write(gfa_path, "S\tgapped\tAC-GT\n")
+                end
+                return nothing
+            end
+            gapped_gfa_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "gapped-gfa");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = gapped_gfa_runner,
+                )
+            end
+            Test.@test gapped_gfa_error isa ErrorException
+            Test.@test occursin(
+                "invalid DNA for GFA segment",
+                sprint(showerror, gapped_gfa_error),
+            )
+
+            gfa_symlink_target = joinpath(temp_dir, "gfa-symlink-target")
+            write(gfa_symlink_target, "S\tsymlinked\tACGT\n")
+            symlinked_gfa_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    gfa_path = only(filter(
+                        path -> endswith(path, ".gfa"),
+                        step.expected_outputs,
+                    ))
+                    rm(gfa_path)
+                    symlink(gfa_symlink_target, gfa_path)
+                end
+                return nothing
+            end
+            symlinked_gfa_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "symlinked-gfa");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = symlinked_gfa_runner,
+                )
+            end
+            Test.@test symlinked_gfa_error isa ErrorException
+            Test.@test occursin(
+                "non-symlink GFA file",
+                sprint(showerror, symlinked_gfa_error),
             )
         end
     end
@@ -1351,6 +1533,67 @@ Test.@testset "Autocycler wrapper" begin
                 "contains invalid DNA",
                 sprint(showerror, invalid_final_dna_error),
             )
+
+            duplicate_final_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :pypolca
+                    final_fasta = only(filter(
+                        path -> endswith(path, "_corrected.fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(
+                        final_fasta,
+                        ">duplicate\nACGT\n>duplicate\nTGCA\n",
+                    )
+                end
+                return nothing
+            end
+            duplicate_final_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "duplicate-polished-identifier");
+                    dependency_checker = () -> nothing,
+                    runner = duplicate_final_runner,
+                )
+            end
+            Test.@test duplicate_final_error isa ErrorException
+            Test.@test occursin(
+                "duplicate FASTA identifier",
+                sprint(showerror, duplicate_final_error),
+            )
+
+            polished_symlink_target =
+                joinpath(temp_dir, "polished-symlink-target")
+            write(polished_symlink_target, ">symlinked\nACGT\n")
+            symlinked_final_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :pypolca
+                    final_fasta = only(filter(
+                        path -> endswith(path, "_corrected.fasta"),
+                        step.expected_outputs,
+                    ))
+                    rm(final_fasta)
+                    symlink(polished_symlink_target, final_fasta)
+                end
+                return nothing
+            end
+            symlinked_final_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "symlinked-polished-fasta");
+                    dependency_checker = () -> nothing,
+                    runner = symlinked_final_runner,
+                )
+            end
+            Test.@test symlinked_final_error isa ErrorException
+            Test.@test occursin(
+                "non-symlink FASTA file",
+                sprint(showerror, symlinked_final_error),
+            )
         end
     end
 
@@ -1586,6 +1829,32 @@ Test.@testset "Autocycler wrapper" begin
 
             write(short_reads_1, "@pair 1:N:0:ACGT\nACGT\n+\nIIII\n")
             write(short_reads_2, "@pair 2:N:0:ACGT\nACGT\n+\nIIII\n")
+            Test.@test Mycelia._validate_autocycler_paired_fastqs(
+                short_reads_1,
+                short_reads_2,
+            ) == 1
+
+            write(
+                short_reads_1,
+                "@pair/1 note 2:N:0:ACGT\nACGT\n+\nIIII\n",
+            )
+            write(
+                short_reads_2,
+                "@pair/2 note 1:N:0:ACGT\nACGT\n+\nIIII\n",
+            )
+            Test.@test Mycelia._validate_autocycler_paired_fastqs(
+                short_reads_1,
+                short_reads_2,
+            ) == 1
+
+            write(
+                short_reads_1,
+                "@pair/1 2:N:0:ACGT:trailing\nACGT\n+\nIIII\n",
+            )
+            write(
+                short_reads_2,
+                "@pair/2 1:N:0:ACGT:trailing\nACGT\n+\nIIII\n",
+            )
             Test.@test Mycelia._validate_autocycler_paired_fastqs(
                 short_reads_1,
                 short_reads_2,

@@ -2741,8 +2741,25 @@ const METAMDBG_ENV_NAME =
     "metamdbg-$(METAMDBG_VERSION)-$(first(METAMDBG_ENVIRONMENT_SPEC_SHA256, 16))"
 const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
 const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
-const _METAMDBG_CONTRACT_SCHEMA_VERSION = 3
+const _METAMDBG_CONTRACT_SCHEMA_VERSION = 4
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
+const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 1
+const _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME = "contract.json"
+const _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS = 300
+const _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS = 1.0
+const _METAMDBG_IUPAC_DNA_REGEX =
+    r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$"
+const _METAMDBG_GFA_IDENTIFIER_REGEX = r"^[!-)+-<>-~][!-~]*$"
+const _METAMDBG_GFA_CIGAR_REGEX =
+    r"^(?:\*|(?:[0-9]+[MIDNSHPX=])+)$"
+const _METAMDBG_GFA_TAG_NAME_REGEX = r"^[A-Za-z][A-Za-z0-9]$"
+const _METAMDBG_GFA_TAG_INTEGER_REGEX = r"^[-+]?[0-9]+$"
+const _METAMDBG_GFA_TAG_FLOAT_REGEX =
+    r"^[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?$"
+const _METAMDBG_GFA_TAG_PRINTABLE_REGEX = r"^[ -~]+$"
+const _METAMDBG_GFA_TAG_HEX_REGEX = r"^[0-9A-F]+$"
+const _METAMDBG_GFA_TAG_ARRAY_REGEX =
+    r"^[cCsSiIf](?:,[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?)+$"
 
 function _metamdbg_paths()::Tuple{String, String}
     install_dir = joinpath(dirname(dirname(pathof(Mycelia))), "deps", "metamdbg")
@@ -3006,10 +3023,47 @@ function _with_metamdbg_output_lock(
     return result
 end
 
+function _metamdbg_input_snapshot(
+        selected_input::NamedTuple,
+)::Vector{NamedTuple}
+    return map(selected_input.paths) do path
+        isfile(path) || error(
+            "metaMDBG input disappeared while capturing invocation metadata: " *
+            "$(path).",
+        )
+        file_status = stat(path)
+        modification_time_ns = round(
+            Int64,
+            file_status.mtime * 1_000_000_000,
+        )
+        return (;
+            path,
+            size_bytes = Int64(file_status.size),
+            modification_time_ns,
+        )
+    end
+end
+
+function _require_current_metamdbg_input_snapshot!(
+        selected_input::NamedTuple,
+        expected_snapshot::AbstractVector{<:NamedTuple},
+)::Vector{NamedTuple}
+    current_snapshot = _metamdbg_input_snapshot(selected_input)
+    current_snapshot == expected_snapshot || error(
+        "metaMDBG input content contract changed after this invocation " *
+        "captured its size and modification-time snapshot. Refusing stale " *
+        "artifact reuse or execution.",
+    )
+    return current_snapshot
+end
+
 function _metamdbg_input_contract(
         selected_input::NamedTuple,
         abundance_min::Int,
         toolchain::NamedTuple = _metamdbg_expected_toolchain(),
+        ;
+        digest_function::Function = _metamdbg_sha256,
+        input_snapshot::Union{Nothing, AbstractVector{<:NamedTuple}} = nothing,
 )::NamedTuple
     input_technology = if selected_input.flag == "--in-hifi"
         "hifi"
@@ -3018,19 +3072,24 @@ function _metamdbg_input_contract(
     else
         error("Unsupported metaMDBG input flag: $(selected_input.flag)")
     end
-    inputs = map(selected_input.paths) do path
-        file_status = stat(path)
-        modification_time_ns = round(
-            Int64,
-            file_status.mtime * 1_000_000_000,
-        )
-        return (
-            path = path,
-            size_bytes = Int64(file_status.size),
-            modification_time_ns,
-            sha256 = _metamdbg_sha256(path),
+    captured_snapshot = input_snapshot === nothing ?
+                        _metamdbg_input_snapshot(selected_input) :
+                        collect(input_snapshot)
+    snapshot_paths = getproperty.(captured_snapshot, :path)
+    snapshot_paths == selected_input.paths || error(
+        "metaMDBG invocation snapshot paths do not match the selected inputs.",
+    )
+    inputs = map(captured_snapshot) do input
+        return (;
+            path = input.path,
+            size_bytes = input.size_bytes,
+            sha256 = String(digest_function(input.path)),
         )
     end
+    _require_current_metamdbg_input_snapshot!(
+        selected_input,
+        captured_snapshot,
+    )
     contract = (
         schema_version = _METAMDBG_CONTRACT_SCHEMA_VERSION,
         input_technology,
@@ -3047,7 +3106,282 @@ function _metamdbg_input_contract(
         signature,
         contract,
     )) * "\n"
-    return (; contract, signature, contents)
+    return (;
+        contract,
+        signature,
+        contents,
+        input_snapshot = captured_snapshot,
+    )
+end
+
+function _require_current_metamdbg_input_contract!(
+        selected_input::NamedTuple,
+        abundance_min::Int,
+        expected_contract::NamedTuple,
+        toolchain::NamedTuple = _metamdbg_expected_toolchain(),
+        ;
+        digest_function::Function = _metamdbg_sha256,
+)::NamedTuple
+    _require_current_metamdbg_input_snapshot!(
+        selected_input,
+        expected_contract.input_snapshot,
+    )
+    current_contract = _metamdbg_input_contract(
+        selected_input,
+        abundance_min,
+        toolchain;
+        digest_function,
+        input_snapshot = expected_contract.input_snapshot,
+    )
+    current_contract.contents == expected_contract.contents || error(
+        "metaMDBG input content contract changed after this invocation " *
+        "captured its schema-v$(_METAMDBG_CONTRACT_SCHEMA_VERSION) " *
+        "provenance. Refusing stale artifact reuse or execution.",
+    )
+    return current_contract
+end
+
+function _metamdbg_submission_reservation_prefix(
+        outdir::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    return ".$(basename(normalized_outdir)).mycelia-metamdbg-submission."
+end
+
+function _metamdbg_submission_reservation_path(
+        outdir::AbstractString,
+        workflow_signature::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    signature = String(workflow_signature)
+    occursin(r"^[0-9a-f]{64}$", signature) || error(
+        "metaMDBG submission reservation requires a lowercase SHA-256 " *
+        "workflow signature, got $(repr(signature)).",
+    )
+    return joinpath(
+        dirname(normalized_outdir),
+        _metamdbg_submission_reservation_prefix(normalized_outdir) * signature,
+    )
+end
+
+function _metamdbg_submission_reservation(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+        ;
+        owner_token::AbstractString = string(UUIDs.uuid4()),
+)::NamedTuple
+    reservation_contract = (;
+        schema_version = _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION,
+        canonical_outdir = outputs.outdir,
+        input_contract_signature = input_contract.signature,
+        graph_k,
+    )
+    reservation_contract_contents = JSON.json(reservation_contract)
+    workflow_signature =
+        SHA.bytes2hex(SHA.sha256(reservation_contract_contents))
+    path = _metamdbg_submission_reservation_path(
+        outputs.outdir,
+        workflow_signature,
+    )
+    contents = JSON.json((;
+        reservation_contract...,
+        workflow_signature,
+        owner_token = String(owner_token),
+    )) * "\n"
+    return (;
+        path,
+        contract_marker = joinpath(
+            path,
+            _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+        ),
+        canonical_outdir = outputs.outdir,
+        input_contract_signature = input_contract.signature,
+        graph_k,
+        workflow_signature,
+        owner_token = String(owner_token),
+        contents,
+    )
+end
+
+function _metamdbg_submission_reservation_paths(
+        outdir::AbstractString,
+)::Vector{String}
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    parent = dirname(normalized_outdir)
+    isdir(parent) || return String[]
+    prefix = _metamdbg_submission_reservation_prefix(normalized_outdir)
+    matching_paths = sort!(filter(
+        path -> startswith(basename(path), prefix),
+        readdir(parent; join = true),
+    ))
+    active_paths = String[]
+    for path in matching_paths
+        filename = basename(path)
+        suffix = filename[(ncodeunits(prefix) + 1):end]
+        if occursin(r"^[0-9a-f]{64}$", suffix)
+            push!(active_paths, path)
+        elseif startswith(suffix, "tmp.") || startswith(suffix, "consumed.")
+            continue
+        else
+            error(
+                "metaMDBG found a malformed submission reservation entry: " *
+                "$(path). Remove it only after confirming no job owns it.",
+            )
+        end
+    end
+    return active_paths
+end
+
+function _require_no_active_metamdbg_submission_reservation!(
+        outdir::AbstractString,
+)::Nothing
+    active_reservations = _metamdbg_submission_reservation_paths(outdir)
+    isempty(active_reservations) || error(
+        "metaMDBG output has an active nonlocal submission reservation: " *
+        "$(join(active_reservations, ", ")). Refusing competing execution.",
+    )
+    return nothing
+end
+
+function _require_metamdbg_submission_reservation!(
+        reservation::NamedTuple,
+)::NamedTuple
+    reservation_path = reservation.path
+    if !isdir(reservation_path) || islink(reservation_path)
+        error(
+            "metaMDBG submission reservation must be a regular, non-symlink " *
+            "directory: $(reservation_path).",
+        )
+    end
+    expected_entries = String[
+        _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+    ]
+    readdir(reservation_path) == expected_entries || error(
+        "metaMDBG submission reservation contains unexpected entries: " *
+        "$(reservation_path).",
+    )
+    marker = reservation.contract_marker
+    if !isfile(marker) || islink(marker) || filesize(marker) == 0
+        error(
+            "metaMDBG submission reservation contract must be a nonempty, " *
+            "regular, non-symlink file: $(marker).",
+        )
+    end
+    read(marker, String) == reservation.contents || error(
+        "metaMDBG submission reservation contract does not match this " *
+        "invocation: $(marker).",
+    )
+    return reservation
+end
+
+function _create_metamdbg_submission_reservation!(
+        reservation::NamedTuple,
+        outdir::AbstractString,
+)::NamedTuple
+    existing_reservations =
+        _metamdbg_submission_reservation_paths(outdir)
+    if !isempty(existing_reservations)
+        if existing_reservations == String[reservation.path]
+            has_regular_marker = isfile(reservation.contract_marker) &&
+                                 !islink(reservation.contract_marker)
+            existing_contents = if has_regular_marker
+                read(reservation.contract_marker, String)
+            else
+                nothing
+            end
+            if existing_contents == reservation.contents
+                error(
+                    "metaMDBG submission is already reserved by this " *
+                    "invocation: $(reservation.path).",
+                )
+            end
+            error(
+                "metaMDBG submission is already reserved for this exact " *
+                "workflow contract: $(reservation.path).",
+            )
+        end
+        error(
+            "metaMDBG output has a conflicting active submission " *
+            "reservation: $(join(existing_reservations, ", ")).",
+        )
+    end
+
+    reservation_parent = dirname(reservation.path)
+    temporary_path = mktempdir(
+        reservation_parent;
+        prefix = _metamdbg_submission_reservation_prefix(outdir) * "tmp.",
+    )
+    chmod(temporary_path, 0o700)
+    temporary_reservation = merge(reservation, (;
+        path = temporary_path,
+        contract_marker = joinpath(
+            temporary_path,
+            _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+        ),
+    ))
+    published = false
+    try
+        open(temporary_reservation.contract_marker, "w") do output
+            write(output, reservation.contents)
+            flush(output)
+        end
+        chmod(temporary_reservation.contract_marker, 0o600)
+        _require_metamdbg_submission_reservation!(temporary_reservation)
+        mv(temporary_path, reservation.path)
+        published = true
+        _require_metamdbg_submission_reservation!(reservation)
+    catch primary_error
+        try
+            if published && ispath(reservation.path)
+                _remove_metamdbg_submission_reservation!(reservation)
+            elseif ispath(temporary_path)
+                rm(temporary_path; recursive = true)
+            end
+        catch cleanup_error
+            @warn "metaMDBG failed to clean an incomplete submission " *
+                  "reservation while preserving the primary reservation " *
+                  "failure" reservation primary_error cleanup_error
+        end
+        Base.rethrow()
+    end
+    return reservation
+end
+
+function _remove_metamdbg_submission_reservation!(
+        reservation::NamedTuple,
+)::Nothing
+    if !ispath(reservation.path) && !islink(reservation.path)
+        return nothing
+    end
+    _require_metamdbg_submission_reservation!(reservation)
+    tombstone_root = mktempdir(
+        dirname(reservation.path);
+        prefix = _metamdbg_submission_reservation_prefix(
+            reservation.canonical_outdir,
+        ) * "consumed.",
+    )
+    chmod(tombstone_root, 0o700)
+    tombstone = joinpath(tombstone_root, "reservation")
+    try
+        mv(reservation.path, tombstone)
+    catch primary_error
+        try
+            rm(tombstone_root; recursive = true)
+        catch cleanup_error
+            @warn "metaMDBG failed to clean an unused reservation tombstone " *
+                  "while preserving the primary atomic-consumption failure" tombstone_root primary_error cleanup_error
+        end
+        Base.rethrow()
+    end
+    try
+        rm(tombstone; recursive = true)
+        rm(tombstone_root)
+    catch cleanup_error
+        @warn "metaMDBG atomically consumed its submission reservation but " *
+              "left a nonblocking tombstone remnant" tombstone_root cleanup_error
+    end
+    return nothing
 end
 
 function _require_metamdbg_contract!(
@@ -3164,14 +3498,29 @@ function _require_valid_metamdbg_fasta(
         )
     end
     record_count = 0
+    identifiers = Set{String}()
     try
         for record in reader
             record isa FASTX.FASTA.Record || error(
                 "$(label) is not valid FASTA: $(normalized_path).",
             )
+            identifier = strip(String(FASTX.identifier(record)))
+            isempty(identifier) && error(
+                "$(label) contains an empty FASTA identifier at record " *
+                "$(record_count + 1): $(normalized_path).",
+            )
+            identifier in identifiers && error(
+                "$(label) contains duplicate FASTA identifier " *
+                "$(repr(identifier)) at record $(record_count + 1): " *
+                "$(normalized_path).",
+            )
             sequence = FASTX.sequence(String, record)
             isempty(sequence) && error(
                 "$(label) contains an empty FASTA sequence at record " *
+                "$(record_count + 1): $(normalized_path).",
+            )
+            occursin(_METAMDBG_IUPAC_DNA_REGEX, sequence) || error(
+                "$(label) contains invalid DNA at FASTA record " *
                 "$(record_count + 1): $(normalized_path).",
             )
             try
@@ -3184,6 +3533,7 @@ function _require_valid_metamdbg_fasta(
                     sprint(showerror, caught),
                 )
             end
+            push!(identifiers, identifier)
             record_count += 1
         end
     catch caught
@@ -3204,54 +3554,384 @@ function _require_valid_metamdbg_fasta(
     return normalized_path
 end
 
+function _require_valid_metamdbg_gfa_identifier(
+        identifier::AbstractString,
+        record_type::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::String
+    normalized_identifier = String(identifier)
+    is_valid_identifier =
+        occursin(_METAMDBG_GFA_IDENTIFIER_REGEX, normalized_identifier) &&
+        !occursin("+,", normalized_identifier) &&
+        !occursin("-,", normalized_identifier)
+    is_valid_identifier || error(
+        "$(label) has an invalid $(record_type) identifier at line " *
+        "$(line_number): $(path).",
+    )
+    return normalized_identifier
+end
+
+function _require_valid_metamdbg_gfa_orientation(
+        orientation::AbstractString,
+        record_type::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::String
+    normalized_orientation = String(orientation)
+    normalized_orientation in ("+", "-") || error(
+        "$(label) has an invalid $(record_type) orientation at line " *
+        "$(line_number): $(path).",
+    )
+    return normalized_orientation
+end
+
+function _require_valid_metamdbg_gfa_cigar(
+        cigar::AbstractString,
+        record_type::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::String
+    normalized_cigar = String(cigar)
+    occursin(_METAMDBG_GFA_CIGAR_REGEX, normalized_cigar) || error(
+        "$(label) has an invalid $(record_type) CIGAR at line " *
+        "$(line_number): $(path).",
+    )
+    return normalized_cigar
+end
+
+function _require_valid_metamdbg_gfa_tag_value(
+        tag_type::AbstractString,
+        value::AbstractString,
+        record_type::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::Nothing
+    normalized_type = String(tag_type)
+    normalized_value = String(value)
+    is_valid = if normalized_type == "A"
+        ncodeunits(normalized_value) == 1 &&
+            occursin(r"^[!-~]$", normalized_value)
+    elseif normalized_type == "i"
+        occursin(_METAMDBG_GFA_TAG_INTEGER_REGEX, normalized_value)
+    elseif normalized_type == "f"
+        occursin(_METAMDBG_GFA_TAG_FLOAT_REGEX, normalized_value)
+    elseif normalized_type in ("Z", "J")
+        occursin(_METAMDBG_GFA_TAG_PRINTABLE_REGEX, normalized_value)
+    elseif normalized_type == "H"
+        occursin(_METAMDBG_GFA_TAG_HEX_REGEX, normalized_value)
+    elseif normalized_type == "B"
+        occursin(_METAMDBG_GFA_TAG_ARRAY_REGEX, normalized_value)
+    else
+        false
+    end
+    is_valid || error(
+        "$(label) has an invalid or unsupported $(record_type) optional tag " *
+        "value at line $(line_number): $(path).",
+    )
+    return nothing
+end
+
+function _require_valid_metamdbg_gfa_tags(
+        fields::AbstractVector{<:AbstractString},
+        first_tag_index::Int,
+        record_type::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::Nothing
+    tag_names = Set{String}()
+    for tag_index in first_tag_index:length(fields)
+        tag = fields[tag_index]
+        components = split(tag, ':'; limit = 3, keepempty = true)
+        length(components) == 3 || error(
+            "$(label) has an invalid $(record_type) optional tag at line " *
+            "$(line_number): $(path).",
+        )
+        tag_name, tag_type, value = String.(components)
+        occursin(_METAMDBG_GFA_TAG_NAME_REGEX, tag_name) || error(
+            "$(label) has an invalid $(record_type) optional tag name at line " *
+            "$(line_number): $(path).",
+        )
+        tag_name in tag_names && error(
+            "$(label) has duplicate $(record_type) optional tag name " *
+            "$(repr(tag_name)) at line $(line_number): $(path).",
+        )
+        _require_valid_metamdbg_gfa_tag_value(
+            tag_type,
+            value,
+            record_type,
+            line_number,
+            label,
+            path,
+        )
+        push!(tag_names, tag_name)
+    end
+    return nothing
+end
+
+function _metamdbg_gfa_path_step_identifiers(
+        field::AbstractString,
+        line_number::Int,
+        label::AbstractString,
+        path::AbstractString,
+)::Vector{String}
+    remaining = String(field)
+    isempty(remaining) && error(
+        "$(label) has an empty GFA path step list at line $(line_number): " *
+        "$(path).",
+    )
+    identifiers = String[]
+    while !isempty(remaining)
+        step_match = match(r"^([!-~]+?)([+-])(?:,|$)", remaining)
+        step_match === nothing && error(
+            "$(label) has a malformed GFA path step at line $(line_number): " *
+            "$(path).",
+        )
+        identifier_capture = step_match.captures[1]
+        identifier_capture isa AbstractString || error(
+            "$(label) has a malformed GFA path step at line " *
+            "$(line_number): $(path).",
+        )
+        identifier = _require_valid_metamdbg_gfa_identifier(
+            identifier_capture,
+            "GFA path step",
+            line_number,
+            label,
+            path,
+        )
+        push!(identifiers, identifier)
+        consumed_bytes = ncodeunits(step_match.match)
+        has_separator = endswith(step_match.match, ",")
+        if consumed_bytes == ncodeunits(remaining)
+            has_separator && error(
+                "$(label) has a trailing GFA path-step separator at line " *
+                "$(line_number): $(path).",
+            )
+            remaining = ""
+        else
+            has_separator || error(
+                "$(label) has malformed GFA path-step separation at line " *
+                "$(line_number): $(path).",
+            )
+            remaining = remaining[(consumed_bytes + 1):end]
+        end
+    end
+    return identifiers
+end
+
 function _require_valid_metamdbg_gfa(
         path::AbstractString,
         label::AbstractString,
 )::String
     normalized_path = _require_metamdbg_regular_file(path, label)
     segment_identifiers = Set{String}()
+    record_identifiers = Set{String}()
     open(normalized_path, "r") do input
-        for (line_number, line) in enumerate(eachline(input))
-            isempty(line) && continue
+        for (line_number, raw_line) in enumerate(eachline(input))
+            line = chomp(raw_line)
+            isempty(strip(line)) && continue
+            startswith(line, "#") && continue
             fields = split(line, '\t'; keepempty = true)
-            first(fields) == "S" || continue
-            length(fields) >= 3 || error(
-                "$(label) has a malformed GFA segment at line " *
-                "$(line_number): $(normalized_path).",
-            )
-            identifier = String(fields[2])
-            sequence = String(fields[3])
-            isempty(identifier) && error(
-                "$(label) has an empty GFA segment identifier at line " *
-                "$(line_number): $(normalized_path).",
-            )
-            identifier in segment_identifiers && error(
-                "$(label) has duplicate GFA segment identifier " *
-                "$(repr(identifier)): $(normalized_path).",
-            )
-            if isempty(sequence) || sequence == "*"
-                error(
-                    "$(label) has no sequence for GFA segment " *
+            record_type = String(first(fields))
+            if record_type == "H"
+                _require_valid_metamdbg_gfa_tags(
+                    fields,
+                    2,
+                    "GFA header",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+            elseif record_type == "S"
+                length(fields) >= 3 || error(
+                    "$(label) has a malformed GFA segment at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                identifier = _require_valid_metamdbg_gfa_identifier(
+                    fields[2],
+                    "GFA segment",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                identifier in record_identifiers && error(
+                    "$(label) has duplicate GFA segment/path name " *
                     "$(repr(identifier)): $(normalized_path).",
                 )
-            end
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch caught
-                caught isa InterruptException && rethrow()
-                error(
+                sequence = String(fields[3])
+                if isempty(sequence) || sequence == "*"
+                    error(
+                        "$(label) has no sequence for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path).",
+                    )
+                end
+                occursin(_METAMDBG_IUPAC_DNA_REGEX, sequence) || error(
                     "$(label) has invalid DNA for GFA segment " *
-                    "$(repr(identifier)): $(normalized_path). Cause: " *
-                    sprint(showerror, caught),
+                    "$(repr(identifier)): $(normalized_path).",
+                )
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch caught
+                    caught isa InterruptException && rethrow()
+                    error(
+                        "$(label) has invalid DNA for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path). Cause: " *
+                        sprint(showerror, caught),
+                    )
+                end
+                _require_valid_metamdbg_gfa_tags(
+                    fields,
+                    4,
+                    "GFA segment",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(segment_identifiers, identifier)
+                push!(record_identifiers, identifier)
+            elseif record_type == "L"
+                length(fields) >= 6 || error(
+                    "$(label) has a malformed GFA link at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                _require_valid_metamdbg_gfa_identifier(
+                    fields[2],
+                    "GFA link source",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                _require_valid_metamdbg_gfa_orientation(
+                    fields[3],
+                    "GFA link source",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                _require_valid_metamdbg_gfa_identifier(
+                    fields[4],
+                    "GFA link destination",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                _require_valid_metamdbg_gfa_orientation(
+                    fields[5],
+                    "GFA link destination",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                _require_valid_metamdbg_gfa_cigar(
+                    fields[6],
+                    "GFA link",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                _require_valid_metamdbg_gfa_tags(
+                    fields,
+                    7,
+                    "GFA link",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+            elseif record_type == "P"
+                length(fields) >= 4 || error(
+                    "$(label) has a malformed GFA path at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+                path_identifier = _require_valid_metamdbg_gfa_identifier(
+                    fields[2],
+                    "GFA path",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                path_identifier in record_identifiers && error(
+                    "$(label) has duplicate GFA segment/path name " *
+                    "$(repr(path_identifier)): $(normalized_path).",
+                )
+                steps = _metamdbg_gfa_path_step_identifiers(
+                    fields[3],
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                overlap_field = String(fields[4])
+                if overlap_field != "*"
+                    overlaps = split(overlap_field, ','; keepempty = true)
+                    length(overlaps) == length(steps) - 1 || error(
+                        "$(label) has the wrong number of GFA path overlaps " *
+                        "at line $(line_number): $(normalized_path).",
+                    )
+                    for overlap in overlaps
+                        _require_valid_metamdbg_gfa_cigar(
+                            overlap,
+                            "GFA path",
+                            line_number,
+                            label,
+                            normalized_path,
+                        )
+                    end
+                end
+                _require_valid_metamdbg_gfa_tags(
+                    fields,
+                    5,
+                    "GFA path",
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+                push!(record_identifiers, path_identifier)
+            else
+                error(
+                    "$(label) has unknown GFA record type " *
+                    "$(repr(record_type)) at line $(line_number): " *
+                    "$(normalized_path).",
                 )
             end
-            push!(segment_identifiers, identifier)
         end
     end
     isempty(segment_identifiers) && error(
         "$(label) contains no sequence-bearing GFA segments: " *
         "$(normalized_path).",
     )
+    open(normalized_path, "r") do input
+        for (line_number, raw_line) in enumerate(eachline(input))
+            line = chomp(raw_line)
+            isempty(strip(line)) && continue
+            startswith(line, "#") && continue
+            fields = split(line, '\t'; keepempty = true)
+            record_type = String(first(fields))
+            referenced_identifiers = if record_type == "L"
+                String[fields[2], fields[4]]
+            elseif record_type == "P"
+                _metamdbg_gfa_path_step_identifiers(
+                    fields[3],
+                    line_number,
+                    label,
+                    normalized_path,
+                )
+            else
+                continue
+            end
+            reference_type = record_type == "L" ? "link" : "path"
+            for identifier in referenced_identifiers
+                identifier in segment_identifiers || error(
+                    "$(label) has a dangling GFA $(reference_type) segment " *
+                    "reference $(repr(identifier)) at line " *
+                    "$(line_number): $(normalized_path).",
+                )
+            end
+        end
+    end
     return normalized_path
 end
 
@@ -3392,31 +4072,85 @@ function _metamdbg_executor_script(
         ;
         conda_runner::AbstractString = CONDA_RUNNER,
         environment_path::AbstractString = last(_metamdbg_paths()),
+        submission_reservation::Union{Nothing, NamedTuple} = nothing,
+        lock_retry_attempts::Int = _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS,
+        lock_retry_delay_seconds::Real =
+            _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS,
 )::String
+    lock_retry_attempts > 0 || throw(ArgumentError(
+        "metaMDBG executor lock_retry_attempts must be positive.",
+    ))
+    isfinite(lock_retry_delay_seconds) && lock_retry_delay_seconds >= 0 ||
+        throw(ArgumentError(
+            "metaMDBG executor lock_retry_delay_seconds must be finite and " *
+            "nonnegative.",
+        ))
     verified_environment_path =
         _require_verified_metamdbg_environment_spec(environment_path)
     outdir_parent = dirname(outputs.outdir)
     outdir_base = basename(outputs.outdir)
     lock_path = _metamdbg_output_lock_path(outputs.outdir)
-    input_validation_lines = String[]
+    effective_submission_reservation = if submission_reservation === nothing
+        _metamdbg_submission_reservation(outputs, input_contract, graph_k)
+    else
+        submission_reservation
+    end
+    input_declaration_lines = String[]
+    input_validation_function_lines = String[
+        "validate_metamdbg_inputs() {",
+    ]
     for (input_index, input) in enumerate(input_contract.contract.inputs)
         input_path_variable = "input_path_$(input_index)"
         expected_digest_variable = "expected_input_sha256_$(input_index)"
         actual_digest_variable = "actual_input_sha256_$(input_index)"
-        append!(input_validation_lines, String[
+        append!(input_declaration_lines, String[
             "$(input_path_variable)=$(Base.shell_escape(input.path))",
             "$(expected_digest_variable)=$(Base.shell_escape(input.sha256))",
+        ])
+        append!(input_validation_function_lines, String[
             "if [ ! -f \"\$$(input_path_variable)\" ]; then",
-            "  echo \"metaMDBG input is missing before execution: \$$(input_path_variable)\" >&2",
-            "  exit 1",
+            "  echo \"metaMDBG input is missing during execution: \$$(input_path_variable)\" >&2",
+            "  return 1",
             "fi",
             "$(actual_digest_variable)=\$(sha256_file \"\$$(input_path_variable)\")",
             "if [ \"\$$(actual_digest_variable)\" != \"\$$(expected_digest_variable)\" ]; then",
-            "  echo \"metaMDBG input content changed before execution: \$$(input_path_variable)\" >&2",
-            "  exit 1",
+            "  echo \"metaMDBG input content changed during execution: \$$(input_path_variable)\" >&2",
+            "  return 1",
             "fi",
         ])
     end
+    push!(input_validation_function_lines, "}")
+    reservation_declaration_lines = String[
+        "submission_reservation_dir=$(Base.shell_escape(effective_submission_reservation.path))",
+        "submission_reservation_contract=$(Base.shell_escape(effective_submission_reservation.contract_marker))",
+    ]
+    reservation_validation_function_lines = String[
+        "validate_submission_reservation() {",
+        "if [ ! -d \"\$submission_reservation_dir\" ] || [ -L \"\$submission_reservation_dir\" ]; then",
+        "  echo \"metaMDBG submission reservation is missing or not a regular directory\" >&2",
+        "  return 1",
+        "fi",
+        "if [ ! -f \"\$submission_reservation_contract\" ] || [ -L \"\$submission_reservation_contract\" ] || [ ! -s \"\$submission_reservation_contract\" ]; then",
+        "  echo \"metaMDBG submission reservation contract is missing, empty, or not regular\" >&2",
+        "  return 1",
+        "fi",
+        "reservation_entry_count=\$(find \"\$submission_reservation_dir\" -mindepth 1 -maxdepth 1 -print | awk 'END { print NR }')",
+        "if [ \"\$reservation_entry_count\" -ne 1 ]; then",
+        "  echo \"metaMDBG submission reservation contains unexpected entries\" >&2",
+        "  return 1",
+        "fi",
+        "cmp -s -- \"\$expected_reservation\" \"\$submission_reservation_contract\" || {",
+        "  echo \"metaMDBG submission reservation contract does not match this job\" >&2",
+        "  return 1",
+        "}",
+        "}",
+    ]
+    reservation_consumption_lines = String[
+        "validate_submission_reservation",
+        "reservation_tombstone=\"\$secure_tmpdir/consumed-reservation\"",
+        "mv -- \"\$submission_reservation_dir\" \"\$reservation_tombstone\"",
+        "rm -rf -- \"\$reservation_tombstone\"",
+    ]
     lines = String[
         "set -euo pipefail",
         "umask 077",
@@ -3433,8 +4167,12 @@ function _metamdbg_executor_script(
         "expected_metamdbg_version=$(Base.shell_escape(METAMDBG_VERSION))",
         "environment_name=$(Base.shell_escape(METAMDBG_ENV_NAME))",
         "conda_runner=$(Base.shell_escape(conda_runner))",
+        reservation_declaration_lines...,
+        input_declaration_lines...,
         "secure_tmpdir=",
         "lock_acquired=0",
+        "lock_retry_attempts=$(lock_retry_attempts)",
+        "lock_retry_delay_seconds=$(Float64(lock_retry_delay_seconds))",
         "sha256_file() {",
         "  local path=\"\$1\"",
         "  if command -v sha256sum >/dev/null 2>&1; then",
@@ -3446,17 +4184,14 @@ function _metamdbg_executor_script(
         "    return 1",
         "  fi",
         "}",
+        input_validation_function_lines...,
+        reservation_validation_function_lines...,
         "mkdir -p -- \"\$outdir_parent\"",
         "runtime_outdir_parent=\$(cd -- \"\$outdir_parent\" && pwd -P)",
         "if [ \"\$runtime_outdir_parent\" != \"\$outdir_parent\" ]; then",
         "  echo \"metaMDBG canonical output parent changed before execution\" >&2",
         "  exit 1",
         "fi",
-        "if ! mkdir -m 700 -- \"\$lock_dir\"; then",
-        "  echo \"metaMDBG output is locked by another lifecycle: \$lock_dir\" >&2",
-        "  exit 1",
-        "fi",
-        "lock_acquired=1",
         "cleanup_metamdbg_lifecycle() {",
         "  local status=\$?",
         "  trap - EXIT INT TERM HUP",
@@ -3478,7 +4213,30 @@ function _metamdbg_executor_script(
         "trap 'exit 129' HUP",
         "trap 'exit 130' INT",
         "trap 'exit 143' TERM",
-        input_validation_lines...,
+        "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.\${outdir_base}.mycelia.XXXXXXXXXX\")",
+        "chmod 700 \"\$secure_tmpdir\"",
+        "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
+        "contract_new=\"\$secure_tmpdir/contract.new\"",
+        "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
+        "package_inventory=\"\$secure_tmpdir/conda-packages.json\"",
+        "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
+        "chmod 600 \"\$expected_contract\"",
+        "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
+        "printf '%s' $(Base.shell_escape(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
+        "chmod 600 \"\$expected_reservation\"",
+        "validate_submission_reservation",
+        "lock_attempt=1",
+        "while ! mkdir -m 700 -- \"\$lock_dir\" 2>/dev/null; do",
+        "  validate_submission_reservation",
+        "  if [ \"\$lock_attempt\" -ge \"\$lock_retry_attempts\" ]; then",
+        "    echo \"metaMDBG output remained locked after \$lock_retry_attempts attempts: \$lock_dir\" >&2",
+        "    exit 1",
+        "  fi",
+        "  sleep \"\$lock_retry_delay_seconds\"",
+        "  lock_attempt=\$((lock_attempt + 1))",
+        "done",
+        "lock_acquired=1",
+        reservation_consumption_lines...,
         "if [ -L \"\$outdir\" ]; then",
         "  echo \"metaMDBG outdir must not be a symbolic link: \$outdir\" >&2",
         "  exit 1",
@@ -3488,14 +4246,7 @@ function _metamdbg_executor_script(
         "  exit 1",
         "fi",
         "mkdir -p -- \"\$outdir\"",
-        "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.\${outdir_base}.mycelia.XXXXXXXXXX\")",
-        "chmod 700 \"\$secure_tmpdir\"",
-        "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
-        "contract_new=\"\$secure_tmpdir/contract.new\"",
-        "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
-        "package_inventory=\"\$secure_tmpdir/conda-packages.json\"",
-        "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
-        "chmod 600 \"\$expected_contract\"",
+        "validate_metamdbg_inputs",
         "contract_exists=0",
         "if [ -n \"\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
         "  if [ ! -f \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
@@ -3522,12 +4273,19 @@ function _metamdbg_executor_script(
         "  exit 1",
         "fi",
         "\"\$conda_runner\" list -n \"\$environment_name\" '^metamdbg\$' --json > \"\$package_inventory\"",
-        "grep -Eq '\"name\"[[:space:]]*:[[:space:]]*\"metamdbg\"' \"\$package_inventory\" || {",
-        "  echo \"metaMDBG package is missing from environment \$environment_name\" >&2",
-        "  exit 1",
-        "}",
-        "grep -Eq '\"version\"[[:space:]]*:[[:space:]]*\"1\\.4\"' \"\$package_inventory\" || {",
-        "  echo \"metaMDBG environment must contain metamdbg exactly \$expected_metamdbg_version\" >&2",
+        "awk '",
+        "  { inventory = inventory \$0 }",
+        "  END {",
+        "    compact = inventory",
+        "    gsub(/[[:space:]]+/, \"\", compact)",
+        "    object_count = split(compact, objects, /[{}]/)",
+        "    for (object_index = 1; object_index <= object_count; object_index += 1) {",
+        "      if (objects[object_index] ~ /\"name\":\"metamdbg\"/ && objects[object_index] ~ /\"version\":\"1[.]4\"/) found = 1",
+        "    }",
+        "    exit found ? 0 : 1",
+        "  }",
+        "' \"\$package_inventory\" || {",
+        "  echo \"metaMDBG environment must contain one metamdbg record at exactly \$expected_metamdbg_version\" >&2",
         "  exit 1",
         "}",
         "validate_fasta_stream() {",
@@ -3536,6 +4294,10 @@ function _metamdbg_executor_script(
         "    { sub(/\\r\$/, \"\", \$0) }",
         "    /^>/ {",
         "      if (records > 0 && sequence_bases == 0) exit 10",
+        "      identifier = substr(\$0, 2)",
+        "      if (identifier == \"\" || identifier ~ /^[[:space:]]/) exit 14",
+        "      sub(/[[:space:]].*\$/, \"\", identifier)",
+        "      if (identifier_seen[identifier]++) exit 15",
         "      records += 1",
         "      sequence_bases = 0",
         "      next",
@@ -3574,16 +4336,113 @@ function _metamdbg_executor_script(
         "    return 1",
         "  fi",
         "  awk -F '\\t' '",
-        "    \$1 == \"S\" {",
-        "      sub(/\\r\$/, \"\", \$3)",
-        "      if (NF < 3 || \$2 == \"\" || \$3 == \"\" || \$3 == \"*\") exit 20",
-        "      if (\$3 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) exit 21",
-        "      if (seen[\$2]++) exit 22",
-        "      segments += 1",
+        "    function fail(code) { validation_error = code; exit code }",
+        "    function valid_name(name) {",
+        "      return name ~ /^[!-)+-<>-~][!-~]*\$/ && index(name, \"+,\") == 0 && index(name, \"-,\") == 0",
         "    }",
-        "    END { if (segments == 0) exit 23 }",
-        "  ' \"\$path\" || {",
-        "    echo \"metaMDBG graph has no unique sequence-bearing GFA segments: \$path\" >&2",
+        "    function valid_tag_value(type, value) {",
+        "      if (type == \"A\") return value ~ /^[!-~]\$/",
+        "      if (type == \"i\") return value ~ /^[-+]?[0-9]+\$/",
+        "      if (type == \"f\") return value ~ /^[-+]?[0-9]*[.]?[0-9]+([eE][-+]?[0-9]+)?\$/",
+        "      if (type == \"Z\" || type == \"J\") return value ~ /^[ -~]+\$/",
+        "      if (type == \"H\") return value ~ /^[0-9A-F]+\$/",
+        "      if (type == \"B\") return value ~ /^[cCsSiIf](,[-+]?[0-9]*[.]?[0-9]+([eE][-+]?[0-9]+)?)+\$/",
+        "      return 0",
+        "    }",
+        "    function validate_tags(first_field, code, field, tag, name, type, value) {",
+        "      for (name in tag_seen) delete tag_seen[name]",
+        "      for (field = first_field; field <= NF; field += 1) {",
+        "        tag = \$field",
+        "        if (length(tag) < 6 || substr(tag, 3, 1) != \":\" || substr(tag, 5, 1) != \":\") fail(code)",
+        "        name = substr(tag, 1, 2)",
+        "        type = substr(tag, 4, 1)",
+        "        value = substr(tag, 6)",
+        "        if (name !~ /^[A-Za-z][A-Za-z0-9]\$/) fail(code)",
+        "        if (tag_seen[name]++) fail(code)",
+        "        if (!valid_tag_value(type, value)) fail(code)",
+        "      }",
+        "    }",
+        "    function validate_path_steps(field, check_references, code, start, position, character, following, name, found, count) {",
+        "      if (field == \"\") fail(code)",
+        "      start = 1",
+        "      count = 0",
+        "      while (start <= length(field)) {",
+        "        found = 0",
+        "        for (position = start; position <= length(field); position += 1) {",
+        "          character = substr(field, position, 1)",
+        "          following = position == length(field) ? \"\" : substr(field, position + 1, 1)",
+        "          if ((character == \"+\" || character == \"-\") && (following == \",\" || following == \"\")) {",
+        "            name = substr(field, start, position - start)",
+        "            if (!valid_name(name)) fail(code)",
+        "            if (check_references && !(name in seen)) fail(52)",
+        "            count += 1",
+        "            start = following == \",\" ? position + 2 : length(field) + 1",
+        "            if (following == \",\" && start > length(field)) fail(code)",
+        "            found = 1",
+        "            break",
+        "          }",
+        "        }",
+        "        if (!found) fail(code)",
+        "      }",
+        "      return count",
+        "    }",
+        "    { sub(/\\r\$/, \"\", \$NF) }",
+        "    NR != FNR {",
+        "      if (\$0 ~ /^[[:space:]]*\$/ || substr(\$0, 1, 1) == \"#\") next",
+        "      if (\$1 == \"L\") {",
+        "        if (!(\$2 in seen)) fail(50)",
+        "        if (!(\$4 in seen)) fail(51)",
+        "      } else if (\$1 == \"P\") {",
+        "        validate_path_steps(\$3, 1, 52)",
+        "      }",
+        "      next",
+        "    }",
+        "    /^[[:space:]]*\$/ { next }",
+        "    substr(\$0, 1, 1) == \"#\" { next }",
+        "    \$1 == \"H\" {",
+        "      validate_tags(2, 30)",
+        "      next",
+        "    }",
+        "    \$1 == \"S\" {",
+        "      if (NF < 3 || !valid_name(\$2)) fail(31)",
+        "      if (\$3 == \"\" || \$3 == \"*\") fail(32)",
+        "      if (\$3 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) fail(33)",
+        "      if (name_seen[\$2]++) fail(34)",
+        "      seen[\$2] = 1",
+        "      validate_tags(4, 35)",
+        "      segments += 1",
+        "      next",
+        "    }",
+        "    \$1 == \"L\" {",
+        "      if (NF < 6) fail(36)",
+        "      if (!valid_name(\$2) || !valid_name(\$4)) fail(37)",
+        "      if (\$3 !~ /^[+-]\$/ || \$5 !~ /^[+-]\$/) fail(38)",
+        "      if (\$6 !~ /^(\\*|([0-9]+[MIDNSHPX=])+)\$/) fail(39)",
+        "      validate_tags(7, 40)",
+        "      next",
+        "    }",
+        "    \$1 == \"P\" {",
+        "      if (NF < 4 || !valid_name(\$2)) fail(41)",
+        "      if (name_seen[\$2]++) fail(42)",
+        "      step_count = validate_path_steps(\$3, 0, 43)",
+        "      if (\$4 != \"*\") {",
+        "        for (overlap_index in overlaps) delete overlaps[overlap_index]",
+        "        overlap_count = split(\$4, overlaps, \",\")",
+        "        if (overlap_count != step_count - 1) fail(45)",
+        "        for (overlap_index = 1; overlap_index <= overlap_count; overlap_index += 1) {",
+        "          if (overlaps[overlap_index] !~ /^(\\*|([0-9]+[MIDNSHPX=])+)\$/) fail(46)",
+        "        }",
+        "      }",
+        "      validate_tags(5, 47)",
+        "      next",
+        "    }",
+        "    { fail(48) }",
+        "    END {",
+        "      if (validation_error) exit validation_error",
+        "      if (segments == 0) exit 49",
+        "    }",
+        "  ' \"\$path\" \"\$path\" || {",
+        "    echo \"metaMDBG graph has malformed, unknown, duplicate, or dangling GFA records: \$path\" >&2",
         "    return 1",
         "  }",
         "}",
@@ -3643,6 +4502,7 @@ function _metamdbg_executor_script(
         "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
         "validate_contigs \"\$contigs_gz\"",
         "validate_gfa \"\$graph_source\"",
+        "validate_metamdbg_inputs",
         "if [ \"\$contract_exists\" -eq 1 ]; then",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
         "else",
@@ -3693,11 +4553,13 @@ function _metamdbg_planned_result(
         submission::Any,
         outputs::NamedTuple,
         input_contract::NamedTuple,
+        ;
+        submission_reservation::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
     status in (:planned, :submitted) || throw(ArgumentError(
         "metaMDBG asynchronous status must be :planned or :submitted.",
     ))
-    return (;
+    result = (;
         status,
         submission,
         outdir = outputs.outdir,
@@ -3708,6 +4570,23 @@ function _metamdbg_planned_result(
         ),
         provenance = _metamdbg_provenance(input_contract),
     )
+    status == :planned && return result
+    submission_reservation === nothing && error(
+        "Submitted metaMDBG result is missing its reclamation capability.",
+    )
+    job_id = submission isa Mycelia.SubmitResult ? submission.job_id : nothing
+    return merge(result, (;
+        submission_reservation = (;
+            canonical_outdir = submission_reservation.canonical_outdir,
+            path = submission_reservation.path,
+            workflow_signature = submission_reservation.workflow_signature,
+            input_contract_signature =
+                submission_reservation.input_contract_signature,
+            graph_k = submission_reservation.graph_k,
+            owner_token = submission_reservation.owner_token,
+            job_id,
+        ),
+    ))
 end
 
 function _metamdbg_existing_artifacts(
@@ -3731,6 +4610,52 @@ function _metamdbg_existing_artifacts(
     return nothing
 end
 
+function _require_successful_metamdbg_submission(
+        submission::Any,
+        ;
+        require_sbatch::Bool = false,
+)::Any
+    if require_sbatch && !(submission isa Mycelia.SubmitResult)
+        error(
+            "metaMDBG real Slurm submission did not return a verifiable " *
+            "SubmitResult.",
+        )
+    end
+    if submission isa Mycelia.SubmitResult
+        if !submission.ok
+            error_details = isempty(submission.errors) ?
+                            "the backend reported no error details" :
+                            join(submission.errors, "; ")
+            error("metaMDBG submission failed: $(error_details)")
+        end
+        submission.dry_run && error(
+            "metaMDBG real submission unexpectedly returned a dry-run result.",
+        )
+        submission.backend == :sbatch || error(
+            "metaMDBG real nonlocal submission did not use the sbatch " *
+            "backend: $(submission.backend).",
+        )
+        job_id = submission.job_id
+        (job_id isa AbstractString && !isempty(strip(job_id))) || error(
+            "metaMDBG sbatch submission returned no job id.",
+        )
+    end
+    return submission
+end
+
+function _cleanup_metamdbg_submission_reservation_after_failure!(
+        outputs::NamedTuple,
+        reservation::NamedTuple,
+)::Nothing
+    if !ispath(reservation.path) && !islink(reservation.path)
+        return nothing
+    end
+    _with_metamdbg_output_lock(outputs.outdir) do
+        _remove_metamdbg_submission_reservation!(reservation)
+    end
+    return nothing
+end
+
 function _run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
         ont_reads::Union{String, Vector{String}, Nothing} = nothing,
@@ -3749,6 +4674,8 @@ function _run_metamdbg(;
         mail_user::Union{Nothing, String} = nothing,
         dependency_checker::Function = _ensure_metamdbg_installed,
         local_runner::Function = Base.run,
+        submission_runner::Function = Mycelia.execute,
+        input_digest_function::Function = _metamdbg_sha256,
 )::NamedTuple
     selected_input = _metamdbg_selected_input(hifi_reads, ont_reads)
     abundance_min > 0 || throw(ArgumentError("abundance_min must be positive."))
@@ -3756,8 +4683,16 @@ function _run_metamdbg(;
     graph_k >= 0 || throw(ArgumentError("graph_k must be nonnegative."))
     outputs = _metamdbg_output_paths(outdir, graph_k)
     toolchain = _metamdbg_expected_toolchain()
-    input_contract =
-        _metamdbg_input_contract(selected_input, abundance_min, toolchain)
+    resolved_executor = executor === nothing ?
+                        Mycelia.LocalExecutor() :
+                        Mycelia.resolve_executor(executor)
+    _require_no_active_metamdbg_submission_reservation!(outputs.outdir)
+    input_contract = _metamdbg_input_contract(
+        selected_input,
+        abundance_min,
+        toolchain;
+        digest_function = input_digest_function,
+    )
     asm_cmd_args = String[
         "metaMDBG",
         "asm",
@@ -3782,12 +4717,15 @@ function _run_metamdbg(;
     ]
     asm_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(asm_cmd_args)`
     gfa_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(gfa_cmd_args)`
-    resolved_executor = executor === nothing ?
-                        Mycelia.LocalExecutor() :
-                        Mycelia.resolve_executor(executor)
-
     if resolved_executor isa Mycelia.LocalExecutor
         return _with_metamdbg_output_lock(outputs.outdir) do
+            _require_no_active_metamdbg_submission_reservation!(
+                outputs.outdir,
+            )
+            _require_current_metamdbg_input_snapshot!(
+                selected_input,
+                input_contract.input_snapshot,
+            )
             has_contract = _prepare_metamdbg_output_root!(
                 outputs,
                 input_contract,
@@ -3798,6 +4736,14 @@ function _run_metamdbg(;
                     "metaMDBG complete output is missing its provenance contract.",
                 )
                 _require_metamdbg_contract!(outputs, input_contract)
+                _require_current_metamdbg_input_contract!(
+                    selected_input,
+                    abundance_min,
+                    input_contract,
+                    toolchain,
+                    ;
+                    digest_function = input_digest_function,
+                )
                 return _metamdbg_complete_result(
                     outputs,
                     existing_artifacts,
@@ -3808,6 +4754,10 @@ function _run_metamdbg(;
             _require_expected_metamdbg_toolchain(dependency_checker())
             existing_contigs = _normalize_metamdbg_contigs!(outputs)
             if existing_contigs === nothing
+                _require_current_metamdbg_input_snapshot!(
+                    selected_input,
+                    input_contract.input_snapshot,
+                )
                 local_runner(asm_command)
                 existing_contigs = _normalize_metamdbg_contigs!(outputs)
                 existing_contigs === nothing && error(
@@ -3817,15 +4767,42 @@ function _run_metamdbg(;
             end
             existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
             if existing_graph === nothing
+                _require_current_metamdbg_input_snapshot!(
+                    selected_input,
+                    input_contract.input_snapshot,
+                )
                 local_runner(gfa_command)
             end
             artifacts = _require_metamdbg_artifacts!(outputs, graph_k)
-            if has_contract
+            _require_current_metamdbg_input_contract!(
+                selected_input,
+                abundance_min,
+                input_contract,
+                toolchain,
+                ;
+                digest_function = input_digest_function,
+            )
+            wrote_contract = false
+            try
+                if has_contract
+                    _require_metamdbg_contract!(outputs, input_contract)
+                else
+                    _write_metamdbg_contract!(outputs, input_contract)
+                    wrote_contract = true
+                end
                 _require_metamdbg_contract!(outputs, input_contract)
-            else
-                _write_metamdbg_contract!(outputs, input_contract)
+            catch primary_error
+                if wrote_contract
+                    try
+                        rm(outputs.contract_marker)
+                    catch cleanup_error
+                        @warn "metaMDBG failed to remove a newly written stale " *
+                              "contract while preserving the primary input " *
+                              "contract failure" outputs primary_error cleanup_error
+                    end
+                end
+                Base.rethrow()
             end
-            _require_metamdbg_contract!(outputs, input_contract)
             return _metamdbg_complete_result(
                 outputs,
                 artifacts,
@@ -3835,6 +4812,11 @@ function _run_metamdbg(;
     end
 
     complete_result = _with_metamdbg_output_lock(outputs.outdir) do
+        _require_no_active_metamdbg_submission_reservation!(outputs.outdir)
+        _require_current_metamdbg_input_snapshot!(
+            selected_input,
+            input_contract.input_snapshot,
+        )
         has_contract = _prepare_metamdbg_output_root!(outputs, input_contract)
         existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
         if existing_artifacts === nothing
@@ -3844,6 +4826,14 @@ function _run_metamdbg(;
             "metaMDBG complete output is missing its provenance contract.",
         )
         _require_metamdbg_contract!(outputs, input_contract)
+        _require_current_metamdbg_input_contract!(
+            selected_input,
+            abundance_min,
+            input_contract,
+            toolchain,
+            ;
+            digest_function = input_digest_function,
+        )
         return _metamdbg_complete_result(
             outputs,
             existing_artifacts,
@@ -3852,12 +4842,24 @@ function _run_metamdbg(;
     end
     complete_result !== nothing && return complete_result
 
+    is_planned =
+        resolved_executor isa Mycelia.CollectExecutor ||
+        resolved_executor isa Mycelia.DryRunExecutor ||
+        (resolved_executor isa Mycelia.SlurmExecutor &&
+         resolved_executor.dry_run)
+    submission_reservation = _metamdbg_submission_reservation(
+        outputs,
+        input_contract,
+        graph_k,
+    )
+
     script = _metamdbg_executor_script(
         Mycelia.command_string(asm_command),
         Mycelia.command_string(gfa_command),
         outputs,
         graph_k,
-        input_contract,
+        input_contract;
+        submission_reservation,
     )
     job = Mycelia.build_execution_job(
         cmd = script,
@@ -3871,24 +4873,174 @@ function _run_metamdbg(;
         account = account,
         mail_user = mail_user,
     )
-    if resolved_executor isa Mycelia.SlurmExecutor &&
-       !resolved_executor.dry_run
-        _require_expected_metamdbg_toolchain(dependency_checker())
+    if is_planned
+        submission = submission_runner(job, resolved_executor)
+        return _metamdbg_planned_result(
+            :planned,
+            submission,
+            outputs,
+            input_contract,
+        )
     end
-    submission = Mycelia.execute(job, resolved_executor)
-    status = if resolved_executor isa Mycelia.CollectExecutor ||
-                resolved_executor isa Mycelia.DryRunExecutor ||
-                (resolved_executor isa Mycelia.SlurmExecutor &&
-                 resolved_executor.dry_run)
-        :planned
-    else
-        :submitted
+
+    newly_complete = _with_metamdbg_output_lock(outputs.outdir) do
+        _require_no_active_metamdbg_submission_reservation!(outputs.outdir)
+        _require_current_metamdbg_input_snapshot!(
+            selected_input,
+            input_contract.input_snapshot,
+        )
+        has_contract = _prepare_metamdbg_output_root!(outputs, input_contract)
+        existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
+        if existing_artifacts !== nothing
+            has_contract || error(
+                "metaMDBG complete output is missing its provenance contract.",
+            )
+            _require_metamdbg_contract!(outputs, input_contract)
+            _require_current_metamdbg_input_contract!(
+                selected_input,
+                abundance_min,
+                input_contract,
+                toolchain,
+                ;
+                digest_function = input_digest_function,
+            )
+            return _metamdbg_complete_result(
+                outputs,
+                existing_artifacts,
+                input_contract,
+            )
+        end
+        _require_current_metamdbg_input_snapshot!(
+            selected_input,
+            input_contract.input_snapshot,
+        )
+        if resolved_executor isa Mycelia.SlurmExecutor
+            _require_expected_metamdbg_toolchain(dependency_checker())
+        end
+        _create_metamdbg_submission_reservation!(
+            submission_reservation,
+            outputs.outdir,
+        )
+        return nothing
+    end
+    newly_complete !== nothing && return newly_complete
+
+    submission = try
+        result = submission_runner(job, resolved_executor)
+        _require_successful_metamdbg_submission(
+            result;
+            require_sbatch = resolved_executor isa Mycelia.SlurmExecutor,
+        )
+    catch primary_error
+        try
+            _cleanup_metamdbg_submission_reservation_after_failure!(
+                outputs,
+                submission_reservation,
+            )
+        catch cleanup_error
+            @warn "metaMDBG failed to clean its submission reservation " *
+                  "while preserving the primary submission failure" outputs primary_error cleanup_error
+        end
+        Base.rethrow()
     end
     return _metamdbg_planned_result(
-        status,
+        :submitted,
         submission,
         outputs,
         input_contract,
+        ;
+        submission_reservation,
+    )
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Reclaim a queued metaMDBG submission reservation after confirmed cancellation.
+
+This is an explicit cancellation capability, not an expiry mechanism. Pass the
+`submission_reservation` metadata returned by `run_metamdbg` with
+`status = :submitted`, the exact random `owner_token`, the exact scheduler
+`job_id`, and `confirm_cancelled = true` only after the scheduler has confirmed
+that the job cannot start. The reservation path is recomputed from its workflow
+signature and removed under the output lock only when the on-disk owner record
+still matches exactly. Missing, consumed, or replacement-owner reservations fail
+loudly and are never removed.
+"""
+function reclaim_metamdbg_submission_reservation!(
+        metadata::NamedTuple,
+        ;
+        owner_token::AbstractString,
+        job_id::AbstractString,
+        confirm_cancelled::Bool = false,
+)::NamedTuple
+    confirm_cancelled || throw(ArgumentError(
+        "Set confirm_cancelled=true only after the scheduler confirms that " *
+        "the metaMDBG job cannot start.",
+    ))
+    required_fields = (
+        :canonical_outdir,
+        :path,
+        :workflow_signature,
+        :input_contract_signature,
+        :graph_k,
+        :owner_token,
+        :job_id,
+    )
+    all(field -> hasproperty(metadata, field), required_fields) || throw(
+        ArgumentError(
+            "metaMDBG reservation metadata is incomplete; use the exact " *
+            "submission_reservation value returned by run_metamdbg.",
+        ),
+    )
+    normalized_owner_token = String(owner_token)
+    isempty(normalized_owner_token) && throw(ArgumentError(
+        "metaMDBG reservation owner_token must be nonempty.",
+    ))
+    normalized_owner_token == metadata.owner_token || error(
+        "metaMDBG reservation owner token does not match the submitted job.",
+    )
+    normalized_job_id = strip(String(job_id))
+    isempty(normalized_job_id) && throw(ArgumentError(
+        "metaMDBG cancelled scheduler job_id must be nonempty.",
+    ))
+    metadata.job_id isa AbstractString || error(
+        "metaMDBG submitted reservation metadata has no scheduler job id.",
+    )
+    normalized_job_id == strip(String(metadata.job_id)) || error(
+        "metaMDBG cancelled scheduler job id does not match the submitted job.",
+    )
+    graph_k = metadata.graph_k
+    graph_k isa Int || throw(ArgumentError(
+        "metaMDBG reservation graph_k metadata must be an Int.",
+    ))
+    outputs = _metamdbg_output_paths(String(metadata.canonical_outdir), graph_k)
+    expected_reservation = _metamdbg_submission_reservation(
+        outputs,
+        (; signature = String(metadata.input_contract_signature)),
+        graph_k;
+        owner_token = normalized_owner_token,
+    )
+    expected_reservation.workflow_signature == metadata.workflow_signature ||
+        error("metaMDBG reservation workflow signature does not match metadata.")
+    expected_reservation.path == metadata.path || error(
+        "metaMDBG reservation path does not match its recomputed workflow path.",
+    )
+    ispath(expected_reservation.path) || error(
+        "metaMDBG submission reservation is missing or was already consumed: " *
+        "$(expected_reservation.path).",
+    )
+    _with_metamdbg_output_lock(outputs.outdir) do
+        ispath(expected_reservation.path) || error(
+            "metaMDBG submission reservation is missing or was already consumed: " *
+            "$(expected_reservation.path).",
+        )
+        _remove_metamdbg_submission_reservation!(expected_reservation)
+    end
+    return (;
+        status = :reclaimed,
+        job_id = normalized_job_id,
+        path = expected_reservation.path,
     )
 end
 
@@ -3917,7 +5069,9 @@ the sequence-bearing `contigs.fasta.gz`, a stable `assemblyGraph_k<k>.gfa`
 alias, the contract marker, and exact toolchain provenance. Nonlocal execution
 returns `status = :planned` for collected/dry-run jobs or `:submitted` for a
 real submission, together with the backend `submission` result and
-`expected_artifacts`; planned paths are not reported as completed artifacts.
+`expected_artifacts`; submitted results also include the exact random-owner
+`submission_reservation` cancellation capability. Planned paths are not
+reported as completed artifacts.
 The graph alias resolves to metaMDBG's validated dynamic
 `assemblyGraph_k<k>_<length>bps.gfa` artifact.
 
@@ -3929,17 +5083,35 @@ The graph alias resolves to metaMDBG's validated dynamic
   rerunning metaMDBG. If contigs exist but the requested graph does not, only
   graph generation runs. Complete and partial reuse require an exact durable
   contract marker for the normalized input paths, technology flag, input file
-  size/modification metadata and SHA-256 content digests, `abundance_min`,
-  metaMDBG 1.4, the spec-addressed environment name, and the bundled
-  environment-spec checksum. Any nonempty uncontracted output root fails before
-  provisioning. Nonlocal jobs revalidate every input digest after acquiring the
-  runtime output lock and before artifact reuse or assembly.
+  sizes and SHA-256 content digests, `abundance_min`, metaMDBG 1.4, the
+  spec-addressed environment name, and the bundled environment-spec checksum.
+  Modification times exist only in the invocation snapshot and are never
+  serialized into the durable schema-v4 contract. Local execution hashes each
+  input once at capture and once at the final boundary; intermediate checks use
+  the cheap invocation size/mtime snapshot. Nonlocal callers hash once, while
+  runtime jobs hash at queued start and immediately before finalization. Any
+  nonempty uncontracted output root fails before provisioning.
+- Every nonlocal job embeds an adjacent, contract-addressed submission
+  reservation. Real submissions create it atomically before submission and the
+  runtime consumes it under the output lock; collected and dry-run jobs persist
+  no reservation and therefore fail closed if executed directly. Active
+  reservations block competing execution before input hashing. Runtime jobs
+  validate their exact reservation before bounded output-lock retries and
+  atomically rename it to a private tombstone only after acquiring the lock.
+  Reservation creation likewise publishes a complete marker by atomic rename;
+  incomplete temporary or consumed-tombstone remnants are nonblocking.
+  Reservations never auto-expire:
+  after scheduler-confirmed cancellation, reclaim one explicitly with
+  `reclaim_metamdbg_submission_reservation!`, the returned owner token and job
+  id, and `confirm_cancelled = true`.
 - Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
   environment and validates the installed package inventory before execution.
-- Local and executor lifecycles validate sequence-bearing DNA FASTA and at
-  least one unique sequence-bearing DNA GFA segment under an adjacent atomic
-  output lock. The contract is stamped only after both semantic validations
-  pass.
+- Local and executor lifecycles validate nonempty unique FASTA identifiers,
+  gap-free IUPAC DNA FASTA, and strict H/S/L/P GFA1 structure, shared segment/
+  path naming, and typed A/i/f/Z/J/H/B optional tags. GFA validation is two-pass
+  and retains segment/path identifiers rather than every edge or path reference.
+  The contract is stamped only after semantic validation and a final input-
+  content digest pass.
 """
 function run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
