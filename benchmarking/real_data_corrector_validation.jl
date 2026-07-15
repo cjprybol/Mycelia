@@ -102,9 +102,29 @@ const SEED = parse(Int, get(ENV, "MYCELIA_RDV_SEED", "42"))
 # so the fast phix/lambda default and SMOKE path do not pay a full SPAdes run or
 # require the spades conda env; enable it for the repeat-bearing parity run.
 const ENABLE_SOTA = _truthy(get(ENV, "MYCELIA_RDV_SOTA", "false"))
-const ARMS = ENABLE_SOTA ?
-             (:naive, :scalable, :hybrid_olc, :sota_spades) :
-             (:naive, :scalable, :hybrid_olc)
+const _DEFAULT_ARMS = ENABLE_SOTA ?
+                      (:naive, :scalable, :hybrid_olc, :sota_spades) :
+                      (:naive, :scalable, :hybrid_olc)
+# MYCELIA_RDV_ARMS lets a run select a subset of arms, e.g. to skip the :naive
+# arm, whose no-prefilter qualmer-evidence store does not scale to bacterial
+# genomes (see td-ck03) — the parity comparison itself only needs :hybrid_olc
+# vs :sota_spades, with :scalable as the memory-bounded reference. Valid names:
+# naive, scalable, hybrid_olc, sota_spades.
+const _VALID_ARMS = (:naive, :scalable, :hybrid_olc, :sota_spades)
+const ARMS = let
+    raw = strip(get(ENV, "MYCELIA_RDV_ARMS", ""))
+    if isempty(raw)
+        _DEFAULT_ARMS
+    else
+        selected = Tuple(Symbol(strip(x)) for x in split(raw, ",") if !isempty(strip(x)))
+        for a in selected
+            a in _VALID_ARMS ||
+                throw(ArgumentError("unknown arm :$(a) in MYCELIA_RDV_ARMS; " *
+                                    "valid: $(_VALID_ARMS)"))
+        end
+        selected
+    end
+end
 const VALIDATION_SCOPE = "interim_engineering_validation"
 const ART_PROFILE = "HS25"
 const READ_LENGTH = 150
@@ -536,6 +556,17 @@ end
 function validate_comparative_gate(
         df::DataFrames.DataFrame,
         targets::AbstractVector{<:AbstractString})::Nothing
+    # This interim gate asserts hybrid-olc vs naive AND vs scalable. If a run
+    # selected a subset of arms that omits any of the three (e.g. MYCELIA_RDV_ARMS
+    # drops :naive because it does not scale — td-ck03), the gate does not apply;
+    # skip it rather than error on a missing arm. validate_results still enforces
+    # per-arm evidence completeness for whatever arms did run.
+    required = Set(["naive", "scalable", "hybrid-olc"])
+    if !issubset(required, Set(df.arm))
+        @info "validate_comparative_gate skipped: run does not include all of " *
+              "naive/scalable/hybrid-olc" arms = sort(unique(df.arm))
+        return nothing
+    end
     for target in targets
         target_rows = df[df.name .== String(target), :]
         naive = only(DataFrames.eachrow(target_rows[target_rows.arm .== "naive", :]))
@@ -978,7 +1009,7 @@ function main()::Nothing
     n_rows = DataFrames.nrow(df)
     df.art_build = fill(conda_package_record("art", "art"), n_rows)
     df.megahit_build = fill(conda_package_record("megahit", "megahit"), n_rows)
-    if ENABLE_SOTA
+    if :sota_spades in ARMS
         # Only query the spades env when the SOTA arm actually ran (otherwise the
         # env may not exist and conda_package_record would error).
         df.spades_build = fill(conda_package_record("spades", "spades"), n_rows)
