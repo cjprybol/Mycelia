@@ -89,9 +89,12 @@ function build_qualmer_graph(
         mode::Symbol = :singlestrand,
         type_hint::Union{Nothing, Symbol} = nothing,
         ambiguous_action::Symbol = :dna,
-        memory_profile::Symbol = :full
+        memory_profile::Symbol = :full,
+        min_count::Int = 1
 )
     # Reduced quality profiles route through build_kmer_graph
+    # (aggregate profiles do NOT accept min_count — they are O(distinct kmers) already
+    # and are singlestrand-only; the prefilter applies to the :full qualmer path).
     if memory_profile == :ultralight_quality
         return build_kmer_graph_singlestrand_ultralight_quality(
             records, k;
@@ -116,7 +119,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     elseif mode == :doublestrand
         return build_qualmer_graph_doublestrand(
@@ -124,7 +128,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     elseif mode == :canonical
         return build_qualmer_graph_canonical(
@@ -132,7 +137,8 @@ function build_qualmer_graph(
             k;
             dataset_id = dataset_id,
             type_hint = type_hint,
-            ambiguous_action = ambiguous_action
+            ambiguous_action = ambiguous_action,
+            min_count = min_count
         )
     else
         error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")

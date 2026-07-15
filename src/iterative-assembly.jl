@@ -1730,6 +1730,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         k_ladder::Union{Nothing, Vector{Int}} = nothing,
         n_k_rungs::Union{Nothing, Int} = nothing,
         graph_mode::Symbol = :canonical,
+        qualmer_prefilter_min_count::Int = 1,
         verbose::Bool = true,
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
@@ -2309,7 +2310,8 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Building qualmer graph with k=$k...")
             end
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode,
+                min_count = qualmer_prefilter_min_count)
             num_kmers = length(MetaGraphsNext.labels(graph))
 
             if verbose

@@ -143,6 +143,7 @@ struct AssemblyConfig
     dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
+    qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op); DISTINCT from min_coverage (td-ck03)
 
     # Optional read-correction front-end (opt-in; default :none preserves today's
     # single-k-from-uncorrected-reads behavior byte-for-byte).
@@ -239,6 +240,7 @@ struct AssemblyConfig
             dedup_revcomp::Union{Bool, Nothing} = nothing,
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
+            qualmer_prefilter_min_count::Union{Int, Nothing} = nothing,
             corrector::Symbol = :none,
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
@@ -268,6 +270,15 @@ struct AssemblyConfig
         # overridden by passing an explicit dedup_revcomp=true/false.
         effective_dedup_revcomp = dedup_revcomp === nothing ?
                                   (corrector == :iterative) : dedup_revcomp
+        # Opt-in qualmer coverage prefilter (td-ck03). Default 1 = exact no-op.
+        # The iterative corrector re-assembles from a qualmer graph whose dominant
+        # memory sink is singleton error k-mers, so it auto-defaults to 2 (drops
+        # ONLY coverage-1 k-mers). DISTINCT from min_coverage (downstream solidity
+        # threshold) so the td-h6w9 variation-preservation holdout stays safe. An
+        # explicit value overrides the auto-default.
+        effective_qualmer_prefilter_min_count = qualmer_prefilter_min_count === nothing ?
+                                                (corrector == :iterative ? 2 : 1) :
+                                                qualmer_prefilter_min_count
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -360,6 +371,10 @@ struct AssemblyConfig
         end
         if min_coverage < 1
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+        if effective_qualmer_prefilter_min_count < 1
+            error("qualmer_prefilter_min_count must be positive, got " *
+                  "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
         end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
@@ -494,6 +509,7 @@ struct AssemblyConfig
             effective_dedup_revcomp,
             compact_unitigs,
             memory_profile,
+            effective_qualmer_prefilter_min_count,
             corrector,
             effective_skip_solid,
             effective_strategy,
@@ -1480,6 +1496,7 @@ function _run_stage1_correction(
             max_k = max_k,
             skip_solid = knobs.skip_solid,
             graph_mode = corrector_graph_mode,
+            qualmer_prefilter_min_count = config.qualmer_prefilter_min_count,
             n_k_rungs = knobs.n_k_rungs,
             max_iterations_per_k = knobs.max_iterations_per_k,
             hard_window = knobs.hard_window,
@@ -2119,7 +2136,8 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode,
+        min_count = config.qualmer_prefilter_min_count)
 
     # Contig extraction + AssemblyResult assembly is factored into
     # `_qualmer_graph_to_assembly` so the iterative corrector can REUSE its already-
