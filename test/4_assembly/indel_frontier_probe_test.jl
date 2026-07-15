@@ -122,7 +122,10 @@ Test.@testset "Checkpoint restores complete per-pass indel telemetry" begin
     )
 end
 
-function indel_frontier_probe_config()::Mycelia.ViterbiCorrectionConfig
+function indel_frontier_probe_config(;
+        band_width::Union{Nothing, Int} = 4,
+        target_vertex::Any = nothing,
+)::Mycelia.ViterbiCorrectionConfig
     return Mycelia.ViterbiCorrectionConfig(
         error_rate = 0.10,
         strand_mode = :singlestrand,
@@ -133,9 +136,95 @@ function indel_frontier_probe_config()::Mycelia.ViterbiCorrectionConfig
         deletion_extend_probability = 0.10,
         deletion_max_run = 3,
         max_insertion_run = 3,
-        band_width = 4,
-        beam_width = typemax(Int)
+        band_width = band_width,
+        beam_width = typemax(Int),
+        target_vertex = target_vertex,
     )
+end
+
+Test.@testset "Initial deletion relaxation honors the adaptive band" begin
+    graph = indel_frontier_probe_graph()
+    observation = [BioSequences.dna"ATGCG"]
+    zero_band_config = indel_frontier_probe_config(; band_width = 0)
+    unbounded_config = indel_frontier_probe_config(; band_width = nothing)
+
+    zero_band_metrics = Mycelia._probe_indel_frontier(
+        graph,
+        observation,
+        :DNA;
+        config = zero_band_config,
+        strand_mode = :singlestrand,
+    )
+    unbounded_metrics = Mycelia._probe_indel_frontier(
+        graph,
+        observation,
+        :DNA;
+        config = unbounded_config,
+        strand_mode = :singlestrand,
+    )
+
+    Test.@test zero_band_metrics.reason == :complete
+    Test.@test zero_band_metrics.completed_columns == 1
+    Test.@test zero_band_metrics.frontier_area == 1
+    Test.@test zero_band_metrics.peak_frontier == 1
+    Test.@test unbounded_metrics.reason == :complete
+    Test.@test unbounded_metrics.completed_columns == 1
+    Test.@test unbounded_metrics.frontier_area > zero_band_metrics.frontier_area
+    Test.@test unbounded_metrics.peak_frontier > zero_band_metrics.peak_frontier
+
+    zero_band_result = only(Mycelia.correct_observations(
+        graph,
+        [observation];
+        config = zero_band_config,
+    ).paths)
+    unbounded_result = only(Mycelia.correct_observations(
+        graph,
+        [observation];
+        config = unbounded_config,
+    ).paths)
+
+    Test.@test zero_band_result.diagnostics[:completed_columns] == 1
+    Test.@test zero_band_result.diagnostics[:frontier_area] == 1
+    Test.@test zero_band_result.diagnostics[:peak_frontier] == 1
+    Test.@test unbounded_result.diagnostics[:completed_columns] == 1
+    Test.@test unbounded_result.diagnostics[:frontier_area] >
+               zero_band_result.diagnostics[:frontier_area]
+    Test.@test unbounded_result.diagnostics[:peak_frontier] >
+               zero_band_result.diagnostics[:peak_frontier]
+
+    target_vertex = BioSequences.dna"GCGTA"
+    zero_band_target = Mycelia.correct_observations(
+        graph,
+        [observation];
+        config = indel_frontier_probe_config(
+            band_width = 0,
+            target_vertex = target_vertex,
+        ),
+    )
+    one_band_target = Mycelia.correct_observations(
+        graph,
+        [observation];
+        config = indel_frontier_probe_config(
+            band_width = 1,
+            target_vertex = target_vertex,
+        ),
+    )
+    unbounded_target = Mycelia.correct_observations(
+        graph,
+        [observation];
+        config = indel_frontier_probe_config(
+            band_width = nothing,
+            target_vertex = target_vertex,
+        ),
+    )
+
+    Test.@test only(zero_band_target.corrected_observations) === nothing
+    for result in (one_band_target, unbounded_target)
+        path_result = only(result.paths)
+        Test.@test [string(step.vertex_label) for step in path_result.path.steps] ==
+                   ["ATGCG", "GCGTA"]
+        Test.@test path_result.diagnostics[:move_counts][:D] == 1
+    end
 end
 
 Test.@testset "Indel topology-frontier probe" begin

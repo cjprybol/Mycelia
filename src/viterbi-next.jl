@@ -2089,6 +2089,15 @@ function _probe_indel_frontier(
         end
     end
 
+    # Apply the same net-gap band used by subsequent columns after the initial
+    # within-column deletion relaxation. In particular, a zero-width band must
+    # not retain leading D states that already sit outside the permitted band.
+    if config.band_width !== nothing
+        band = config.band_width
+        filter!(cell -> abs(cell.net_gap) <= band, match_frontier)
+        filter!(cell -> abs(cell.net_gap) <= band, deletion_frontier)
+    end
+
     insertion_frontier = Set{Cell}()
     layer_size = length(match_frontier) + length(deletion_frontier)
     frontier_area = _saturating_indel_frontier_add(frontier_area, layer_size)
@@ -2463,6 +2472,18 @@ function _viterbi_correct_observation_indel(
         return Rhizomorph.ViterbiDecodingResult(nothing, -Inf, diagnostics)
     end
     _relax_deletions!(1, match_scores, del_scores)
+
+    # The initial deletion relaxation is part of the first retained layer, so
+    # enforce the adaptive band here just as for every subsequent read column.
+    if band !== nothing
+        for scores in (match_scores, ins_scores, del_scores)
+            for state in collect(keys(scores))
+                if abs(state.net_gap) > band
+                    delete!(scores, state)
+                end
+            end
+        end
+    end
 
     initial_frontier = length(match_scores) + length(ins_scores) + length(del_scores)
     diagnostics[:frontier_area] = initial_frontier
