@@ -1,0 +1,4 @@
+arm,sequencing_tech,wall_seconds,identity,edit_distance,matches,aligned_bases,best_contig_length,best_orientation,n_contigs,total_assembled_bases,largest_contig,n50,k_progression,indel_requested,indel_attempted,indel_completed,indel_truncated,indel_engaged,trace_contract_errors,window_anchor_rejections,window_divergences,assembly_sha256
+nanopore,nanopore,69.733080375,0.1,1800,200,2000,200,forward,372,10063,200,26,3;11;31,207,25,25,0,14,0,16,0,5bcd67300d745f1e892f71c7021f178384ce59d63d1215e6f52b30fbac210382
+illumina,illumina,5.851929625,0.0655,1869,131,2000,131,forward,526,13124,131,24,3;11;31,0,0,0,0,0,0,0,0,d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311
+default_illumina_oracle,default,2.488882292,0.0655,1869,131,2000,131,forward,526,13124,131,24,3;11;31,0,0,0,0,0,0,0,0,d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311
