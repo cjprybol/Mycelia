@@ -2726,14 +2726,174 @@ function _metamdbg_selected_input(
     return (; flag, paths = normalized_paths)
 end
 
-const _METAMDBG_CONTRACT_SCHEMA_VERSION = 1
+const METAMDBG_VERSION = "1.4"
+const METAMDBG_ENVIRONMENT_SPEC_SHA256 =
+    "c6fbbb3c2e85ffae22764424333cda0937bfcf13187f9a40c20282c40736db3f"
+const METAMDBG_ENV_NAME =
+    "metamdbg-$(METAMDBG_VERSION)-$(first(METAMDBG_ENVIRONMENT_SPEC_SHA256, 16))"
+const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
+const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
+const _METAMDBG_CONTRACT_SCHEMA_VERSION = 2
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
+
+function _metamdbg_paths()::Tuple{String, String}
+    install_dir = joinpath(dirname(dirname(pathof(Mycelia))), "deps", "metamdbg")
+    return install_dir, joinpath(install_dir, "environment.yml")
+end
+
+function _metamdbg_sha256(path::AbstractString)::String
+    return SHA.bytes2hex(SHA.sha256(read(path)))
+end
+
+function _require_verified_metamdbg_environment_spec(
+        path::AbstractString,
+)::String
+    normalized_path = abspath(path)
+    if !isfile(normalized_path) || filesize(normalized_path) == 0
+        error(
+            "Bundled metaMDBG environment specification is missing or empty: " *
+            "$(normalized_path). Reinstall Mycelia before running metaMDBG.",
+        )
+    end
+    actual_sha256 = _metamdbg_sha256(normalized_path)
+    actual_sha256 == METAMDBG_ENVIRONMENT_SPEC_SHA256 || error(
+        "metaMDBG environment specification checksum mismatch: expected " *
+        "$(METAMDBG_ENVIRONMENT_SPEC_SHA256), got $(actual_sha256) for " *
+        "$(normalized_path).",
+    )
+    return normalized_path
+end
+
+function _metamdbg_expected_toolchain()::NamedTuple
+    return (
+        metamdbg_version = METAMDBG_VERSION,
+        environment_name = METAMDBG_ENV_NAME,
+        environment_spec_sha256 = METAMDBG_ENVIRONMENT_SPEC_SHA256,
+    )
+end
+
+function _metamdbg_environment_packages(;
+        conda_runner::AbstractString = CONDA_RUNNER,
+        command_reader::Function = command -> read(command, String),
+)::Dict{String, String}
+    command = Cmd(String[
+        String(conda_runner),
+        "list",
+        "-n",
+        METAMDBG_ENV_NAME,
+        "--json",
+    ])
+    package_records = JSON.parse(command_reader(command))
+    package_records isa AbstractVector || error(
+        "metaMDBG conda package inventory was not a JSON array.",
+    )
+    versions = Dict{String, String}()
+    for package_record in package_records
+        package_record isa AbstractDict || continue
+        name = get(package_record, "name", nothing)
+        version = get(package_record, "version", nothing)
+        if name isa AbstractString && version isa AbstractString
+            versions[String(name)] = String(version)
+        end
+    end
+    return versions
+end
+
+function _require_metamdbg_package_version(
+        versions::AbstractDict{<:AbstractString, <:AbstractString},
+)::NamedTuple
+    actual_version = get(versions, "metamdbg", nothing)
+    displayed_version =
+        actual_version === nothing ? "missing" : repr(actual_version)
+    actual_version == METAMDBG_VERSION || error(
+        "metaMDBG spec-addressed environment $(repr(METAMDBG_ENV_NAME)) must " *
+        "contain metamdbg exactly $(METAMDBG_VERSION), got " *
+        "$(displayed_version). " *
+        "Refusing to repair it in place; remove it manually before reinstalling.",
+    )
+    return _metamdbg_expected_toolchain()
+end
+
+function _require_expected_metamdbg_toolchain(toolchain::Any)::NamedTuple
+    expected = _metamdbg_expected_toolchain()
+    toolchain isa NamedTuple || error(
+        "metaMDBG dependency validation did not return toolchain provenance.",
+    )
+    toolchain == expected || error(
+        "metaMDBG dependency validation returned incompatible toolchain " *
+        "provenance: expected $(repr(expected)), got $(repr(toolchain)).",
+    )
+    return expected
+end
+
+function _metamdbg_install_lock_path()::String
+    return joinpath(
+        first(Base.DEPOT_PATH),
+        "locks",
+        "mycelia-$(METAMDBG_ENV_NAME)-install.pid",
+    )
+end
+
+function _with_metamdbg_install_lock(
+        action::Function,
+        lock_path::AbstractString,
+)::Any
+    normalized_lock_path = abspath(lock_path)
+    mkpath(dirname(normalized_lock_path))
+    return FileWatching.Pidfile.mkpidlock(
+        normalized_lock_path;
+        stale_age = _METAMDBG_INSTALL_LOCK_STALE_SECONDS,
+        refresh = _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS,
+    ) do
+        action()
+    end
+end
+
+function _ensure_metamdbg_installed_locked(;
+        paths::Tuple{String, String} = _metamdbg_paths(),
+        environment_checker::Function = () ->
+            check_bioconda_env_is_installed(METAMDBG_ENV_NAME),
+        environment_creator::Function = create_conda_env_from_yaml,
+        package_inspector::Function = _metamdbg_environment_packages,
+)::NamedTuple
+    install_dir, environment_path = paths
+    mkpath(install_dir)
+    verified_environment_path =
+        _require_verified_metamdbg_environment_spec(environment_path)
+    if !Bool(environment_checker())
+        environment_creator(
+            verified_environment_path,
+            METAMDBG_ENV_NAME;
+            force = false,
+        )
+    end
+    return _require_metamdbg_package_version(package_inspector())
+end
+
+function _ensure_metamdbg_installed(;
+        paths::Tuple{String, String} = _metamdbg_paths(),
+        environment_checker::Function = () ->
+            check_bioconda_env_is_installed(METAMDBG_ENV_NAME),
+        environment_creator::Function = create_conda_env_from_yaml,
+        package_inspector::Function = _metamdbg_environment_packages,
+        lock_path::AbstractString = _metamdbg_install_lock_path(),
+        lock_runner::Function = _with_metamdbg_install_lock,
+)::NamedTuple
+    return lock_runner(String(lock_path)) do
+        _ensure_metamdbg_installed_locked(;
+            paths,
+            environment_checker,
+            environment_creator,
+            package_inspector,
+        )
+    end
+end
 
 function _metamdbg_output_paths(
         outdir::AbstractString,
         graph_k::Int,
 )::NamedTuple
-    normalized_outdir = String(outdir)
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
     return (
         outdir = normalized_outdir,
         contigs_plain = joinpath(normalized_outdir, "contigs.fasta"),
@@ -2749,9 +2909,87 @@ function _metamdbg_output_paths(
     )
 end
 
+function _metamdbg_canonical_output_path(outdir::AbstractString)::String
+    stripped_outdir = strip(String(outdir))
+    isempty(stripped_outdir) && throw(ArgumentError("outdir must be nonempty."))
+    requested_path = normpath(abspath(stripped_outdir))
+    islink(requested_path) && throw(ArgumentError(
+        "metaMDBG outdir must not be a symbolic link: $(requested_path)",
+    ))
+
+    missing_components = String[]
+    existing_ancestor = requested_path
+    while !ispath(existing_ancestor)
+        islink(existing_ancestor) && throw(ArgumentError(
+            "metaMDBG outdir has a dangling symbolic-link ancestor: " *
+            "$(existing_ancestor)",
+        ))
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && error(
+            "Unable to find an existing ancestor for metaMDBG outdir: " *
+            "$(requested_path)",
+        )
+        push!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    isdir(existing_ancestor) || throw(ArgumentError(
+        "metaMDBG outdir has a non-directory ancestor: $(existing_ancestor)",
+    ))
+
+    canonical_path = realpath(existing_ancestor)
+    for component in Iterators.reverse(missing_components)
+        canonical_path = joinpath(canonical_path, component)
+    end
+    canonical_path = normpath(canonical_path)
+    if ispath(canonical_path) && !isdir(canonical_path)
+        throw(ArgumentError(
+            "metaMDBG outdir exists but is not a directory: $(canonical_path)",
+        ))
+    end
+    islink(canonical_path) && throw(ArgumentError(
+        "metaMDBG outdir must not be a symbolic link: $(canonical_path)",
+    ))
+    return canonical_path
+end
+
+function _metamdbg_output_lock_path(outdir::AbstractString)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    return joinpath(
+        dirname(normalized_outdir),
+        ".$(basename(normalized_outdir)).mycelia-metamdbg.lock",
+    )
+end
+
+function _with_metamdbg_output_lock(
+        action::Function,
+        outdir::AbstractString,
+)::Any
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    lock_path = _metamdbg_output_lock_path(canonical_outdir)
+    mkpath(dirname(lock_path))
+    try
+        Base.Filesystem.mkdir(lock_path; mode = 0o700)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "metaMDBG output is locked by another lifecycle: $(lock_path). " *
+            "If no workflow is active, remove this stale lock directory. Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    try
+        _metamdbg_canonical_output_path(canonical_outdir) == canonical_outdir ||
+            error("metaMDBG output path changed while acquiring its lock.")
+        return action()
+    finally
+        rm(lock_path)
+    end
+end
+
 function _metamdbg_input_contract(
         selected_input::NamedTuple,
         abundance_min::Int,
+        toolchain::NamedTuple = _metamdbg_expected_toolchain(),
 )::NamedTuple
     input_technology = if selected_input.flag == "--in-hifi"
         "hifi"
@@ -2778,6 +3016,7 @@ function _metamdbg_input_contract(
         input_flag = selected_input.flag,
         inputs,
         abundance_min,
+        toolchain,
     )
     serialized_contract = JSON.json(contract)
     signature = SHA.bytes2hex(SHA.sha256(serialized_contract))
@@ -2790,26 +3029,15 @@ function _metamdbg_input_contract(
     return (; contract, signature, contents)
 end
 
-function _metamdbg_has_reusable_output(
-        outputs::NamedTuple,
-        graph_k::Int,
-)::Bool
-    has_contigs = _metamdbg_nonempty_file(outputs.contigs_gz) ||
-                  _metamdbg_nonempty_file(outputs.contigs_plain)
-    has_graph = !isempty(_metamdbg_graph_candidates(outputs, graph_k)) ||
-                ispath(outputs.graph_alias) || islink(outputs.graph_alias)
-    return has_contigs || has_graph
-end
-
 function _require_metamdbg_contract!(
         outputs::NamedTuple,
         expected_contract::NamedTuple,
 )::String
     marker = outputs.contract_marker
-    if !isfile(marker)
+    if !isfile(marker) || islink(marker)
         error(
-            "metaMDBG refuses to reuse output without its provenance contract " *
-            "marker: $(marker). Remove the stale output directory and rerun.",
+            "metaMDBG provenance contract marker must be a regular, non-symlink " *
+            "file: $(marker). Remove the stale output directory and rerun.",
         )
     end
     filesize(marker) > 0 || error(
@@ -2818,10 +3046,40 @@ function _require_metamdbg_contract!(
     actual_contents = read(marker, String)
     actual_contents == expected_contract.contents || error(
         "metaMDBG existing output contract does not match the normalized " *
-        "input paths, input technology, input file metadata, or abundance_min " *
-        "for this invocation: $(marker). Refusing stale output reuse.",
+        "input paths, input technology, input file metadata, abundance_min, " *
+        "or exact toolchain for this invocation: $(marker). Refusing stale " *
+        "output reuse.",
     )
     return marker
+end
+
+function _prepare_metamdbg_output_root!(
+        outputs::NamedTuple,
+        expected_contract::NamedTuple,
+)::Bool
+    canonical_outdir = _metamdbg_canonical_output_path(outputs.outdir)
+    canonical_outdir == outputs.outdir || error(
+        "metaMDBG output path is not canonical: $(outputs.outdir)",
+    )
+    if !ispath(canonical_outdir)
+        mkpath(canonical_outdir)
+    end
+    isdir(canonical_outdir) && !islink(canonical_outdir) || error(
+        "metaMDBG outdir must be a regular directory, not a symbolic link: " *
+        "$(canonical_outdir)",
+    )
+
+    isempty(readdir(canonical_outdir)) && return false
+    marker = outputs.contract_marker
+    if !isfile(marker) || islink(marker)
+        error(
+            "metaMDBG refuses to adopt a nonempty output root without its " *
+            "regular provenance contract marker: $(canonical_outdir). " *
+            "Remove the partial or legacy output directory and rerun.",
+        )
+    end
+    _require_metamdbg_contract!(outputs, expected_contract)
+    return true
 end
 
 function _write_metamdbg_contract!(
@@ -2829,15 +3087,22 @@ function _write_metamdbg_contract!(
         input_contract::NamedTuple,
 )::String
     marker = outputs.contract_marker
+    if ispath(marker) || islink(marker)
+        error(
+            "metaMDBG refuses to overwrite an existing provenance contract " *
+            "marker: $(marker).",
+        )
+    end
     temporary_path, temporary_io = mktemp(dirname(marker))
     try
         write(temporary_io, input_contract.contents)
         flush(temporary_io)
         close(temporary_io)
+        chmod(temporary_path, 0o600)
         filesize(temporary_path) > 0 || error(
             "Failed to write metaMDBG provenance contract marker: $(marker).",
         )
-        mv(temporary_path, marker; force = true)
+        mv(temporary_path, marker)
     finally
         isopen(temporary_io) && close(temporary_io)
         rm(temporary_path; force = true)
@@ -2846,22 +3111,144 @@ function _write_metamdbg_contract!(
 end
 
 function _metamdbg_nonempty_file(path::AbstractString)::Bool
-    return isfile(path) && filesize(path) > 0
+    return isfile(path) && !islink(path) && filesize(path) > 0
+end
+
+function _require_metamdbg_regular_file(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = abspath(path)
+    if !isfile(normalized_path) || islink(normalized_path)
+        error("$(label) is not a regular, non-symlink file: $(normalized_path).")
+    end
+    filesize(normalized_path) > 0 || error(
+        "$(label) is empty: $(normalized_path).",
+    )
+    return normalized_path
+end
+
+function _require_valid_metamdbg_fasta(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_metamdbg_regular_file(path, label)
+    reader = try
+        Mycelia.open_fastx(normalized_path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    record_count = 0
+    try
+        for record in reader
+            record isa FASTX.FASTA.Record || error(
+                "$(label) is not valid FASTA: $(normalized_path).",
+            )
+            sequence = FASTX.sequence(String, record)
+            isempty(sequence) && error(
+                "$(label) contains an empty FASTA sequence at record " *
+                "$(record_count + 1): $(normalized_path).",
+            )
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch caught
+                caught isa InterruptException && rethrow()
+                error(
+                    "$(label) contains invalid DNA at FASTA record " *
+                    "$(record_count + 1): $(normalized_path). Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            record_count += 1
+        end
+    catch caught
+        caught isa InterruptException && rethrow()
+        if caught isa ErrorException && startswith(caught.msg, String(label))
+            rethrow()
+        end
+        error(
+            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+            sprint(showerror, caught),
+        )
+    finally
+        close(reader)
+    end
+    record_count > 0 || error(
+        "$(label) contains no FASTA records: $(normalized_path).",
+    )
+    return normalized_path
+end
+
+function _require_valid_metamdbg_gfa(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_metamdbg_regular_file(path, label)
+    segment_identifiers = Set{String}()
+    open(normalized_path, "r") do input
+        for (line_number, line) in enumerate(eachline(input))
+            isempty(line) && continue
+            fields = split(line, '\t'; keepempty = true)
+            first(fields) == "S" || continue
+            length(fields) >= 3 || error(
+                "$(label) has a malformed GFA segment at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            identifier = String(fields[2])
+            sequence = String(fields[3])
+            isempty(identifier) && error(
+                "$(label) has an empty GFA segment identifier at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            identifier in segment_identifiers && error(
+                "$(label) has duplicate GFA segment identifier " *
+                "$(repr(identifier)): $(normalized_path).",
+            )
+            if isempty(sequence) || sequence == "*"
+                error(
+                    "$(label) has no sequence for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path).",
+                )
+            end
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch caught
+                caught isa InterruptException && rethrow()
+                error(
+                    "$(label) has invalid DNA for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path). Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            push!(segment_identifiers, identifier)
+        end
+    end
+    isempty(segment_identifiers) && error(
+        "$(label) contains no sequence-bearing GFA segments: " *
+        "$(normalized_path).",
+    )
+    return normalized_path
 end
 
 function _existing_metamdbg_contigs(
         outputs::NamedTuple,
 )::Union{Nothing, String}
-    if _metamdbg_nonempty_file(outputs.contigs_gz)
+    if ispath(outputs.contigs_gz) || islink(outputs.contigs_gz)
+        _require_valid_metamdbg_fasta(
+            outputs.contigs_gz,
+            "metaMDBG compressed contigs artifact",
+        )
         return outputs.contigs_gz
-    elseif _metamdbg_nonempty_file(outputs.contigs_plain)
+    elseif ispath(outputs.contigs_plain) || islink(outputs.contigs_plain)
+        _require_valid_metamdbg_fasta(
+            outputs.contigs_plain,
+            "metaMDBG plain contigs artifact",
+        )
         return outputs.contigs_plain
-    end
-
-    for candidate in (outputs.contigs_gz, outputs.contigs_plain)
-        if ispath(candidate)
-            error("metaMDBG contigs artifact is empty or not a file: $(candidate)")
-        end
     end
     return nothing
 end
@@ -2904,9 +3291,13 @@ function _normalize_metamdbg_contigs!(
     existing_contigs = _existing_metamdbg_contigs(outputs)
     existing_contigs === nothing && return nothing
     existing_contigs == outputs.contigs_gz && return outputs.contigs_gz
-    return _gzip_metamdbg_contigs!(
+    compressed_contigs = _gzip_metamdbg_contigs!(
         outputs.contigs_plain,
         outputs.contigs_gz,
+    )
+    return _require_valid_metamdbg_fasta(
+        compressed_contigs,
+        "metaMDBG compressed contigs artifact",
     )
 end
 
@@ -2919,8 +3310,7 @@ function _metamdbg_graph_candidates(
     return sort!(filter(
         path -> begin
             filename = basename(path)
-            startswith(filename, prefix) && endswith(filename, "bps.gfa") &&
-                _metamdbg_nonempty_file(path)
+            startswith(filename, prefix) && endswith(filename, "bps.gfa")
         end,
         readdir(outputs.outdir; join = true),
     ))
@@ -2933,18 +3323,25 @@ function _normalize_metamdbg_graph!(
     candidates = _metamdbg_graph_candidates(outputs, graph_k)
     isempty(candidates) && return nothing
     length(candidates) == 1 || error(
-        "metaMDBG produced multiple nonempty graph artifacts for k=$(graph_k): " *
+        "metaMDBG produced multiple graph artifacts for k=$(graph_k): " *
         join(candidates, ", "),
+    )
+    graph_source = _require_valid_metamdbg_gfa(
+        only(candidates),
+        "metaMDBG graph artifact",
     )
 
     if ispath(outputs.graph_alias) || islink(outputs.graph_alias)
         rm(outputs.graph_alias; force = true)
     end
-    symlink(basename(only(candidates)), outputs.graph_alias)
-    _metamdbg_nonempty_file(outputs.graph_alias) || error(
-        "metaMDBG graph alias does not resolve to a nonempty artifact: " *
-        outputs.graph_alias,
-    )
+    symlink(basename(graph_source), outputs.graph_alias)
+    if !islink(outputs.graph_alias) || !isfile(outputs.graph_alias) ||
+       filesize(outputs.graph_alias) == 0
+        error(
+            "metaMDBG graph alias does not resolve to a nonempty artifact: " *
+            outputs.graph_alias,
+        )
+    end
     return outputs.graph_alias
 end
 
@@ -2971,28 +3368,191 @@ function _metamdbg_executor_script(
         outputs::NamedTuple,
         graph_k::Int,
         input_contract::NamedTuple,
+        ;
+        conda_runner::AbstractString = CONDA_RUNNER,
+        environment_path::AbstractString = last(_metamdbg_paths()),
 )::String
+    verified_environment_path =
+        _require_verified_metamdbg_environment_spec(environment_path)
+    outdir_parent = dirname(outputs.outdir)
+    outdir_base = basename(outputs.outdir)
+    lock_path = _metamdbg_output_lock_path(outputs.outdir)
     lines = String[
         "set -euo pipefail",
+        "umask 077",
         "outdir=$(Base.shell_escape(outputs.outdir))",
+        "outdir_parent=$(Base.shell_escape(outdir_parent))",
+        "outdir_base=$(Base.shell_escape(outdir_base))",
+        "lock_dir=$(Base.shell_escape(lock_path))",
         "contigs_plain=\"\$outdir/contigs.fasta\"",
         "contigs_gz=\"\$outdir/contigs.fasta.gz\"",
         "graph_alias=\"\$outdir/assemblyGraph_k$(graph_k).gfa\"",
         "contract_marker=\"\$outdir/$(_METAMDBG_CONTRACT_FILENAME)\"",
-        "expected_contract=\"\${contract_marker}.expected.\$\$\"",
-        "contract_tmp=\"\${contract_marker}.tmp.\$\$\"",
-        "mkdir -p \"\$outdir\"",
-        "cleanup_metamdbg_contract_tmp() {",
-        "  rm -f -- \"\$expected_contract\" \"\$contract_tmp\"",
+        "environment_spec=$(Base.shell_escape(verified_environment_path))",
+        "expected_spec_sha256=$(Base.shell_escape(METAMDBG_ENVIRONMENT_SPEC_SHA256))",
+        "expected_metamdbg_version=$(Base.shell_escape(METAMDBG_VERSION))",
+        "environment_name=$(Base.shell_escape(METAMDBG_ENV_NAME))",
+        "conda_runner=$(Base.shell_escape(conda_runner))",
+        "secure_tmpdir=",
+        "lock_acquired=0",
+        "mkdir -p -- \"\$outdir_parent\"",
+        "runtime_outdir_parent=\$(cd -- \"\$outdir_parent\" && pwd -P)",
+        "if [ \"\$runtime_outdir_parent\" != \"\$outdir_parent\" ]; then",
+        "  echo \"metaMDBG canonical output parent changed before execution\" >&2",
+        "  exit 1",
+        "fi",
+        "if ! mkdir -m 700 -- \"\$lock_dir\"; then",
+        "  echo \"metaMDBG output is locked by another lifecycle: \$lock_dir\" >&2",
+        "  exit 1",
+        "fi",
+        "lock_acquired=1",
+        "cleanup_metamdbg_lifecycle() {",
+        "  local status=\$?",
+        "  trap - EXIT INT TERM HUP",
+        "  if [ -n \"\$secure_tmpdir\" ]; then",
+        "    if ! rm -rf -- \"\$secure_tmpdir\"; then",
+        "      echo \"metaMDBG failed to remove secure lifecycle temporary directory\" >&2",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    fi",
+        "  fi",
+        "  if [ \"\$lock_acquired\" -eq 1 ]; then",
+        "    if ! rmdir -- \"\$lock_dir\"; then",
+        "      echo \"metaMDBG failed to release lifecycle lock: \$lock_dir\" >&2",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    fi",
+        "  fi",
+        "  exit \"\$status\"",
         "}",
-        "trap cleanup_metamdbg_contract_tmp EXIT",
+        "trap cleanup_metamdbg_lifecycle EXIT",
+        "trap 'exit 129' HUP",
+        "trap 'exit 130' INT",
+        "trap 'exit 143' TERM",
+        "if [ -L \"\$outdir\" ]; then",
+        "  echo \"metaMDBG outdir must not be a symbolic link: \$outdir\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ -e \"\$outdir\" ] && [ ! -d \"\$outdir\" ]; then",
+        "  echo \"metaMDBG outdir exists but is not a directory: \$outdir\" >&2",
+        "  exit 1",
+        "fi",
+        "mkdir -p -- \"\$outdir\"",
+        "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.\${outdir_base}.mycelia.XXXXXXXXXX\")",
+        "chmod 700 \"\$secure_tmpdir\"",
+        "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
+        "contract_new=\"\$secure_tmpdir/contract.new\"",
+        "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
+        "package_inventory=\"\$secure_tmpdir/conda-packages.json\"",
         "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
+        "chmod 600 \"\$expected_contract\"",
+        "contract_exists=0",
+        "if [ -n \"\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
+        "  if [ ! -f \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
+        "    echo \"metaMDBG refuses to adopt a nonempty output root without its regular provenance contract marker\" >&2",
+        "    exit 1",
+        "  fi",
+        "  test -s \"\$contract_marker\" || {",
+        "    echo \"metaMDBG provenance contract marker is empty\" >&2",
+        "    exit 1",
+        "  }",
+        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\" || {",
+        "    echo \"metaMDBG existing output contract does not match this invocation\" >&2",
+        "    exit 1",
+        "  }",
+        "  contract_exists=1",
+        "fi",
+        "if [ ! -f \"\$environment_spec\" ] || [ -L \"\$environment_spec\" ]; then",
+        "  echo \"metaMDBG environment specification is missing or not regular\" >&2",
+        "  exit 1",
+        "fi",
+        "if command -v sha256sum >/dev/null 2>&1; then",
+        "  actual_spec_sha256=\$(sha256sum -- \"\$environment_spec\" | awk '{print \$1}')",
+        "elif command -v shasum >/dev/null 2>&1; then",
+        "  actual_spec_sha256=\$(shasum -a 256 -- \"\$environment_spec\" | awk '{print \$1}')",
+        "else",
+        "  echo \"metaMDBG requires sha256sum or shasum to validate its environment\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ \"\$actual_spec_sha256\" != \"\$expected_spec_sha256\" ]; then",
+        "  echo \"metaMDBG environment specification checksum mismatch\" >&2",
+        "  exit 1",
+        "fi",
+        "\"\$conda_runner\" list -n \"\$environment_name\" '^metamdbg\$' --json > \"\$package_inventory\"",
+        "grep -Eq '\"name\"[[:space:]]*:[[:space:]]*\"metamdbg\"' \"\$package_inventory\" || {",
+        "  echo \"metaMDBG package is missing from environment \$environment_name\" >&2",
+        "  exit 1",
+        "}",
+        "grep -Eq '\"version\"[[:space:]]*:[[:space:]]*\"1\\.4\"' \"\$package_inventory\" || {",
+        "  echo \"metaMDBG environment must contain metamdbg exactly \$expected_metamdbg_version\" >&2",
+        "  exit 1",
+        "}",
+        "validate_fasta_stream() {",
+        "  awk '",
+        "    BEGIN { records = 0; sequence_bases = 0 }",
+        "    { sub(/\\r\$/, \"\", \$0) }",
+        "    /^>/ {",
+        "      if (records > 0 && sequence_bases == 0) exit 10",
+        "      records += 1",
+        "      sequence_bases = 0",
+        "      next",
+        "    }",
+        "    /^[[:space:]]*\$/ { next }",
+        "    {",
+        "      if (records == 0) exit 11",
+        "      if (\$0 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) exit 12",
+        "      sequence_bases += length(\$0)",
+        "    }",
+        "    END { if (records == 0 || sequence_bases == 0) exit 13 }",
+        "  ' || return 1",
+        "}",
+        "validate_contigs() {",
+        "  local path=\$1",
+        "  if [ ! -f \"\$path\" ] || [ -L \"\$path\" ] || [ ! -s \"\$path\" ]; then",
+        "    echo \"metaMDBG contigs are missing, empty, or not regular: \$path\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [[ \"\$path\" == *.gz ]]; then",
+        "    gzip -cd -- \"\$path\" | validate_fasta_stream || {",
+        "      echo \"metaMDBG contigs are not sequence-bearing FASTA: \$path\" >&2",
+        "      return 1",
+        "    }",
+        "  else",
+        "    validate_fasta_stream < \"\$path\" || {",
+        "      echo \"metaMDBG contigs are not sequence-bearing FASTA: \$path\" >&2",
+        "      return 1",
+        "    }",
+        "  fi",
+        "}",
+        "validate_gfa() {",
+        "  local path=\$1",
+        "  if [ ! -f \"\$path\" ] || [ -L \"\$path\" ] || [ ! -s \"\$path\" ]; then",
+        "    echo \"metaMDBG graph is missing, empty, or not regular: \$path\" >&2",
+        "    return 1",
+        "  fi",
+        "  awk -F '\\t' '",
+        "    \$1 == \"S\" {",
+        "      sub(/\\r\$/, \"\", \$3)",
+        "      if (NF < 3 || \$2 == \"\" || \$3 == \"\" || \$3 == \"*\") exit 20",
+        "      if (\$3 !~ /^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+\$/) exit 21",
+        "      if (seen[\$2]++) exit 22",
+        "      segments += 1",
+        "    }",
+        "    END { if (segments == 0) exit 23 }",
+        "  ' \"\$path\" || {",
+        "    echo \"metaMDBG graph has no unique sequence-bearing GFA segments: \$path\" >&2",
+        "    return 1",
+        "  }",
+        "}",
         "find_metamdbg_graph() {",
         "  local candidates=()",
         "  local candidate",
         "  shopt -s nullglob",
         "  for candidate in \"\$outdir\"/assemblyGraph_k$(graph_k)_*bps.gfa; do",
-        "    [ -s \"\$candidate\" ] && candidates+=(\"\$candidate\")",
+        "    if [ ! -f \"\$candidate\" ] || [ -L \"\$candidate\" ] || [ ! -s \"\$candidate\" ]; then",
+        "      echo \"metaMDBG graph candidate is empty or not regular: \$candidate\" >&2",
+        "      shopt -u nullglob",
+        "      return 2",
+        "    fi",
+        "    candidates+=(\"\$candidate\")",
         "  done",
         "  shopt -u nullglob",
         "  if [ \"\${#candidates[@]}\" -eq 0 ]; then",
@@ -3003,52 +3563,23 @@ function _metamdbg_executor_script(
         "  fi",
         "  printf '%s\\n' \"\${candidates[0]}\"",
         "}",
-        "has_reusable_output=0",
-        "if [ -s \"\$contigs_gz\" ] || [ -s \"\$contigs_plain\" ]; then",
-        "  has_reusable_output=1",
-        "fi",
-        "shopt -s nullglob",
-        "for candidate in \"\$outdir\"/assemblyGraph_k$(graph_k)_*bps.gfa; do",
-        "  [ -s \"\$candidate\" ] && has_reusable_output=1",
-        "done",
-        "shopt -u nullglob",
-        "if [ -e \"\$graph_alias\" ] || [ -L \"\$graph_alias\" ]; then",
-        "  has_reusable_output=1",
-        "fi",
-        "if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
-        "  test -s \"\$contract_marker\" || {",
-        "    echo \"metaMDBG provenance contract marker is empty\" >&2",
-        "    exit 1",
-        "  }",
-        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\" || {",
-        "    echo \"metaMDBG existing output contract does not match this invocation\" >&2",
-        "    exit 1",
-        "  }",
-        "elif [ \"\$has_reusable_output\" -eq 1 ]; then",
-        "  echo \"metaMDBG refuses to reuse output without its provenance contract marker\" >&2",
-        "  exit 1",
-        "fi",
-        "assembly_ran=0",
-        "if [ ! -s \"\$contigs_gz\" ] && [ ! -s \"\$contigs_plain\" ]; then",
-        "  $(asm_cmd)",
-        "  assembly_ran=1",
-        "fi",
-        "if [ ! -s \"\$contigs_gz\" ]; then",
-        "  test -s \"\$contigs_plain\" || {",
-        "    echo \"metaMDBG produced no nonempty contigs artifact\" >&2",
-        "    exit 1",
-        "  }",
-        "  gzip -c -- \"\$contigs_plain\" > \"\${contigs_gz}.tmp\"",
-        "  mv \"\${contigs_gz}.tmp\" \"\$contigs_gz\"",
-        "fi",
-        "test -s \"\$contigs_gz\"",
-        "if [ \"\$assembly_ran\" -eq 1 ]; then",
-        "  cp -- \"\$expected_contract\" \"\$contract_tmp\"",
-        "  mv -f -- \"\$contract_tmp\" \"\$contract_marker\"",
+        "if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
+        "  validate_contigs \"\$contigs_gz\"",
+        "elif [ -e \"\$contigs_plain\" ] || [ -L \"\$contigs_plain\" ]; then",
+        "  validate_contigs \"\$contigs_plain\"",
         "else",
-        "  test -s \"\$contract_marker\"",
-        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
+        "  $(asm_cmd)",
         "fi",
+        "if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
+        "  validate_contigs \"\$contigs_gz\"",
+        "else",
+        "  validate_contigs \"\$contigs_plain\"",
+        "  gzip -c -- \"\$contigs_plain\" > \"\$contigs_new\"",
+        "  chmod 600 \"\$contigs_new\"",
+        "  validate_contigs \"\$contigs_new\"",
+        "  mv -f -- \"\$contigs_new\" \"\$contigs_gz\"",
+        "fi",
+        "validate_contigs \"\$contigs_gz\"",
         "graph_status=0",
         "graph_source=\"\"",
         "graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
@@ -3061,11 +3592,98 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG produced no unique nonempty graph for k=$(graph_k)\" >&2",
         "  exit \"\$graph_status\"",
         "fi",
+        "validate_gfa \"\$graph_source\"",
         "rm -f -- \"\$graph_alias\"",
         "ln -s -- \"\$(basename \"\$graph_source\")\" \"\$graph_alias\"",
-        "test -s \"\$graph_alias\"",
+        "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
+        "validate_contigs \"\$contigs_gz\"",
+        "validate_gfa \"\$graph_source\"",
+        "if [ \"\$contract_exists\" -eq 1 ]; then",
+        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
+        "else",
+        "  if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
+        "    echo \"metaMDBG provenance marker appeared during locked execution\" >&2",
+        "    exit 1",
+        "  fi",
+        "  cp -- \"\$expected_contract\" \"\$contract_new\"",
+        "  chmod 600 \"\$contract_new\"",
+        "  mv -n -- \"\$contract_new\" \"\$contract_marker\"",
+        "  if [ -e \"\$contract_new\" ]; then",
+        "    echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
+        "    exit 1",
+        "  fi",
+        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
+        "fi",
     ]
     return join(lines, "\n")
+end
+
+function _metamdbg_provenance(input_contract::NamedTuple)::NamedTuple
+    toolchain = _metamdbg_expected_toolchain()
+    return (;
+        contract_signature = input_contract.signature,
+        metamdbg_version = toolchain.metamdbg_version,
+        environment_name = toolchain.environment_name,
+        environment_spec_sha256 = toolchain.environment_spec_sha256,
+    )
+end
+
+function _metamdbg_complete_result(
+        outputs::NamedTuple,
+        artifacts::NamedTuple,
+        input_contract::NamedTuple,
+)::NamedTuple
+    return (;
+        status = :complete,
+        outdir = outputs.outdir,
+        contigs = artifacts.contigs,
+        graph = artifacts.graph,
+        contract_marker = outputs.contract_marker,
+        provenance = _metamdbg_provenance(input_contract),
+    )
+end
+
+function _metamdbg_planned_result(
+        status::Symbol,
+        submission::Any,
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+)::NamedTuple
+    status in (:planned, :submitted) || throw(ArgumentError(
+        "metaMDBG asynchronous status must be :planned or :submitted.",
+    ))
+    return (;
+        status,
+        submission,
+        outdir = outputs.outdir,
+        expected_artifacts = (;
+            contigs = outputs.contigs_gz,
+            graph = outputs.graph_alias,
+            contract_marker = outputs.contract_marker,
+        ),
+        provenance = _metamdbg_provenance(input_contract),
+    )
+end
+
+function _metamdbg_existing_artifacts(
+        outputs::NamedTuple,
+        graph_k::Int,
+)::Union{Nothing, NamedTuple}
+    existing_contigs = _normalize_metamdbg_contigs!(outputs)
+    existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
+    if existing_contigs !== nothing && existing_graph !== nothing
+        return (;
+            outdir = outputs.outdir,
+            contigs = existing_contigs,
+            graph = existing_graph,
+        )
+    elseif existing_contigs === nothing && existing_graph !== nothing
+        error(
+            "metaMDBG output is inconsistent: graph exists without contigs in " *
+            outputs.outdir,
+        )
+    end
+    return nothing
 end
 
 function _run_metamdbg(;
@@ -3084,43 +3702,17 @@ function _run_metamdbg(;
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing,
-        dependency_checker::Function = () -> Mycelia.add_bioconda_env("metamdbg"),
+        dependency_checker::Function = _ensure_metamdbg_installed,
         local_runner::Function = Base.run,
 )::NamedTuple
     selected_input = _metamdbg_selected_input(hifi_reads, ont_reads)
-    isempty(strip(outdir)) && throw(ArgumentError("outdir must be nonempty."))
     abundance_min > 0 || throw(ArgumentError("abundance_min must be positive."))
     threads > 0 || throw(ArgumentError("threads must be positive."))
     graph_k >= 0 || throw(ArgumentError("graph_k must be nonnegative."))
-    if ispath(outdir) && !isdir(outdir)
-        throw(ArgumentError("metaMDBG outdir exists but is not a directory: $(outdir)"))
-    end
-    mkpath(outdir)
-
     outputs = _metamdbg_output_paths(outdir, graph_k)
-    input_contract = _metamdbg_input_contract(selected_input, abundance_min)
-    contract_marker_exists = ispath(outputs.contract_marker) ||
-                             islink(outputs.contract_marker)
-    if contract_marker_exists ||
-            _metamdbg_has_reusable_output(outputs, graph_k)
-        _require_metamdbg_contract!(outputs, input_contract)
-    end
-    existing_contigs = _normalize_metamdbg_contigs!(outputs)
-    existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
-    if existing_contigs !== nothing && existing_graph !== nothing
-        return (;
-            outdir = outputs.outdir,
-            contigs = existing_contigs,
-            graph = existing_graph,
-        )
-    elseif existing_contigs === nothing && existing_graph !== nothing
-        error(
-            "metaMDBG output is inconsistent: graph exists without contigs in " *
-            outputs.outdir,
-        )
-    end
-
-    dependency_checker()
+    toolchain = _metamdbg_expected_toolchain()
+    input_contract =
+        _metamdbg_input_contract(selected_input, abundance_min, toolchain)
     asm_cmd_args = String[
         "metaMDBG",
         "asm",
@@ -3143,55 +3735,116 @@ function _run_metamdbg(;
         "--threads",
         string(threads),
     ]
-    asm_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(asm_cmd_args)`
-    gfa_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`
+    asm_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(asm_cmd_args)`
+    gfa_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(gfa_cmd_args)`
+    resolved_executor = executor === nothing ?
+                        Mycelia.LocalExecutor() :
+                        Mycelia.resolve_executor(executor)
 
-    if executor !== nothing
-        script = _metamdbg_executor_script(
-            Mycelia.command_string(asm_command),
-            Mycelia.command_string(gfa_command),
+    if resolved_executor isa Mycelia.LocalExecutor
+        return _with_metamdbg_output_lock(outputs.outdir) do
+            has_contract = _prepare_metamdbg_output_root!(
+                outputs,
+                input_contract,
+            )
+            existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
+            if existing_artifacts !== nothing
+                has_contract || error(
+                    "metaMDBG complete output is missing its provenance contract.",
+                )
+                _require_metamdbg_contract!(outputs, input_contract)
+                return _metamdbg_complete_result(
+                    outputs,
+                    existing_artifacts,
+                    input_contract,
+                )
+            end
+
+            _require_expected_metamdbg_toolchain(dependency_checker())
+            existing_contigs = _normalize_metamdbg_contigs!(outputs)
+            if existing_contigs === nothing
+                local_runner(asm_command)
+                existing_contigs = _normalize_metamdbg_contigs!(outputs)
+                existing_contigs === nothing && error(
+                    "metaMDBG assembly produced no sequence-bearing contigs " *
+                    "artifact in $(outputs.outdir).",
+                )
+            end
+            existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
+            if existing_graph === nothing
+                local_runner(gfa_command)
+            end
+            artifacts = _require_metamdbg_artifacts!(outputs, graph_k)
+            if has_contract
+                _require_metamdbg_contract!(outputs, input_contract)
+            else
+                _write_metamdbg_contract!(outputs, input_contract)
+            end
+            _require_metamdbg_contract!(outputs, input_contract)
+            return _metamdbg_complete_result(
+                outputs,
+                artifacts,
+                input_contract,
+            )
+        end
+    end
+
+    complete_result = _with_metamdbg_output_lock(outputs.outdir) do
+        has_contract = _prepare_metamdbg_output_root!(outputs, input_contract)
+        existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
+        if existing_artifacts === nothing
+            return nothing
+        end
+        has_contract || error(
+            "metaMDBG complete output is missing its provenance contract.",
+        )
+        _require_metamdbg_contract!(outputs, input_contract)
+        return _metamdbg_complete_result(
             outputs,
-            graph_k,
+            existing_artifacts,
             input_contract,
         )
-        job = Mycelia.build_execution_job(
-            cmd = script,
-            job_name = job_name,
-            site = site,
-            time_limit = time_limit,
-            cpus_per_task = threads,
-            mem_gb = mem_gb,
-            partition = partition,
-            qos = qos,
-            account = account,
-            mail_user = mail_user,
-        )
-        resolved_executor = Mycelia.resolve_executor(executor)
-        Mycelia.execute(job, resolved_executor)
-        if resolved_executor isa Mycelia.LocalExecutor
-            _require_metamdbg_contract!(outputs, input_contract)
-            return _require_metamdbg_artifacts!(outputs, graph_k)
-        end
-        return (;
-            outdir = outputs.outdir,
-            contigs = outputs.contigs_gz,
-            graph = outputs.graph_alias,
-        )
     end
+    complete_result !== nothing && return complete_result
 
-    if existing_contigs === nothing
-        local_runner(asm_command)
-        existing_contigs = _normalize_metamdbg_contigs!(outputs)
-        existing_contigs === nothing && error(
-            "metaMDBG assembly produced no nonempty contigs artifact in " *
-            outputs.outdir,
-        )
-        _write_metamdbg_contract!(outputs, input_contract)
+    script = _metamdbg_executor_script(
+        Mycelia.command_string(asm_command),
+        Mycelia.command_string(gfa_command),
+        outputs,
+        graph_k,
+        input_contract,
+    )
+    job = Mycelia.build_execution_job(
+        cmd = script,
+        job_name = job_name,
+        site = site,
+        time_limit = time_limit,
+        cpus_per_task = threads,
+        mem_gb = mem_gb,
+        partition = partition,
+        qos = qos,
+        account = account,
+        mail_user = mail_user,
+    )
+    if resolved_executor isa Mycelia.SlurmExecutor &&
+       !resolved_executor.dry_run
+        _require_expected_metamdbg_toolchain(dependency_checker())
     end
-    if existing_graph === nothing
-        local_runner(gfa_command)
+    submission = Mycelia.execute(job, resolved_executor)
+    status = if resolved_executor isa Mycelia.CollectExecutor ||
+                resolved_executor isa Mycelia.DryRunExecutor ||
+                (resolved_executor isa Mycelia.SlurmExecutor &&
+                 resolved_executor.dry_run)
+        :planned
+    else
+        :submitted
     end
-    return _require_metamdbg_artifacts!(outputs, graph_k)
+    return _metamdbg_planned_result(
+        status,
+        submission,
+        outputs,
+        input_contract,
+    )
 end
 
 """
@@ -3214,9 +3867,14 @@ Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
 from this wrapper rather than advertised as a false combined-input contract.
 
 # Returns
-A named tuple with `outdir`, the nonempty `contigs.fasta.gz`, and a stable graph
-alias `assemblyGraph_k<k>.gfa`. The graph alias resolves to metaMDBG's validated
-dynamic `assemblyGraph_k<k>_<length>bps.gfa` artifact.
+Synchronous execution and complete reuse return `status = :complete`, `outdir`,
+the sequence-bearing `contigs.fasta.gz`, a stable `assemblyGraph_k<k>.gfa`
+alias, the contract marker, and exact toolchain provenance. Nonlocal execution
+returns `status = :planned` for collected/dry-run jobs or `:submitted` for a
+real submission, together with the backend `submission` result and
+`expected_artifacts`; planned paths are not reported as completed artifacts.
+The graph alias resolves to metaMDBG's validated dynamic
+`assemblyGraph_k<k>_<length>bps.gfa` artifact.
 
 # Details
 - Uses metaMDBG's minimizer-space de Bruijn graphs for metagenomic assembly.
@@ -3226,10 +3884,15 @@ dynamic `assemblyGraph_k<k>_<length>bps.gfa` artifact.
   rerunning metaMDBG. If contigs exist but the requested graph does not, only
   graph generation runs. Complete and partial reuse require an exact durable
   contract marker for the normalized input paths, technology flag, input file
-  size/modification metadata, and `abundance_min`; stale or unprovenanced output
-  fails before provisioning.
-- Local and executor scripts validate nonempty contigs and exactly one dynamic
-  graph for the requested `graph_k` before reporting success.
+  size/modification metadata, `abundance_min`, metaMDBG 1.4, the spec-addressed
+  environment name, and the bundled environment-spec checksum. Any nonempty
+  uncontracted output root fails before provisioning.
+- Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
+  environment and validates the installed package inventory before execution.
+- Local and executor lifecycles validate sequence-bearing DNA FASTA and at
+  least one unique sequence-bearing DNA GFA segment under an adjacent atomic
+  output lock. The contract is stamped only after both semantic validations
+  pass.
 """
 function run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
