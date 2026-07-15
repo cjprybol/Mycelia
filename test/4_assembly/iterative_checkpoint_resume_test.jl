@@ -1028,6 +1028,39 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
 
         valid_checkpoint = JSON.parsefile(checkpoint_file)
 
+        inconsistent_improvement_rate = Base.deepcopy(valid_checkpoint)
+        inconsistent_row = Base.first(
+            inconsistent_improvement_rate["iteration_history"]["3"])
+        inconsistent_row["improvement_rate"] += 0.125
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, inconsistent_improvement_rate, 2)
+        end
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint iteration history improvement_rate must equal " *
+            "improvements_made / total_reads",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
+
+        zero_total_reads = Base.deepcopy(valid_checkpoint)
+        zero_total_row = Base.first(
+            zero_total_reads["iteration_history"]["3"])
+        zero_total_row["improvements_made"] = 0
+        zero_total_row["total_reads"] = 0
+        zero_total_row["improvement_rate"] = 0.0
+        Base.open(checkpoint_file, "w") do io
+            JSON.print(io, zero_total_reads, 2)
+        end
+        checkpoint_test_error(
+            ArgumentError,
+            "checkpoint iteration history total_reads must be positive",
+        ) do
+            checkpoint_resume_invocation(
+                input_fastq, output_directory)
+        end
+
         # Schema-v2 checkpoints are complete snapshots, not best-effort legacy
         # records. Missing cursor/root or mandatory per-pass fields fail closed.
         partial_root = Base.deepcopy(valid_checkpoint)
@@ -1147,6 +1180,10 @@ Test.@testset "Iterative checkpoint resumes the next pass exactly" begin
         improvement_rows = improvement_overflow["iteration_history"]["3"]
         improvement_rows[1]["improvements_made"] = typemax(Int)
         improvement_rows[2]["improvements_made"] = 1
+        for row in improvement_rows
+            row["improvement_rate"] =
+                row["improvements_made"] / row["total_reads"]
+        end
         improvement_overflow["total_improvements"] = typemax(Int)
         open(checkpoint_file, "w") do io
             JSON.print(io, improvement_overflow, 2)

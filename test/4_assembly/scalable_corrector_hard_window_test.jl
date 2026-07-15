@@ -34,6 +34,21 @@ end
 
 struct _RejectingWindowImprover end
 
+struct _UnchangedWindowImprover end
+
+function (::_UnchangedWindowImprover)(
+        read::FASTX.FASTQ.Record,
+        ::Any,
+        ::Int;
+        soft_weights::Union{
+            Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
+        kwargs...,
+)::Tuple{FASTX.FASTQ.Record, Bool}
+    accumulator = Base.something(soft_weights)
+    accumulator.weights[FASTX.identifier(read)] = 1.0
+    return read, false
+end
+
 function (::_RejectingWindowImprover)(
         read::FASTX.FASTQ.Record,
         ::Any,
@@ -290,6 +305,39 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
             last(first_window),
             k,
         )
+
+        # A valid no-change decode still contributes responsibilities to the
+        # next M-step. The per-window transaction must therefore merge its staged
+        # accumulator even though there is no corrected sequence to splice.
+        unchanged_soft_weights = R.SoftEdgeWeightAccumulator()
+        unchanged_soft_weights.weights[:existing] = 2.0
+        unchanged_read,
+        unchanged_improved,
+        unchanged_decoded_windows,
+        unchanged_divergent_windows =
+            Mycelia.improve_read_likelihood_windowed_detail(
+                read,
+                graph,
+                k,
+                hard;
+                graph_mode = :canonical,
+                soft_weights = unchanged_soft_weights,
+                pad = 0,
+                max_window = 500,
+                read_improver = _UnchangedWindowImprover(),
+            )
+        unchanged_window = Base.only(legacy_windows)
+        unchanged_identifier =
+            "overlong_hard_region_win$(Base.first(unchanged_window))_" *
+            "$(Base.last(unchanged_window))"
+        Test.@test !unchanged_improved
+        Test.@test unchanged_decoded_windows == 1
+        Test.@test unchanged_divergent_windows == 0
+        Test.@test FASTX.sequence(Base.String, unchanged_read) == sequence
+        Test.@test unchanged_soft_weights.weights[:existing] == 2.0
+        Test.@test unchanged_soft_weights.weights[unchanged_identifier] == 1.0
+        Test.@test Base.Set(Base.keys(unchanged_soft_weights.weights)) ==
+                   Base.Set{Any}([:existing, unchanged_identifier])
 
         # Soft-EM updates are transactional per window. The injected improver
         # stages one unique responsibility and mutates each window's final base:

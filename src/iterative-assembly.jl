@@ -1485,6 +1485,14 @@ function _symbolize_iteration_stats(
             "checkpoint iteration history $key must be finite and nonnegative"))
         stats[key] = number
     end
+    total_reads = stats[:total_reads]
+    total_reads > 0 || throw(ArgumentError(
+        "checkpoint iteration history total_reads must be positive"))
+    expected_improvement_rate = stats[:improvements_made] / total_reads
+    stats[:improvement_rate] == expected_improvement_rate ||
+        throw(ArgumentError(
+            "checkpoint iteration history improvement_rate must equal " *
+            "improvements_made / total_reads"))
     return stats
 end
 
@@ -4002,7 +4010,20 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             calibrated_gap_threshold = calibrated_gap_threshold,
             indel_params = window_indel_params,
             substitution_error_rate = substitution_error_rate)
-        improved || continue
+        if !improved
+            # A valid no-change decode still contributes E-step responsibilities.
+            # Lower layers publish into this staged accumulator only after every
+            # path/trace/length contract passes, so structural failures merge an
+            # empty accumulator. Changed windows remain staged until their splice
+            # and overlap contracts pass below.
+            if soft_weights !== nothing
+                _merge_soft_edge_weights!(
+                    soft_weights,
+                    Base.something(staged_soft_weights),
+                )
+            end
+            continue
+        end
         dseq = FASTX.sequence(String, decoded_sub)
         dqual = String(FASTX.quality(decoded_sub))
         dseq_chars = collect(dseq)
