@@ -8,6 +8,14 @@ Both embedded manifests therefore retain source
 `code_sha=8adbb91e1e17ecfec3391248c7ab5dcd0dc1dd42` instead of claiming the later
 snapshot commit.
 
+A later review-fix commit,
+`69d2870c5e325ed38003fc252385c36827a898c7`, limits production-code changes to
+bounded checkpoint reading and raw-undirected successor indexing. The benchmarks use no
+checkpoints, and their runtime and fixed-toy graphs are directed
+`:singlestrand` or `:doublestrand`. This snapshot therefore remains exact
+evidence for source commit `8adbb91e1e17ecfec3391248c7ab5dcd0dc1dd42`;
+it does not claim final-head provenance.
+
 ## Branching/frontier runtime calibration
 
 - The runtime matrix measures warmed pair-HMM runtime against topology/frontier

@@ -271,15 +271,25 @@
       "generation_id": "9f605263967604e7f8b4bc26ac1d2601110e9e312cd6ef43c18d13c1f07e552e"
     }
   },
+  "post_generation_review_fixes": [
+    {
+      "commit": "69d2870c5e325ed38003fc252385c36827a898c7",
+      "measured_path_impact": "none; checkpointing is disabled and benchmark graphs are directed",
+      "scope": [
+        "bound checkpoint reads to immutable maximum-sized snapshots",
+        "match raw undirected probe topology to weighted conversion"
+      ]
+    }
+  ],
   "schema_version": 1,
-  "snapshot_semantics": "artifact-only commit after a clean source generation; embedded manifests intentionally retain source_code_sha",
+  "snapshot_semantics": "artifact-only commit after a clean source generation; embedded manifests intentionally retain code_sha",
   "source_code_sha": "8adbb91e1e17ecfec3391248c7ab5dcd0dc1dd42",
   "source_code_short_sha": "8adbb91e",
   "supplemental_files": [
     {
-      "bytes": 2562,
+      "bytes": 3007,
       "path": "README.md",
-      "sha256": "01c1b7e202e4b4acbd305058554b8d362ea07c860c44e5ffc0d9ba5b1f593011"
+      "sha256": "dda847217f3d0c6a35bda0e5b77616f4e99adf98f180d84c71df817b612daa11"
     }
   ],
   "validation": {
