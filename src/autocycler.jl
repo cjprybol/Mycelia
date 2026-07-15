@@ -456,6 +456,19 @@ function _require_valid_autocycler_fasta(
                     "$(record_count + 1): $(normalized_path).",
                 ),
             )
+            sequence = FASTX.sequence(String, record)
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch error
+                error isa InterruptException && rethrow()
+                throw(
+                    ErrorException(
+                        "$(label) contains invalid DNA at FASTA record " *
+                        "$(record_count + 1): $(normalized_path). Cause: " *
+                        sprint(showerror, error),
+                    ),
+                )
+            end
             record_count += 1
         end
     catch error
@@ -546,11 +559,53 @@ function _autocycler_pair_identifier(identifier::AbstractString)::String
     return replace(first_token, r"/[12]$" => "")
 end
 
-function _autocycler_pair_role(identifier::AbstractString)::Union{Nothing, Int}
+function _autocycler_identifier_pair_role(
+        identifier::AbstractString,
+)::Union{Nothing, Int}
     first_token = first(split(String(identifier)))
     role_match = match(r"/([12])$", first_token)
     return role_match === nothing ? nothing :
            parse(Int, something(only(role_match.captures)))
+end
+
+function _autocycler_casava_pair_role(
+        description::AbstractString,
+)::Union{Nothing, Int}
+    detected_role::Union{Nothing, Int} = nothing
+    for token in split(String(description))
+        role_match = match(r"^([12]):[YN]:", token)
+        role_match === nothing && continue
+        role = parse(Int, something(only(role_match.captures)))
+        if detected_role !== nothing && detected_role != role
+            throw(
+                ArgumentError(
+                    "FASTQ description contains conflicting CASAVA mate roles: " *
+                    repr(String(description)),
+                ),
+            )
+        end
+        detected_role = role
+    end
+    return detected_role
+end
+
+function _autocycler_pair_role(
+        identifier::AbstractString,
+        description::AbstractString = "",
+)::Union{Nothing, Int}
+    identifier_role = _autocycler_identifier_pair_role(identifier)
+    casava_role = _autocycler_casava_pair_role(description)
+    if identifier_role !== nothing && casava_role !== nothing &&
+       identifier_role != casava_role
+        throw(
+            ArgumentError(
+                "FASTQ identifier and CASAVA description contain conflicting " *
+                "explicit mate roles: identifier=$(repr(String(identifier))), " *
+                "description=$(repr(String(description))).",
+            ),
+        )
+    end
+    return identifier_role === nothing ? casava_role : identifier_role
 end
 
 function _validate_autocycler_fastq(
@@ -608,15 +663,18 @@ function _validate_autocycler_paired_fastqs(
             end
             identifier_1 = String(FASTX.identifier(record_1))
             identifier_2 = String(FASTX.identifier(record_2))
-            role_1 = _autocycler_pair_role(identifier_1)
-            role_2 = _autocycler_pair_role(identifier_2)
+            description_1 = String(FASTX.description(record_1))
+            description_2 = String(FASTX.description(record_2))
+            role_1 = _autocycler_pair_role(identifier_1, description_1)
+            role_2 = _autocycler_pair_role(identifier_2, description_2)
             roles_valid = (role_1 === nothing && role_2 === nothing) ||
                           (role_1 == 1 && role_2 == 2)
             roles_valid || throw(ArgumentError(
                 "Autocycler paired short reads have invalid explicit mate " *
                 "roles at record $(pair_count): " *
                 "R1=$(repr(identifier_1)), R2=$(repr(identifier_2)); " *
-                "expected /1 then /2.",
+                "expected R1 role 1 then R2 role 2 from /1,/2 suffixes or " *
+                "CASAVA descriptions.",
             ))
             if _autocycler_pair_identifier(identifier_1) !=
                _autocycler_pair_identifier(identifier_2)
@@ -697,6 +755,12 @@ end
 
 function _autocycler_output_lock_path(out_dir::AbstractString)::String
     canonical_out_dir = _canonical_autocycler_output_path(out_dir)
+    return _autocycler_output_lock_path_from_canonical(canonical_out_dir)
+end
+
+function _autocycler_output_lock_path_from_canonical(
+        canonical_out_dir::AbstractString,
+)::String
     lock_name = ".$(basename(canonical_out_dir))$(_AUTOCYCLER_OUTPUT_LOCK_SUFFIX)"
     return joinpath(dirname(canonical_out_dir), lock_name)
 end
@@ -710,10 +774,12 @@ function _with_autocycler_output_lock(
 )::Any
     stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
     poll_interval > 0 || throw(ArgumentError("poll_interval must be positive."))
-    lock_path = _autocycler_output_lock_path(out_dir)
+    canonical_out_dir = _canonical_autocycler_output_path(out_dir)
+    lock_path = _autocycler_output_lock_path_from_canonical(canonical_out_dir)
     mkpath(dirname(lock_path))
+    locked_action = () -> action(canonical_out_dir)
     return pidlock_runner(
-        action,
+        locked_action,
         lock_path;
         stale_age,
         poll_interval,
@@ -1169,14 +1235,14 @@ end
 
 function _run_autocycler_with_reserved_output(
         normalized_long_reads::AbstractString,
-        normalized_out_dir::AbstractString;
+        reserved_out_dir::AbstractString;
         threads::Integer,
         jobs::Integer,
         read_type::AbstractString,
         dependency_checker::Function,
         runner::Function,
 )::NamedTuple
-    validated_out_dir = _validate_autocycler_output_dir(normalized_out_dir)
+    validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
     toolchain = dependency_checker()
     prepared_out_dir = _prepare_autocycler_output_dir(validated_out_dir)
     _, script_path, _ = _autocycler_paths()
@@ -1234,10 +1300,10 @@ function _run_autocycler(
     )
     validate_long_reads &&
         _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
-    return output_lock_runner(normalized_out_dir) do
+    return output_lock_runner(normalized_out_dir) do reserved_out_dir
         _run_autocycler_with_reserved_output(
             normalized_long_reads,
-            normalized_out_dir;
+            reserved_out_dir;
             threads,
             jobs,
             read_type = normalized_read_type,
@@ -1422,12 +1488,12 @@ function _run_autocycler_polished(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
-    return output_lock_runner(normalized_out_dir) do
+    return output_lock_runner(normalized_out_dir) do reserved_out_dir
         _run_autocycler_polished_with_reserved_output(
             normalized_long_reads,
             normalized_short_reads_1,
             normalized_short_reads_2,
-            normalized_out_dir;
+            reserved_out_dir;
             threads,
             jobs,
             read_type = normalized_read_type,

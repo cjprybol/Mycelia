@@ -796,6 +796,53 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test Mycelia._autocycler_output_lock_path(aliased_output) ==
                        expected_alias_lock
 
+            retarget_target = joinpath(temp_dir, "retarget-target")
+            mkpath(retarget_target)
+            expected_canonical_output = joinpath(
+                realpath(symlink_target),
+                "nested",
+                "results",
+            )
+            retargeted_output = joinpath(
+                realpath(retarget_target),
+                "nested",
+                "results",
+            )
+            retargeting_pidlock_runner = function (
+                    action::Function,
+                    lock_path::AbstractString;
+                    stale_age::Real,
+                    poll_interval::Real,
+            )
+                Test.@test lock_path == expected_alias_lock
+                Test.@test stale_age > 0
+                Test.@test poll_interval > 0
+                rm(symlink_ancestor)
+                symlink(retarget_target, symlink_ancestor)
+                return action()
+            end
+            retargeting_output_lock_runner = function (
+                    action::Function,
+                    output_path::AbstractString,
+            )
+                return Mycelia._with_autocycler_output_lock(
+                    action,
+                    output_path;
+                    pidlock_runner = retargeting_pidlock_runner,
+                )
+            end
+            retarget_result = Mycelia._run_autocycler(
+                long_reads,
+                aliased_output;
+                dependency_checker = () -> nothing,
+                runner = _autocycler_test_runner!,
+                output_lock_runner = retargeting_output_lock_runner,
+            )
+            Test.@test retarget_result.outdir == expected_canonical_output
+            Test.@test isfile(retarget_result.assembly)
+            Test.@test isfile(retarget_result.graph)
+            Test.@test !ispath(retargeted_output)
+
             cheap_parameter_error = _autocycler_test_error() do
                 Mycelia._run_autocycler(
                     malformed_long_reads,
@@ -1004,6 +1051,31 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test occursin(
                 "not valid FASTA",
                 sprint(showerror, malformed_fasta_error),
+            )
+
+            invalid_dna_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    fasta_path = only(filter(
+                        path -> endswith(path, ".fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(fasta_path, ">invalid_dna\nACGTZ\n")
+                end
+                return nothing
+            end
+            invalid_dna_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "invalid-dna-fasta");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = invalid_dna_runner,
+                )
+            end
+            Test.@test invalid_dna_error isa ErrorException
+            Test.@test occursin(
+                "contains invalid DNA",
+                sprint(showerror, invalid_dna_error),
             )
 
             malformed_gfa_runner = function (step::NamedTuple)
@@ -1252,6 +1324,33 @@ Test.@testset "Autocycler wrapper" begin
                 "not valid FASTA",
                 sprint(showerror, malformed_final_error),
             )
+
+            invalid_final_dna_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :pypolca
+                    final_fasta = only(filter(
+                        path -> endswith(path, "_corrected.fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(final_fasta, ">invalid_dna\nACGTZ\n")
+                end
+                return nothing
+            end
+            invalid_final_dna_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "invalid-polished-dna");
+                    dependency_checker = () -> nothing,
+                    runner = invalid_final_dna_runner,
+                )
+            end
+            Test.@test invalid_final_dna_error isa ErrorException
+            Test.@test occursin(
+                "contains invalid DNA",
+                sprint(showerror, invalid_final_dna_error),
+            )
         end
     end
 
@@ -1484,6 +1583,59 @@ Test.@testset "Autocycler wrapper" begin
             )
             Test.@test runner_calls[] == 0
             Test.@test !ispath(joinpath(temp_dir, "reversed-should-not-run"))
+
+            write(short_reads_1, "@pair 1:N:0:ACGT\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair 2:N:0:ACGT\nACGT\n+\nIIII\n")
+            Test.@test Mycelia._validate_autocycler_paired_fastqs(
+                short_reads_1,
+                short_reads_2,
+            ) == 1
+
+            write(short_reads_1, "@pair 2:N:0:ACGT\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair 1:N:0:ACGT\nACGT\n+\nIIII\n")
+            casava_reversed_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "casava-reversed-should-not-run");
+                    dependency_checker = () -> nothing,
+                    runner = runner,
+                )
+            end
+            Test.@test casava_reversed_error isa ArgumentError
+            Test.@test occursin(
+                "invalid explicit mate roles",
+                sprint(showerror, casava_reversed_error),
+            )
+            Test.@test runner_calls[] == 0
+            Test.@test !ispath(joinpath(
+                temp_dir,
+                "casava-reversed-should-not-run",
+            ))
+
+            write(short_reads_1, "@pair/1 2:N:0:ACGT\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair/2 2:N:0:ACGT\nACGT\n+\nIIII\n")
+            conflicting_role_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "conflicting-role-should-not-run");
+                    dependency_checker = () -> nothing,
+                    runner = runner,
+                )
+            end
+            Test.@test conflicting_role_error isa ArgumentError
+            Test.@test occursin(
+                "conflicting explicit mate roles",
+                sprint(showerror, conflicting_role_error),
+            )
+            Test.@test runner_calls[] == 0
+            Test.@test !ispath(joinpath(
+                temp_dir,
+                "conflicting-role-should-not-run",
+            ))
 
             fasta_pair = joinpath(temp_dir, "not-fastq.fasta")
             write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
