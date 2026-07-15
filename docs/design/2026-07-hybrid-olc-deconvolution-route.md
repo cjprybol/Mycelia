@@ -49,10 +49,14 @@ parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
 assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
 remains available for a single HiFi *or* single ONT input and fails before
 provisioning when both, neither, an empty path set, or a missing/empty input file
-is supplied. It reuses only validated nonempty contigs plus the exact requested-k
-dynamic graph when the durable provenance contract matches the normalized input
-technology, ordered paths, file size/mtime metadata, and `abundance_min`; legacy
-plain contigs are normalized to `contigs.fasta.gz`.
+is supplied. The wrapper uses an exact metaMDBG 1.4, spec-hash-addressed
+environment and validates its package inventory before execution. It reuses only
+structurally valid, sequence-bearing contigs plus the exact requested-k dynamic
+graph when the durable provenance contract matches the normalized input
+technology, ordered paths, file size/mtime metadata, `abundance_min`, and pinned
+toolchain identity; legacy plain contigs are normalized to `contigs.fasta.gz`.
+Any nonempty output directory without that contract is rejected rather than
+adopted as partial state.
 
 This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
 false dual-long workflow would make benchmark comparisons invalid.
@@ -115,8 +119,10 @@ arguments.
 ## Ownership and failure behavior
 
 With `output_dir = nothing`, the route owns a temporary workflow root and every
-corrected FASTQ. It deletes those artifacts on success and failure. With a
-caller-supplied output directory, corrected FASTQs and final tool artifacts are
+corrected FASTQ. Cleanup is best effort for ordinary filesystem failures, with
+retained paths recorded in result provenance when a result can be returned;
+cancellation is always rethrown. With a caller-supplied output directory,
+corrected FASTQs and final tool artifacts are
 preserved for auditing. A non-empty persistent output directory is rejected so
 stale assemblies cannot be mistaken for current results. Large alignment SAMs,
 filtered SAMs, and BWA index files are removed after successful polishing by
@@ -126,13 +132,18 @@ records them explicitly and therefore requires a persistent `output_dir`.
 Missing, empty, malformed, reordered, or count-changing inputs and corrected
 read sets fail before the combined assembler. Missing/empty corrected FASTQs,
 zero corrected read counts, absent assemblies, and absent Autocycler graphs
-also fail loudly.
+also fail loudly. Persistent workflow and tool output roots are protected by
+adjacent interprocess locks held from output validation through artifact
+finalization and cleanup, so concurrent invocations cannot share a lifecycle.
 
 ## Provenance and reproducibility
 
 Every `AssemblyResult` records the workflow, exact correction technologies,
-input and corrected read counts, correction settings, polishing order, and
-caller-owned artifacts. Autocycler additionally records:
+input and corrected read counts, requested options, effective per-read-set
+correction knobs, `max_k`, indel parameters, substitution-error rate, polishing
+order, cleanup retention, and caller-owned artifacts. Injected correction
+runners that do not report an effective field record it as unavailable rather
+than copying the requested value. Autocycler additionally records:
 
 - the immutable upstream script revision and verified SHA-256;
 - the bundled environment specification SHA-256; and
@@ -142,11 +153,21 @@ The installer uses the immutable environment name
 `autocycler-0.5.2-d6aef758`, derived from the compatibility version and the
 pinned bundled-environment SHA-256. A same-version interprocess lock serializes
 direct installation, first-use creation, and revalidation. An existing
-content-addressed environment is never recreated in place. Missing or
+spec-hash-addressed environment is never recreated in place. Missing or
 incompatible packages fail closed with instructions to stop active workflows
 before manually removing and reinstalling the environment, while a future
 spec/version receives a different name and cannot replace an environment that
 an older workflow is actively using.
+
+The single-input metaMDBG wrapper applies the same fail-closed principles with
+the separate `metamdbg-1.4-c6fbbb3c2e85ffae` environment specification. Local
+execution returns
+`status = :complete` only after semantic FASTA/GFA validation and durable
+contract finalization. A nonlocal executor returns `status = :planned` for a
+collected or dry-run job and `status = :submitted` for a real submission,
+together with the executor result and `expected_artifacts`; it does not present
+planned paths as completed artifacts. The submitted script independently locks
+the output root and performs the same validation before committing provenance.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream

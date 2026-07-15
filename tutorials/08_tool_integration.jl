@@ -92,8 +92,10 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # autocycler_result.assembly_stats["toolchain"]
 #
 # metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
-# combined HiFi-plus-ONT adapter.
-# Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
+# combined HiFi-plus-ONT adapter. Synchronous execution returns :complete only
+# after semantic FASTA/GFA validation; collected or dry-run jobs return :planned.
+# metamdbg_result = Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
+# @assert metamdbg_result.status == :complete
 #
 # Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size = 31)
 # Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)
