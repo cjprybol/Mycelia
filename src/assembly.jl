@@ -2687,39 +2687,389 @@ function run_velvetg(velvet_dir::String; outdir::String = velvet_dir,
     return (; outdir, contigs = contigs_file, stats = stats_file)
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+function _metamdbg_selected_input(
+        hifi_reads::Union{String, Vector{String}, Nothing},
+        ont_reads::Union{String, Vector{String}, Nothing},
+)::NamedTuple
+    has_hifi_reads = hifi_reads !== nothing
+    has_ont_reads = ont_reads !== nothing
+    if has_hifi_reads == has_ont_reads
+        throw(ArgumentError(
+            "metaMDBG requires exactly one input technology: provide " *
+            "either hifi_reads or ont_reads, but not both.",
+        ))
+    end
 
-Run metaMDBG assembler for metagenomic long-read assembly.
+    selected_reads = has_hifi_reads ? hifi_reads : ont_reads
+    selected_paths = selected_reads isa String ? [selected_reads] : selected_reads
+    technology = has_hifi_reads ? "hifi_reads" : "ont_reads"
+    flag = has_hifi_reads ? "--in-hifi" : "--in-ont"
+    isempty(selected_paths) && throw(ArgumentError(
+        "metaMDBG $(technology) must contain at least one non-empty path.",
+    ))
 
-# Arguments
-- `hifi_reads::Union{String,Vector{String},Nothing}`: Path(s) to HiFi (PacBio) read files (default: nothing)
-- `ont_reads::Union{String,Vector{String},Nothing}`: Path(s) to ONT (Nanopore) read files (default: nothing)
-- `outdir::String`: Output directory path (default: "metamdbg_output")
-- `abundance_min::Int`: Minimum abundance threshold (default: 3)
-- `threads::Int`: Number of threads to use (default: get_default_threads())
-- `graph_k::Int`: K-mer resolution level for graph generation (default: 21)
+    normalized_paths = String[]
+    for path in selected_paths
+        stripped_path = strip(path)
+        isempty(stripped_path) && throw(ArgumentError(
+            "metaMDBG $(technology) must contain at least one non-empty path.",
+        ))
+        normalized_path = normpath(abspath(stripped_path))
+        isfile(normalized_path) || throw(ArgumentError(
+            "metaMDBG $(technology) input file does not exist: $(normalized_path)",
+        ))
+        filesize(normalized_path) > 0 || throw(ArgumentError(
+            "metaMDBG $(technology) input file is empty: $(normalized_path)",
+        ))
+        push!(normalized_paths, normalized_path)
+    end
+    return (; flag, paths = normalized_paths)
+end
 
-Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
-`--in-hifi` and `--in-ont`; mixed HiFi-plus-ONT assembly is therefore excluded
-from this wrapper rather than advertised as a false combined-input contract.
-Graph generation: Automatically generates assembly graphs using the specified k-mer resolution.
+const _METAMDBG_CONTRACT_SCHEMA_VERSION = 1
+const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
 
-# Returns
-Named tuple containing:
-- `outdir::String`: Path to output directory
-- `contigs::String`: Path to contigs file
-- `graph::String`: Path to assembly graph file
+function _metamdbg_output_paths(
+        outdir::AbstractString,
+        graph_k::Int,
+)::NamedTuple
+    normalized_outdir = String(outdir)
+    return (
+        outdir = normalized_outdir,
+        contigs_plain = joinpath(normalized_outdir, "contigs.fasta"),
+        contigs_gz = joinpath(normalized_outdir, "contigs.fasta.gz"),
+        graph_alias = joinpath(
+            normalized_outdir,
+            "assemblyGraph_k$(graph_k).gfa",
+        ),
+        contract_marker = joinpath(
+            normalized_outdir,
+            _METAMDBG_CONTRACT_FILENAME,
+        ),
+    )
+end
 
-# Details
-- Uses metaMDBG's minimizer-space de Bruijn graphs for metagenomic assembly
-- Specifically designed for long-read metagenomic data
-- Handles species abundance variation and strain diversity
-- Produces both contigs and assembly graphs
-- Automatically creates and uses a conda environment with metamdbg
-- Skips assembly if output directory already exists
-"""
-function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
+function _metamdbg_input_contract(
+        selected_input::NamedTuple,
+        abundance_min::Int,
+)::NamedTuple
+    input_technology = if selected_input.flag == "--in-hifi"
+        "hifi"
+    elseif selected_input.flag == "--in-ont"
+        "ont"
+    else
+        error("Unsupported metaMDBG input flag: $(selected_input.flag)")
+    end
+    inputs = map(selected_input.paths) do path
+        file_status = stat(path)
+        modification_time_ns = round(
+            Int64,
+            file_status.mtime * 1_000_000_000,
+        )
+        return (
+            path = path,
+            size_bytes = Int64(file_status.size),
+            modification_time_ns,
+        )
+    end
+    contract = (
+        schema_version = _METAMDBG_CONTRACT_SCHEMA_VERSION,
+        input_technology,
+        input_flag = selected_input.flag,
+        inputs,
+        abundance_min,
+    )
+    serialized_contract = JSON.json(contract)
+    signature = SHA.bytes2hex(SHA.sha256(serialized_contract))
+    contents = JSON.json((;
+        schema_version = _METAMDBG_CONTRACT_SCHEMA_VERSION,
+        signature_algorithm = "sha256",
+        signature,
+        contract,
+    )) * "\n"
+    return (; contract, signature, contents)
+end
+
+function _metamdbg_has_reusable_output(
+        outputs::NamedTuple,
+        graph_k::Int,
+)::Bool
+    has_contigs = _metamdbg_nonempty_file(outputs.contigs_gz) ||
+                  _metamdbg_nonempty_file(outputs.contigs_plain)
+    has_graph = !isempty(_metamdbg_graph_candidates(outputs, graph_k)) ||
+                ispath(outputs.graph_alias) || islink(outputs.graph_alias)
+    return has_contigs || has_graph
+end
+
+function _require_metamdbg_contract!(
+        outputs::NamedTuple,
+        expected_contract::NamedTuple,
+)::String
+    marker = outputs.contract_marker
+    if !isfile(marker)
+        error(
+            "metaMDBG refuses to reuse output without its provenance contract " *
+            "marker: $(marker). Remove the stale output directory and rerun.",
+        )
+    end
+    filesize(marker) > 0 || error(
+        "metaMDBG provenance contract marker is empty: $(marker).",
+    )
+    actual_contents = read(marker, String)
+    actual_contents == expected_contract.contents || error(
+        "metaMDBG existing output contract does not match the normalized " *
+        "input paths, input technology, input file metadata, or abundance_min " *
+        "for this invocation: $(marker). Refusing stale output reuse.",
+    )
+    return marker
+end
+
+function _write_metamdbg_contract!(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+)::String
+    marker = outputs.contract_marker
+    temporary_path, temporary_io = mktemp(dirname(marker))
+    try
+        write(temporary_io, input_contract.contents)
+        flush(temporary_io)
+        close(temporary_io)
+        filesize(temporary_path) > 0 || error(
+            "Failed to write metaMDBG provenance contract marker: $(marker).",
+        )
+        mv(temporary_path, marker; force = true)
+    finally
+        isopen(temporary_io) && close(temporary_io)
+        rm(temporary_path; force = true)
+    end
+    return marker
+end
+
+function _metamdbg_nonempty_file(path::AbstractString)::Bool
+    return isfile(path) && filesize(path) > 0
+end
+
+function _existing_metamdbg_contigs(
+        outputs::NamedTuple,
+)::Union{Nothing, String}
+    if _metamdbg_nonempty_file(outputs.contigs_gz)
+        return outputs.contigs_gz
+    elseif _metamdbg_nonempty_file(outputs.contigs_plain)
+        return outputs.contigs_plain
+    end
+
+    for candidate in (outputs.contigs_gz, outputs.contigs_plain)
+        if ispath(candidate)
+            error("metaMDBG contigs artifact is empty or not a file: $(candidate)")
+        end
+    end
+    return nothing
+end
+
+function _gzip_metamdbg_contigs!(
+        plain_path::AbstractString,
+        gzip_path::AbstractString,
+)::String
+    temporary_path, temporary_io = mktemp(dirname(gzip_path))
+    close(temporary_io)
+    try
+        open(plain_path, "r") do input
+            open(temporary_path, "w") do raw_output
+                gzip_output = CodecZlib.GzipCompressorStream(raw_output)
+                try
+                    buffer = Vector{UInt8}(undef, 1024 * 1024)
+                    while !eof(input)
+                        bytes_read = readbytes!(input, buffer)
+                        bytes_read == 0 && break
+                        write(gzip_output, view(buffer, 1:bytes_read))
+                    end
+                finally
+                    close(gzip_output)
+                end
+            end
+        end
+        _metamdbg_nonempty_file(temporary_path) || error(
+            "Failed to gzip metaMDBG contigs from $(plain_path).",
+        )
+        mv(temporary_path, gzip_path; force = true)
+    finally
+        rm(temporary_path; force = true)
+    end
+    return String(gzip_path)
+end
+
+function _normalize_metamdbg_contigs!(
+        outputs::NamedTuple,
+)::Union{Nothing, String}
+    existing_contigs = _existing_metamdbg_contigs(outputs)
+    existing_contigs === nothing && return nothing
+    existing_contigs == outputs.contigs_gz && return outputs.contigs_gz
+    return _gzip_metamdbg_contigs!(
+        outputs.contigs_plain,
+        outputs.contigs_gz,
+    )
+end
+
+function _metamdbg_graph_candidates(
+        outputs::NamedTuple,
+        graph_k::Int,
+)::Vector{String}
+    isdir(outputs.outdir) || return String[]
+    prefix = "assemblyGraph_k$(graph_k)_"
+    return sort!(filter(
+        path -> begin
+            filename = basename(path)
+            startswith(filename, prefix) && endswith(filename, "bps.gfa") &&
+                _metamdbg_nonempty_file(path)
+        end,
+        readdir(outputs.outdir; join = true),
+    ))
+end
+
+function _normalize_metamdbg_graph!(
+        outputs::NamedTuple,
+        graph_k::Int,
+)::Union{Nothing, String}
+    candidates = _metamdbg_graph_candidates(outputs, graph_k)
+    isempty(candidates) && return nothing
+    length(candidates) == 1 || error(
+        "metaMDBG produced multiple nonempty graph artifacts for k=$(graph_k): " *
+        join(candidates, ", "),
+    )
+
+    if ispath(outputs.graph_alias) || islink(outputs.graph_alias)
+        rm(outputs.graph_alias; force = true)
+    end
+    symlink(basename(only(candidates)), outputs.graph_alias)
+    _metamdbg_nonempty_file(outputs.graph_alias) || error(
+        "metaMDBG graph alias does not resolve to a nonempty artifact: " *
+        outputs.graph_alias,
+    )
+    return outputs.graph_alias
+end
+
+function _require_metamdbg_artifacts!(
+        outputs::NamedTuple,
+        graph_k::Int,
+)::NamedTuple
+    contigs = _normalize_metamdbg_contigs!(outputs)
+    contigs === nothing && error(
+        "metaMDBG produced neither contigs.fasta.gz nor contigs.fasta in " *
+        outputs.outdir,
+    )
+    graph = _normalize_metamdbg_graph!(outputs, graph_k)
+    graph === nothing && error(
+        "metaMDBG produced no nonempty assemblyGraph_k$(graph_k)_*bps.gfa " *
+        "artifact in $(outputs.outdir).",
+    )
+    return (; outdir = outputs.outdir, contigs, graph)
+end
+
+function _metamdbg_executor_script(
+        asm_cmd::String,
+        gfa_cmd::String,
+        outputs::NamedTuple,
+        graph_k::Int,
+        input_contract::NamedTuple,
+)::String
+    lines = String[
+        "set -euo pipefail",
+        "outdir=$(Base.shell_escape(outputs.outdir))",
+        "contigs_plain=\"\$outdir/contigs.fasta\"",
+        "contigs_gz=\"\$outdir/contigs.fasta.gz\"",
+        "graph_alias=\"\$outdir/assemblyGraph_k$(graph_k).gfa\"",
+        "contract_marker=\"\$outdir/$(_METAMDBG_CONTRACT_FILENAME)\"",
+        "expected_contract=\"\${contract_marker}.expected.\$\$\"",
+        "contract_tmp=\"\${contract_marker}.tmp.\$\$\"",
+        "mkdir -p \"\$outdir\"",
+        "cleanup_metamdbg_contract_tmp() {",
+        "  rm -f -- \"\$expected_contract\" \"\$contract_tmp\"",
+        "}",
+        "trap cleanup_metamdbg_contract_tmp EXIT",
+        "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
+        "find_metamdbg_graph() {",
+        "  local candidates=()",
+        "  local candidate",
+        "  shopt -s nullglob",
+        "  for candidate in \"\$outdir\"/assemblyGraph_k$(graph_k)_*bps.gfa; do",
+        "    [ -s \"\$candidate\" ] && candidates+=(\"\$candidate\")",
+        "  done",
+        "  shopt -u nullglob",
+        "  if [ \"\${#candidates[@]}\" -eq 0 ]; then",
+        "    return 1",
+        "  elif [ \"\${#candidates[@]}\" -ne 1 ]; then",
+        "    echo \"metaMDBG produced multiple graphs for k=$(graph_k)\" >&2",
+        "    return 2",
+        "  fi",
+        "  printf '%s\\n' \"\${candidates[0]}\"",
+        "}",
+        "has_reusable_output=0",
+        "if [ -s \"\$contigs_gz\" ] || [ -s \"\$contigs_plain\" ]; then",
+        "  has_reusable_output=1",
+        "fi",
+        "shopt -s nullglob",
+        "for candidate in \"\$outdir\"/assemblyGraph_k$(graph_k)_*bps.gfa; do",
+        "  [ -s \"\$candidate\" ] && has_reusable_output=1",
+        "done",
+        "shopt -u nullglob",
+        "if [ -e \"\$graph_alias\" ] || [ -L \"\$graph_alias\" ]; then",
+        "  has_reusable_output=1",
+        "fi",
+        "if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
+        "  test -s \"\$contract_marker\" || {",
+        "    echo \"metaMDBG provenance contract marker is empty\" >&2",
+        "    exit 1",
+        "  }",
+        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\" || {",
+        "    echo \"metaMDBG existing output contract does not match this invocation\" >&2",
+        "    exit 1",
+        "  }",
+        "elif [ \"\$has_reusable_output\" -eq 1 ]; then",
+        "  echo \"metaMDBG refuses to reuse output without its provenance contract marker\" >&2",
+        "  exit 1",
+        "fi",
+        "assembly_ran=0",
+        "if [ ! -s \"\$contigs_gz\" ] && [ ! -s \"\$contigs_plain\" ]; then",
+        "  $(asm_cmd)",
+        "  assembly_ran=1",
+        "fi",
+        "if [ ! -s \"\$contigs_gz\" ]; then",
+        "  test -s \"\$contigs_plain\" || {",
+        "    echo \"metaMDBG produced no nonempty contigs artifact\" >&2",
+        "    exit 1",
+        "  }",
+        "  gzip -c -- \"\$contigs_plain\" > \"\${contigs_gz}.tmp\"",
+        "  mv \"\${contigs_gz}.tmp\" \"\$contigs_gz\"",
+        "fi",
+        "test -s \"\$contigs_gz\"",
+        "if [ \"\$assembly_ran\" -eq 1 ]; then",
+        "  cp -- \"\$expected_contract\" \"\$contract_tmp\"",
+        "  mv -f -- \"\$contract_tmp\" \"\$contract_marker\"",
+        "else",
+        "  test -s \"\$contract_marker\"",
+        "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
+        "fi",
+        "graph_status=0",
+        "graph_source=\"\"",
+        "graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
+        "if [ \"\$graph_status\" -eq 1 ]; then",
+        "  $(gfa_cmd)",
+        "  graph_status=0",
+        "  graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
+        "fi",
+        "if [ \"\$graph_status\" -ne 0 ]; then",
+        "  echo \"metaMDBG produced no unique nonempty graph for k=$(graph_k)\" >&2",
+        "  exit \"\$graph_status\"",
+        "fi",
+        "rm -f -- \"\$graph_alias\"",
+        "ln -s -- \"\$(basename \"\$graph_source\")\" \"\$graph_alias\"",
+        "test -s \"\$graph_alias\"",
+    ]
+    return join(lines, "\n")
+end
+
+function _run_metamdbg(;
+        hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
         ont_reads::Union{String, Vector{String}, Nothing} = nothing,
         outdir::String = "metamdbg_output",
         abundance_min::Int = 3,
@@ -2733,78 +3083,77 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)
-
-    has_hifi_reads = !isnothing(hifi_reads)
-    has_ont_reads = !isnothing(ont_reads)
-    if has_hifi_reads == has_ont_reads
-        throw(
-            ArgumentError(
-                "metaMDBG requires exactly one input technology: provide " *
-                "either hifi_reads or ont_reads, but not both.",
-            ),
-        )
+        mail_user::Union{Nothing, String} = nothing,
+        dependency_checker::Function = () -> Mycelia.add_bioconda_env("metamdbg"),
+        local_runner::Function = Base.run,
+)::NamedTuple
+    selected_input = _metamdbg_selected_input(hifi_reads, ont_reads)
+    isempty(strip(outdir)) && throw(ArgumentError("outdir must be nonempty."))
+    abundance_min > 0 || throw(ArgumentError("abundance_min must be positive."))
+    threads > 0 || throw(ArgumentError("threads must be positive."))
+    graph_k >= 0 || throw(ArgumentError("graph_k must be nonnegative."))
+    if ispath(outdir) && !isdir(outdir)
+        throw(ArgumentError("metaMDBG outdir exists but is not a directory: $(outdir)"))
     end
-    selected_reads = has_hifi_reads ? hifi_reads : ont_reads
-    selected_paths = selected_reads isa String ? [selected_reads] : selected_reads
-    if isempty(selected_paths) || any(path -> isempty(strip(path)), selected_paths)
-        technology = has_hifi_reads ? "hifi_reads" : "ont_reads"
-        throw(ArgumentError(
-            "metaMDBG $(technology) must contain at least one non-empty path.",
-        ))
-    end
-
-    Mycelia.add_bioconda_env("metamdbg")
     mkpath(outdir)
 
-    contigs_file = joinpath(outdir, "contigs.fasta")
-    graph_file = joinpath(outdir, "graph.gfa")
+    outputs = _metamdbg_output_paths(outdir, graph_k)
+    input_contract = _metamdbg_input_contract(selected_input, abundance_min)
+    contract_marker_exists = ispath(outputs.contract_marker) ||
+                             islink(outputs.contract_marker)
+    if contract_marker_exists ||
+            _metamdbg_has_reusable_output(outputs, graph_k)
+        _require_metamdbg_contract!(outputs, input_contract)
+    end
+    existing_contigs = _normalize_metamdbg_contigs!(outputs)
+    existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
+    if existing_contigs !== nothing && existing_graph !== nothing
+        return (;
+            outdir = outputs.outdir,
+            contigs = existing_contigs,
+            graph = existing_graph,
+        )
+    elseif existing_contigs === nothing && existing_graph !== nothing
+        error(
+            "metaMDBG output is inconsistent: graph exists without contigs in " *
+            outputs.outdir,
+        )
+    end
+
+    dependency_checker()
+    asm_cmd_args = String[
+        "metaMDBG",
+        "asm",
+        "--out-dir",
+        outputs.outdir,
+        selected_input.flag,
+        selected_input.paths...,
+        "--min-abundance",
+        string(abundance_min),
+        "--threads",
+        string(threads),
+    ]
+    gfa_cmd_args = String[
+        "metaMDBG",
+        "gfa",
+        "--assembly-dir",
+        outputs.outdir,
+        "--k",
+        string(graph_k),
+        "--threads",
+        string(threads),
+    ]
+    asm_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(asm_cmd_args)`
+    gfa_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`
 
     if executor !== nothing
-        asm_cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
-
-        if !isnothing(hifi_reads)
-            push!(asm_cmd_args, "--in-hifi")
-            if isa(hifi_reads, String)
-                push!(asm_cmd_args, hifi_reads)
-            else
-                append!(asm_cmd_args, hifi_reads)
-            end
-        end
-
-        if !isnothing(ont_reads)
-            push!(asm_cmd_args, "--in-ont")
-            if isa(ont_reads, String)
-                push!(asm_cmd_args, ont_reads)
-            else
-                append!(asm_cmd_args, ont_reads)
-            end
-        end
-
-        push!(asm_cmd_args, "--min-abundance", string(abundance_min))
-        push!(asm_cmd_args, "--threads", string(threads))
-
-        gfa_cmd_args = [
-            "metaMDBG", "gfa",
-            "--assembly-dir", outdir,
-            "--k", string(graph_k),
-            "--threads", string(threads)
-        ]
-
-        asm_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(asm_cmd_args)`
+        script = _metamdbg_executor_script(
+            Mycelia.command_string(asm_command),
+            Mycelia.command_string(gfa_command),
+            outputs,
+            graph_k,
+            input_contract,
         )
-        gfa_cmd = Mycelia.command_string(
-            `$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`
-        )
-        script = join([
-            "set -euo pipefail",
-            "mkdir -p \"$(outdir)\"",
-            "if [ ! -f \"$(joinpath(outdir, "contigs.fasta"))\" ] && [ ! -f \"$(joinpath(outdir, "contigs.fasta.gz"))\" ]; then",
-            "  $(asm_cmd)",
-            "fi",
-            "$(gfa_cmd)"
-        ], "\n")
         job = Mycelia.build_execution_job(
             cmd = script,
             job_name = job_name,
@@ -2815,72 +3164,107 @@ function run_metamdbg(; hifi_reads::Union{String, Vector{String}, Nothing} = not
             partition = partition,
             qos = qos,
             account = account,
-            mail_user = mail_user
+            mail_user = mail_user,
         )
-        Mycelia.execute(job, Mycelia.resolve_executor(executor))
+        resolved_executor = Mycelia.resolve_executor(executor)
+        Mycelia.execute(job, resolved_executor)
+        if resolved_executor isa Mycelia.LocalExecutor
+            _require_metamdbg_contract!(outputs, input_contract)
+            return _require_metamdbg_artifacts!(outputs, graph_k)
+        end
         return (;
-            outdir,
-            contigs = joinpath(outdir, "contigs.fasta.gz"),
-            graph = joinpath(outdir, "assemblyGraph_k$(graph_k).gfa")
+            outdir = outputs.outdir,
+            contigs = outputs.contigs_gz,
+            graph = outputs.graph_alias,
         )
     end
 
-    if !isfile(contigs_file)
-        # Build command arguments
-        cmd_args = ["metaMDBG", "asm", "--out-dir", outdir]
-
-        # Add HiFi reads if provided
-        if !isnothing(hifi_reads)
-            push!(cmd_args, "--in-hifi")
-            if isa(hifi_reads, String)
-                push!(cmd_args, hifi_reads)
-            else
-                append!(cmd_args, hifi_reads)
-            end
-        end
-
-        # Add ONT reads if provided
-        if !isnothing(ont_reads)
-            push!(cmd_args, "--in-ont")
-            if isa(ont_reads, String)
-                push!(cmd_args, ont_reads)
-            else
-                append!(cmd_args, ont_reads)
-            end
-        end
-
-        # Add other parameters
-        push!(cmd_args, "--min-abundance", string(abundance_min))
-        push!(cmd_args, "--threads", string(threads))
-
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(cmd_args)`)
-
-        # Generate assembly graph using metaMDBG gfa command
-        gfa_cmd_args = [
-            "metaMDBG", "gfa",
-            "--assembly-dir", outdir,
-            "--k", string(graph_k),
-            "--threads", string(threads)
-        ]
-
-        run(`$(Mycelia.CONDA_RUNNER) run --live-stream -n metamdbg $(gfa_cmd_args)`)
-
-        # Set expected output file names
-        contigs_file = joinpath(outdir, "contigs.fasta.gz")  # metaMDBG compresses output
-
-        # Find the generated graph file (format: assemblyGraph_k{k}_{length}bps.gfa)
-        graph_files = filter(
-            f -> startswith(basename(f), "assemblyGraph_k") && endswith(f, ".gfa"),
-            readdir(outdir, join = true))
-
-        if isempty(graph_files)
-            error("metaMDBG failed to generate assembly graph file. Expected file pattern: assemblyGraph_k*.gfa in $outdir")
-        end
-
-        graph_file = first(graph_files)
+    if existing_contigs === nothing
+        local_runner(asm_command)
+        existing_contigs = _normalize_metamdbg_contigs!(outputs)
+        existing_contigs === nothing && error(
+            "metaMDBG assembly produced no nonempty contigs artifact in " *
+            outputs.outdir,
+        )
+        _write_metamdbg_contract!(outputs, input_contract)
     end
+    if existing_graph === nothing
+        local_runner(gfa_command)
+    end
+    return _require_metamdbg_artifacts!(outputs, graph_k)
+end
 
-    return (; outdir, contigs = contigs_file, graph = graph_file)
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Run metaMDBG assembler for metagenomic long-read assembly.
+
+# Arguments
+- `hifi_reads::Union{String,Vector{String},Nothing}`: Existing, nonempty HiFi
+  (PacBio) read file(s) (default: nothing).
+- `ont_reads::Union{String,Vector{String},Nothing}`: Existing, nonempty ONT
+  (Nanopore) read file(s) (default: nothing).
+- `outdir::String`: Output directory path (default: "metamdbg_output").
+- `abundance_min::Int`: Minimum abundance threshold (default: 3).
+- `threads::Int`: Number of threads to use (default: get_default_threads()).
+- `graph_k::Int`: Graph resolution requested from `metaMDBG gfa` (default: 21).
+
+Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
+`--in-hifi` and `--in-ont`; mixed HiFi-plus-ONT assembly is therefore excluded
+from this wrapper rather than advertised as a false combined-input contract.
+
+# Returns
+A named tuple with `outdir`, the nonempty `contigs.fasta.gz`, and a stable graph
+alias `assemblyGraph_k<k>.gfa`. The graph alias resolves to metaMDBG's validated
+dynamic `assemblyGraph_k<k>_<length>bps.gfa` artifact.
+
+# Details
+- Uses metaMDBG's minimizer-space de Bruijn graphs for metagenomic assembly.
+- Accepts both upstream `contigs.fasta.gz` and legacy plain `contigs.fasta`; a
+  plain artifact is retained and normalized to `contigs.fasta.gz`.
+- Reuses a complete contigs-plus-requested-graph result without provisioning or
+  rerunning metaMDBG. If contigs exist but the requested graph does not, only
+  graph generation runs. Complete and partial reuse require an exact durable
+  contract marker for the normalized input paths, technology flag, input file
+  size/modification metadata, and `abundance_min`; stale or unprovenanced output
+  fails before provisioning.
+- Local and executor scripts validate nonempty contigs and exactly one dynamic
+  graph for the requested `graph_k` before reporting success.
+"""
+function run_metamdbg(;
+        hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
+        ont_reads::Union{String, Vector{String}, Nothing} = nothing,
+        outdir::String = "metamdbg_output",
+        abundance_min::Int = 3,
+        threads::Int = get_default_threads(),
+        graph_k::Int = 21,
+        executor = nothing,
+        site::Symbol = :local,
+        job_name::String = "metamdbg",
+        time_limit::String = "3-00:00:00",
+        partition::Union{Nothing, String} = nothing,
+        account::Union{Nothing, String} = nothing,
+        mem_gb::Union{Nothing, Real} = nothing,
+        qos::Union{Nothing, String} = nothing,
+        mail_user::Union{Nothing, String} = nothing,
+)::NamedTuple
+    return _run_metamdbg(;
+        hifi_reads,
+        ont_reads,
+        outdir,
+        abundance_min,
+        threads,
+        graph_k,
+        executor,
+        site,
+        job_name,
+        time_limit,
+        partition,
+        account,
+        mem_gb,
+        qos,
+        mail_user,
+    )
 end
 
 function _strainy_output_paths(outdir::String, stage::Symbol)::NamedTuple
