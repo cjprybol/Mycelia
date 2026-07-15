@@ -79,6 +79,8 @@ Test.@testset "Autocycler wrapper" begin
         Test.@test Mycelia.AUTOCYCLER_ENV_NAME ==
                    "autocycler-0.5.2-d6aef758"
         Test.@test Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS == 128
+        Test.@test Mycelia.AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS > 0
+        Test.@test Mycelia.AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS > 0
         Test.@test Mycelia._effective_autocycler_assembly_threads(64) == 64
         Test.@test Mycelia._effective_autocycler_assembly_threads(256) == 128
         Test.@test Mycelia.AUTOCYCLER_READ_TYPES == (
@@ -287,7 +289,7 @@ Test.@testset "Autocycler wrapper" begin
                 sprint(showerror, force_error),
             )
             Test.@test occursin(
-                "immutable content-addressed environment",
+                "immutable spec-hash-addressed environment",
                 sprint(showerror, force_error),
             )
             Test.@test environment_creations[] == 0
@@ -305,6 +307,7 @@ Test.@testset "Autocycler wrapper" begin
             cp(bundled_paths[3], paths[3])
             lock_path = joinpath(temp_dir, "autocycler-install.pid")
             environment_creator_forces = Bool[]
+            package_inspections = Ref(0)
             environment_creator = function (
                     environment_file::AbstractString,
                     environment_name::AbstractString;
@@ -332,13 +335,123 @@ Test.@testset "Autocycler wrapper" begin
                     return false
                 end,
                 environment_creator,
+                package_inspector = () -> begin
+                    Test.@test isfile(lock_path)
+                    package_inspections[] += 1
+                    return _autocycler_test_compatible_packages()
+                end,
                 downloader,
                 lock_path,
             )
             Test.@test installed_script == paths[2]
             Test.@test environment_creator_forces == [false]
+            Test.@test package_inspections[] == 1
             Test.@test Mycelia._autocycler_script_is_verified(installed_script)
             Test.@test !ispath(lock_path)
+        end
+
+        Test.@testset "Public installer validates packages under its lock" begin
+            mktempdir() do temp_dir
+                bundled_paths = Mycelia._autocycler_paths()
+                paths = (
+                    temp_dir,
+                    joinpath(temp_dir, "autocycler_full.sh"),
+                    joinpath(temp_dir, "environment.yml"),
+                )
+                cp(bundled_paths[2], paths[2])
+                cp(bundled_paths[3], paths[3])
+                lock_path = joinpath(temp_dir, "autocycler-install.pid")
+                inspection_calls = Ref(0)
+                installed_script = Mycelia.install_autocycler(;
+                    paths,
+                    environment_checker = () -> true,
+                    environment_creator = (_args...; _kwargs...) -> error(
+                        "existing environment must not be recreated",
+                    ),
+                    package_inspector = () -> begin
+                        Test.@test isfile(lock_path)
+                        inspection_calls[] += 1
+                        return _autocycler_test_compatible_packages()
+                    end,
+                    downloader = (_args...) -> error(
+                        "verified script must not be downloaded",
+                    ),
+                    lock_path,
+                )
+                Test.@test installed_script == paths[2]
+                Test.@test inspection_calls[] == 1
+                Test.@test !ispath(lock_path)
+
+                incompatible_packages = _autocycler_test_compatible_packages()
+                incompatible_packages["autocycler"] = "0.5.1"
+                incompatible_error = _autocycler_test_error() do
+                    Mycelia.install_autocycler(;
+                        paths,
+                        environment_checker = () -> true,
+                        package_inspector = () -> begin
+                            Test.@test isfile(lock_path)
+                            return incompatible_packages
+                        end,
+                        lock_path,
+                    )
+                end
+                Test.@test incompatible_error isa ErrorException
+                Test.@test occursin(
+                    "autocycler must equal 0.5.2",
+                    sprint(showerror, incompatible_error),
+                )
+                Test.@test !ispath(lock_path)
+            end
+
+            mktempdir() do temp_dir
+                bundled_paths = Mycelia._autocycler_paths()
+                paths = (
+                    temp_dir,
+                    joinpath(temp_dir, "autocycler_full.sh"),
+                    joinpath(temp_dir, "environment.yml"),
+                )
+                cp(bundled_paths[3], paths[3])
+                lock_path = joinpath(temp_dir, "autocycler-install.pid")
+                environment_creations = Ref(0)
+                package_inspections = Ref(0)
+                created_environment_error = _autocycler_test_error() do
+                    Mycelia.install_autocycler(;
+                        paths,
+                        environment_checker = () -> false,
+                        environment_creator = function (
+                                _environment_file::AbstractString,
+                                _environment_name::AbstractString;
+                                force::Bool = false,
+                        )
+                            Test.@test !force
+                            Test.@test isfile(lock_path)
+                            environment_creations[] += 1
+                            return nothing
+                        end,
+                        package_inspector = () -> begin
+                            Test.@test isfile(lock_path)
+                            package_inspections[] += 1
+                            return Dict("autocycler" => "0.5.2")
+                        end,
+                        downloader = function (
+                                _url::AbstractString,
+                                destination::AbstractString,
+                        )
+                            cp(bundled_paths[2], destination; force = true)
+                            return String(destination)
+                        end,
+                        lock_path,
+                    )
+                end
+                Test.@test created_environment_error isa ErrorException
+                Test.@test occursin(
+                    "missing or incompatible required packages",
+                    sprint(showerror, created_environment_error),
+                )
+                Test.@test environment_creations[] == 1
+                Test.@test package_inspections[] == 1
+                Test.@test !ispath(lock_path)
+            end
         end
 
         inspection_calls = Ref(0)
@@ -351,22 +464,13 @@ Test.@testset "Autocycler wrapper" begin
             end
             return packages
         end
-        installer_forces = Bool[]
-        installer = function (; force::Bool = false)
-            push!(installer_forces, force)
-            return nothing
-        end
         package_error = _autocycler_test_error() do
-            Mycelia._ensure_autocycler_packages!(
-                package_inspector,
-                installer,
-            )
+            Mycelia._ensure_autocycler_packages!(package_inspector)
         end
         Test.@test package_error isa ErrorException
         Test.@test inspection_calls[] == 1
-        Test.@test isempty(installer_forces)
         Test.@test occursin(
-            "immutable content-addressed environment",
+            "immutable spec-hash-addressed environment",
             sprint(showerror, package_error),
         )
         Test.@test occursin(
@@ -400,7 +504,7 @@ Test.@testset "Autocycler wrapper" begin
             "bwa" => "0.7.17",
         )
         stale_error = _autocycler_test_error() do
-            Mycelia._ensure_autocycler_packages!(always_stale, installer)
+            Mycelia._ensure_autocycler_packages!(always_stale)
         end
         Test.@test stale_error isa ErrorException
         Test.@test occursin(
@@ -411,7 +515,6 @@ Test.@testset "Autocycler wrapper" begin
             "remove it manually before reinstalling",
             sprint(showerror, stale_error),
         )
-        Test.@test isempty(installer_forces)
 
         mktempdir() do temp_dir
             lock_path = joinpath(temp_dir, "autocycler-install.pid")
@@ -424,6 +527,34 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test lock_observed[]
             Test.@test locked_result == Dict{String, Any}("locked" => true)
+            Test.@test !ispath(lock_path)
+
+            observed_stale_age = Ref(0.0)
+            pidlock_runner = function (
+                    action::Function,
+                    observed_path::AbstractString;
+                    stale_age::Real,
+                    poll_interval::Real,
+            )
+                Test.@test observed_path == abspath(lock_path)
+                Test.@test poll_interval > 0
+                observed_stale_age[] = Float64(stale_age)
+                write(observed_path, "synthetic bounded lock\n")
+                try
+                    return action()
+                finally
+                    rm(observed_path; force = true)
+                end
+            end
+            bounded_result = Mycelia._with_autocycler_install_lock(
+                () -> :bounded,
+                lock_path;
+                pidlock_runner,
+            )
+            Test.@test bounded_result == :bounded
+            Test.@test observed_stale_age[] ==
+                       Mycelia.AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS
+            Test.@test observed_stale_age[] > 0
             Test.@test !ispath(lock_path)
 
             lock_active = Ref(false)
@@ -612,6 +743,59 @@ Test.@testset "Autocycler wrapper" begin
                 sprint(showerror, ancestor_output_error),
             )
 
+            dangling_output = joinpath(temp_dir, "dangling-output")
+            symlink(joinpath(temp_dir, "missing-output-target"), dangling_output)
+            dangling_output_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    malformed_long_reads,
+                    dangling_output;
+                    dependency_checker = () -> begin
+                        cheap_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = cheap_runner,
+                )
+            end
+            Test.@test dangling_output_error isa ArgumentError
+            Test.@test occursin(
+                "must not be a symbolic link",
+                sprint(showerror, dangling_output_error),
+            )
+
+            dangling_ancestor = joinpath(temp_dir, "dangling-ancestor")
+            symlink(joinpath(temp_dir, "missing-ancestor-target"), dangling_ancestor)
+            dangling_ancestor_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    malformed_long_reads,
+                    joinpath(dangling_ancestor, "nested", "results");
+                    dependency_checker = () -> begin
+                        cheap_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = cheap_runner,
+                )
+            end
+            Test.@test dangling_ancestor_error isa ArgumentError
+            Test.@test occursin(
+                "non-directory existing ancestor",
+                sprint(showerror, dangling_ancestor_error),
+            )
+
+            symlink_target = joinpath(temp_dir, "symlink-target")
+            symlink_ancestor = joinpath(temp_dir, "symlink-ancestor")
+            mkpath(symlink_target)
+            symlink(symlink_target, symlink_ancestor)
+            aliased_output = joinpath(symlink_ancestor, "nested", "results")
+            Test.@test Mycelia._validate_autocycler_output_dir(aliased_output) ==
+                       abspath(aliased_output)
+            expected_alias_lock = joinpath(
+                realpath(symlink_target),
+                "nested",
+                ".results.mycelia-autocycler.pid",
+            )
+            Test.@test Mycelia._autocycler_output_lock_path(aliased_output) ==
+                       expected_alias_lock
+
             cheap_parameter_error = _autocycler_test_error() do
                 Mycelia._run_autocycler(
                     malformed_long_reads,
@@ -731,7 +915,7 @@ Test.@testset "Autocycler wrapper" begin
             sprint(showerror, process_error),
         )
         Test.@test occursin(
-            "content-addressed environment",
+            "spec-hash-addressed environment",
             sprint(showerror, process_error),
         )
         Test.@test occursin(
@@ -742,6 +926,20 @@ Test.@testset "Autocycler wrapper" begin
             "install_autocycler(force=true)",
             sprint(showerror, process_error),
         )
+
+        mktempdir() do temp_dir
+            intermediate = joinpath(temp_dir, "intermediate.sam")
+            write(intermediate, "owned\n")
+            cleanup_interrupt = _autocycler_test_error() do
+                Mycelia._cleanup_autocycler_polishing_intermediates!(
+                    [intermediate];
+                    remover = (_path::AbstractString) ->
+                        throw(InterruptException()),
+                )
+            end
+            Test.@test cleanup_interrupt isa InterruptException
+            Test.@test isfile(intermediate)
+        end
     end
 
     Test.@testset "Autocycler returns authoritative FASTA and GFA" begin
@@ -752,17 +950,23 @@ Test.@testset "Autocycler wrapper" begin
             expected_toolchain = Dict(
                 "autocycler_script_revision" => "test-revision",
             )
+            out_dir = joinpath(temp_dir, "autocycler-run")
+            output_lock_path = Mycelia._autocycler_output_lock_path(out_dir)
             result = Mycelia._run_autocycler(
                 long_reads,
-                joinpath(temp_dir, "autocycler-run");
+                out_dir;
                 threads = 4,
                 jobs = 3,
                 read_type = "ont_r9",
                 dependency_checker = () -> begin
+                    Test.@test isfile(output_lock_path)
                     dependency_checks[] += 1
                     return expected_toolchain
                 end,
-                runner = _autocycler_test_runner!,
+                runner = (step::NamedTuple) -> begin
+                    Test.@test isfile(output_lock_path)
+                    return _autocycler_test_runner!(step)
+                end,
             )
             Test.@test dependency_checks[] == 1
             Test.@test result.toolchain == expected_toolchain
@@ -775,6 +979,7 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.outdir == abspath(joinpath(temp_dir, "autocycler-run"))
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
+            Test.@test !ispath(output_lock_path)
 
             malformed_fasta_runner = function (step::NamedTuple)
                 _autocycler_test_runner!(step)
@@ -922,20 +1127,27 @@ Test.@testset "Autocycler wrapper" begin
             write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
             write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
             dependency_checks = Ref(0)
+            polished_out_dir = joinpath(temp_dir, "polished-run")
+            polished_lock_path =
+                Mycelia._autocycler_output_lock_path(polished_out_dir)
 
             result = Mycelia._run_autocycler_polished(
                 long_reads,
                 short_reads_1,
                 short_reads_2,
-                joinpath(temp_dir, "polished-run");
+                polished_out_dir;
                 threads = 4,
                 jobs = 2,
                 read_type = "ont_r10",
                 dependency_checker = () -> begin
+                    Test.@test isfile(polished_lock_path)
                     dependency_checks[] += 1
                     return nothing
                 end,
-                runner = _autocycler_test_runner!,
+                runner = (step::NamedTuple) -> begin
+                    Test.@test isfile(polished_lock_path)
+                    return _autocycler_test_runner!(step)
+                end,
             )
             Test.@test dependency_checks[] == 1
             Test.@test isfile(result.graph)
@@ -950,6 +1162,7 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
             Test.@test result.polishing_threads == 4
+            Test.@test !ispath(polished_lock_path)
             Test.@test !any(isfile, String[
                 "$(result.autocycler_assembly).$(extension)" for
                 extension in ("amb", "ann", "bwt", "pac", "sa")

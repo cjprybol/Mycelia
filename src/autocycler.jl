@@ -13,6 +13,9 @@ const AUTOCYCLER_ENVIRONMENT_SPEC_SHA256 =
 const AUTOCYCLER_ENV_NAME =
     "autocycler-$(AUTOCYCLER_VERSION)-$(first(AUTOCYCLER_ENVIRONMENT_SPEC_SHA256, 8))"
 const AUTOCYCLER_MAX_ASSEMBLY_THREADS = 128
+const AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS = 6 * 60 * 60
+const AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
+const _AUTOCYCLER_OUTPUT_LOCK_SUFFIX = ".mycelia-autocycler.pid"
 const AUTOCYCLER_SCRIPT_REVISION =
     "c98b126eb45727584623041db1bfdbdaf7aa0923"
 const AUTOCYCLER_SCRIPT_SHA256 =
@@ -240,13 +243,12 @@ end
 
 function _ensure_autocycler_packages!(
         package_inspector::Function,
-        _installer::Function,
 )::Dict{String, String}
     versions = package_inspector()
     package_issues = _autocycler_package_issues(versions)
     isempty(package_issues) || throw(
         ErrorException(
-            "Autocycler immutable content-addressed environment " *
+            "Autocycler immutable spec-hash-addressed environment " *
             "$(repr(AUTOCYCLER_ENV_NAME)) has missing or incompatible " *
             "required packages: $(join(package_issues, "; ")). Refusing " *
             "to recreate or repair it in place. Stop all workflows using " *
@@ -278,16 +280,21 @@ end
 
 function _with_autocycler_install_lock(
         action::Function,
-        lock_path::AbstractString,
+        lock_path::AbstractString;
+        stale_age::Real = AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS,
+        poll_interval::Real = 10,
+        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
 )::Any
+    stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
+    poll_interval > 0 || throw(ArgumentError("poll_interval must be positive."))
     normalized_lock_path = abspath(lock_path)
     mkpath(dirname(normalized_lock_path))
-    return FileWatching.Pidfile.mkpidlock(
+    return pidlock_runner(
+        action,
         normalized_lock_path;
-        stale_age = 0,
-    ) do
-        action()
-    end
+        stale_age,
+        poll_interval,
+    )
 end
 
 function _autocycler_environment_is_installed()::Bool
@@ -300,6 +307,7 @@ function _install_autocycler_locked(;
         paths::Tuple{String, String, String} = _autocycler_paths(),
         environment_checker::Function = _autocycler_environment_is_installed,
         environment_creator::Function = create_conda_env_from_yaml,
+        package_inspector::Function = _autocycler_environment_packages,
 )::String
     install_dir, script_path, env_file_path = paths
     mkpath(install_dir)
@@ -311,7 +319,7 @@ function _install_autocycler_locked(;
         throw(
             ErrorException(
                 "Refusing install_autocycler(force=true): immutable " *
-                "content-addressed environment " *
+                "spec-hash-addressed environment " *
                 "$(repr(AUTOCYCLER_ENV_NAME)) already exists and must not " *
                 "be recreated in place. Stop all workflows using this " *
                 "environment and remove it manually before reinstalling.",
@@ -343,6 +351,8 @@ function _install_autocycler_locked(;
         )
     end
 
+    _ensure_autocycler_packages!(package_inspector)
+
     @info "Autocycler installed successfully."
     return script_path
 end
@@ -350,7 +360,7 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Install Autocycler and the short-read polishing tools in a content-addressed
+Install Autocycler and the short-read polishing tools in a spec-hash-addressed
 conda environment.
 
 The package-bundled `environment.yml` is authoritative because it extends the
@@ -364,7 +374,7 @@ releases with different environment specifications cannot mutate the environment
 used by an already-running assembly. An existing environment is immutable: this
 function never removes or recreates it. `force=true` is accepted for a first
 installation, where it refreshes the verified script, but fails closed when the
-content-addressed environment already exists. A stale or incompatible environment
+spec-hash-addressed environment already exists. A stale or incompatible environment
 must not be repaired in place; stop all workflows using it before manually
 removing and reinstalling it, or use a Mycelia release with a corrected
 environment specification. Direct calls serialize the environment check and
@@ -378,7 +388,7 @@ general metagenome, eukaryotic-genome, or fragmentary-assembly consensus method.
 
 # Keywords
 - `force::Bool=false`: Refresh the pinned script during a first installation;
-  error if the content-addressed environment already exists.
+  error if the spec-hash-addressed environment already exists.
 """
 function install_autocycler(;
         force::Bool = false,
@@ -386,6 +396,7 @@ function install_autocycler(;
         paths::Tuple{String, String, String} = _autocycler_paths(),
         environment_checker::Function = _autocycler_environment_is_installed,
         environment_creator::Function = create_conda_env_from_yaml,
+        package_inspector::Function = _autocycler_environment_packages,
         lock_path::AbstractString = _autocycler_install_lock_path(),
         lock_runner::Function = _with_autocycler_install_lock,
 )::String
@@ -396,6 +407,7 @@ function install_autocycler(;
             paths,
             environment_checker,
             environment_creator,
+            package_inspector,
         )
     end
 end
@@ -656,6 +668,58 @@ function _effective_autocycler_assembly_threads(threads::Integer)::Int
     return Int(min(threads, AUTOCYCLER_MAX_ASSEMBLY_THREADS))
 end
 
+function _autocycler_path_entry_exists(path::AbstractString)::Bool
+    return ispath(path) || islink(path)
+end
+
+function _canonical_autocycler_output_path(out_dir::AbstractString)::String
+    normalized_out_dir = abspath(out_dir)
+    missing_components = String[]
+    existing_ancestor = normalized_out_dir
+    while !_autocycler_path_entry_exists(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    isdir(existing_ancestor) || throw(
+        ArgumentError(
+            "Autocycler output directory has a non-directory existing " *
+            "ancestor: $(existing_ancestor)",
+        ),
+    )
+    canonical_ancestor = realpath(existing_ancestor)
+    if isempty(missing_components)
+        return canonical_ancestor
+    end
+    return joinpath(canonical_ancestor, missing_components...)
+end
+
+function _autocycler_output_lock_path(out_dir::AbstractString)::String
+    canonical_out_dir = _canonical_autocycler_output_path(out_dir)
+    lock_name = ".$(basename(canonical_out_dir))$(_AUTOCYCLER_OUTPUT_LOCK_SUFFIX)"
+    return joinpath(dirname(canonical_out_dir), lock_name)
+end
+
+function _with_autocycler_output_lock(
+        action::Function,
+        out_dir::AbstractString;
+        stale_age::Real = AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS,
+        poll_interval::Real = 10,
+        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
+)::Any
+    stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
+    poll_interval > 0 || throw(ArgumentError("poll_interval must be positive."))
+    lock_path = _autocycler_output_lock_path(out_dir)
+    mkpath(dirname(lock_path))
+    return pidlock_runner(
+        action,
+        lock_path;
+        stale_age,
+        poll_interval,
+    )
+end
+
 function _validate_autocycler_parameters(
         threads::Integer,
         jobs::Integer,
@@ -683,6 +747,14 @@ function _validate_autocycler_output_dir(out_dir::AbstractString)::String
         ArgumentError("Autocycler output directory must be a non-blank path."),
     )
     normalized_out_dir = abspath(out_dir)
+    if islink(normalized_out_dir)
+        throw(
+            ArgumentError(
+                "Autocycler output path must not be a symbolic link: " *
+                "$(normalized_out_dir)",
+            ),
+        )
+    end
     if isfile(normalized_out_dir)
         throw(ArgumentError("Autocycler output path is a file: $(normalized_out_dir)"))
     end
@@ -695,12 +767,13 @@ function _validate_autocycler_output_dir(out_dir::AbstractString)::String
     end
 
     existing_ancestor = normalized_out_dir
-    while !ispath(existing_ancestor)
+    while !_autocycler_path_entry_exists(existing_ancestor)
         parent = dirname(existing_ancestor)
         parent == existing_ancestor && break
         existing_ancestor = parent
     end
-    if ispath(existing_ancestor) && !isdir(existing_ancestor)
+    if _autocycler_path_entry_exists(existing_ancestor) &&
+       !isdir(existing_ancestor)
         throw(
             ArgumentError(
                 "Autocycler output directory has a non-directory existing " *
@@ -708,6 +781,7 @@ function _validate_autocycler_output_dir(out_dir::AbstractString)::String
             ),
         )
     end
+    _canonical_autocycler_output_path(normalized_out_dir)
     return normalized_out_dir
 end
 
@@ -976,6 +1050,7 @@ function _cleanup_autocycler_polishing_intermediates!(
         try
             remover(normalized_path)
         catch error
+            error isa InterruptException && rethrow()
             cleanup_error = error
         end
         if cleanup_error !== nothing
@@ -1022,7 +1097,7 @@ function _execute_autocycler_steps(
                 throw(
                     ErrorException(
                         "Autocycler workflow command $(step.name) failed. " *
-                        "The content-addressed environment " *
+                        "The spec-hash-addressed environment " *
                         "$(repr(AUTOCYCLER_ENV_NAME)) is immutable. If a " *
                         "command is missing, stop all workflows using this " *
                         "environment and remove it manually before reinstalling. " *
@@ -1072,7 +1147,7 @@ function _ensure_autocycler_installed_locked(
             ),
         )
     end
-    versions = _ensure_autocycler_packages!(package_inspector, installer)
+    versions = _ensure_autocycler_packages!(package_inspector)
     return _autocycler_toolchain_metadata(versions)
 end
 
@@ -1092,37 +1167,25 @@ function _ensure_autocycler_installed(;
     end
 end
 
-function _run_autocycler(
-        long_reads::AbstractString,
-        out_dir::AbstractString;
-        threads::Integer = max(Sys.CPU_THREADS, 1),
-        jobs::Integer = 1,
-        read_type::AbstractString = "ont_r10",
-        dependency_checker::Function = _ensure_autocycler_installed,
-        runner::Function = _default_autocycler_step_runner,
-        validate_long_reads::Bool = true,
+function _run_autocycler_with_reserved_output(
+        normalized_long_reads::AbstractString,
+        normalized_out_dir::AbstractString;
+        threads::Integer,
+        jobs::Integer,
+        read_type::AbstractString,
+        dependency_checker::Function,
+        runner::Function,
 )::NamedTuple
-    normalized_read_type = _validate_autocycler_parameters(
-        threads,
-        jobs,
-        read_type,
-    )
-    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    normalized_long_reads = _require_nonempty_autocycler_file(
-        long_reads,
-        "Long-read FASTQ",
-    )
-    validate_long_reads &&
-        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
+    validated_out_dir = _validate_autocycler_output_dir(normalized_out_dir)
     toolchain = dependency_checker()
-    normalized_out_dir = _prepare_autocycler_output_dir(normalized_out_dir)
+    prepared_out_dir = _prepare_autocycler_output_dir(validated_out_dir)
     _, script_path, _ = _autocycler_paths()
     plan = _autocycler_command_plan(
         normalized_long_reads,
-        normalized_out_dir;
+        prepared_out_dir;
         threads = threads,
         jobs = jobs,
-        read_type = normalized_read_type,
+        read_type,
         script_path = script_path,
     )
 
@@ -1136,16 +1199,52 @@ function _run_autocycler(
         plan.graph,
         "Autocycler consensus GFA",
     )
-    @info "Autocycler pipeline complete" out_dir = normalized_out_dir
+    @info "Autocycler pipeline complete" out_dir = prepared_out_dir
 
     return (
-        outdir = normalized_out_dir,
+        outdir = prepared_out_dir,
         assembly = assembly,
         graph = graph,
         toolchain = toolchain,
         requested_threads = plan.requested_threads,
         autocycler_assembly_threads = plan.autocycler_assembly_threads,
     )
+end
+
+function _run_autocycler(
+        long_reads::AbstractString,
+        out_dir::AbstractString;
+        threads::Integer = max(Sys.CPU_THREADS, 1),
+        jobs::Integer = 1,
+        read_type::AbstractString = "ont_r10",
+        dependency_checker::Function = _ensure_autocycler_installed,
+        runner::Function = _default_autocycler_step_runner,
+        validate_long_reads::Bool = true,
+        output_lock_runner::Function = _with_autocycler_output_lock,
+)::NamedTuple
+    normalized_read_type = _validate_autocycler_parameters(
+        threads,
+        jobs,
+        read_type,
+    )
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
+    normalized_long_reads = _require_nonempty_autocycler_file(
+        long_reads,
+        "Long-read FASTQ",
+    )
+    validate_long_reads &&
+        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
+    return output_lock_runner(normalized_out_dir) do
+        _run_autocycler_with_reserved_output(
+            normalized_long_reads,
+            normalized_out_dir;
+            threads,
+            jobs,
+            read_type = normalized_read_type,
+            dependency_checker,
+            runner,
+        )
+    end
 end
 
 """
@@ -1156,7 +1255,8 @@ Run the upstream long-read-only Autocycler pipeline.
 Autocycler consumes one long-read FASTQ and writes its fixed `autocycler_out`
 directory relative to the isolated `out_dir` working directory. Its authoritative
 consensus FASTA and companion GFA are both validated and returned without
-rewriting either artifact. The output directory must be absent or empty.
+rewriting either artifact. The output directory must be absent or empty and is
+reserved by an adjacent interprocess lock for the full workflow lifecycle.
 
 The verified script and environment are compatibility-pinned to Autocycler 0.5.2.
 The upstream consensus model is intended for bacterial isolates whose alternative
@@ -1193,59 +1293,28 @@ function run_autocycler(;
     )
 end
 
-function _run_autocycler_polished(
-        long_reads::AbstractString,
-        short_reads_1::AbstractString,
-        short_reads_2::AbstractString,
-        out_dir::AbstractString;
-        threads::Integer = max(Sys.CPU_THREADS, 1),
-        jobs::Integer = 1,
-        read_type::AbstractString = "ont_r10",
-        polypolish_careful::Bool = true,
-        keep_intermediates::Bool = false,
-        dependency_checker::Function = _ensure_autocycler_installed,
-        runner::Function = _default_autocycler_step_runner,
-        intermediate_remover::Function = path -> rm(path; force = true),
+function _run_autocycler_polished_with_reserved_output(
+        normalized_long_reads::AbstractString,
+        normalized_short_reads_1::AbstractString,
+        normalized_short_reads_2::AbstractString,
+        normalized_out_dir::AbstractString;
+        threads::Integer,
+        jobs::Integer,
+        read_type::AbstractString,
+        polypolish_careful::Bool,
+        keep_intermediates::Bool,
+        dependency_checker::Function,
+        runner::Function,
+        intermediate_remover::Function,
 )::NamedTuple
-    normalized_read_type = _validate_autocycler_parameters(
+    autocycler_result = _run_autocycler_with_reserved_output(
+        normalized_long_reads,
+        normalized_out_dir;
         threads,
         jobs,
         read_type,
-    )
-    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    normalized_long_reads = _require_nonempty_autocycler_file(
-        long_reads,
-        "Long-read FASTQ",
-    )
-    normalized_short_reads_1 = _require_nonempty_autocycler_file(
-        short_reads_1,
-        "Paired short-read R1 FASTQ",
-    )
-    normalized_short_reads_2 = _require_nonempty_autocycler_file(
-        short_reads_2,
-        "Paired short-read R2 FASTQ",
-    )
-    _validate_autocycler_input_sources(
-        normalized_long_reads,
-        normalized_short_reads_1,
-        normalized_short_reads_2,
-    )
-    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
-    _validate_autocycler_paired_fastqs(
-        normalized_short_reads_1,
-        normalized_short_reads_2,
-    )
-    toolchain = dependency_checker()
-
-    autocycler_result = _run_autocycler(
-        normalized_long_reads,
-        normalized_out_dir;
-        threads = threads,
-        jobs = jobs,
-        read_type = normalized_read_type,
-        dependency_checker = () -> toolchain,
-        runner = runner,
-        validate_long_reads = false,
+        dependency_checker,
+        runner,
     )
     normalized_out_dir = autocycler_result.outdir
 
@@ -1310,6 +1379,67 @@ function _run_autocycler_polished(
     )
 end
 
+function _run_autocycler_polished(
+        long_reads::AbstractString,
+        short_reads_1::AbstractString,
+        short_reads_2::AbstractString,
+        out_dir::AbstractString;
+        threads::Integer = max(Sys.CPU_THREADS, 1),
+        jobs::Integer = 1,
+        read_type::AbstractString = "ont_r10",
+        polypolish_careful::Bool = true,
+        keep_intermediates::Bool = false,
+        dependency_checker::Function = _ensure_autocycler_installed,
+        runner::Function = _default_autocycler_step_runner,
+        intermediate_remover::Function = path -> rm(path; force = true),
+        output_lock_runner::Function = _with_autocycler_output_lock,
+)::NamedTuple
+    normalized_read_type = _validate_autocycler_parameters(
+        threads,
+        jobs,
+        read_type,
+    )
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
+    normalized_long_reads = _require_nonempty_autocycler_file(
+        long_reads,
+        "Long-read FASTQ",
+    )
+    normalized_short_reads_1 = _require_nonempty_autocycler_file(
+        short_reads_1,
+        "Paired short-read R1 FASTQ",
+    )
+    normalized_short_reads_2 = _require_nonempty_autocycler_file(
+        short_reads_2,
+        "Paired short-read R2 FASTQ",
+    )
+    _validate_autocycler_input_sources(
+        normalized_long_reads,
+        normalized_short_reads_1,
+        normalized_short_reads_2,
+    )
+    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
+    _validate_autocycler_paired_fastqs(
+        normalized_short_reads_1,
+        normalized_short_reads_2,
+    )
+    return output_lock_runner(normalized_out_dir) do
+        _run_autocycler_polished_with_reserved_output(
+            normalized_long_reads,
+            normalized_short_reads_1,
+            normalized_short_reads_2,
+            normalized_out_dir;
+            threads,
+            jobs,
+            read_type = normalized_read_type,
+            polypolish_careful,
+            keep_intermediates,
+            dependency_checker,
+            runner,
+            intermediate_remover,
+        )
+    end
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
@@ -1326,6 +1456,8 @@ validated before long-read assembly starts. Large SAM, filtered-SAM, and BWA
 index intermediates are removed after success unless `keep_intermediates=true`.
 Route-owned BWA/SAM intermediates are also cleaned after a failed polishing run
 unless explicit retention was requested; diagnostic assembly artifacts remain.
+An adjacent interprocess lock reserves the output directory continuously across
+both long-read assembly and paired-short polishing.
 
 This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
 same bacterial-isolate/mostly-complete-alternative-assemblies applicability
