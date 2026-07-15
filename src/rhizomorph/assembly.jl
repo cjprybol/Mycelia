@@ -2855,18 +2855,40 @@ function _read_paths_refer_to_same_file(
     return abspath(path_1) == abspath(path_2)
 end
 
+function _read_source_paths(reads::Any)::Union{Nothing, Vector{String}}
+    if reads isa AbstractString
+        return [String(reads)]
+    elseif reads isa AbstractVector{<:AbstractString}
+        return String.(reads)
+    end
+    return nothing
+end
+
+function _validate_unique_read_source_paths(
+        reads::Any,
+        label::AbstractString,
+)::Nothing
+    paths = _read_source_paths(reads)
+    paths === nothing && return nothing
+    for first_index in eachindex(paths)
+        for second_index in (first_index + 1):lastindex(paths)
+            _read_paths_refer_to_same_file(
+                paths[first_index],
+                paths[second_index],
+            ) || continue
+            throw(ArgumentError(
+                "input $(label) sources must be distinct; entries " *
+                "$(first_index) and $(second_index) refer to the same file.",
+            ))
+        end
+    end
+    return nothing
+end
+
 function _read_sources_overlap(reads_1::Any, reads_2::Any)::Bool
     reads_1 === reads_2 && return true
-    paths_1 = if reads_1 isa AbstractString
-        [String(reads_1)]
-    elseif reads_1 isa AbstractVector{<:AbstractString}
-        String.(reads_1)
-    end
-    paths_2 = if reads_2 isa AbstractString
-        [String(reads_2)]
-    elseif reads_2 isa AbstractVector{<:AbstractString}
-        String.(reads_2)
-    end
+    paths_1 = _read_source_paths(reads_1)
+    paths_2 = _read_source_paths(reads_2)
     if paths_1 !== nothing && paths_2 !== nothing
         return any(
             _read_paths_refer_to_same_file(path_1, path_2)
@@ -2874,6 +2896,210 @@ function _read_sources_overlap(reads_1::Any, reads_2::Any)::Bool
         )
     end
     return false
+end
+
+function _update_multi_input_digest_uint64!(
+        context::Mycelia.SHA.SHA2_256_CTX,
+        value::UInt64,
+)::Nothing
+    buffer = Vector{UInt8}(undef, 8)
+    @inbounds for index in eachindex(buffer)
+        shift = 64 - 8 * index
+        buffer[index] = UInt8((value >> shift) & 0xff)
+    end
+    Mycelia.SHA.update!(context, buffer)
+    return nothing
+end
+
+function _update_multi_input_digest_field!(
+        context::Mycelia.SHA.SHA2_256_CTX,
+        value::AbstractString,
+)::Nothing
+    bytes = codeunits(String(value))
+    _update_multi_input_digest_uint64!(context, UInt64(length(bytes)))
+    Mycelia.SHA.update!(context, bytes)
+    return nothing
+end
+
+function _multi_input_file_sha256(path::AbstractString)::String
+    return open(path, "r") do input
+        bytes2hex(Mycelia.SHA.sha256(input))
+    end
+end
+
+function _multi_input_path_content_identity(
+        path::AbstractString,
+        label::AbstractString,
+        source_index::Int,
+)::Dict{String, Any}
+    normalized_path = normpath(abspath(String(path)))
+    isfile(normalized_path) || throw(ArgumentError(
+        "$(label) source $(source_index) is not a file: $(normalized_path).",
+    ))
+    canonical_path = realpath(normalized_path)
+    return Dict{String, Any}(
+        "kind" => "path",
+        "source_index" => source_index,
+        "path" => normalized_path,
+        "canonical_path" => canonical_path,
+        "size_bytes" => filesize(normalized_path),
+        "sha256" => _multi_input_file_sha256(normalized_path),
+    )
+end
+
+function _multi_input_path_set_sha256(
+        sources::Vector{Dict{String, Any}},
+)::String
+    context = Mycelia.SHA.SHA2_256_CTX()
+    _update_multi_input_digest_field!(context, "mycelia-path-set-v1")
+    _update_multi_input_digest_uint64!(context, UInt64(length(sources)))
+    for source in sources
+        _update_multi_input_digest_field!(
+            context,
+            String(source["canonical_path"]),
+        )
+        _update_multi_input_digest_field!(context, String(source["sha256"]))
+        _update_multi_input_digest_uint64!(
+            context,
+            UInt64(source["size_bytes"]),
+        )
+    end
+    return bytes2hex(Mycelia.SHA.digest!(context))
+end
+
+function _multi_input_record_set_content_identity(
+        reads::Any,
+        label::AbstractString,
+)::Dict{String, Any}
+    content_context = Mycelia.SHA.SHA2_256_CTX()
+    identifier_context = Mycelia.SHA.SHA2_256_CTX()
+    _update_multi_input_digest_field!(content_context, "mycelia-fastq-set-v1")
+    _update_multi_input_digest_field!(identifier_context, "mycelia-fastq-ids-v1")
+    _update_multi_input_digest_uint64!(content_context, UInt64(length(reads)))
+    _update_multi_input_digest_uint64!(identifier_context, UInt64(length(reads)))
+    for (record_index, record) in enumerate(reads)
+        record isa FASTX.FASTQ.Record || throw(ArgumentError(
+            "$(label) in-memory source record $(record_index) is not FASTQ.",
+        ))
+        identifier = String(FASTX.identifier(record))
+        description = String(FASTX.description(record))
+        sequence = FASTX.sequence(String, record)
+        quality = String(FASTX.quality(record))
+        _update_multi_input_digest_field!(identifier_context, identifier)
+        for field in (identifier, description, sequence, quality)
+            _update_multi_input_digest_field!(content_context, field)
+        end
+    end
+    return Dict{String, Any}(
+        "kind" => "in_memory_fastq",
+        "source_identity" => "in_memory:$(label)",
+        "record_count" => length(reads),
+        "identifier_sha256" => bytes2hex(
+            Mycelia.SHA.digest!(identifier_context),
+        ),
+        "sha256" => bytes2hex(Mycelia.SHA.digest!(content_context)),
+    )
+end
+
+function _multi_input_source_content_identity(
+        reads::Any,
+        label::AbstractString,
+)::Dict{String, Any}
+    paths = _read_source_paths(reads)
+    if paths === nothing
+        return _multi_input_record_set_content_identity(reads, label)
+    end
+    sources = Dict{String, Any}[
+        _multi_input_path_content_identity(path, label, source_index)
+        for (source_index, path) in enumerate(paths)
+    ]
+    return Dict{String, Any}(
+        "kind" => "path_set",
+        "source_count" => length(sources),
+        "sources" => sources,
+        "sha256" => _multi_input_path_set_sha256(sources),
+    )
+end
+
+function _multi_input_source_content_contract(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "schema" => "mycelia-paired-short-long-input-content-v1",
+        "short_r1" => _multi_input_source_content_identity(
+            short_r1,
+            "short_r1",
+        ),
+        "short_r2" => _multi_input_source_content_identity(
+            short_r2,
+            "short_r2",
+        ),
+        "long_reads" => _multi_input_source_content_identity(
+            long_reads,
+            "long_reads",
+        ),
+    )
+end
+
+function _verify_multi_input_source_content_contract(
+        expected::Dict{String, Any},
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any,
+)::Nothing
+    observed = _multi_input_source_content_contract(
+        short_r1,
+        short_r2,
+        long_reads,
+    )
+    for label in ("short_r1", "short_r2", "long_reads")
+        expected[label] == observed[label] && continue
+        error(
+            "input $(label) content changed during independent correction; " *
+            "refusing to run the combined-input assembler.",
+        )
+    end
+    return nothing
+end
+
+function _multi_input_corrected_content_contract(
+        inputs::_CorrectedPairedShortLong,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "schema" => "mycelia-corrected-fastq-content-v1",
+        "short_r1" => _multi_input_path_content_identity(
+            inputs.short_r1.path,
+            "corrected short_r1",
+            1,
+        ),
+        "short_r2" => _multi_input_path_content_identity(
+            inputs.short_r2.path,
+            "corrected short_r2",
+            1,
+        ),
+        "long_reads" => _multi_input_path_content_identity(
+            inputs.long_reads.path,
+            "corrected long_reads",
+            1,
+        ),
+    )
+end
+
+function _verify_multi_input_corrected_content_contract(
+        expected::Dict{String, Any},
+        inputs::_CorrectedPairedShortLong,
+)::Nothing
+    observed = _multi_input_corrected_content_contract(inputs)
+    for label in ("short_r1", "short_r2", "long_reads")
+        expected[label] == observed[label] && continue
+        error(
+            "corrected $(label) FASTQ content changed during combined-input " *
+            "assembly; refusing stale corrected-read provenance.",
+        )
+    end
+    return nothing
 end
 
 function _validate_paired_reads(
@@ -3418,6 +3644,186 @@ function _cleanup_multi_input_root!(
     return retained
 end
 
+function _normalize_unicycler_package_inventory(
+        package_records::Any,
+)::Vector{NamedTuple}
+    package_records isa AbstractVector || error(
+        "Unicycler Conda package inventory was not a JSON array.",
+    )
+    packages = NamedTuple[]
+    for (record_index, package_record) in enumerate(package_records)
+        package_record isa AbstractDict || error(
+            "Unicycler Conda package inventory record $(record_index) is not an object.",
+        )
+        name = get(package_record, "name", nothing)
+        version = get(package_record, "version", nothing)
+        build = get(
+            package_record,
+            "build_string",
+            get(package_record, "build", nothing),
+        )
+        channel = get(package_record, "channel", nothing)
+        all(
+            value -> value isa AbstractString && !isempty(value),
+            (name, version, build, channel),
+        ) || error(
+            "Unicycler Conda package inventory record $(record_index) must " *
+            "report non-empty name, version, build, and channel fields.",
+        )
+        push!(packages, (
+            name = String(name),
+            version = String(version),
+            build = String(build),
+            channel = String(channel),
+        ))
+    end
+    isempty(packages) && error("Unicycler Conda package inventory is empty.")
+    sort!(
+        packages;
+        by = package -> (
+            package.name,
+            package.version,
+            package.build,
+            package.channel,
+        ),
+    )
+    length(unique(package.name for package in packages)) == length(packages) ||
+        error("Unicycler Conda package inventory contains duplicate package names.")
+    return packages
+end
+
+function _unicycler_conda_package_inventory(;
+        conda_runner::AbstractString = Mycelia.CONDA_RUNNER,
+        command_reader::Function = command -> read(command, String),
+)::Vector{NamedTuple}
+    command = Cmd(String[
+        String(conda_runner),
+        "list",
+        "-n",
+        "unicycler",
+        "--json",
+    ])
+    package_records = Mycelia.JSON.parse(command_reader(command))
+    return _normalize_unicycler_package_inventory(package_records)
+end
+
+function _unicycler_package_inventory_sha256(
+        packages::Vector{NamedTuple},
+)::String
+    context = Mycelia.SHA.SHA2_256_CTX()
+    _update_multi_input_digest_field!(
+        context,
+        "mycelia-conda-package-inventory-v1",
+    )
+    _update_multi_input_digest_uint64!(context, UInt64(length(packages)))
+    for package in packages
+        for field in (
+                package.name,
+                package.version,
+                package.build,
+                package.channel,
+        )
+            _update_multi_input_digest_field!(context, field)
+        end
+    end
+    return bytes2hex(Mycelia.SHA.digest!(context))
+end
+
+function _unicycler_toolchain_provenance(;
+        inventory_reader::Function = _unicycler_conda_package_inventory,
+)::Dict{String, Any}
+    packages = inventory_reader()
+    package_names = Set(package.name for package in packages)
+    for required_package in ("unicycler", "spades")
+        required_package in package_names || error(
+            "Unicycler realized Conda package inventory is missing required " *
+            "package $(repr(required_package)).",
+        )
+    end
+    normalized_packages = Dict{String, Any}[
+        Dict{String, Any}(
+            "name" => package.name,
+            "version" => package.version,
+            "build" => package.build,
+            "channel" => package.channel,
+        ) for package in packages
+    ]
+    return Dict{String, Any}(
+        "environment_name" => "unicycler",
+        "inventory_schema" => "conda-name-version-build-channel-v1",
+        "package_inventory_sha256" =>
+            _unicycler_package_inventory_sha256(packages),
+        "packages" => normalized_packages,
+    )
+end
+
+function _require_unicycler_toolchain_provenance(
+        toolchain::Any,
+)::Dict{String, Any}
+    toolchain isa AbstractDict || error(
+        "Unicycler workflow did not report realized toolchain provenance.",
+    )
+    normalized = _normalize_provenance_value(toolchain)
+    get(normalized, "environment_name", nothing) == "unicycler" || error(
+        "Unicycler workflow toolchain provenance has the wrong environment name.",
+    )
+    get(normalized, "inventory_schema", nothing) ==
+        "conda-name-version-build-channel-v1" || error(
+        "Unicycler workflow toolchain provenance has an unsupported inventory schema.",
+    )
+    digest = get(normalized, "package_inventory_sha256", nothing)
+    packages = get(normalized, "packages", nothing)
+    digest isa AbstractString && occursin(r"^[0-9a-f]{64}$", digest) || error(
+        "Unicycler workflow toolchain provenance is missing a valid package " *
+        "inventory SHA-256 digest.",
+    )
+    packages isa AbstractVector && !isempty(packages) || error(
+        "Unicycler workflow toolchain provenance has no realized package inventory.",
+    )
+    normalized_packages = _normalize_unicycler_package_inventory(packages)
+    package_names = Set(package.name for package in normalized_packages)
+    for required_package in ("unicycler", "spades")
+        required_package in package_names || error(
+            "Unicycler workflow toolchain provenance is missing required " *
+            "package $(repr(required_package)).",
+        )
+    end
+    expected_digest = _unicycler_package_inventory_sha256(normalized_packages)
+    digest == expected_digest || error(
+        "Unicycler workflow package inventory digest does not match its " *
+        "reported name/version/build/channel inventory.",
+    )
+    return _unicycler_toolchain_provenance(
+        inventory_reader = () -> normalized_packages,
+    )
+end
+
+const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
+const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
+
+function _unicycler_environment_lock_path()::String
+    return joinpath(
+        first(Base.DEPOT_PATH),
+        "locks",
+        "mycelia-unicycler-environment.pid",
+    )
+end
+
+function _with_unicycler_environment_lock(
+        action::Function,
+        lock_path::AbstractString,
+)::Any
+    normalized_lock_path = abspath(String(lock_path))
+    mkpath(dirname(normalized_lock_path))
+    return Mycelia.FileWatching.Pidfile.mkpidlock(
+        normalized_lock_path;
+        stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+        refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
+    ) do
+        action()
+    end
+end
+
 """
     _run_multi_input_assembler(Val(:unicycler), inputs, outdir, config)
 
@@ -3430,15 +3836,35 @@ function _run_multi_input_assembler(
         outdir::AbstractString,
         config::UnicyclerHybridConfig;
         runner::Function = Mycelia.run_unicycler,
+        toolchain_inspector::Function = _unicycler_toolchain_provenance,
+        environment_preparer::Function = () ->
+            Mycelia.add_bioconda_env("unicycler"),
+        environment_lock_path::AbstractString =
+            _unicycler_environment_lock_path(),
+        environment_lock_runner::Function = _with_unicycler_environment_lock,
 )::NamedTuple
-    return runner(;
-        config.assembler_options...,
-        short_1 = inputs.short_r1.path,
-        short_2 = inputs.short_r2.path,
-        long_reads = inputs.long_reads.path,
-        outdir = String(outdir),
-        threads = config.threads,
-    )
+    return environment_lock_runner(String(environment_lock_path)) do
+        environment_preparer()
+        toolchain_before = _require_unicycler_toolchain_provenance(
+            toolchain_inspector(),
+        )
+        result = runner(;
+            config.assembler_options...,
+            short_1 = inputs.short_r1.path,
+            short_2 = inputs.short_r2.path,
+            long_reads = inputs.long_reads.path,
+            outdir = String(outdir),
+            threads = config.threads,
+        )
+        toolchain_after = _require_unicycler_toolchain_provenance(
+            toolchain_inspector(),
+        )
+        toolchain_before == toolchain_after || error(
+            "Unicycler realized Conda package inventory changed while the " *
+            "assembler ran; refusing stale toolchain provenance.",
+        )
+        return merge(result, (; toolchain = toolchain_after))
+    end
 end
 
 function _run_multi_input_assembler(
@@ -3718,214 +4144,11 @@ function _require_valid_multi_input_fasta(
     return records
 end
 
-function _is_valid_multi_input_gfa_overlap(overlap::AbstractString)::Bool
-    return overlap == "*" ||
-           occursin(r"^(?:[0-9]+[MIDNSHPX=])+$", overlap)
-end
-
-function _validate_multi_input_gfa_tags(
-        fields::AbstractVector{<:AbstractString},
-        first_tag_index::Int,
-        record_label::AbstractString,
-        line_number::Int,
-        label::AbstractString,
-        path::AbstractString,
-)::Nothing
-    for field_index in first_tag_index:length(fields)
-        occursin(
-            r"^[A-Za-z][A-Za-z0-9]:[A-Za-z]:.*$",
-            fields[field_index],
-        ) || error(
-            "$(label) has a malformed GFA $(record_label) tag at line " *
-            "$(line_number): $(path).",
-        )
-    end
-    return nothing
-end
-
 function _require_valid_multi_input_gfa(
         path::AbstractString,
         label::AbstractString,
 )::String
-    normalized_path = _require_tool_artifact(path, label)
-    islink(normalized_path) && error(
-        "$(label) must be a regular, non-symlink GFA file: $(normalized_path).",
-    )
-    segment_identifiers = Set{String}()
-    path_identifiers = Set{String}()
-    segment_references = Tuple{String, Int, String}[]
-    open(normalized_path, "r") do input
-        for (line_number, line) in enumerate(eachline(input))
-            isempty(line) && continue
-            startswith(line, '#') && continue
-            fields = split(line, '\t'; keepempty = true)
-            record_type = first(fields)
-            if record_type == "H"
-                _validate_multi_input_gfa_tags(
-                    fields,
-                    2,
-                    "header",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-            elseif record_type == "S"
-                length(fields) >= 3 || error(
-                    "$(label) has a malformed GFA segment at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                identifier = String(fields[2])
-                sequence = String(fields[3])
-                isempty(identifier) && error(
-                    "$(label) has an empty GFA segment identifier at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                identifier in segment_identifiers && error(
-                    "$(label) has duplicate GFA segment identifier " *
-                    "$(repr(identifier)): $(normalized_path).",
-                )
-                if isempty(sequence) || sequence == "*"
-                    error(
-                        "$(label) has no sequence for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path).",
-                    )
-                end
-                _is_multi_input_iupac_dna(sequence) || error(
-                    "$(label) has invalid DNA for GFA segment " *
-                    "$(repr(identifier)): $(normalized_path).",
-                )
-                try
-                    BioSequences.LongDNA{4}(sequence)
-                catch caught
-                    caught isa InterruptException && rethrow()
-                    error(
-                        "$(label) has invalid DNA for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path). Cause: " *
-                        sprint(showerror, caught),
-                    )
-                end
-                _validate_multi_input_gfa_tags(
-                    fields,
-                    4,
-                    "segment",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(segment_identifiers, identifier)
-            elseif record_type == "L"
-                length(fields) >= 6 || error(
-                    "$(label) has a malformed GFA link at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                from_identifier = String(fields[2])
-                from_orientation = String(fields[3])
-                to_identifier = String(fields[4])
-                to_orientation = String(fields[5])
-                overlap = String(fields[6])
-                if isempty(from_identifier) || isempty(to_identifier) ||
-                   !(from_orientation in ("+", "-")) ||
-                   !(to_orientation in ("+", "-")) ||
-                   !_is_valid_multi_input_gfa_overlap(overlap)
-                    error(
-                        "$(label) has a malformed GFA link at line " *
-                        "$(line_number): $(normalized_path).",
-                    )
-                end
-                _validate_multi_input_gfa_tags(
-                    fields,
-                    7,
-                    "link",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(segment_references, (
-                    from_identifier,
-                    line_number,
-                    "link",
-                ))
-                push!(segment_references, (
-                    to_identifier,
-                    line_number,
-                    "link",
-                ))
-            elseif record_type == "P"
-                length(fields) >= 4 || error(
-                    "$(label) has a malformed GFA path at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                path_identifier = String(fields[2])
-                isempty(path_identifier) && error(
-                    "$(label) has a malformed GFA path at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                path_identifier in path_identifiers && error(
-                    "$(label) has duplicate GFA path identifier " *
-                    "$(repr(path_identifier)): $(normalized_path).",
-                )
-                path_segments = split(fields[3], ','; keepempty = true)
-                isempty(path_segments) && error(
-                    "$(label) has a malformed GFA path at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                for path_segment in path_segments
-                    segment_match = match(r"^(.+)[+-]$", path_segment)
-                    segment_match === nothing && error(
-                        "$(label) has a malformed GFA path at line " *
-                        "$(line_number): $(normalized_path).",
-                    )
-                    push!(segment_references, (
-                        String(only(segment_match.captures)),
-                        line_number,
-                        "path",
-                    ))
-                end
-                path_overlaps = String(fields[4])
-                if path_overlaps != "*"
-                    overlaps = split(path_overlaps, ','; keepempty = true)
-                    if length(overlaps) != max(length(path_segments) - 1, 0) ||
-                       any(
-                            overlap ->
-                                !_is_valid_multi_input_gfa_overlap(overlap),
-                            overlaps,
-                        )
-                        error(
-                            "$(label) has a malformed GFA path at line " *
-                            "$(line_number): $(normalized_path).",
-                        )
-                    end
-                end
-                _validate_multi_input_gfa_tags(
-                    fields,
-                    5,
-                    "path",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(path_identifiers, path_identifier)
-            else
-                error(
-                    "$(label) has unknown GFA record type " *
-                    "$(repr(record_type)) at line $(line_number): " *
-                    "$(normalized_path).",
-                )
-            end
-        end
-    end
-    isempty(segment_identifiers) && error(
-        "$(label) contains no sequence-bearing GFA segments: " *
-        "$(normalized_path).",
-    )
-    for (identifier, line_number, record_label) in segment_references
-        identifier in segment_identifiers || error(
-            "$(label) has a dangling GFA $(record_label) reference to " *
-            "unknown segment $(repr(identifier)) at line " *
-            "$(line_number): $(normalized_path).",
-        )
-    end
-    return normalized_path
+    return Mycelia._require_valid_metamdbg_gfa(path, label)
 end
 
 function _persistent_tool_artifacts(
@@ -4000,6 +4223,8 @@ function _wrap_multi_input_assembly(
         input_technologies::Dict{String, String},
         retained_cleanup_files::Vector{String},
         retained_cleanup_roots::Vector{String},
+        source_content_contract::Dict{String, Any} = Dict{String, Any}(),
+        corrected_content_contract::Dict{String, Any} = Dict{String, Any}(),
 )::AssemblyResult
     assembly_path = _primary_assembly_path(result)
     records = _read_external_fasta(assembly_path)
@@ -4069,8 +4294,16 @@ function _wrap_multi_input_assembly(
     end
     assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
     tool_artifacts = _persistent_tool_artifacts(result, output_dir)
-    toolchain = hasproperty(result, :toolchain) ?
-                _normalize_provenance_value(result.toolchain) : nothing
+    toolchain = if workflow == :unicycler
+        hasproperty(result, :toolchain) || error(
+            "Unicycler workflow did not report realized toolchain provenance.",
+        )
+        _require_unicycler_toolchain_provenance(result.toolchain)
+    elseif hasproperty(result, :toolchain)
+        _normalize_provenance_value(result.toolchain)
+    else
+        nothing
+    end
     retained_intermediates = hasproperty(result, :intermediates) ?
                              String.(result.intermediates) : String[]
     stats = Dict{String, Any}(
@@ -4093,6 +4326,10 @@ function _wrap_multi_input_assembly(
         "corrected_fastqs" => corrected_paths,
         "correction_options" => _normalize_provenance_value(correction_options),
         "correction_provenance" => correction_provenance,
+        "read_content_provenance" => Dict{String, Any}(
+            "source_inputs" => source_content_contract,
+            "corrected_fastqs" => corrected_content_contract,
+        ),
         "retained_cleanup_files" => retained_cleanup_files,
         "retained_cleanup_roots" => retained_cleanup_roots,
         "raw_graph" => output_dir === nothing ? nothing : graph_path,
@@ -4128,19 +4365,31 @@ function _assemble_paired_short_long(
         short_reads[2],
         long_reads,
     )
-    short_r1 = _prepare_read_source(short_reads[1])
-    short_r2 = _prepare_read_source(short_reads[2])
-    prepared_long_reads = _prepare_read_source(long_reads)
-    if _read_sources_overlap(short_r1, prepared_long_reads) ||
-       _read_sources_overlap(short_r2, prepared_long_reads)
-        throw(ArgumentError(
-            "Long-read input must be distinct from paired short-read R1 and R2 sources.",
-        ))
-    end
     root_plan = _validate_workflow_root(config.output_dir)
     function run_reserved_workflow(
             reserved_root_plan::NamedTuple,
     )::AssemblyResult
+        short_r1 = _prepare_read_source(short_reads[1])
+        short_r2 = _prepare_read_source(short_reads[2])
+        prepared_long_reads = _prepare_read_source(long_reads)
+        _validate_unique_read_source_paths(short_r1, "short_r1")
+        _validate_unique_read_source_paths(short_r2, "short_r2")
+        _validate_unique_read_source_paths(prepared_long_reads, "long_reads")
+        _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
+            "input paired short-read R1 and R2 sources must be distinct.",
+        ))
+        if _read_sources_overlap(short_r1, prepared_long_reads) ||
+           _read_sources_overlap(short_r2, prepared_long_reads)
+            throw(ArgumentError(
+                "Long-read input must be distinct from paired short-read " *
+                "R1 and R2 sources.",
+            ))
+        end
+        source_content_contract = _multi_input_source_content_contract(
+            short_r1,
+            short_r2,
+            prepared_long_reads,
+        )
         paired_count = _validate_paired_reads(short_r1, short_r2, "input")
         long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
         long_read_correction_technology = _long_read_correction_technology(config)
@@ -4201,9 +4450,21 @@ function _assemble_paired_short_long(
                 corrected_r2,
                 corrected_long,
             )
+            corrected_content_contract =
+                _multi_input_corrected_content_contract(inputs)
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads,
+            )
             tool_result = assembler_runner(
                 inputs,
                 joinpath(root.path, "assembler_$(workflow)"),
+            )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs,
             )
             corrected_paths = if root.ephemeral
                 nothing
@@ -4251,6 +4512,8 @@ function _assemble_paired_short_long(
                 input_technologies = _paired_input_technologies(config),
                 retained_cleanup_files = retained_cleanup_files,
                 retained_cleanup_roots = retained_cleanup_roots,
+                source_content_contract,
+                corrected_content_contract,
             )
         finally
             append!(

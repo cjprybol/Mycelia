@@ -113,6 +113,7 @@ function _assert_persistent_hybrid_result(
         result::Mycelia.Rhizomorph.AssemblyResult,
         workflow::AbstractString,
         output_dir::AbstractString,
+        input_paths::NamedTuple,
         short_read_tech::Symbol,
         long_read_tech::Symbol,
         expected_polishers::Vector{String},
@@ -182,6 +183,126 @@ function _assert_persistent_hybrid_result(
         Test.@test isfile(path)
         Test.@test filesize(path) > 0
     end
+
+    content_provenance = stats["read_content_provenance"]
+    content_provenance isa AbstractDict || error(
+        "Hybrid smoke result is missing read-content provenance.",
+    )
+    source_contract = content_provenance["source_inputs"]
+    corrected_contract = content_provenance["corrected_fastqs"]
+    source_contract isa AbstractDict || error(
+        "Hybrid smoke result has malformed source-input provenance.",
+    )
+    corrected_contract isa AbstractDict || error(
+        "Hybrid smoke result has malformed corrected-FASTQ provenance.",
+    )
+    Test.@test source_contract["schema"] ==
+               "mycelia-paired-short-long-input-content-v1"
+    Test.@test corrected_contract["schema"] ==
+               "mycelia-corrected-fastq-content-v1"
+
+    expected_input_paths = Dict(
+        "short_r1" => input_paths.short_r1,
+        "short_r2" => input_paths.short_r2,
+        "long_reads" => input_paths.long_reads,
+    )
+    for label in ("short_r1", "short_r2", "long_reads")
+        expected_input_path = abspath(expected_input_paths[label])
+        source_set = source_contract[label]
+        source_set isa AbstractDict || error(
+            "Hybrid smoke $(label) source provenance is malformed.",
+        )
+        Test.@test source_set["kind"] == "path_set"
+        Test.@test source_set["source_count"] == 1
+        _assert_hybrid_sha256(source_set["sha256"], "$(label) source set")
+        sources = source_set["sources"]
+        sources isa AbstractVector || error(
+            "Hybrid smoke $(label) source list is malformed.",
+        )
+        Test.@test length(sources) == 1
+        source = only(sources)
+        source isa AbstractDict || error(
+            "Hybrid smoke $(label) source identity is malformed.",
+        )
+        Test.@test source["kind"] == "path"
+        Test.@test source["source_index"] == 1
+        Test.@test source["path"] == expected_input_path
+        Test.@test source["canonical_path"] == realpath(expected_input_path)
+        Test.@test source["size_bytes"] == filesize(expected_input_path)
+        Test.@test _assert_hybrid_sha256(
+            source["sha256"],
+            "$(label) source",
+        ) == Mycelia.Rhizomorph._multi_input_file_sha256(expected_input_path)
+
+        corrected_path = corrected_paths[label]
+        corrected_identity = corrected_contract[label]
+        corrected_identity isa AbstractDict || error(
+            "Hybrid smoke $(label) corrected identity is malformed.",
+        )
+        Test.@test corrected_identity["kind"] == "path"
+        Test.@test corrected_identity["source_index"] == 1
+        Test.@test corrected_identity["path"] == corrected_path
+        Test.@test corrected_identity["canonical_path"] == realpath(corrected_path)
+        Test.@test corrected_identity["size_bytes"] == filesize(corrected_path)
+        Test.@test _assert_hybrid_sha256(
+            corrected_identity["sha256"],
+            "$(label) corrected FASTQ",
+        ) == Mycelia.Rhizomorph._multi_input_file_sha256(corrected_path)
+    end
+    return nothing
+end
+
+function _assert_hybrid_sha256(value::Any, label::AbstractString)::String
+    value isa AbstractString || error(
+        "Hybrid smoke $(label) SHA-256 is not a string.",
+    )
+    digest = String(value)
+    Test.@test match(r"^[0-9a-f]{64}$", digest) !== nothing
+    return digest
+end
+
+function _assert_unicycler_toolchain(stats::AbstractDict)::Nothing
+    toolchain = stats["toolchain"]
+    toolchain isa AbstractDict || error(
+        "Unicycler smoke result is missing toolchain provenance.",
+    )
+    Test.@test toolchain["environment_name"] == "unicycler"
+    Test.@test toolchain["inventory_schema"] ==
+               "conda-name-version-build-channel-v1"
+    inventory_sha256 = _assert_hybrid_sha256(
+        toolchain["package_inventory_sha256"],
+        "Unicycler package inventory",
+    )
+    packages = toolchain["packages"]
+    packages isa AbstractVector || error(
+        "Unicycler smoke result has no realized package inventory.",
+    )
+    Test.@test !isempty(packages)
+    package_names = Set{String}()
+    for (package_index, package) in enumerate(packages)
+        package isa AbstractDict || error(
+            "Unicycler package record $(package_index) is malformed.",
+        )
+        Test.@test Set(String.(keys(package))) ==
+                   Set(["name", "version", "build", "channel"])
+        for field in ("name", "version", "build", "channel")
+            value = package[field]
+            value isa AbstractString || error(
+                "Unicycler package $(package_index) $(field) is not a string.",
+            )
+            Test.@test !isempty(String(value))
+        end
+        push!(package_names, String(package["name"]))
+    end
+    Test.@test "unicycler" in package_names
+    Test.@test "spades" in package_names
+    normalized_packages =
+        Mycelia.Rhizomorph._normalize_unicycler_package_inventory(packages)
+    expected_inventory_sha256 =
+        Mycelia.Rhizomorph._unicycler_package_inventory_sha256(
+            normalized_packages,
+        )
+    Test.@test inventory_sha256 == expected_inventory_sha256
     return nothing
 end
 
@@ -254,18 +375,10 @@ Test.@testset "multi-input hybrid external smoke" begin
             name for name in _HYBRID_INPUT_ENV_VARS if isempty(strip(get(ENV, name, "")))
         ]
         if !isempty(missing_inputs)
-            if run_autocycler
-                throw(ArgumentError(
-                    "Autocycler-polished smoke requires all FASTQ variables; " *
-                    "missing: $(join(missing_inputs, ", ")).",
-                ))
-            else
-                @info (
-                    "Multi-input hybrid smoke skipped: provide real FASTQ paths " *
-                    "in all required environment variables."
-                ) missing_environment_variables = missing_inputs
-                Test.@test_skip false
-            end
+            throw(ArgumentError(
+                "Enabled multi-input hybrid smoke requires all FASTQ " *
+                "variables; missing: $(join(missing_inputs, ", ")).",
+            ))
         else
             inputs = _hybrid_input_paths()
             short_read_tech = _hybrid_env_symbol(
@@ -322,10 +435,12 @@ Test.@testset "multi-input hybrid external smoke" begin
                         result,
                         "unicycler",
                         output_dir,
+                        inputs,
                         short_read_tech,
                         long_read_tech,
                         String[],
                     )
+                    _assert_unicycler_toolchain(result.assembly_stats)
                 end
 
                 if !run_autocycler
@@ -364,6 +479,7 @@ Test.@testset "multi-input hybrid external smoke" begin
                             result,
                             "autocycler_polished",
                             output_dir,
+                            inputs,
                             short_read_tech,
                             resolved_long_read_tech,
                             ["polypolish-careful", "pypolca-careful"],

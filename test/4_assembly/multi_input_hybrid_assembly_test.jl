@@ -177,6 +177,39 @@ function multi_input_write_fasta(
     return String(path)
 end
 
+function multi_input_fake_unicycler_toolchain()::Dict{String, Any}
+    packages = NamedTuple[
+        (
+            name = "python",
+            version = "3.11.9",
+            build = "h955ad1f_0_cpython",
+            channel = "conda-forge",
+        ),
+        (
+            name = "spades",
+            version = "4.2.0",
+            build = "h5ca1c30_1",
+            channel = "bioconda",
+        ),
+        (
+            name = "unicycler",
+            version = "0.5.1",
+            build = "pyhdfd78af_0",
+            channel = "bioconda",
+        ),
+    ]
+    return Mycelia.Rhizomorph._unicycler_toolchain_provenance(
+        inventory_reader = () -> packages,
+    )
+end
+
+function multi_input_noop_lock(
+        action::Function,
+        lock_path::AbstractString,
+)::Any
+    return action()
+end
+
 function multi_input_fake_assembler_result(
         outdir::AbstractString;
         gzip::Bool = false,
@@ -207,11 +240,17 @@ function multi_input_fake_assembler_result(
                 autocycler_assembly,
                 polypolish_assembly,
                 pypolca_report,
+                toolchain = multi_input_fake_unicycler_toolchain(),
             )
         end
-        return use_contigs_key ? (; contigs = assembly, graph) : (; assembly, graph)
+        toolchain = multi_input_fake_unicycler_toolchain()
+        return use_contigs_key ?
+               (; contigs = assembly, graph, toolchain) :
+               (; assembly, graph, toolchain)
     end
-    return use_contigs_key ? (; contigs = assembly) : (; assembly)
+    toolchain = multi_input_fake_unicycler_toolchain()
+    return use_contigs_key ? (; contigs = assembly, toolchain) :
+           (; assembly, toolchain)
 end
 
 function multi_input_without_field(
@@ -368,6 +407,36 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 (joinpath(temp_dir, "missing-r2.fastq"),),
                 (joinpath(temp_dir, "missing-long.fastq"),),
             )
+
+            lazy_consumptions = Ref(0)
+            function lazy_missing_source(path::AbstractString)::Base.Generator
+                return (
+                    begin
+                        lazy_consumptions[] += 1
+                        value
+                    end for value in (String(path),)
+                )
+            end
+            stale_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = stale_root,
+            )
+            test_throws_message(
+                ArgumentError,
+                "prevent stale hybrid assembly reuse",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (
+                        lazy_missing_source(missing_inputs[1][1]),
+                        lazy_missing_source(missing_inputs[2][1]),
+                    ),
+                    lazy_missing_source(missing_inputs[3][1]),
+                    stale_config,
+                    :unicycler;
+                    correction_runner = root_validation_correction_runner,
+                    assembler_runner = root_validation_assembler_runner,
+                )
+            end
+            Test.@test lazy_consumptions[] == 0
 
             for (message, output_dir) in (
                     ("prevent stale hybrid assembly reuse", stale_root),
@@ -534,6 +603,47 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             Test.@test isempty(first_result.assembly_stats["retained_cleanup_files"])
             Test.@test isempty(first_result.assembly_stats["retained_cleanup_roots"])
             Test.@test !ispath(physical_lock)
+
+            lifecycle_output = joinpath(physical_parent, "lifecycle-output")
+            lifecycle_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    lifecycle_output,
+                )
+            lock_observations = Bool[]
+            function lock_observing_source(values::Any)::Base.Generator
+                return (
+                    begin
+                        push!(lock_observations, isfile(lifecycle_lock))
+                        value
+                    end for value in values
+                )
+            end
+            lifecycle_calls = NamedTuple[]
+            lifecycle_result =
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (
+                        lock_observing_source(MULTI_INPUT_R1),
+                        lock_observing_source(MULTI_INPUT_R2),
+                    ),
+                    lock_observing_source(MULTI_INPUT_LONG),
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = lifecycle_output,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        lifecycle_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        Test.@test isfile(lifecycle_lock)
+                        multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            Test.@test length(lifecycle_calls) == 3
+            Test.@test !isempty(lock_observations)
+            Test.@test all(lock_observations)
+            Test.@test lifecycle_result.assembly_stats["output_dir"] ==
+                       lifecycle_output
+            Test.@test !ispath(lifecycle_lock)
         end
     end
 
@@ -959,6 +1069,25 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 "short_r2" => 2,
                 "long_reads" => 1,
             )
+            source_contract = result.assembly_stats[
+                "read_content_provenance"
+            ]["source_inputs"]
+            expected_paths = Dict(
+                "short_r1" => r1_gzip,
+                "short_r2" => r2_gzip,
+                "long_reads" => long_gzip,
+            )
+            for (label, expected_path) in expected_paths
+                identity = source_contract[label]
+                Test.@test identity["kind"] == "path_set"
+                Test.@test identity["source_count"] == 1
+                source = only(identity["sources"])
+                Test.@test source["path"] == abspath(expected_path)
+                Test.@test source["canonical_path"] == realpath(expected_path)
+                Test.@test source["size_bytes"] == filesize(expected_path)
+                Test.@test occursin(r"^[0-9a-f]{64}$", source["sha256"])
+                Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+            end
             Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         end
     end
@@ -1023,22 +1152,32 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         interrupted_tokens = [
             Mycelia.Rhizomorph._Stage1CleanupToken(interrupted_fastq, true),
         ]
-        Test.@test_throws InterruptException begin
+        stage_interrupt = InterruptException()
+        caught_stage_interrupt = try
             Mycelia.Rhizomorph._cleanup_multi_input_stages!(
                 interrupted_tokens;
-                remover = path -> throw(InterruptException()),
+                remover = path -> throw(stage_interrupt),
             )
+            nothing
+        catch caught
+            caught
         end
+        Test.@test caught_stage_interrupt === stage_interrupt
         Test.@test isfile(interrupted_fastq)
         rm(interrupted_fastq; force = true)
 
         interrupted_root = mktempdir()
-        Test.@test_throws InterruptException begin
+        root_interrupt = InterruptException()
+        caught_root_interrupt = try
             Mycelia.Rhizomorph._cleanup_multi_input_root!(
                 interrupted_root;
-                remover = path -> throw(InterruptException()),
+                remover = path -> throw(root_interrupt),
             )
+            nothing
+        catch caught
+            caught
         end
+        Test.@test caught_root_interrupt === root_interrupt
         Test.@test isdir(interrupted_root)
         rm(interrupted_root; recursive = true, force = true)
 
@@ -1185,6 +1324,34 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             "k" => 17,
             "strategy" => "scalable",
         )
+        content_provenance =
+            result.assembly_stats["read_content_provenance"]
+        source_contract = content_provenance["source_inputs"]
+        Test.@test source_contract["schema"] ==
+                   "mycelia-paired-short-long-input-content-v1"
+        for label in ("short_r1", "short_r2", "long_reads")
+            identity = source_contract[label]
+            Test.@test identity["kind"] == "in_memory_fastq"
+            Test.@test identity["record_count"] ==
+                       result.assembly_stats["input_read_counts"][label]
+            Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+            Test.@test occursin(
+                r"^[0-9a-f]{64}$",
+                identity["identifier_sha256"],
+            )
+        end
+        corrected_contract = content_provenance["corrected_fastqs"]
+        Test.@test corrected_contract["schema"] ==
+                   "mycelia-corrected-fastq-content-v1"
+        for label in ("short_r1", "short_r2", "long_reads")
+            identity = corrected_contract[label]
+            Test.@test identity["kind"] == "path"
+            Test.@test isabspath(identity["path"])
+            Test.@test identity["size_bytes"] > 0
+            Test.@test occursin(r"^[0-9a-f]{64}$", identity["sha256"])
+        end
+        Test.@test result.assembly_stats["toolchain"] ==
+                   multi_input_fake_unicycler_toolchain()
         correction_provenance = result.assembly_stats["correction_provenance"]
         Test.@test Set(keys(correction_provenance)) ==
                    Set(["short_r1", "short_r2", "long_reads"])
@@ -1215,6 +1382,151 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         Test.@test !result.gfa_compatible
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         Test.@test !isdir(dirname(captured_outdir[]))
+    end
+
+    Test.@testset "source content mutation fails before assembler" begin
+        mktempdir() do temp_dir
+            path_r1 = multi_input_write_fastq(
+                joinpath(temp_dir, "R1.fastq"),
+                MULTI_INPUT_R1,
+            )
+            path_r2 = multi_input_write_fastq(
+                joinpath(temp_dir, "R2.fastq"),
+                MULTI_INPUT_R2,
+            )
+            path_long = multi_input_write_fastq(
+                joinpath(temp_dir, "long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            path_calls = NamedTuple[]
+            path_base_runner = multi_input_fake_correction_runner(path_calls)
+            function path_mutating_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                stage = path_base_runner(reads, config)
+                if length(path_calls) == 1
+                    multi_input_write_fastq(
+                        path_r1,
+                        FASTX.FASTQ.Record[
+                            multi_input_fastq_record("pair_a/1", "TTTTTTTT"),
+                            MULTI_INPUT_R1[2],
+                        ],
+                    )
+                end
+                return stage
+            end
+            path_assembler_calls = Ref(0)
+            function path_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                path_assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end
+            test_throws_message(
+                ErrorException,
+                "input short_r1 content changed during independent correction",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (path_r1, path_r2),
+                    path_long,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = path_mutating_correction_runner,
+                    assembler_runner = path_assembler_runner,
+                )
+            end
+            Test.@test length(path_calls) == 3
+            Test.@test path_assembler_calls[] == 0
+            Test.@test all(call -> !isfile(call.corrected_fastq), path_calls)
+        end
+
+        in_memory_r1 = copy(MULTI_INPUT_R1)
+        in_memory_r2 = copy(MULTI_INPUT_R2)
+        in_memory_long = copy(MULTI_INPUT_LONG)
+        in_memory_calls = NamedTuple[]
+        in_memory_base_runner =
+            multi_input_fake_correction_runner(in_memory_calls)
+        function in_memory_mutating_correction_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = in_memory_base_runner(reads, config)
+            if length(in_memory_calls) == 1
+                reads[1] = multi_input_fastq_record("pair_a/1", "GGGGGGGG")
+            end
+            return stage
+        end
+        in_memory_assembler_calls = Ref(0)
+        function in_memory_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            in_memory_assembler_calls[] += 1
+            return multi_input_fake_assembler_result(outdir)
+        end
+        test_throws_message(
+            ErrorException,
+            "input short_r1 content changed during independent correction",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (in_memory_r1, in_memory_r2),
+                in_memory_long,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = in_memory_mutating_correction_runner,
+                assembler_runner = in_memory_assembler_runner,
+            )
+        end
+        Test.@test length(in_memory_calls) == 3
+        Test.@test in_memory_assembler_calls[] == 0
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            in_memory_calls,
+        )
+
+        corrected_mutation_calls = NamedTuple[]
+        corrected_assembler_calls = Ref(0)
+        function corrected_mutating_assembler_runner(
+                inputs::Mycelia.Rhizomorph._CorrectedPairedShortLong,
+                outdir::AbstractString,
+        )::NamedTuple
+            corrected_assembler_calls[] += 1
+            corrected_r1_records = multi_input_collect_fastq([
+                inputs.short_r1.path,
+            ])
+            corrected_r1_records[1] = multi_input_fastq_record(
+                String(FASTX.identifier(corrected_r1_records[1])),
+                "CCCCCCCC",
+            )
+            multi_input_write_fastq(
+                inputs.short_r1.path,
+                corrected_r1_records,
+            )
+            return multi_input_fake_assembler_result(outdir)
+        end
+        test_throws_message(
+            ErrorException,
+            "corrected short_r1 FASTQ content changed during combined-input assembly",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    corrected_mutation_calls,
+                ),
+                assembler_runner = corrected_mutating_assembler_runner,
+            )
+        end
+        Test.@test length(corrected_mutation_calls) == 3
+        Test.@test corrected_assembler_calls[] == 1
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            corrected_mutation_calls,
+        )
     end
 
     Test.@testset "effective per-read-set correction provenance" begin
@@ -1285,12 +1597,16 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             assembler_options = (; kmers = "21,33"),
             threads = 6,
         )
-        Mycelia.Rhizomorph._run_multi_input_assembler(
+        unicycler_result = Mycelia.Rhizomorph._run_multi_input_assembler(
             Val(:unicycler),
             inputs,
             "/workflow/unicycler",
             unicycler_config;
             runner = unicycler_runner,
+            toolchain_inspector = multi_input_fake_unicycler_toolchain,
+            environment_preparer = () -> nothing,
+            environment_lock_path = "/unused/unicycler-test.lock",
+            environment_lock_runner = multi_input_noop_lock,
         )
         Test.@test unicycler_kwargs[] == (
             kmers = "21,33",
@@ -1300,6 +1616,85 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             outdir = "/workflow/unicycler",
             threads = 6,
         )
+        Test.@test unicycler_result.toolchain ==
+                   multi_input_fake_unicycler_toolchain()
+
+        test_throws_message(ErrorException, "did not report realized toolchain") do
+            Mycelia.Rhizomorph._run_multi_input_assembler(
+                Val(:unicycler),
+                inputs,
+                "/workflow/unicycler-unreported",
+                unicycler_config;
+                runner = unicycler_runner,
+                toolchain_inspector = () -> nothing,
+                environment_preparer = () -> nothing,
+                environment_lock_path = "/unused/unicycler-test.lock",
+                environment_lock_runner = multi_input_noop_lock,
+            )
+        end
+
+        package_records = Any[
+            Dict(
+                "name" => "unicycler",
+                "version" => "0.5.1",
+                "build_string" => "pyhdfd78af_0",
+                "channel" => "bioconda",
+            ),
+            Dict(
+                "name" => "spades",
+                "version" => "4.2.0",
+                "build_string" => "h5ca1c30_1",
+                "channel" => "bioconda",
+            ),
+        ]
+        normalized_packages =
+            Mycelia.Rhizomorph._normalize_unicycler_package_inventory(
+                package_records,
+            )
+        Test.@test [package.name for package in normalized_packages] ==
+                   ["spades", "unicycler"]
+        original_inventory_digest =
+            Mycelia.Rhizomorph._unicycler_package_inventory_sha256(
+                normalized_packages,
+            )
+        changed_build_records = deepcopy(package_records)
+        changed_build_records[1]["build_string"] = "pyhdfd78af_1"
+        changed_inventory_digest =
+            Mycelia.Rhizomorph._unicycler_package_inventory_sha256(
+                Mycelia.Rhizomorph._normalize_unicycler_package_inventory(
+                    changed_build_records,
+                ),
+            )
+        Test.@test original_inventory_digest != changed_inventory_digest
+        Test.@test occursin(r"^[0-9a-f]{64}$", original_inventory_digest)
+
+        changed_toolchain = Mycelia.Rhizomorph._unicycler_toolchain_provenance(
+            inventory_reader = () ->
+                Mycelia.Rhizomorph._normalize_unicycler_package_inventory(
+                    changed_build_records,
+                ),
+        )
+        inventory_snapshots = Any[
+            multi_input_fake_unicycler_toolchain(),
+            changed_toolchain,
+        ]
+        test_throws_message(
+            ErrorException,
+            "package inventory changed while the assembler ran",
+        ) do
+            Mycelia.Rhizomorph._run_multi_input_assembler(
+                Val(:unicycler),
+                inputs,
+                "/workflow/unicycler-mutated-toolchain",
+                unicycler_config;
+                runner = unicycler_runner,
+                toolchain_inspector = () -> popfirst!(inventory_snapshots),
+                environment_preparer = () -> nothing,
+                environment_lock_path = "/unused/unicycler-test.lock",
+                environment_lock_runner = multi_input_noop_lock,
+            )
+        end
+        Test.@test isempty(inventory_snapshots)
 
         autocycler_kwargs = Ref{Any}()
         autocycler_runner = function (; kwargs...)
@@ -1607,7 +2002,11 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         )
 
         wrapped = Mycelia.Rhizomorph._wrap_multi_input_assembly(
-            (; contigs = gzip_fasta, graph = gzip_graph),
+            (;
+                contigs = gzip_fasta,
+                graph = gzip_graph,
+                toolchain = multi_input_fake_unicycler_toolchain(),
+            ),
             :unicycler;
             input_counts = Dict(
                 "short_r1" => 1,
@@ -1640,6 +2039,21 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         )
         Test.@test wrapped.contig_names == ["alpha", "beta"]
         Test.@test wrapped.contigs == ["ACGT", "TTAA"]
+
+        comma_identifier_graph = joinpath(
+            artifact_dir,
+            "comma-identifier.gfa",
+        )
+        write(
+            comma_identifier_graph,
+            "H\tVN:Z:1.0\n" *
+            "S\tsegment,name\tACGT\n" *
+            "P\tprimary\tsegment,name+\t*\n",
+        )
+        Test.@test Mycelia.Rhizomorph._require_valid_multi_input_gfa(
+            comma_identifier_graph,
+            "comma-name graph",
+        ) == comma_identifier_graph
 
         missing = joinpath(artifact_dir, "missing.fasta")
         test_throws_message(ErrorException, "no non-empty contigs FASTA") do
@@ -1746,7 +2160,11 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 graph = joinpath(outdir, "assembly.gfa")
                 write(graph, graph_contents)
                 if workflow == :unicycler
-                    return (; assembly, graph)
+                    return (;
+                        assembly,
+                        graph,
+                        toolchain = multi_input_fake_unicycler_toolchain(),
+                    )
                 end
                 autocycler_assembly = multi_input_write_fasta(
                     joinpath(outdir, "autocycler_assembly.fasta");
@@ -1815,14 +2233,14 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                         "L\tcontig_1\t+\tcontig_2\t-\n",
                 ),
                 (
-                    message = "dangling GFA link reference",
+                    message = "dangling GFA link segment reference",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents =
                         "S\tcontig_1\tACGT\n" *
                         "L\tcontig_1\t+\tmissing\t-\t1M\n",
                 ),
                 (
-                    message = "dangling GFA path reference",
+                    message = "dangling GFA path segment reference",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents =
                         "S\tcontig_1\tACGT\n" *
@@ -1834,7 +2252,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     graph_contents = "H\tVN:Z:1.0\n",
                 ),
                 (
-                    message = "duplicate GFA segment identifier",
+                    message = "duplicate GFA segment/path name",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents =
                         "S\tduplicate\tACGT\nS\tduplicate\tTGCA\n",
@@ -1848,6 +2266,18 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     message = "invalid DNA for GFA segment",
                     assembly_records = ["contig_1" => "ACGT"],
                     graph_contents = "S\tgapped\tACGT-ACGT\n",
+                ),
+                (
+                    message = "duplicate GFA segment/path name",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents =
+                        "S\tshared_name\tACGT\n" *
+                        "P\tshared_name\tshared_name+\t*\n",
+                ),
+                (
+                    message = "invalid GFA segment optional tag",
+                    assembly_records = ["contig_1" => "ACGT"],
+                    graph_contents = "S\tcontig_1\tACGT\tbad-tag\n",
                 ),
             )
             for workflow in (:unicycler, :autocycler_polished)
@@ -2000,6 +2430,10 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             )
             paired_hardlink = joinpath(temp_dir, "same-physical-hardlink.fastq")
             Base.hardlink(paired_path, paired_hardlink)
+            distinct_r2_alias = joinpath(temp_dir, "distinct-r2-alias.fastq")
+            symlink(distinct_r2, distinct_r2_alias)
+            long_hardlink = joinpath(temp_dir, "long-hardlink.fastq")
+            Base.hardlink(long_path, long_hardlink)
             correction_calls = Ref(0)
             assembler_calls = Ref(0)
             function alias_guard_correction_runner(
@@ -2037,6 +2471,27 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     short_r2 = (distinct_r2,),
                     long_reads = (path for path in (paired_hardlink,)),
                     output_name = "hardlink-generator-alias",
+                ),
+                (
+                    message = "input short_r1 sources must be distinct",
+                    short_r1 = (paired_path, paired_path),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (long_path,),
+                    output_name = "duplicate-within-r1",
+                ),
+                (
+                    message = "input short_r2 sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2, distinct_r2_alias),
+                    long_reads = (long_path,),
+                    output_name = "symlink-alias-within-r2",
+                ),
+                (
+                    message = "input long_reads sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (long_path, long_hardlink),
+                    output_name = "hardlink-alias-within-long",
                 ),
             )
             for alias_case in alias_cases

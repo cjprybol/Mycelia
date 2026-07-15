@@ -80,6 +80,11 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #         output_dir = "hybrid_unicycler_out",
 #     ),
 # )
+# # Unicycler's mutable Conda environment is bound to the realized package
+# # inventory for this run (name, version, build, and channel for every package).
+# unicycler_toolchain = unicycler_result.assembly_stats["toolchain"]
+# unicycler_toolchain["package_inventory_sha256"]
+# unicycler_toolchain["packages"]
 # autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
 #     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
 #     "reads_hifi.fastq.gz";
@@ -90,6 +95,12 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #     ),
 # )
 # autocycler_result.assembly_stats["toolchain"]
+#
+# # Both high-level workflows bind the original source content and corrected
+# # FASTQ path, size, and content to deterministic SHA-256 provenance.
+# read_content = unicycler_result.assembly_stats["read_content_provenance"]
+# read_content["source_inputs"]
+# read_content["corrected_fastqs"]
 #
 # metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
 # combined HiFi-plus-ONT adapter. Synchronous execution returns :complete only

@@ -2743,6 +2743,8 @@ const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
 const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
 const _METAMDBG_CONTRACT_SCHEMA_VERSION = 4
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
+const _METAMDBG_COMPLETION_SCHEMA_VERSION = 1
+const _METAMDBG_COMPLETION_FILENAME = "mycelia_metamdbg_completion.json"
 const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 1
 const _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME = "contract.json"
 const _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS = 300
@@ -2772,6 +2774,10 @@ function _metamdbg_sha256(path::AbstractString)::String
     end
 end
 
+function _metamdbg_string_sha256(value::AbstractString)::String
+    return SHA.bytes2hex(SHA.sha256(String(value)))
+end
+
 function _require_verified_metamdbg_environment_spec(
         path::AbstractString,
 )::String
@@ -2799,10 +2805,99 @@ function _metamdbg_expected_toolchain()::NamedTuple
     )
 end
 
+function _metamdbg_package_record_field(
+        package_record::Union{NamedTuple, AbstractDict},
+        field::Symbol,
+)::Any
+    if package_record isa NamedTuple
+        return hasproperty(package_record, field) ?
+               getproperty(package_record, field) : nothing
+    end
+    return get(
+        package_record,
+        String(field),
+        get(package_record, field, nothing),
+    )
+end
+
+function _metamdbg_normalized_package_inventory(
+        package_records::AbstractVector,
+)::Vector{NamedTuple}
+    isempty(package_records) && error(
+        "metaMDBG conda package inventory must contain at least one package.",
+    )
+    inventory = NamedTuple[]
+    for (record_index, package_record) in enumerate(package_records)
+        package_record isa Union{NamedTuple, AbstractDict} || error(
+            "metaMDBG conda package inventory record $(record_index) is not " *
+            "an object.",
+        )
+        name = _metamdbg_package_record_field(package_record, :name)
+        version = _metamdbg_package_record_field(package_record, :version)
+        build = _metamdbg_package_record_field(package_record, :build_string)
+        build === nothing &&
+            (build = _metamdbg_package_record_field(package_record, :build))
+        channel = _metamdbg_package_record_field(package_record, :channel)
+        fields = (; name, version, build, channel)
+        for (field_name, value) in pairs(fields)
+            value isa AbstractString && !isempty(value) || error(
+                "metaMDBG conda package inventory record $(record_index) has " *
+                "a missing or empty $(field_name) field.",
+            )
+            occursin(r"[\t\r\n]", value) && error(
+                "metaMDBG conda package inventory record $(record_index) has " *
+                "a noncanonical $(field_name) field.",
+            )
+        end
+        push!(inventory, (;
+            name = String(name),
+            version = String(version),
+            build = String(build),
+            channel = String(channel),
+        ))
+    end
+    sort!(
+        inventory;
+        by = record -> (
+            record.name,
+            record.version,
+            record.build,
+            record.channel,
+        ),
+    )
+    names = getproperty.(inventory, :name)
+    allunique(names) || error(
+        "metaMDBG conda package inventory contains duplicate package names.",
+    )
+    return inventory
+end
+
+function _metamdbg_package_inventory_contents(
+        package_records::AbstractVector,
+)::String
+    inventory = _metamdbg_normalized_package_inventory(package_records)
+    return join(
+        map(inventory) do record
+            join(
+                (record.name, record.version, record.build, record.channel),
+                '\t',
+            )
+        end,
+        '\n',
+    ) * "\n"
+end
+
+function _metamdbg_package_inventory_sha256(
+        package_records::AbstractVector,
+)::String
+    contents = _metamdbg_package_inventory_contents(package_records)
+    return SHA.bytes2hex(SHA.sha256(contents))
+end
+
 function _metamdbg_environment_packages(;
         conda_runner::AbstractString = CONDA_RUNNER,
         command_reader::Function = command -> read(command, String),
-)::Dict{String, String}
+)::Vector{NamedTuple}
     command = Cmd(String[
         String(conda_runner),
         "list",
@@ -2814,22 +2909,19 @@ function _metamdbg_environment_packages(;
     package_records isa AbstractVector || error(
         "metaMDBG conda package inventory was not a JSON array.",
     )
-    versions = Dict{String, String}()
-    for package_record in package_records
-        package_record isa AbstractDict || continue
-        name = get(package_record, "name", nothing)
-        version = get(package_record, "version", nothing)
-        if name isa AbstractString && version isa AbstractString
-            versions[String(name)] = String(version)
-        end
-    end
-    return versions
+    return _metamdbg_normalized_package_inventory(package_records)
 end
 
 function _require_metamdbg_package_version(
-        versions::AbstractDict{<:AbstractString, <:AbstractString},
+        package_records::AbstractVector,
 )::NamedTuple
-    actual_version = get(versions, "metamdbg", nothing)
+    inventory = _metamdbg_normalized_package_inventory(package_records)
+    metamdbg_records = filter(
+        record -> record.name == "metamdbg",
+        inventory,
+    )
+    actual_version = isempty(metamdbg_records) ?
+                     nothing : only(metamdbg_records).version
     displayed_version =
         actual_version === nothing ? "missing" : repr(actual_version)
     actual_version == METAMDBG_VERSION || error(
@@ -2838,7 +2930,14 @@ function _require_metamdbg_package_version(
         "$(displayed_version). " *
         "Refusing to repair it in place; remove it manually before reinstalling.",
     )
-    return _metamdbg_expected_toolchain()
+    expected = _metamdbg_expected_toolchain()
+    return (;
+        expected...,
+        package_inventory = inventory,
+        package_inventory_sha256 =
+            _metamdbg_package_inventory_sha256(inventory),
+        package_count = length(inventory),
+    )
 end
 
 function _require_expected_metamdbg_toolchain(toolchain::Any)::NamedTuple
@@ -2846,11 +2945,42 @@ function _require_expected_metamdbg_toolchain(toolchain::Any)::NamedTuple
     toolchain isa NamedTuple || error(
         "metaMDBG dependency validation did not return toolchain provenance.",
     )
-    toolchain == expected || error(
-        "metaMDBG dependency validation returned incompatible toolchain " *
-        "provenance: expected $(repr(expected)), got $(repr(toolchain)).",
+    for field in propertynames(expected)
+        actual_value = hasproperty(toolchain, field) ?
+                       getproperty(toolchain, field) : nothing
+        if actual_value != getproperty(expected, field)
+            error(
+                "metaMDBG dependency validation returned incompatible " *
+                "$(field) provenance: expected " *
+                "$(repr(getproperty(expected, field))), got " *
+                "$(repr(actual_value)).",
+            )
+        end
+    end
+    hasproperty(toolchain, :package_inventory) || error(
+        "metaMDBG dependency validation did not return its resolved package " *
+        "inventory.",
     )
-    return expected
+    realized = _require_metamdbg_package_version(toolchain.package_inventory)
+    if !hasproperty(toolchain, :package_inventory_sha256) ||
+       toolchain.package_inventory_sha256 !=
+       realized.package_inventory_sha256
+        error(
+            "metaMDBG dependency validation returned an incompatible " *
+            "normalized package inventory digest.",
+        )
+    end
+    if !hasproperty(toolchain, :package_count) ||
+       toolchain.package_count != realized.package_count
+        error(
+            "metaMDBG dependency validation returned an incompatible package " *
+            "count.",
+        )
+    end
+    propertynames(toolchain) == propertynames(realized) || error(
+        "metaMDBG dependency validation returned unexpected toolchain fields.",
+    )
+    return realized
 end
 
 function _metamdbg_install_lock_path()::String
@@ -2932,6 +3062,10 @@ function _metamdbg_output_paths(
         contract_marker = joinpath(
             normalized_outdir,
             _METAMDBG_CONTRACT_FILENAME,
+        ),
+        completion_marker = joinpath(
+            normalized_outdir,
+            _METAMDBG_COMPLETION_FILENAME,
         ),
     )
 end
@@ -3164,6 +3298,21 @@ function _metamdbg_submission_reservation_path(
     )
 end
 
+function _metamdbg_workflow_contract(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+)::NamedTuple
+    contract = (;
+        schema_version = _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION,
+        canonical_outdir = outputs.outdir,
+        input_contract_signature = input_contract.signature,
+        graph_k,
+    )
+    signature = _metamdbg_string_sha256(JSON.json(contract))
+    return (; contract, signature)
+end
+
 function _metamdbg_submission_reservation(
         outputs::NamedTuple,
         input_contract::NamedTuple,
@@ -3171,15 +3320,13 @@ function _metamdbg_submission_reservation(
         ;
         owner_token::AbstractString = string(UUIDs.uuid4()),
 )::NamedTuple
-    reservation_contract = (;
-        schema_version = _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION,
-        canonical_outdir = outputs.outdir,
-        input_contract_signature = input_contract.signature,
+    workflow = _metamdbg_workflow_contract(
+        outputs,
+        input_contract,
         graph_k,
     )
-    reservation_contract_contents = JSON.json(reservation_contract)
-    workflow_signature =
-        SHA.bytes2hex(SHA.sha256(reservation_contract_contents))
+    reservation_contract = workflow.contract
+    workflow_signature = workflow.signature
     path = _metamdbg_submission_reservation_path(
         outputs.outdir,
         workflow_signature,
@@ -3273,6 +3420,116 @@ function _require_metamdbg_submission_reservation!(
         "invocation: $(marker).",
     )
     return reservation
+end
+
+function _metamdbg_submission_reservation_from_path(
+        path::AbstractString,
+        canonical_outdir::AbstractString,
+)::NamedTuple
+    normalized_path = normpath(abspath(path))
+    marker = joinpath(
+        normalized_path,
+        _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+    )
+    if !isdir(normalized_path) || islink(normalized_path)
+        error(
+            "metaMDBG submission reservation must be a regular, non-symlink " *
+            "directory: $(normalized_path).",
+        )
+    end
+    readdir(normalized_path) ==
+        String[_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME] || error(
+        "metaMDBG submission reservation contains unexpected entries: " *
+        "$(normalized_path).",
+    )
+    if !isfile(marker) || islink(marker) || filesize(marker) == 0
+        error(
+            "metaMDBG submission reservation contract must be a nonempty, " *
+            "regular, non-symlink file: $(marker).",
+        )
+    end
+    contents = read(marker, String)
+    parsed = try
+        JSON.parse(contents)
+    catch caught
+        error(
+            "metaMDBG submission reservation contract is not valid JSON: " *
+            "$(marker). Cause: $(sprint(showerror, caught))",
+        )
+    end
+    parsed isa AbstractDict || error(
+        "metaMDBG submission reservation contract is not a JSON object: " *
+        "$(marker).",
+    )
+    expected_keys = Set(String[
+        "schema_version",
+        "canonical_outdir",
+        "input_contract_signature",
+        "graph_k",
+        "workflow_signature",
+        "owner_token",
+    ])
+    Set(String.(keys(parsed))) == expected_keys || error(
+        "metaMDBG submission reservation contract has unexpected fields: " *
+        "$(marker).",
+    )
+    schema_version = get(parsed, "schema_version", nothing)
+    schema_version == _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION || error(
+        "metaMDBG submission reservation has an unsupported schema version: " *
+        "$(repr(schema_version)).",
+    )
+    recorded_outdir = get(parsed, "canonical_outdir", nothing)
+    recorded_outdir isa AbstractString || error(
+        "metaMDBG submission reservation canonical_outdir must be a string.",
+    )
+    expected_outdir = _metamdbg_canonical_output_path(canonical_outdir)
+    String(recorded_outdir) == expected_outdir || error(
+        "metaMDBG submission reservation targets a different output root.",
+    )
+    input_contract_signature = get(
+        parsed,
+        "input_contract_signature",
+        nothing,
+    )
+    input_contract_signature isa AbstractString &&
+        occursin(r"^[0-9a-f]{64}$", input_contract_signature) || error(
+        "metaMDBG submission reservation input contract signature is invalid.",
+    )
+    graph_k_value = get(parsed, "graph_k", nothing)
+    graph_k_value isa Integer || error(
+        "metaMDBG submission reservation graph_k must be an integer.",
+    )
+    graph_k = Int(graph_k_value)
+    graph_k >= 0 || error(
+        "metaMDBG submission reservation graph_k must be nonnegative.",
+    )
+    workflow_signature = get(parsed, "workflow_signature", nothing)
+    workflow_signature isa AbstractString &&
+        occursin(r"^[0-9a-f]{64}$", workflow_signature) || error(
+        "metaMDBG submission reservation workflow signature is invalid.",
+    )
+    owner_token = get(parsed, "owner_token", nothing)
+    owner_token isa AbstractString && !isempty(owner_token) || error(
+        "metaMDBG submission reservation owner token is invalid.",
+    )
+    outputs = _metamdbg_output_paths(expected_outdir, graph_k)
+    expected = _metamdbg_submission_reservation(
+        outputs,
+        (; signature = String(input_contract_signature)),
+        graph_k;
+        owner_token = String(owner_token),
+    )
+    expected.path == normalized_path || error(
+        "metaMDBG submission reservation path does not match its workflow " *
+        "signature.",
+    )
+    expected.workflow_signature == workflow_signature || error(
+        "metaMDBG submission reservation workflow signature is inconsistent.",
+    )
+    expected.contents == contents || error(
+        "metaMDBG submission reservation contract is not canonical.",
+    )
+    return _require_metamdbg_submission_reservation!(expected)
 end
 
 function _create_metamdbg_submission_reservation!(
@@ -4063,6 +4320,238 @@ function _require_metamdbg_artifacts!(
     return (; outdir = outputs.outdir, contigs, graph)
 end
 
+function _metamdbg_completion_toolchain_summary(
+        toolchain::NamedTuple,
+)::NamedTuple
+    expected = _metamdbg_expected_toolchain()
+    for field in propertynames(expected)
+        if !hasproperty(toolchain, field) ||
+           getproperty(toolchain, field) != getproperty(expected, field)
+            error(
+                "metaMDBG completion toolchain has incompatible $(field) " *
+                "provenance.",
+            )
+        end
+    end
+    hasproperty(toolchain, :package_inventory_sha256) || error(
+        "metaMDBG completion toolchain is missing its normalized package " *
+        "inventory digest.",
+    )
+    inventory_sha256 = toolchain.package_inventory_sha256
+    if !(inventory_sha256 isa AbstractString) ||
+       !occursin(r"^[0-9a-f]{64}$", inventory_sha256)
+        error(
+            "metaMDBG completion toolchain package inventory digest is " *
+            "invalid.",
+        )
+    end
+    hasproperty(toolchain, :package_count) || error(
+        "metaMDBG completion toolchain is missing its package count.",
+    )
+    package_count = toolchain.package_count
+    if !(package_count isa Integer) || package_count <= 0
+        error("metaMDBG completion toolchain package count must be positive.")
+    end
+    return (;
+        expected...,
+        package_inventory_sha256 = String(inventory_sha256),
+        package_count = Int(package_count),
+    )
+end
+
+function _metamdbg_completion_manifest(
+        outputs::NamedTuple,
+        artifacts::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+        toolchain::NamedTuple,
+        ;
+        digest_function::Function = _metamdbg_sha256,
+)::NamedTuple
+    toolchain_summary = _metamdbg_completion_toolchain_summary(toolchain)
+    workflow = _metamdbg_workflow_contract(outputs, input_contract, graph_k)
+    contigs_path = realpath(artifacts.contigs)
+    graph_alias_path = normpath(abspath(artifacts.graph))
+    graph_source_path = realpath(artifacts.graph)
+    manifest = (;
+        schema_version = _METAMDBG_COMPLETION_SCHEMA_VERSION,
+        workflow = (;
+            canonical_outdir_sha256 =
+                _metamdbg_string_sha256(outputs.outdir),
+            input_contract_signature = input_contract.signature,
+            graph_k,
+            workflow_signature = workflow.signature,
+        ),
+        toolchain = toolchain_summary,
+        artifacts = (;
+            contigs = (;
+                canonical_path_sha256 =
+                    _metamdbg_string_sha256(contigs_path),
+                size_bytes = Int64(filesize(contigs_path)),
+                sha256 = String(digest_function(contigs_path)),
+            ),
+            graph = (;
+                alias_path_sha256 =
+                    _metamdbg_string_sha256(graph_alias_path),
+                source_path_sha256 =
+                    _metamdbg_string_sha256(graph_source_path),
+                size_bytes = Int64(filesize(graph_source_path)),
+                sha256 = String(digest_function(graph_source_path)),
+            ),
+        ),
+    )
+    serialized_manifest = JSON.json(manifest)
+    signature = _metamdbg_string_sha256(serialized_manifest)
+    contents = JSON.json((;
+        schema_version = _METAMDBG_COMPLETION_SCHEMA_VERSION,
+        signature_algorithm = "sha256",
+        signature,
+        manifest,
+    )) * "\n"
+    return (; manifest, signature, contents)
+end
+
+function _write_metamdbg_completion_manifest!(
+        outputs::NamedTuple,
+        completion::NamedTuple,
+)::String
+    marker = outputs.completion_marker
+    if ispath(marker) || islink(marker)
+        error(
+            "metaMDBG refuses to overwrite an existing completion manifest: " *
+            "$(marker).",
+        )
+    end
+    temporary_path, temporary_io = mktemp(dirname(marker))
+    published = false
+    try
+        write(temporary_io, completion.contents)
+        flush(temporary_io)
+        close(temporary_io)
+        chmod(temporary_path, 0o600)
+        Base.Filesystem.hardlink(temporary_path, marker)
+        published = true
+        rm(temporary_path)
+        read(marker, String) == completion.contents || error(
+            "Failed to write metaMDBG completion manifest: $(marker).",
+        )
+    catch primary_error
+        isopen(temporary_io) && close(temporary_io)
+        if ispath(temporary_path)
+            try
+                rm(temporary_path)
+            catch cleanup_error
+                @warn "metaMDBG failed to clean an unpublished completion " *
+                      "manifest while preserving the primary publication " *
+                      "failure" temporary_path primary_error cleanup_error
+            end
+        end
+        if published && ispath(marker)
+            try
+                rm(marker)
+            catch cleanup_error
+                @warn "metaMDBG failed to remove an invalid newly published " *
+                      "completion manifest while preserving the primary " *
+                      "publication failure" marker primary_error cleanup_error
+            end
+        end
+        Base.rethrow()
+    end
+    return marker
+end
+
+function _metamdbg_completion_toolchain_from_json(
+        manifest::AbstractDict,
+)::NamedTuple
+    toolchain = get(manifest, "toolchain", nothing)
+    toolchain isa AbstractDict || error(
+        "metaMDBG completion manifest toolchain must be a JSON object.",
+    )
+    expected_keys = Set(String[
+        "metamdbg_version",
+        "environment_name",
+        "environment_spec_sha256",
+        "package_inventory_sha256",
+        "package_count",
+    ])
+    Set(String.(keys(toolchain))) == expected_keys || error(
+        "metaMDBG completion manifest toolchain has unexpected fields.",
+    )
+    return _metamdbg_completion_toolchain_summary((;
+        metamdbg_version = get(toolchain, "metamdbg_version", nothing),
+        environment_name = get(toolchain, "environment_name", nothing),
+        environment_spec_sha256 =
+            get(toolchain, "environment_spec_sha256", nothing),
+        package_inventory_sha256 =
+            get(toolchain, "package_inventory_sha256", nothing),
+        package_count = get(toolchain, "package_count", nothing),
+    ))
+end
+
+function _require_metamdbg_completion_manifest!(
+        outputs::NamedTuple,
+        artifacts::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+        ;
+        digest_function::Function = _metamdbg_sha256,
+)::NamedTuple
+    marker = outputs.completion_marker
+    if !isfile(marker) || islink(marker) || filesize(marker) == 0
+        error(
+            "metaMDBG complete output is missing its regular, nonempty " *
+            "completion manifest: $(marker). Refusing unbound artifact reuse.",
+        )
+    end
+    actual_contents = read(marker, String)
+    parsed = try
+        JSON.parse(actual_contents)
+    catch caught
+        error(
+            "metaMDBG completion manifest is not valid JSON: $(marker). " *
+            "Cause: $(sprint(showerror, caught))",
+        )
+    end
+    parsed isa AbstractDict || error(
+        "metaMDBG completion manifest must be a JSON object: $(marker).",
+    )
+    Set(String.(keys(parsed))) == Set(String[
+        "schema_version",
+        "signature_algorithm",
+        "signature",
+        "manifest",
+    ]) || error(
+        "metaMDBG completion manifest has unexpected top-level fields: " *
+        "$(marker).",
+    )
+    get(parsed, "schema_version", nothing) ==
+        _METAMDBG_COMPLETION_SCHEMA_VERSION || error(
+        "metaMDBG completion manifest has an unsupported schema version.",
+    )
+    get(parsed, "signature_algorithm", nothing) == "sha256" || error(
+        "metaMDBG completion manifest has an unsupported signature algorithm.",
+    )
+    manifest = get(parsed, "manifest", nothing)
+    manifest isa AbstractDict || error(
+        "metaMDBG completion manifest payload must be a JSON object.",
+    )
+    toolchain = _metamdbg_completion_toolchain_from_json(manifest)
+    expected = _metamdbg_completion_manifest(
+        outputs,
+        artifacts,
+        input_contract,
+        graph_k,
+        toolchain;
+        digest_function,
+    )
+    actual_contents == expected.contents || error(
+        "metaMDBG completion manifest does not match graph_k, workflow, exact " *
+        "resolved toolchain inventory, or current artifact identities, sizes, " *
+        "and SHA-256 digests: $(marker). Refusing stale output reuse.",
+    )
+    return expected
+end
+
 function _metamdbg_executor_script(
         asm_cmd::String,
         gfa_cmd::String,
@@ -4162,11 +4651,14 @@ function _metamdbg_executor_script(
         "contigs_gz=\"\$outdir/contigs.fasta.gz\"",
         "graph_alias=\"\$outdir/assemblyGraph_k$(graph_k).gfa\"",
         "contract_marker=\"\$outdir/$(_METAMDBG_CONTRACT_FILENAME)\"",
+        "completion_marker=\"\$outdir/$(_METAMDBG_COMPLETION_FILENAME)\"",
         "environment_spec=$(Base.shell_escape(verified_environment_path))",
         "expected_spec_sha256=$(Base.shell_escape(METAMDBG_ENVIRONMENT_SPEC_SHA256))",
         "expected_metamdbg_version=$(Base.shell_escape(METAMDBG_VERSION))",
         "environment_name=$(Base.shell_escape(METAMDBG_ENV_NAME))",
         "conda_runner=$(Base.shell_escape(conda_runner))",
+        "expected_input_contract_signature=$(Base.shell_escape(input_contract.signature))",
+        "expected_workflow_signature=$(Base.shell_escape(effective_submission_reservation.workflow_signature))",
         reservation_declaration_lines...,
         input_declaration_lines...,
         "secure_tmpdir=",
@@ -4183,6 +4675,19 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG requires sha256sum or shasum to validate content\" >&2",
         "    return 1",
         "  fi",
+        "}",
+        "sha256_stream() {",
+        "  if command -v sha256sum >/dev/null 2>&1; then",
+        "    sha256sum | awk '{print \$1}'",
+        "  elif command -v shasum >/dev/null 2>&1; then",
+        "    shasum -a 256 | awk '{print \$1}'",
+        "  else",
+        "    echo \"metaMDBG requires sha256sum or shasum to validate content\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
+        "sha256_text() {",
+        "  printf '%s' \"\$1\" | sha256_stream",
         "}",
         input_validation_function_lines...,
         reservation_validation_function_lines...,
@@ -4219,6 +4724,10 @@ function _metamdbg_executor_script(
         "contract_new=\"\$secure_tmpdir/contract.new\"",
         "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
         "package_inventory=\"\$secure_tmpdir/conda-packages.json\"",
+        "package_inventory_unsorted=\"\$secure_tmpdir/conda-packages.unsorted.tsv\"",
+        "package_inventory_normalized=\"\$secure_tmpdir/conda-packages.tsv\"",
+        "completion_payload=\"\$secure_tmpdir/completion-payload.json\"",
+        "completion_new=\"\$secure_tmpdir/completion.new\"",
         "printf '%s' $(Base.shell_escape(input_contract.contents)) > \"\$expected_contract\"",
         "chmod 600 \"\$expected_contract\"",
         "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
@@ -4272,22 +4781,61 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG environment specification checksum mismatch\" >&2",
         "  exit 1",
         "fi",
-        "\"\$conda_runner\" list -n \"\$environment_name\" '^metamdbg\$' --json > \"\$package_inventory\"",
+        "\"\$conda_runner\" list -n \"\$environment_name\" --json > \"\$package_inventory\"",
         "awk '",
+        "  function json_field(object, key, marker, start, remainder, finish) {",
+        "    marker = \"\\\"\" key \"\\\":\\\"\"",
+        "    start = index(object, marker)",
+        "    if (start == 0) return \"\"",
+        "    remainder = substr(object, start + length(marker))",
+        "    finish = index(remainder, \"\\\"\")",
+        "    if (finish == 0) return \"\"",
+        "    return substr(remainder, 1, finish - 1)",
+        "  }",
         "  { inventory = inventory \$0 }",
         "  END {",
         "    compact = inventory",
         "    gsub(/[[:space:]]+/, \"\", compact)",
-        "    object_count = split(compact, objects, /[{}]/)",
+        "    sub(/^\\[/, \"\", compact)",
+        "    sub(/\\]\$/, \"\", compact)",
+        "    if (compact == \"\") exit 2",
+        "    object_count = split(compact, objects, /\\},\\{/)",
         "    for (object_index = 1; object_index <= object_count; object_index += 1) {",
-        "      if (objects[object_index] ~ /\"name\":\"metamdbg\"/ && objects[object_index] ~ /\"version\":\"1[.]4\"/) found = 1",
+        "      object = objects[object_index]",
+        "      sub(/^\\{/, \"\", object)",
+        "      sub(/\\}\$/, \"\", object)",
+        "      name = json_field(object, \"name\")",
+        "      version = json_field(object, \"version\")",
+        "      build = json_field(object, \"build_string\")",
+        "      if (build == \"\") build = json_field(object, \"build\")",
+        "      channel = json_field(object, \"channel\")",
+        "      if (name == \"\" || version == \"\" || build == \"\" || channel == \"\") exit 3",
+        "      if (name ~ /[\\t\\r\\n]/ || version ~ /[\\t\\r\\n]/ || build ~ /[\\t\\r\\n]/ || channel ~ /[\\t\\r\\n]/) exit 4",
+        "      print name \"\\t\" version \"\\t\" build \"\\t\" channel",
         "    }",
-        "    exit found ? 0 : 1",
         "  }",
-        "' \"\$package_inventory\" || {",
+        "' \"\$package_inventory\" > \"\$package_inventory_unsorted\" || {",
+        "  echo \"metaMDBG environment package inventory is incomplete or malformed\" >&2",
+        "  exit 1",
+        "}",
+        "LC_ALL=C sort \"\$package_inventory_unsorted\" > \"\$package_inventory_normalized\"",
+        "package_count=\$(awk 'END { print NR }' \"\$package_inventory_normalized\")",
+        "if [ \"\$package_count\" -le 0 ]; then",
+        "  echo \"metaMDBG normalized package inventory is empty\" >&2",
+        "  exit 1",
+        "fi",
+        "if cut -f 1 \"\$package_inventory_normalized\" | uniq -d | grep -q .; then",
+        "  echo \"metaMDBG normalized package inventory has duplicate package names\" >&2",
+        "  exit 1",
+        "fi",
+        "awk -F '\\t' -v expected=\"\$expected_metamdbg_version\" '",
+        "  \$1 == \"metamdbg\" && \$2 == expected { count += 1 }",
+        "  END { exit count == 1 ? 0 : 1 }",
+        "' \"\$package_inventory_normalized\" || {",
         "  echo \"metaMDBG environment must contain one metamdbg record at exactly \$expected_metamdbg_version\" >&2",
         "  exit 1",
         "}",
+        "package_inventory_sha256=\$(sha256_file \"\$package_inventory_normalized\")",
         "validate_fasta_stream() {",
         "  awk '",
         "    BEGIN { records = 0; sequence_bases = 0 }",
@@ -4502,6 +5050,45 @@ function _metamdbg_executor_script(
         "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
         "validate_contigs \"\$contigs_gz\"",
         "validate_gfa \"\$graph_source\"",
+        "if [ -e \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ]; then",
+        "  echo \"metaMDBG refuses to overwrite an existing completion manifest\" >&2",
+        "  exit 1",
+        "fi",
+        "contigs_canonical=\"\$outdir/contigs.fasta.gz\"",
+        "graph_source_parent=\$(cd -- \"\$(dirname -- \"\$graph_source\")\" && pwd -P)",
+        "graph_source_canonical=\"\$graph_source_parent/\$(basename -- \"\$graph_source\")\"",
+        "outdir_sha256=\$(sha256_text \"\$outdir\")",
+        "contigs_path_sha256=\$(sha256_text \"\$contigs_canonical\")",
+        "graph_alias_path_sha256=\$(sha256_text \"\$graph_alias\")",
+        "graph_source_path_sha256=\$(sha256_text \"\$graph_source_canonical\")",
+        "contigs_size=\$(wc -c < \"\$contigs_canonical\" | tr -d '[:space:]')",
+        "graph_size=\$(wc -c < \"\$graph_source_canonical\" | tr -d '[:space:]')",
+        "contigs_sha256=\$(sha256_file \"\$contigs_canonical\")",
+        "graph_sha256=\$(sha256_file \"\$graph_source_canonical\")",
+        "printf '%s' '{\"schema_version\":$(_METAMDBG_COMPLETION_SCHEMA_VERSION),\"workflow\":{' > \"\$completion_payload\"",
+        "printf '\"canonical_outdir_sha256\":\"%s\",' \"\$outdir_sha256\" >> \"\$completion_payload\"",
+        "printf '\"input_contract_signature\":\"%s\",' \"\$expected_input_contract_signature\" >> \"\$completion_payload\"",
+        "printf '\"graph_k\":%s,' $(graph_k) >> \"\$completion_payload\"",
+        "printf '\"workflow_signature\":\"%s\"},\"toolchain\":{' \"\$expected_workflow_signature\" >> \"\$completion_payload\"",
+        "printf '\"metamdbg_version\":\"%s\",' \"\$expected_metamdbg_version\" >> \"\$completion_payload\"",
+        "printf '\"environment_name\":\"%s\",' \"\$environment_name\" >> \"\$completion_payload\"",
+        "printf '\"environment_spec_sha256\":\"%s\",' \"\$expected_spec_sha256\" >> \"\$completion_payload\"",
+        "printf '\"package_inventory_sha256\":\"%s\",' \"\$package_inventory_sha256\" >> \"\$completion_payload\"",
+        "printf '\"package_count\":%s},\"artifacts\":{\"contigs\":{' \"\$package_count\" >> \"\$completion_payload\"",
+        "printf '\"canonical_path_sha256\":\"%s\",' \"\$contigs_path_sha256\" >> \"\$completion_payload\"",
+        "printf '\"size_bytes\":%s,' \"\$contigs_size\" >> \"\$completion_payload\"",
+        "printf '\"sha256\":\"%s\"},\"graph\":{' \"\$contigs_sha256\" >> \"\$completion_payload\"",
+        "printf '\"alias_path_sha256\":\"%s\",' \"\$graph_alias_path_sha256\" >> \"\$completion_payload\"",
+        "printf '\"source_path_sha256\":\"%s\",' \"\$graph_source_path_sha256\" >> \"\$completion_payload\"",
+        "printf '\"size_bytes\":%s,' \"\$graph_size\" >> \"\$completion_payload\"",
+        "printf '\"sha256\":\"%s\"}}}' \"\$graph_sha256\" >> \"\$completion_payload\"",
+        "completion_signature=\$(sha256_file \"\$completion_payload\")",
+        "printf '%s' '{\"schema_version\":$(_METAMDBG_COMPLETION_SCHEMA_VERSION),\"signature_algorithm\":\"sha256\",' > \"\$completion_new\"",
+        "printf '\"signature\":\"%s\",\"manifest\":' \"\$completion_signature\" >> \"\$completion_new\"",
+        "cat \"\$completion_payload\" >> \"\$completion_new\"",
+        "printf '}\\n' >> \"\$completion_new\"",
+        "chmod 600 \"\$completion_new\"",
+        "expected_completion_sha256=\$(sha256_file \"\$completion_new\")",
         "validate_metamdbg_inputs",
         "if [ \"\$contract_exists\" -eq 1 ]; then",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
@@ -4519,17 +5106,61 @@ function _metamdbg_executor_script(
         "  fi",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
         "fi",
+        "mv -n -- \"\$completion_new\" \"\$completion_marker\"",
+        "if [ -e \"\$completion_new\" ]; then",
+        "  echo \"metaMDBG refused to overwrite a concurrent completion manifest\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ ! -f \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ] || [ ! -s \"\$completion_marker\" ]; then",
+        "  echo \"metaMDBG failed to publish a regular completion manifest\" >&2",
+        "  exit 1",
+        "fi",
+        "actual_completion_sha256=\$(sha256_file \"\$completion_marker\")",
+        "if [ \"\$actual_completion_sha256\" != \"\$expected_completion_sha256\" ]; then",
+        "  echo \"metaMDBG published completion manifest changed unexpectedly\" >&2",
+        "  exit 1",
+        "fi",
     ]
     return join(lines, "\n")
 end
 
-function _metamdbg_provenance(input_contract::NamedTuple)::NamedTuple
+function _metamdbg_provenance(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+        ;
+        completion::Union{Nothing, NamedTuple} = nothing,
+)::NamedTuple
     toolchain = _metamdbg_expected_toolchain()
-    return (;
+    workflow = _metamdbg_workflow_contract(outputs, input_contract, graph_k)
+    provenance = (;
         contract_signature = input_contract.signature,
+        workflow_signature = workflow.signature,
+        graph_k,
         metamdbg_version = toolchain.metamdbg_version,
         environment_name = toolchain.environment_name,
         environment_spec_sha256 = toolchain.environment_spec_sha256,
+    )
+    completion === nothing && return provenance
+    manifest = completion.manifest
+    return (;
+        provenance...,
+        completion_signature = completion.signature,
+        package_inventory_sha256 =
+            manifest.toolchain.package_inventory_sha256,
+        package_count = manifest.toolchain.package_count,
+        canonical_outdir_sha256 =
+            manifest.workflow.canonical_outdir_sha256,
+        contigs_path_sha256 =
+            manifest.artifacts.contigs.canonical_path_sha256,
+        contigs_size_bytes = manifest.artifacts.contigs.size_bytes,
+        contigs_sha256 = manifest.artifacts.contigs.sha256,
+        graph_alias_path_sha256 =
+            manifest.artifacts.graph.alias_path_sha256,
+        graph_source_path_sha256 =
+            manifest.artifacts.graph.source_path_sha256,
+        graph_size_bytes = manifest.artifacts.graph.size_bytes,
+        graph_sha256 = manifest.artifacts.graph.sha256,
     )
 end
 
@@ -4537,6 +5168,8 @@ function _metamdbg_complete_result(
         outputs::NamedTuple,
         artifacts::NamedTuple,
         input_contract::NamedTuple,
+        graph_k::Int,
+        completion::NamedTuple,
 )::NamedTuple
     return (;
         status = :complete,
@@ -4544,7 +5177,13 @@ function _metamdbg_complete_result(
         contigs = artifacts.contigs,
         graph = artifacts.graph,
         contract_marker = outputs.contract_marker,
-        provenance = _metamdbg_provenance(input_contract),
+        completion_marker = outputs.completion_marker,
+        provenance = _metamdbg_provenance(
+            outputs,
+            input_contract,
+            graph_k;
+            completion,
+        ),
     )
 end
 
@@ -4553,6 +5192,7 @@ function _metamdbg_planned_result(
         submission::Any,
         outputs::NamedTuple,
         input_contract::NamedTuple,
+        graph_k::Int,
         ;
         submission_reservation::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
@@ -4567,8 +5207,9 @@ function _metamdbg_planned_result(
             contigs = outputs.contigs_gz,
             graph = outputs.graph_alias,
             contract_marker = outputs.contract_marker,
+            completion_marker = outputs.completion_marker,
         ),
-        provenance = _metamdbg_provenance(input_contract),
+        provenance = _metamdbg_provenance(outputs, input_contract, graph_k),
     )
     status == :planned && return result
     submission_reservation === nothing && error(
@@ -4605,6 +5246,12 @@ function _metamdbg_existing_artifacts(
         error(
             "metaMDBG output is inconsistent: graph exists without contigs in " *
             outputs.outdir,
+        )
+    end
+    if ispath(outputs.completion_marker) || islink(outputs.completion_marker)
+        error(
+            "metaMDBG output has a completion manifest without both validated " *
+            "artifacts in $(outputs.outdir).",
         )
     end
     return nothing
@@ -4686,6 +5333,16 @@ function _run_metamdbg(;
     resolved_executor = executor === nothing ?
                         Mycelia.LocalExecutor() :
                         Mycelia.resolve_executor(executor)
+    supported_executor =
+        resolved_executor isa Mycelia.LocalExecutor ||
+        resolved_executor isa Mycelia.CollectExecutor ||
+        resolved_executor isa Mycelia.DryRunExecutor ||
+        resolved_executor isa Mycelia.SlurmExecutor
+    supported_executor || throw(ArgumentError(
+        "metaMDBG supports only LocalExecutor, CollectExecutor, " *
+        "DryRunExecutor, or SlurmExecutor; refusing an unverifiable custom " *
+        "nonlocal executor before creating a submission reservation.",
+    ))
     _require_no_active_metamdbg_submission_reservation!(outputs.outdir)
     input_contract = _metamdbg_input_contract(
         selected_input,
@@ -4744,14 +5401,23 @@ function _run_metamdbg(;
                     ;
                     digest_function = input_digest_function,
                 )
+                completion = _require_metamdbg_completion_manifest!(
+                    outputs,
+                    existing_artifacts,
+                    input_contract,
+                    graph_k,
+                )
                 return _metamdbg_complete_result(
                     outputs,
                     existing_artifacts,
                     input_contract,
+                    graph_k,
+                    completion,
                 )
             end
 
-            _require_expected_metamdbg_toolchain(dependency_checker())
+            realized_toolchain =
+                _require_expected_metamdbg_toolchain(dependency_checker())
             existing_contigs = _normalize_metamdbg_contigs!(outputs)
             if existing_contigs === nothing
                 _require_current_metamdbg_input_snapshot!(
@@ -4774,6 +5440,13 @@ function _run_metamdbg(;
                 local_runner(gfa_command)
             end
             artifacts = _require_metamdbg_artifacts!(outputs, graph_k)
+            completion = _metamdbg_completion_manifest(
+                outputs,
+                artifacts,
+                input_contract,
+                graph_k,
+                realized_toolchain,
+            )
             _require_current_metamdbg_input_contract!(
                 selected_input,
                 abundance_min,
@@ -4783,6 +5456,7 @@ function _run_metamdbg(;
                 digest_function = input_digest_function,
             )
             wrote_contract = false
+            wrote_completion = false
             try
                 if has_contract
                     _require_metamdbg_contract!(outputs, input_contract)
@@ -4791,7 +5465,31 @@ function _run_metamdbg(;
                     wrote_contract = true
                 end
                 _require_metamdbg_contract!(outputs, input_contract)
+                _write_metamdbg_completion_manifest!(outputs, completion)
+                wrote_completion = true
+                completion = _require_metamdbg_completion_manifest!(
+                    outputs,
+                    artifacts,
+                    input_contract,
+                    graph_k,
+                )
+                return _metamdbg_complete_result(
+                    outputs,
+                    artifacts,
+                    input_contract,
+                    graph_k,
+                    completion,
+                )
             catch primary_error
+                if wrote_completion
+                    try
+                        rm(outputs.completion_marker)
+                    catch cleanup_error
+                        @warn "metaMDBG failed to remove a newly written stale " *
+                              "completion manifest while preserving the " *
+                              "primary completion failure" outputs primary_error cleanup_error
+                    end
+                end
                 if wrote_contract
                     try
                         rm(outputs.contract_marker)
@@ -4803,11 +5501,6 @@ function _run_metamdbg(;
                 end
                 Base.rethrow()
             end
-            return _metamdbg_complete_result(
-                outputs,
-                artifacts,
-                input_contract,
-            )
         end
     end
 
@@ -4834,10 +5527,18 @@ function _run_metamdbg(;
             ;
             digest_function = input_digest_function,
         )
+        completion = _require_metamdbg_completion_manifest!(
+            outputs,
+            existing_artifacts,
+            input_contract,
+            graph_k,
+        )
         return _metamdbg_complete_result(
             outputs,
             existing_artifacts,
             input_contract,
+            graph_k,
+            completion,
         )
     end
     complete_result !== nothing && return complete_result
@@ -4880,6 +5581,7 @@ function _run_metamdbg(;
             submission,
             outputs,
             input_contract,
+            graph_k,
         )
     end
 
@@ -4904,10 +5606,18 @@ function _run_metamdbg(;
                 ;
                 digest_function = input_digest_function,
             )
+            completion = _require_metamdbg_completion_manifest!(
+                outputs,
+                existing_artifacts,
+                input_contract,
+                graph_k,
+            )
             return _metamdbg_complete_result(
                 outputs,
                 existing_artifacts,
                 input_contract,
+                graph_k,
+                completion,
             )
         end
         _require_current_metamdbg_input_snapshot!(
@@ -4948,6 +5658,7 @@ function _run_metamdbg(;
         submission,
         outputs,
         input_contract,
+        graph_k,
         ;
         submission_reservation,
     )
@@ -4956,27 +5667,67 @@ end
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Reclaim a queued metaMDBG submission reservation after confirmed cancellation.
+Inspect durable metaMDBG submission reservations for an output root.
+
+Each returned record is reconstructed from and verified against its mode-0600
+on-disk owner contract under the output lock. This is the recovery path when a
+caller dies after publishing the reservation but before receiving the returned
+capability. Inspection never expires or removes a reservation.
+"""
+function inspect_metamdbg_submission_reservations(
+        outdir::AbstractString,
+)::Vector{NamedTuple}
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    return _with_metamdbg_output_lock(canonical_outdir) do
+        map(_metamdbg_submission_reservation_paths(canonical_outdir)) do path
+            reservation = _metamdbg_submission_reservation_from_path(
+                path,
+                canonical_outdir,
+            )
+            return (;
+                canonical_outdir = reservation.canonical_outdir,
+                path = reservation.path,
+                workflow_signature = reservation.workflow_signature,
+                input_contract_signature =
+                    reservation.input_contract_signature,
+                graph_k = reservation.graph_k,
+                owner_token = reservation.owner_token,
+                job_id = nothing,
+                submission_state = :unknown,
+            )
+        end
+    end
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Reclaim a durable metaMDBG submission reservation after explicit confirmation.
 
 This is an explicit cancellation capability, not an expiry mechanism. Pass the
 `submission_reservation` metadata returned by `run_metamdbg` with
 `status = :submitted`, the exact random `owner_token`, the exact scheduler
 `job_id`, and `confirm_cancelled = true` only after the scheduler has confirmed
-that the job cannot start. The reservation path is recomputed from its workflow
-signature and removed under the output lock only when the on-disk owner record
-still matches exactly. Missing, consumed, or replacement-owner reservations fail
-loudly and are never removed.
+that the job cannot start. For a process death before submission, first call
+`inspect_metamdbg_submission_reservations`, independently confirm that no job
+was submitted, then pass that inspected record, its exact owner token, and
+`confirm_not_submitted = true`. The two confirmation modes are mutually
+exclusive. The reservation is removed under the output lock only when the
+on-disk owner record still matches exactly. Missing, consumed, or
+replacement-owner reservations fail loudly and are never removed automatically.
 """
 function reclaim_metamdbg_submission_reservation!(
         metadata::NamedTuple,
         ;
         owner_token::AbstractString,
-        job_id::AbstractString,
+        job_id::Union{Nothing, AbstractString} = nothing,
         confirm_cancelled::Bool = false,
+        confirm_not_submitted::Bool = false,
 )::NamedTuple
-    confirm_cancelled || throw(ArgumentError(
-        "Set confirm_cancelled=true only after the scheduler confirms that " *
-        "the metaMDBG job cannot start.",
+    confirm_cancelled != confirm_not_submitted || throw(ArgumentError(
+        "Set exactly one of confirm_cancelled=true or " *
+        "confirm_not_submitted=true after independently verifying the " *
+        "corresponding scheduler state.",
     ))
     required_fields = (
         :canonical_outdir,
@@ -4998,18 +5749,36 @@ function reclaim_metamdbg_submission_reservation!(
         "metaMDBG reservation owner_token must be nonempty.",
     ))
     normalized_owner_token == metadata.owner_token || error(
-        "metaMDBG reservation owner token does not match the submitted job.",
+        "metaMDBG reservation owner token does not match the durable " *
+        "reservation capability.",
     )
-    normalized_job_id = strip(String(job_id))
-    isempty(normalized_job_id) && throw(ArgumentError(
-        "metaMDBG cancelled scheduler job_id must be nonempty.",
-    ))
-    metadata.job_id isa AbstractString || error(
-        "metaMDBG submitted reservation metadata has no scheduler job id.",
-    )
-    normalized_job_id == strip(String(metadata.job_id)) || error(
-        "metaMDBG cancelled scheduler job id does not match the submitted job.",
-    )
+    normalized_job_id = if confirm_cancelled
+        job_id isa AbstractString || throw(ArgumentError(
+            "metaMDBG cancelled scheduler job_id must be provided.",
+        ))
+        normalized = strip(String(job_id))
+        isempty(normalized) && throw(ArgumentError(
+            "metaMDBG cancelled scheduler job_id must be nonempty.",
+        ))
+        metadata.job_id isa AbstractString || error(
+            "metaMDBG submitted reservation metadata has no scheduler job id.",
+        )
+        normalized == strip(String(metadata.job_id)) || error(
+            "metaMDBG cancelled scheduler job id does not match the submitted " *
+            "job.",
+        )
+        normalized
+    else
+        job_id === nothing || throw(ArgumentError(
+            "Do not provide a scheduler job_id when confirming that submission " *
+            "never occurred.",
+        ))
+        metadata.job_id === nothing || error(
+            "metaMDBG reservation metadata contains a scheduler job id and " *
+            "cannot be reclaimed as not submitted.",
+        )
+        nothing
+    end
     graph_k = metadata.graph_k
     graph_k isa Int || throw(ArgumentError(
         "metaMDBG reservation graph_k metadata must be an Int.",
@@ -5040,6 +5809,7 @@ function reclaim_metamdbg_submission_reservation!(
     return (;
         status = :reclaimed,
         job_id = normalized_job_id,
+        recovery_reason = confirm_cancelled ? :cancelled : :not_submitted,
         path = expected_reservation.path,
     )
 end
@@ -5066,7 +5836,8 @@ from this wrapper rather than advertised as a false combined-input contract.
 # Returns
 Synchronous execution and complete reuse return `status = :complete`, `outdir`,
 the sequence-bearing `contigs.fasta.gz`, a stable `assemblyGraph_k<k>.gfa`
-alias, the contract marker, and exact toolchain provenance. Nonlocal execution
+alias, the input-contract marker, an atomic completion manifest, and exact
+resolved toolchain-inventory provenance. Nonlocal execution
 returns `status = :planned` for collected/dry-run jobs or `:submitted` for a
 real submission, together with the backend `submission` result and
 `expected_artifacts`; submitted results also include the exact random-owner
@@ -5090,7 +5861,10 @@ The graph alias resolves to metaMDBG's validated dynamic
   input once at capture and once at the final boundary; intermediate checks use
   the cheap invocation size/mtime snapshot. Nonlocal callers hash once, while
   runtime jobs hash at queued start and immediately before finalization. Any
-  nonempty uncontracted output root fails before provisioning.
+  nonempty uncontracted output root fails before provisioning. Complete reuse
+  additionally verifies the atomic completion manifest against `graph_k`, the
+  workflow signature, normalized resolved package-inventory digest, and current
+  canonical artifact identities, sizes, and SHA-256 digests.
 - Every nonlocal job embeds an adjacent, contract-addressed submission
   reservation. Real submissions create it atomically before submission and the
   runtime consumes it under the output lock; collected and dry-run jobs persist
@@ -5103,15 +5877,19 @@ The graph alias resolves to metaMDBG's validated dynamic
   Reservations never auto-expire:
   after scheduler-confirmed cancellation, reclaim one explicitly with
   `reclaim_metamdbg_submission_reservation!`, the returned owner token and job
-  id, and `confirm_cancelled = true`.
+  id, and `confirm_cancelled = true`. If a caller dies before submission,
+  recover the durable capability with
+  `inspect_metamdbg_submission_reservations` and reclaim it only after explicit
+  independent confirmation that no job was submitted.
 - Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
-  environment and validates the installed package inventory before execution.
+  environment and records a normalized digest over every resolved package's
+  name, version, build, and channel before execution.
 - Local and executor lifecycles validate nonempty unique FASTA identifiers,
   gap-free IUPAC DNA FASTA, and strict H/S/L/P GFA1 structure, shared segment/
   path naming, and typed A/i/f/Z/J/H/B optional tags. GFA validation is two-pass
   and retains segment/path identifiers rather than every edge or path reference.
-  The contract is stamped only after semantic validation and a final input-
-  content digest pass.
+  Completion is stamped only after semantic validation, exact inventory
+  capture, and a final input-content digest pass.
 """
 function run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,

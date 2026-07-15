@@ -11,7 +11,7 @@ const AUTOCYCLER_VERSION = "0.5.2"
 const AUTOCYCLER_ENVIRONMENT_SPEC_SHA256 =
     "d6aef758986db23c453203f067a23be6f29b690b536bc24b283b5a6e913624ef"
 const AUTOCYCLER_ENV_NAME =
-    "autocycler-$(AUTOCYCLER_VERSION)-$(first(AUTOCYCLER_ENVIRONMENT_SPEC_SHA256, 8))"
+    "autocycler-$(AUTOCYCLER_VERSION)-$(first(AUTOCYCLER_ENVIRONMENT_SPEC_SHA256, 16))"
 const AUTOCYCLER_MAX_ASSEMBLY_THREADS = 128
 const AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS = 6 * 60 * 60
 const AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
@@ -368,15 +368,15 @@ upstream Autocycler environment with BWA, Polypolish, and Pypolca. The upstream
 automation script is pinned to `AUTOCYCLER_SCRIPT_REVISION` and verified against
 `AUTOCYCLER_SCRIPT_SHA256` before it can be executed.
 
-The bundled environment specification is checksum-verified and a stable prefix
-of its expected SHA-256 is part of `AUTOCYCLER_ENV_NAME`. Consequently, Mycelia
-releases with different environment specifications cannot mutate the environment
-used by an already-running assembly. An existing environment is immutable: this
-function never removes or recreates it. `force=true` is accepted for a first
-installation, where it refreshes the verified script, but fails closed when the
-spec-hash-addressed environment already exists. A stale or incompatible environment
-must not be repaired in place; stop all workflows using it before manually
-removing and reinstalling it, or use a Mycelia release with a corrected
+The bundled environment specification is checksum-verified and a 16-character
+prefix of its expected SHA-256 is part of `AUTOCYCLER_ENV_NAME`. Consequently,
+Mycelia releases with different environment specifications cannot mutate the
+environment used by an already-running assembly. An existing environment is
+immutable: this function never removes or recreates it. `force=true` is accepted
+for a first installation, where it refreshes the verified script, but fails closed
+when the spec-hash-addressed environment already exists. A stale or incompatible
+environment must not be repaired in place; stop all workflows using it before
+manually removing and reinstalling it, or use a Mycelia release with a corrected
 environment specification. Direct calls serialize the environment check and
 first-use creation under the same per-environment installation lock used by the
 assembly preflight.
@@ -521,256 +521,11 @@ function _require_valid_autocycler_fasta(
     return normalized_path
 end
 
-function _is_valid_autocycler_gfa_overlap(overlap::AbstractString)::Bool
-    return overlap == "*" ||
-           occursin(r"^(?:[0-9]+[MIDNSHPX=])+$", overlap)
-end
-
-function _validate_autocycler_gfa_tags(
-        fields::AbstractVector{<:AbstractString},
-        first_tag_index::Int,
-        record_label::AbstractString,
-        line_number::Int,
-        label::AbstractString,
-        path::AbstractString,
-)::Nothing
-    for field_index in first_tag_index:length(fields)
-        occursin(
-            r"^[A-Za-z][A-Za-z0-9]:[A-Za-z]:.*$",
-            fields[field_index],
-        ) || throw(
-            ErrorException(
-                "$(label) has a malformed GFA $(record_label) tag at line " *
-                "$(line_number): $(path).",
-            ),
-        )
-    end
-    return nothing
-end
-
 function _require_valid_autocycler_gfa(
         path::AbstractString,
         label::AbstractString,
 )::String
-    normalized_path = _require_nonempty_autocycler_file(path, label)
-    islink(normalized_path) && throw(
-        ErrorException(
-            "$(label) must be a regular, non-symlink GFA file: " *
-            "$(normalized_path).",
-        ),
-    )
-    segment_identifiers = Set{String}()
-    path_identifiers = Set{String}()
-    segment_references = Tuple{String, Int, String}[]
-    open(normalized_path, "r") do input
-        for (line_number, line) in enumerate(eachline(input))
-            isempty(line) && continue
-            startswith(line, '#') && continue
-            fields = split(line, '\t'; keepempty = true)
-            record_type = first(fields)
-            if record_type == "H"
-                _validate_autocycler_gfa_tags(
-                    fields,
-                    2,
-                    "header",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-            elseif record_type == "S"
-                length(fields) >= 3 || throw(
-                    ErrorException(
-                        "$(label) has a malformed GFA segment at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                identifier = String(fields[2])
-                sequence = String(fields[3])
-                isempty(identifier) && throw(
-                    ErrorException(
-                        "$(label) has an empty GFA segment identifier at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                identifier in segment_identifiers && throw(
-                    ErrorException(
-                        "$(label) has duplicate GFA segment identifier " *
-                        "$(repr(identifier)): $(normalized_path).",
-                    ),
-                )
-                if isempty(sequence) || sequence == "*"
-                    throw(
-                        ErrorException(
-                            "$(label) has no sequence for GFA segment " *
-                            "$(repr(identifier)): $(normalized_path).",
-                        ),
-                    )
-                end
-                occursin(
-                    r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$",
-                    sequence,
-                ) || throw(
-                    ErrorException(
-                        "$(label) has invalid DNA for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path).",
-                    ),
-                )
-                try
-                    BioSequences.LongDNA{4}(sequence)
-                catch error
-                    error isa InterruptException && rethrow()
-                    throw(
-                        ErrorException(
-                            "$(label) has invalid DNA for GFA segment " *
-                            "$(repr(identifier)): $(normalized_path). Cause: " *
-                            sprint(showerror, error),
-                        ),
-                    )
-                end
-                _validate_autocycler_gfa_tags(
-                    fields,
-                    4,
-                    "segment",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(segment_identifiers, identifier)
-            elseif record_type == "L"
-                length(fields) >= 6 || throw(
-                    ErrorException(
-                        "$(label) has a malformed GFA link at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                from_identifier = String(fields[2])
-                from_orientation = String(fields[3])
-                to_identifier = String(fields[4])
-                to_orientation = String(fields[5])
-                overlap = String(fields[6])
-                if isempty(from_identifier) || isempty(to_identifier) ||
-                   !(from_orientation in ("+", "-")) ||
-                   !(to_orientation in ("+", "-")) ||
-                   !_is_valid_autocycler_gfa_overlap(overlap)
-                    throw(
-                        ErrorException(
-                            "$(label) has a malformed GFA link at line " *
-                            "$(line_number): $(normalized_path).",
-                        ),
-                    )
-                end
-                _validate_autocycler_gfa_tags(
-                    fields,
-                    7,
-                    "link",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(segment_references, (
-                    from_identifier,
-                    line_number,
-                    "link",
-                ))
-                push!(segment_references, (
-                    to_identifier,
-                    line_number,
-                    "link",
-                ))
-            elseif record_type == "P"
-                length(fields) >= 4 || throw(
-                    ErrorException(
-                        "$(label) has a malformed GFA path at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                path_identifier = String(fields[2])
-                isempty(path_identifier) && throw(
-                    ErrorException(
-                        "$(label) has a malformed GFA path at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                path_identifier in path_identifiers && throw(
-                    ErrorException(
-                        "$(label) has duplicate GFA path identifier " *
-                        "$(repr(path_identifier)): $(normalized_path).",
-                    ),
-                )
-                path_segments = split(fields[3], ','; keepempty = true)
-                isempty(path_segments) && throw(
-                    ErrorException(
-                        "$(label) has a malformed GFA path at line " *
-                        "$(line_number): $(normalized_path).",
-                    ),
-                )
-                for path_segment in path_segments
-                    segment_match = match(r"^(.+)[+-]$", path_segment)
-                    segment_match === nothing && throw(
-                        ErrorException(
-                            "$(label) has a malformed GFA path at line " *
-                            "$(line_number): $(normalized_path).",
-                        ),
-                    )
-                    push!(segment_references, (
-                        String(only(segment_match.captures)),
-                        line_number,
-                        "path",
-                    ))
-                end
-                path_overlaps = String(fields[4])
-                if path_overlaps != "*"
-                    overlaps = split(path_overlaps, ','; keepempty = true)
-                    if length(overlaps) != max(length(path_segments) - 1, 0) ||
-                       any(
-                            overlap ->
-                                !_is_valid_autocycler_gfa_overlap(overlap),
-                            overlaps,
-                        )
-                        throw(
-                            ErrorException(
-                                "$(label) has a malformed GFA path at line " *
-                                "$(line_number): $(normalized_path).",
-                            ),
-                        )
-                    end
-                end
-                _validate_autocycler_gfa_tags(
-                    fields,
-                    5,
-                    "path",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(path_identifiers, path_identifier)
-            else
-                throw(
-                    ErrorException(
-                        "$(label) has unknown GFA record type " *
-                        "$(repr(record_type)) at line $(line_number): " *
-                        "$(normalized_path).",
-                    ),
-                )
-            end
-        end
-    end
-    isempty(segment_identifiers) && throw(
-        ErrorException(
-            "$(label) contains no sequence-bearing GFA segments: " *
-            "$(normalized_path).",
-        ),
-    )
-    for (identifier, line_number, record_label) in segment_references
-        identifier in segment_identifiers || throw(
-            ErrorException(
-                "$(label) has a dangling GFA $(record_label) reference to " *
-                "unknown segment $(repr(identifier)) at line " *
-                "$(line_number): $(normalized_path).",
-            ),
-        )
-    end
-    return normalized_path
+    return _require_valid_metamdbg_gfa(path, label)
 end
 
 function _autocycler_pair_identifier(identifier::AbstractString)::String
@@ -1386,6 +1141,15 @@ function _execute_autocycler_steps(
         end
 
         for output_path in step.expected_outputs
+            if islink(output_path)
+                throw(
+                    ErrorException(
+                        "Autocycler workflow step $(step.name) created a " *
+                        "symlinked artifact instead of a regular file: " *
+                        "$(output_path)",
+                    ),
+                )
+            end
             if !isfile(output_path) || filesize(output_path) == 0
                 throw(
                     ErrorException(
@@ -1615,12 +1379,24 @@ function _run_autocycler_polished_with_reserved_output(
     mkpath(polishing_plan.polishing_dir)
 
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
-    final_assembly = try
-        _execute_autocycler_steps(polishing_plan.steps; runner = runner)
-        _require_valid_autocycler_fasta(
+    polypolish_assembly, final_assembly = try
+        _execute_autocycler_steps(
+            polishing_plan.steps[1:(end - 1)];
+            runner = runner,
+        )
+        validated_polypolish_assembly = _require_valid_autocycler_fasta(
+            polishing_plan.polypolish_assembly,
+            "Polypolish Autocycler assembly",
+        )
+        _execute_autocycler_steps(
+            (last(polishing_plan.steps),);
+            runner = runner,
+        )
+        validated_final_assembly = _require_valid_autocycler_fasta(
             polishing_plan.assembly,
             "Pypolca-polished Autocycler assembly",
         )
+        (validated_polypolish_assembly, validated_final_assembly)
     catch
         if !keep_intermediates
             _cleanup_autocycler_polishing_intermediates!(
@@ -1645,7 +1421,7 @@ function _run_autocycler_polished_with_reserved_output(
         assembly = final_assembly,
         graph = autocycler_result.graph,
         autocycler_assembly = autocycler_result.assembly,
-        polypolish_assembly = polishing_plan.polypolish_assembly,
+        polypolish_assembly = polypolish_assembly,
         pypolca_report = polishing_plan.pypolca_report,
         intermediates = retained_intermediates,
         toolchain = autocycler_result.toolchain,

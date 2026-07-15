@@ -49,16 +49,21 @@ parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
 assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
 remains available for a single HiFi *or* single ONT input and fails before
 provisioning when both, neither, an empty path set, or a missing/empty input file
-is supplied. The wrapper uses an exact metaMDBG 1.4, spec-hash-addressed
-environment and validates its package inventory before execution. It reuses only
-structurally valid, sequence-bearing contigs plus the exact requested-k dynamic
-graph when the durable provenance contract matches the normalized input
-technology, ordered paths, file size/mtime metadata, input SHA-256 digests,
-`abundance_min`, and pinned top-level toolchain identity; legacy plain contigs
-are normalized to `contigs.fasta.gz`. Submitted jobs recompute every input
-digest after acquiring the runtime output lock and before reuse or execution.
-Any nonempty output directory without that contract is rejected rather than
-adopted as partial state.
+is supplied. The wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
+records a digest of the complete normalized resolved Conda inventory (package
+name, version, build, and channel, including transitive packages). It reuses
+only structurally valid, sequence-bearing contigs plus the exact requested-k
+dynamic graph when the durable input contract matches the normalized input
+technology, ordered paths, file sizes, input SHA-256 digests, `abundance_min`,
+and pinned environment specification. Modification time is a transient
+same-invocation race snapshot only and is intentionally absent from the durable
+schema-v4 contract. A separate atomic completion manifest binds `graph_k`, the
+workflow signature, the realized package-inventory digest, and canonical
+artifact identities, sizes, and SHA-256 digests. Legacy plain contigs are
+normalized to `contigs.fasta.gz`. Submitted jobs recompute every input digest
+after acquiring the runtime output lock and before reuse or execution. Any
+nonempty output directory without the input contract, or any complete artifact
+set without its matching completion manifest, is rejected rather than adopted.
 
 This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
 false dual-long workflow would make benchmark comparisons invalid.
@@ -150,17 +155,29 @@ input and corrected read counts, requested options, effective per-read-set
 correction knobs, `max_k`, indel parameters, substitution-error rate, polishing
 order, cleanup retention, and caller-owned artifacts. Injected correction
 runners that do not report an effective field record it as unavailable rather
-than copying the requested value. Autocycler additionally records:
+than copying the requested value. `read_content_provenance` binds each original
+source to a deterministic content identity and each corrected FASTQ to its
+canonical path, size, and SHA-256. Path-backed sources record per-file canonical
+paths, sizes, and SHA-256 digests; in-memory sources record their read count,
+identifier digest, and full record-content digest.
+
+The Unicycler arm uses the realized `unicycler` Conda environment rather than
+claiming a spec-pinned solve. Under an interprocess environment lock, it records
+the complete normalized package inventory (name, version, build, and channel),
+requires both Unicycler and SPAdes, and verifies that the inventory and its
+SHA-256 digest are identical immediately before and after assembly. Autocycler
+additionally records:
 
 - the immutable upstream script revision and verified SHA-256;
 - the bundled environment specification SHA-256; and
 - the installed versions of required conda packages.
 
 The installer uses the immutable environment name
-`autocycler-0.5.2-d6aef758`, derived from the compatibility version and the
-pinned bundled-environment SHA-256. A same-version interprocess lock serializes
-direct installation, first-use creation, and revalidation. An existing
-spec-hash-addressed environment is never recreated in place. Missing or
+`autocycler-0.5.2-d6aef758986db23c`, derived from the compatibility version and
+the first 16 hexadecimal characters of the pinned bundled-environment SHA-256.
+A same-version interprocess lock serializes direct installation, first-use
+creation, and revalidation. An existing spec-hash-addressed environment is
+never recreated in place. Missing or
 incompatible packages fail closed with instructions to stop active workflows
 before manually removing and reinstalling the environment, while a future
 spec/version receives a different name and cannot replace an environment that
@@ -174,7 +191,11 @@ contract finalization. A nonlocal executor returns `status = :planned` for a
 collected or dry-run job and `status = :submitted` for a real submission,
 together with the executor result and `expected_artifacts`; it does not present
 planned paths as completed artifacts. The submitted script independently locks
-the output root and performs the same validation before committing provenance.
+the output root and performs the same validation before atomically committing
+completion provenance. Real nonlocal execution is limited to the verifiable
+Slurm backend. Durable pre-submit reservations never expire automatically; a
+crashed caller can inspect the on-disk capability and reclaim it only with the
+exact owner token plus explicit confirmation that submission never occurred.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream

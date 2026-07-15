@@ -71,13 +71,51 @@ function _autocycler_test_compatible_packages()::Dict{String, String}
     )
 end
 
+function _autocycler_real_smoke_inputs(
+        environment::AbstractDict,
+)::NamedTuple
+    long_reads = String(get(
+        environment,
+        "MYCELIA_AUTOCYCLER_LONG_READS",
+        "",
+    ))
+    short_reads_1 = String(get(
+        environment,
+        "MYCELIA_AUTOCYCLER_SHORT_READS_1",
+        "",
+    ))
+    short_reads_2 = String(get(
+        environment,
+        "MYCELIA_AUTOCYCLER_SHORT_READS_2",
+        "",
+    ))
+    read_type = String(get(
+        environment,
+        "MYCELIA_AUTOCYCLER_READ_TYPE",
+        "ont_r10",
+    ))
+    isempty(long_reads) && throw(
+        ArgumentError(
+            "MYCELIA_RUN_EXTERNAL=true requires " *
+            "MYCELIA_AUTOCYCLER_LONG_READS.",
+        ),
+    )
+    xor(isempty(short_reads_1), isempty(short_reads_2)) && throw(
+        ArgumentError(
+            "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1 and " *
+            "MYCELIA_AUTOCYCLER_SHORT_READS_2, or leave both unset.",
+        ),
+    )
+    return (; long_reads, short_reads_1, short_reads_2, read_type)
+end
+
 Test.@testset "Autocycler wrapper" begin
     Test.@testset "Constants, paths, and bundled environment" begin
         Test.@test Mycelia.AUTOCYCLER_VERSION == "0.5.2"
         Test.@test Mycelia.AUTOCYCLER_ENVIRONMENT_SPEC_SHA256 ==
                    "d6aef758986db23c453203f067a23be6f29b690b536bc24b283b5a6e913624ef"
         Test.@test Mycelia.AUTOCYCLER_ENV_NAME ==
-                   "autocycler-0.5.2-d6aef758"
+                   "autocycler-0.5.2-d6aef758986db23c"
         Test.@test Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS == 128
         Test.@test Mycelia.AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS > 0
         Test.@test Mycelia.AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS > 0
@@ -975,7 +1013,32 @@ Test.@testset "Autocycler wrapper" begin
         )
 
         mktempdir() do temp_dir
+            intermediate_target = joinpath(temp_dir, "intermediate-target.sam")
+            intermediate_link = joinpath(temp_dir, "intermediate.sam")
+            symlink_step = (
+                name = :synthetic_intermediate,
+                command = `true`,
+                stdout = nothing,
+                expected_outputs = String[intermediate_link],
+            )
+            symlink_error = _autocycler_test_error() do
+                Mycelia._execute_autocycler_steps(
+                    (symlink_step,);
+                    runner = _ -> begin
+                        write(intermediate_target, "owned\n")
+                        symlink(intermediate_target, intermediate_link)
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test symlink_error isa ErrorException
+            Test.@test occursin(
+                "symlinked artifact",
+                sprint(showerror, symlink_error),
+            )
+
             intermediate = joinpath(temp_dir, "intermediate.sam")
+            rm(intermediate; force = true)
             write(intermediate, "owned\n")
             cleanup_interrupt = _autocycler_test_error() do
                 Mycelia._cleanup_autocycler_polishing_intermediates!(
@@ -1142,7 +1205,7 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test symlinked_fasta_error isa ErrorException
             Test.@test occursin(
-                "non-symlink FASTA file",
+                "symlinked artifact",
                 sprint(showerror, symlinked_fasta_error),
             )
 
@@ -1159,6 +1222,18 @@ Test.@testset "Autocycler wrapper" begin
                 structured_gfa,
                 "Autocycler structured GFA",
             ) == structured_gfa
+
+            comma_identifier_gfa = joinpath(temp_dir, "comma-identifier.gfa")
+            write(
+                comma_identifier_gfa,
+                "S\tleft,half\tACGT\n" *
+                "S\tright\tTGCA\n" *
+                "P\tprimary\tleft,half+,right-\t1M\n",
+            )
+            Test.@test Mycelia._require_valid_autocycler_gfa(
+                comma_identifier_gfa,
+                "Autocycler comma-safe GFA",
+            ) == comma_identifier_gfa
 
             malformed_gfa_cases = (
                 (
@@ -1178,14 +1253,42 @@ Test.@testset "Autocycler wrapper" begin
                     contents =
                         "S\tleft\tACGT\n" *
                         "L\tleft\t+\tmissing\t-\t1M\n",
-                    message = "dangling GFA link reference",
+                    message = "dangling GFA link segment reference",
                 ),
                 (
                     name = "dangling-path",
                     contents =
                         "S\tleft\tACGT\n" *
                         "P\tprimary\tleft+,missing-\t1M\n",
-                    message = "dangling GFA path reference",
+                    message = "dangling GFA path segment reference",
+                ),
+                (
+                    name = "shared-segment-path-name",
+                    contents =
+                        "S\tshared\tACGT\n" *
+                        "P\tshared\tshared+\t*\n",
+                    message = "duplicate GFA segment/path name",
+                ),
+                (
+                    name = "invalid-segment-name",
+                    contents = "S\t*invalid\tACGT\n",
+                    message = "invalid GFA segment identifier",
+                ),
+                (
+                    name = "invalid-tag-name",
+                    contents = "S\tleft\tACGT\tX:i:4\n",
+                    message = "invalid GFA segment optional tag name",
+                ),
+                (
+                    name = "invalid-tag-type",
+                    contents = "S\tleft\tACGT\tLN:q:4\n",
+                    message =
+                        "invalid or unsupported GFA segment optional tag value",
+                ),
+                (
+                    name = "duplicate-tag-name",
+                    contents = "S\tleft\tACGT\tLN:i:4\tLN:i:4\n",
+                    message = "duplicate GFA segment optional tag name",
                 ),
             )
             for malformed_case in malformed_gfa_cases
@@ -1281,7 +1384,7 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test symlinked_gfa_error isa ErrorException
             Test.@test occursin(
-                "non-symlink GFA file",
+                "symlinked artifact",
                 sprint(showerror, symlinked_gfa_error),
             )
         end
@@ -1421,6 +1524,84 @@ Test.@testset "Autocycler wrapper" begin
                 "$(result.autocycler_assembly).$(extension)" for
                 extension in ("amb", "ann", "bwt", "pac", "sa")
             ])
+
+            invalid_polypolish_cases = (
+                (
+                    slug = "malformed-polypolish-fasta",
+                    contents = "not FASTA\n",
+                    message = "not valid FASTA",
+                ),
+                (
+                    slug = "empty-polypolish-fasta",
+                    contents = "",
+                    message = "did not create a nonempty artifact",
+                ),
+                (
+                    slug = "duplicate-polypolish-identifier",
+                    contents = ">duplicate\nACGT\n>duplicate\nTGCA\n",
+                    message = "duplicate FASTA identifier",
+                ),
+            )
+            for invalid_case in invalid_polypolish_cases
+                pypolca_calls = Ref(0)
+                invalid_polypolish_runner = function (step::NamedTuple)
+                    _autocycler_test_runner!(step)
+                    if step.name == :polypolish
+                        write(only(step.expected_outputs), invalid_case.contents)
+                    elseif step.name == :pypolca
+                        pypolca_calls[] += 1
+                    end
+                    return nothing
+                end
+                invalid_polypolish_error = _autocycler_test_error() do
+                    Mycelia._run_autocycler_polished(
+                        long_reads,
+                        short_reads_1,
+                        short_reads_2,
+                        joinpath(temp_dir, invalid_case.slug);
+                        dependency_checker = () -> nothing,
+                        runner = invalid_polypolish_runner,
+                    )
+                end
+                Test.@test invalid_polypolish_error isa ErrorException
+                Test.@test occursin(
+                    invalid_case.message,
+                    sprint(showerror, invalid_polypolish_error),
+                )
+                Test.@test pypolca_calls[] == 0
+            end
+
+            polypolish_symlink_target =
+                joinpath(temp_dir, "polypolish-symlink-target")
+            write(polypolish_symlink_target, ">symlinked\nACGT\n")
+            symlinked_polypolish_pypolca_calls = Ref(0)
+            symlinked_polypolish_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :polypolish
+                    polypolish_fasta = only(step.expected_outputs)
+                    rm(polypolish_fasta)
+                    symlink(polypolish_symlink_target, polypolish_fasta)
+                elseif step.name == :pypolca
+                    symlinked_polypolish_pypolca_calls[] += 1
+                end
+                return nothing
+            end
+            symlinked_polypolish_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "symlinked-polypolish-fasta");
+                    dependency_checker = () -> nothing,
+                    runner = symlinked_polypolish_runner,
+                )
+            end
+            Test.@test symlinked_polypolish_error isa ErrorException
+            Test.@test occursin(
+                "symlinked artifact",
+                sprint(showerror, symlinked_polypolish_error),
+            )
+            Test.@test symlinked_polypolish_pypolca_calls[] == 0
 
             retained = Mycelia._run_autocycler_polished(
                 long_reads,
@@ -1591,7 +1772,7 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test symlinked_final_error isa ErrorException
             Test.@test occursin(
-                "non-symlink FASTA file",
+                "symlinked artifact",
                 sprint(showerror, symlinked_final_error),
             )
         end
@@ -1992,6 +2173,37 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test !ispath(joinpath(temp_dir, "stale-env-should-not-run"))
         end
     end
+
+    Test.@testset "Real-smoke fixtures fail loudly when enabled" begin
+        missing_long_reads_error = _autocycler_test_error() do
+            _autocycler_real_smoke_inputs(Dict{String, String}())
+        end
+        Test.@test missing_long_reads_error isa ArgumentError
+        Test.@test occursin(
+            "requires MYCELIA_AUTOCYCLER_LONG_READS",
+            sprint(showerror, missing_long_reads_error),
+        )
+
+        incomplete_pair_error = _autocycler_test_error() do
+            _autocycler_real_smoke_inputs(Dict(
+                "MYCELIA_AUTOCYCLER_LONG_READS" => "long.fastq",
+                "MYCELIA_AUTOCYCLER_SHORT_READS_1" => "R1.fastq",
+            ))
+        end
+        Test.@test incomplete_pair_error isa ArgumentError
+        Test.@test occursin(
+            "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1",
+            sprint(showerror, incomplete_pair_error),
+        )
+
+        long_only = _autocycler_real_smoke_inputs(Dict(
+            "MYCELIA_AUTOCYCLER_LONG_READS" => "long.fastq",
+        ))
+        Test.@test long_only.long_reads == "long.fastq"
+        Test.@test isempty(long_only.short_reads_1)
+        Test.@test isempty(long_only.short_reads_2)
+        Test.@test long_only.read_type == "ont_r10"
+    end
 end
 
 function _autocycler_test_env_enabled(name::AbstractString)::Bool
@@ -2004,41 +2216,32 @@ run_external = run_all || _autocycler_test_env_enabled("MYCELIA_RUN_EXTERNAL")
 
 if run_external
     Test.@testset "Autocycler gated real smoke" begin
-        long_reads = get(ENV, "MYCELIA_AUTOCYCLER_LONG_READS", "")
-        short_reads_1 = get(ENV, "MYCELIA_AUTOCYCLER_SHORT_READS_1", "")
-        short_reads_2 = get(ENV, "MYCELIA_AUTOCYCLER_SHORT_READS_2", "")
-        read_type = get(ENV, "MYCELIA_AUTOCYCLER_READ_TYPE", "ont_r10")
+        smoke_inputs = _autocycler_real_smoke_inputs(ENV)
 
-        if isempty(long_reads)
-            Test.@test_skip "Set MYCELIA_AUTOCYCLER_LONG_READS for a real smoke test"
-        elseif xor(isempty(short_reads_1), isempty(short_reads_2))
-            Test.@test_skip "Set both Autocycler paired-short read variables or neither"
-        else
-            Mycelia.install_autocycler()
-            mktempdir() do temp_dir
-                if isempty(short_reads_1)
-                    result = Mycelia.run_autocycler(
-                        long_reads = long_reads,
-                        out_dir = joinpath(temp_dir, "autocycler"),
-                        read_type = read_type,
-                    )
-                    Test.@test isfile(result.graph)
-                    Test.@test filesize(result.graph) > 0
-                    Test.@test isfile(result.assembly)
-                    Test.@test filesize(result.assembly) > 0
-                else
-                    result = Mycelia.run_autocycler_polished(
-                        long_reads = long_reads,
-                        short_reads_1 = short_reads_1,
-                        short_reads_2 = short_reads_2,
-                        out_dir = joinpath(temp_dir, "autocycler-polished"),
-                        read_type = read_type,
-                    )
-                    Test.@test isfile(result.graph)
-                    Test.@test filesize(result.graph) > 0
-                    Test.@test isfile(result.assembly)
-                    Test.@test filesize(result.assembly) > 0
-                end
+        Mycelia.install_autocycler()
+        mktempdir() do temp_dir
+            if isempty(smoke_inputs.short_reads_1)
+                result = Mycelia.run_autocycler(
+                    long_reads = smoke_inputs.long_reads,
+                    out_dir = joinpath(temp_dir, "autocycler"),
+                    read_type = smoke_inputs.read_type,
+                )
+                Test.@test isfile(result.graph)
+                Test.@test filesize(result.graph) > 0
+                Test.@test isfile(result.assembly)
+                Test.@test filesize(result.assembly) > 0
+            else
+                result = Mycelia.run_autocycler_polished(
+                    long_reads = smoke_inputs.long_reads,
+                    short_reads_1 = smoke_inputs.short_reads_1,
+                    short_reads_2 = smoke_inputs.short_reads_2,
+                    out_dir = joinpath(temp_dir, "autocycler-polished"),
+                    read_type = smoke_inputs.read_type,
+                )
+                Test.@test isfile(result.graph)
+                Test.@test filesize(result.graph) > 0
+                Test.@test isfile(result.assembly)
+                Test.@test filesize(result.assembly) > 0
             end
         end
     end

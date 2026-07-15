@@ -1,8 +1,11 @@
 # Default-CI contract tests for the single-technology metaMDBG wrapper.
 
 import CodecZlib
+import JSON
 import Test
 import Mycelia
+
+struct _TestUnverifiableMetamdbgExecutor <: Mycelia.AbstractExecutor end
 
 function _test_metamdbg_error(
         thunk::Function,
@@ -23,7 +26,20 @@ function _test_metamdbg_error(
 end
 
 function _test_metamdbg_toolchain()::NamedTuple
-    return Mycelia._metamdbg_expected_toolchain()
+    return Mycelia._require_metamdbg_package_version(NamedTuple[
+        (;
+            name = "libzlib",
+            version = "1.3.1",
+            build = "h8359307_2",
+            channel = "conda-forge",
+        ),
+        (;
+            name = "metamdbg",
+            version = "1.4",
+            build = "h43eeafb_2",
+            channel = "bioconda",
+        ),
+    ])
 end
 
 function _write_test_metamdbg_gzip_fasta!(
@@ -162,6 +178,26 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         Test.@test provisioning_calls[] == 0
         Test.@test !ispath(joinpath(temporary_root, "missing-file"))
 
+        unsupported_outdir = joinpath(temporary_root, "unsupported-executor")
+        _test_metamdbg_error(
+            () -> Mycelia._run_metamdbg(;
+                hifi_reads = valid_reads,
+                outdir = unsupported_outdir,
+                executor = _TestUnverifiableMetamdbgExecutor(),
+                dependency_checker,
+                local_runner = forbidden_runner,
+                submission_runner = (_job, _executor) -> error(
+                    "unsupported executor must fail before submission",
+                ),
+            ),
+            ArgumentError,
+            r"refusing an unverifiable custom nonlocal executor",
+        )
+        Test.@test !ispath(unsupported_outdir)
+        Test.@test isempty(
+            Mycelia._metamdbg_submission_reservation_paths(unsupported_outdir),
+        )
+
         unprovenanced_outdir = joinpath(temporary_root, "unprovenanced")
         mkpath(unprovenanced_outdir)
         write(
@@ -251,6 +287,30 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test result.provenance.metamdbg_version == "1.4"
             Test.@test result.provenance.environment_name ==
                        Mycelia.METAMDBG_ENV_NAME
+            Test.@test result.provenance.graph_k == 21
+            Test.@test occursin(
+                r"^[0-9a-f]{64}$",
+                result.provenance.workflow_signature,
+            )
+            Test.@test result.provenance.package_inventory_sha256 ==
+                       _test_metamdbg_toolchain().package_inventory_sha256
+            Test.@test result.provenance.package_count == 2
+            Test.@test result.provenance.contigs_size_bytes ==
+                       filesize(result.contigs)
+            Test.@test result.provenance.graph_size_bytes ==
+                       filesize(realpath(result.graph))
+            Test.@test result.completion_marker == outputs.completion_marker
+            Test.@test isfile(outputs.completion_marker)
+            completion_record = JSON.parse(read(
+                outputs.completion_marker,
+                String,
+            ))
+            Test.@test completion_record["manifest"]["workflow"]["graph_k"] ==
+                       21
+            Test.@test completion_record["manifest"]["artifacts"]["contigs"]["sha256"] ==
+                       Mycelia._metamdbg_sha256(result.contigs)
+            Test.@test completion_record["manifest"]["artifacts"]["graph"]["sha256"] ==
+                       Mycelia._metamdbg_sha256(realpath(result.graph))
             Test.@test !ispath(output_lock_path)
 
             reader = Mycelia.open_fastx(result.contigs)
@@ -272,6 +332,45 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test reused == result
             Test.@test command_count[] == 2
+
+            contigs_backup = joinpath(temporary_root, "contigs-backup.fasta.gz")
+            cp(result.contigs, contigs_backup)
+            _write_test_metamdbg_gzip_fasta!(
+                result.contigs;
+                contents = ">contig-1\nTGCA\n",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    ont_reads = valid_reads,
+                    outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "artifact-replaced reuse must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"completion manifest does not match",
+            )
+            cp(contigs_backup, result.contigs; force = true)
+
+            graph_source = realpath(result.graph)
+            graph_backup = read(graph_source, String)
+            _write_test_metamdbg_gfa!(graph_source; sequence = "TGCA")
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    ont_reads = valid_reads,
+                    outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "graph-replaced reuse must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"completion manifest does not match",
+            )
+            write(graph_source, graph_backup)
 
             changed_reads = joinpath(temporary_root, "changed-reads.fastq")
             write(changed_reads, "@read-1\nACGT\n+\nIIII\n")
@@ -430,6 +529,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             outputs = Mycelia._metamdbg_output_paths(outdir, 21)
             Test.@test command_count[] == 2
             Test.@test !ispath(outputs.contract_marker)
+            Test.@test !ispath(outputs.completion_marker)
             Test.@test !ispath(Mycelia._metamdbg_output_lock_path(outdir))
         end
 
@@ -539,6 +639,35 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         end
 
         Test.@testset "exact graph-k discovery and ambiguity failure" begin
+            legacy_complete_outdir =
+                joinpath(temporary_root, "legacy-unbound-complete")
+            mkpath(legacy_complete_outdir)
+            _write_test_metamdbg_gzip_fasta!(joinpath(
+                legacy_complete_outdir,
+                "contigs.fasta.gz",
+            ))
+            _write_test_metamdbg_gfa!(joinpath(
+                legacy_complete_outdir,
+                "assemblyGraph_k21_4bps.gfa",
+            ))
+            _write_test_metamdbg_contract!(
+                legacy_complete_outdir,
+                valid_reads,
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = valid_reads,
+                    outdir = legacy_complete_outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "unbound complete reuse must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"missing its regular, nonempty completion manifest",
+            )
+
             outdir = joinpath(temporary_root, "exact-k")
             mkpath(outdir)
             _write_test_metamdbg_gzip_fasta!(
@@ -614,15 +743,59 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     rendered = string(command)
                     Test.@test occursin("fixture-conda list -n", rendered)
                     Test.@test occursin(Mycelia.METAMDBG_ENV_NAME, rendered)
-                    return "[{\"name\":\"metamdbg\",\"version\":\"1.4\"}]"
+                    return "[" *
+                           "{\"name\":\"metamdbg\",\"version\":\"1.4\"," *
+                           "\"build_string\":\"h43eeafb_2\"," *
+                           "\"channel\":\"bioconda\"}," *
+                           "{\"name\":\"libzlib\",\"version\":\"1.3.1\"," *
+                           "\"build_string\":\"h8359307_2\"," *
+                           "\"channel\":\"conda-forge\"}]"
                 end,
             )
-            Test.@test inventory == Dict("metamdbg" => "1.4")
-            Test.@test Mycelia._require_metamdbg_package_version(inventory) ==
-                       _test_metamdbg_toolchain()
+            Test.@test inventory ==
+                       _test_metamdbg_toolchain().package_inventory
+            realized_toolchain =
+                Mycelia._require_metamdbg_package_version(inventory)
+            Test.@test realized_toolchain == _test_metamdbg_toolchain()
+            Test.@test realized_toolchain.package_count == 2
+            Test.@test occursin(
+                r"^[0-9a-f]{64}$",
+                realized_toolchain.package_inventory_sha256,
+            )
+            changed_build_toolchain =
+                Mycelia._require_metamdbg_package_version(NamedTuple[
+                    (;
+                        name = "libzlib",
+                        version = "1.3.1",
+                        build = "h8359307_3",
+                        channel = "conda-forge",
+                    ),
+                    (;
+                        name = "metamdbg",
+                        version = "1.4",
+                        build = "h43eeafb_2",
+                        channel = "bioconda",
+                    ),
+                ])
+            Test.@test changed_build_toolchain.metamdbg_version ==
+                       realized_toolchain.metamdbg_version
+            Test.@test changed_build_toolchain.package_inventory_sha256 !=
+                       realized_toolchain.package_inventory_sha256
+            _test_metamdbg_error(
+                () -> Mycelia._require_metamdbg_package_version(Any[
+                    Dict("name" => "metamdbg", "version" => "1.4"),
+                ]),
+                ErrorException,
+                r"missing or empty build field",
+            )
             _test_metamdbg_error(
                 () -> Mycelia._require_metamdbg_package_version(
-                    Dict("metamdbg" => "1.3"),
+                    NamedTuple[(;
+                        name = "metamdbg",
+                        version = "1.3",
+                        build = "h43eeafb_2",
+                        channel = "bioconda",
+                    )],
                 ),
                 ErrorException,
                 r"exactly 1.4",
@@ -648,7 +821,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     created[] = true
                     return String(environment_name)
                 end,
-                package_inspector = () -> Dict("metamdbg" => "1.4"),
+                package_inspector = () ->
+                    _test_metamdbg_toolchain().package_inventory,
                 lock_path = joinpath(temporary_root, "injected-install.pid"),
                 lock_runner = function (
                         action::Function,
@@ -1378,7 +1552,12 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "set -euo pipefail\n" *
                 "if [ \"\$1\" != \"list\" ]; then exit 90; fi\n" *
                 "printf '%s\\n' " *
-                "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"}]'\n",
+                "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"," *
+                "\"build_string\":\"h43eeafb_2\"," *
+                "\"channel\":\"bioconda\"}," *
+                "{\"name\":\"libzlib\",\"version\":\"1.3.1\"," *
+                "\"build_string\":\"h8359307_2\"," *
+                "\"channel\":\"conda-forge\"}]'\n",
             )
             chmod(fake_conda, 0o700)
             fake_asm =
@@ -1741,6 +1920,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !success(`bash $(runtime_mutation_script_path)`)
             Test.@test !ispath(runtime_mutation_reservation.path)
             Test.@test !ispath(runtime_mutation_outputs.contract_marker)
+            Test.@test !ispath(runtime_mutation_outputs.completion_marker)
             Test.@test !ispath(Mycelia._metamdbg_output_lock_path(
                 runtime_mutation_outdir,
             ))
@@ -1827,6 +2007,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             ) == graph_source
             Test.@test read(executable_outputs.contract_marker, String) ==
                        input_contract.contents
+            executable_artifacts =
+                Mycelia._require_metamdbg_artifacts!(executable_outputs, 21)
+            executable_completion =
+                Mycelia._require_metamdbg_completion_manifest!(
+                    executable_outputs,
+                    executable_artifacts,
+                    input_contract,
+                    21,
+                )
+            Test.@test executable_completion.manifest.toolchain.package_inventory_sha256 ==
+                       _test_metamdbg_toolchain().package_inventory_sha256
             Test.@test !ispath(executable_reservation.path)
             Test.@test !ispath(
                 Mycelia._metamdbg_output_lock_path(executable_outdir),
@@ -1889,6 +2080,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             ) == sentinel_outputs.contigs_gz
             Test.@test read(sentinel_outputs.contract_marker, String) ==
                        input_contract.contents
+            sentinel_artifacts =
+                Mycelia._require_metamdbg_artifacts!(sentinel_outputs, 21)
+            Test.@test Mycelia._require_metamdbg_completion_manifest!(
+                sentinel_outputs,
+                sentinel_artifacts,
+                input_contract,
+                21,
+            ).manifest.workflow.graph_k == 21
             Test.@test !ispath(sentinel_reservation.path)
             Test.@test !ispath(
                 Mycelia._metamdbg_output_lock_path(sentinel_outdir),
@@ -1917,6 +2116,24 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        joinpath(outdir, "contigs.fasta.gz")
             Test.@test result.expected_artifacts.graph ==
                        joinpath(outdir, "assemblyGraph_k31.gfa")
+            Test.@test result.expected_artifacts.completion_marker ==
+                       joinpath(outdir, "mycelia_metamdbg_completion.json")
+            Test.@test result.provenance.graph_k == 31
+            alternate_graph_k = Mycelia._run_metamdbg(;
+                hifi_reads = valid_reads,
+                outdir,
+                graph_k = 32,
+                executor = Mycelia.CollectExecutor(),
+                dependency_checker = () -> error(
+                    "planned collection must not provision metaMDBG",
+                ),
+                local_runner = forbidden_runner,
+            )
+            Test.@test alternate_graph_k.provenance.contract_signature ==
+                       result.provenance.contract_signature
+            Test.@test alternate_graph_k.provenance.workflow_signature !=
+                       result.provenance.workflow_signature
+            Test.@test alternate_graph_k.provenance.graph_k == 32
             Test.@test occursin(
                 "assemblyGraph_k31_*bps.gfa",
                 only(executor.jobs).cmd,
@@ -1925,6 +2142,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test occursin("validate_gfa", only(executor.jobs).cmd)
             Test.@test occursin(
                 "mycelia_metamdbg_contract.json",
+                only(executor.jobs).cmd,
+            )
+            Test.@test occursin(
+                "mycelia_metamdbg_completion.json",
                 only(executor.jobs).cmd,
             )
             Test.@test occursin("cmp -s", only(executor.jobs).cmd)
@@ -2080,7 +2301,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     job_id = reservation_metadata.job_id,
                 ),
                 ArgumentError,
-                r"confirm_cancelled=true",
+                r"exactly one of confirm_cancelled=true",
             )
             Test.@test isdir(reserved_path[])
             _test_metamdbg_error(
@@ -2113,7 +2334,81 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test reclaimed.status == :reclaimed
             Test.@test reclaimed.job_id == "fixture-123"
+            Test.@test reclaimed.recovery_reason == :cancelled
             Test.@test !ispath(reserved_path[])
+
+            crashed_outdir =
+                joinpath(temporary_root, "pre-submit-process-death")
+            crashed_outputs =
+                Mycelia._metamdbg_output_paths(crashed_outdir, 21)
+            crashed_input_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            crashed_reservation = Mycelia._metamdbg_submission_reservation(
+                crashed_outputs,
+                crashed_input_contract,
+                21;
+                owner_token = "pre-submit-owner-capability",
+            )
+            Mycelia._with_metamdbg_output_lock(crashed_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    crashed_reservation,
+                    crashed_outdir,
+                )
+            end
+            run(`touch -t 200001010101 $(crashed_reservation.contract_marker)`)
+            inspected =
+                Mycelia.inspect_metamdbg_submission_reservations(crashed_outdir)
+            Test.@test length(inspected) == 1
+            inspected_reservation = only(inspected)
+            Test.@test inspected_reservation.path == crashed_reservation.path
+            Test.@test inspected_reservation.owner_token ==
+                       crashed_reservation.owner_token
+            Test.@test inspected_reservation.job_id === nothing
+            Test.@test inspected_reservation.submission_state == :unknown
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    inspected_reservation;
+                    owner_token = "wrong-pre-submit-token",
+                    confirm_not_submitted = true,
+                ),
+                ErrorException,
+                r"owner token does not match",
+            )
+            Test.@test isdir(crashed_reservation.path)
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    inspected_reservation;
+                    owner_token = inspected_reservation.owner_token,
+                ),
+                ArgumentError,
+                r"exactly one of confirm_cancelled=true",
+            )
+            Test.@test isdir(crashed_reservation.path)
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    inspected_reservation;
+                    owner_token = inspected_reservation.owner_token,
+                    job_id = "must-not-exist",
+                    confirm_not_submitted = true,
+                ),
+                ArgumentError,
+                r"Do not provide a scheduler job_id",
+            )
+            Test.@test isdir(crashed_reservation.path)
+            recovered = Mycelia.reclaim_metamdbg_submission_reservation!(
+                inspected_reservation;
+                owner_token = inspected_reservation.owner_token,
+                confirm_not_submitted = true,
+            )
+            Test.@test recovered.status == :reclaimed
+            Test.@test recovered.job_id === nothing
+            Test.@test recovered.recovery_reason == :not_submitted
+            Test.@test !ispath(crashed_reservation.path)
+            Test.@test isempty(
+                Mycelia.inspect_metamdbg_submission_reservations(crashed_outdir),
+            )
 
             immediate_outdir = joinpath(
                 temporary_root,
@@ -2131,7 +2426,12 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "set -euo pipefail\n" *
                 "if [ \"\$1\" != \"list\" ]; then exit 90; fi\n" *
                 "printf '%s\\n' " *
-                "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"}]'\n",
+                "'[{\"name\":\"metamdbg\",\"version\":\"1.4\"," *
+                "\"build_string\":\"h43eeafb_2\"," *
+                "\"channel\":\"bioconda\"}," *
+                "{\"name\":\"libzlib\",\"version\":\"1.3.1\"," *
+                "\"build_string\":\"h8359307_2\"," *
+                "\"channel\":\"conda-forge\"}]'\n",
             )
             chmod(immediate_fake_conda, 0o700)
             immediate_script_path = joinpath(
@@ -2191,6 +2491,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test immediate_result.submission.job_id ==
                        "fixture-immediate-456"
             Test.@test isfile(immediate_outputs.contract_marker)
+            Test.@test isfile(immediate_outputs.completion_marker)
             Test.@test Mycelia._require_valid_metamdbg_fasta(
                 immediate_outputs.contigs_gz,
                 "immediate-start contigs",
@@ -2205,6 +2506,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 immediate_outdir,
                 "assemblyGraph_k21_4bps.gfa",
             )
+            immediate_complete = Mycelia._run_metamdbg(;
+                hifi_reads = valid_reads,
+                outdir = immediate_outdir,
+                dependency_checker = () -> error(
+                    "runtime-complete reuse must not provision metaMDBG",
+                ),
+                local_runner = forbidden_runner,
+            )
+            Test.@test immediate_complete.status == :complete
+            Test.@test immediate_complete.provenance.package_inventory_sha256 ==
+                       _test_metamdbg_toolchain().package_inventory_sha256
         end
 
         Test.@testset "submission failures clean owned reservations" begin
