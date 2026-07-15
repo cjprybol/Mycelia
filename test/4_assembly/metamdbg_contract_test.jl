@@ -74,6 +74,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         empty_reads = joinpath(temporary_root, "empty.fastq")
         write(valid_reads, "@read-1\nACGT\n+\nIIII\n")
         touch(empty_reads)
+        symlink_reads = joinpath(temporary_root, "reads-symlink.fastq")
+        hardlink_reads = joinpath(temporary_root, "reads-hardlink.fastq")
+        symlink(valid_reads, symlink_reads)
+        Base.Filesystem.hardlink(valid_reads, hardlink_reads)
 
         provisioning_calls = Ref(0)
         dependency_checker = () -> begin
@@ -134,6 +138,27 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             ArgumentError,
             r"input file is empty",
         )
+        aliased_inputs = (
+            exact = String[valid_reads, valid_reads],
+            symlink = String[valid_reads, symlink_reads],
+            hardlink = String[valid_reads, hardlink_reads],
+        )
+        for (alias_type, input_paths) in pairs(aliased_inputs)
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = input_paths,
+                    outdir = joinpath(temporary_root, "$(alias_type)-alias"),
+                    dependency_checker,
+                    local_runner = forbidden_runner,
+                ),
+                ArgumentError,
+                r"must refer to physically distinct files",
+            )
+            Test.@test !ispath(joinpath(
+                temporary_root,
+                "$(alias_type)-alias",
+            ))
+        end
         Test.@test provisioning_calls[] == 0
         Test.@test !ispath(joinpath(temporary_root, "missing-file"))
 
@@ -212,6 +237,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test isfile(outputs.contract_marker)
             Test.@test read(outputs.contract_marker, String) ==
                        expected_contract.contents
+            expected_input = only(expected_contract.contract.inputs)
+            Test.@test expected_contract.contract.schema_version == 3
+            Test.@test expected_input.sha256 ==
+                       Mycelia._metamdbg_sha256(valid_reads)
             Test.@test result.provenance.contract_signature ==
                        expected_contract.signature
             Test.@test result.provenance.metamdbg_version == "1.4"
@@ -284,6 +313,45 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 ErrorException,
                 r"existing output contract does not match",
             )
+
+            metadata_reference = joinpath(
+                temporary_root,
+                "reads-original-metadata.fastq",
+            )
+            write(metadata_reference, read(valid_reads, String))
+            run(`touch -r $(valid_reads) $(metadata_reference)`)
+            write(valid_reads, "@read-1\nTGCA\n+\nIIII\n")
+            run(`touch -r $(metadata_reference) $(valid_reads)`)
+            changed_content_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                3,
+            )
+            changed_content_input = only(changed_content_contract.contract.inputs)
+            Test.@test changed_content_input.size_bytes == expected_input.size_bytes
+            Test.@test changed_content_input.modification_time_ns ==
+                       expected_input.modification_time_ns
+            Test.@test changed_content_input.sha256 != expected_input.sha256
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    ont_reads = valid_reads,
+                    outdir,
+                    graph_k = 21,
+                    dependency_checker = () -> error(
+                        "content-changed reuse must fail before provisioning",
+                    ),
+                    local_runner = forbidden_runner,
+                ),
+                ErrorException,
+                r"existing output contract does not match",
+            )
+            write(valid_reads, "@read-1\nACGT\n+\nIIII\n")
+            run(`touch -r $(metadata_reference) $(valid_reads)`)
+            restored_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                3,
+            )
+            Test.@test restored_contract.contents == expected_contract.contents
+
             open(valid_reads, "a") do io
                 write(io, "@read-2\nTGCA\n+\nIIII\n")
             end
@@ -695,6 +763,47 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test lock_result == :locked
             Test.@test !ispath(lifecycle_lock)
+
+            primary_outdir = joinpath(temporary_root, "primary-failure-output")
+            primary_lock = Mycelia._metamdbg_output_lock_path(primary_outdir)
+            primary_failure = ErrorException("primary workflow failure")
+            cleanup_failure = ErrorException("synthetic lock cleanup failure")
+            preserved_failure = try
+                Mycelia._with_metamdbg_output_lock(
+                    primary_outdir;
+                    lock_remover = _path -> throw(cleanup_failure),
+                ) do
+                    Test.@test isdir(primary_lock)
+                    throw(primary_failure)
+                end
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test preserved_failure === primary_failure
+            Test.@test isdir(primary_lock)
+            rm(primary_lock)
+
+            interrupted_outdir =
+                joinpath(temporary_root, "cleanup-interrupted-output")
+            interrupted_lock =
+                Mycelia._metamdbg_output_lock_path(interrupted_outdir)
+            primary_interrupt = InterruptException()
+            preserved_interrupt = try
+                Mycelia._with_metamdbg_output_lock(
+                    interrupted_outdir;
+                    lock_remover = _path -> throw(cleanup_failure),
+                ) do
+                    Test.@test isdir(interrupted_lock)
+                    throw(primary_interrupt)
+                end
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test preserved_interrupt === primary_interrupt
+            Test.@test isdir(interrupted_lock)
+            rm(interrupted_lock)
         end
 
         Test.@testset "executor script validates dynamic artifacts" begin
@@ -733,6 +842,24 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test occursin("cmp -s", script)
             Test.@test occursin("mv -n -- \"\$contract_new\"", script)
             Test.@test occursin(input_contract.signature, script)
+            Test.@test occursin("sha256_file", script)
+            Test.@test occursin(
+                only(input_contract.contract.inputs).sha256,
+                script,
+            )
+            lock_position = first(something(findfirst(
+                "lock_acquired=1",
+                script,
+            )))
+            digest_position = first(something(findfirst(
+                "actual_input_sha256_1=",
+                script,
+            )))
+            reuse_position = first(something(findfirst(
+                "contract_exists=0",
+                script,
+            )))
+            Test.@test lock_position < digest_position < reuse_position
             Test.@test !occursin("\$\$", script)
             Test.@test !occursin("\${contigs_gz}.tmp", script)
             Test.@test !occursin("rmdir -- \"\$lock_dir\" || true", script)
@@ -756,6 +883,74 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             fake_gfa =
                 "printf 'H\\tVN:Z:1.0\\nS\\tcontig-1\\tACGT\\n' " *
                 "> \"\$outdir/assemblyGraph_k21_4bps.gfa\""
+
+            for queued_change in (:mutation, :replacement)
+                queued_reads = joinpath(
+                    temporary_root,
+                    "queued-$(queued_change).fastq",
+                )
+                write(queued_reads, "@queued\nACGT\n+\nIIII\n")
+                queued_mutation_target = queued_reads
+                queued_input = if queued_change == :mutation
+                    queued_secondary = joinpath(
+                        temporary_root,
+                        "queued-mutation-secondary.fastq",
+                    )
+                    write(queued_secondary, "@secondary\nACGT\n+\nIIII\n")
+                    queued_mutation_target = queued_secondary
+                    String[queued_reads, queued_secondary]
+                else
+                    queued_reads
+                end
+                queued_outdir = joinpath(
+                    temporary_root,
+                    "queued-$(queued_change)-output",
+                )
+                queued_outputs =
+                    Mycelia._metamdbg_output_paths(queued_outdir, 21)
+                queued_contract = Mycelia._metamdbg_input_contract(
+                    Mycelia._metamdbg_selected_input(queued_input, nothing),
+                    3,
+                )
+                assembly_marker = joinpath(
+                    temporary_root,
+                    "queued-$(queued_change)-assembly-ran",
+                )
+                queued_asm =
+                    "touch $(Base.shell_escape(assembly_marker)); $(fake_asm)"
+                queued_script = Mycelia._metamdbg_executor_script(
+                    queued_asm,
+                    fake_gfa,
+                    queued_outputs,
+                    21,
+                    queued_contract;
+                    conda_runner = fake_conda,
+                )
+                if queued_change == :mutation
+                    write(
+                        queued_mutation_target,
+                        "@secondary\nTGCA\n+\nIIII\n",
+                    )
+                else
+                    replacement_reads = joinpath(
+                        temporary_root,
+                        "queued-replacement-new.fastq",
+                    )
+                    write(replacement_reads, "@queued\nTGCA\n+\nIIII\n")
+                    mv(replacement_reads, queued_reads; force = true)
+                end
+                queued_script_path = joinpath(
+                    temporary_root,
+                    "queued-$(queued_change)-executor.sh",
+                )
+                write(queued_script_path, queued_script)
+                Test.@test !success(`bash $(queued_script_path)`)
+                Test.@test !ispath(assembly_marker)
+                Test.@test !ispath(queued_outputs.contract_marker)
+                Test.@test !ispath(
+                    Mycelia._metamdbg_output_lock_path(queued_outdir),
+                )
+            end
 
             executable_outdir = joinpath(temporary_root, "executor-fixture")
             executable_outputs =

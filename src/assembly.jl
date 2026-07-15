@@ -2721,6 +2721,14 @@ function _metamdbg_selected_input(
         filesize(normalized_path) > 0 || throw(ArgumentError(
             "metaMDBG $(technology) input file is empty: $(normalized_path)",
         ))
+        for existing_path in normalized_paths
+            Base.Filesystem.samefile(normalized_path, existing_path) && throw(
+                ArgumentError(
+                    "metaMDBG $(technology) input files must refer to physically " *
+                    "distinct files; $(normalized_path) aliases $(existing_path).",
+                ),
+            )
+        end
         push!(normalized_paths, normalized_path)
     end
     return (; flag, paths = normalized_paths)
@@ -2733,7 +2741,7 @@ const METAMDBG_ENV_NAME =
     "metamdbg-$(METAMDBG_VERSION)-$(first(METAMDBG_ENVIRONMENT_SPEC_SHA256, 16))"
 const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
 const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
-const _METAMDBG_CONTRACT_SCHEMA_VERSION = 2
+const _METAMDBG_CONTRACT_SCHEMA_VERSION = 3
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
 
 function _metamdbg_paths()::Tuple{String, String}
@@ -2742,7 +2750,9 @@ function _metamdbg_paths()::Tuple{String, String}
 end
 
 function _metamdbg_sha256(path::AbstractString)::String
-    return SHA.bytes2hex(SHA.sha256(read(path)))
+    return open(path, "r") do input
+        SHA.bytes2hex(SHA.sha256(input))
+    end
 end
 
 function _require_verified_metamdbg_environment_spec(
@@ -2963,6 +2973,8 @@ end
 function _with_metamdbg_output_lock(
         action::Function,
         outdir::AbstractString,
+        ;
+        lock_remover::Function = path -> rm(path),
 )::Any
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
     lock_path = _metamdbg_output_lock_path(canonical_outdir)
@@ -2977,13 +2989,21 @@ function _with_metamdbg_output_lock(
             sprint(showerror, caught),
         )
     end
-    try
+    result = try
         _metamdbg_canonical_output_path(canonical_outdir) == canonical_outdir ||
             error("metaMDBG output path changed while acquiring its lock.")
-        return action()
-    finally
-        rm(lock_path)
+        action()
+    catch primary_error
+        try
+            lock_remover(lock_path)
+        catch cleanup_error
+            @warn "metaMDBG failed to release its output lock while preserving " *
+                  "the primary workflow failure" lock_path primary_error cleanup_error
+        end
+        Base.rethrow()
     end
+    lock_remover(lock_path)
+    return result
 end
 
 function _metamdbg_input_contract(
@@ -3008,6 +3028,7 @@ function _metamdbg_input_contract(
             path = path,
             size_bytes = Int64(file_status.size),
             modification_time_ns,
+            sha256 = _metamdbg_sha256(path),
         )
     end
     contract = (
@@ -3046,9 +3067,9 @@ function _require_metamdbg_contract!(
     actual_contents = read(marker, String)
     actual_contents == expected_contract.contents || error(
         "metaMDBG existing output contract does not match the normalized " *
-        "input paths, input technology, input file metadata, abundance_min, " *
-        "or exact toolchain for this invocation: $(marker). Refusing stale " *
-        "output reuse.",
+        "input paths, input technology, input file metadata or SHA-256 content " *
+        "digests, abundance_min, or exact toolchain for this invocation: " *
+        "$(marker). Refusing stale output reuse.",
     )
     return marker
 end
@@ -3377,6 +3398,25 @@ function _metamdbg_executor_script(
     outdir_parent = dirname(outputs.outdir)
     outdir_base = basename(outputs.outdir)
     lock_path = _metamdbg_output_lock_path(outputs.outdir)
+    input_validation_lines = String[]
+    for (input_index, input) in enumerate(input_contract.contract.inputs)
+        input_path_variable = "input_path_$(input_index)"
+        expected_digest_variable = "expected_input_sha256_$(input_index)"
+        actual_digest_variable = "actual_input_sha256_$(input_index)"
+        append!(input_validation_lines, String[
+            "$(input_path_variable)=$(Base.shell_escape(input.path))",
+            "$(expected_digest_variable)=$(Base.shell_escape(input.sha256))",
+            "if [ ! -f \"\$$(input_path_variable)\" ]; then",
+            "  echo \"metaMDBG input is missing before execution: \$$(input_path_variable)\" >&2",
+            "  exit 1",
+            "fi",
+            "$(actual_digest_variable)=\$(sha256_file \"\$$(input_path_variable)\")",
+            "if [ \"\$$(actual_digest_variable)\" != \"\$$(expected_digest_variable)\" ]; then",
+            "  echo \"metaMDBG input content changed before execution: \$$(input_path_variable)\" >&2",
+            "  exit 1",
+            "fi",
+        ])
+    end
     lines = String[
         "set -euo pipefail",
         "umask 077",
@@ -3395,6 +3435,17 @@ function _metamdbg_executor_script(
         "conda_runner=$(Base.shell_escape(conda_runner))",
         "secure_tmpdir=",
         "lock_acquired=0",
+        "sha256_file() {",
+        "  local path=\"\$1\"",
+        "  if command -v sha256sum >/dev/null 2>&1; then",
+        "    sha256sum -- \"\$path\" | awk '{print \$1}'",
+        "  elif command -v shasum >/dev/null 2>&1; then",
+        "    shasum -a 256 -- \"\$path\" | awk '{print \$1}'",
+        "  else",
+        "    echo \"metaMDBG requires sha256sum or shasum to validate content\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
         "mkdir -p -- \"\$outdir_parent\"",
         "runtime_outdir_parent=\$(cd -- \"\$outdir_parent\" && pwd -P)",
         "if [ \"\$runtime_outdir_parent\" != \"\$outdir_parent\" ]; then",
@@ -3427,6 +3478,7 @@ function _metamdbg_executor_script(
         "trap 'exit 129' HUP",
         "trap 'exit 130' INT",
         "trap 'exit 143' TERM",
+        input_validation_lines...,
         "if [ -L \"\$outdir\" ]; then",
         "  echo \"metaMDBG outdir must not be a symbolic link: \$outdir\" >&2",
         "  exit 1",
@@ -3464,14 +3516,7 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG environment specification is missing or not regular\" >&2",
         "  exit 1",
         "fi",
-        "if command -v sha256sum >/dev/null 2>&1; then",
-        "  actual_spec_sha256=\$(sha256sum -- \"\$environment_spec\" | awk '{print \$1}')",
-        "elif command -v shasum >/dev/null 2>&1; then",
-        "  actual_spec_sha256=\$(shasum -a 256 -- \"\$environment_spec\" | awk '{print \$1}')",
-        "else",
-        "  echo \"metaMDBG requires sha256sum or shasum to validate its environment\" >&2",
-        "  exit 1",
-        "fi",
+        "actual_spec_sha256=\$(sha256_file \"\$environment_spec\")",
         "if [ \"\$actual_spec_sha256\" != \"\$expected_spec_sha256\" ]; then",
         "  echo \"metaMDBG environment specification checksum mismatch\" >&2",
         "  exit 1",
@@ -3884,9 +3929,11 @@ The graph alias resolves to metaMDBG's validated dynamic
   rerunning metaMDBG. If contigs exist but the requested graph does not, only
   graph generation runs. Complete and partial reuse require an exact durable
   contract marker for the normalized input paths, technology flag, input file
-  size/modification metadata, `abundance_min`, metaMDBG 1.4, the spec-addressed
-  environment name, and the bundled environment-spec checksum. Any nonempty
-  uncontracted output root fails before provisioning.
+  size/modification metadata and SHA-256 content digests, `abundance_min`,
+  metaMDBG 1.4, the spec-addressed environment name, and the bundled
+  environment-spec checksum. Any nonempty uncontracted output root fails before
+  provisioning. Nonlocal jobs revalidate every input digest after acquiring the
+  runtime output lock and before artifact reuse or assembly.
 - Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
   environment and validates the installed package inventory before execution.
 - Local and executor lifecycles validate sequence-bearing DNA FASTA and at
