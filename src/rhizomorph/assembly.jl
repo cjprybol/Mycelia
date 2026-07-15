@@ -562,7 +562,7 @@ function _validate_hybrid_output_dir(
     if output_dir === nothing
         return nothing
     end
-    isempty(output_dir) && throw(ArgumentError(
+    isempty(strip(output_dir)) && throw(ArgumentError(
         "output_dir must be a non-empty path; pass nothing for ephemeral output.",
     ))
     return String(output_dir)
@@ -2575,7 +2575,27 @@ function _prepare_read_source(
 end
 
 function _prepare_read_source(records::Any)::Any
-    return collect(records)
+    prepared = collect(records)
+    if all(record -> record isa AbstractString, prepared)
+        return String[String(record) for record in prepared]
+    end
+    return prepared
+end
+
+function _validate_distinct_read_source_objects(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any,
+)::Nothing
+    short_r1 === short_r2 && throw(ArgumentError(
+        "input paired short-read R1 and R2 sources must be distinct.",
+    ))
+    if short_r1 === long_reads || short_r2 === long_reads
+        throw(ArgumentError(
+            "Long-read input must be distinct from paired short-read R1 and R2 sources.",
+        ))
+    end
+    return nothing
 end
 
 function _canonical_pair_identifier(identifier::AbstractString)::String
@@ -2831,6 +2851,157 @@ function _validate_corrected_identifiers_preserved(
     end
 end
 
+function _validate_corrected_identifiers_preserved(
+        input_reads::Any,
+        corrected::_CorrectedReadSet,
+        label::AbstractString,
+)::Int
+    observed_count = _validate_corrected_identifiers_preserved(
+        input_reads,
+        corrected.path,
+        label,
+    )
+    corrected.count == observed_count || error(
+        "$(label) correction reported $(corrected.count) corrected reads, but " *
+        "$(corrected.path) contains $(observed_count) FASTQ records.",
+    )
+    return observed_count
+end
+
+"""
+Validate corrected R1/R2 synchronization and preservation in one streaming pass.
+
+`_correct_read_set!` deliberately retains its immediate FASTQ/count pass so a
+malformed stage fails before the next correction starts. This combined pass
+replaces the previous corrected-pair pass plus two separate identifier-
+preservation passes, reducing each compressed corrected mate from three reads to
+two without changing correction side-effect ordering or error precedence.
+"""
+function _validate_corrected_pair_preserved(
+        input_r1::Any,
+        input_r2::Any,
+        corrected_r1::_CorrectedReadSet,
+        corrected_r2::_CorrectedReadSet,
+        expected_pair_count::Int,
+)::Int
+    input_r1_cursor = _read_identifier_cursor(input_r1)
+    input_r2_cursor = _read_identifier_cursor(input_r2)
+    corrected_r1_cursor = _read_identifier_cursor([corrected_r1.path])
+    corrected_r2_cursor = _read_identifier_cursor([corrected_r2.path])
+    input_r1_count = 0
+    input_r2_count = 0
+    corrected_r1_count = 0
+    corrected_r2_count = 0
+    first_r1_mismatch = nothing
+    first_r2_mismatch = nothing
+    try
+        while true
+            input_r1_identifier = _next_read_identifier!(input_r1_cursor)
+            input_r2_identifier = _next_read_identifier!(input_r2_cursor)
+            corrected_r1_identifier = _next_read_identifier!(corrected_r1_cursor)
+            corrected_r2_identifier = _next_read_identifier!(corrected_r2_cursor)
+
+            input_r1_identifier === nothing || (input_r1_count += 1)
+            input_r2_identifier === nothing || (input_r2_count += 1)
+            corrected_r1_identifier === nothing || (corrected_r1_count += 1)
+            corrected_r2_identifier === nothing || (corrected_r2_count += 1)
+
+            if corrected_r1_identifier !== nothing &&
+               corrected_r2_identifier !== nothing
+                _validate_explicit_pair_roles(
+                    corrected_r1_identifier,
+                    corrected_r2_identifier,
+                    "corrected",
+                    corrected_r1_count,
+                )
+                if _canonical_pair_identifier(corrected_r1_identifier) !=
+                   _canonical_pair_identifier(corrected_r2_identifier)
+                    throw(ArgumentError(
+                        "corrected paired short reads are out of sync at record " *
+                        "$(corrected_r1_count): " *
+                        "R1=$(repr(corrected_r1_identifier)), " *
+                        "R2=$(repr(corrected_r2_identifier)).",
+                    ))
+                end
+            end
+
+            if first_r1_mismatch === nothing &&
+               input_r1_identifier !== nothing &&
+               corrected_r1_identifier !== nothing &&
+               input_r1_identifier != corrected_r1_identifier
+                first_r1_mismatch = (
+                    input_r1_count,
+                    input_r1_identifier,
+                    corrected_r1_identifier,
+                )
+            end
+            if first_r2_mismatch === nothing &&
+               input_r2_identifier !== nothing &&
+               corrected_r2_identifier !== nothing &&
+               input_r2_identifier != corrected_r2_identifier
+                first_r2_mismatch = (
+                    input_r2_count,
+                    input_r2_identifier,
+                    corrected_r2_identifier,
+                )
+            end
+
+            if input_r1_identifier === nothing &&
+               input_r2_identifier === nothing &&
+               corrected_r1_identifier === nothing &&
+               corrected_r2_identifier === nothing
+                break
+            end
+        end
+    finally
+        _close_read_identifier_cursor!(input_r1_cursor)
+        _close_read_identifier_cursor!(input_r2_cursor)
+        _close_read_identifier_cursor!(corrected_r1_cursor)
+        _close_read_identifier_cursor!(corrected_r2_cursor)
+    end
+
+    corrected_r1_count == corrected_r2_count || throw(ArgumentError(
+        "corrected paired short reads have different counts: " *
+        "R1=$(corrected_r1_count), R2=$(corrected_r2_count).",
+    ))
+    corrected_r1.count == corrected_r1_count || error(
+        "short_r1 correction reported $(corrected_r1.count) corrected reads, but " *
+        "$(corrected_r1.path) contains $(corrected_r1_count) FASTQ records.",
+    )
+    corrected_r2.count == corrected_r2_count || error(
+        "short_r2 correction reported $(corrected_r2.count) corrected reads, but " *
+        "$(corrected_r2.path) contains $(corrected_r2_count) FASTQ records.",
+    )
+    if first_r1_mismatch !== nothing
+        record_number, input_identifier, corrected_identifier = first_r1_mismatch
+        throw(ArgumentError(
+            "short_r1 correction changed read order or identifier at record " *
+            "$(record_number): input=$(repr(input_identifier)), " *
+            "corrected=$(repr(corrected_identifier)).",
+        ))
+    end
+    input_r1_count == corrected_r1_count || throw(ArgumentError(
+        "short_r1 correction changed read count: " *
+        "input=$(input_r1_count), corrected=$(corrected_r1_count).",
+    ))
+    if first_r2_mismatch !== nothing
+        record_number, input_identifier, corrected_identifier = first_r2_mismatch
+        throw(ArgumentError(
+            "short_r2 correction changed read order or identifier at record " *
+            "$(record_number): input=$(repr(input_identifier)), " *
+            "corrected=$(repr(corrected_identifier)).",
+        ))
+    end
+    input_r2_count == corrected_r2_count || throw(ArgumentError(
+        "short_r2 correction changed read count: " *
+        "input=$(input_r2_count), corrected=$(corrected_r2_count).",
+    ))
+    corrected_r1_count == expected_pair_count || error(
+        "Corrected paired-short count diverged from the validated input count.",
+    )
+    return corrected_r1_count
+end
+
 function _count_nonempty_reads(
         sources::AbstractVector{<:AbstractString},
         label::AbstractString,
@@ -2876,14 +3047,28 @@ function _count_nonempty_fastq_reads(
     return count
 end
 
-function _prepare_workflow_root(
+function _workflow_path_entry_exists(path::AbstractString)::Bool
+    return ispath(path) || islink(path)
+end
+
+function _nearest_existing_workflow_ancestor(path::AbstractString)::String
+    ancestor = String(path)
+    while !_workflow_path_entry_exists(ancestor)
+        parent = dirname(ancestor)
+        parent == ancestor && return ancestor
+        ancestor = parent
+    end
+    return ancestor
+end
+
+function _validate_workflow_root(
         output_dir::Union{Nothing, String},
 )::NamedTuple
     if output_dir === nothing
-        return (; path = mktempdir(), ephemeral = true)
+        return (; path = nothing, ephemeral = true)
     end
     path = abspath(output_dir)
-    if ispath(path) && !isdir(path)
+    if _workflow_path_entry_exists(path) && !isdir(path)
         throw(ArgumentError("output_dir exists but is not a directory: $(path)"))
     end
     if isdir(path) && !isempty(readdir(path))
@@ -2892,6 +3077,19 @@ function _prepare_workflow_root(
             "assembly reuse: $(path)",
         ))
     end
+    ancestor = _nearest_existing_workflow_ancestor(path)
+    isdir(ancestor) || throw(ArgumentError(
+        "output_dir has a non-directory ancestor: $(ancestor)",
+    ))
+    return (; path, ephemeral = false)
+end
+
+function _prepare_workflow_root(root_plan::NamedTuple)::NamedTuple
+    if root_plan.ephemeral
+        return (; path = mktempdir(), ephemeral = true)
+    end
+    validated_plan = _validate_workflow_root(String(root_plan.path))
+    path = String(validated_plan.path)
     mkpath(path)
     return (; path, ephemeral = false)
 end
@@ -3100,6 +3298,9 @@ function _normalized_workflow_settings(
         "workflow" => "autocycler_polished",
         "assembler" => "autocycler",
         "threads" => config.threads,
+        "autocycler_assembly_threads" =>
+            Mycelia._effective_autocycler_assembly_threads(config.threads),
+        "polishing_threads" => config.threads,
         "jobs" => config.jobs,
         "autocycler_read_type" => String(config.autocycler_read_type),
         "long_read_correction_tech" => String(correction_technology),
@@ -3266,23 +3467,25 @@ function _assemble_paired_short_long(
         correction_runner::Function = _run_multi_input_stage1_correction,
         assembler_runner::Function,
 )::AssemblyResult
-    _read_sources_overlap(short_reads[1], short_reads[2]) &&
-        throw(ArgumentError(
-            "input paired short-read R1 and R2 sources must be distinct.",
-        ))
-    if _read_sources_overlap(short_reads[1], long_reads) ||
-       _read_sources_overlap(short_reads[2], long_reads)
+    _validate_distinct_read_source_objects(
+        short_reads[1],
+        short_reads[2],
+        long_reads,
+    )
+    short_r1 = _prepare_read_source(short_reads[1])
+    short_r2 = _prepare_read_source(short_reads[2])
+    prepared_long_reads = _prepare_read_source(long_reads)
+    if _read_sources_overlap(short_r1, prepared_long_reads) ||
+       _read_sources_overlap(short_r2, prepared_long_reads)
         throw(ArgumentError(
             "Long-read input must be distinct from paired short-read R1 and R2 sources.",
         ))
     end
-    short_r1 = _prepare_read_source(short_reads[1])
-    short_r2 = _prepare_read_source(short_reads[2])
-    prepared_long_reads = _prepare_read_source(long_reads)
+    root_plan = _validate_workflow_root(config.output_dir)
     paired_count = _validate_paired_reads(short_r1, short_r2, "input")
     long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
     long_read_correction_technology = _long_read_correction_technology(config)
-    root = _prepare_workflow_root(config.output_dir)
+    root = _prepare_workflow_root(root_plan)
     cleanup_tokens = _Stage1CleanupToken[]
     try
         corrected_r1 = _correct_read_set!(
@@ -3315,34 +3518,17 @@ function _assemble_paired_short_long(
             !root.ephemeral,
             correction_runner,
         )
-        corrected_pair_count = _validate_paired_reads(
-            [corrected_r1.path],
-            [corrected_r2.path],
-            "corrected",
-        )
-        corrected_r1_count = _validate_corrected_identifiers_preserved(
+        corrected_pair_count = _validate_corrected_pair_preserved(
             short_r1,
-            corrected_r1.path,
-            "short_r1",
-        )
-        corrected_r2_count = _validate_corrected_identifiers_preserved(
             short_r2,
-            corrected_r2.path,
-            "short_r2",
+            corrected_r1,
+            corrected_r2,
+            paired_count,
         )
         corrected_long_count = _validate_corrected_identifiers_preserved(
             prepared_long_reads,
-            corrected_long.path,
+            corrected_long,
             "long_reads",
-        )
-        corrected_pair_count == paired_count || error(
-            "Corrected paired-short count diverged from the validated input count.",
-        )
-        corrected_r1_count == corrected_pair_count || error(
-            "Corrected R1 count diverged from the validated paired count.",
-        )
-        corrected_r2_count == corrected_pair_count || error(
-            "Corrected R2 count diverged from the validated paired count.",
         )
         corrected_long_count == long_count || error(
             "Corrected long-read count diverged from the validated input count.",

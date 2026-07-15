@@ -278,6 +278,93 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         test_throws_message(ArgumentError, "output_dir must be a non-empty path") do
             Mycelia.Rhizomorph.UnicyclerHybridConfig(output_dir = "")
         end
+        test_throws_message(ArgumentError, "output_dir must be a non-empty path") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(output_dir = "   ")
+        end
+    end
+
+    Test.@testset "workflow root validates before FASTQ scans" begin
+        mktempdir() do temp_dir
+            stale_root = joinpath(temp_dir, "stale-root")
+            mkpath(stale_root)
+            stale_marker = joinpath(stale_root, "owned.txt")
+            write(stale_marker, "keep\n")
+            blocked_parent = joinpath(temp_dir, "blocked-parent")
+            write(blocked_parent, "not a directory\n")
+            blocked_root = joinpath(blocked_parent, "hybrid")
+            file_root = joinpath(temp_dir, "file-root")
+            write(file_root, "not a directory\n")
+
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function root_validation_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("correction must not run")
+            end
+            function root_validation_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("assembler must not run")
+            end
+            missing_inputs = (
+                (joinpath(temp_dir, "missing-r1.fastq"),),
+                (joinpath(temp_dir, "missing-r2.fastq"),),
+                (joinpath(temp_dir, "missing-long.fastq"),),
+            )
+
+            for (message, output_dir) in (
+                    ("prevent stale hybrid assembly reuse", stale_root),
+                    ("non-directory ancestor", blocked_root),
+                    ("exists but is not a directory", file_root),
+            )
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, message) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (missing_inputs[1], missing_inputs[2]),
+                        missing_inputs[3],
+                        config,
+                        :unicycler;
+                        correction_runner = root_validation_correction_runner,
+                        assembler_runner = root_validation_assembler_runner,
+                    )
+                end
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+            Test.@test isfile(stale_marker)
+            Test.@test read(stale_marker, String) == "keep\n"
+            Test.@test !ispath(blocked_root)
+            Test.@test isfile(file_root)
+
+            for output_dir in (
+                    joinpath(temp_dir, "absent-invalid-root"),
+                    mktempdir(temp_dir),
+            )
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, "different counts") do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2[1:1]),
+                        MULTI_INPUT_LONG,
+                        config,
+                        :unicycler;
+                        correction_runner = root_validation_correction_runner,
+                        assembler_runner = root_validation_assembler_runner,
+                    )
+                end
+                if isdir(output_dir)
+                    Test.@test isempty(readdir(output_dir))
+                else
+                    Test.@test !ispath(output_dir)
+                end
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+        end
     end
 
     Test.@testset "raw and corrected mate validation" begin
@@ -781,6 +868,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         correction_calls = NamedTuple[]
         correction_runner = multi_input_fake_correction_runner(correction_calls)
         output_dir = mktempdir()
+        requested_threads = Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS + 7
         assembler_runner = function (inputs::Any, outdir::AbstractString)
             Test.@test inputs.long_reads.technology == :pacbio_hifi
             result = multi_input_fake_assembler_result(
@@ -802,7 +890,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             long_read_tech = :pacbio_hifi,
             autocycler_read_type = :pacbio_hifi,
             output_dir,
-            threads = 4,
+            threads = requested_threads,
             jobs = 2,
         )
         result = Mycelia.Rhizomorph._assemble_paired_short_long(
@@ -829,7 +917,10 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test result.assembly_stats["workflow_settings"] == Dict(
             "workflow" => "autocycler_polished",
             "assembler" => "autocycler",
-            "threads" => 4,
+            "threads" => requested_threads,
+            "autocycler_assembly_threads" =>
+                Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS,
+            "polishing_threads" => requested_threads,
             "jobs" => 2,
             "autocycler_read_type" => "pacbio_hifi",
             "long_read_correction_tech" => "pacbio_hifi",
@@ -1110,6 +1201,69 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
                 )
             end
+
+            long_path = multi_input_write_fastq(
+                joinpath(temp_dir, "long.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            paired_hardlink = joinpath(temp_dir, "same-physical-hardlink.fastq")
+            Base.hardlink(paired_path, paired_hardlink)
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function alias_guard_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("correction must not run")
+            end
+            function alias_guard_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("assembler must not run")
+            end
+            alias_cases = (
+                (
+                    message = "sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (path for path in Any[paired_path]),
+                    long_reads = (long_path,),
+                    output_name = "exact-generator-alias",
+                ),
+                (
+                    message = "sources must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (path for path in (paired_alias,)),
+                    long_reads = (long_path,),
+                    output_name = "symlink-generator-alias",
+                ),
+                (
+                    message = "Long-read input must be distinct",
+                    short_r1 = (paired_path,),
+                    short_r2 = (distinct_r2,),
+                    long_reads = (path for path in (paired_hardlink,)),
+                    output_name = "hardlink-generator-alias",
+                ),
+            )
+            for alias_case in alias_cases
+                output_dir = joinpath(temp_dir, alias_case.output_name)
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(; output_dir)
+                test_throws_message(ArgumentError, alias_case.message) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (alias_case.short_r1, alias_case.short_r2),
+                        alias_case.long_reads,
+                        config,
+                        :unicycler;
+                        correction_runner = alias_guard_correction_runner,
+                        assembler_runner = alias_guard_assembler_runner,
+                    )
+                end
+                Test.@test !ispath(output_dir)
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
 
             excluded_outdir = joinpath(temp_dir, "excluded-mixed-metamdbg")
             test_throws_message(ArgumentError, "exactly one input technology") do
