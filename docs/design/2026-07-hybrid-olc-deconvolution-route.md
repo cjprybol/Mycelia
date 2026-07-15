@@ -23,15 +23,23 @@ one-corrected-FASTQ contract. Multi-input workflows use the separate
 Unicycler receives corrected R1, corrected R2, and corrected long reads in the
 same hybrid assembly call.
 
-Autocycler itself remains long-read-only. The pinned upstream script receives
-one corrected long FASTQ, threads per job, concurrent jobs, and an explicit
-`ont_r9`, `ont_r10`, `pacbio_clr`, or `pacbio_hifi` chemistry. Its consensus is
-then polished by aligning corrected R1 and R2 separately with `bwa mem -a`,
-filtering the paired alignments with Polypolish, running Polypolish, and finally
-running Pypolca in `--careful` mode. The raw Autocycler GFA is never described as
-a sequence-polished graph. It is retained only when the caller supplies a
-persistent output directory; ephemeral high-level runs delete route-owned tool
-outputs after wrapping the final assembly.
+Autocycler itself remains long-read-only. Mycelia intentionally pins the
+upstream 0.5.2 script revision for reproducibility; this is a compatibility pin,
+not a claim that the environment tracks the current upstream release. The script
+receives one corrected long FASTQ, threads per job, concurrent jobs, and an
+explicit `ont_r9`, `ont_r10`, `pacbio_clr`, or `pacbio_hifi` chemistry. Its
+consensus is then polished by aligning corrected R1 and R2 separately with
+`bwa mem -a`, filtering the paired alignments with Polypolish, running
+Polypolish, and finally running Pypolca in `--careful` mode. The raw Autocycler
+GFA is never described as a sequence-polished graph. It is retained only when
+the caller supplies a persistent output directory; ephemeral high-level runs
+delete route-owned tool outputs after wrapping the final assembly.
+
+Autocycler is intended for bacterial isolate genomes where most or all input
+assemblies can be complete. It is not an appropriate benchmark arm when complete
+alternative assemblies are infeasible, including genomes with repeats longer
+than the reads. A nonempty result is not evidence that these biological
+preconditions were met.
 
 ## Explicit metaMDBG exclusion
 
@@ -40,7 +48,11 @@ Upstream rejects a command that supplies both flags and selects one platform
 parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
 assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
 remains available for a single HiFi *or* single ONT input and fails before
-provisioning when both, neither, or an empty path set is supplied.
+provisioning when both, neither, an empty path set, or a missing/empty input file
+is supplied. It reuses only validated nonempty contigs plus the exact requested-k
+dynamic graph when the durable provenance contract matches the normalized input
+technology, ordered paths, file size/mtime metadata, and `abundance_min`; legacy
+plain contigs are normalized to `contigs.fasta.gz`.
 
 This exclusion is intentional: modeling metaMDBG as Illumina-plus-long or as a
 false dual-long workflow would make benchmark comparisons invalid.
@@ -126,9 +138,21 @@ caller-owned artifacts. Autocycler additionally records:
 - the bundled environment specification SHA-256; and
 - the installed versions of required conda packages.
 
-The installer recreates a stale pre-existing `autocycler` environment before
-assembly when a required assembly/polishing package is absent or violates the
-version constraint in the bundled environment specification.
+The installer uses the immutable environment name
+`autocycler-0.5.2-d6aef758`, derived from the compatibility version and the
+pinned bundled-environment SHA-256. A same-version interprocess lock serializes
+direct installation, first-use creation, and revalidation. An existing
+content-addressed environment is never recreated in place. Missing or
+incompatible packages fail closed with instructions to stop active workflows
+before manually removing and reinstalling the environment, while a future
+spec/version receives a different name and cannot replace an environment that
+an older workflow is actively using.
+
+Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
+automatic environment refresh. An upgrade must re-pin and verify the upstream
+script checksum, reconcile package constraints and command/output contracts,
+and rerun the wrapper unit tests plus the real Autocycler smoke test before the
+new version is used in a benchmark matrix.
 
 ## Verification
 
@@ -137,9 +161,25 @@ sibling-adapter argument mapping, provenance, persistent and ephemeral cleanup,
 stale-output rejection, and fail-loud artifacts. The existing single-input OLC
 suite remains part of the regression gate.
 
-Real Autocycler execution is opt-in because it is compute intensive. Set
-`MYCELIA_RUN_EXTERNAL=true` and provide the documented FASTQ environment
-variables to run the gated smoke test.
+Real Autocycler execution is opt-in because it is compute intensive. The fixture
+must be a bacterial isolate for which mostly complete alternative long-read
+assemblies are expected. Set both external-tool gates, provide all three FASTQs,
+and select the exact Autocycler chemistry:
+
+```bash
+MYCELIA_RUN_EXTERNAL=true \
+MYCELIA_RUN_AUTOCYCLER_POLISHED=true \
+MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz \
+MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz \
+MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz \
+MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10 \
+julia --project=. -e \
+  'include("test/4_assembly/third_party_assemblers_multi_input_hybrid.jl")'
+```
+
+Default CI leaves the dedicated Autocycler gate disabled. Once it is enabled,
+missing or invalid gate prerequisites fail loudly rather than producing a green
+skip.
 
 ## Downstream benchmark and ensemble boundary
 
@@ -153,6 +193,8 @@ and ensemble inference is not claimed as part of this adapter.
 ## Upstream references
 
 - [Autocycler automated script](https://github.com/rrwick/Autocycler/blob/c98b126eb45727584623041db1bfdbdaf7aa0923/pipelines/Automated_Autocycler_Bash_script_by_Ryan_Wick/autocycler_full.sh)
+- [Autocycler bacterial-genome scope](https://github.com/rrwick/Autocycler/blob/c98b126eb45727584623041db1bfdbdaf7aa0923/README.md)
+- [Autocycler completeness requirement](https://github.com/rrwick/Autocycler/wiki#an-important-requirement)
 - [Autocycler combine outputs](https://github.com/rrwick/Autocycler/wiki/Autocycler-combine)
 - [Polypolish workflow](https://github.com/rrwick/Polypolish/wiki/How-to-run-Polypolish)
 - [Pypolca v0.3.1](https://github.com/gbouras13/pypolca/tree/v0.3.1)

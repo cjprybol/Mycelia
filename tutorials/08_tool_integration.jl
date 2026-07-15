@@ -53,20 +53,23 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # The wrappers below expose thin Julia entry points for external tools. Use these
 # examples as templates and replace paths with real inputs. These snippets are
 # shown as documentation only and are not executed in docs builds.
+# Autocycler 0.5.2 is a reproducible compatibility pin for bacterial isolates
+# where mostly complete alternative long-read assemblies are expected; it is not
+# a generic metagenome/eukaryote assembler or an automatically current release.
 #
 # ```julia
 # Mycelia.install_autocycler()
 # Mycelia.run_autocycler(
-#     long_reads="reads.fastq",
-#     out_dir="autocycler_out",
-#     read_type="ont_r10",
+#     long_reads = "reads.fastq",
+#     out_dir = "autocycler_out",
+#     read_type = "ont_r10",
 # )
 # Mycelia.run_autocycler_polished(
-#     long_reads="reads.fastq",
-#     short_reads_1="reads_R1.fastq",
-#     short_reads_2="reads_R2.fastq",
-#     out_dir="autocycler_polished_out",
-#     read_type="ont_r10",
+#     long_reads = "reads.fastq",
+#     short_reads_1 = "reads_R1.fastq",
+#     short_reads_2 = "reads_R2.fastq",
+#     out_dir = "autocycler_polished_out",
+#     read_type = "ont_r10",
 # )
 #
 # # High-level corrected multi-input workflows use typed sibling adapters.
@@ -92,7 +95,7 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # combined HiFi-plus-ONT adapter.
 # Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
 #
-# Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size=31)
+# Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size = 31)
 # Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)
 # Mycelia.ggcat_query("graph.lz4", "queries.fasta", "ggcat_hits.tsv", 31)
 #
@@ -100,7 +103,7 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # Mycelia.run_pantools(["--help"])
 #
 # Mycelia.install_prokrustean()
-# Mycelia.prokrustean_build_graph("example.ebwt", "prokrustean.bin"; kmin=21)
+# Mycelia.prokrustean_build_graph("example.ebwt", "prokrustean.bin"; kmin = 21)
 # ```
 
 # ## Part 2: Bioconda Integration
@@ -571,23 +574,16 @@ println("- Provide example datasets")
 
 # ## Summary
 println("\n=== Tool Integration Summary ===")
-println("✓ Understanding external tool integration strategies")
-println("✓ Implementing bioconda environment management")
-println("✓ Creating robust workflow architectures")
-println("✓ Integrating with HPC and cloud platforms")
-println("✓ Implementing quality control and validation")
-println("✓ Ensuring reproducibility and documentation")
-println("✓ Optimizing performance and resource usage")
-println("✓ Creating user-friendly interfaces")
-println("✓ Applying comprehensive testing strategies")
-println("✓ Understanding deployment and distribution")
-
-println("\nCongratulations! You have completed all Mycelia tutorials.")
-println("You now have a comprehensive understanding of:")
-println("- Data acquisition and quality control")
-println("- K-mer analysis and genome assembly")
-println("- Assembly validation and gene annotation")
-println("- Comparative genomics and tool integration")
+println("Topics introduced in this survey:")
+println("- External-tool wrapper entry points")
+println("- Environment and dependency-management concepts")
+println("- Workflow, HPC, cloud, and resource-management concepts")
+println("- Quality-control, reproducibility, and testing concepts")
+println("- Interface, deployment, and distribution concepts")
+println()
+println("Sections marked TODO are conceptual placeholders, not implemented exercises.")
+println("You have reached the end of Tutorial 8; this survey does not certify")
+println("completion of every workflow or every Mycelia tutorial.")
 println()
 println("Continue exploring the Mycelia package for advanced features")
 println("and consider contributing to the project!")
