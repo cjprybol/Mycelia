@@ -151,8 +151,9 @@ struct AssemblyConfig
 
     # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
     # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
-    #   hard-read gating + soft-EM v2 competing-path responsibilities and an
-    #   M-step support floor. Built for real-scale inputs.
+    #   hard-read gating + soft-EM v2 competing-path responsibilities with an
+    #   M-step support floor + frontier-budgeted indel scheduling. Built for
+    #   real-scale inputs.
     # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
     #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
     #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
@@ -170,12 +171,13 @@ struct AssemblyConfig
     token_sequences::Union{Nothing, Vector{Vector{String}}}
 
     # Linear-time defragmentation of the (qualmer) assembly graph BEFORE contig
-    # extraction (td-969e): coverage-1 dead-end tip clipping + guarded low-coverage
-    # bubble collapse. Three-state sentinel so the DEFAULT can differ by context
-    # (see _qualmer_graph_to_assembly): `nothing` = context default (ON for the
-    # iterative corrector's re-assembly, OFF for a plain qualmer assembly), `true`
-    # / `false` = force. Removes only unambiguous errors; never collapses a
-    # data-supported variant (td-h6w9), so it cannot lose real sequence.
+    # extraction (td-969e): conservative support/length/topology heuristics for
+    # tips, bubbles, and disconnected components. Three-state sentinel so the
+    # DEFAULT can differ by context (see _qualmer_graph_to_assembly): `nothing` =
+    # context default (ON for the iterative corrector's re-assembly, OFF for a
+    # plain qualmer assembly), `true` / `false` = force. These heuristics can
+    # remove genuine low-coverage structures that meet the configured thresholds;
+    # cleanup therefore runs on a private copy and remains explicitly disableable.
     graph_cleanup::Union{Bool, Nothing}
 
     # Persistent directory for the Stage-1 corrector handoff (hybrid-OLC route,
@@ -986,11 +988,24 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
 - `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
   (route through the iterative maximum-likelihood read corrector before assembly)
-- `sequencing_tech`: exact error profile driving iterative correction. Default
-  `:illumina` is substitution-only. `:nanopore`, `:pacbio_clr`, and legacy
-  `:pacbio` enable indel-aware correction; `:pacbio_hifi` and `:ultima` remain
-  substitution-only because their absolute error rates do not justify the
-  CLR-like pair-HMM.
+- `strategy`: iterative-corrector scheduling tier. The default `:scalable` tier
+  uses a sparse three-rung ladder and applies the score-free branching/frontier
+  runtime classifier to each eligible hard window. Affordable windows are
+  admitted to pair-HMM decoding on the raw graph or a privately cleaned rescue
+  copy; rejected windows retain the bounded substitution-only decode when its
+  measured raw+weighted graph footprint fits the configured memory ceiling.
+  Otherwise the pass fails closed and records the memory gate. `:exhaustive`
+  selects explicit `:unrestricted` indel scheduling: it bypasses frontier
+  admission and its private rescue cleaning, uses an exact unbounded Viterbi
+  beam, and can exhaust memory on large or highly branching inputs.
+- `sequencing_tech`: exact error-profile intent driving iterative correction; only
+  consulted when `corrector=:iterative`. Default `:illumina` is substitution-only
+  and preserves the pre-wiring oracle. `:nanopore`, `:pacbio_clr`, and legacy
+  `:pacbio` request indel-aware pair-HMM correction; `:pacbio_hifi` and `:ultima`
+  remain substitution-only. A profile with indels records intent
+  (`assembly_stats["indel_moves"] == true`), not proof that a pair-HMM decode ran
+  or used a gap move; runtime admission and engagement are reported separately in
+  the indel telemetry below.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -1002,6 +1017,33 @@ This interface automatically:
 2. **Chooses assembly method**: k-mer vs overlap-based on parameters
 3. **Validates compatibility**: AA/String sequences -> SingleStrand only
 4. **Dispatches optimally**: Based on input type and quality scores
+
+For an iterative correction, `assembly_stats["indel_rung_telemetry"]` contains
+one row per actual k-rung iteration. Its counters have the following meanings:
+
+- `requested`: eligible hard windows requesting pair-HMM service under
+  `:scalable`, or non-skipped reads under `:unrestricted` semantics.
+- `attempted`: pair-HMM kernel calls actually entered after scheduling.
+- `completed`: full, nontruncated, trace-valid pair-HMM decodes.
+- `truncated`: pair-HMM calls that did not produce a full trace-valid completion
+  (decoded prefix, valid no-path, malformed result, or post-dispatch failure).
+  These are rejected before correction or soft-EM side effects.
+- `engaged`: completed traces containing at least one insertion or deletion move.
+
+Every attempted call is exactly one `completed` or `truncated` outcome.
+`trace_contract_errors` is an orthogonal contract-failure flag, not another
+terminal outcome. It can accompany a malformed/failed truncated call or a
+completed kernel decode that is later rejected by the window-splice contract,
+and must not be added to the terminal counters.
+
+The aggregate `indel_requested`, `indel_attempted`, `indel_completed`,
+`indel_truncated`, and `indel_engaged` fields sum those counters over all rows.
+In particular, selecting `sequencing_tech=:nanopore`, `:pacbio_clr`, or legacy
+`:pacbio` does not imply
+`engaged > 0`: admission may reject every scalable window, or completed traces
+may remain substitution-only. Frontier metric samples are intentionally empty
+under `strategy=:exhaustive` because its `:unrestricted` semantics bypass the
+classifier entirely.
 
 **Method Selection Logic:**
 - String input + k -> N-gram graph
@@ -1150,13 +1192,15 @@ routing can be unit-tested without running the (slow) corrector.
   skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
   linear single-substitution fix before the decode), hard-read gating (Stage 3,
   now narrowed to bubble/repeat vertices only), soft-EM v2 competing-path
-  responsibilities plus an M-step support floor (Stage 2), the size-aware
+  responsibilities plus an M-step support floor (Stage 2),
+  branching/frontier-budgeted indel scheduling, the size-aware
   auto-beam (`beam_width=nothing`), and
   `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
   machinery and was the cause of the quality gap; the skip/classification is
   coverage-based and mode-agnostic).
 - `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
   (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  unrestricted indel scheduling,
   `graph_mode=nothing` (derive from `config.graph_mode`, byte-identical
   passthrough), and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
   of the prior corrector default: master's corrector route used the size-aware
@@ -1165,7 +1209,7 @@ routing can be unit-tested without running the (slow) corrector.
   Intended for SMALL-SCALE / high-sensitivity inputs; the exact beam can OOM on
   very large reads — use `:scalable` at scale.
 """
-function _corrector_strategy_knobs(strategy::Symbol)
+function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
     if strategy == :scalable
         return (
             n_k_rungs = 3,
@@ -1196,6 +1240,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             # caps (the bounded Bellman-Ford relaxation replacing the O(V³)
             # Floyd-Warshall). Ignored on substitution-only profiles (:illumina),
             # whose decode threads no indel params at all.
+            indel_schedule = :frontier_budgeted,
             band_width = 16,
             deletion_max_run = 3,
             max_insertion_run = 3
@@ -1215,7 +1260,10 @@ function _corrector_strategy_knobs(strategy::Symbol)
             graph_mode = nothing,
             # Indel-decode bounds (td-9q84 / 4a): maximum-sensitivity tier ⇒ UNBOUNDED
             # band (`band_width=nothing`, the exact/oracle setting) + larger run caps.
+            # The unrestricted schedule preserves the tier's explicit exact/oracle
+            # semantics rather than applying the scalable frontier classifier.
             # Consulted only when the error profile enables indels.
+            indel_schedule = :unrestricted,
             band_width = nothing,
             deletion_max_run = 10,
             max_insertion_run = 10
@@ -1440,6 +1488,7 @@ function _run_stage1_correction(
             cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
             indel_params = indel_params,
+            indel_schedule = knobs.indel_schedule,
             substitution_error_rate = substitution_error_rate,
             verbose = false,
             enable_checkpointing = false,
@@ -1607,9 +1656,10 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
         assembly.assembly_stats["strategy"] = String(config.strategy)
-        # Indel-aware correction provenance (td-9q84 / 4a): the driving error profile
-        # and whether it engaged the pair-HMM gap moves. `indel_moves=false` (the
-        # :illumina default) marks the substitution-only oracle path.
+        # Indel-aware correction provenance (td-9q84 / 4a): the driving error
+        # profile and whether it requested pair-HMM gap moves. `indel_moves` is the
+        # retained profile-intent field; it does not claim that any rung engaged.
+        # `indel_engaged` below carries that runtime outcome explicitly.
         assembly.assembly_stats["sequencing_tech"] = String(config.sequencing_tech)
         assembly.assembly_stats["indel_moves"] = indel_params !== nothing
         assembly.assembly_stats["substitution_error_rate"] = substitution_error_rate
@@ -1643,12 +1693,47 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
         corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
         assembly.assembly_stats["corrector_errors"] = corrector_errors
-        assembly.assembly_stats["indel_decodes"] =
-            get(corrector_errors, :indel_decodes, 0)
-        assembly.assembly_stats["truncated_decodes"] =
-            get(corrector_errors, :truncated_decodes, 0)
+        indel_rung_telemetry = get(
+            _corr_meta,
+            :indel_rung_telemetry,
+            Dict{Symbol, Any}[],
+        )
+        indel_requested = get(_corr_meta, :indel_requested, 0)
+        indel_attempted = get(
+            _corr_meta,
+            :indel_attempted,
+            get(corrector_errors, :indel_attempts, 0),
+        )
+        indel_completed = get(
+            _corr_meta,
+            :indel_completed,
+            get(corrector_errors, :indel_decodes, 0),
+        )
+        indel_truncated = get(
+            _corr_meta,
+            :indel_truncated,
+            get(corrector_errors, :truncated_decodes, 0),
+        )
+        indel_engaged = get(
+            _corr_meta,
+            :indel_engaged,
+            get(corrector_errors, :indel_engaged, 0),
+        )
+        assembly.assembly_stats["indel_rung_telemetry"] = indel_rung_telemetry
+        assembly.assembly_stats["indel_schedule"] =
+            String(get(_corr_meta, :indel_schedule, knobs.indel_schedule))
+        assembly.assembly_stats["indel_requested"] = indel_requested
+        assembly.assembly_stats["indel_attempted"] = indel_attempted
+        assembly.assembly_stats["indel_completed"] = indel_completed
+        assembly.assembly_stats["indel_truncated"] = indel_truncated
+        assembly.assembly_stats["indel_engaged"] = indel_engaged
+        # Backward-compatible aliases for callers predating per-rung telemetry.
+        assembly.assembly_stats["indel_decodes"] = indel_completed
+        assembly.assembly_stats["truncated_decodes"] = indel_truncated
         assembly.assembly_stats["trace_contract_errors"] =
             get(corrector_errors, :trace_contract_errors, 0)
+        assembly.assembly_stats["window_anchor_rejections"] =
+            get(corrector_errors, :window_anchor_rejections, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
         # Hoist fail-open contract counters to the flat telemetry surface used by
@@ -2082,15 +2167,14 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
-    # Linear-time graph defragmentation BEFORE contig extraction (td-969e). The
-    # scalable corrector's final graph keeps error-induced branch points (dead-end
-    # tips + coverage-1 bubbles); find_contigs_next breaks a unitig at every branch
-    # vertex, so each residual branch point is a contig boundary. clean_corrector_
-    # graph! removes ONLY unambiguous errors (coverage-1 dead-end tips + guarded
-    # low-coverage bubble collapse) in O(V+E), never collapsing a data-supported
-    # variant (the td-h6w9 invariant). Operate on a deepcopy so a REUSED corrector
-    # final-pass graph (td-04tb) is not mutated for other consumers; the cleaned
-    # copy is what we both extract contigs from AND return in the AssemblyResult.
+    # Linear-time graph defragmentation BEFORE contig extraction (td-969e).
+    # find_contigs_next breaks a unitig at every residual branch vertex, so the
+    # configured support/length/topology heuristics remove qualifying tips,
+    # bubbles, and components before extraction. These are conservative assembly
+    # heuristics, not biological proofs: genuine low-coverage structures can meet
+    # their thresholds. Operate on a deepcopy so a REUSED corrector final-pass
+    # graph (td-04tb) is not mutated for other consumers; the cleaned copy is what
+    # we both extract contigs from AND return in the AssemblyResult.
     cleanup_stats = nothing
     if graph_cleanup
         graph = deepcopy(graph)

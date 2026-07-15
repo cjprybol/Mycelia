@@ -2,12 +2,11 @@
 # =================================
 #
 # Unit tests for the linear-time defragmentation pass that runs on the scalable
-# corrector's final graph before contig extraction. The pass removes ONLY
-# unambiguous errors — coverage-1 dead-end tips and guarded low-coverage bubble
-# branches — and must NEVER collapse a data-supported variant or clip a
-# stand-alone linear run / genome terminus (the td-h6w9 variation-preservation
-# invariant, tested here at the graph-primitive level; the end-to-end invariant
-# lives in variation_preservation_holdout_test.jl).
+# corrector's final graph before contig extraction. The pass applies conservative
+# support/length/topology heuristics to qualifying tips, bubbles, and components.
+# Tests protect structural guards such as stand-alone linear runs and genome
+# termini, but the configured thresholds are not biological proofs and can remove
+# genuine low-coverage structures.
 #
 # Run directly:
 #   LD_LIBRARY_PATH='' julia --project=. \

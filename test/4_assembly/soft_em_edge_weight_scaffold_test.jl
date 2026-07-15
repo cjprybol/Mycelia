@@ -1,18 +1,16 @@
-# SCAFFOLD test for soft-EM edge weighting (td-e70t).
+# Unit tests for soft-EM edge weighting (td-e70t).
 #
 # The graph-as-HMM correction redesign replaces the hard-count M-step
 # (`compute_edge_weight` == raw coverage) with probability-weighted evidence:
 # after Viterbi decodes a read, each candidate path's RESPONSIBILITY (posterior
 # over the read's candidate set) is accumulated onto its edges. Error edges,
 # traversed only by rare low-probability paths, accrue little soft weight and
-# decay below the emergent-cleaning gate WITHOUT tip-clipping.
+# contribute less to subsequent transition scoring.
 #
-# What lands here: the accumulation PRIMITIVE + the correction-side hook, proven
-# at the unit level (passing tests below). What does NOT land yet: making the
-# qualmer graph rebuild / transition weighting CONSUME these soft weights so the
-# full pipeline coalesces a 1 kb toy to ~1 contig across EM iterations — that
-# M-step consumption is outside the correction-core file boundary and is the
-# td-e70t follow-on. The full-pipeline acceptance is therefore a skipped test.
+# This file covers the accumulation primitives, support floor, and direct
+# registration behavior. Production M-step consumption is landed via task-local
+# scoped snapshots. The full-pipeline monotonic-decrease acceptance remains
+# skipped pending a low-skip-fraction integration fixture.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/soft_em_edge_weight_scaffold_test.jl")'
@@ -24,7 +22,7 @@ import MetaGraphsNext
 import Mycelia
 import Test
 
-Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
+Test.@testset "Soft-EM edge weighting primitives (td-e70t)" begin
     Test.@testset "path_responsibility softmax normalization" begin
         # A single candidate path owns all the responsibility.
         Test.@test Mycelia.Rhizomorph.path_responsibility(-3.2, Float64[-3.2]) ≈ 1.0
@@ -49,8 +47,8 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
         Test.@test Mycelia.Rhizomorph.soft_edge_weight(acc, error_edge) ≈ 0.1
         # Unseen edge falls back to the prior.
         Test.@test Mycelia.Rhizomorph.soft_edge_weight(acc, ("X", "Y"); prior = 0.0) == 0.0
-        # The error edge is already far below the emergent-cleaning gate (0.01 per
-        # read of responsibility); the true edge dominates.
+        # The lower responsibility gives the error edge less transition weight;
+        # the true edge dominates.
         Test.@test Mycelia.Rhizomorph.soft_edge_weight(acc, error_edge) <
                    Mycelia.Rhizomorph.soft_edge_weight(acc, true_edge)
     end
@@ -60,8 +58,8 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
         # offers a TRUE path and an ERROR path. As correction sharpens the graph
         # across iterations, the error path's relative likelihood falls (the gap
         # widens), so its per-iteration responsibility -- the soft weight it
-        # deposits -- monotonically decreases. This is the decay mechanism that,
-        # once the M-step consumes it, drives emergent cleaning.
+        # deposits -- monotonically decreases. This is the transition-weight
+        # signal consumed by the next M-step.
         true_edge = ("ATG", "TGC")
         error_edge = ("ATG", "TGA")
         true_logp = -1.0
@@ -113,10 +111,9 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
 
     Test.@testset "SUPPORT FLOOR retains supported skewed variant, lets error decay (td-h6w9)" begin
         # The mechanism that fixes the prior soft-EM v2's collapse of skewed
-        # variants (PR #363 review C1): `register_soft_edge_weights!` clamps a
-        # well-supported edge's soft weight to at least its RAW coverage, so a real
-        # but skewed minority allele never decays below its own support, while a
-        # near-zero-support (error) edge keeps a floor of 0 and is free to decay.
+        # variants (PR #363 review C1): `register_soft_edge_weights!` clamps an
+        # edge meeting the support threshold to at least its RAW coverage, while a
+        # below-threshold edge keeps a floor of 0 and is free to decay.
         #
         # Controlled graph: from source ATG three out-edges with distinct raw
         # coverage — TGC (5x majority), TGT (4x SKEWED minority, >= MIN_SUPPORT=3),
@@ -242,15 +239,15 @@ Test.@testset "Soft-EM edge weighting scaffold (td-e70t)" begin
         # td-e70t acceptance: running mycelia_iterative_assemble on a clean ~1 kb
         # toy should coalesce the qualmer graph toward ~1 contig across EM
         # iterations, and the summed soft weight of error edges should DECREASE
-        # across iterations, WITHOUT any explicit tip/bubble removal.
+        # across iterations in a fixture that isolates the soft-EM contribution
+        # from separately configured graph cleaning.
         #
         # M-step consumption IS LANDED on this branch: `mycelia_iterative_assemble`
-        # registers each EM iteration's soft-weight accumulator onto the next
-        # iteration's freshly-built graph (`register_soft_edge_weights!`), so
-        # `compute_edge_weight` / the Viterbi transition scoring consume the
-        # support-floored soft weights in place of raw coverage counts. The wiring
-        # is exercised by scalable_corrector_soft_em_test.jl and the M-step-floor
-        # recurrence above.
+        # binds each EM iteration's soft-weight accumulator to the next iteration's
+        # freshly-built graph in a task-local scope, so `compute_edge_weight` /
+        # Viterbi transition scoring consume support-floored soft weights and the
+        # prior snapshot is restored afterward. The wiring is exercised by
+        # scalable_corrector_soft_em_test.jl and the M-step-floor recurrence above.
         #
         # This end-to-end monotonic-decrease assertion remains @test_skip only
         # because it needs a dedicated LOW-SKIP-FRACTION integration harness (bead

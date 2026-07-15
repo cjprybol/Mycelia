@@ -32,6 +32,42 @@ function _clean_reads(rng, ref; n_reads = 120, readlen = 80)
     return records
 end
 
+struct _RejectingWindowImprover end
+
+struct _UnchangedWindowImprover end
+
+function (::_UnchangedWindowImprover)(
+        read::FASTX.FASTQ.Record,
+        ::Any,
+        ::Int;
+        soft_weights::Union{
+            Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
+        kwargs...,
+)::Tuple{FASTX.FASTQ.Record, Bool}
+    accumulator = Base.something(soft_weights)
+    accumulator.weights[FASTX.identifier(read)] = 1.0
+    return read, false
+end
+
+function (::_RejectingWindowImprover)(
+        read::FASTX.FASTQ.Record,
+        ::Any,
+        ::Int;
+        soft_weights::Union{
+            Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
+        kwargs...,
+)::Tuple{FASTX.FASTQ.Record, Bool}
+    accumulator = something(soft_weights)
+    accumulator.weights[FASTX.identifier(read)] = 1.0
+    sequence = collect(FASTX.sequence(String, read))
+    sequence[end] = sequence[end] == 'A' ? 'C' : 'A'
+    return FASTX.FASTQ.Record(
+        FASTX.identifier(read),
+        String(sequence),
+        String(FASTX.quality(read)),
+    ), true
+end
+
 Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
     R = Mycelia.Rhizomorph
     k = 13
@@ -126,6 +162,250 @@ Test.@testset "scalable corrector hard-window gating (td-nn6l)" begin
         # Empty hard set ⇒ no windows.
         empty_hard = Set(eltype(collect(hard))[])
         Test.@test isempty(Mycelia._hard_window_ranges(clean[1], k, empty_hard))
+    end
+
+    Test.@testset "overlong indel regions retain anchored tails" begin
+        # Substitution-only calls preserve the historical first-window cap. The
+        # explicit complete-span indel mode covers the tail with k-base overlaps,
+        # giving every later pair-HMM decode a complete immutable start anchor.
+        read_length = 1_010
+        sequence = first(repeat("ACGT", cld(read_length, 4)), read_length)
+        read = FASTX.FASTQ.Record(
+            "overlong_hard_region",
+            sequence,
+            repeat("I", read_length),
+        )
+        graph = R.build_qualmer_graph(
+            FASTX.FASTQ.Record[read], k; mode = :canonical)
+        hard = Set(R.MetaGraphsNext.labels(graph))
+        legacy_windows = Mycelia._hard_window_ranges(
+            read,
+            k,
+            hard;
+            pad = 0,
+            max_window = 500,
+            graph_mode = :canonical,
+        )
+        Test.@test legacy_windows == UnitRange{Int}[1:500]
+
+        windows = Mycelia._hard_window_ranges(
+            read,
+            k,
+            hard;
+            pad = 0,
+            max_window = 500,
+            graph_mode = :canonical,
+            complete_span = true,
+        )
+
+        Test.@test length(windows) == 3
+        Test.@test first(first(windows)) == 1
+        Test.@test last(last(windows)) == read_length
+        Test.@test all(k <= length(window) <= 500 for window in windows)
+        Test.@test all(
+            last(windows[index]) - first(windows[index + 1]) + 1 == k
+            for index in 1:(length(windows) - 1)
+        )
+        owned_bases = length(first(windows)) +
+                      sum(length(window) - k for window in windows[2:end])
+        Test.@test owned_bases == read_length
+
+        # Exercise the production anchor-trim helper with true length changes,
+        # then splice every balanced ownership range by original coordinates.
+        sequence_chars = collect(sequence)
+        quality_chars = collect(repeat("I", read_length))
+        accepted = Tuple{UnitRange{Int}, String, String}[]
+
+        first_window = first(windows)
+        first_anchor_start = last(first_window) - k + 1
+        first_prefix = sequence_chars[first(first_window):(first_anchor_start - 1)]
+        first_anchor = sequence_chars[first_anchor_start:last(first_window)]
+        # Insert immediately BEFORE the terminal anchor. A length change is valid,
+        # but the decoded suffix must still name the graph state that anchors the
+        # next overlapping window.
+        first_decoded = String(vcat(first_prefix, ['A'], first_anchor))
+        Test.@test Mycelia._indel_window_terminal_anchor_matches(
+            sequence_chars,
+            collect(first_decoded),
+            last(first_window),
+            k,
+        )
+        push!(accepted,
+            (first_window, first_decoded, repeat("I", length(first_decoded))))
+
+        second_window = windows[2]
+        second_anchor_stop = first(second_window) + k - 1
+        second_anchor = sequence_chars[first(second_window):second_anchor_stop]
+        second_owned = sequence_chars[(first(second_window) + k):last(second_window)]
+        # Delete the first owned base while retaining the immutable k-base anchor.
+        second_decoded = vcat(second_anchor, second_owned[2:end])
+        second_quality = fill('I', length(second_decoded))
+        second_trimmed = Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            second_decoded,
+            second_quality,
+            first(second_window),
+            k,
+        )
+        Test.@test second_trimmed !== nothing
+        second_trimmed_sequence, second_trimmed_quality = something(second_trimmed)
+        push!(accepted,
+            (
+                (first(second_window) + k):last(second_window),
+                String(second_trimmed_sequence),
+                String(second_trimmed_quality),
+            ))
+
+        third_window = windows[3]
+        third_decoded = sequence_chars[third_window]
+        third_quality = fill('I', length(third_decoded))
+        third_trimmed = Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            third_decoded,
+            third_quality,
+            first(third_window),
+            k,
+        )
+        Test.@test third_trimmed !== nothing
+        third_trimmed_sequence, third_trimmed_quality = something(third_trimmed)
+        push!(accepted,
+            (
+                (first(third_window) + k):last(third_window),
+                String(third_trimmed_sequence),
+                String(third_trimmed_quality),
+            ))
+
+        corrected = Mycelia._splice_indel_windows(
+            "overlap_length_change",
+            sequence_chars,
+            quality_chars,
+            accepted,
+        )
+        expected_sequence = first_decoded *
+                            String(second_owned[2:end]) *
+                            String(sequence_chars[(first(third_window) + k):end])
+        Test.@test FASTX.sequence(String, corrected) == expected_sequence
+        Test.@test length(FASTX.quality(corrected)) == length(expected_sequence)
+
+        mutated_anchor = copy(third_decoded)
+        mutated_anchor[1] = mutated_anchor[1] == 'A' ? 'C' : 'A'
+        Test.@test Mycelia._trim_indel_window_overlap(
+            sequence_chars,
+            mutated_anchor,
+            third_quality,
+            first(third_window),
+            k,
+        ) === nothing
+
+        mutated_terminal = collect(first_decoded)
+        mutated_terminal[end] = mutated_terminal[end] == 'A' ? 'C' : 'A'
+        Test.@test !Mycelia._indel_window_terminal_anchor_matches(
+            sequence_chars,
+            mutated_terminal,
+            last(first_window),
+            k,
+        )
+
+        # A valid no-change decode still contributes responsibilities to the
+        # next M-step. The per-window transaction must therefore merge its staged
+        # accumulator even though there is no corrected sequence to splice.
+        unchanged_soft_weights = R.SoftEdgeWeightAccumulator()
+        unchanged_soft_weights.weights[:existing] = 2.0
+        unchanged_read,
+        unchanged_improved,
+        unchanged_decoded_windows,
+        unchanged_divergent_windows =
+            Mycelia.improve_read_likelihood_windowed_detail(
+                read,
+                graph,
+                k,
+                hard;
+                graph_mode = :canonical,
+                soft_weights = unchanged_soft_weights,
+                pad = 0,
+                max_window = 500,
+                read_improver = _UnchangedWindowImprover(),
+            )
+        unchanged_window = Base.only(legacy_windows)
+        unchanged_identifier =
+            "overlong_hard_region_win$(Base.first(unchanged_window))_" *
+            "$(Base.last(unchanged_window))"
+        Test.@test !unchanged_improved
+        Test.@test unchanged_decoded_windows == 1
+        Test.@test unchanged_divergent_windows == 0
+        Test.@test FASTX.sequence(Base.String, unchanged_read) == sequence
+        Test.@test unchanged_soft_weights.weights[:existing] == 2.0
+        Test.@test unchanged_soft_weights.weights[unchanged_identifier] == 1.0
+        Test.@test Base.Set(Base.keys(unchanged_soft_weights.weights)) ==
+                   Base.Set{Any}([:existing, unchanged_identifier])
+
+        # Soft-EM updates are transactional per window. The injected improver
+        # stages one unique responsibility and mutates each window's final base:
+        # every nonfinal window then fails its terminal overlap anchor, while the
+        # final window is accepted. Only the final window may reach the shared
+        # accumulator that seeds the next EM pass.
+        soft_weights = R.SoftEdgeWeightAccumulator()
+        soft_weights.weights[:existing] = 2.0
+        diagnostics = Mycelia.CorrectorDiagnostics()
+        indel_params = Mycelia.IndelDecodeParams(
+            0.05,
+            0.2,
+            0.2,
+            0.1,
+            0.1,
+            3,
+            3,
+            16,
+        )
+        corrected,
+        improved,
+        decoded_windows,
+        divergent_windows =
+            Mycelia.improve_read_likelihood_windowed_detail(
+                read,
+                graph,
+                k,
+                hard;
+                graph_mode = :canonical,
+                soft_weights = soft_weights,
+                diagnostics = diagnostics,
+                pad = 0,
+                max_window = 500,
+                indel_params = indel_params,
+                read_improver = _RejectingWindowImprover(),
+            )
+        final_window = last(windows)
+        final_identifier =
+            "overlong_hard_region_win$(first(final_window))_$(last(final_window))"
+        Test.@test decoded_windows == length(windows)
+        Test.@test divergent_windows == 0
+        Test.@test improved
+        Test.@test FASTX.sequence(String, corrected) != sequence
+        Test.@test diagnostics.window_anchor_rejections[] == length(windows) - 1
+        Test.@test soft_weights.weights[:existing] == 2.0
+        Test.@test soft_weights.weights[final_identifier] == 1.0
+        Test.@test Set(keys(soft_weights.weights)) ==
+                   Set{Any}([:existing, final_identifier])
+    end
+
+    Test.@testset "doublestrand windows use observed graph orientation" begin
+        branch_reads = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("r1", "TTTA", "IIII"),
+            FASTX.FASTQ.Record("r2", "TTTC", "IIII"),
+        ]
+        graph = R.build_qualmer_graph(branch_reads, 3; mode = :doublestrand)
+        hard = Mycelia._hard_vertex_set(graph, 3)
+        Test.@test Set(string.(hard)) == Set(["TTT"])
+        for read in branch_reads
+            Test.@test Mycelia.should_decode_read(
+                read, 3, hard; graph_mode = :doublestrand)
+            Test.@test Mycelia._hard_window_ranges(
+                read, 3, hard;
+                pad = 3,
+                max_window = 500,
+                graph_mode = :doublestrand,
+            ) == UnitRange{Int}[1:4]
+        end
     end
 
     Test.@testset "end-to-end scalable assemble reports a skip fraction" begin
