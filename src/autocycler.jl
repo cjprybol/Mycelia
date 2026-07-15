@@ -7,7 +7,12 @@ References:
 - Pypolca: https://github.com/gbouras13/pypolca
 """
 
-const AUTOCYCLER_ENV_NAME = "autocycler"
+const AUTOCYCLER_VERSION = "0.5.2"
+const AUTOCYCLER_ENVIRONMENT_SPEC_SHA256 =
+    "d6aef758986db23c453203f067a23be6f29b690b536bc24b283b5a6e913624ef"
+const AUTOCYCLER_ENV_NAME =
+    "autocycler-$(AUTOCYCLER_VERSION)-$(first(AUTOCYCLER_ENVIRONMENT_SPEC_SHA256, 8))"
+const AUTOCYCLER_MAX_ASSEMBLY_THREADS = 128
 const AUTOCYCLER_SCRIPT_REVISION =
     "c98b126eb45727584623041db1bfdbdaf7aa0923"
 const AUTOCYCLER_SCRIPT_SHA256 =
@@ -18,7 +23,7 @@ const AUTOCYCLER_SCRIPT_URL =
     "/pipelines/Automated_Autocycler_Bash_script_by_Ryan_Wick/" *
     "autocycler_full.sh"
 const AUTOCYCLER_REQUIRED_PACKAGE_SPECS = (
-    (name = "autocycler", constraint = :exact, version = "0.5.2"),
+    (name = "autocycler", constraint = :exact, version = AUTOCYCLER_VERSION),
     (name = "bwa", constraint = :minimum, version = "0.7.17"),
     (name = "canu", constraint = :minimum, version = "2.3"),
     (name = "flye", constraint = :minimum, version = "2.9.6"),
@@ -59,8 +64,42 @@ function _autocycler_paths()::Tuple{String, String, String}
     return install_dir, script_path, env_file_path
 end
 
+function _autocycler_install_lock_path()::String
+    return joinpath(
+        first(Base.DEPOT_PATH),
+        "locks",
+        "mycelia-$(AUTOCYCLER_ENV_NAME)-install.pid",
+    )
+end
+
 function _autocycler_sha256(path::AbstractString)::String
     return SHA.bytes2hex(SHA.sha256(read(path)))
+end
+
+function _require_verified_autocycler_environment_spec(
+        path::AbstractString,
+)::String
+    normalized_path = abspath(path)
+    if !isfile(normalized_path) || filesize(normalized_path) == 0
+        throw(
+            ErrorException(
+                "Bundled Autocycler environment file is missing or empty: " *
+                "$(normalized_path). Reinstall Mycelia before installing " *
+                "Autocycler.",
+            ),
+        )
+    end
+    actual_sha256 = _autocycler_sha256(normalized_path)
+    if actual_sha256 != AUTOCYCLER_ENVIRONMENT_SPEC_SHA256
+        throw(
+            ErrorException(
+                "Autocycler environment specification checksum mismatch: " *
+                "expected $(AUTOCYCLER_ENVIRONMENT_SPEC_SHA256), got " *
+                "$(actual_sha256) for $(normalized_path).",
+            ),
+        )
+    end
+    return normalized_path
 end
 
 function _autocycler_script_is_verified(path::AbstractString)::Bool
@@ -201,20 +240,19 @@ end
 
 function _ensure_autocycler_packages!(
         package_inspector::Function,
-        installer::Function,
+        _installer::Function,
 )::Dict{String, String}
     versions = package_inspector()
     package_issues = _autocycler_package_issues(versions)
-    if !isempty(package_issues)
-        @warn "Autocycler environment is stale; recreating it before assembly" package_issues
-        installer(; force = true)
-        versions = package_inspector()
-        package_issues = _autocycler_package_issues(versions)
-    end
     isempty(package_issues) || throw(
         ErrorException(
-            "Autocycler environment has missing or incompatible required " *
-            "packages after recreation: $(join(package_issues, "; ")).",
+            "Autocycler immutable content-addressed environment " *
+            "$(repr(AUTOCYCLER_ENV_NAME)) has missing or incompatible " *
+            "required packages: $(join(package_issues, "; ")). Refusing " *
+            "to recreate or repair it in place. Stop all workflows using " *
+            "this environment and remove it manually before reinstalling, " *
+            "or use a Mycelia release with a corrected environment " *
+            "specification.",
         ),
     )
     return Dict{String, String}(versions)
@@ -224,52 +262,69 @@ function _autocycler_toolchain_metadata(
         versions::AbstractDict{<:AbstractString, <:AbstractString},
 )::Dict{String, Any}
     _, script_path, env_file_path = _autocycler_paths()
+    verified_env_file_path =
+        _require_verified_autocycler_environment_spec(env_file_path)
     return Dict{String, Any}(
         "autocycler_script_revision" => AUTOCYCLER_SCRIPT_REVISION,
         "autocycler_script_sha256" => _autocycler_sha256(script_path),
-        "environment_spec_sha256" => _autocycler_sha256(env_file_path),
+        "environment_name" => AUTOCYCLER_ENV_NAME,
+        "environment_spec_expected_sha256" =>
+            AUTOCYCLER_ENVIRONMENT_SPEC_SHA256,
+        "environment_spec_sha256" =>
+            _autocycler_sha256(verified_env_file_path),
         "packages" => Dict{String, String}(versions),
     )
 end
 
-"""
-$(DocStringExtensions.TYPEDSIGNATURES)
+function _with_autocycler_install_lock(
+        action::Function,
+        lock_path::AbstractString,
+)::Any
+    normalized_lock_path = abspath(lock_path)
+    mkpath(dirname(normalized_lock_path))
+    return FileWatching.Pidfile.mkpidlock(
+        normalized_lock_path;
+        stale_age = 0,
+    ) do
+        action()
+    end
+end
 
-Install Autocycler and the short-read polishing tools in a shared conda
-environment.
+function _autocycler_environment_is_installed()::Bool
+    return check_bioconda_env_is_installed(AUTOCYCLER_ENV_NAME)
+end
 
-The package-bundled `environment.yml` is authoritative because it extends the
-upstream Autocycler environment with BWA, Polypolish, and Pypolca. The upstream
-automation script is pinned to `AUTOCYCLER_SCRIPT_REVISION` and verified against
-`AUTOCYCLER_SCRIPT_SHA256` before it can be executed. `force=true` recreates the
-environment and refreshes that verified script without overwriting the bundled
-environment specification.
-
-# Keywords
-- `force::Bool=false`: Recreate the environment and re-download the pinned script.
-"""
-function install_autocycler(;
+function _install_autocycler_locked(;
         force::Bool = false,
         downloader::Function = Downloads.download,
         paths::Tuple{String, String, String} = _autocycler_paths(),
+        environment_checker::Function = _autocycler_environment_is_installed,
+        environment_creator::Function = create_conda_env_from_yaml,
 )::String
     install_dir, script_path, env_file_path = paths
     mkpath(install_dir)
+    verified_env_file_path =
+        _require_verified_autocycler_environment_spec(env_file_path)
 
-    if !isfile(env_file_path) || filesize(env_file_path) == 0
+    environment_installed = Bool(environment_checker())
+    if force && environment_installed
         throw(
             ErrorException(
-                "Bundled Autocycler environment file is missing or empty: " *
-                "$(env_file_path). Reinstall Mycelia before installing Autocycler.",
+                "Refusing install_autocycler(force=true): immutable " *
+                "content-addressed environment " *
+                "$(repr(AUTOCYCLER_ENV_NAME)) already exists and must not " *
+                "be recreated in place. Stop all workflows using this " *
+                "environment and remove it manually before reinstalling.",
             ),
         )
     end
-
-    create_conda_env_from_yaml(
-        env_file_path,
-        AUTOCYCLER_ENV_NAME;
-        force = force,
-    )
+    if !environment_installed
+        environment_creator(
+            verified_env_file_path,
+            AUTOCYCLER_ENV_NAME;
+            force = false,
+        )
+    end
 
     if force || !_autocycler_script_is_verified(script_path)
         @info "Installing pinned, checksum-verified autocycler_full.sh script..."
@@ -292,6 +347,59 @@ function install_autocycler(;
     return script_path
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Install Autocycler and the short-read polishing tools in a content-addressed
+conda environment.
+
+The package-bundled `environment.yml` is authoritative because it extends the
+upstream Autocycler environment with BWA, Polypolish, and Pypolca. The upstream
+automation script is pinned to `AUTOCYCLER_SCRIPT_REVISION` and verified against
+`AUTOCYCLER_SCRIPT_SHA256` before it can be executed.
+
+The bundled environment specification is checksum-verified and a stable prefix
+of its expected SHA-256 is part of `AUTOCYCLER_ENV_NAME`. Consequently, Mycelia
+releases with different environment specifications cannot mutate the environment
+used by an already-running assembly. An existing environment is immutable: this
+function never removes or recreates it. `force=true` is accepted for a first
+installation, where it refreshes the verified script, but fails closed when the
+content-addressed environment already exists. A stale or incompatible environment
+must not be repaired in place; stop all workflows using it before manually
+removing and reinstalling it, or use a Mycelia release with a corrected
+environment specification. Direct calls serialize the environment check and
+first-use creation under the same per-environment installation lock used by the
+assembly preflight.
+
+Compatibility is deliberately pinned to Autocycler 0.5.2. This wrapper targets
+Autocycler's bacterial-isolate use case, where the alternative input assemblies
+are expected to be mostly complete; installing it does not make the workflow a
+general metagenome, eukaryotic-genome, or fragmentary-assembly consensus method.
+
+# Keywords
+- `force::Bool=false`: Refresh the pinned script during a first installation;
+  error if the content-addressed environment already exists.
+"""
+function install_autocycler(;
+        force::Bool = false,
+        downloader::Function = Downloads.download,
+        paths::Tuple{String, String, String} = _autocycler_paths(),
+        environment_checker::Function = _autocycler_environment_is_installed,
+        environment_creator::Function = create_conda_env_from_yaml,
+        lock_path::AbstractString = _autocycler_install_lock_path(),
+        lock_runner::Function = _with_autocycler_install_lock,
+)::String
+    return lock_runner(String(lock_path)) do
+        _install_autocycler_locked(;
+            force,
+            downloader,
+            paths,
+            environment_checker,
+            environment_creator,
+        )
+    end
+end
+
 function _require_nonempty_autocycler_file(
         path::AbstractString,
         label::AbstractString,
@@ -303,6 +411,121 @@ function _require_nonempty_autocycler_file(
     if filesize(normalized_path) == 0
         throw(ArgumentError("$(label) is empty: $(normalized_path)"))
     end
+    return normalized_path
+end
+
+function _require_valid_autocycler_fasta(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_nonempty_autocycler_file(path, label)
+    reader = try
+        Mycelia.open_fastx(normalized_path)
+    catch error
+        error isa InterruptException && rethrow()
+        throw(
+            ErrorException(
+                "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+                sprint(showerror, error),
+            ),
+        )
+    end
+    record_count = 0
+    try
+        for record in reader
+            record isa FASTX.FASTA.Record || throw(
+                ErrorException(
+                    "$(label) is not valid FASTA: $(normalized_path).",
+                ),
+            )
+            isempty(FASTX.sequence(record)) && throw(
+                ErrorException(
+                    "$(label) contains an empty FASTA sequence at record " *
+                    "$(record_count + 1): $(normalized_path).",
+                ),
+            )
+            record_count += 1
+        end
+    catch error
+        error isa InterruptException && rethrow()
+        if error isa ErrorException && startswith(error.msg, String(label))
+            rethrow()
+        end
+        throw(
+            ErrorException(
+                "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+                sprint(showerror, error),
+            ),
+        )
+    finally
+        close(reader)
+    end
+    record_count > 0 || throw(
+        ErrorException("$(label) contains no FASTA records: $(normalized_path)."),
+    )
+    return normalized_path
+end
+
+function _require_valid_autocycler_gfa(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_nonempty_autocycler_file(path, label)
+    segment_identifiers = Set{String}()
+    open(normalized_path, "r") do input
+        for (line_number, line) in enumerate(eachline(input))
+            isempty(line) && continue
+            fields = split(line, '\t'; keepempty = true)
+            first(fields) == "S" || continue
+            length(fields) >= 3 || throw(
+                ErrorException(
+                    "$(label) has a malformed GFA segment at line " *
+                    "$(line_number): $(normalized_path).",
+                ),
+            )
+            identifier = String(fields[2])
+            sequence = String(fields[3])
+            isempty(identifier) && throw(
+                ErrorException(
+                    "$(label) has an empty GFA segment identifier at line " *
+                    "$(line_number): $(normalized_path).",
+                ),
+            )
+            identifier in segment_identifiers && throw(
+                ErrorException(
+                    "$(label) has duplicate GFA segment identifier " *
+                    "$(repr(identifier)): $(normalized_path).",
+                ),
+            )
+            if isempty(sequence) || sequence == "*"
+                throw(
+                    ErrorException(
+                        "$(label) has no sequence for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path).",
+                    ),
+                )
+            end
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch error
+                error isa InterruptException && rethrow()
+                throw(
+                    ErrorException(
+                        "$(label) has invalid DNA for GFA segment " *
+                        "$(repr(identifier)): $(normalized_path). Cause: " *
+                        sprint(showerror, error),
+                    ),
+                )
+            end
+            push!(segment_identifiers, identifier)
+        end
+    end
+    isempty(segment_identifiers) && throw(
+        ErrorException(
+            "$(label) contains no sequence-bearing GFA segments: " *
+            "$(normalized_path).",
+        ),
+    )
     return normalized_path
 end
 
@@ -406,14 +629,39 @@ function _validate_autocycler_paired_fastqs(
     return pair_count
 end
 
+function _validate_autocycler_input_sources(
+        long_reads::AbstractString,
+        short_reads_1::AbstractString,
+        short_reads_2::AbstractString,
+)::Nothing
+    !Base.Filesystem.samefile(short_reads_1, short_reads_2) || throw(
+        ArgumentError(
+            "Autocycler paired short-read R1 and R2 must be distinct files.",
+        ),
+    )
+    if Base.Filesystem.samefile(long_reads, short_reads_1) ||
+       Base.Filesystem.samefile(long_reads, short_reads_2)
+        throw(
+            ArgumentError(
+                "Autocycler long reads must be physically distinct from paired " *
+                "short-read R1 and R2 files.",
+            ),
+        )
+    end
+    return nothing
+end
+
+function _effective_autocycler_assembly_threads(threads::Integer)::Int
+    threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)"))
+    return Int(min(threads, AUTOCYCLER_MAX_ASSEMBLY_THREADS))
+end
+
 function _validate_autocycler_parameters(
         threads::Integer,
         jobs::Integer,
         read_type::AbstractString,
 )::String
-    if threads < 1
-        throw(ArgumentError("threads must be positive, got $(threads)"))
-    end
+    _effective_autocycler_assembly_threads(threads)
     if jobs < 1
         throw(ArgumentError("jobs must be positive, got $(jobs)"))
     end
@@ -431,6 +679,9 @@ function _validate_autocycler_parameters(
 end
 
 function _validate_autocycler_output_dir(out_dir::AbstractString)::String
+    isempty(strip(out_dir)) && throw(
+        ArgumentError("Autocycler output directory must be a non-blank path."),
+    )
     normalized_out_dir = abspath(out_dir)
     if isfile(normalized_out_dir)
         throw(ArgumentError("Autocycler output path is a file: $(normalized_out_dir)"))
@@ -439,6 +690,21 @@ function _validate_autocycler_output_dir(out_dir::AbstractString)::String
         throw(
             ArgumentError(
                 "Autocycler output directory must be empty: $(normalized_out_dir)",
+            ),
+        )
+    end
+
+    existing_ancestor = normalized_out_dir
+    while !ispath(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        existing_ancestor = parent
+    end
+    if ispath(existing_ancestor) && !isdir(existing_ancestor)
+        throw(
+            ArgumentError(
+                "Autocycler output directory has a non-directory existing " *
+                "ancestor: $(existing_ancestor)",
             ),
         )
     end
@@ -491,6 +757,8 @@ function _autocycler_command_plan(
         jobs,
         read_type,
     )
+    requested_threads = Int(threads)
+    autocycler_assembly_threads = _effective_autocycler_assembly_threads(threads)
     normalized_long_reads = abspath(long_reads)
     normalized_out_dir = abspath(out_dir)
     normalized_script_path = abspath(script_path)
@@ -503,7 +771,7 @@ function _autocycler_command_plan(
             "bash",
             normalized_script_path,
             normalized_long_reads,
-            string(threads),
+            string(autocycler_assembly_threads),
             string(jobs),
             normalized_read_type,
         ],
@@ -521,6 +789,8 @@ function _autocycler_command_plan(
         outdir = normalized_out_dir,
         assembly = assembly,
         graph = graph,
+        requested_threads = requested_threads,
+        autocycler_assembly_threads = autocycler_assembly_threads,
     )
 end
 
@@ -696,12 +966,33 @@ function _autocycler_polishing_command_plan(
 end
 
 function _cleanup_autocycler_polishing_intermediates!(
-        paths::AbstractVector{<:AbstractString},
-)::Nothing
+        paths::AbstractVector{<:AbstractString};
+        remover::Function = path -> rm(path; force = true),
+)::Vector{String}
+    retained = String[]
     for path in paths
-        rm(path; force = true)
+        normalized_path = String(path)
+        cleanup_error = nothing
+        try
+            remover(normalized_path)
+        catch error
+            cleanup_error = error
+        end
+        if cleanup_error !== nothing
+            cleanup_message =
+                "Autocycler could not remove a polishing intermediate"
+            @warn cleanup_message path = normalized_path cleanup_error
+        end
+        if ispath(normalized_path)
+            push!(retained, normalized_path)
+            if cleanup_error === nothing
+                retained_message =
+                    "Autocycler retained a polishing intermediate after cleanup"
+                @warn retained_message path = normalized_path
+            end
+        end
     end
-    return nothing
+    return retained
 end
 
 function _default_autocycler_step_runner(step::NamedTuple)::Nothing
@@ -731,8 +1022,10 @@ function _execute_autocycler_steps(
                 throw(
                     ErrorException(
                         "Autocycler workflow command $(step.name) failed. " *
-                        "Recreate the tool environment with " *
-                        "install_autocycler(force=true) if a command is missing. " *
+                        "The content-addressed environment " *
+                        "$(repr(AUTOCYCLER_ENV_NAME)) is immutable. If a " *
+                        "command is missing, stop all workflows using this " *
+                        "environment and remove it manually before reinstalling. " *
                         "Cause: $(message)",
                     ),
                 )
@@ -754,17 +1047,22 @@ function _execute_autocycler_steps(
     return nothing
 end
 
-function _ensure_autocycler_installed(;
-        package_inspector::Function = _autocycler_environment_packages,
-        installer::Function = install_autocycler,
+function _ensure_autocycler_installed_locked(
+        package_inspector::Function,
+        installer::Function,
+        environment_checker::Function,
 )::Dict{String, Any}
-    _, script_path, _ = _autocycler_paths()
-    environment_installed = check_bioconda_env_is_installed(
-        AUTOCYCLER_ENV_NAME,
-    )
+    _, script_path, env_file_path = _autocycler_paths()
+    _require_verified_autocycler_environment_spec(env_file_path)
+    environment_installed = Bool(environment_checker())
     if !environment_installed || !_autocycler_script_is_verified(script_path)
         @warn "Autocycler is not fully installed. Installing now..."
         installer()
+        Bool(environment_checker()) || throw(
+            ErrorException(
+                "Autocycler environment was not available after installation.",
+            ),
+        )
     end
     if !_autocycler_script_is_verified(script_path)
         throw(
@@ -778,6 +1076,22 @@ function _ensure_autocycler_installed(;
     return _autocycler_toolchain_metadata(versions)
 end
 
+function _ensure_autocycler_installed(;
+        package_inspector::Function = _autocycler_environment_packages,
+        installer::Function = _install_autocycler_locked,
+        environment_checker::Function = _autocycler_environment_is_installed,
+        lock_path::AbstractString = _autocycler_install_lock_path(),
+        lock_runner::Function = _with_autocycler_install_lock,
+)::Dict{String, Any}
+    return lock_runner(String(lock_path)) do
+        _ensure_autocycler_installed_locked(
+            package_inspector,
+            installer,
+            environment_checker,
+        )
+    end
+end
+
 function _run_autocycler(
         long_reads::AbstractString,
         out_dir::AbstractString;
@@ -788,18 +1102,18 @@ function _run_autocycler(
         runner::Function = _default_autocycler_step_runner,
         validate_long_reads::Bool = true,
 )::NamedTuple
-    normalized_long_reads = _require_nonempty_autocycler_file(
-        long_reads,
-        "Long-read FASTQ",
-    )
-    validate_long_reads &&
-        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     normalized_read_type = _validate_autocycler_parameters(
         threads,
         jobs,
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
+    normalized_long_reads = _require_nonempty_autocycler_file(
+        long_reads,
+        "Long-read FASTQ",
+    )
+    validate_long_reads &&
+        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     toolchain = dependency_checker()
     normalized_out_dir = _prepare_autocycler_output_dir(normalized_out_dir)
     _, script_path, _ = _autocycler_paths()
@@ -814,17 +1128,23 @@ function _run_autocycler(
 
     @info "Starting long-read-only Autocycler pipeline..."
     _execute_autocycler_steps(plan.steps; runner = runner)
-    assembly = _require_nonempty_autocycler_file(
+    assembly = _require_valid_autocycler_fasta(
         plan.assembly,
         "Autocycler consensus FASTA",
+    )
+    graph = _require_valid_autocycler_gfa(
+        plan.graph,
+        "Autocycler consensus GFA",
     )
     @info "Autocycler pipeline complete" out_dir = normalized_out_dir
 
     return (
         outdir = normalized_out_dir,
         assembly = assembly,
-        graph = plan.graph,
+        graph = graph,
         toolchain = toolchain,
+        requested_threads = plan.requested_threads,
+        autocycler_assembly_threads = plan.autocycler_assembly_threads,
     )
 end
 
@@ -838,6 +1158,11 @@ directory relative to the isolated `out_dir` working directory. Its authoritativ
 consensus FASTA and companion GFA are both validated and returned without
 rewriting either artifact. The output directory must be absent or empty.
 
+The verified script and environment are compatibility-pinned to Autocycler 0.5.2.
+The upstream consensus model is intended for bacterial isolates whose alternative
+long-read assemblies are mostly complete. This wrapper does not widen that boundary
+to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies.
+
 # Keywords
 - `long_reads::AbstractString`: Nonempty long-read FASTQ.
 - `out_dir::AbstractString`: Empty isolated working/output directory.
@@ -848,7 +1173,9 @@ rewriting either artifact. The output directory must be absent or empty.
 
 # Returns
 A named tuple with `outdir`, `assembly`, `graph`, and exact `toolchain`
-provenance.
+provenance. `requested_threads` records the caller request and
+`autocycler_assembly_threads` records the explicit effective cap used by the
+alternative-assembly stage.
 """
 function run_autocycler(;
         long_reads::AbstractString,
@@ -878,7 +1205,14 @@ function _run_autocycler_polished(
         keep_intermediates::Bool = false,
         dependency_checker::Function = _ensure_autocycler_installed,
         runner::Function = _default_autocycler_step_runner,
+        intermediate_remover::Function = path -> rm(path; force = true),
 )::NamedTuple
+    normalized_read_type = _validate_autocycler_parameters(
+        threads,
+        jobs,
+        read_type,
+    )
+    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
     normalized_long_reads = _require_nonempty_autocycler_file(
         long_reads,
         "Long-read FASTQ",
@@ -891,17 +1225,16 @@ function _run_autocycler_polished(
         short_reads_2,
         "Paired short-read R2 FASTQ",
     )
+    _validate_autocycler_input_sources(
+        normalized_long_reads,
+        normalized_short_reads_1,
+        normalized_short_reads_2,
+    )
     _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     _validate_autocycler_paired_fastqs(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
-    normalized_read_type = _validate_autocycler_parameters(
-        threads,
-        jobs,
-        read_type,
-    )
-    normalized_out_dir = _validate_autocycler_output_dir(out_dir)
     toolchain = dependency_checker()
 
     autocycler_result = _run_autocycler(
@@ -938,19 +1271,16 @@ function _run_autocycler_polished(
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
     final_assembly = try
         _execute_autocycler_steps(polishing_plan.steps; runner = runner)
-        _require_nonempty_autocycler_file(
+        _require_valid_autocycler_fasta(
             polishing_plan.assembly,
             "Pypolca-polished Autocycler assembly",
         )
     catch
         if !keep_intermediates
-            try
-                _cleanup_autocycler_polishing_intermediates!(
-                    polishing_plan.intermediate_files,
-                )
-            catch cleanup_error
-                @warn "Autocycler failure cleanup could not remove intermediates" cleanup_error
-            end
+            _cleanup_autocycler_polishing_intermediates!(
+                polishing_plan.intermediate_files;
+                remover = intermediate_remover,
+            )
         end
         rethrow()
     end
@@ -958,9 +1288,9 @@ function _run_autocycler_polished(
         polishing_plan.intermediate_files
     else
         _cleanup_autocycler_polishing_intermediates!(
-            polishing_plan.intermediate_files,
+            polishing_plan.intermediate_files;
+            remover = intermediate_remover,
         )
-        String[]
     end
     @info "Autocycler paired-short polishing complete" assembly = final_assembly
 
@@ -973,6 +1303,10 @@ function _run_autocycler_polished(
         pypolca_report = polishing_plan.pypolca_report,
         intermediates = retained_intermediates,
         toolchain = autocycler_result.toolchain,
+        requested_threads = autocycler_result.requested_threads,
+        autocycler_assembly_threads =
+            autocycler_result.autocycler_assembly_threads,
+        polishing_threads = Int(threads),
     )
 end
 
@@ -993,6 +1327,12 @@ index intermediates are removed after success unless `keep_intermediates=true`.
 Route-owned BWA/SAM intermediates are also cleaned after a failed polishing run
 unless explicit retention was requested; diagnostic assembly artifacts remain.
 
+This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
+same bacterial-isolate/mostly-complete-alternative-assemblies applicability
+boundary. Paired-short polishing improves the resulting consensus; it does not
+turn Autocycler into a general metagenome, eukaryotic-genome, or fragmentary-input
+ensemble method.
+
 # Keywords
 - `long_reads::AbstractString`: Nonempty long-read FASTQ.
 - `short_reads_1::AbstractString`: Corrected paired-short R1 FASTQ.
@@ -1008,7 +1348,10 @@ unless explicit retention was requested; diagnostic assembly artifacts remain.
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
 `polypolish_assembly`, `pypolca_report`, `outdir`, and exact `toolchain`
 provenance. `intermediates` lists files retained by an explicit
-`keep_intermediates=true` request.
+`keep_intermediates=true` request or because best-effort cleanup could not remove
+them. `requested_threads` and `autocycler_assembly_threads` distinguish the caller
+request from Autocycler's effective assembly cap; `polishing_threads` records the
+uncapped caller request used by the threaded BWA and Pypolca polishing steps.
 """
 function run_autocycler_polished(;
         long_reads::AbstractString,

@@ -16,6 +16,7 @@
 #   'include("test/8_tool_integration/autocycler.jl")'
 # ```
 
+import Logging
 import Mycelia
 import Test
 
@@ -72,7 +73,14 @@ end
 
 Test.@testset "Autocycler wrapper" begin
     Test.@testset "Constants, paths, and bundled environment" begin
-        Test.@test Mycelia.AUTOCYCLER_ENV_NAME == "autocycler"
+        Test.@test Mycelia.AUTOCYCLER_VERSION == "0.5.2"
+        Test.@test Mycelia.AUTOCYCLER_ENVIRONMENT_SPEC_SHA256 ==
+                   "d6aef758986db23c453203f067a23be6f29b690b536bc24b283b5a6e913624ef"
+        Test.@test Mycelia.AUTOCYCLER_ENV_NAME ==
+                   "autocycler-0.5.2-d6aef758"
+        Test.@test Mycelia.AUTOCYCLER_MAX_ASSEMBLY_THREADS == 128
+        Test.@test Mycelia._effective_autocycler_assembly_threads(64) == 64
+        Test.@test Mycelia._effective_autocycler_assembly_threads(256) == 128
         Test.@test Mycelia.AUTOCYCLER_READ_TYPES == (
             "ont_r9",
             "ont_r10",
@@ -89,8 +97,17 @@ Test.@testset "Autocycler wrapper" begin
         Test.@test endswith(script_path, "autocycler_full.sh")
         Test.@test endswith(env_file_path, "environment.yml")
         Test.@test endswith(install_dir, joinpath("deps", "autocycler"))
+        Test.@test occursin(
+            Mycelia.AUTOCYCLER_ENV_NAME,
+            basename(Mycelia._autocycler_install_lock_path()),
+        )
+        Test.@test Mycelia._require_verified_autocycler_environment_spec(
+            env_file_path,
+        ) == abspath(env_file_path)
 
         environment_spec = read(env_file_path, String)
+        Test.@test Mycelia._autocycler_sha256(env_file_path) ==
+                   Mycelia.AUTOCYCLER_ENVIRONMENT_SPEC_SHA256
         Test.@test occursin("  - autocycler=0.5.2", environment_spec)
         dependency_section = split(environment_spec, "dependencies:"; limit = 2)[2]
         dependency_names = Set{String}()
@@ -121,6 +138,8 @@ Test.@testset "Autocycler wrapper" begin
         Test.@test Set(keys(toolchain)) == Set([
             "autocycler_script_revision",
             "autocycler_script_sha256",
+            "environment_name",
+            "environment_spec_expected_sha256",
             "environment_spec_sha256",
             "packages",
         ])
@@ -128,8 +147,12 @@ Test.@testset "Autocycler wrapper" begin
                    Mycelia.AUTOCYCLER_SCRIPT_REVISION
         Test.@test toolchain["autocycler_script_sha256"] ==
                    Mycelia.AUTOCYCLER_SCRIPT_SHA256
+        Test.@test toolchain["environment_name"] ==
+                   Mycelia.AUTOCYCLER_ENV_NAME
+        Test.@test toolchain["environment_spec_expected_sha256"] ==
+                   Mycelia.AUTOCYCLER_ENVIRONMENT_SPEC_SHA256
         Test.@test toolchain["environment_spec_sha256"] ==
-                   Mycelia._autocycler_sha256(env_file_path)
+                   Mycelia.AUTOCYCLER_ENVIRONMENT_SPEC_SHA256
         Test.@test toolchain["packages"] == compatible_packages
     end
 
@@ -183,7 +206,7 @@ Test.@testset "Autocycler wrapper" begin
                     "/test/conda",
                     "list",
                     "-n",
-                    "autocycler",
+                    Mycelia.AUTOCYCLER_ENV_NAME,
                     "--json",
                 ]
                 return "[{\"name\":\"autocycler\",\"version\":\"0.5.2\"}]"
@@ -197,8 +220,9 @@ Test.@testset "Autocycler wrapper" begin
                 joinpath(temp_dir, "autocycler_full.sh"),
                 joinpath(temp_dir, "environment.yml"),
             )
+            lock_path = joinpath(temp_dir, "autocycler-install.pid")
             missing_environment_error = _autocycler_test_error() do
-                Mycelia.install_autocycler(; paths)
+                Mycelia.install_autocycler(; paths, lock_path)
             end
             Test.@test missing_environment_error isa ErrorException
             Test.@test occursin(
@@ -207,9 +231,114 @@ Test.@testset "Autocycler wrapper" begin
             )
             write(paths[3], "")
             empty_environment_error = _autocycler_test_error() do
-                Mycelia.install_autocycler(; paths)
+                Mycelia.install_autocycler(; paths, lock_path)
             end
             Test.@test empty_environment_error isa ErrorException
+            write(paths[3], "tampered environment\n")
+            checksum_error = _autocycler_test_error() do
+                Mycelia.install_autocycler(; paths, lock_path)
+            end
+            Test.@test checksum_error isa ErrorException
+            Test.@test occursin(
+                "environment specification checksum mismatch",
+                sprint(showerror, checksum_error),
+            )
+            Test.@test !ispath(lock_path)
+        end
+
+        mktempdir() do temp_dir
+            bundled_paths = Mycelia._autocycler_paths()
+            paths = (
+                temp_dir,
+                joinpath(temp_dir, "autocycler_full.sh"),
+                joinpath(temp_dir, "environment.yml"),
+            )
+            cp(bundled_paths[2], paths[2])
+            cp(bundled_paths[3], paths[3])
+            lock_path = joinpath(temp_dir, "autocycler-install.pid")
+            environment_creations = Ref(0)
+            script_downloads = Ref(0)
+            force_error = _autocycler_test_error() do
+                Mycelia.install_autocycler(;
+                    force = true,
+                    paths,
+                    environment_checker = () -> begin
+                        Test.@test isfile(lock_path)
+                        return true
+                    end,
+                    environment_creator = function (
+                            _environment_file::AbstractString,
+                            _environment_name::AbstractString;
+                            force::Bool = false,
+                    )
+                        environment_creations[] += 1
+                        return force
+                    end,
+                    downloader = (_url, _destination) -> begin
+                        script_downloads[] += 1
+                        return nothing
+                    end,
+                    lock_path,
+                )
+            end
+            Test.@test force_error isa ErrorException
+            Test.@test occursin(
+                "Refusing install_autocycler(force=true)",
+                sprint(showerror, force_error),
+            )
+            Test.@test occursin(
+                "immutable content-addressed environment",
+                sprint(showerror, force_error),
+            )
+            Test.@test environment_creations[] == 0
+            Test.@test script_downloads[] == 0
+            Test.@test !ispath(lock_path)
+        end
+
+        mktempdir() do temp_dir
+            bundled_paths = Mycelia._autocycler_paths()
+            paths = (
+                temp_dir,
+                joinpath(temp_dir, "autocycler_full.sh"),
+                joinpath(temp_dir, "environment.yml"),
+            )
+            cp(bundled_paths[3], paths[3])
+            lock_path = joinpath(temp_dir, "autocycler-install.pid")
+            environment_creator_forces = Bool[]
+            environment_creator = function (
+                    environment_file::AbstractString,
+                    environment_name::AbstractString;
+                    force::Bool = false,
+            )
+                Test.@test environment_file == abspath(paths[3])
+                Test.@test environment_name == Mycelia.AUTOCYCLER_ENV_NAME
+                Test.@test isfile(lock_path)
+                push!(environment_creator_forces, force)
+                return String(environment_name)
+            end
+            downloader = function (
+                    url::AbstractString,
+                    destination::AbstractString,
+            )
+                Test.@test url == Mycelia.AUTOCYCLER_SCRIPT_URL
+                cp(bundled_paths[2], destination; force = true)
+                return String(destination)
+            end
+            installed_script = Mycelia.install_autocycler(;
+                force = true,
+                paths,
+                environment_checker = () -> begin
+                    Test.@test isfile(lock_path)
+                    return false
+                end,
+                environment_creator,
+                downloader,
+                lock_path,
+            )
+            Test.@test installed_script == paths[2]
+            Test.@test environment_creator_forces == [false]
+            Test.@test Mycelia._autocycler_script_is_verified(installed_script)
+            Test.@test !ispath(lock_path)
         end
 
         inspection_calls = Ref(0)
@@ -227,14 +356,27 @@ Test.@testset "Autocycler wrapper" begin
             push!(installer_forces, force)
             return nothing
         end
-        versions = Mycelia._ensure_autocycler_packages!(
-            package_inspector,
-            installer,
+        package_error = _autocycler_test_error() do
+            Mycelia._ensure_autocycler_packages!(
+                package_inspector,
+                installer,
+            )
+        end
+        Test.@test package_error isa ErrorException
+        Test.@test inspection_calls[] == 1
+        Test.@test isempty(installer_forces)
+        Test.@test occursin(
+            "immutable content-addressed environment",
+            sprint(showerror, package_error),
         )
-        Test.@test inspection_calls[] == 2
-        Test.@test installer_forces == [true]
-        Test.@test versions["autocycler"] == "0.5.2"
-        Test.@test haskey(versions, "canu")
+        Test.@test occursin(
+            "autocycler must equal 0.5.2",
+            sprint(showerror, package_error),
+        )
+        Test.@test occursin(
+            "canu is missing",
+            sprint(showerror, package_error),
+        )
 
         too_old = _autocycler_test_compatible_packages()
         too_old["flye"] = "2.9.5"
@@ -265,6 +407,74 @@ Test.@testset "Autocycler wrapper" begin
             "missing or incompatible required packages",
             sprint(showerror, stale_error),
         )
+        Test.@test occursin(
+            "remove it manually before reinstalling",
+            sprint(showerror, stale_error),
+        )
+        Test.@test isempty(installer_forces)
+
+        mktempdir() do temp_dir
+            lock_path = joinpath(temp_dir, "autocycler-install.pid")
+            lock_observed = Ref(false)
+            locked_result = Mycelia._with_autocycler_install_lock(
+                lock_path,
+            ) do
+                lock_observed[] = isfile(lock_path)
+                return Dict{String, Any}("locked" => true)
+            end
+            Test.@test lock_observed[]
+            Test.@test locked_result == Dict{String, Any}("locked" => true)
+            Test.@test !ispath(lock_path)
+
+            lock_active = Ref(false)
+            lock_events = Symbol[]
+            lock_runner = function (
+                    action::Function,
+                    observed_path::AbstractString,
+            )
+                Test.@test observed_path == lock_path
+                Test.@test !lock_active[]
+                lock_active[] = true
+                push!(lock_events, :entered)
+                try
+                    return action()
+                finally
+                    push!(lock_events, :exited)
+                    lock_active[] = false
+                end
+            end
+            environment_checks = Ref(0)
+            environment_checker = function ()
+                Test.@test lock_active[]
+                environment_checks[] += 1
+                return environment_checks[] >= 2
+            end
+            locked_inspections = Ref(0)
+            locked_package_inspector = function ()
+                Test.@test lock_active[]
+                locked_inspections[] += 1
+                return _autocycler_test_compatible_packages()
+            end
+            locked_installs = Bool[]
+            locked_installer = function (; force::Bool = false)
+                Test.@test lock_active[]
+                push!(locked_installs, force)
+                return nothing
+            end
+            locked_toolchain = Mycelia._ensure_autocycler_installed(;
+                package_inspector = locked_package_inspector,
+                installer = locked_installer,
+                environment_checker,
+                lock_path,
+                lock_runner,
+            )
+            Test.@test lock_events == [:entered, :exited]
+            Test.@test environment_checks[] == 2
+            Test.@test locked_inspections[] == 1
+            Test.@test locked_installs == [false]
+            Test.@test locked_toolchain["packages"] ==
+                       _autocycler_test_compatible_packages()
+        end
     end
 
     Test.@testset "Exact long-read-only upstream command" begin
@@ -290,7 +500,7 @@ Test.@testset "Autocycler wrapper" begin
                 "run",
                 "--live-stream",
                 "-n",
-                "autocycler",
+                Mycelia.AUTOCYCLER_ENV_NAME,
                 "bash",
                 abspath(script_path),
                 abspath(long_reads),
@@ -313,6 +523,21 @@ Test.@testset "Autocycler wrapper" begin
                 plan.graph,
                 plan.assembly,
             ]
+            Test.@test plan.requested_threads == 8
+            Test.@test plan.autocycler_assembly_threads == 8
+
+            capped_plan = Mycelia._autocycler_command_plan(
+                long_reads,
+                out_dir;
+                threads = 256,
+                jobs = 2,
+                read_type = "pacbio_hifi",
+                script_path = script_path,
+                conda_runner = "/test/conda",
+            )
+            Test.@test capped_plan.requested_threads == 256
+            Test.@test capped_plan.autocycler_assembly_threads == 128
+            Test.@test only(capped_plan.steps).command.exec[end - 2] == "128"
             Test.@test !ispath(out_dir)
         end
     end
@@ -342,6 +567,71 @@ Test.@testset "Autocycler wrapper" begin
         mktempdir() do temp_dir
             long_reads = joinpath(temp_dir, "long.fastq")
             write(long_reads, "@long\nACGT\n+\nIIII\n")
+            malformed_long_reads = joinpath(temp_dir, "not-fastq.fasta")
+            write(malformed_long_reads, ">long\nACGT\n")
+            cheap_dependency_checks = Ref(0)
+            cheap_runner_calls = Ref(0)
+            cheap_runner = function (step::NamedTuple)
+                cheap_runner_calls[] += 1
+                return nothing
+            end
+
+            blank_output_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    malformed_long_reads,
+                    "   ";
+                    dependency_checker = () -> begin
+                        cheap_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = cheap_runner,
+                )
+            end
+            Test.@test blank_output_error isa ArgumentError
+            Test.@test occursin(
+                "non-blank path",
+                sprint(showerror, blank_output_error),
+            )
+
+            blocking_ancestor = joinpath(temp_dir, "blocking-ancestor")
+            write(blocking_ancestor, "not a directory\n")
+            ancestor_output_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    malformed_long_reads,
+                    joinpath(blocking_ancestor, "nested", "results");
+                    dependency_checker = () -> begin
+                        cheap_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = cheap_runner,
+                )
+            end
+            Test.@test ancestor_output_error isa ArgumentError
+            Test.@test occursin(
+                "non-directory existing ancestor",
+                sprint(showerror, ancestor_output_error),
+            )
+
+            cheap_parameter_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    malformed_long_reads,
+                    joinpath(temp_dir, "invalid-parameters");
+                    threads = 0,
+                    dependency_checker = () -> begin
+                        cheap_dependency_checks[] += 1
+                        return nothing
+                    end,
+                    runner = cheap_runner,
+                )
+            end
+            Test.@test cheap_parameter_error isa ArgumentError
+            Test.@test occursin(
+                "threads must be positive",
+                sprint(showerror, cheap_parameter_error),
+            )
+            Test.@test cheap_dependency_checks[] == 0
+            Test.@test cheap_runner_calls[] == 0
+
             nonempty_out_dir = joinpath(temp_dir, "nonempty")
             mkpath(nonempty_out_dir)
             write(joinpath(nonempty_out_dir, "owned.txt"), "keep\n")
@@ -440,6 +730,18 @@ Test.@testset "Autocycler wrapper" begin
             "workflow command synthetic failed",
             sprint(showerror, process_error),
         )
+        Test.@test occursin(
+            "content-addressed environment",
+            sprint(showerror, process_error),
+        )
+        Test.@test occursin(
+            "remove it manually before reinstalling",
+            sprint(showerror, process_error),
+        )
+        Test.@test !occursin(
+            "install_autocycler(force=true)",
+            sprint(showerror, process_error),
+        )
     end
 
     Test.@testset "Autocycler returns authoritative FASTA and GFA" begin
@@ -471,6 +773,58 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test read(result.graph, String) ==
                        "H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\tdp:f:20.0\n"
             Test.@test result.outdir == abspath(joinpath(temp_dir, "autocycler-run"))
+            Test.@test result.requested_threads == 4
+            Test.@test result.autocycler_assembly_threads == 4
+
+            malformed_fasta_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    fasta_path = only(filter(
+                        path -> endswith(path, ".fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(fasta_path, "not FASTA\n")
+                end
+                return nothing
+            end
+            malformed_fasta_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "malformed-fasta");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = malformed_fasta_runner,
+                )
+            end
+            Test.@test malformed_fasta_error isa ErrorException
+            Test.@test occursin(
+                "not valid FASTA",
+                sprint(showerror, malformed_fasta_error),
+            )
+
+            malformed_gfa_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    gfa_path = only(filter(
+                        path -> endswith(path, ".gfa"),
+                        step.expected_outputs,
+                    ))
+                    write(gfa_path, "not GFA\n")
+                end
+                return nothing
+            end
+            malformed_gfa_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "malformed-gfa");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = malformed_gfa_runner,
+                )
+            end
+            Test.@test malformed_gfa_error isa ErrorException
+            Test.@test occursin(
+                "no sequence-bearing GFA segments",
+                sprint(showerror, malformed_gfa_error),
+            )
         end
     end
 
@@ -538,6 +892,24 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test !("--careful" in noncareful_plan.steps[5].command.exec)
             Test.@test "--careful" in noncareful_plan.steps[6].command.exec
             Test.@test !ispath(out_dir)
+
+            requested_polishing_plan = Mycelia._autocycler_polishing_command_plan(
+                assembly,
+                short_reads_1,
+                short_reads_2,
+                out_dir;
+                threads = 256,
+                conda_runner = "/test/conda",
+            )
+            requested_bwa_arguments = requested_polishing_plan.steps[2].command.exec
+            requested_bwa_threads = findfirst(==("-t"), requested_bwa_arguments)
+            Test.@test requested_bwa_arguments[requested_bwa_threads + 1] == "256"
+            requested_pypolca_arguments =
+                requested_polishing_plan.steps[6].command.exec
+            requested_pypolca_threads =
+                findfirst(==("-t"), requested_pypolca_arguments)
+            Test.@test requested_pypolca_arguments[requested_pypolca_threads + 1] ==
+                       "256"
         end
     end
 
@@ -575,6 +947,9 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.assembly != result.polypolish_assembly
             Test.@test result.toolchain === nothing
             Test.@test isempty(result.intermediates)
+            Test.@test result.requested_threads == 4
+            Test.@test result.autocycler_assembly_threads == 4
+            Test.@test result.polishing_threads == 4
             Test.@test !any(isfile, String[
                 "$(result.autocycler_assembly).$(extension)" for
                 extension in ("amb", "ann", "bwt", "pac", "sa")
@@ -591,6 +966,79 @@ Test.@testset "Autocycler wrapper" begin
             )
             Test.@test length(retained.intermediates) == 9
             Test.@test all(isfile, retained.intermediates)
+
+            cleanup_attempts = String[]
+            cleanup_failure_path = Ref("")
+            cleanup_remover = function (path::AbstractString)
+                normalized_path = String(path)
+                push!(cleanup_attempts, normalized_path)
+                if endswith(normalized_path, "filtered_1.sam")
+                    cleanup_failure_path[] = normalized_path
+                    throw(ErrorException("synthetic cleanup failure"))
+                end
+                rm(normalized_path; force = true)
+                return nothing
+            end
+            cleanup_result = Test.@test_logs (
+                :warn,
+                r"Autocycler could not remove a polishing intermediate",
+            ) min_level=Logging.Warn match_mode=:any begin
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "cleanup-failure-run");
+                    threads = 256,
+                    dependency_checker = () -> nothing,
+                    runner = _autocycler_test_runner!,
+                    intermediate_remover = cleanup_remover,
+                )
+            end
+            expected_cleanup_plan = Mycelia._autocycler_polishing_command_plan(
+                cleanup_result.autocycler_assembly,
+                short_reads_1,
+                short_reads_2,
+                cleanup_result.outdir;
+                threads = 256,
+            )
+            Test.@test cleanup_attempts == expected_cleanup_plan.intermediate_files
+            Test.@test cleanup_result.intermediates == [cleanup_failure_path[]]
+            Test.@test isfile(cleanup_failure_path[])
+            Test.@test all(
+                path -> path == cleanup_failure_path[] || !ispath(path),
+                expected_cleanup_plan.intermediate_files,
+            )
+            Test.@test isfile(cleanup_result.assembly)
+            Test.@test cleanup_result.requested_threads == 256
+            Test.@test cleanup_result.autocycler_assembly_threads == 128
+            Test.@test cleanup_result.polishing_threads == 256
+
+            malformed_final_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :pypolca
+                    final_fasta = only(filter(
+                        path -> endswith(path, "_corrected.fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(final_fasta, "not FASTA\n")
+                end
+                return nothing
+            end
+            malformed_final_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "malformed-polished-fasta");
+                    dependency_checker = () -> nothing,
+                    runner = malformed_final_runner,
+                )
+            end
+            Test.@test malformed_final_error isa ErrorException
+            Test.@test occursin(
+                "not valid FASTA",
+                sprint(showerror, malformed_final_error),
+            )
         end
     end
 
@@ -649,6 +1097,91 @@ Test.@testset "Autocycler wrapper" begin
                 Test.@test isfile(polishing_plan.assembly)
                 Test.@test isfile(polishing_plan.pypolca_report)
             end
+        end
+    end
+
+    Test.@testset "Polished preflight rejects output hazards and input aliases" begin
+        mktempdir() do temp_dir
+            short_reads_1 = joinpath(temp_dir, "R1.fastq")
+            short_reads_2 = joinpath(temp_dir, "R2.fastq")
+            write(short_reads_1, "not FASTQ R1\n")
+            write(short_reads_2, "not FASTQ R2\n")
+
+            dependency_checks = Ref(0)
+            runner_calls = Ref(0)
+            dependency_checker = function ()
+                dependency_checks[] += 1
+                return nothing
+            end
+            runner = function (step::NamedTuple)
+                runner_calls[] += 1
+                return nothing
+            end
+
+            blank_output_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    short_reads_1,
+                    short_reads_1,
+                    short_reads_2,
+                    "   ";
+                    dependency_checker,
+                    runner,
+                )
+            end
+            Test.@test blank_output_error isa ArgumentError
+            Test.@test occursin(
+                "non-blank path",
+                sprint(showerror, blank_output_error),
+            )
+
+            blocking_ancestor = joinpath(temp_dir, "blocking-output-ancestor")
+            write(blocking_ancestor, "not a directory\n")
+            ancestor_output_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    short_reads_1,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(blocking_ancestor, "nested", "results");
+                    dependency_checker,
+                    runner,
+                )
+            end
+            Test.@test ancestor_output_error isa ArgumentError
+            Test.@test occursin(
+                "non-directory existing ancestor",
+                sprint(showerror, ancestor_output_error),
+            )
+
+            symlink_long_reads = joinpath(temp_dir, "long-symlink.fastq")
+            hardlink_long_reads = joinpath(temp_dir, "long-hardlink.fastq")
+            symlink(short_reads_2, symlink_long_reads)
+            Base.Filesystem.hardlink(short_reads_1, hardlink_long_reads)
+            aliased_long_reads = (
+                exact = short_reads_1,
+                symlink = symlink_long_reads,
+                hardlink = hardlink_long_reads,
+            )
+            for (alias_type, long_reads) in pairs(aliased_long_reads)
+                out_dir = joinpath(temp_dir, "$(alias_type)-alias-should-not-run")
+                alias_error = _autocycler_test_error() do
+                    Mycelia._run_autocycler_polished(
+                        long_reads,
+                        short_reads_1,
+                        short_reads_2,
+                        out_dir;
+                        dependency_checker,
+                        runner,
+                    )
+                end
+                Test.@test alias_error isa ArgumentError
+                Test.@test occursin(
+                    "physically distinct",
+                    sprint(showerror, alias_error),
+                )
+                Test.@test !ispath(out_dir)
+            end
+            Test.@test dependency_checks[] == 0
+            Test.@test runner_calls[] == 0
         end
     end
 
