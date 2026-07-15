@@ -2543,6 +2543,40 @@ struct _CorrectedReadSet
     path::String
     count::Int
     technology::Symbol
+    provenance::Dict{String, Any}
+end
+
+function _unreported_correction_provenance(
+        technology::Symbol,
+)::Dict{String, Any}
+    availability = Dict{String, Bool}(
+        "knobs" => false,
+        "max_k" => false,
+        "indel_params" => false,
+        "substitution_error_rate" => false,
+    )
+    return Dict{String, Any}(
+        "status" => "unavailable",
+        "technology" => String(technology),
+        "availability" => availability,
+        "knobs" => nothing,
+        "max_k" => nothing,
+        "indel_params" => nothing,
+        "substitution_error_rate" => nothing,
+    )
+end
+
+function _CorrectedReadSet(
+        path::AbstractString,
+        count::Int,
+        technology::Symbol,
+)::_CorrectedReadSet
+    return _CorrectedReadSet(
+        String(path),
+        count,
+        technology,
+        _unreported_correction_provenance(technology),
+    )
 end
 
 struct _CorrectedPairedShortLong
@@ -3051,6 +3085,45 @@ function _workflow_path_entry_exists(path::AbstractString)::Bool
     return ispath(path) || islink(path)
 end
 
+const _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS = 24 * 60 * 60
+
+function _multi_input_workflow_lock_path(
+        workflow_root::AbstractString,
+)::String
+    # Keep the claim adjacent: the workflow root must remain empty before use,
+    # and assembler child directories must not contend on the high-level lock.
+    # Canonicalizing the existing ancestor collapses symlink aliases onto one
+    # interprocess claim even when the final workflow directory is still absent.
+    normalized_root = _canonical_planned_workflow_path(workflow_root)
+    return joinpath(
+        dirname(normalized_root),
+        ".$(basename(normalized_root)).mycelia-hybrid.lock",
+    )
+end
+
+function _with_multi_input_workflow_lock(
+        action::Function,
+        lock_path::AbstractString,
+)::Any
+    normalized_lock_path = abspath(lock_path)
+    mkpath(dirname(normalized_lock_path))
+    stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS
+    lock_handle = Mycelia.FileWatching.Pidfile.trymkpidlock(
+        normalized_lock_path;
+        stale_age,
+        refresh = stale_age / 2,
+    )
+    lock_handle === false && throw(ArgumentError(
+        "Persistent multi-input output_dir is already reserved by another " *
+        "workflow: $(normalized_lock_path)",
+    ))
+    try
+        return action()
+    finally
+        Base.close(lock_handle)
+    end
+end
+
 function _nearest_existing_workflow_ancestor(path::AbstractString)::String
     ancestor = String(path)
     while !_workflow_path_entry_exists(ancestor)
@@ -3061,26 +3134,43 @@ function _nearest_existing_workflow_ancestor(path::AbstractString)::String
     return ancestor
 end
 
+function _canonical_planned_workflow_path(
+        path::AbstractString,
+)::String
+    normalized_path = abspath(path)
+    ancestor = _nearest_existing_workflow_ancestor(normalized_path)
+    isdir(ancestor) || throw(ArgumentError(
+        "output_dir has a non-directory ancestor: $(ancestor)",
+    ))
+    canonical_ancestor = realpath(ancestor)
+    relative_path = relpath(normalized_path, ancestor)
+    return relative_path == "." ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, relative_path))
+end
+
 function _validate_workflow_root(
         output_dir::Union{Nothing, String},
 )::NamedTuple
     if output_dir === nothing
         return (; path = nothing, ephemeral = true)
     end
-    path = abspath(output_dir)
-    if _workflow_path_entry_exists(path) && !isdir(path)
-        throw(ArgumentError("output_dir exists but is not a directory: $(path)"))
-    end
-    if isdir(path) && !isempty(readdir(path))
+    requested_path = abspath(output_dir)
+    if _workflow_path_entry_exists(requested_path) && !isdir(requested_path)
         throw(ArgumentError(
-            "output_dir must be absent or empty to prevent stale hybrid " *
-            "assembly reuse: $(path)",
+            "output_dir exists but is not a directory: $(requested_path)",
         ))
     end
-    ancestor = _nearest_existing_workflow_ancestor(path)
+    if isdir(requested_path) && !isempty(readdir(requested_path))
+        throw(ArgumentError(
+            "output_dir must be absent or empty to prevent stale hybrid " *
+            "assembly reuse: $(requested_path)",
+        ))
+    end
+    ancestor = _nearest_existing_workflow_ancestor(requested_path)
     isdir(ancestor) || throw(ArgumentError(
         "output_dir has a non-directory ancestor: $(ancestor)",
     ))
+    path = _canonical_planned_workflow_path(requested_path)
     return (; path, ephemeral = false)
 end
 
@@ -3166,22 +3256,62 @@ function _correct_read_set!(
         "$(label) correction reported $(corrected_count) corrected reads, but " *
         "$(corrected_fastq) contains $(observed_count) FASTQ records.",
     )
-    return _CorrectedReadSet(corrected_fastq, corrected_count, technology)
+    provenance = _correction_stage_provenance(stage, technology)
+    return _CorrectedReadSet(
+        corrected_fastq,
+        corrected_count,
+        technology,
+        provenance,
+    )
 end
 
 function _cleanup_multi_input_stages!(
-        cleanup_tokens::Vector{_Stage1CleanupToken},
-)::Nothing
+        cleanup_tokens::Vector{_Stage1CleanupToken};
+        remover::Function = path -> rm(path; force = true),
+)::Vector{String}
+    retained_files = String[]
     for token in cleanup_tokens
         if token.ephemeral
+            cleanup_failed = false
             try
-                rm(token.corrected_fastq; force = true)
+                remover(token.corrected_fastq)
             catch cleanup_error
+                cleanup_error isa InterruptException && rethrow()
+                cleanup_failed = true
                 @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
+            end
+            if _workflow_path_entry_exists(token.corrected_fastq)
+                push!(retained_files, token.corrected_fastq)
+                cleanup_failed || @warn(
+                    "multi-input assembly: corrected FASTQ cleanup retained path",
+                    corrected_fastq = token.corrected_fastq,
+                )
             end
         end
     end
-    return nothing
+    return unique!(retained_files)
+end
+
+function _cleanup_multi_input_root!(
+        workflow_root::AbstractString;
+        remover::Function = path -> rm(path; recursive = true, force = true),
+)::Bool
+    cleanup_failed = false
+    try
+        remover(workflow_root)
+    catch cleanup_error
+        cleanup_error isa InterruptException && rethrow()
+        cleanup_failed = true
+        @warn "multi-input assembly: ephemeral output cleanup failed" cleanup_error
+    end
+    retained = _workflow_path_entry_exists(workflow_root)
+    if retained && !cleanup_failed
+        @warn(
+            "multi-input assembly: ephemeral output cleanup retained root",
+            workflow_root = String(workflow_root),
+        )
+    end
+    return retained
 end
 
 """
@@ -3270,8 +3400,63 @@ function _normalize_provenance_value(
     return normalized
 end
 
+function _normalize_correction_parameter(value::Any)::Any
+    value === nothing && return nothing
+    if value isa NamedTuple || value isa AbstractDict || value isa AbstractVector
+        return _normalize_provenance_value(value)
+    end
+    fields = fieldnames(typeof(value))
+    isempty(fields) && return _normalize_provenance_value(value)
+    return Dict{String, Any}(
+        String(field) => _normalize_provenance_value(getfield(value, field))
+        for field in fields
+    )
+end
+
 function _normalize_provenance_value(value::Any)::Any
     return value
+end
+
+function _correction_stage_provenance(
+        stage::NamedTuple,
+        technology::Symbol,
+)::Dict{String, Any}
+    fields = (
+        :knobs,
+        :max_k,
+        :indel_params,
+        :substitution_error_rate,
+    )
+    availability = Dict{String, Bool}(
+        String(field) => hasproperty(stage, field) for field in fields
+    )
+    available_count = count(values(availability))
+    status = if available_count == length(fields)
+        "reported"
+    elseif available_count == 0
+        "unavailable"
+    else
+        "partial"
+    end
+    provenance = Dict{String, Any}(
+        "status" => status,
+        "technology" => String(technology),
+        "availability" => availability,
+    )
+    for field in fields
+        value = if hasproperty(stage, field)
+            reported_value = getproperty(stage, field)
+            if field == :indel_params
+                _normalize_correction_parameter(reported_value)
+            else
+                _normalize_provenance_value(reported_value)
+            end
+        else
+            nothing
+        end
+        provenance[String(field)] = value
+    end
+    return provenance
 end
 
 function _normalized_workflow_settings(
@@ -3405,10 +3590,13 @@ function _wrap_multi_input_assembly(
         short_read_tech::Union{Nothing, Symbol},
         long_read_tech::Union{Nothing, Symbol},
         correction_options::NamedTuple,
+        correction_provenance::Dict{String, Any},
         output_dir::Union{Nothing, String},
         polishers::Vector{String},
         workflow_settings::Dict{String, Any},
         input_technologies::Dict{String, String},
+        retained_cleanup_files::Vector{String},
+        retained_cleanup_roots::Vector{String},
 )::AssemblyResult
     assembly_path = _primary_assembly_path(result)
     records = _read_external_fasta(assembly_path)
@@ -3446,6 +3634,9 @@ function _wrap_multi_input_assembly(
         "corrected_read_counts" => corrected_counts,
         "corrected_fastqs" => corrected_paths,
         "correction_options" => _normalize_provenance_value(correction_options),
+        "correction_provenance" => correction_provenance,
+        "retained_cleanup_files" => retained_cleanup_files,
+        "retained_cleanup_roots" => retained_cleanup_roots,
         "raw_graph" => output_dir === nothing ? nothing : graph_path,
         "output_dir" => output_dir,
         "num_contigs" => length(contigs),
@@ -3466,6 +3657,13 @@ function _assemble_paired_short_long(
         workflow::Symbol;
         correction_runner::Function = _run_multi_input_stage1_correction,
         assembler_runner::Function,
+        workflow_lock_runner::Function = _with_multi_input_workflow_lock,
+        corrected_fastq_remover::Function = path -> rm(path; force = true),
+        workflow_root_remover::Function = path -> rm(
+            path;
+            recursive = true,
+            force = true,
+        ),
 )::AssemblyResult
     _validate_distinct_read_source_objects(
         short_reads[1],
@@ -3482,114 +3680,150 @@ function _assemble_paired_short_long(
         ))
     end
     root_plan = _validate_workflow_root(config.output_dir)
-    paired_count = _validate_paired_reads(short_r1, short_r2, "input")
-    long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
-    long_read_correction_technology = _long_read_correction_technology(config)
-    root = _prepare_workflow_root(root_plan)
-    cleanup_tokens = _Stage1CleanupToken[]
-    try
-        corrected_r1 = _correct_read_set!(
-            cleanup_tokens,
-            short_r1,
-            config.short_read_tech,
-            :short_r1,
-            config.correction_options,
-            root.path,
-            !root.ephemeral,
-            correction_runner,
-        )
-        corrected_r2 = _correct_read_set!(
-            cleanup_tokens,
-            short_r2,
-            config.short_read_tech,
-            :short_r2,
-            config.correction_options,
-            root.path,
-            !root.ephemeral,
-            correction_runner,
-        )
-        corrected_long = _correct_read_set!(
-            cleanup_tokens,
-            prepared_long_reads,
-            long_read_correction_technology,
-            :long_reads,
-            config.correction_options,
-            root.path,
-            !root.ephemeral,
-            correction_runner,
-        )
-        corrected_pair_count = _validate_corrected_pair_preserved(
-            short_r1,
-            short_r2,
-            corrected_r1,
-            corrected_r2,
-            paired_count,
-        )
-        corrected_long_count = _validate_corrected_identifiers_preserved(
-            prepared_long_reads,
-            corrected_long,
-            "long_reads",
-        )
-        corrected_long_count == long_count || error(
-            "Corrected long-read count diverged from the validated input count.",
-        )
-        inputs = _CorrectedPairedShortLong(
-            corrected_r1,
-            corrected_r2,
-            corrected_long,
-        )
-        tool_result = assembler_runner(
-            inputs,
-            joinpath(root.path, "assembler_$(workflow)"),
-        )
-        corrected_paths = if root.ephemeral
-            nothing
-        else
-            Dict(
-                "short_r1" => corrected_r1.path,
-                "short_r2" => corrected_r2.path,
-                "long_reads" => corrected_long.path,
+    function run_reserved_workflow(
+            reserved_root_plan::NamedTuple,
+    )::AssemblyResult
+        paired_count = _validate_paired_reads(short_r1, short_r2, "input")
+        long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+        long_read_correction_technology = _long_read_correction_technology(config)
+        root = _prepare_workflow_root(reserved_root_plan)
+        cleanup_tokens = _Stage1CleanupToken[]
+        # AssemblyResult retains these vectors by reference. The finally block
+        # fills them only after all best-effort cleanup attempts have completed.
+        retained_cleanup_files = String[]
+        retained_cleanup_roots = String[]
+        try
+            corrected_r1 = _correct_read_set!(
+                cleanup_tokens,
+                short_r1,
+                config.short_read_tech,
+                :short_r1,
+                config.correction_options,
+                root.path,
+                !root.ephemeral,
+                correction_runner,
+            )
+            corrected_r2 = _correct_read_set!(
+                cleanup_tokens,
+                short_r2,
+                config.short_read_tech,
+                :short_r2,
+                config.correction_options,
+                root.path,
+                !root.ephemeral,
+                correction_runner,
+            )
+            corrected_long = _correct_read_set!(
+                cleanup_tokens,
+                prepared_long_reads,
+                long_read_correction_technology,
+                :long_reads,
+                config.correction_options,
+                root.path,
+                !root.ephemeral,
+                correction_runner,
+            )
+            corrected_pair_count = _validate_corrected_pair_preserved(
+                short_r1,
+                short_r2,
+                corrected_r1,
+                corrected_r2,
+                paired_count,
+            )
+            corrected_long_count = _validate_corrected_identifiers_preserved(
+                prepared_long_reads,
+                corrected_long,
+                "long_reads",
+            )
+            corrected_long_count == long_count || error(
+                "Corrected long-read count diverged from the validated input count.",
+            )
+            inputs = _CorrectedPairedShortLong(
+                corrected_r1,
+                corrected_r2,
+                corrected_long,
+            )
+            tool_result = assembler_runner(
+                inputs,
+                joinpath(root.path, "assembler_$(workflow)"),
+            )
+            corrected_paths = if root.ephemeral
+                nothing
+            else
+                Dict(
+                    "short_r1" => corrected_r1.path,
+                    "short_r2" => corrected_r2.path,
+                    "long_reads" => corrected_long.path,
+                )
+            end
+            polishers = if workflow == :autocycler_polished
+                polypolish = config.polypolish_careful ?
+                             "polypolish-careful" : "polypolish"
+                [polypolish, "pypolca-careful"]
+            else
+                String[]
+            end
+            persistent_output_dir = root.ephemeral ? nothing : root.path
+            correction_provenance = Dict{String, Any}(
+                "short_r1" => corrected_r1.provenance,
+                "short_r2" => corrected_r2.provenance,
+                "long_reads" => corrected_long.provenance,
+            )
+            return _wrap_multi_input_assembly(
+                tool_result,
+                workflow;
+                input_counts = Dict(
+                    "short_r1" => paired_count,
+                    "short_r2" => paired_count,
+                    "long_reads" => long_count,
+                ),
+                corrected_counts = Dict(
+                    "short_r1" => corrected_pair_count,
+                    "short_r2" => corrected_pair_count,
+                    "long_reads" => corrected_long.count,
+                ),
+                corrected_paths = corrected_paths,
+                short_read_tech = config.short_read_tech,
+                long_read_tech = long_read_correction_technology,
+                correction_options = config.correction_options,
+                correction_provenance = correction_provenance,
+                output_dir = persistent_output_dir,
+                polishers = polishers,
+                workflow_settings = _normalized_workflow_settings(config),
+                input_technologies = _paired_input_technologies(config),
+                retained_cleanup_files = retained_cleanup_files,
+                retained_cleanup_roots = retained_cleanup_roots,
+            )
+        finally
+            append!(
+                retained_cleanup_files,
+                _cleanup_multi_input_stages!(
+                    cleanup_tokens;
+                    remover = corrected_fastq_remover,
+                ),
+            )
+            if root.ephemeral && _cleanup_multi_input_root!(
+                    root.path;
+                    remover = workflow_root_remover,
+            )
+                push!(retained_cleanup_roots, root.path)
+            end
+            # A failed per-file removal may still be recovered by recursive root
+            # cleanup; report only paths that exist after the full cleanup chain.
+            filter!(
+                _workflow_path_entry_exists,
+                retained_cleanup_files,
             )
         end
-        polishers = if workflow == :autocycler_polished
-            polypolish = config.polypolish_careful ?
-                         "polypolish-careful" : "polypolish"
-            [polypolish, "pypolca-careful"]
-        else
-            String[]
-        end
-        persistent_output_dir = root.ephemeral ? nothing : root.path
-        return _wrap_multi_input_assembly(
-            tool_result,
-            workflow;
-            input_counts = Dict(
-                "short_r1" => paired_count,
-                "short_r2" => paired_count,
-                "long_reads" => long_count,
-            ),
-            corrected_counts = Dict(
-                "short_r1" => corrected_pair_count,
-                "short_r2" => corrected_pair_count,
-                "long_reads" => corrected_long.count,
-            ),
-            corrected_paths = corrected_paths,
-            short_read_tech = config.short_read_tech,
-            long_read_tech = long_read_correction_technology,
-            correction_options = config.correction_options,
-            output_dir = persistent_output_dir,
-            polishers = polishers,
-            workflow_settings = _normalized_workflow_settings(config),
-            input_technologies = _paired_input_technologies(config),
-        )
-    finally
-        _cleanup_multi_input_stages!(cleanup_tokens)
-        if root.ephemeral
-            try
-                rm(root.path; recursive = true, force = true)
-            catch cleanup_error
-                @warn "multi-input assembly: ephemeral output cleanup failed" cleanup_error
-            end
-        end
+    end
+
+    if root_plan.ephemeral
+        return run_reserved_workflow(root_plan)
+    end
+    lock_path = _multi_input_workflow_lock_path(String(root_plan.path))
+    return workflow_lock_runner(lock_path) do
+        reserved_root_plan = _validate_workflow_root(String(root_plan.path))
+        return run_reserved_workflow(reserved_root_plan)
     end
 end
 

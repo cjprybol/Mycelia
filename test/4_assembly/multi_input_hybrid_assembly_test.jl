@@ -108,6 +108,48 @@ function multi_input_fake_correction_runner(
     return correction_runner
 end
 
+function multi_input_reported_correction_runner(
+        calls::Vector{NamedTuple},
+)::Function
+    base_runner = multi_input_fake_correction_runner(calls)
+    function correction_runner(
+            reads::Any,
+            config::Mycelia.Rhizomorph.AssemblyConfig,
+    )::NamedTuple
+        stage = base_runner(reads, config)
+        technology = config.sequencing_tech
+        indel_params = if technology in (:nanopore, :pacbio_clr)
+            Mycelia.IndelDecodeParams(
+                0.1,
+                0.4,
+                0.4,
+                0.2,
+                0.2,
+                3,
+                4,
+                64,
+            )
+        else
+            nothing
+        end
+        max_k = config.k === nothing ? 13 : max(config.k, 13)
+        substitution_error_rate = technology == :pacbio_hifi ? 0.001 : nothing
+        return merge(
+            stage,
+            (;
+                knobs = (
+                    strategy = config.strategy,
+                    skip_solid = technology != :nanopore,
+                ),
+                max_k,
+                indel_params,
+                substitution_error_rate,
+            ),
+        )
+    end
+    return correction_runner
+end
+
 function multi_input_write_fasta(
         path::AbstractString;
         records::Vector{Pair{String, String}} = ["contig_1" => "ACGTACGT"],
@@ -364,6 +406,124 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             end
             Test.@test correction_calls[] == 0
             Test.@test assembler_calls[] == 0
+        end
+    end
+
+    Test.@testset "persistent root reservation is alias-safe" begin
+        mktempdir() do temp_dir
+            physical_parent = joinpath(temp_dir, "physical")
+            mkpath(physical_parent)
+            alias_parent = joinpath(temp_dir, "alias")
+            symlink(physical_parent, alias_parent)
+            physical_output = joinpath(physical_parent, "hybrid-output")
+            alias_output = joinpath(alias_parent, "hybrid-output")
+            physical_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                physical_output,
+            )
+            alias_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                alias_output,
+            )
+            Test.@test physical_lock == alias_lock
+            Test.@test dirname(physical_lock) == physical_parent
+            Test.@test !startswith(physical_lock, "$(physical_output)/")
+
+            failing_lock = Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                joinpath(physical_parent, "failing-workflow"),
+            )
+            test_throws_message(ErrorException, "synthetic locked failure") do
+                Mycelia.Rhizomorph._with_multi_input_workflow_lock(failing_lock) do
+                    error("synthetic locked failure")
+                end
+            end
+            Test.@test !ispath(failing_lock)
+
+            first_calls = NamedTuple[]
+            first_base_runner = multi_input_fake_correction_runner(first_calls)
+            correction_entered = Channel{Nothing}(1)
+            release_correction = Channel{Nothing}(1)
+            first_call_blocked = Ref(false)
+            function blocking_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                if !first_call_blocked[]
+                    first_call_blocked[] = true
+                    put!(correction_entered, nothing)
+                    take!(release_correction)
+                end
+                return first_base_runner(reads, config)
+            end
+            function first_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                Test.@test isfile(physical_lock)
+                Test.@test dirname(String(outdir)) == physical_output
+                Test.@test String(outdir) != physical_lock
+                return multi_input_fake_assembler_result(outdir)
+            end
+            first_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = physical_output,
+            )
+            first_task = @async Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                first_config,
+                :unicycler;
+                correction_runner = blocking_correction_runner,
+                assembler_runner = first_assembler_runner,
+            )
+            wait_status = Base.timedwait(
+                () -> isready(correction_entered) || istaskdone(first_task),
+                30.0,
+            )
+            Test.@test wait_status == :ok
+            if !isready(correction_entered)
+                fetch(first_task)
+            end
+            take!(correction_entered)
+
+            second_correction_calls = Ref(0)
+            second_assembler_calls = Ref(0)
+            function second_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                second_correction_calls[] += 1
+                error("second correction must not run")
+            end
+            function second_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                second_assembler_calls[] += 1
+                error("second assembler must not run")
+            end
+            second_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = alias_output,
+            )
+            try
+                test_throws_message(ArgumentError, "already reserved") do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        second_config,
+                        :unicycler;
+                        correction_runner = second_correction_runner,
+                        assembler_runner = second_assembler_runner,
+                    )
+                end
+            finally
+                put!(release_correction, nothing)
+            end
+            first_result = fetch(first_task)
+            Test.@test length(first_calls) == 3
+            Test.@test second_correction_calls[] == 0
+            Test.@test second_assembler_calls[] == 0
+            Test.@test first_result.assembly_stats["output_dir"] == physical_output
+            Test.@test isempty(first_result.assembly_stats["retained_cleanup_files"])
+            Test.@test isempty(first_result.assembly_stats["retained_cleanup_roots"])
+            Test.@test !ispath(physical_lock)
         end
     end
 
@@ -652,6 +812,32 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Mycelia.Rhizomorph._cleanup_multi_input_stages!(cleanup_tokens)
         Test.@test !isfile(counted_fastq)
 
+        interrupted_fastq = multi_input_write_fastq(
+            tempname() * ".fastq",
+            MULTI_INPUT_LONG,
+        )
+        interrupted_tokens = [
+            Mycelia.Rhizomorph._Stage1CleanupToken(interrupted_fastq, true),
+        ]
+        Test.@test_throws InterruptException begin
+            Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                interrupted_tokens;
+                remover = path -> throw(InterruptException()),
+            )
+        end
+        Test.@test isfile(interrupted_fastq)
+        rm(interrupted_fastq; force = true)
+
+        interrupted_root = mktempdir()
+        Test.@test_throws InterruptException begin
+            Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                interrupted_root;
+                remover = path -> throw(InterruptException()),
+            )
+        end
+        Test.@test isdir(interrupted_root)
+        rm(interrupted_root; recursive = true, force = true)
+
         valid_fastq = multi_input_write_fastq(
             tempname() * ".fastq",
             MULTI_INPUT_LONG,
@@ -795,9 +981,88 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             "k" => 17,
             "strategy" => "scalable",
         )
+        correction_provenance = result.assembly_stats["correction_provenance"]
+        Test.@test Set(keys(correction_provenance)) ==
+                   Set(["short_r1", "short_r2", "long_reads"])
+        expected_technologies = Dict(
+            "short_r1" => "illumina",
+            "short_r2" => "illumina",
+            "long_reads" => "nanopore",
+        )
+        for (label, technology) in expected_technologies
+            provenance = correction_provenance[label]
+            Test.@test provenance["status"] == "unavailable"
+            Test.@test provenance["technology"] == technology
+            Test.@test all(
+                available -> !available,
+                values(provenance["availability"]),
+            )
+            for field in (
+                    "knobs",
+                    "max_k",
+                    "indel_params",
+                    "substitution_error_rate",
+            )
+                Test.@test provenance[field] === nothing
+            end
+        end
+        Test.@test isempty(result.assembly_stats["retained_cleanup_files"])
+        Test.@test isempty(result.assembly_stats["retained_cleanup_roots"])
         Test.@test !result.gfa_compatible
         Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
         Test.@test !isdir(dirname(captured_outdir[]))
+    end
+
+    Test.@testset "effective per-read-set correction provenance" begin
+        correction_calls = NamedTuple[]
+        config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+            short_read_tech = :illumina,
+            long_read_tech = :nanopore,
+            correction_options = (; k = 17, strategy = :scalable),
+        )
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            config,
+            :unicycler;
+            correction_runner = multi_input_reported_correction_runner(
+                correction_calls,
+            ),
+            assembler_runner = (inputs, outdir) ->
+                multi_input_fake_assembler_result(outdir),
+        )
+        provenance = result.assembly_stats["correction_provenance"]
+        Test.@test all(
+            read_set -> read_set["status"] == "reported",
+            values(provenance),
+        )
+        Test.@test all(
+            read_set -> all(values(read_set["availability"])),
+            values(provenance),
+        )
+        Test.@test provenance["short_r1"]["knobs"] == Dict(
+            "strategy" => "scalable",
+            "skip_solid" => true,
+        )
+        Test.@test provenance["short_r2"]["max_k"] == 17
+        Test.@test provenance["short_r1"]["indel_params"] === nothing
+        Test.@test provenance["long_reads"]["technology"] == "nanopore"
+        Test.@test provenance["long_reads"]["knobs"]["skip_solid"] == false
+        Test.@test provenance["long_reads"]["substitution_error_rate"] === nothing
+        Test.@test provenance["long_reads"]["indel_params"] == Dict(
+            "base_error_rate" => 0.1,
+            "insertion_fraction" => 0.4,
+            "deletion_fraction" => 0.4,
+            "insertion_extend_probability" => 0.2,
+            "deletion_extend_probability" => 0.2,
+            "deletion_max_run" => 3,
+            "max_insertion_run" => 4,
+            "band_width" => 64,
+        )
+        serialized_provenance = Mycelia.JSON.json(provenance)
+        parsed_provenance = Mycelia.JSON.parse(serialized_provenance)
+        Test.@test parsed_provenance["long_reads"]["indel_params"]["band_width"] == 64
+        Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
     end
 
     Test.@testset "sibling adapters map exact corrected paths" begin
@@ -1012,6 +1277,49 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
         Test.@test !isfile(interrupted_correction_calls[1].corrected_fastq)
     end
 
+    Test.@testset "retained cleanup artifacts are recorded" begin
+        correction_calls = NamedTuple[]
+        correction_runner = multi_input_fake_correction_runner(correction_calls)
+        workflow_root = Ref("")
+        assembler_runner = function (inputs::Any, outdir::AbstractString)
+            workflow_root[] = dirname(String(outdir))
+            return multi_input_fake_assembler_result(outdir)
+        end
+        function selective_corrected_remover(path::AbstractString)::Nothing
+            if path == correction_calls[1].corrected_fastq
+                error("synthetic corrected cleanup failure")
+            end
+            rm(path; force = true)
+            return nothing
+        end
+        function failing_root_remover(path::AbstractString)::Nothing
+            error("synthetic root cleanup failure: $(path)")
+        end
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner,
+            assembler_runner,
+            corrected_fastq_remover = selective_corrected_remover,
+            workflow_root_remover = failing_root_remover,
+        )
+        retained_file = correction_calls[1].corrected_fastq
+        Test.@test result.assembly_stats["retained_cleanup_files"] ==
+                   [retained_file]
+        Test.@test result.assembly_stats["retained_cleanup_roots"] ==
+                   [workflow_root[]]
+        Test.@test isfile(retained_file)
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls[2:3],
+        )
+        Test.@test isdir(workflow_root[])
+        rm(retained_file; force = true)
+        rm(workflow_root[]; recursive = true, force = true)
+    end
+
     Test.@testset "caller-owned artifacts persist" begin
         output_dir = mktempdir()
         correction_calls = NamedTuple[]
@@ -1099,6 +1407,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
             short_read_tech = :illumina,
             long_read_tech = :nanopore,
             correction_options = (; k = 13),
+            correction_provenance = Dict{String, Any}(),
             output_dir = nothing,
             polishers = String[],
             workflow_settings = Dict{String, Any}(
@@ -1110,6 +1419,8 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 "short_r2" => "illumina",
                 "long_reads" => "nanopore",
             ),
+            retained_cleanup_files = String[],
+            retained_cleanup_roots = String[],
         )
         Test.@test wrapped.contig_names == ["alpha", "beta"]
         Test.@test wrapped.contigs == ["ACGT", "TTAA"]
@@ -1137,6 +1448,7 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                 short_read_tech = :illumina,
                 long_read_tech = :nanopore,
                 correction_options = (;),
+                correction_provenance = Dict{String, Any}(),
                 output_dir = nothing,
                 polishers = ["polypolish", "pypolca-careful"],
                 workflow_settings = Dict{String, Any}(
@@ -1148,6 +1460,8 @@ Test.@testset "multi-input hybrid assembly contracts (td-06er)" begin
                     "short_r2" => "illumina",
                     "long_reads" => "nanopore",
                 ),
+                retained_cleanup_files = String[],
+                retained_cleanup_roots = String[],
             )
         end
     end
