@@ -2776,6 +2776,9 @@ struct _ReadIdentity
 end
 
 function _read_identity(record::Any)::_ReadIdentity
+    record isa FASTX.FASTQ.Record || throw(ArgumentError(
+        "Read identifier validation requires FASTQ records.",
+    ))
     return _ReadIdentity(
         String(FASTX.identifier(record)),
         String(FASTX.description(record)),
@@ -3183,6 +3186,8 @@ function _verify_multi_input_source_content_contract(
         short_r1::Any,
         short_r2::Any,
         long_reads::Any,
+        ;
+        change_context::AbstractString = "during independent correction",
 )::Nothing
     observed = _multi_input_source_content_contract(
         short_r1,
@@ -3192,7 +3197,7 @@ function _verify_multi_input_source_content_contract(
     for label in ("short_r1", "short_r2", "long_reads")
         expected[label] == observed[label] && continue
         error(
-            "input $(label) content changed during independent correction; " *
+            "input $(label) content changed $(change_context); " *
             "refusing to run the combined-input assembler.",
         )
     end
@@ -3225,13 +3230,15 @@ end
 function _verify_multi_input_corrected_content_contract(
         expected::Dict{String, Any},
         inputs::_CorrectedPairedShortLong,
+        ;
+        change_context::AbstractString = "during combined-input assembly",
 )::Nothing
     observed = _multi_input_corrected_content_contract(inputs)
     for label in ("short_r1", "short_r2", "long_reads")
         expected[label] == observed[label] && continue
         error(
-            "corrected $(label) FASTQ content changed during combined-input " *
-            "assembly; refusing stale corrected-read provenance.",
+            "corrected $(label) FASTQ content changed $(change_context); " *
+            "refusing stale corrected-read provenance.",
         )
     end
     return nothing
@@ -3553,9 +3560,6 @@ end
 const _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS =
     Mycelia._OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
 
-const _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX =
-    Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX
-
 function _multi_input_workflow_lock_path(
         workflow_root::AbstractString,
 )::String
@@ -3567,27 +3571,6 @@ function _multi_input_workflow_lock_path(
     return Mycelia._output_root_reservation_lock_path_from_canonical(
         normalized_root,
     )
-end
-
-function _multi_input_workflow_lock_is_active(
-        lock_path::AbstractString,
-)::Bool
-    return Mycelia._output_root_reservation_is_active(
-        lock_path;
-        stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS,
-    )
-end
-
-function _multi_input_ancestor_workflow_lock_paths(
-        workflow_root::AbstractString,
-)::Vector{String}
-    return Mycelia._ancestor_output_root_reservation_lock_paths(workflow_root)
-end
-
-function _multi_input_descendant_workflow_lock_paths(
-        workflow_root::AbstractString,
-)::Vector{String}
-    return Mycelia._descendant_output_root_reservation_lock_paths(workflow_root)
 end
 
 function _require_exclusive_multi_input_workflow_domain(
@@ -4812,6 +4795,9 @@ function _assemble_paired_short_long(
         correction_runner::Function = _run_multi_input_stage1_correction,
         assembler_runner::Function,
         workflow_lock_runner::Function = _with_multi_input_workflow_lock,
+        after_source_semantic_validation_hook::Function =
+            (short_r1, short_r2, long_reads) -> nothing,
+        after_corrected_semantic_validation_hook::Function = inputs -> nothing,
         corrected_fastq_remover::Function = path -> rm(path; force = true),
         workflow_root_remover::Function = path -> rm(
             path;
@@ -4831,6 +4817,16 @@ function _assemble_paired_short_long(
         short_r1 = _prepare_read_source(short_reads[1])
         short_r2 = _prepare_read_source(short_reads[2])
         prepared_long_reads = _prepare_read_source(long_reads)
+        source_content_contract = _multi_input_source_content_contract(
+            short_r1,
+            short_r2,
+            prepared_long_reads,
+        )
+        _validate_distinct_read_source_objects(
+            short_reads[1],
+            short_reads[2],
+            long_reads,
+        )
         _validate_distinct_in_memory_read_records(
             short_r1,
             short_r2,
@@ -4855,13 +4851,20 @@ function _assemble_paired_short_long(
             prepared_long_reads,
             "long_reads",
         )
-        source_content_contract = _multi_input_source_content_contract(
+        paired_count = _validate_paired_reads(short_r1, short_r2, "input")
+        long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+        after_source_semantic_validation_hook(
             short_r1,
             short_r2,
             prepared_long_reads,
         )
-        paired_count = _validate_paired_reads(short_r1, short_r2, "input")
-        long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+        _verify_multi_input_source_content_contract(
+            source_content_contract,
+            short_r1,
+            short_r2,
+            prepared_long_reads;
+            change_context = "after input semantic validation",
+        )
         protected_source_paths = String[]
         for read_set in (short_r1, short_r2, prepared_long_reads)
             paths = _read_source_paths(read_set)
@@ -4912,6 +4915,13 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
+            inputs = _CorrectedPairedShortLong(
+                corrected_r1,
+                corrected_r2,
+                corrected_long,
+            )
+            corrected_content_contract =
+                _multi_input_corrected_content_contract(inputs)
             corrected_pair_count = _validate_corrected_pair_preserved(
                 short_r1,
                 short_r2,
@@ -4927,13 +4937,12 @@ function _assemble_paired_short_long(
             corrected_long_count == long_count || error(
                 "Corrected long-read count diverged from the validated input count.",
             )
-            inputs = _CorrectedPairedShortLong(
-                corrected_r1,
-                corrected_r2,
-                corrected_long,
+            after_corrected_semantic_validation_hook(inputs)
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context = "after corrected-read semantic validation",
             )
-            corrected_content_contract =
-                _multi_input_corrected_content_contract(inputs)
             _verify_multi_input_source_content_contract(
                 source_content_contract,
                 short_r1,

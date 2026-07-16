@@ -7,6 +7,8 @@ function nonempty_file(path::AbstractString)
 end
 
 const _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX = ".mycelia-output-root.pid"
+const _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR =
+    ".mycelia-output-root.reservation."
 const _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS = 7 * 24 * 60 * 60
 const _OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK = ReentrantLock()
 const _OUTPUT_ROOT_ALLOWED_ANCESTORS = IdDict{Task, Vector{String}}()
@@ -50,6 +52,41 @@ function _output_root_reservation_lock_path(
     return _output_root_reservation_lock_path_from_canonical(canonical_root)
 end
 
+function _output_root_durable_reservation_path_from_canonical(
+        canonical_root::AbstractString,
+        capability::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    normalized_capability = String(capability)
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", normalized_capability) ||
+        throw(ArgumentError(
+            "Output-root durable reservation capability must contain only " *
+            "letters, digits, period, underscore, or hyphen.",
+        ))
+    reservation_name =
+        ".$(basename(normalized_root))" *
+        "$(_OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR)" *
+        normalized_capability
+    return joinpath(dirname(normalized_root), reservation_name)
+end
+
+function _output_root_durable_reservation_prefix_from_canonical(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    return ".$(basename(normalized_root))" *
+           _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR
+end
+
+function _is_output_root_durable_reservation_path(
+        reservation_path::AbstractString,
+)::Bool
+    return occursin(
+        _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR,
+        basename(String(reservation_path)),
+    )
+end
+
 function _output_root_reservation_is_active(
         lock_path::AbstractString;
         stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
@@ -57,6 +94,11 @@ function _output_root_reservation_is_active(
     stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
     normalized_lock_path = normpath(abspath(String(lock_path)))
     _output_root_path_entry_exists(normalized_lock_path) || return false
+    !endswith(
+        basename(normalized_lock_path),
+        _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX,
+    ) && _is_output_root_durable_reservation_path(normalized_lock_path) &&
+        return true
     lock_handle = try
         FileWatching.Pidfile.trymkpidlock(
             normalized_lock_path;
@@ -75,6 +117,24 @@ function _output_root_reservation_is_active(
     return false
 end
 
+function _same_output_root_reservation_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    parent = dirname(normalized_root)
+    isdir(parent) || return String[]
+    durable_prefix =
+        _output_root_durable_reservation_prefix_from_canonical(normalized_root)
+    reservation_paths = String[
+        _output_root_reservation_lock_path_from_canonical(normalized_root),
+    ]
+    for entry in readdir(parent; join = true)
+        startswith(basename(entry), durable_prefix) || continue
+        push!(reservation_paths, entry)
+    end
+    return sort!(unique!(reservation_paths))
+end
+
 function _ancestor_output_root_reservation_lock_paths(
         workflow_root::AbstractString,
 )::Vector{String}
@@ -82,13 +142,10 @@ function _ancestor_output_root_reservation_lock_paths(
     lock_paths = String[]
     ancestor = dirname(normalized_root)
     while dirname(ancestor) != ancestor
-        push!(
-            lock_paths,
-            _output_root_reservation_lock_path_from_canonical(ancestor),
-        )
+        append!(lock_paths, _same_output_root_reservation_paths(ancestor))
         ancestor = dirname(ancestor)
     end
-    return lock_paths
+    return sort!(unique!(lock_paths))
 end
 
 function _descendant_output_root_reservation_lock_paths(
@@ -103,14 +160,21 @@ function _descendant_output_root_reservation_lock_paths(
             normalized_root;
             follow_symlinks = false,
     )
+        directory_entries = copy(directories)
         filter!(
             child -> !islink(joinpath(directory, child)),
             directories,
         )
-        for file in files
-            startswith(file, ".") || continue
-            endswith(file, _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX) || continue
-            push!(lock_paths, joinpath(directory, file))
+        for entry in Iterators.flatten((directory_entries, files))
+            startswith(entry, ".") || continue
+            is_reservation =
+                endswith(entry, _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX) ||
+                occursin(
+                    _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR,
+                    entry,
+                )
+            is_reservation || continue
+            push!(lock_paths, joinpath(directory, entry))
         end
     end
     return sort!(lock_paths)
@@ -167,6 +231,14 @@ function _require_exclusive_output_root_reservation(
     normalized_root = normpath(abspath(String(workflow_root)))
     normalized_own_lock = normpath(abspath(String(own_lock_path)))
     allowed_ancestor_locks = _current_allowed_output_root_ancestor_locks()
+    for lock_path in _same_output_root_reservation_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active same-root " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
     for lock_path in
         _ancestor_output_root_reservation_lock_paths(normalized_root)
         lock_path == normalized_own_lock && continue

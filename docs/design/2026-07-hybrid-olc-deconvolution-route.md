@@ -43,13 +43,14 @@ preconditions were met.
 
 ## Explicit metaMDBG exclusion
 
-metaMDBG v1.4 accepts exactly one platform input: `--in-hifi` or `--in-ont`.
-Upstream rejects a command that supplies both flags and selects one platform
-parameter set internally. Therefore metaMDBG is not a HiFi-plus-ONT combined
-assembler and is excluded from the multi-input adapter. `Mycelia.run_metamdbg`
-remains available for a single HiFi *or* single ONT input and fails before
-provisioning when both, neither, an empty path set, or a missing/empty input file
-is supplied. The wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
+metaMDBG v1.4 accepts exactly one platform option, `--in-hifi` or `--in-ont`,
+with one or more FASTQs for that technology. Upstream rejects a command that
+supplies both flags and selects one platform parameter set internally. Therefore
+metaMDBG is not a HiFi-plus-ONT combined assembler and is excluded from the
+multi-input adapter. `Mycelia.run_metamdbg` remains available for one or more
+HiFi *or* one or more ONT inputs and fails before provisioning when both,
+neither, an empty path set, or a missing/empty input file is supplied. The
+wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
 records a digest of the complete normalized resolved Conda inventory (package
 name, version, build, and channel, including transitive packages). Environment
 discovery, creation, inventory, local commands, and generated runtime scripts

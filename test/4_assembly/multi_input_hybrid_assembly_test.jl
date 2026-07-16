@@ -48,6 +48,18 @@ function multi_input_write_fastq(
     return String(path)
 end
 
+function multi_input_mutate_first_sequence!(path::AbstractString)::Nothing
+    original = read(path, String)
+    mutated = replace(
+        original,
+        "ACGTACGT" => "GCGTGCGT";
+        count = 1,
+    )
+    mutated != original || error("FASTQ mutation fixture did not find a sequence.")
+    write(path, mutated)
+    return nothing
+end
+
 function multi_input_gzip_file(
         source::AbstractString,
         destination::AbstractString,
@@ -2377,6 +2389,97 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             call -> !isfile(call.corrected_fastq),
             corrected_mutation_calls,
         )
+    end
+
+    Test.@testset "semantic validation binds exact source and corrected bytes" begin
+        for role in (:short_r1, :short_r2, :long_reads)
+            mktempdir() do temp_dir
+                source_paths = (
+                    short_r1 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R1.fastq"),
+                        MULTI_INPUT_R1,
+                    ),
+                    short_r2 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R2.fastq"),
+                        MULTI_INPUT_R2,
+                    ),
+                    long_reads = multi_input_write_fastq(
+                        joinpath(temp_dir, "long.fastq"),
+                        MULTI_INPUT_LONG,
+                    ),
+                )
+                correction_calls = NamedTuple[]
+                assembler_calls = Ref(0)
+                function source_assembler_runner(
+                        inputs::Any,
+                        outdir::AbstractString,
+                )::NamedTuple
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end
+                test_throws_message(
+                    ErrorException,
+                    "input $(role) content changed after input semantic validation",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (source_paths.short_r1, source_paths.short_r2),
+                        source_paths.long_reads,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                        :unicycler;
+                        correction_runner = multi_input_fake_correction_runner(
+                            correction_calls,
+                        ),
+                        assembler_runner = source_assembler_runner,
+                        after_source_semantic_validation_hook =
+                            (short_r1, short_r2, long_reads) -> begin
+                                multi_input_mutate_first_sequence!(
+                                    getproperty(source_paths, role),
+                                )
+                            end,
+                    )
+                end
+                Test.@test isempty(correction_calls)
+                Test.@test assembler_calls[] == 0
+            end
+        end
+
+        for role in (:short_r1, :short_r2, :long_reads)
+            correction_calls = NamedTuple[]
+            assembler_calls = Ref(0)
+            function corrected_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                return multi_input_fake_assembler_result(outdir)
+            end
+            test_throws_message(
+                ErrorException,
+                "corrected $(role) FASTQ content changed after " *
+                "corrected-read semantic validation",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        correction_calls,
+                    ),
+                    assembler_runner = corrected_assembler_runner,
+                    after_corrected_semantic_validation_hook = inputs -> begin
+                        selected_reads = getproperty(inputs, role)
+                        multi_input_mutate_first_sequence!(selected_reads.path)
+                    end,
+                )
+            end
+            Test.@test length(correction_calls) == 3
+            Test.@test assembler_calls[] == 0
+            Test.@test all(
+                call -> !isfile(call.corrected_fastq),
+                correction_calls,
+            )
+        end
     end
 
     Test.@testset "effective per-read-set correction provenance" begin

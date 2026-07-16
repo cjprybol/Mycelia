@@ -175,6 +175,103 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "$(alias_type)-alias",
             ))
         end
+        distinct_reads = joinpath(temporary_root, "reads-distinct.fastq")
+        write(distinct_reads, "@read-2\nTGCA\n+\nJJJJ\n")
+        ordered_paths = String[distinct_reads, valid_reads]
+        ordered_input =
+            Mycelia._metamdbg_selected_input(ordered_paths, nothing)
+        ordered_contract = Mycelia._metamdbg_input_contract(ordered_input, 3)
+        Test.@test getproperty.(
+            ordered_contract.contract.inputs,
+            :path,
+        ) == ordered_paths
+        Test.@test getproperty.(
+            ordered_contract.contract.inputs,
+            :sha256,
+        ) == Mycelia._metamdbg_sha256.(ordered_paths)
+        reversed_contract = Mycelia._metamdbg_input_contract(
+            Mycelia._metamdbg_selected_input(reverse(ordered_paths), nothing),
+            3,
+        )
+        Test.@test ordered_contract.signature != reversed_contract.signature
+        distinct_executor = Mycelia.CollectExecutor()
+        distinct_result = Mycelia._run_metamdbg(;
+            hifi_reads = ordered_paths,
+            outdir = joinpath(temporary_root, "distinct-input-plan"),
+            executor = distinct_executor,
+            dependency_checker = () -> error(
+                "planned distinct inputs must not provision metaMDBG",
+            ),
+            local_runner = forbidden_runner,
+        )
+        Test.@test distinct_result.status == :planned
+        distinct_script = only(distinct_executor.jobs).cmd
+        distinct_positions = map(ordered_paths) do path
+            position = findfirst(path, distinct_script)
+            Test.@test position !== nothing
+            return first(position)
+        end
+        Test.@test first(distinct_positions) < last(distinct_positions)
+        for fingerprint in getproperty.(
+                ordered_contract.contract.inputs,
+                :sha256,
+        )
+            Test.@test occursin(fingerprint, distinct_script)
+        end
+        distinct_execution_outdir =
+            joinpath(temporary_root, "distinct-input-execution")
+        distinct_command_count = Ref(0)
+        distinct_runner = function (command::Cmd)
+            distinct_command_count[] += 1
+            if distinct_command_count[] == 1
+                input_flag_index = only(findall(
+                    ==("--in-hifi"),
+                    command.exec,
+                ))
+                abundance_index = only(findall(
+                    ==("--min-abundance"),
+                    command.exec,
+                ))
+                staged_paths = command.exec[
+                    (input_flag_index + 1):(abundance_index - 1)
+                ]
+                Test.@test length(staged_paths) == 2
+                Test.@test read.(staged_paths, String) ==
+                           read.(ordered_paths, String)
+                write(
+                    joinpath(distinct_execution_outdir, "contigs.fasta"),
+                    ">distinct-contig\nACGT\n",
+                )
+            elseif distinct_command_count[] == 2
+                _write_test_metamdbg_gfa!(joinpath(
+                    distinct_execution_outdir,
+                    "assemblyGraph_k21_4bps.gfa",
+                ))
+            else
+                error("unexpected distinct-input metaMDBG command")
+            end
+            return nothing
+        end
+        distinct_execution = Mycelia._run_metamdbg(;
+            hifi_reads = ordered_paths,
+            outdir = distinct_execution_outdir,
+            dependency_checker = _test_metamdbg_toolchain,
+            local_runner = distinct_runner,
+        )
+        Test.@test distinct_execution.status == :complete
+        Test.@test distinct_command_count[] == 2
+        executed_contract = JSON.parse(read(
+            distinct_execution.contract_marker,
+            String,
+        ))
+        Test.@test getindex.(
+            executed_contract["contract"]["inputs"],
+            "path",
+        ) == ordered_paths
+        Test.@test getindex.(
+            executed_contract["contract"]["inputs"],
+            "sha256",
+        ) == Mycelia._metamdbg_sha256.(ordered_paths)
         Test.@test provisioning_calls[] == 0
         Test.@test !ispath(joinpath(temporary_root, "missing-file"))
 
@@ -1998,6 +2095,155 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !ispath(reservation.path)
         end
 
+        Test.@testset "shared hierarchical output-root reservations" begin
+            same_root = joinpath(temporary_root, "shared-domain-same")
+            Mycelia._with_metamdbg_output_domain_lock(same_root) do
+                conflict = fetch(@async try
+                    Mycelia._with_unicycler_output_lock(same_root) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end)
+                Test.@test conflict isa ArgumentError
+                Test.@test occursin(
+                    "already reserved",
+                    sprint(showerror, conflict),
+                )
+            end
+
+            parent_root = joinpath(temporary_root, "shared-domain-parent")
+            child_root = joinpath(parent_root, "child")
+            Mycelia._with_metamdbg_output_domain_lock(parent_root) do
+                conflict = fetch(@async try
+                    Mycelia._with_autocycler_output_lock(child_root) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end)
+                Test.@test conflict isa ArgumentError
+                Test.@test occursin(
+                    "active ancestor output-root reservation",
+                    sprint(showerror, conflict),
+                )
+            end
+            Mycelia._with_metamdbg_output_domain_lock(child_root) do
+                conflict = fetch(@async try
+                    Mycelia._with_unicycler_output_lock(parent_root) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end)
+                Test.@test conflict isa ArgumentError
+                Test.@test occursin(
+                    "active descendant output-root reservation",
+                    sprint(showerror, conflict),
+                )
+            end
+
+            sibling_meta = joinpath(temporary_root, "shared-domain-sibling-a")
+            sibling_generic =
+                joinpath(temporary_root, "shared-domain-sibling-b")
+            Mycelia._with_metamdbg_output_domain_lock(sibling_meta) do
+                result = fetch(@async Mycelia._with_unicycler_output_lock(
+                    sibling_generic,
+                ) do _reserved
+                    :sibling_reserved
+                end)
+                Test.@test result == :sibling_reserved
+            end
+
+            input_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            function reserve_output_root!(
+                    outdir::String,
+                    owner_token::String,
+            )::NamedTuple
+                outputs = Mycelia._metamdbg_output_paths(outdir, 21)
+                reservation = Mycelia._metamdbg_submission_reservation(
+                    outputs,
+                    input_contract,
+                    21;
+                    owner_token,
+                )
+                Mycelia._with_metamdbg_output_domain_lock(outdir) do
+                    Mycelia._create_metamdbg_submission_reservation!(
+                        reservation,
+                        outdir,
+                    )
+                end
+                return reservation
+            end
+
+            queued_parent =
+                joinpath(temporary_root, "shared-domain-queued-parent")
+            queued_parent_reservation = reserve_output_root!(
+                queued_parent,
+                "shared-domain-queued-parent-owner",
+            )
+            Test.@test isfile(
+                queued_parent_reservation.output_root_reservation_marker,
+            )
+            Test.@test Mycelia._output_root_reservation_is_active(
+                queued_parent_reservation.output_root_reservation_marker,
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_unicycler_output_lock(queued_parent) do _
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active same-root output-root reservation",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    joinpath(queued_parent, "meta-child"),
+                ) do
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active ancestor output-root reservation",
+            )
+            queued_sibling = joinpath(
+                temporary_root,
+                "shared-domain-queued-sibling",
+            )
+            Test.@test Mycelia._with_autocycler_output_lock(
+                queued_sibling,
+            ) do _reserved
+                :queued_sibling_reserved
+            end == :queued_sibling_reserved
+            Mycelia._with_metamdbg_output_lock(queued_parent) do
+                Mycelia._remove_metamdbg_submission_reservation!(
+                    queued_parent_reservation,
+                )
+            end
+
+            queued_child =
+                joinpath(parent_root, "queued-meta-child")
+            queued_child_reservation = reserve_output_root!(
+                queued_child,
+                "shared-domain-queued-child-owner",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    parent_root,
+                ) do
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active descendant output-root reservation",
+            )
+            Mycelia._with_metamdbg_output_lock(queued_child) do
+                Mycelia._remove_metamdbg_submission_reservation!(
+                    queued_child_reservation,
+                )
+            end
+        end
+
         Test.@testset "executor script validates dynamic artifacts" begin
             outdir = joinpath(temporary_root, "executor output")
             outputs = Mycelia._metamdbg_output_paths(outdir, 21)
@@ -2123,6 +2369,79 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "P\\tpath-1\\tcontig-1+,contig-2-\\t4M\\n" *
                 "P\\tcomma-path\\tcontig,with,comma+\\t*\\n' " *
                 "> \"\$outdir/assemblyGraph_k21_4bps.gfa\""
+
+            owner_runtime_outdir =
+                joinpath(temporary_root, "executor-owner-capability")
+            owner_runtime_outputs =
+                Mycelia._metamdbg_output_paths(owner_runtime_outdir, 21)
+            owner_runtime_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    owner_runtime_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "executor-owner-capability-fixture",
+                )
+            Mycelia._with_metamdbg_output_domain_lock(
+                owner_runtime_outdir,
+            ) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    owner_runtime_reservation,
+                    owner_runtime_outdir,
+                )
+            end
+            owner_runtime_reservation =
+                Mycelia._bind_metamdbg_submission_job!(
+                    owner_runtime_reservation,
+                    "899",
+                )
+            foreign_reservation =
+                Mycelia._output_root_durable_reservation_path_from_canonical(
+                    owner_runtime_outdir,
+                    "foreign-owner-proof",
+                )
+            write(foreign_reservation, "foreign owner\n")
+            chmod(foreign_reservation, 0o600)
+            owner_assembly_marker =
+                joinpath(temporary_root, "owner-capability-assembly-ran")
+            owner_runtime_script = Mycelia._metamdbg_executor_script(
+                "touch $(Base.shell_escape(owner_assembly_marker)); $(fake_asm)",
+                fake_gfa,
+                owner_runtime_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = owner_runtime_reservation,
+            )
+            owner_runtime_script_path =
+                joinpath(temporary_root, "executor-owner-capability.sh")
+            write(owner_runtime_script_path, owner_runtime_script)
+            Test.@test !Base.withenv(
+                "SLURM_JOB_ID" => owner_runtime_reservation.job_id,
+            ) do
+                success(`bash $(owner_runtime_script_path)`)
+            end
+            Test.@test isdir(owner_runtime_reservation.path)
+            Test.@test isfile(
+                owner_runtime_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                owner_runtime_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(owner_assembly_marker)
+            rm(foreign_reservation)
+            Test.@test Base.withenv(
+                "SLURM_JOB_ID" => owner_runtime_reservation.job_id,
+            ) do
+                success(`bash $(owner_runtime_script_path)`)
+            end
+            Test.@test !ispath(owner_runtime_reservation.path)
+            Test.@test !ispath(
+                owner_runtime_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                owner_runtime_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test ispath(owner_assembly_marker)
 
             swapped_runtime_outdir =
                 joinpath(temporary_root, "executor-output-root-swap")
@@ -4420,6 +4739,12 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                         Mycelia._with_metamdbg_output_lock(
                             replacement_outdir,
                         ) do
+                            active_record =
+                                Mycelia._metamdbg_submission_reservation_from_path(
+                                    active_reservation,
+                                    replacement_outdir,
+                                )
+                            rm(active_record.output_root_reservation_marker)
                             rm(joinpath(
                                 active_reservation,
                                 Mycelia._METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,

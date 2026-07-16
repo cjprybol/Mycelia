@@ -15,8 +15,6 @@ const AUTOCYCLER_ENV_NAME =
 const AUTOCYCLER_MAX_ASSEMBLY_THREADS = 128
 const AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS = 6 * 60 * 60
 const AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
-const _AUTOCYCLER_OUTPUT_LOCK_SUFFIX =
-    _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX
 const AUTOCYCLER_SCRIPT_REVISION =
     "c98b126eb45727584623041db1bfdbdaf7aa0923"
 const AUTOCYCLER_SCRIPT_SHA256 =
@@ -2325,7 +2323,7 @@ function _run_autocycler(
         dependency_checker::Function =
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
-        validate_long_reads::Bool = true,
+        after_input_semantic_validation_hook::Function = snapshots -> nothing,
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
@@ -2346,14 +2344,16 @@ function _run_autocycler(
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    normalized_long_reads = _require_nonempty_autocycler_file(
+    long_read_snapshot = _autocycler_input_snapshot(
         long_reads,
         "Long-read FASTQ",
     )
-    validate_long_reads &&
-        _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
-    long_read_snapshot = _autocycler_input_snapshot(
-        normalized_long_reads,
+    normalized_long_reads = long_read_snapshot.path
+    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
+    input_snapshots = (; long_reads = long_read_snapshot)
+    after_input_semantic_validation_hook(input_snapshots)
+    _require_unchanged_autocycler_input(
+        long_read_snapshot,
         "Long-read FASTQ",
     )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
@@ -2412,7 +2412,7 @@ function _run_autocycler(
             )
             return merge(
                 result,
-                (; input_snapshots = (; long_reads = long_read_snapshot)),
+                (; input_snapshots),
             )
         end
     end
@@ -2932,6 +2932,7 @@ function _run_autocycler_polished(
         dependency_checker::Function =
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
+        after_input_semantic_validation_hook::Function = snapshots -> nothing,
         intermediate_remover::Function = path -> rm(path; force = true),
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
@@ -2953,18 +2954,23 @@ function _run_autocycler_polished(
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    normalized_long_reads = _require_nonempty_autocycler_file(
-        long_reads,
-        "Long-read FASTQ",
+    input_snapshots = (
+        long_reads = _autocycler_input_snapshot(
+            long_reads,
+            "Long-read FASTQ",
+        ),
+        short_reads_1 = _autocycler_input_snapshot(
+            short_reads_1,
+            "Paired short-read R1 FASTQ",
+        ),
+        short_reads_2 = _autocycler_input_snapshot(
+            short_reads_2,
+            "Paired short-read R2 FASTQ",
+        ),
     )
-    normalized_short_reads_1 = _require_nonempty_autocycler_file(
-        short_reads_1,
-        "Paired short-read R1 FASTQ",
-    )
-    normalized_short_reads_2 = _require_nonempty_autocycler_file(
-        short_reads_2,
-        "Paired short-read R2 FASTQ",
-    )
+    normalized_long_reads = input_snapshots.long_reads.path
+    normalized_short_reads_1 = input_snapshots.short_reads_1.path
+    normalized_short_reads_2 = input_snapshots.short_reads_2.path
     _validate_autocycler_input_sources(
         normalized_long_reads,
         normalized_short_reads_1,
@@ -2975,19 +2981,18 @@ function _run_autocycler_polished(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
-    input_snapshots = (
-        long_reads = _autocycler_input_snapshot(
-            normalized_long_reads,
-            "Long-read FASTQ",
-        ),
-        short_reads_1 = _autocycler_input_snapshot(
-            normalized_short_reads_1,
-            "Paired short-read R1 FASTQ",
-        ),
-        short_reads_2 = _autocycler_input_snapshot(
-            normalized_short_reads_2,
-            "Paired short-read R2 FASTQ",
-        ),
+    after_input_semantic_validation_hook(input_snapshots)
+    _require_unchanged_autocycler_input(
+        input_snapshots.long_reads,
+        "Long-read FASTQ",
+    )
+    _require_unchanged_autocycler_input(
+        input_snapshots.short_reads_1,
+        "Paired short-read R1 FASTQ",
+    )
+    _require_unchanged_autocycler_input(
+        input_snapshots.short_reads_2,
+        "Paired short-read R2 FASTQ",
     )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do

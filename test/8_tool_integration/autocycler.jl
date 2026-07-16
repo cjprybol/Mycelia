@@ -3360,6 +3360,83 @@ Test.@testset "Autocycler input content lifecycle binding" begin
             return (; long_reads, short_reads_1, short_reads_2)
         end
 
+        semantic_long_inputs = write_inputs("semantic-long")
+        semantic_long_dependency_calls = Ref(0)
+        semantic_long_runner_calls = Ref(0)
+        semantic_long_error = _autocycler_test_error() do
+            Mycelia._run_autocycler(
+                semantic_long_inputs.long_reads,
+                joinpath(temp_dir, "semantic-long-output");
+                dependency_checker = () -> begin
+                    semantic_long_dependency_calls[] += 1
+                    return toolchain
+                end,
+                runner = step -> begin
+                    semantic_long_runner_calls[] += 1
+                    _autocycler_test_runner!(step)
+                end,
+                after_input_semantic_validation_hook = snapshots -> write(
+                    snapshots.long_reads.path,
+                    "@long\nTGCA\n+\nIIII\n",
+                ),
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "semantic-long-environment.pid",
+                ),
+            )
+        end
+        Test.@test semantic_long_error isa ErrorException
+        Test.@test occursin(
+            "Long-read FASTQ changed after its initial path/size/SHA-256 snapshot",
+            sprint(showerror, semantic_long_error),
+        )
+        Test.@test semantic_long_dependency_calls[] == 0
+        Test.@test semantic_long_runner_calls[] == 0
+
+        for role in (:short_reads_1, :short_reads_2)
+            semantic_pair_inputs = write_inputs("semantic-$(role)")
+            semantic_pair_dependency_calls = Ref(0)
+            semantic_pair_runner_calls = Ref(0)
+            semantic_pair_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    semantic_pair_inputs.long_reads,
+                    semantic_pair_inputs.short_reads_1,
+                    semantic_pair_inputs.short_reads_2,
+                    joinpath(temp_dir, "semantic-$(role)-output");
+                    dependency_checker = () -> begin
+                        semantic_pair_dependency_calls[] += 1
+                        return toolchain
+                    end,
+                    runner = step -> begin
+                        semantic_pair_runner_calls[] += 1
+                        _autocycler_test_runner!(step)
+                    end,
+                    after_input_semantic_validation_hook = snapshots -> begin
+                        selected_snapshot = getproperty(snapshots, role)
+                        mate = role == :short_reads_1 ? 1 : 2
+                        write(
+                            selected_snapshot.path,
+                            "@pair/$(mate)\nTGCA\n+\nIIII\n",
+                        )
+                    end,
+                    environment_lock_path = joinpath(
+                        temp_dir,
+                        "semantic-$(role)-environment.pid",
+                    ),
+                )
+            end
+            label = role == :short_reads_1 ?
+                    "Paired short-read R1 FASTQ" :
+                    "Paired short-read R2 FASTQ"
+            Test.@test semantic_pair_error isa ErrorException
+            Test.@test occursin(
+                "$(label) changed after its initial path/size/SHA-256 snapshot",
+                sprint(showerror, semantic_pair_error),
+            )
+            Test.@test semantic_pair_dependency_calls[] == 0
+            Test.@test semantic_pair_runner_calls[] == 0
+        end
+
         before_inputs = write_inputs("before-consumption")
         before_dependency_calls = Ref(0)
         before_runner_calls = Ref(0)
