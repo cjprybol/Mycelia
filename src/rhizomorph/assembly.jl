@@ -2731,17 +2731,66 @@ struct _CorrectedPairedShortLong
     long_reads::_CorrectedReadSet
 end
 
+struct _WorkflowPathIdentity
+    device::UInt64
+    inode::UInt64
+end
+
+function _workflow_path_identity(
+        path::AbstractString,
+        label::AbstractString,
+)::_WorkflowPathIdentity
+    normalized_path = normpath(abspath(String(path)))
+    if islink(normalized_path) || !ispath(normalized_path)
+        error(
+            "$(label) must be an existing, non-symlink path before its " *
+            "filesystem identity can be captured: $(normalized_path).",
+        )
+    end
+    status = stat(normalized_path)
+    return _WorkflowPathIdentity(status.device, status.inode)
+end
+
+function _require_unchanged_workflow_path_identity(
+        path::AbstractString,
+        expected::_WorkflowPathIdentity,
+        label::AbstractString,
+)::_WorkflowPathIdentity
+    observed = _workflow_path_identity(path, label)
+    observed == expected || error(
+        "$(label) changed filesystem identity: expected " *
+        "device=$(expected.device), inode=$(expected.inode); observed " *
+        "device=$(observed.device), inode=$(observed.inode) at " *
+        "$(normpath(abspath(String(path)))).",
+    )
+    return observed
+end
+
 """
 Minimal ownership record retained until multi-input workflow cleanup.
 
 Stage-1 correction results can contain full graphs and in-memory read vectors.
 Keeping only the corrected FASTQ path and its ownership bit prevents three
 independent correction graphs from remaining live while the external assembler
-runs.
+runs. The captured filesystem identity also prevents cleanup from deleting a
+regular-file replacement installed at the same path.
 """
 struct _Stage1CleanupToken
     corrected_fastq::String
     ephemeral::Bool
+    identity::_WorkflowPathIdentity
+end
+
+function _Stage1CleanupToken(
+        corrected_fastq::AbstractString,
+        ephemeral::Bool,
+)
+    normalized_fastq = normpath(abspath(String(corrected_fastq)))
+    identity = _workflow_path_identity(
+        normalized_fastq,
+        "corrected FASTQ cleanup target",
+    )
+    return _Stage1CleanupToken(normalized_fastq, ephemeral, identity)
 end
 
 function _prepare_read_source(source::AbstractString)::Vector{String}
@@ -3664,6 +3713,98 @@ function _canonical_planned_workflow_path(
            normpath(joinpath(canonical_ancestor, relative_path))
 end
 
+function _require_canonical_workflow_root(
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(workflow_root)))
+    if islink(normalized_root) || !isdir(normalized_root)
+        throw(ArgumentError(
+            "$(label) requires a regular, non-symlink workflow root: " *
+            "$(normalized_root).",
+        ))
+    end
+    canonical_root = realpath(normalized_root)
+    canonical_root == normalized_root || throw(ArgumentError(
+        "$(label) workflow root changed physical identity: expected " *
+        "$(normalized_root), resolved $(canonical_root).",
+    ))
+    return normalized_root
+end
+
+function _require_workflow_child_directory(
+        child_path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString;
+        create::Bool = false,
+        require_existing::Bool = false,
+)::String
+    canonical_root = _require_canonical_workflow_root(workflow_root, label)
+    normalized_child = normpath(abspath(String(child_path)))
+    relative_child = relpath(normalized_child, canonical_root)
+    relative_parts = splitpath(relative_child)
+    if relative_child == "." ||
+       isabspath(relative_child) ||
+       isempty(relative_parts) ||
+       first(relative_parts) == ".."
+        throw(ArgumentError(
+            "$(label) escapes the canonical workflow root " *
+            "$(canonical_root): $(normalized_child).",
+        ))
+    end
+
+    current_path = canonical_root
+    for component in relative_parts
+        current_path = joinpath(current_path, component)
+        if islink(current_path)
+            throw(ArgumentError(
+                "$(label) contains a symbolic-link path component: " *
+                "$(current_path).",
+            ))
+        elseif ispath(current_path) && !isdir(current_path)
+            throw(ArgumentError(
+                "$(label) contains a non-directory path component: " *
+                "$(current_path).",
+            ))
+        elseif !ispath(current_path)
+            break
+        end
+    end
+
+    create && mkpath(normalized_child)
+    if require_existing && !isdir(normalized_child)
+        throw(ArgumentError(
+            "$(label) did not create its reserved workflow child directory: " *
+            "$(normalized_child).",
+        ))
+    end
+    if ispath(normalized_child) || islink(normalized_child)
+        if islink(normalized_child) || !isdir(normalized_child)
+            throw(ArgumentError(
+                "$(label) must be a regular, non-symlink directory: " *
+                "$(normalized_child).",
+            ))
+        end
+        canonical_child = realpath(normalized_child)
+        canonical_child == normalized_child || throw(ArgumentError(
+            "$(label) changed physical identity: expected " *
+            "$(normalized_child), resolved $(canonical_child).",
+        ))
+        canonical_relative_child = relpath(canonical_child, canonical_root)
+        canonical_relative_parts = splitpath(canonical_relative_child)
+        if canonical_relative_child == "." ||
+           isabspath(canonical_relative_child) ||
+           isempty(canonical_relative_parts) ||
+           first(canonical_relative_parts) == ".."
+            throw(ArgumentError(
+                "$(label) resolves outside the canonical workflow root " *
+                "$(canonical_root): $(canonical_child).",
+            ))
+        end
+    end
+    return normalized_child
+end
+
 function _validate_workflow_root_shape(
         requested_path::AbstractString,
 )::Nothing
@@ -3709,7 +3850,9 @@ end
 
 function _prepare_workflow_root(root_plan::NamedTuple)::NamedTuple
     if root_plan.ephemeral
-        return (; path = mktempdir(), ephemeral = true)
+        path = mktempdir()
+        identity = _workflow_path_identity(path, "ephemeral workflow root")
+        return (; path, ephemeral = true, identity)
     end
     path = abspath(String(root_plan.path))
     validated_plan = _validate_workflow_root(path)
@@ -3722,7 +3865,8 @@ function _prepare_workflow_root(root_plan::NamedTuple)::NamedTuple
         "Persistent output_dir changed physical identity while being created: " *
         "$(path).",
     ))
-    return (; path, ephemeral = false)
+    identity = _workflow_path_identity(path, "persistent workflow root")
+    return (; path, ephemeral = false, identity)
 end
 
 function _stage1_multi_input_config(
@@ -3760,16 +3904,53 @@ function _correct_read_set!(
         persist::Bool,
         correction_runner::Function,
         protected_paths::Vector{String} = String[],
+        workflow_root_identity::Union{Nothing, _WorkflowPathIdentity} = nothing,
 )::_CorrectedReadSet
-    stage_output_dir = joinpath(workflow_root, "corrected", String(label))
-    mkpath(stage_output_dir)
-    canonical_stage_output_dir = realpath(stage_output_dir)
+    stage_label = "$(label) correction stage"
+    expected_root_identity = workflow_root_identity === nothing ?
+                             _workflow_path_identity(
+        workflow_root,
+        "multi-input workflow root",
+    ) : workflow_root_identity
+    _require_canonical_workflow_root(workflow_root, stage_label)
+    _require_unchanged_workflow_path_identity(
+        workflow_root,
+        expected_root_identity,
+        "multi-input workflow root",
+    )
+    stage_output_dir = _require_workflow_child_directory(
+        joinpath(workflow_root, "corrected", String(label)),
+        workflow_root,
+        stage_label;
+        create = true,
+        require_existing = true,
+    )
+    stage_output_identity = _workflow_path_identity(
+        stage_output_dir,
+        stage_label,
+    )
     stage_config = _stage1_multi_input_config(
         correction_options,
         technology,
         stage_output_dir,
     )
     stage = correction_runner(reads, stage_config)
+    _require_unchanged_workflow_path_identity(
+        workflow_root,
+        expected_root_identity,
+        "multi-input workflow root",
+    )
+    _require_workflow_child_directory(
+        stage_output_dir,
+        workflow_root,
+        stage_label;
+        require_existing = true,
+    )
+    _require_unchanged_workflow_path_identity(
+        stage_output_dir,
+        stage_output_identity,
+        stage_label,
+    )
     hasproperty(stage, :corrected_fastq) || error(
         "$(label) correction result is missing corrected_fastq.",
     )
@@ -3781,16 +3962,21 @@ function _correct_read_set!(
         )
     end
     canonical_corrected_fastq = realpath(corrected_fastq)
+    canonical_corrected_fastq == corrected_fastq || error(
+        "$(label) correction output resolves through a symbolic-link path " *
+        "component: $(corrected_fastq) resolves to " *
+        "$(canonical_corrected_fastq).",
+    )
     relative_corrected_path = relpath(
         canonical_corrected_fastq,
-        canonical_stage_output_dir,
+        stage_output_dir,
     )
     relative_parts = splitpath(relative_corrected_path)
     if relative_corrected_path == "." ||
        (!isempty(relative_parts) && first(relative_parts) == "..")
         error(
             "$(label) correction output is outside its reserved stage " *
-            "directory $(canonical_stage_output_dir): $(corrected_fastq).",
+            "directory $(stage_output_dir): $(corrected_fastq).",
         )
     end
     for protected_path in protected_paths
@@ -3857,19 +4043,44 @@ function _cleanup_multi_input_stages!(
     retained_files = String[]
     for token in cleanup_tokens
         if token.ephemeral
+            if !_workflow_path_entry_exists(token.corrected_fastq)
+                continue
+            end
+            cleanup_path = normpath(abspath(token.corrected_fastq))
+            cleanup_is_safe = try
+                !islink(cleanup_path) &&
+                    isfile(cleanup_path) &&
+                    realpath(cleanup_path) == cleanup_path &&
+                    _workflow_path_identity(
+                        cleanup_path,
+                        "corrected FASTQ cleanup target",
+                    ) == token.identity
+            catch cleanup_identity_error
+                cleanup_identity_error isa InterruptException && rethrow()
+                false
+            end
+            if !cleanup_is_safe
+                @warn(
+                    "multi-input assembly: refusing corrected FASTQ cleanup " *
+                    "after path identity changed",
+                    corrected_fastq = cleanup_path,
+                )
+                push!(retained_files, cleanup_path)
+                continue
+            end
             cleanup_failed = false
             try
-                remover(token.corrected_fastq)
+                remover(cleanup_path)
             catch cleanup_error
                 cleanup_error isa InterruptException && rethrow()
                 cleanup_failed = true
                 @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
             end
-            if _workflow_path_entry_exists(token.corrected_fastq)
-                push!(retained_files, token.corrected_fastq)
+            if _workflow_path_entry_exists(cleanup_path)
+                push!(retained_files, cleanup_path)
                 cleanup_failed || @warn(
                     "multi-input assembly: corrected FASTQ cleanup retained path",
-                    corrected_fastq = token.corrected_fastq,
+                    corrected_fastq = cleanup_path,
                 )
             end
         end
@@ -3879,21 +4090,49 @@ end
 
 function _cleanup_multi_input_root!(
         workflow_root::AbstractString;
+        expected_identity::Union{Nothing, _WorkflowPathIdentity} = nothing,
         remover::Function = path -> rm(path; recursive = true, force = true),
 )::Bool
+    normalized_root = normpath(abspath(String(workflow_root)))
+    if !_workflow_path_entry_exists(normalized_root)
+        return false
+    end
+    observed_identity = try
+        if !islink(normalized_root) &&
+           isdir(normalized_root) &&
+           realpath(normalized_root) == normalized_root
+            _workflow_path_identity(normalized_root, "ephemeral workflow root")
+        else
+            nothing
+        end
+    catch cleanup_identity_error
+        cleanup_identity_error isa InterruptException && rethrow()
+        nothing
+    end
+    root_cleanup_is_safe = observed_identity !== nothing &&
+                           (expected_identity === nothing ||
+                            observed_identity == expected_identity)
+    if !root_cleanup_is_safe
+        @warn(
+            "multi-input assembly: refusing ephemeral root cleanup after " *
+            "path identity changed",
+            workflow_root = normalized_root,
+        )
+        return true
+    end
     cleanup_failed = false
     try
-        remover(workflow_root)
+        remover(normalized_root)
     catch cleanup_error
         cleanup_error isa InterruptException && rethrow()
         cleanup_failed = true
         @warn "multi-input assembly: ephemeral output cleanup failed" cleanup_error
     end
-    retained = _workflow_path_entry_exists(workflow_root)
+    retained = _workflow_path_entry_exists(normalized_root)
     if retained && !cleanup_failed
         @warn(
             "multi-input assembly: ephemeral output cleanup retained root",
-            workflow_root = String(workflow_root),
+            workflow_root = normalized_root,
         )
     end
     return retained
@@ -4195,6 +4434,10 @@ function _require_reserved_multi_input_artifact(
         "file: $(normalized_path).",
     )
     canonical_path = realpath(normalized_path)
+    canonical_path == normalized_path || error(
+        "multi-input assembler $(label) resolves through a symbolic-link " *
+        "path component: $(normalized_path) resolves to $(canonical_path).",
+    )
     relative_path = relpath(canonical_path, normalized_outdir)
     relative_parts = splitpath(relative_path)
     if relative_path == "." ||
@@ -4691,6 +4934,7 @@ function _assemble_paired_short_long(
                 !root.ephemeral,
                 correction_runner,
                 protected_source_paths,
+                root.identity,
             )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
@@ -4702,6 +4946,7 @@ function _assemble_paired_short_long(
                 !root.ephemeral,
                 correction_runner,
                 protected_source_paths,
+                root.identity,
             )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
@@ -4713,6 +4958,7 @@ function _assemble_paired_short_long(
                 !root.ephemeral,
                 correction_runner,
                 protected_source_paths,
+                root.identity,
             )
             corrected_pair_count = _validate_corrected_pair_preserved(
                 short_r1,
@@ -4742,10 +4988,33 @@ function _assemble_paired_short_long(
                 short_r2,
                 prepared_long_reads,
             )
-            assembler_output_dir = _canonical_planned_workflow_path(
+            _require_unchanged_workflow_path_identity(
+                root.path,
+                root.identity,
+                "multi-input workflow root",
+            )
+            assembler_label = "$(workflow) assembler output"
+            assembler_output_dir = _require_workflow_child_directory(
                 joinpath(root.path, "assembler_$(workflow)"),
+                root.path,
+                assembler_label,
             )
             tool_result = assembler_runner(inputs, assembler_output_dir)
+            _require_unchanged_workflow_path_identity(
+                root.path,
+                root.identity,
+                "multi-input workflow root",
+            )
+            _require_workflow_child_directory(
+                assembler_output_dir,
+                root.path,
+                assembler_label;
+                require_existing = true,
+            )
+            assembler_output_identity = _workflow_path_identity(
+                assembler_output_dir,
+                assembler_label,
+            )
             _verify_multi_input_corrected_content_contract(
                 corrected_content_contract,
                 inputs,
@@ -4772,7 +5041,7 @@ function _assemble_paired_short_long(
                 "short_r2" => corrected_r2.provenance,
                 "long_reads" => corrected_long.provenance,
             )
-            return _wrap_multi_input_assembly(
+            wrapped_result = _wrap_multi_input_assembly(
                 tool_result,
                 workflow;
                 input_counts = Dict(
@@ -4800,6 +5069,23 @@ function _assemble_paired_short_long(
                 corrected_content_contract,
                 assembler_output_dir,
             )
+            _require_unchanged_workflow_path_identity(
+                root.path,
+                root.identity,
+                "multi-input workflow root",
+            )
+            _require_workflow_child_directory(
+                assembler_output_dir,
+                root.path,
+                assembler_label;
+                require_existing = true,
+            )
+            _require_unchanged_workflow_path_identity(
+                assembler_output_dir,
+                assembler_output_identity,
+                assembler_label,
+            )
+            return wrapped_result
         finally
             append!(
                 retained_cleanup_files,
@@ -4810,6 +5096,7 @@ function _assemble_paired_short_long(
             )
             if root.ephemeral && _cleanup_multi_input_root!(
                     root.path;
+                    expected_identity = root.identity,
                     remover = workflow_root_remover,
             )
                 push!(retained_cleanup_roots, root.path)

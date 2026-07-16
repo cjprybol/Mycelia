@@ -9,6 +9,7 @@
 
 import CodecZlib
 import FASTX
+import Logging
 import Mycelia
 import Test
 
@@ -1363,7 +1364,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
 
     Test.@testset "lightweight Stage-1 cleanup ownership" begin
         Test.@test fieldnames(Mycelia.Rhizomorph._Stage1CleanupToken) ==
-                   (:corrected_fastq, :ephemeral)
+                   (:corrected_fastq, :ephemeral, :identity)
         cleanup_tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
         correction_calls = NamedTuple[]
         correction_runner = multi_input_fake_correction_runner(correction_calls)
@@ -1439,6 +1440,71 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         Test.@test isfile(interrupted_fastq)
         rm(interrupted_fastq; force = true)
 
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "workflow")
+            stage_dir = joinpath(workflow_root, "corrected", "long_reads")
+            external_dir = joinpath(temp_dir, "external")
+            corrected_fastq = multi_input_write_fastq(
+                joinpath(stage_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            external_fastq = multi_input_write_fastq(
+                joinpath(external_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            retargeted_tokens = [
+                Mycelia.Rhizomorph._Stage1CleanupToken(
+                    corrected_fastq,
+                    true,
+                ),
+            ]
+            rm(stage_dir; recursive = true)
+            symlink(external_dir, stage_dir)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing corrected FASTQ cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                    retargeted_tokens,
+                )
+            end
+            Test.@test retained == [corrected_fastq]
+            Test.@test isfile(external_fastq)
+            Test.@test read(external_fastq) == read(
+                joinpath(stage_dir, "corrected.fastq"),
+            )
+        end
+
+        mktempdir() do temp_dir
+            corrected_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "corrected.fastq"),
+                MULTI_INPUT_LONG,
+            )
+            replacement_fastq = multi_input_write_fastq(
+                joinpath(temp_dir, "replacement.fastq"),
+                [multi_input_fastq_record("replacement")],
+            )
+            replacement_content = read(replacement_fastq)
+            replaced_tokens = [
+                Mycelia.Rhizomorph._Stage1CleanupToken(
+                    corrected_fastq,
+                    true,
+                ),
+            ]
+            rm(corrected_fastq)
+            mv(replacement_fastq, corrected_fastq)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing corrected FASTQ cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_stages!(
+                    replaced_tokens,
+                )
+            end
+            Test.@test retained == [corrected_fastq]
+            Test.@test read(corrected_fastq) == replacement_content
+        end
+
         interrupted_root = mktempdir()
         root_interrupt = InterruptException()
         caught_root_interrupt = try
@@ -1453,6 +1519,55 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         Test.@test caught_root_interrupt === root_interrupt
         Test.@test isdir(interrupted_root)
         rm(interrupted_root; recursive = true, force = true)
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "ephemeral-root")
+            external_root = joinpath(temp_dir, "external-root")
+            mkpath(workflow_root)
+            mkpath(external_root)
+            external_marker = joinpath(external_root, "preserve.txt")
+            write(external_marker, "preserve\n")
+            rm(workflow_root; recursive = true)
+            symlink(external_root, workflow_root)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing ephemeral root cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_root!(workflow_root)
+            end
+            Test.@test retained
+            Test.@test read(external_marker, String) == "preserve\n"
+        end
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "ephemeral-root")
+            replacement_root = joinpath(temp_dir, "replacement-root")
+            mkpath(workflow_root)
+            expected_identity =
+                Mycelia.Rhizomorph._workflow_path_identity(
+                    workflow_root,
+                    "test workflow root",
+                )
+            mkpath(replacement_root)
+            replacement_marker = joinpath(replacement_root, "preserve.txt")
+            write(replacement_marker, "replacement\n")
+            rm(workflow_root; recursive = true)
+            mv(replacement_root, workflow_root)
+            retained = Test.@test_logs (
+                :warn,
+                r"refusing ephemeral root cleanup after path identity changed",
+            ) min_level=Logging.Warn begin
+                Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                    workflow_root;
+                    expected_identity,
+                )
+            end
+            Test.@test retained
+            Test.@test read(
+                joinpath(workflow_root, "preserve.txt"),
+                String,
+            ) == "replacement\n"
+        end
 
         malformed_stages = [
             (
@@ -1627,6 +1742,123 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             end
             Test.@test isfile(external_fastq)
             Test.@test all(isfile, sources)
+
+            stage_escape_root = joinpath(temp_dir, "stage-escape-root")
+            escaped_stage = joinpath(
+                stage_escape_root,
+                "corrected",
+                "long_reads",
+            )
+            external_stage = joinpath(temp_dir, "external-stage")
+            mkpath(dirname(escaped_stage))
+            mkpath(external_stage)
+            symlink(external_stage, escaped_stage)
+            stage_runner_called = Ref(false)
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    stage_escape_root,
+                    false,
+                    (reads, config) -> begin
+                        stage_runner_called[] = true
+                        error("escaped correction runner must not execute")
+                    end,
+                )
+            end
+            Test.@test !stage_runner_called[]
+            Test.@test isempty(readdir(external_stage))
+
+            postcheck_root = joinpath(temp_dir, "stage-postcheck-root")
+            postcheck_external = joinpath(temp_dir, "stage-postcheck-external")
+            mkpath(postcheck_root)
+            mkpath(postcheck_external)
+            postcheck_external_fastq = joinpath(
+                postcheck_external,
+                "corrected.fastq",
+            )
+            function retargeting_stage_runner(
+                    reads::Any,
+                    config::Any,
+            )::NamedTuple
+                stage_dir = something(config.output_dir)
+                rm(stage_dir; recursive = true)
+                symlink(postcheck_external, stage_dir)
+                multi_input_write_fastq(
+                    joinpath(stage_dir, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                return (;
+                    corrected_fastq = joinpath(stage_dir, "corrected.fastq"),
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                )
+            end
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    postcheck_root,
+                    false,
+                    retargeting_stage_runner,
+                )
+            end
+            Test.@test isfile(postcheck_external_fastq)
+
+            replacement_root = joinpath(temp_dir, "stage-replacement-root")
+            mkpath(replacement_root)
+            function replacing_stage_runner(
+                    reads::Any,
+                    config::Any,
+            )::NamedTuple
+                stage_dir = something(config.output_dir)
+                replacement_stage = joinpath(
+                    dirname(stage_dir),
+                    "replacement-stage",
+                )
+                mkpath(replacement_stage)
+                corrected_fastq = multi_input_write_fastq(
+                    joinpath(replacement_stage, "corrected.fastq"),
+                    MULTI_INPUT_LONG,
+                )
+                rm(stage_dir; recursive = true)
+                mv(replacement_stage, stage_dir)
+                return (;
+                    corrected_fastq = joinpath(
+                        stage_dir,
+                        basename(corrected_fastq),
+                    ),
+                    corrected_read_count = 1,
+                    ephemeral = true,
+                )
+            end
+            test_throws_message(
+                ErrorException,
+                "correction stage changed filesystem identity",
+            ) do
+                Mycelia.Rhizomorph._correct_read_set!(
+                    Mycelia.Rhizomorph._Stage1CleanupToken[],
+                    MULTI_INPUT_LONG,
+                    :nanopore,
+                    :long_reads,
+                    (; k = 13, strategy = :scalable),
+                    replacement_root,
+                    false,
+                    replacing_stage_runner,
+                )
+            end
 
             function source_alias_runner(reads::Any, config::Any)::NamedTuple
                 source_path = only(reads)
@@ -2490,6 +2722,36 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 )
             end
 
+            nested_symlink_outdir = joinpath(temp_dir, "nested-symlink")
+            nested_symlink_result = multi_input_fake_assembler_result(
+                nested_symlink_outdir,
+            )
+            nested_real_dir = joinpath(nested_symlink_outdir, "real")
+            nested_alias_dir = joinpath(nested_symlink_outdir, "alias")
+            mkpath(nested_real_dir)
+            nested_assembly = multi_input_write_fasta(
+                joinpath(nested_real_dir, "assembly.fasta"),
+            )
+            symlink(nested_real_dir, nested_alias_dir)
+            test_throws_message(
+                ErrorException,
+                "resolves through a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    merge(
+                        nested_symlink_result,
+                        (;
+                            assembly = joinpath(
+                                nested_alias_dir,
+                                basename(nested_assembly),
+                            ),
+                        ),
+                    ),
+                    :unicycler,
+                    nested_symlink_outdir,
+                )
+            end
+
             correction_calls = NamedTuple[]
             test_throws_message(
                 ErrorException,
@@ -2509,6 +2771,123 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     ),
                 )
             end
+            workflow_output = joinpath(temp_dir, "retargeted-assembler-child")
+            external_assembler_dir = joinpath(temp_dir, "external-assembler")
+            mkpath(external_assembler_dir)
+            retargeting_correction_calls = NamedTuple[]
+            base_correction_runner = multi_input_fake_correction_runner(
+                retargeting_correction_calls,
+            )
+            function assembler_retargeting_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                stage = base_correction_runner(reads, config)
+                if length(retargeting_correction_calls) == 3
+                    symlink(
+                        external_assembler_dir,
+                        joinpath(workflow_output, "assembler_unicycler"),
+                    )
+                end
+                return stage
+            end
+            assembler_called = Ref(false)
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = workflow_output,
+                    ),
+                    :unicycler;
+                    correction_runner =
+                        assembler_retargeting_correction_runner,
+                    assembler_runner = (inputs, outdir) -> begin
+                        assembler_called[] = true
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test !assembler_called[]
+            Test.@test isempty(readdir(external_assembler_dir))
+
+            postcheck_workflow = joinpath(
+                temp_dir,
+                "assembler-postcheck-workflow",
+            )
+            postcheck_assembler_dir = joinpath(
+                temp_dir,
+                "assembler-postcheck-external",
+            )
+            mkpath(postcheck_assembler_dir)
+            postcheck_calls = NamedTuple[]
+            test_throws_message(
+                ArgumentError,
+                "contains a symbolic-link path component",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = postcheck_workflow,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        postcheck_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        symlink(postcheck_assembler_dir, outdir)
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test isfile(joinpath(postcheck_assembler_dir, "assembly.fasta"))
+            Test.@test isfile(joinpath(postcheck_assembler_dir, "assembly.gfa"))
+
+            replaced_workflow = joinpath(temp_dir, "replaced-workflow")
+            replacement_marker = joinpath(
+                replaced_workflow,
+                "replacement-marker.txt",
+            )
+            replacement_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "multi-input workflow root changed filesystem identity",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = replaced_workflow,
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        replacement_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        staged_replacement = joinpath(
+                            temp_dir,
+                            "staged-replacement-workflow",
+                        )
+                        mkpath(staged_replacement)
+                        write(
+                            joinpath(
+                                staged_replacement,
+                                basename(replacement_marker),
+                            ),
+                            "preserve replacement\n",
+                        )
+                        rm(replaced_workflow; recursive = true)
+                        mv(staged_replacement, replaced_workflow)
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test read(replacement_marker, String) ==
+                       "preserve replacement\n"
             Test.@test isfile(external_fasta)
             Test.@test isfile(external_graph)
             Test.@test isfile(external_report)

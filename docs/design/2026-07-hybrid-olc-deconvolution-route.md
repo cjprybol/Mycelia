@@ -51,21 +51,28 @@ remains available for a single HiFi *or* single ONT input and fails before
 provisioning when both, neither, an empty path set, or a missing/empty input file
 is supplied. The wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
 records a digest of the complete normalized resolved Conda inventory (package
-name, version, build, and channel, including transitive packages). It reuses
-only structurally valid, sequence-bearing contigs plus the exact requested-k
-dynamic graph when the durable input contract matches the normalized input
-technology, ordered paths, file sizes, input SHA-256 digests, `abundance_min`,
-and pinned environment specification. Modification time is a transient
-same-invocation race snapshot only and is intentionally absent from the durable
-schema-v4 contract. A separate atomic completion manifest binds `graph_k`, the
-workflow signature, the realized package-inventory digest, and canonical
-artifact identities, sizes, and SHA-256 digests. Legacy plain contigs are
-normalized to `contigs.fasta.gz`. Each tool-execution lifecycle stages mode-0400
-private input copies, verifies them against the captured SHA-256 contract, and
-runs metaMDBG only against those staged paths. Local and submitted lifecycles
-capture the full normalized Conda inventory before and after all tool commands
-and reject any drift. Submitted jobs also recompute every source input digest
-after acquiring the runtime output lock and immediately before publication. Any
+name, version, build, and channel, including transitive packages). Environment
+discovery, creation, inventory, local commands, and generated runtime scripts
+all use one canonical Conda executable. The install lock is anchored beneath
+that executable's Conda root rather than a Julia depot, so two wrappers cannot
+concurrently mutate the same environment through different depots and two
+independent Conda roots do not block each other. The wrapper reuses only
+structurally valid, sequence-bearing contigs plus exactly one dynamic graph in
+the entire output root, and that graph must have the requested k. A requested-k
+graph alongside any foreign-k graph is rejected. Reuse also requires the durable
+input contract to match the normalized input technology, ordered paths, file
+sizes, input SHA-256 digests, `abundance_min`, and pinned environment
+specification. Modification time is a transient same-invocation race snapshot
+only and is intentionally absent from the durable schema-v4 contract. A
+separate atomic completion manifest binds `graph_k`, the workflow signature,
+the realized package-inventory digest, and canonical artifact identities,
+sizes, and SHA-256 digests. Legacy plain contigs are normalized to
+`contigs.fasta.gz`. Each tool-execution lifecycle stages mode-0400 private input
+copies, verifies them against the captured SHA-256 contract, and runs metaMDBG
+only against those staged paths. Local and submitted lifecycles capture the
+full normalized Conda inventory before and after all tool commands and reject
+any drift. Submitted jobs also recompute every source input digest after
+acquiring the runtime output lock and immediately before publication. Any
 nonempty output directory without the input contract, or any complete artifact
 set without its matching completion manifest, is rejected rather than adopted.
 Partial contracted contigs are likewise never resumed because they lack
@@ -182,8 +189,10 @@ after assembly. Reused historical outputs do not claim current realized-
 execution provenance, and nonlocal executors are rejected because their work
 would outlive the mutable-environment lock; the higher-level exact hybrid route
 therefore receives only a fresh local exact result. Incomplete non-empty legacy
-output directories are preserved and rejected rather than deleted. Autocycler
-additionally records:
+output directories are preserved and rejected rather than deleted. Its public
+result treats `outdir`, `assembly`, and `graph` as canonical absolute safety
+fields; `requested_outdir` preserves caller spelling for audit only and carries
+no artifact-access or cleanup authority. Autocycler additionally records:
 
 - the immutable upstream script revision and verified SHA-256;
 - the bundled environment specification SHA-256; and
@@ -203,6 +212,12 @@ before manually removing and reinstalling the environment, while a future
 spec/version receives a different name and cannot replace an environment that
 an older workflow is actively using.
 
+`install_autocycler`, `run_autocycler`, and `run_autocycler_polished` expose the
+same `conda_runner` and optional `environment_prefix` contract. Explicit
+prefixes are canonicalized through their nearest existing physical ancestor,
+so an install performed through one stable alias can be consumed through
+another alias without selecting a different environment or lock domain.
+
 The single-input metaMDBG wrapper applies the same fail-closed principles with
 the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification. Local
 execution returns
@@ -213,13 +228,43 @@ together with the executor result and `expected_artifacts`; it does not present
 planned paths as completed artifacts. The submitted script independently locks
 the output root and performs the same validation before atomically committing
 completion provenance. Real nonlocal execution is limited to the verifiable
-Slurm backend. Durable pre-submit reservations never expire automatically; a
-crashed caller can inspect the on-disk capability and reclaim it only with the
-exact owner token plus explicit confirmation that submission never occurred.
-Submitted jobs can be reclaimed only with the exact recorded scheduler job ID
-after explicit cancellation or terminal-failed confirmation. Reservation
-directories and owner records must remain current-user-owned mode 0700 and 0600,
-respectively.
+Slurm backend. Durable pre-submit reservations never expire automatically. A
+new reservation contains only a mode-0600 `contract.json` owner record and is
+reported as `submission_state = :reserved`. The wrapper submits the job held,
+atomically adds a mode-0600 `job.json` sidecar binding the exact scheduler job
+ID, workflow signature, and owner token, and only then releases it; inspection
+then reports `submission_state = :submitted`. A runtime job that starts after
+release must match the sidecar against `SLURM_JOB_ID` before atomically consuming
+the reservation. If that released job starts and consumes the reservation before
+the caller returns, the returned capability is reported as
+`submission_state = :consumed` rather than pretending the sidecar still exists.
+
+A caller that dies before submission can inspect the on-disk reserved
+capability and reclaim it only with the exact owner token plus explicit
+confirmation that submission never occurred. In the narrower process-death
+window after scheduler acceptance but before normal sidecar publication, an
+operator must independently prove which exact scheduler job belongs to the
+reservation, then call
+`Mycelia.bind_metamdbg_submission_reservation_job!` with the inspected record,
+exact owner token and job ID, and
+`confirm_submitted = true`. Submitted jobs can be reclaimed only with the exact
+recorded scheduler job ID after explicit cancellation or terminal-failed
+confirmation. Reservation directories, owner records, and job sidecars must
+remain current-user-owned with modes 0700, 0600, and 0600, respectively;
+noncanonical, modified, or replacement records fail closed.
+
+The Slurm executor now submits this lifecycle with `sbatch --hold --parsable`,
+accepts exactly one numeric job ID with an optional federation-cluster suffix,
+durably binds that numeric ID in `job.json` under the output lock, and only then
+releases that exact job with `scontrol release`. Runtime execution requires the
+bound sidecar and an exact `SLURM_JOB_ID` match before consuming the reservation.
+A crash before binding therefore leaves a non-runnable held job, while a crash
+after binding leaves an inspectable job ID that can be released or cancelled.
+Scheduler acceptance is recorded as not attempted, explicitly rejected,
+accepted, or unknown. Only the first two states permit automatic reservation
+cleanup; malformed output, transport interruption, a thrown post-attempt runner,
+or any other unknown outcome preserves the unbound reservation for inspection,
+explicit recovery binding, or confirmed-not-submitted reclamation.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream

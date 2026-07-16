@@ -21,6 +21,27 @@ Test.@testset "Execution backend helpers" begin
     Test.@test Mycelia.resolve_executor(nothing) isa Mycelia.LocalExecutor
     Test.@test Mycelia.resolve_executor(:local) isa Mycelia.LocalExecutor
     Test.@test Mycelia.resolve_executor(:slurm) isa Mycelia.SlurmExecutor
+    Test.@test !Mycelia.SlurmExecutor().hold
+    Test.@test Mycelia.SlurmExecutor(hold = true).hold
+    legacy_slurm_executor = Mycelia.SlurmExecutor(true)
+    Test.@test legacy_slurm_executor.dry_run
+    Test.@test !legacy_slurm_executor.hold
+    legacy_submit_result = Mycelia.SubmitResult(
+        true,
+        false,
+        :scg,
+        :sbatch,
+        nothing,
+        nothing,
+        nothing,
+        "12345",
+        "12345\n",
+        String[],
+        String[],
+    )
+    Test.@test legacy_submit_result.ok
+    Test.@test !legacy_submit_result.held
+    Test.@test legacy_submit_result.scheduler_acceptance == :not_attempted
     Test.@test Mycelia.resolve_executor(:collect) isa Mycelia.CollectExecutor
     Test.@test Mycelia.resolve_executor(:dry_run) isa Mycelia.DryRunExecutor
     Test.@test Mycelia.resolve_executor(:dryrun) isa Mycelia.DryRunExecutor
@@ -116,6 +137,18 @@ Test.@testset "Executor collection and dry-run submission" begin
     Test.@test result.ok
     Test.@test length(dry_executor.jobs) == 1
     Test.@test length(dry_executor.results) == 1
+
+    held_result = Mycelia.execute(
+        job,
+        Mycelia.SlurmExecutor(dry_run = true, hold = true),
+    )
+    Test.@test held_result.ok
+    Test.@test held_result.dry_run
+    Test.@test held_result.held
+    Test.@test startswith(
+        something(held_result.submit_command, ""),
+        "sbatch --hold --parsable ",
+    )
 end
 
 Test.@testset "Wrapper collection paths remain routable through executor infrastructure" begin
@@ -407,6 +440,146 @@ Test.@testset "Submission helper branches" begin
 end
 
 Test.@testset "Scheduler utility helpers" begin
+    Test.@test Mycelia._extract_sbatch_job_id(
+        "12345",
+    ) == "12345"
+    Test.@test Mycelia._extract_sbatch_job_id(
+        "site notice\n12345;federated_cluster\n",
+    ) == "12345"
+    Test.@test Mycelia._extract_sbatch_job_id("12345\r\n") == "12345"
+    Test.@test Mycelia._extract_sbatch_job_id("12\r345\n") === nothing
+    Test.@test Mycelia._extract_sbatch_job_id(
+        "12345;cluster-a\n67890;cluster-b\n",
+    ) === nothing
+    Test.@test Mycelia._extract_sbatch_job_id(
+        "Submitted batch job 12345\n",
+    ) === nothing
+
+    mktempdir() do temporary_root
+        job = Mycelia.JobSpec(
+            job_name = "held-submit-fixture",
+            cmd = "echo fixture",
+            site = :scg,
+            partition = "nih_s10",
+            account = "PI_FIXTURE",
+            time_limit = "00:10:00",
+            nodes = 1,
+            ntasks = 1,
+            cpus_per_task = 1,
+            mem_gb = 1,
+        )
+        captured_commands = Cmd[]
+        accepted = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "accepted.sbatch"),
+            sbatch_runner = command -> begin
+                push!(captured_commands, command)
+                return (;
+                    exit_code = 0,
+                    term_signal = 0,
+                    stdout = "site notice\n12345;cluster-a\n",
+                    stderr = "",
+                )
+            end,
+        )
+        Test.@test accepted.ok
+        Test.@test accepted.held
+        Test.@test accepted.scheduler_acceptance == :accepted
+        Test.@test accepted.job_id == "12345"
+        Test.@test length(captured_commands) == 1
+        Test.@test occursin(
+            "sbatch --hold --parsable",
+            Mycelia.command_string(only(captured_commands)),
+        )
+
+        ambiguous = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "ambiguous.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = 0,
+                term_signal = 0,
+                stdout = "12345\n67890\n",
+                stderr = "",
+            ),
+        )
+        Test.@test !ambiguous.ok
+        Test.@test ambiguous.scheduler_acceptance == :unknown
+        Test.@test ambiguous.job_id === nothing
+
+        rejected = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "rejected.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = 1,
+                term_signal = 0,
+                stdout = "",
+                stderr = "invalid account",
+            ),
+        )
+        Test.@test !rejected.ok
+        Test.@test rejected.scheduler_acceptance == :rejected
+        Test.@test any(
+            error -> occursin("invalid account", error),
+            rejected.errors,
+        )
+
+        signalled = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "signalled.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = -1,
+                term_signal = 15,
+                stdout = "",
+                stderr = "",
+            ),
+        )
+        Test.@test !signalled.ok
+        Test.@test signalled.scheduler_acceptance == :unknown
+
+        runner_threw = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "runner-threw.sbatch"),
+            sbatch_runner = _command -> error("transport interrupted"),
+        )
+        Test.@test !runner_threw.ok
+        Test.@test runner_threw.scheduler_acceptance == :unknown
+    end
+
+    release_commands = Cmd[]
+    released_job_id = Mycelia.release_slurm_job(
+        "12345";
+        scontrol_path = "/fixture/scontrol",
+        command_runner = command -> push!(release_commands, command),
+    )
+    Test.@test released_job_id == "12345"
+    Test.@test length(release_commands) == 1
+    Test.@test Mycelia.command_string(only(release_commands)) ==
+               "/fixture/scontrol release 12345"
+    test_throws_message(ArgumentError, ["decimal digits"]) do
+        Mycelia.release_slurm_job(
+            "12345;67890";
+            scontrol_path = "/fixture/scontrol",
+            command_runner = _command -> nothing,
+        )
+    end
+    test_throws_message(ErrorException, ["12345 remains held"]) do
+        Mycelia.release_slurm_job(
+            "12345";
+            scontrol_path = nothing,
+            command_runner = _command -> nothing,
+        )
+    end
+
     Test.@test Mycelia.list_lawrencium_associations(execute = false) ==
                "sacctmgr show association -p user=\$USER"
     Test.@test Mycelia.list_lawrencium_qos_limits(execute = false) ==

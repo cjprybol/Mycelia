@@ -70,11 +70,63 @@ function _autocycler_paths()::Tuple{String, String, String}
     return install_dir, script_path, env_file_path
 end
 
-function _autocycler_install_lock_path()::String
+function _canonical_autocycler_conda_runner(
+        conda_runner::AbstractString = _conda_runner(),
+)::String
+    executable = Sys.which(String(conda_runner))
+    candidate = executable === nothing ?
+                abspath(String(conda_runner)) : String(executable)
+    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+end
+
+function _canonical_autocycler_environment_prefix(
+        environment_prefix::AbstractString,
+)::String
+    normalized_prefix = normpath(abspath(String(environment_prefix)))
+    existing_ancestor = normalized_prefix
+    missing_components = String[]
+    while !ispath(existing_ancestor) && !islink(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    isdir(existing_ancestor) || throw(ArgumentError(
+        "Autocycler environment prefix has a non-directory existing " *
+        "ancestor: $(existing_ancestor)",
+    ))
+    canonical_ancestor = realpath(existing_ancestor)
+    return isempty(missing_components) ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, missing_components...))
+end
+
+function _autocycler_environment_prefix(
+        conda_runner::AbstractString = _conda_runner(),
+)::String
+    canonical_runner = _canonical_autocycler_conda_runner(conda_runner)
+    conda_root = normpath(joinpath(dirname(canonical_runner), ".."))
+    return _canonical_autocycler_environment_prefix(
+        joinpath(conda_root, "envs", AUTOCYCLER_ENV_NAME),
+    )
+end
+
+function _autocycler_install_lock_path(
+        conda_runner::AbstractString = _conda_runner(),
+)::String
+    environment_prefix = _autocycler_environment_prefix(conda_runner)
+    return _autocycler_install_lock_path_from_prefix(environment_prefix)
+end
+
+function _autocycler_install_lock_path_from_prefix(
+        environment_prefix::AbstractString,
+)::String
+    normalized_prefix =
+        _canonical_autocycler_environment_prefix(environment_prefix)
+    conda_root = dirname(dirname(normalized_prefix))
     return joinpath(
-        first(Base.DEPOT_PATH),
-        "locks",
-        "mycelia-$(AUTOCYCLER_ENV_NAME)-install.pid",
+        conda_root,
+        ".mycelia-locks",
+        "$(AUTOCYCLER_ENV_NAME).pid",
     )
 end
 
@@ -257,15 +309,20 @@ function _autocycler_package_inventory_sha256(
 end
 
 function _autocycler_environment_packages(;
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
         command_reader::Function = command -> read(command, String),
 )::Vector{NamedTuple}
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix =
+        _canonical_autocycler_environment_prefix(environment_prefix)
     command = Cmd(
         String[
-            String(conda_runner),
+            resolved_runner,
             "list",
-            "-n",
-            AUTOCYCLER_ENV_NAME,
+            "-p",
+            resolved_prefix,
             "--json",
         ],
     )
@@ -533,24 +590,100 @@ function _with_autocycler_install_lock(
     )
 end
 
-function _autocycler_environment_is_installed()::Bool
-    return check_bioconda_env_is_installed(AUTOCYCLER_ENV_NAME)
+function _autocycler_environment_is_installed(
+        conda_runner::AbstractString = _conda_runner();
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
+)::Bool
+    resolved_prefix =
+        _canonical_autocycler_environment_prefix(environment_prefix)
+    return isdir(joinpath(resolved_prefix, "conda-meta"))
+end
+
+function _create_autocycler_environment_from_yaml(
+        environment_file::AbstractString,
+        environment_name::AbstractString;
+        force::Bool = false,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
+        command_runner::Function = run,
+)::String
+    String(environment_name) == AUTOCYCLER_ENV_NAME || throw(ArgumentError(
+        "Autocycler environment name must be $(repr(AUTOCYCLER_ENV_NAME)).",
+    ))
+    force && throw(ArgumentError(
+        "Autocycler environments are immutable and cannot be force-created.",
+    ))
+    normalized_environment_file = abspath(String(environment_file))
+    isfile(normalized_environment_file) || throw(ArgumentError(
+        "Autocycler environment file does not exist: " *
+        normalized_environment_file,
+    ))
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix =
+        _canonical_autocycler_environment_prefix(environment_prefix)
+    _autocycler_environment_is_installed(
+        resolved_runner;
+        environment_prefix = resolved_prefix,
+    ) && return resolved_prefix
+    command_runner(Cmd(String[
+        resolved_runner,
+        "env",
+        "create",
+        "-f",
+        normalized_environment_file,
+        "-p",
+        resolved_prefix,
+    ]))
+    command_runner(Cmd(String[resolved_runner, "clean", "--all", "-y"]))
+    return resolved_prefix
 end
 
 function _install_autocycler_locked(;
         force::Bool = false,
         downloader::Function = Downloads.download,
         paths::Tuple{String, String, String} = _autocycler_paths(),
-        environment_checker::Function = _autocycler_environment_is_installed,
-        environment_creator::Function = create_conda_env_from_yaml,
-        package_inspector::Function = _autocycler_environment_packages,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+        environment_checker::Union{Nothing, Function} = nothing,
+        environment_creator::Union{Nothing, Function} = nothing,
+        package_inspector::Union{Nothing, Function} = nothing,
 )::String
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    effective_environment_checker = environment_checker === nothing ?
+                                    () -> _autocycler_environment_is_installed(
+        resolved_runner;
+        environment_prefix = resolved_prefix,
+    ) : environment_checker
+    effective_environment_creator = environment_creator === nothing ?
+                                    (
+        environment_file::AbstractString,
+        environment_name::AbstractString;
+        force::Bool = false,
+    ) -> _create_autocycler_environment_from_yaml(
+        environment_file,
+        environment_name;
+        force,
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    ) : environment_creator
+    effective_package_inspector = package_inspector === nothing ?
+                                  () -> _autocycler_environment_packages(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    ) : package_inspector
     install_dir, script_path, env_file_path = paths
     mkpath(install_dir)
     verified_env_file_path =
         _require_verified_autocycler_environment_spec(env_file_path)
 
-    environment_installed = Bool(environment_checker())
+    environment_installed = Bool(effective_environment_checker())
     if force && environment_installed
         throw(
             ErrorException(
@@ -563,7 +696,7 @@ function _install_autocycler_locked(;
         )
     end
     if !environment_installed
-        environment_creator(
+        effective_environment_creator(
             verified_env_file_path,
             AUTOCYCLER_ENV_NAME;
             force = false,
@@ -587,7 +720,7 @@ function _install_autocycler_locked(;
         )
     end
 
-    _ensure_autocycler_packages!(package_inspector)
+    _ensure_autocycler_packages!(effective_package_inspector)
 
     @info "Autocycler installed successfully."
     return script_path
@@ -625,22 +758,42 @@ general metagenome, eukaryotic-genome, or fragmentary-assembly consensus method.
 # Keywords
 - `force::Bool=false`: Refresh the pinned script during a first installation;
   error if the spec-hash-addressed environment already exists.
+- `conda_runner::AbstractString`: Conda-compatible executable that owns the
+  selected environment root.
+- `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
+  to create or inspect; pass the same value to `run_autocycler` or
+  `run_autocycler_polished`.
 """
 function install_autocycler(;
         force::Bool = false,
         downloader::Function = Downloads.download,
         paths::Tuple{String, String, String} = _autocycler_paths(),
-        environment_checker::Function = _autocycler_environment_is_installed,
-        environment_creator::Function = create_conda_env_from_yaml,
-        package_inspector::Function = _autocycler_environment_packages,
-        lock_path::AbstractString = _autocycler_install_lock_path(),
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+        environment_checker::Union{Nothing, Function} = nothing,
+        environment_creator::Union{Nothing, Function} = nothing,
+        package_inspector::Union{Nothing, Function} = nothing,
+        lock_path::Union{Nothing, AbstractString} = nothing,
         lock_runner::Function = _with_autocycler_install_lock,
 )::String
-    return lock_runner(String(lock_path)) do
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    resolved_lock_path = lock_path === nothing ?
+                         _autocycler_install_lock_path_from_prefix(
+        resolved_prefix,
+    ) :
+                         String(lock_path)
+    return lock_runner(resolved_lock_path) do
         _install_autocycler_locked(;
             force,
             downloader,
             paths,
+            conda_runner = resolved_runner,
+            environment_prefix = resolved_prefix,
             environment_checker,
             environment_creator,
             package_inspector,
@@ -1206,14 +1359,19 @@ end
 function _autocycler_conda_command(
         arguments::Vector{String},
         work_dir::AbstractString;
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
 )::Cmd
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix =
+        _canonical_autocycler_environment_prefix(environment_prefix)
     command_arguments = String[
-        String(conda_runner),
+        resolved_runner,
         "run",
         "--live-stream",
-        "-n",
-        AUTOCYCLER_ENV_NAME,
+        "-p",
+        resolved_prefix,
     ]
     append!(command_arguments, arguments)
     command = Cmd(command_arguments)
@@ -1236,7 +1394,9 @@ function _autocycler_command_plan(
         jobs::Integer = 1,
         read_type::AbstractString = "ont_r10",
         script_path::AbstractString = _autocycler_paths()[2],
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
 )::NamedTuple
     normalized_read_type = _validate_autocycler_parameters(
         threads,
@@ -1263,6 +1423,7 @@ function _autocycler_command_plan(
         ],
         normalized_out_dir;
         conda_runner = conda_runner,
+        environment_prefix = environment_prefix,
     )
     step = (
         name = :autocycler,
@@ -1287,7 +1448,9 @@ function _autocycler_polishing_command_plan(
         out_dir::AbstractString;
         threads::Integer = max(Sys.CPU_THREADS, 1),
         polypolish_careful::Bool = true,
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _autocycler_environment_prefix(conda_runner),
 )::NamedTuple
     if threads < 1
         throw(ArgumentError("threads must be positive, got $(threads)"))
@@ -1320,6 +1483,7 @@ function _autocycler_polishing_command_plan(
             String["bwa", "index", normalized_assembly],
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = nothing,
         expected_outputs = bwa_index_files,
@@ -1338,6 +1502,7 @@ function _autocycler_polishing_command_plan(
             ],
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = alignments_1,
         expected_outputs = String[alignments_1],
@@ -1356,6 +1521,7 @@ function _autocycler_polishing_command_plan(
             ],
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = alignments_2,
         expected_outputs = String[alignments_2],
@@ -1377,6 +1543,7 @@ function _autocycler_polishing_command_plan(
             ],
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = nothing,
         expected_outputs = String[filtered_1, filtered_2],
@@ -1395,6 +1562,7 @@ function _autocycler_polishing_command_plan(
             polypolish_arguments,
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = polypolish_assembly,
         expected_outputs = String[polypolish_assembly],
@@ -1421,6 +1589,7 @@ function _autocycler_polishing_command_plan(
             ],
             polishing_dir;
             conda_runner = conda_runner,
+            environment_prefix = environment_prefix,
         ),
         stdout = nothing,
         expected_outputs = String[final_assembly, pypolca_report],
@@ -1572,16 +1741,49 @@ function _ensure_autocycler_installed_locked(
     return _autocycler_toolchain_metadata(inventory)
 end
 
-function _ensure_autocycler_installed_locked_default()::Dict{String, Any}
+function _ensure_autocycler_installed_locked_default(
+        conda_runner::AbstractString = _conda_runner();
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+)::Dict{String, Any}
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    package_inspector = () -> _autocycler_environment_packages(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    )
+    installer = () -> _install_autocycler_locked(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    )
+    environment_checker = () -> _autocycler_environment_is_installed(
+        resolved_runner;
+        environment_prefix = resolved_prefix,
+    )
     return _ensure_autocycler_installed_locked(
-        _autocycler_environment_packages,
-        _install_autocycler_locked,
-        _autocycler_environment_is_installed,
+        package_inspector,
+        installer,
+        environment_checker,
     )
 end
 
-function _inspect_autocycler_toolchain_locked()::Dict{String, Any}
-    Bool(_autocycler_environment_is_installed()) || throw(
+function _inspect_autocycler_toolchain_locked(
+        conda_runner::AbstractString = _conda_runner();
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+)::Dict{String, Any}
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    Bool(_autocycler_environment_is_installed(
+        resolved_runner;
+        environment_prefix = resolved_prefix,
+    )) || throw(
         ErrorException(
             "Autocycler environment disappeared while its shared lock was held.",
         ),
@@ -1594,16 +1796,25 @@ function _inspect_autocycler_toolchain_locked()::Dict{String, Any}
             "was held.",
         ),
     )
-    inventory =
-        _ensure_autocycler_packages!(_autocycler_environment_packages)
+    package_inspector = () -> _autocycler_environment_packages(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    )
+    inventory = _ensure_autocycler_packages!(package_inspector)
     return _autocycler_toolchain_metadata(inventory)
 end
 
 function _autocycler_toolchain_snapshotter(
         dependency_checker::Function,
+        conda_runner::AbstractString = _conda_runner();
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
 )::Function
     return dependency_checker === _ensure_autocycler_installed_locked_default ?
-           _inspect_autocycler_toolchain_locked : dependency_checker
+           () -> _inspect_autocycler_toolchain_locked(
+        conda_runner;
+        environment_prefix,
+    ) :
+           dependency_checker
 end
 
 function _require_unchanged_autocycler_toolchain(
@@ -1629,17 +1840,45 @@ function _require_unchanged_autocycler_toolchain(
 end
 
 function _ensure_autocycler_installed(;
-        package_inspector::Function = _autocycler_environment_packages,
-        installer::Function = _install_autocycler_locked,
-        environment_checker::Function = _autocycler_environment_is_installed,
-        lock_path::AbstractString = _autocycler_install_lock_path(),
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+        package_inspector::Union{Nothing, Function} = nothing,
+        installer::Union{Nothing, Function} = nothing,
+        environment_checker::Union{Nothing, Function} = nothing,
+        lock_path::Union{Nothing, AbstractString} = nothing,
         lock_runner::Function = _with_autocycler_install_lock,
 )::Dict{String, Any}
-    return lock_runner(String(lock_path)) do
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    effective_package_inspector = package_inspector === nothing ?
+                                  () -> _autocycler_environment_packages(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    ) : package_inspector
+    effective_installer = installer === nothing ?
+                          () -> _install_autocycler_locked(;
+        conda_runner = resolved_runner,
+        environment_prefix = resolved_prefix,
+    ) : installer
+    effective_environment_checker = environment_checker === nothing ?
+                                    () -> _autocycler_environment_is_installed(
+        resolved_runner;
+        environment_prefix = resolved_prefix,
+    ) : environment_checker
+    resolved_lock_path = lock_path === nothing ?
+                         _autocycler_install_lock_path_from_prefix(
+        resolved_prefix,
+    ) :
+                         String(lock_path)
+    return lock_runner(resolved_lock_path) do
         _ensure_autocycler_installed_locked(
-            package_inspector,
-            installer,
-            environment_checker,
+            effective_package_inspector,
+            effective_installer,
+            effective_environment_checker,
         )
     end
 end
@@ -1652,6 +1891,8 @@ function _run_autocycler_with_reserved_output(
         read_type::AbstractString,
         toolchain::AbstractDict,
         runner::Function,
+        conda_runner::AbstractString,
+        environment_prefix::AbstractString,
 )::NamedTuple
     validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
     normalized_toolchain =
@@ -1665,6 +1906,8 @@ function _run_autocycler_with_reserved_output(
         jobs = jobs,
         read_type,
         script_path = script_path,
+        conda_runner,
+        environment_prefix,
     )
 
     @info "Starting long-read-only Autocycler pipeline..."
@@ -1705,15 +1948,26 @@ function _run_autocycler(
         threads::Integer = max(Sys.CPU_THREADS, 1),
         jobs::Integer = 1,
         read_type::AbstractString = "ont_r10",
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
         dependency_checker::Function =
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         validate_long_reads::Bool = true,
         output_lock_runner::Function = _with_autocycler_output_lock,
-        environment_lock_path::AbstractString =
-            _autocycler_install_lock_path(),
+        environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
 )::NamedTuple
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    resolved_environment_lock_path = environment_lock_path === nothing ?
+                                     _autocycler_install_lock_path_from_prefix(
+        resolved_prefix,
+    ) : String(environment_lock_path)
     normalized_read_type = _validate_autocycler_parameters(
         threads,
         jobs,
@@ -1727,11 +1981,21 @@ function _run_autocycler(
     validate_long_reads &&
         _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
-        environment_lock_runner(String(environment_lock_path)) do
-            toolchain_snapshotter =
-                _autocycler_toolchain_snapshotter(dependency_checker)
+        environment_lock_runner(resolved_environment_lock_path) do
+            toolchain_snapshotter = _autocycler_toolchain_snapshotter(
+                dependency_checker,
+                resolved_runner;
+                environment_prefix = resolved_prefix,
+            )
+            dependency_result =
+                dependency_checker === _ensure_autocycler_installed_locked_default ?
+                _ensure_autocycler_installed_locked_default(
+                    resolved_runner;
+                    environment_prefix = resolved_prefix,
+                ) :
+                dependency_checker()
             initial_toolchain = _require_autocycler_toolchain_provenance(
-                dependency_checker(),
+                dependency_result,
             )
             result = _run_autocycler_with_reserved_output(
                 normalized_long_reads,
@@ -1741,6 +2005,8 @@ function _run_autocycler(
                 read_type = normalized_read_type,
                 toolchain = initial_toolchain,
                 runner,
+                conda_runner = resolved_runner,
+                environment_prefix = resolved_prefix,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -1781,6 +2047,11 @@ to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies
 - `jobs::Integer`: Number of simultaneous assembler jobs.
 - `read_type::AbstractString`: One of `ont_r9`, `ont_r10`, `pacbio_clr`, or
   `pacbio_hifi`.
+- `conda_runner::AbstractString`: Conda-compatible executable that owns the
+  selected environment root.
+- `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
+  created by `install_autocycler`; `nothing` derives the spec-hash-addressed
+  prefix from `conda_runner`.
 
 # Returns
 A named tuple with `outdir`, `assembly`, `graph`, and exact realized `toolchain`
@@ -1795,6 +2066,8 @@ function run_autocycler(;
         threads::Integer = max(Sys.CPU_THREADS, 1),
         jobs::Integer = 1,
         read_type::AbstractString = "ont_r10",
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
 )::NamedTuple
     return _run_autocycler(
         long_reads,
@@ -1802,6 +2075,8 @@ function run_autocycler(;
         threads = threads,
         jobs = jobs,
         read_type = read_type,
+        conda_runner = conda_runner,
+        environment_prefix = environment_prefix,
     )
 end
 
@@ -1819,6 +2094,8 @@ function _run_autocycler_polished_with_reserved_output(
         dependency_checker::Function,
         runner::Function,
         intermediate_remover::Function,
+        conda_runner::AbstractString,
+        environment_prefix::AbstractString,
 )::NamedTuple
     autocycler_result = _run_autocycler_with_reserved_output(
         normalized_long_reads,
@@ -1828,6 +2105,8 @@ function _run_autocycler_polished_with_reserved_output(
         read_type,
         toolchain,
         runner,
+        conda_runner,
+        environment_prefix,
     )
     normalized_out_dir = autocycler_result.outdir
     _require_unchanged_autocycler_toolchain(
@@ -1857,6 +2136,8 @@ function _run_autocycler_polished_with_reserved_output(
         normalized_out_dir;
         threads = threads,
         polypolish_careful = polypolish_careful,
+        conda_runner,
+        environment_prefix,
     )
     if isdir(polishing_plan.polishing_dir) &&
        !isempty(readdir(polishing_plan.polishing_dir))
@@ -2166,15 +2447,26 @@ function _run_autocycler_polished(
         read_type::AbstractString = "ont_r10",
         polypolish_careful::Bool = true,
         keep_intermediates::Bool = false,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
         dependency_checker::Function =
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         intermediate_remover::Function = path -> rm(path; force = true),
         output_lock_runner::Function = _with_autocycler_output_lock,
-        environment_lock_path::AbstractString =
-            _autocycler_install_lock_path(),
+        environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
 )::NamedTuple
+    resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
+    resolved_prefix = environment_prefix === nothing ?
+                      _autocycler_environment_prefix(resolved_runner) :
+                      _canonical_autocycler_environment_prefix(
+        environment_prefix,
+    )
+    resolved_environment_lock_path = environment_lock_path === nothing ?
+                                     _autocycler_install_lock_path_from_prefix(
+        resolved_prefix,
+    ) : String(environment_lock_path)
     normalized_read_type = _validate_autocycler_parameters(
         threads,
         jobs,
@@ -2204,11 +2496,21 @@ function _run_autocycler_polished(
         normalized_short_reads_2,
     )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
-        environment_lock_runner(String(environment_lock_path)) do
-            toolchain_snapshotter =
-                _autocycler_toolchain_snapshotter(dependency_checker)
+        environment_lock_runner(resolved_environment_lock_path) do
+            toolchain_snapshotter = _autocycler_toolchain_snapshotter(
+                dependency_checker,
+                resolved_runner;
+                environment_prefix = resolved_prefix,
+            )
+            dependency_result =
+                dependency_checker === _ensure_autocycler_installed_locked_default ?
+                _ensure_autocycler_installed_locked_default(
+                    resolved_runner;
+                    environment_prefix = resolved_prefix,
+                ) :
+                dependency_checker()
             initial_toolchain = _require_autocycler_toolchain_provenance(
-                dependency_checker(),
+                dependency_result,
             )
             result = _run_autocycler_polished_with_reserved_output(
                 normalized_long_reads,
@@ -2224,6 +2526,8 @@ function _run_autocycler_polished(
                 dependency_checker = toolchain_snapshotter,
                 runner,
                 intermediate_remover,
+                conda_runner = resolved_runner,
+                environment_prefix = resolved_prefix,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -2279,6 +2583,11 @@ ensemble method.
 - `read_type::AbstractString`: Exact Autocycler long-read chemistry.
 - `polypolish_careful::Bool`: Enable conservative Polypolish filtering.
 - `keep_intermediates::Bool`: Retain BWA indices and SAM intermediates.
+- `conda_runner::AbstractString`: Conda-compatible executable that owns the
+  selected environment root.
+- `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
+  created by `install_autocycler`; `nothing` derives the spec-hash-addressed
+  prefix from `conda_runner`.
 
 # Returns
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
@@ -2300,6 +2609,8 @@ function run_autocycler_polished(;
         read_type::AbstractString = "ont_r10",
         polypolish_careful::Bool = true,
         keep_intermediates::Bool = false,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
 )::NamedTuple
     return _run_autocycler_polished(
         long_reads,
@@ -2311,5 +2622,7 @@ function run_autocycler_polished(;
         read_type = read_type,
         polypolish_careful = polypolish_careful,
         keep_intermediates = keep_intermediates,
+        conda_runner = conda_runner,
+        environment_prefix = environment_prefix,
     )
 end

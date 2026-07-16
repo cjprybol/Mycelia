@@ -20,6 +20,85 @@ import Logging
 import Mycelia
 import Test
 
+function _autocycler_shell_quote(value::AbstractString)::String
+    return "'" * replace(String(value), "'" => "'\"'\"'") * "'"
+end
+
+function _autocycler_public_test_conda_runner(
+        path::AbstractString,
+        environment_prefix::AbstractString,
+)::String
+    inventory = Mycelia.JSON.json(
+        _autocycler_test_compatible_packages(),
+    )
+    quoted_prefix = _autocycler_shell_quote(environment_prefix)
+    script = replace(
+        raw"""#!/bin/sh
+expected_prefix=__EXPECTED_PREFIX__
+if [ "$1" = "list" ]; then
+    [ "$2" = "-p" ] && [ "$3" = "$expected_prefix" ] || exit 61
+    cat <<'MYCELIA_AUTOCYCLER_JSON'
+__PACKAGE_INVENTORY__
+MYCELIA_AUTOCYCLER_JSON
+    exit 0
+fi
+
+[ "$1" = "run" ] || exit 62
+shift
+[ "$1" = "--live-stream" ] || exit 63
+shift
+[ "$1" = "-p" ] && [ "$2" = "$expected_prefix" ] || exit 64
+shift 2
+
+if [ "$1" = "bash" ]; then
+    mkdir -p autocycler_out
+    printf '>contig_1\nACGTACGT\n' > autocycler_out/consensus_assembly.fasta
+    printf 'H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\tdp:f:20.0\n' > autocycler_out/consensus_assembly.gfa
+elif [ "$1" = "bwa" ] && [ "$2" = "index" ]; then
+    for extension in amb ann bwt pac sa; do
+        printf 'index\n' > "$3.$extension"
+    done
+elif [ "$1" = "bwa" ] && [ "$2" = "mem" ]; then
+    printf '@HD\tVN:1.6\n'
+elif [ "$1" = "polypolish" ] && [ "$2" = "filter" ]; then
+    shift 2
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --out1) out1="$2"; shift 2 ;;
+            --out2) out2="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    printf '@HD\tVN:1.6\n' > "$out1"
+    printf '@HD\tVN:1.6\n' > "$out2"
+elif [ "$1" = "polypolish" ] && [ "$2" = "polish" ]; then
+    printf '>contig_1\nACGTACGT\n'
+elif [ "$1" = "pypolca" ] && [ "$2" = "run" ]; then
+    shift 2
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -o) output_dir="$2"; shift 2 ;;
+            -p) output_prefix="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    mkdir -p "$output_dir"
+    printf '>contig_1\nACGTACGT\n' > "$output_dir/${output_prefix}_corrected.fasta"
+    printf 'corrected_bases\t0\n' > "$output_dir/${output_prefix}.report"
+else
+    exit 65
+fi
+""",
+        "__EXPECTED_PREFIX__" => quoted_prefix,
+        "__PACKAGE_INVENTORY__" => inventory,
+    )
+    normalized_path = abspath(String(path))
+    mkpath(dirname(normalized_path))
+    write(normalized_path, script)
+    chmod(normalized_path, 0o755)
+    return normalized_path
+end
+
 function _autocycler_test_runner!(step::NamedTuple)::Nothing
     for output_path in step.expected_outputs
         mkpath(dirname(output_path))
@@ -186,9 +265,103 @@ Test.@testset "Autocycler wrapper" begin
             Mycelia.AUTOCYCLER_ENV_NAME,
             basename(Mycelia._autocycler_install_lock_path()),
         )
+        shared_runner = "/opt/shared-conda/bin/conda"
+        shared_prefix = joinpath(
+            "/opt/shared-conda",
+            "envs",
+            Mycelia.AUTOCYCLER_ENV_NAME,
+        )
+        Test.@test Mycelia._autocycler_environment_prefix(shared_runner) ==
+                   shared_prefix
+        Test.@test Mycelia._autocycler_install_lock_path(shared_runner) ==
+                   joinpath(
+            "/opt/shared-conda",
+            ".mycelia-locks",
+            "$(Mycelia.AUTOCYCLER_ENV_NAME).pid",
+        )
+        Test.@test !occursin(
+            first(Base.DEPOT_PATH),
+            Mycelia._autocycler_install_lock_path(shared_runner),
+        )
         Test.@test Mycelia._require_verified_autocycler_environment_spec(
             env_file_path,
         ) == abspath(env_file_path)
+
+        mktempdir() do temp_dir
+            physical_root = joinpath(temp_dir, "physical-conda")
+            alias_root = joinpath(temp_dir, "alias-conda")
+            physical_runner = joinpath(physical_root, "bin", "conda")
+            mkpath(dirname(physical_runner))
+            write(physical_runner, "synthetic runner\n")
+            symlink(physical_root, alias_root)
+            alias_runner = joinpath(alias_root, "bin", "conda")
+            Test.@test Mycelia._canonical_autocycler_conda_runner(
+                alias_runner,
+            ) == realpath(physical_runner)
+            Test.@test Mycelia._autocycler_environment_prefix(alias_runner) ==
+                       Mycelia._autocycler_environment_prefix(physical_runner)
+            Test.@test Mycelia._autocycler_install_lock_path(alias_runner) ==
+                       Mycelia._autocycler_install_lock_path(physical_runner)
+
+            environment_file = joinpath(temp_dir, "environment.yml")
+            write(environment_file, "name: synthetic\n")
+            exact_prefix = joinpath(
+                physical_root,
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
+            alias_prefix = joinpath(
+                alias_root,
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
+            Test.@test Mycelia._canonical_autocycler_environment_prefix(
+                alias_prefix,
+            ) == exact_prefix
+            Test.@test Mycelia._autocycler_install_lock_path_from_prefix(
+                alias_prefix,
+            ) == Mycelia._autocycler_install_lock_path_from_prefix(exact_prefix)
+            alias_command = Mycelia._autocycler_conda_command(
+                ["autocycler", "--version"],
+                temp_dir;
+                conda_runner = alias_runner,
+                environment_prefix = alias_prefix,
+            )
+            Test.@test alias_command.exec[1] == realpath(physical_runner)
+            Test.@test alias_command.exec[4:5] == ["-p", exact_prefix]
+            mkpath(exact_prefix)
+            Test.@test Mycelia._canonical_autocycler_environment_prefix(
+                alias_prefix,
+            ) == realpath(exact_prefix)
+            commands = Cmd[]
+            created_prefix = Mycelia._create_autocycler_environment_from_yaml(
+                environment_file,
+                Mycelia.AUTOCYCLER_ENV_NAME;
+                conda_runner = alias_runner,
+                environment_prefix = exact_prefix,
+                command_runner = command -> begin
+                    push!(commands, command)
+                    return nothing
+                end,
+            )
+            Test.@test created_prefix == exact_prefix
+            Test.@test length(commands) == 2
+            Test.@test commands[1].exec == String[
+                realpath(physical_runner),
+                "env",
+                "create",
+                "-f",
+                abspath(environment_file),
+                "-p",
+                exact_prefix,
+            ]
+            Test.@test commands[2].exec == String[
+                realpath(physical_runner),
+                "clean",
+                "--all",
+                "-y",
+            ]
+        end
 
         environment_spec = read(env_file_path, String)
         Test.@test Mycelia._autocycler_sha256(env_file_path) ==
@@ -445,12 +618,13 @@ Test.@testset "Autocycler wrapper" begin
 
         parsed_inventory = Mycelia._autocycler_environment_packages(;
             conda_runner = "/test/conda",
+            environment_prefix = "/test/envs/autocycler-exact",
             command_reader = command -> begin
                 Test.@test command.exec == String[
                     "/test/conda",
                     "list",
-                    "-n",
-                    Mycelia.AUTOCYCLER_ENV_NAME,
+                    "-p",
+                    "/test/envs/autocycler-exact",
                     "--json",
                 ]
                 return "[{\"name\":\"autocycler\",\"version\":\"0.5.2\"," *
@@ -897,6 +1071,12 @@ Test.@testset "Autocycler wrapper" begin
             script_path = joinpath(temp_dir, "autocycler_full.sh")
             write(long_reads, "@long\nACGT\n+\nIIII\n")
             write(script_path, "#!/usr/bin/env bash\n")
+            environment_prefix = joinpath(
+                temp_dir,
+                "conda",
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
 
             plan = Mycelia._autocycler_command_plan(
                 long_reads,
@@ -906,14 +1086,15 @@ Test.@testset "Autocycler wrapper" begin
                 read_type = "pacbio_hifi",
                 script_path = script_path,
                 conda_runner = "/test/conda",
+                environment_prefix,
             )
             command = only(plan.steps).command
             Test.@test command.exec == String[
                 "/test/conda",
                 "run",
                 "--live-stream",
-                "-n",
-                Mycelia.AUTOCYCLER_ENV_NAME,
+                "-p",
+                environment_prefix,
                 "bash",
                 abspath(script_path),
                 abspath(long_reads),
@@ -1320,6 +1501,15 @@ Test.@testset "Autocycler wrapper" begin
             dependency_checks = Ref(0)
             expected_toolchain = _autocycler_test_toolchain()
             out_dir = joinpath(temp_dir, "autocycler-run")
+            conda_runner = joinpath(temp_dir, "exact-conda", "bin", "conda")
+            mkpath(dirname(conda_runner))
+            write(conda_runner, "synthetic runner\n")
+            environment_prefix = joinpath(
+                temp_dir,
+                "exact-conda",
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
             output_lock_path = Mycelia._autocycler_output_lock_path(out_dir)
             environment_lock_path = joinpath(temp_dir, "environment.pid")
             environment_lock_active = Ref(false)
@@ -1342,6 +1532,8 @@ Test.@testset "Autocycler wrapper" begin
                 threads = 4,
                 jobs = 3,
                 read_type = "ont_r9",
+                conda_runner,
+                environment_prefix,
                 dependency_checker = () -> begin
                     Test.@test isfile(output_lock_path)
                     Test.@test environment_lock_active[]
@@ -1351,6 +1543,11 @@ Test.@testset "Autocycler wrapper" begin
                 runner = (step::NamedTuple) -> begin
                     Test.@test isfile(output_lock_path)
                     Test.@test environment_lock_active[]
+                    Test.@test first(step.command.exec) == realpath(conda_runner)
+                    prefix_index = findfirst(==("-p"), step.command.exec)
+                    Test.@test prefix_index !== nothing
+                    Test.@test step.command.exec[prefix_index + 1] ==
+                               environment_prefix
                     return _autocycler_test_runner!(step)
                 end,
                 environment_lock_path,
@@ -1792,6 +1989,20 @@ Test.@testset "Autocycler wrapper" begin
             write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
             dependency_checks = Ref(0)
             polished_out_dir = joinpath(temp_dir, "polished-run")
+            conda_runner = joinpath(
+                temp_dir,
+                "polished-conda",
+                "bin",
+                "conda",
+            )
+            mkpath(dirname(conda_runner))
+            write(conda_runner, "synthetic runner\n")
+            environment_prefix = joinpath(
+                temp_dir,
+                "polished-conda",
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
             polished_lock_path =
                 Mycelia._autocycler_output_lock_path(polished_out_dir)
             environment_lock_path = joinpath(temp_dir, "polished-environment.pid")
@@ -1818,6 +2029,8 @@ Test.@testset "Autocycler wrapper" begin
                 threads = 4,
                 jobs = 2,
                 read_type = "ont_r10",
+                conda_runner,
+                environment_prefix,
                 dependency_checker = () -> begin
                     Test.@test isfile(polished_lock_path)
                     Test.@test environment_lock_active[]
@@ -1827,6 +2040,11 @@ Test.@testset "Autocycler wrapper" begin
                 runner = (step::NamedTuple) -> begin
                     Test.@test isfile(polished_lock_path)
                     Test.@test environment_lock_active[]
+                    Test.@test first(step.command.exec) == realpath(conda_runner)
+                    prefix_index = findfirst(==("-p"), step.command.exec)
+                    Test.@test prefix_index !== nothing
+                    Test.@test step.command.exec[prefix_index + 1] ==
+                               environment_prefix
                     return _autocycler_test_runner!(step)
                 end,
                 environment_lock_path,
@@ -2858,6 +3076,69 @@ Test.@testset "Autocycler wrapper" begin
             )
             Test.@test runner_calls[] == 0
             Test.@test !ispath(joinpath(temp_dir, "stale-env-should-not-run"))
+        end
+    end
+
+    Test.@testset "public custom environment round trip" begin
+        mktempdir() do temp_dir
+            physical_root = joinpath(temp_dir, "physical-conda")
+            alias_root = joinpath(temp_dir, "alias-conda")
+            physical_prefix = joinpath(
+                physical_root,
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
+            alias_prefix = joinpath(
+                alias_root,
+                "envs",
+                Mycelia.AUTOCYCLER_ENV_NAME,
+            )
+            mkpath(joinpath(physical_prefix, "conda-meta"))
+            conda_runner = _autocycler_public_test_conda_runner(
+                joinpath(physical_root, "bin", "conda"),
+                physical_prefix,
+            )
+            symlink(physical_root, alias_root)
+
+            installed_script = Mycelia.install_autocycler(;
+                conda_runner,
+                environment_prefix = alias_prefix,
+            )
+            Test.@test Mycelia._autocycler_script_is_verified(
+                installed_script,
+            )
+
+            long_reads = joinpath(temp_dir, "long.fastq")
+            short_reads_1 = joinpath(temp_dir, "short_R1.fastq")
+            short_reads_2 = joinpath(temp_dir, "short_R2.fastq")
+            write(long_reads, "@long\nACGTACGT\n+\nIIIIIIII\n")
+            write(short_reads_1, "@pair/1\nACGTACGT\n+\nIIIIIIII\n")
+            write(short_reads_2, "@pair/2\nACGTACGT\n+\nIIIIIIII\n")
+
+            long_only = Mycelia.run_autocycler(;
+                long_reads,
+                out_dir = joinpath(temp_dir, "long-only"),
+                threads = 2,
+                conda_runner,
+                environment_prefix = alias_prefix,
+            )
+            Test.@test isfile(long_only.assembly)
+            Test.@test isfile(long_only.graph)
+            Test.@test long_only.toolchain == _autocycler_test_toolchain()
+
+            polished = Mycelia.run_autocycler_polished(;
+                long_reads,
+                short_reads_1,
+                short_reads_2,
+                out_dir = joinpath(temp_dir, "polished"),
+                threads = 2,
+                conda_runner,
+                environment_prefix = alias_prefix,
+            )
+            Test.@test isfile(polished.assembly)
+            Test.@test isfile(polished.graph)
+            Test.@test isfile(polished.autocycler_assembly)
+            Test.@test polished.toolchain == _autocycler_test_toolchain()
         end
     end
 

@@ -64,7 +64,10 @@ function lawrencium_sbatch(;
     if executor !== nothing
         resolved_executor = resolve_executor(executor)
         if dry_run && resolved_executor isa SlurmExecutor
-            resolved_executor = SlurmExecutor(dry_run = true)
+            resolved_executor = SlurmExecutor(
+                dry_run = true,
+                hold = resolved_executor.hold,
+            )
         end
         return execute(job, resolved_executor)
     end
@@ -148,7 +151,10 @@ function scg_sbatch(;
     if executor !== nothing
         resolved_executor = resolve_executor(executor)
         if dry_run && resolved_executor isa SlurmExecutor
-            resolved_executor = SlurmExecutor(dry_run = true)
+            resolved_executor = SlurmExecutor(
+                dry_run = true,
+                hold = resolved_executor.hold,
+            )
         end
         return execute(job, resolved_executor)
     end
@@ -287,7 +293,10 @@ function nersc_sbatch(;
     if executor !== nothing
         resolved_executor = resolve_executor(executor)
         if dry_run && resolved_executor isa SlurmExecutor
-            resolved_executor = SlurmExecutor(dry_run = true)
+            resolved_executor = SlurmExecutor(
+                dry_run = true,
+                hold = resolved_executor.hold,
+            )
         end
         return execute(job, resolved_executor)
     end

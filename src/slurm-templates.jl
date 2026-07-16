@@ -46,6 +46,8 @@ end
 Base.@kwdef struct SubmitResult
     ok::Bool = false
     dry_run::Bool = true
+    held::Bool = false
+    scheduler_acceptance::Symbol = :not_attempted
     site::Symbol = :local
     backend::Symbol = :none
     artifact_path::Union{Nothing, String} = nothing
@@ -55,6 +57,36 @@ Base.@kwdef struct SubmitResult
     stdout::Union{Nothing, String} = nothing
     warnings::Vector{String} = String[]
     errors::Vector{String} = String[]
+end
+
+function SubmitResult(
+        ok::Bool,
+        dry_run::Bool,
+        site::Symbol,
+        backend::Symbol,
+        artifact_path::Union{Nothing, String},
+        artifact_text::Union{Nothing, String},
+        submit_command::Union{Nothing, String},
+        job_id::Union{Nothing, String},
+        stdout::Union{Nothing, String},
+        warnings::Vector{String},
+        errors::Vector{String},
+)::SubmitResult
+    return SubmitResult(;
+        ok,
+        dry_run,
+        held = false,
+        scheduler_acceptance = :not_attempted,
+        site,
+        backend,
+        artifact_path,
+        artifact_text,
+        submit_command,
+        job_id,
+        stdout,
+        warnings,
+        errors,
+    )
 end
 
 const VALID_JOB_SITES = Set([:nersc, :lawrencium, :scg, :local, :cloudbuild])
@@ -1644,9 +1676,92 @@ function _is_interactive_job(job::JobSpec)::Bool
     return job.site == :scg && partition == "interactive"
 end
 
-function _extract_sbatch_job_id(stdout_text::AbstractString)
-    match_entry = match(r"Submitted batch job (\d+)", String(stdout_text))
-    return match_entry === nothing ? nothing : match_entry.captures[1]
+function _extract_sbatch_job_id(
+        stdout_text::AbstractString,
+)::Union{Nothing, String}
+    job_ids = String[]
+    for line in split(String(stdout_text), '\n'; keepempty = false)
+        match_entry = match(
+            r"^([0-9]+)(?:;[A-Za-z0-9_.-]+)?$",
+            strip(line),
+        )
+        match_entry === nothing || push!(job_ids, match_entry.captures[1])
+    end
+    return length(job_ids) == 1 ? only(job_ids) : nothing
+end
+
+function _run_sbatch_command(command::Cmd)::NamedTuple
+    stdout_buffer = IOBuffer()
+    stderr_buffer = IOBuffer()
+    process = Base.run(pipeline(
+        Base.ignorestatus(command);
+        stdout = stdout_buffer,
+        stderr = stderr_buffer,
+    ))
+    return (;
+        exit_code = Int(process.exitcode),
+        term_signal = Int(process.termsignal),
+        stdout = String(take!(stdout_buffer)),
+        stderr = String(take!(stderr_buffer)),
+    )
+end
+
+function _normalize_sbatch_execution(result::Any)::NamedTuple
+    result isa NamedTuple || error(
+        "sbatch runner must return a NamedTuple execution record.",
+    )
+    required_fields = (:exit_code, :term_signal, :stdout, :stderr)
+    all(field -> hasproperty(result, field), required_fields) || error(
+        "sbatch runner execution record is incomplete.",
+    )
+    result.exit_code isa Integer || error(
+        "sbatch runner exit_code must be an integer.",
+    )
+    result.term_signal isa Integer || error(
+        "sbatch runner term_signal must be an integer.",
+    )
+    result.stdout isa AbstractString || error(
+        "sbatch runner stdout must be a string.",
+    )
+    result.stderr isa AbstractString || error(
+        "sbatch runner stderr must be a string.",
+    )
+    return (;
+        exit_code = Int(result.exit_code),
+        term_signal = Int(result.term_signal),
+        stdout = String(result.stdout),
+        stderr = String(result.stderr),
+    )
+end
+
+function _normalize_slurm_job_id(job_id::AbstractString)::String
+    normalized_job_id = strip(String(job_id))
+    occursin(r"^[0-9]+$", normalized_job_id) || throw(ArgumentError(
+        "SLURM job id must contain only decimal digits.",
+    ))
+    return normalized_job_id
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Release one exact held SLURM job and return its normalized job id.
+"""
+function release_slurm_job(
+        job_id::AbstractString;
+        command_runner::Function = Base.run,
+        scontrol_path::Union{Nothing, AbstractString} = Sys.which("scontrol"),
+)::String
+    normalized_job_id = _normalize_slurm_job_id(job_id)
+    scontrol_path === nothing && error(
+        "scontrol is unavailable; SLURM job $(normalized_job_id) remains held.",
+    )
+    normalized_scontrol_path = String(scontrol_path)
+    isempty(strip(normalized_scontrol_path)) && throw(ArgumentError(
+        "scontrol_path must be nonempty when provided.",
+    ))
+    command_runner(`$(normalized_scontrol_path) release $(normalized_job_id)`)
+    return normalized_job_id
 end
 
 """
@@ -1660,14 +1775,22 @@ Submit a `JobSpec` to its target backend.
 function submit(
         job::JobSpec;
         dry_run::Bool = true,
+        hold::Bool = false,
         path::Union{Nothing, String} = nothing,
         allow_invalid::Bool = false,
         io::IO = stdout,
         execute_interactive::Bool = false,
-        execute_cloudbuild::Bool = false
+        execute_cloudbuild::Bool = false,
+        sbatch_runner::Function = _run_sbatch_command,
 )::SubmitResult
     normalized_job = normalize_job_spec(job)
     report = validate(normalized_job)
+
+    if hold && normalized_job.site in (:local, :cloudbuild)
+        throw(ArgumentError(
+            "hold=true is supported only for noninteractive SLURM batch jobs.",
+        ))
+    end
 
     if !isempty(report.errors) && !allow_invalid
         return SubmitResult(
@@ -1817,6 +1940,9 @@ function submit(
     end
 
     if _is_interactive_job(normalized_job)
+        hold && throw(ArgumentError(
+            "hold=true is not supported for interactive SLURM jobs.",
+        ))
         artifact_text = render_salloc(normalized_job)
         submit_command = artifact_text
 
@@ -1879,13 +2005,15 @@ function submit(
 
     artifact_text = render_sbatch(normalized_job)
     artifact_path = something(path, _default_sbatch_path(normalized_job))
-    submit_command = "sbatch " * _shell_quote(artifact_path)
+    submit_command = "sbatch " * (hold ? "--hold " : "") *
+                     "--parsable " * _shell_quote(artifact_path)
 
     if dry_run
         _print_dry_run(io, artifact_text, submit_command)
         return SubmitResult(
             ok = true,
             dry_run = true,
+            held = hold,
             site = normalized_job.site,
             backend = :sbatch,
             artifact_path = artifact_path,
@@ -1901,11 +2029,57 @@ function submit(
     chmod(artifact_path, 0o755)
 
     try
-        output = read(`sbatch $artifact_path`, String)
+        submit_cmd = hold ?
+                     `sbatch --hold --parsable $artifact_path` :
+                     `sbatch --parsable $artifact_path`
+        execution = _normalize_sbatch_execution(sbatch_runner(submit_cmd))
+        output = execution.stdout
         job_id = _extract_sbatch_job_id(output)
+        scheduler_acceptance = if execution.term_signal != 0
+            :unknown
+        elseif execution.exit_code == 0 && job_id !== nothing
+            :accepted
+        elseif execution.exit_code == 0 ||
+               job_id !== nothing ||
+               !isempty(strip(output))
+            :unknown
+        else
+            :rejected
+        end
+        if scheduler_acceptance != :accepted
+            diagnostic = if scheduler_acceptance == :rejected
+                "sbatch explicitly rejected the submission with exit code " *
+                "$(execution.exit_code)"
+            elseif execution.term_signal != 0
+                "sbatch terminated by signal $(execution.term_signal); " *
+                "scheduler acceptance is unknown"
+            else
+                "sbatch returned no single exact parsable '<digits>' or " *
+                "'<digits>;<cluster>' record; scheduler acceptance is unknown"
+            end
+            if !isempty(strip(execution.stderr))
+                diagnostic *= ": $(strip(execution.stderr))"
+            end
+            return SubmitResult(
+                ok = false,
+                dry_run = false,
+                held = hold,
+                scheduler_acceptance = scheduler_acceptance,
+                site = normalized_job.site,
+                backend = :sbatch,
+                artifact_path = artifact_path,
+                artifact_text = artifact_text,
+                submit_command = submit_command,
+                stdout = output,
+                warnings = report.warnings,
+                errors = vcat(report.errors, [diagnostic]),
+            )
+        end
         return SubmitResult(
             ok = true,
             dry_run = false,
+            held = hold,
+            scheduler_acceptance = :accepted,
             site = normalized_job.site,
             backend = :sbatch,
             artifact_path = artifact_path,
@@ -1920,6 +2094,8 @@ function submit(
         return SubmitResult(
             ok = false,
             dry_run = false,
+            held = hold,
+            scheduler_acceptance = :unknown,
             site = normalized_job.site,
             backend = :sbatch,
             artifact_path = artifact_path,

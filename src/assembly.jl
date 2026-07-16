@@ -1153,6 +1153,7 @@ end
 
 const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
 const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
+const _UNICYCLER_OUTPUT_LOCK_SUFFIX = ".mycelia-unicycler.lock"
 
 function _normalize_unicycler_package_inventory(
         package_records::Any,
@@ -1366,6 +1367,90 @@ function _with_unicycler_environment_lock(
     end
 end
 
+function _nearest_existing_unicycler_ancestor(path::AbstractString)::String
+    ancestor = abspath(String(path))
+    while !ispath(ancestor) && !islink(ancestor)
+        parent = dirname(ancestor)
+        parent == ancestor && return ancestor
+        ancestor = parent
+    end
+    return ancestor
+end
+
+function _canonical_planned_unicycler_output_path(
+        outdir::AbstractString,
+)::String
+    normalized_outdir = abspath(String(outdir))
+    islink(normalized_outdir) && throw(ArgumentError(
+        "Unicycler outdir must not be a symbolic link: " *
+        repr(normalized_outdir),
+    ))
+    ancestor = _nearest_existing_unicycler_ancestor(normalized_outdir)
+    isdir(ancestor) || throw(ArgumentError(
+        "Unicycler outdir has a non-directory existing ancestor: " *
+        repr(ancestor),
+    ))
+    canonical_ancestor = realpath(ancestor)
+    relative_path = relpath(normalized_outdir, ancestor)
+    return relative_path == "." ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, relative_path))
+end
+
+function _unicycler_output_lock_path(outdir::AbstractString)::String
+    canonical_outdir = _canonical_planned_unicycler_output_path(outdir)
+    lock_name = ".$(basename(canonical_outdir))$(_UNICYCLER_OUTPUT_LOCK_SUFFIX)"
+    return joinpath(dirname(canonical_outdir), lock_name)
+end
+
+function _with_unicycler_output_lock(
+        action::Function,
+        outdir::AbstractString;
+        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
+)::Any
+    canonical_outdir = _canonical_planned_unicycler_output_path(outdir)
+    lock_path = _unicycler_output_lock_path(canonical_outdir)
+    mkpath(dirname(lock_path))
+    return pidlock_runner(
+        lock_path;
+        stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+        refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
+    ) do
+        action(canonical_outdir)
+    end
+end
+
+function _require_unchanged_unicycler_output_plan(
+        requested_outdir::AbstractString,
+        planned_outdir::AbstractString,
+)::String
+    normalized_plan = normpath(abspath(String(planned_outdir)))
+    observed_plan = _canonical_planned_unicycler_output_path(requested_outdir)
+    observed_plan == normalized_plan || throw(ArgumentError(
+        "Unicycler outdir changed physical identity after reservation: " *
+        "planned $(repr(normalized_plan)), observed $(repr(observed_plan)).",
+    ))
+    return normalized_plan
+end
+
+function _require_exact_unicycler_output_dir(
+        outdir::AbstractString,
+)::String
+    normalized_outdir = normpath(abspath(String(outdir)))
+    if islink(normalized_outdir) || !isdir(normalized_outdir)
+        error(
+            "Unicycler did not preserve its exact reserved output directory: " *
+            repr(normalized_outdir),
+        )
+    end
+    canonical_outdir = realpath(normalized_outdir)
+    canonical_outdir == normalized_outdir || error(
+        "Unicycler reserved output directory resolves through a symbolic-link " *
+        "component: $(repr(normalized_outdir)) resolves to " *
+        "$(repr(canonical_outdir)).",
+    )
+    return normalized_outdir
+end
+
 function _unicycler_command(;
         conda_runner::AbstractString,
         short_1::AbstractString,
@@ -1436,8 +1521,10 @@ end
 function _require_unicycler_artifact(
         path::AbstractString,
         label::AbstractString,
+        outdir::AbstractString,
 )::String
-    normalized_path = String(path)
+    normalized_outdir = _require_exact_unicycler_output_dir(outdir)
+    normalized_path = normpath(abspath(String(path)))
     islink(normalized_path) && error(
         "Unicycler $(label) must be a regular non-symlink file: " *
         repr(normalized_path),
@@ -1446,6 +1533,21 @@ function _require_unicycler_artifact(
         "Unicycler did not produce a non-empty $(label) at " *
         repr(normalized_path),
     )
+    canonical_path = realpath(normalized_path)
+    canonical_path == normalized_path || error(
+        "Unicycler $(label) resolves through a symbolic-link component: " *
+        "$(repr(normalized_path)) resolves to $(repr(canonical_path)).",
+    )
+    relative_path = relpath(canonical_path, normalized_outdir)
+    relative_parts = splitpath(relative_path)
+    if relative_path == "." ||
+       isabspath(relative_path) ||
+       (!isempty(relative_parts) && first(relative_parts) == "..")
+        error(
+            "Unicycler $(label) escapes its exact reserved output directory " *
+            "$(repr(normalized_outdir)): $(repr(normalized_path)).",
+        )
+    end
     return normalized_path
 end
 
@@ -1477,16 +1579,15 @@ function _run_unicycler_with_contract(;
             ),
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_unicycler_environment_lock,
+        output_lock_runner::Function = _with_unicycler_output_lock,
         command_runner::Function = run,
 )::NamedTuple
     reported_outdir = String(outdir)
     isempty(strip(reported_outdir)) && throw(ArgumentError(
         "Unicycler outdir must be a non-empty path.",
     ))
-    reported_assembly = joinpath(reported_outdir, "assembly.fasta")
-    reported_graph = joinpath(reported_outdir, "assembly.gfa")
     normalized_outdir = abspath(String(outdir))
-    assembly = joinpath(normalized_outdir, "assembly.fasta")
+    planned_outdir = _canonical_planned_unicycler_output_path(normalized_outdir)
     resolved_conda_runner = _canonical_unicycler_conda_runner(conda_runner)
     resolved_executor = resolve_executor(executor)
     resolved_executor isa LocalExecutor || throw(ArgumentError(
@@ -1496,74 +1597,122 @@ function _run_unicycler_with_contract(;
     lock_path = environment_lock_path === nothing ?
                 _unicycler_environment_lock_path(resolved_conda_runner) :
                 String(environment_lock_path)
-    return environment_lock_runner(lock_path) do
-        environment_preparer(resolved_conda_runner)
-        toolchain_before = _require_unicycler_toolchain_provenance(
-            toolchain_inspector(resolved_conda_runner),
+    return output_lock_runner(planned_outdir) do reserved_outdir
+        reserved_outdir = _require_unchanged_unicycler_output_plan(
+            normalized_outdir,
+            reserved_outdir,
         )
-        graph = joinpath(normalized_outdir, "assembly.gfa")
-        if ispath(assembly) || islink(assembly) ||
-           ispath(graph) || islink(graph)
-            _require_unicycler_artifact(assembly, "assembly FASTA")
-            _require_unicycler_artifact(graph, "assembly GFA")
-            return (;
-                outdir = reported_outdir,
-                assembly = reported_assembly,
-                graph = reported_graph,
-                toolchain = nothing,
-                provenance_status = "unavailable-reused-output",
+        return environment_lock_runner(lock_path) do
+            environment_preparer(resolved_conda_runner)
+            toolchain_before = _require_unicycler_toolchain_provenance(
+                toolchain_inspector(resolved_conda_runner),
             )
-        end
+            assembly = joinpath(reserved_outdir, "assembly.fasta")
+            graph = joinpath(reserved_outdir, "assembly.gfa")
+            if ispath(assembly) || islink(assembly) ||
+               ispath(graph) || islink(graph)
+                assembly = _require_unicycler_artifact(
+                    assembly,
+                    "assembly FASTA",
+                    reserved_outdir,
+                )
+                graph = _require_unicycler_artifact(
+                    graph,
+                    "assembly GFA",
+                    reserved_outdir,
+                )
+                _require_unchanged_unicycler_output_plan(
+                    normalized_outdir,
+                    reserved_outdir,
+                )
+                return (;
+                    outdir = reserved_outdir,
+                    assembly,
+                    graph,
+                    requested_outdir = reported_outdir,
+                    toolchain = nothing,
+                    provenance_status = "unavailable-reused-output",
+                )
+            end
 
-        command = _unicycler_command(;
-            conda_runner = resolved_conda_runner,
-            short_1,
-            short_2,
-            long_reads,
-            outdir = normalized_outdir,
-            threads,
-            spades_options,
-            kmers,
-        )
-        if islink(normalized_outdir) || (ispath(normalized_outdir) &&
-                                        !isdir(normalized_outdir))
-            throw(ArgumentError(
-                "Unicycler outdir must be absent or an empty directory: " *
-                repr(normalized_outdir),
-            ))
-        end
-        if isdir(normalized_outdir)
-            isempty(readdir(normalized_outdir)) || throw(ArgumentError(
-                "Refusing to remove non-empty Unicycler outdir without a " *
-                "completed assembly: $(repr(normalized_outdir)).",
-            ))
-            try
-                rm(normalized_outdir)
-            catch removal_error
-                removal_error isa InterruptException && rethrow()
+            command = _unicycler_command(;
+                conda_runner = resolved_conda_runner,
+                short_1,
+                short_2,
+                long_reads,
+                outdir = reserved_outdir,
+                threads,
+                spades_options,
+                kmers,
+            )
+            if islink(reserved_outdir) ||
+               (ispath(reserved_outdir) && !isdir(reserved_outdir))
                 throw(ArgumentError(
-                    "Unicycler outdir changed or was not empty during " *
-                    "nonrecursive removal: $(repr(normalized_outdir)).",
+                    "Unicycler outdir must be absent or an empty directory: " *
+                    repr(reserved_outdir),
                 ))
             end
+            if isdir(reserved_outdir)
+                _require_exact_unicycler_output_dir(reserved_outdir)
+                isempty(readdir(reserved_outdir)) || throw(ArgumentError(
+                    "Refusing to remove non-empty Unicycler outdir without a " *
+                    "completed assembly: $(repr(reserved_outdir)).",
+                ))
+                try
+                    rm(reserved_outdir)
+                catch removal_error
+                    removal_error isa InterruptException && rethrow()
+                    throw(ArgumentError(
+                        "Unicycler outdir changed or was not empty during " *
+                        "nonrecursive removal: $(repr(reserved_outdir)).",
+                    ))
+                end
+            end
+            command_runner(command)
+            _require_unchanged_unicycler_output_plan(
+                normalized_outdir,
+                reserved_outdir,
+            )
+            assembly = _require_unicycler_artifact(
+                assembly,
+                "assembly FASTA",
+                reserved_outdir,
+            )
+            graph = _require_unicycler_artifact(
+                graph,
+                "assembly GFA",
+                reserved_outdir,
+            )
+            toolchain_after = _require_unicycler_toolchain_provenance(
+                toolchain_inspector(resolved_conda_runner),
+            )
+            toolchain_before == toolchain_after || error(
+                "Unicycler realized Conda package inventory changed while the " *
+                "assembler ran; refusing stale toolchain provenance.",
+            )
+            _require_unchanged_unicycler_output_plan(
+                normalized_outdir,
+                reserved_outdir,
+            )
+            assembly = _require_unicycler_artifact(
+                assembly,
+                "assembly FASTA",
+                reserved_outdir,
+            )
+            graph = _require_unicycler_artifact(
+                graph,
+                "assembly GFA",
+                reserved_outdir,
+            )
+            return (;
+                outdir = reserved_outdir,
+                assembly,
+                graph,
+                requested_outdir = reported_outdir,
+                toolchain = toolchain_after,
+                provenance_status = "realized-local-exact",
+            )
         end
-        command_runner(command)
-        _require_unicycler_artifact(assembly, "assembly FASTA")
-        _require_unicycler_artifact(graph, "assembly GFA")
-        toolchain_after = _require_unicycler_toolchain_provenance(
-            toolchain_inspector(resolved_conda_runner),
-        )
-        toolchain_before == toolchain_after || error(
-            "Unicycler realized Conda package inventory changed while the " *
-            "assembler ran; refusing stale toolchain provenance.",
-        )
-        return (;
-            outdir = reported_outdir,
-            assembly = reported_assembly,
-            graph = reported_graph,
-            toolchain = toolchain_after,
-            provenance_status = "realized-local-exact",
-        )
     end
 end
 
@@ -1583,9 +1732,10 @@ Run hybrid assembly combining short and long reads using Unicycler.
 
 # Returns
 Named tuple containing:
-- `outdir::String`: Path to output directory
+- `outdir::String`: Canonical physical path to the validated output directory
 - `assembly::String`: Path to final assembly file
 - `graph::String`: Path to assembly graph in GFA format
+- `requested_outdir::String`: Caller-supplied output spelling retained for audit
 - `toolchain::Union{Nothing,Dict}`: Exact realized package inventory for a
   fresh local run; `nothing` for reused work
 - `provenance_status::String`: Why exact toolchain provenance is available or
@@ -1602,6 +1752,10 @@ Named tuple containing:
 - Rejects an incomplete non-empty output directory instead of deleting
   caller-owned contents. An empty output directory may be removed because
   Unicycler requires the output path to be absent.
+- Returns `outdir`, `assembly`, and `graph` as canonical absolute safety fields,
+  even when the caller supplied a relative path or a stable parent-directory
+  alias. `requested_outdir` is audit-only caller spelling and must not be used
+  for artifact access or cleanup authority.
 - Utilizes all available CPU threads
 """
 function run_unicycler(;
@@ -3129,8 +3283,10 @@ const _METAMDBG_CONTRACT_SCHEMA_VERSION = 4
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
 const _METAMDBG_COMPLETION_SCHEMA_VERSION = 1
 const _METAMDBG_COMPLETION_FILENAME = "mycelia_metamdbg_completion.json"
-const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 1
+const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 2
 const _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME = "contract.json"
+const _METAMDBG_SUBMISSION_RESERVATION_JOB_SCHEMA_VERSION = 1
+const _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME = "job.json"
 const _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS = 300
 const _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS = 1.0
 const _METAMDBG_IUPAC_DNA_REGEX =
@@ -3568,7 +3724,7 @@ for line_number, fields in records(path):
 end
 
 function _metamdbg_environment_packages(;
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
         command_reader::Function = command -> read(command, String),
 )::Vector{NamedTuple}
     command = Cmd(String[
@@ -3669,12 +3825,69 @@ function _require_unchanged_metamdbg_toolchain(
     return normalized_after
 end
 
-function _metamdbg_install_lock_path()::String
+function _canonical_metamdbg_conda_runner(
+        conda_runner::AbstractString,
+)::String
+    executable = Sys.which(String(conda_runner))
+    candidate = executable === nothing ?
+                abspath(String(conda_runner)) : String(executable)
+    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+end
+
+function _metamdbg_environment_prefix(
+        conda_runner::AbstractString,
+)::String
+    canonical_runner = _canonical_metamdbg_conda_runner(conda_runner)
+    conda_root = normpath(joinpath(dirname(canonical_runner), ".."))
+    return joinpath(conda_root, "envs", METAMDBG_ENV_NAME)
+end
+
+function _metamdbg_install_lock_path(
+        conda_runner::AbstractString = _conda_runner(),
+)::String
+    environment_prefix = _metamdbg_environment_prefix(conda_runner)
+    conda_root = dirname(dirname(environment_prefix))
     return joinpath(
-        first(Base.DEPOT_PATH),
-        "locks",
-        "mycelia-$(METAMDBG_ENV_NAME)-install.pid",
+        conda_root,
+        ".mycelia-locks",
+        "$(METAMDBG_ENV_NAME).pid",
     )
+end
+
+function _metamdbg_environment_is_installed(
+        conda_runner::AbstractString,
+)::Bool
+    environment_prefix = _metamdbg_environment_prefix(conda_runner)
+    environment_names = _conda_environment_names(
+        _canonical_metamdbg_conda_runner(conda_runner),
+        dirname(environment_prefix),
+    )
+    return METAMDBG_ENV_NAME in environment_names
+end
+
+function _create_metamdbg_environment(
+        environment_path::AbstractString,
+        environment_name::AbstractString,
+        conda_runner::AbstractString;
+        force::Bool = false,
+)::String
+    force && error(
+        "metaMDBG immutable environments cannot be recreated in place.",
+    )
+    resolved_runner = _canonical_metamdbg_conda_runner(conda_runner)
+    verified_environment_path =
+        _require_verified_metamdbg_environment_spec(environment_path)
+    Base.run(Cmd(String[
+        resolved_runner,
+        "env",
+        "create",
+        "-f",
+        verified_environment_path,
+        "-n",
+        String(environment_name),
+    ]))
+    Base.run(Cmd(String[resolved_runner, "clean", "--all", "-y"]))
+    return String(environment_name)
 end
 
 function _with_metamdbg_install_lock(
@@ -3693,37 +3906,46 @@ function _with_metamdbg_install_lock(
 end
 
 function _ensure_metamdbg_installed_locked(;
+        conda_runner::AbstractString = _conda_runner(),
         paths::Tuple{String, String} = _metamdbg_paths(),
-        environment_checker::Function = () ->
-            check_bioconda_env_is_installed(METAMDBG_ENV_NAME),
-        environment_creator::Function = create_conda_env_from_yaml,
-        package_inspector::Function = _metamdbg_environment_packages,
+        environment_checker::Function = _metamdbg_environment_is_installed,
+        environment_creator::Function = _create_metamdbg_environment,
+        package_inspector::Function = runner ->
+            _metamdbg_environment_packages(conda_runner = runner),
 )::NamedTuple
+    resolved_runner = _canonical_metamdbg_conda_runner(conda_runner)
     install_dir, environment_path = paths
     mkpath(install_dir)
     verified_environment_path =
         _require_verified_metamdbg_environment_spec(environment_path)
-    if !Bool(environment_checker())
+    if !Bool(environment_checker(resolved_runner))
         environment_creator(
             verified_environment_path,
-            METAMDBG_ENV_NAME;
+            METAMDBG_ENV_NAME,
+            resolved_runner;
             force = false,
         )
     end
-    return _require_metamdbg_package_version(package_inspector())
+    return _require_metamdbg_package_version(package_inspector(resolved_runner))
 end
 
 function _ensure_metamdbg_installed(;
+        conda_runner::AbstractString = _conda_runner(),
         paths::Tuple{String, String} = _metamdbg_paths(),
-        environment_checker::Function = () ->
-            check_bioconda_env_is_installed(METAMDBG_ENV_NAME),
-        environment_creator::Function = create_conda_env_from_yaml,
-        package_inspector::Function = _metamdbg_environment_packages,
-        lock_path::AbstractString = _metamdbg_install_lock_path(),
+        environment_checker::Function = _metamdbg_environment_is_installed,
+        environment_creator::Function = _create_metamdbg_environment,
+        package_inspector::Function = runner ->
+            _metamdbg_environment_packages(conda_runner = runner),
+        lock_path::Union{Nothing, AbstractString} = nothing,
         lock_runner::Function = _with_metamdbg_install_lock,
 )::NamedTuple
-    return lock_runner(String(lock_path)) do
+    resolved_runner = _canonical_metamdbg_conda_runner(conda_runner)
+    resolved_lock_path = lock_path === nothing ?
+                         _metamdbg_install_lock_path(resolved_runner) :
+                         String(lock_path)
+    return lock_runner(resolved_lock_path) do
         _ensure_metamdbg_installed_locked(;
+            conda_runner = resolved_runner,
             paths,
             environment_checker,
             environment_creator,
@@ -4065,6 +4287,53 @@ function _metamdbg_submission_reservation_path(
     )
 end
 
+function _metamdbg_scheduler_job_name(
+        requested_job_name::AbstractString,
+        workflow_signature::AbstractString,
+)::String
+    signature = String(workflow_signature)
+    occursin(r"^[0-9a-f]{64}$", signature) || error(
+        "metaMDBG scheduler job name requires a lowercase SHA-256 workflow " *
+        "signature, got $(repr(signature)).",
+    )
+    requested_prefix = replace(
+        strip(String(requested_job_name)),
+        r"[^A-Za-z0-9_.-]+" => "-",
+    )
+    requested_prefix = replace(requested_prefix, r"-+" => "-")
+    requested_prefix = replace(requested_prefix, r"^-|-$" => "")
+    isempty(requested_prefix) && (requested_prefix = "metamdbg")
+    suffix = "-mycelia-metamdbg-$(signature)"
+    maximum_prefix_length = 128 - ncodeunits(suffix)
+    prefix = first(
+        requested_prefix,
+        min(length(requested_prefix), maximum_prefix_length),
+    )
+    return "$(prefix)$(suffix)"
+end
+
+function _metamdbg_scheduler_job_name_prefix(
+        scheduler_job_name::AbstractString,
+        workflow_signature::AbstractString,
+)::String
+    normalized_job_name = String(scheduler_job_name)
+    signature = String(workflow_signature)
+    suffix = "-mycelia-metamdbg-$(signature)"
+    occursin(r"^[A-Za-z0-9_.-]+$", normalized_job_name) &&
+        ncodeunits(normalized_job_name) <= 128 &&
+        endswith(normalized_job_name, suffix) || error(
+        "metaMDBG scheduler job name is not bound to its workflow signature.",
+    )
+    prefix_length = ncodeunits(normalized_job_name) - ncodeunits(suffix)
+    prefix_length > 0 || error(
+        "metaMDBG scheduler job name has no requested-name prefix.",
+    )
+    prefix = normalized_job_name[1:prefix_length]
+    _metamdbg_scheduler_job_name(prefix, signature) == normalized_job_name ||
+        error("metaMDBG scheduler job name is not canonical.")
+    return prefix
+end
+
 function _metamdbg_workflow_contract(
         outputs::NamedTuple,
         input_contract::NamedTuple,
@@ -4086,6 +4355,7 @@ function _metamdbg_submission_reservation(
         graph_k::Int,
         ;
         owner_token::AbstractString = string(UUIDs.uuid4()),
+        job_name::AbstractString = "metamdbg",
 )::NamedTuple
     workflow = _metamdbg_workflow_contract(
         outputs,
@@ -4094,6 +4364,10 @@ function _metamdbg_submission_reservation(
     )
     reservation_contract = workflow.contract
     workflow_signature = workflow.signature
+    scheduler_job_name = _metamdbg_scheduler_job_name(
+        job_name,
+        workflow_signature,
+    )
     path = _metamdbg_submission_reservation_path(
         outputs.outdir,
         workflow_signature,
@@ -4101,6 +4375,7 @@ function _metamdbg_submission_reservation(
     contents = JSON.json((;
         reservation_contract...,
         workflow_signature,
+        scheduler_job_name,
         owner_token = String(owner_token),
     )) * "\n"
     return (;
@@ -4109,13 +4384,68 @@ function _metamdbg_submission_reservation(
             path,
             _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
         ),
+        job_marker = joinpath(
+            path,
+            _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+        ),
         canonical_outdir = outputs.outdir,
         input_contract_signature = input_contract.signature,
         graph_k,
         workflow_signature,
+        scheduler_job_name,
         owner_token = String(owner_token),
         contents,
+        job_id = nothing,
+        job_contents = nothing,
+        submission_state = :reserved,
     )
+end
+
+function _normalize_metamdbg_job_id(job_id::AbstractString)::String
+    normalized_job_id = strip(String(job_id))
+    occursin(r"^[0-9]+$", normalized_job_id) || throw(
+        ArgumentError(
+            "metaMDBG scheduler job_id must contain only decimal digits.",
+        ),
+    )
+    return normalized_job_id
+end
+
+function _metamdbg_submission_job_parts(
+        reservation::NamedTuple,
+)::Tuple{String, String}
+    prefix_object = JSON.json((;
+        schema_version = _METAMDBG_SUBMISSION_RESERVATION_JOB_SCHEMA_VERSION,
+        workflow_signature = reservation.workflow_signature,
+        owner_token = reservation.owner_token,
+    ))
+    endswith(prefix_object, "}") || error(
+        "metaMDBG failed to construct its submission job record prefix.",
+    )
+    prefix = chop(prefix_object; tail = 1) * ",\"job_id\":\""
+    return prefix, "\"}\n"
+end
+
+function _metamdbg_submission_job_contents(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+)::String
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    prefix, suffix = _metamdbg_submission_job_parts(reservation)
+    return prefix * normalized_job_id * suffix
+end
+
+function _metamdbg_bound_submission_reservation(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+)::NamedTuple
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    return merge(reservation, (;
+        job_id = normalized_job_id,
+        job_contents =
+            _metamdbg_submission_job_contents(reservation, normalized_job_id),
+        submission_state = :submitted,
+    ))
 end
 
 function _metamdbg_submission_reservation_paths(
@@ -4145,6 +4475,36 @@ function _metamdbg_submission_reservation_paths(
         end
     end
     return active_paths
+end
+
+function _fsync_metamdbg_descriptor(
+        descriptor::Union{Integer, Base.RawFD},
+        label::AbstractString,
+)::Nothing
+    raw_descriptor = descriptor isa Base.RawFD ?
+                     reinterpret(Cint, descriptor) : Cint(descriptor)
+    result = ccall(:fsync, Cint, (Cint,), raw_descriptor)
+    result == 0 || throw(SystemError("fsync $(label)", true))
+    return nothing
+end
+
+function _fsync_metamdbg_file(
+        output::IOStream,
+        label::AbstractString,
+)::Nothing
+    flush(output)
+    _fsync_metamdbg_descriptor(Base.fd(output), label)
+    return nothing
+end
+
+function _fsync_metamdbg_directory(path::AbstractString)::Nothing
+    directory = Base.Filesystem.open(String(path), Base.JL_O_RDONLY)
+    try
+        _fsync_metamdbg_descriptor(Base.fd(directory), path)
+    finally
+        close(directory)
+    end
+    return nothing
 end
 
 function _require_no_active_metamdbg_submission_reservation!(
@@ -4177,7 +4537,13 @@ function _require_metamdbg_submission_reservation!(
         "metaMDBG submission reservation directory must have mode 0700: " *
         "$(reservation_path).",
     )
-    expected_entries = String[
+    has_bound_job = reservation.job_id isa AbstractString
+    expected_entries = has_bound_job ?
+                       String[
+        _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+        _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+    ] :
+                       String[
         _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
     ]
     readdir(reservation_path) == expected_entries || error(
@@ -4204,6 +4570,28 @@ function _require_metamdbg_submission_reservation!(
         "metaMDBG submission reservation contract does not match this " *
         "invocation: $(marker).",
     )
+    if has_bound_job
+        job_marker = reservation.job_marker
+        if !isfile(job_marker) || islink(job_marker) || filesize(job_marker) == 0
+            error(
+                "metaMDBG submission job record must be a nonempty, regular, " *
+                "non-symlink file: $(job_marker).",
+            )
+        end
+        job_status = stat(job_marker)
+        job_status.uid == Base.Libc.getuid() || error(
+            "metaMDBG submission job record is not owned by the current user: " *
+            "$(job_marker).",
+        )
+        (job_status.mode & 0o777) == 0o600 || error(
+            "metaMDBG submission job record must have mode 0600: " *
+            "$(job_marker).",
+        )
+        read(job_marker, String) == reservation.job_contents || error(
+            "metaMDBG submission job record does not match this reservation: " *
+            "$(job_marker).",
+        )
+    end
     return reservation
 end
 
@@ -4222,8 +4610,15 @@ function _metamdbg_submission_reservation_from_path(
             "directory: $(normalized_path).",
         )
     end
-    readdir(normalized_path) ==
-        String[_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME] || error(
+    entries = readdir(normalized_path)
+    allowed_entries = (
+        String[_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME],
+        String[
+            _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+            _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+        ],
+    )
+    entries in allowed_entries || error(
         "metaMDBG submission reservation contains unexpected entries: " *
         "$(normalized_path).",
     )
@@ -4252,6 +4647,7 @@ function _metamdbg_submission_reservation_from_path(
         "input_contract_signature",
         "graph_k",
         "workflow_signature",
+        "scheduler_job_name",
         "owner_token",
     ])
     Set(String.(keys(parsed))) == expected_keys || error(
@@ -4293,6 +4689,14 @@ function _metamdbg_submission_reservation_from_path(
         occursin(r"^[0-9a-f]{64}$", workflow_signature) || error(
         "metaMDBG submission reservation workflow signature is invalid.",
     )
+    scheduler_job_name = get(parsed, "scheduler_job_name", nothing)
+    scheduler_job_name isa AbstractString || error(
+        "metaMDBG submission reservation scheduler_job_name must be a string.",
+    )
+    requested_job_name = _metamdbg_scheduler_job_name_prefix(
+        scheduler_job_name,
+        workflow_signature,
+    )
     owner_token = get(parsed, "owner_token", nothing)
     owner_token isa AbstractString && !isempty(owner_token) || error(
         "metaMDBG submission reservation owner token is invalid.",
@@ -4303,6 +4707,7 @@ function _metamdbg_submission_reservation_from_path(
         (; signature = String(input_contract_signature)),
         graph_k;
         owner_token = String(owner_token),
+        job_name = requested_job_name,
     )
     expected.path == normalized_path || error(
         "metaMDBG submission reservation path does not match its workflow " *
@@ -4314,6 +4719,46 @@ function _metamdbg_submission_reservation_from_path(
     expected.contents == contents || error(
         "metaMDBG submission reservation contract is not canonical.",
     )
+    if _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME in entries
+        if !isfile(expected.job_marker) || islink(expected.job_marker) ||
+           filesize(expected.job_marker) == 0
+            error(
+                "metaMDBG submission job record must be a nonempty, regular, " *
+                "non-symlink file: $(expected.job_marker).",
+            )
+        end
+        job_contents = read(expected.job_marker, String)
+        parsed_job = try
+            JSON.parse(job_contents)
+        catch caught
+            error(
+                "metaMDBG submission job record is not valid JSON: " *
+                "$(expected.job_marker). Cause: $(sprint(showerror, caught))",
+            )
+        end
+        parsed_job isa AbstractDict || error(
+            "metaMDBG submission job record is not a JSON object: " *
+            "$(expected.job_marker).",
+        )
+        Set(String.(keys(parsed_job))) == Set(String[
+            "schema_version",
+            "workflow_signature",
+            "owner_token",
+            "job_id",
+        ]) || error(
+            "metaMDBG submission job record has unexpected fields: " *
+            "$(expected.job_marker).",
+        )
+        job_id = get(parsed_job, "job_id", nothing)
+        job_id isa AbstractString || error(
+            "metaMDBG submission job record job_id must be a string.",
+        )
+        expected = _metamdbg_bound_submission_reservation(expected, job_id)
+        expected.job_contents == job_contents || error(
+            "metaMDBG submission job record is not canonical or does not " *
+            "match its workflow owner.",
+        )
+    end
     return _require_metamdbg_submission_reservation!(expected)
 end
 
@@ -4361,17 +4806,26 @@ function _create_metamdbg_submission_reservation!(
             temporary_path,
             _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
         ),
+        job_marker = joinpath(
+            temporary_path,
+            _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+        ),
     ))
     published = false
     try
         open(temporary_reservation.contract_marker, "w") do output
             write(output, reservation.contents)
-            flush(output)
+            chmod(temporary_reservation.contract_marker, 0o600)
+            _fsync_metamdbg_file(
+                output,
+                temporary_reservation.contract_marker,
+            )
         end
-        chmod(temporary_reservation.contract_marker, 0o600)
+        _fsync_metamdbg_directory(temporary_path)
         _require_metamdbg_submission_reservation!(temporary_reservation)
         mv(temporary_path, reservation.path)
         published = true
+        _fsync_metamdbg_directory(reservation_parent)
         _require_metamdbg_submission_reservation!(reservation)
     catch primary_error
         try
@@ -4388,6 +4842,142 @@ function _create_metamdbg_submission_reservation!(
         Base.rethrow()
     end
     return reservation
+end
+
+function _bind_metamdbg_submission_job!(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+)::NamedTuple
+    _require_metamdbg_submission_reservation!(reservation)
+    bound_reservation =
+        _metamdbg_bound_submission_reservation(reservation, job_id)
+    marker = bound_reservation.job_marker
+    if ispath(marker) || islink(marker)
+        error(
+            "metaMDBG refuses to overwrite an existing durable submission " *
+            "job record: $(marker).",
+        )
+    end
+    temporary_path, temporary_io = mktemp(dirname(reservation.path))
+    published = false
+    try
+        write(temporary_io, bound_reservation.job_contents)
+        chmod(temporary_path, 0o600)
+        _fsync_metamdbg_file(temporary_io, temporary_path)
+        close(temporary_io)
+        Base.Filesystem.hardlink(temporary_path, marker)
+        published = true
+        _fsync_metamdbg_directory(reservation.path)
+        rm(temporary_path)
+        _fsync_metamdbg_directory(dirname(reservation.path))
+        _require_metamdbg_submission_reservation!(bound_reservation)
+    catch primary_error
+        isopen(temporary_io) && close(temporary_io)
+        if ispath(temporary_path)
+            try
+                rm(temporary_path)
+            catch cleanup_error
+                @warn "metaMDBG failed to clean an unpublished submission " *
+                      "job record while preserving the primary bind failure" temporary_path primary_error cleanup_error
+            end
+        end
+        if published && ispath(marker)
+            try
+                rm(marker)
+            catch cleanup_error
+                @warn "metaMDBG failed to remove an invalid newly published " *
+                      "submission job record while preserving the primary " *
+                      "bind failure" marker primary_error cleanup_error
+            end
+        end
+        Base.rethrow()
+    end
+    return bound_reservation
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Bind a scheduler job ID to an inspected metaMDBG submission reservation.
+
+This recovery operation is intended for the narrow crash window after the
+scheduler accepted a job but before `run_metamdbg` durably recorded the returned
+job ID. Set `confirm_submitted = true` only after independently confirming that
+the exact scheduler job belongs to this reservation. The job record is published
+atomically under the output lock and becomes available through
+`inspect_metamdbg_submission_reservations`.
+"""
+function bind_metamdbg_submission_reservation_job!(
+        metadata::NamedTuple;
+        owner_token::AbstractString,
+        job_id::AbstractString,
+        confirm_submitted::Bool = false,
+)::NamedTuple
+    confirm_submitted || throw(ArgumentError(
+        "Set confirm_submitted=true only after independently confirming the " *
+        "scheduler job belongs to this metaMDBG reservation.",
+    ))
+    required_fields = (
+        :canonical_outdir,
+        :path,
+        :workflow_signature,
+        :input_contract_signature,
+        :graph_k,
+        :owner_token,
+        :job_id,
+    )
+    all(field -> hasproperty(metadata, field), required_fields) || throw(
+        ArgumentError(
+            "metaMDBG reservation metadata is incomplete; inspect the exact " *
+            "durable reservation before binding its scheduler job.",
+        ),
+    )
+    metadata.job_id === nothing || error(
+        "metaMDBG submission reservation already has a scheduler job id.",
+    )
+    normalized_owner_token = String(owner_token)
+    normalized_owner_token == metadata.owner_token || error(
+        "metaMDBG reservation owner token does not match the durable " *
+        "reservation capability.",
+    )
+    graph_k = metadata.graph_k
+    graph_k isa Int || throw(ArgumentError(
+        "metaMDBG reservation graph_k metadata must be an Int.",
+    ))
+    outputs = _metamdbg_output_paths(String(metadata.canonical_outdir), graph_k)
+    expected = _metamdbg_submission_reservation(
+        outputs,
+        (; signature = String(metadata.input_contract_signature)),
+        graph_k;
+        owner_token = normalized_owner_token,
+    )
+    expected.path == metadata.path || error(
+        "metaMDBG reservation path does not match its recomputed workflow path.",
+    )
+    expected.workflow_signature == metadata.workflow_signature || error(
+        "metaMDBG reservation workflow signature does not match metadata.",
+    )
+    bound = _with_metamdbg_output_lock(outputs.outdir) do
+        current = _metamdbg_submission_reservation_from_path(
+            expected.path,
+            outputs.outdir,
+        )
+        current.job_id === nothing || error(
+            "metaMDBG submission reservation already has a scheduler job id.",
+        )
+        _bind_metamdbg_submission_job!(current, job_id)
+    end
+    return (;
+        canonical_outdir = bound.canonical_outdir,
+        path = bound.path,
+        workflow_signature = bound.workflow_signature,
+        scheduler_job_name = bound.scheduler_job_name,
+        input_contract_signature = bound.input_contract_signature,
+        graph_k = bound.graph_k,
+        owner_token = bound.owner_token,
+        job_id = bound.job_id,
+        submission_state = bound.submission_state,
+    )
 end
 
 function _remove_metamdbg_submission_reservation!(
@@ -5152,6 +5742,14 @@ function _normalize_metamdbg_graph!(
         "metaMDBG produced multiple graph artifacts for k=$(graph_k): " *
         join(candidates, ", "),
     )
+    all_candidates = _metamdbg_all_graph_candidates(outputs)
+    length(all_candidates) == 1 || error(
+        "metaMDBG requires exactly one total graph artifact per output root; " *
+        "found $(length(all_candidates)): $(join(all_candidates, ", ")).",
+    )
+    only(all_candidates) == only(candidates) || error(
+        "metaMDBG graph inventory does not match requested k=$(graph_k).",
+    )
     graph_source = _require_valid_metamdbg_gfa(
         only(candidates),
         "metaMDBG graph artifact",
@@ -5434,7 +6032,7 @@ function _metamdbg_executor_script(
         graph_k::Int,
         input_contract::NamedTuple,
         ;
-        conda_runner::AbstractString = CONDA_RUNNER,
+        conda_runner::AbstractString = _conda_runner(),
         environment_path::AbstractString = last(_metamdbg_paths()),
         submission_reservation::Union{Nothing, NamedTuple} = nothing,
         threads::Union{Nothing, Int} = nothing,
@@ -5553,9 +6151,13 @@ function _metamdbg_executor_script(
             "--threads $(threads)",
         ], " ")
     end
+    job_record_parts = _metamdbg_submission_job_parts(
+        effective_submission_reservation,
+    )
     reservation_declaration_lines = String[
         "submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.path))",
         "submission_reservation_contract=$(_metamdbg_shell_literal(effective_submission_reservation.contract_marker))",
+        "submission_reservation_job=$(_metamdbg_shell_literal(effective_submission_reservation.job_marker))",
     ]
     reservation_validation_function_lines = String[
         "metamdbg_file_mode() {",
@@ -5589,13 +6191,28 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG submission reservation contract owner or mode is invalid\" >&2",
         "  return 1",
         "fi",
-        "reservation_entry_count=\$(find \"\$submission_reservation_dir\" -mindepth 1 -maxdepth 1 -print | awk 'END { print NR }')",
-        "if [ \"\$reservation_entry_count\" -ne 1 ]; then",
-        "  echo \"metaMDBG submission reservation contains unexpected entries\" >&2",
-        "  return 1",
-        "fi",
         "cmp -s -- \"\$expected_reservation\" \"\$submission_reservation_contract\" || {",
         "  echo \"metaMDBG submission reservation contract does not match this job\" >&2",
+        "  return 1",
+        "}",
+        "reservation_entry_count=\$(find \"\$submission_reservation_dir\" -mindepth 1 -maxdepth 1 -print | awk 'END { print NR }')",
+        "if [ \"\$reservation_entry_count\" -ne 2 ] || [ ! -f \"\$submission_reservation_job\" ] || [ -L \"\$submission_reservation_job\" ] || [ ! -s \"\$submission_reservation_job\" ]; then",
+        "  echo \"metaMDBG runtime refuses an unbound or invalid submission reservation\" >&2",
+        "  return 1",
+        "fi",
+        "if [ \"\$(metamdbg_file_uid \"\$submission_reservation_job\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$submission_reservation_job\")\" != \"600\" ]; then",
+        "  echo \"metaMDBG submission reservation job record owner or mode is invalid\" >&2",
+        "  return 1",
+        "fi",
+        "if [ -z \"\${SLURM_JOB_ID:-}\" ]; then",
+        "  echo \"metaMDBG bound submission reservation requires SLURM_JOB_ID\" >&2",
+        "  return 1",
+        "fi",
+        "printf '%s' $(_metamdbg_shell_literal(first(job_record_parts))) > \"\$expected_reservation_job\"",
+        "printf '%s' \"\$SLURM_JOB_ID\" >> \"\$expected_reservation_job\"",
+        "printf '%s' $(_metamdbg_shell_literal(last(job_record_parts))) >> \"\$expected_reservation_job\"",
+        "cmp -s -- \"\$expected_reservation_job\" \"\$submission_reservation_job\" || {",
+        "  echo \"metaMDBG submission reservation job record does not match SLURM_JOB_ID\" >&2",
         "  return 1",
         "}",
         "}",
@@ -5706,6 +6323,7 @@ function _metamdbg_executor_script(
         "printf '%s' $(_metamdbg_shell_literal(input_contract.contents)) > \"\$expected_contract\"",
         "chmod 600 \"\$expected_contract\"",
         "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
+        "expected_reservation_job=\"\$secure_tmpdir/expected-reservation-job.json\"",
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
         "chmod 600 \"\$expected_reservation\"",
         "validate_submission_reservation",
@@ -5847,25 +6465,37 @@ function _metamdbg_executor_script(
         "  }",
         "}",
         "find_metamdbg_graph() {",
-        "  local candidates=()",
+        "  local all_candidates=()",
+        "  local requested_candidates=()",
         "  local candidate",
+        "  local filename",
         "  shopt -s nullglob",
-        "  for candidate in \"\$outdir\"/assemblyGraph_k$(graph_k)_*bps.gfa; do",
+        "  for candidate in \"\$outdir\"/assemblyGraph_k*_*bps.gfa; do",
+        "    filename=\${candidate##*/}",
+        "    if [[ ! \"\$filename\" =~ ^assemblyGraph_k[0-9]+_.*bps\\.gfa\$ ]]; then",
+        "      continue",
+        "    fi",
         "    if [ ! -f \"\$candidate\" ] || [ -L \"\$candidate\" ] || [ ! -s \"\$candidate\" ]; then",
         "      echo \"metaMDBG graph candidate is empty or not regular: \$candidate\" >&2",
         "      shopt -u nullglob",
         "      return 2",
         "    fi",
-        "    candidates+=(\"\$candidate\")",
+        "    all_candidates+=(\"\$candidate\")",
+        "    if [[ \"\$filename\" == assemblyGraph_k$(graph_k)_*bps.gfa ]]; then",
+        "      requested_candidates+=(\"\$candidate\")",
+        "    fi",
         "  done",
         "  shopt -u nullglob",
-        "  if [ \"\${#candidates[@]}\" -eq 0 ]; then",
+        "  if [ \"\${#all_candidates[@]}\" -eq 0 ]; then",
         "    return 1",
-        "  elif [ \"\${#candidates[@]}\" -ne 1 ]; then",
-        "    echo \"metaMDBG produced multiple graphs for k=$(graph_k)\" >&2",
+        "  elif [ \"\${#all_candidates[@]}\" -ne 1 ]; then",
+        "    echo \"metaMDBG requires exactly one total graph artifact per output root\" >&2",
+        "    return 2",
+        "  elif [ \"\${#requested_candidates[@]}\" -ne 1 ]; then",
+        "    echo \"metaMDBG graph inventory does not match requested k=$(graph_k)\" >&2",
         "    return 2",
         "  fi",
-        "  printf '%s\\n' \"\${candidates[0]}\"",
+        "  printf '%s\\n' \"\${requested_candidates[0]}\"",
         "}",
         "if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
         "  validate_contigs \"\$contigs_gz\"",
@@ -6093,11 +6723,14 @@ function _metamdbg_planned_result(
             canonical_outdir = submission_reservation.canonical_outdir,
             path = submission_reservation.path,
             workflow_signature = submission_reservation.workflow_signature,
+            scheduler_job_name =
+                submission_reservation.scheduler_job_name,
             input_contract_signature =
                 submission_reservation.input_contract_signature,
             graph_k = submission_reservation.graph_k,
             owner_token = submission_reservation.owner_token,
             job_id,
+            submission_state = submission_reservation.submission_state,
         ),
     ))
 end
@@ -6107,7 +6740,19 @@ function _metamdbg_existing_artifacts(
         graph_k::Int,
 )::Union{Nothing, NamedTuple}
     existing_contigs = _normalize_metamdbg_contigs!(outputs)
-    existing_graph = _normalize_metamdbg_graph!(outputs, graph_k)
+    requested_graphs = _metamdbg_graph_candidates(outputs, graph_k)
+    all_graphs = _metamdbg_all_graph_candidates(outputs)
+    existing_graph = if isempty(all_graphs)
+        nothing
+    elseif isempty(requested_graphs)
+        error(
+            "metaMDBG supports exactly one graph_k lifecycle per output " *
+            "root. Existing graph artifacts do not match the requested " *
+            "graph_k; choose a fresh output root.",
+        )
+    else
+        _normalize_metamdbg_graph!(outputs, graph_k)
+    end
     if existing_contigs !== nothing && existing_graph !== nothing
         return (;
             outdir = outputs.outdir,
@@ -6120,14 +6765,6 @@ function _metamdbg_existing_artifacts(
             outputs.outdir,
         )
     elseif existing_contigs !== nothing
-        other_graphs = _metamdbg_all_graph_candidates(outputs)
-        if !isempty(other_graphs)
-            error(
-                "metaMDBG supports exactly one graph_k lifecycle per output " *
-                "root. Existing graph artifacts do not match the requested " *
-                "graph_k; choose a fresh output root.",
-            )
-        end
         error(
             "metaMDBG refuses to adopt partial contracted contigs without a " *
             "realized-stage completion manifest. Remove the partial output " *
@@ -6168,12 +6805,77 @@ function _require_successful_metamdbg_submission(
             "metaMDBG real nonlocal submission did not use the sbatch " *
             "backend: $(submission.backend).",
         )
+        submission.scheduler_acceptance == :accepted || error(
+            "metaMDBG real Slurm submission has unverified scheduler " *
+            "acceptance state $(repr(submission.scheduler_acceptance)).",
+        )
+        submission.held || error(
+            "metaMDBG real Slurm submission was not verified as held; " *
+            "refusing to bind or release an immediate-start job.",
+        )
         job_id = submission.job_id
         (job_id isa AbstractString && !isempty(strip(job_id))) || error(
             "metaMDBG sbatch submission returned no job id.",
         )
+        normalized_job_id = _normalize_metamdbg_job_id(job_id)
+        String(job_id) == normalized_job_id || error(
+            "metaMDBG sbatch submission returned a non-exact job id: " *
+            "$(repr(job_id)).",
+        )
+        if submission.stdout !== nothing
+            stdout_job_id = Mycelia._extract_sbatch_job_id(submission.stdout)
+            stdout_job_id == normalized_job_id || error(
+                "metaMDBG sbatch submission stdout did not contain the exact " *
+                "returned job id $(normalized_job_id).",
+            )
+        end
     end
     return submission
+end
+
+function _metamdbg_submission_recovery_guidance(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+)::String
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    return "SLURM job $(normalized_job_id) remains held or has an unknown " *
+           "release state. Its durable reservation is $(reservation.path) " *
+           "and scheduler name is $(reservation.scheduler_job_name). Inspect " *
+           "that exact job with `scontrol show job $(normalized_job_id)` before " *
+           "running `scontrol release $(normalized_job_id)` or cancelling and " *
+           "reclaiming the reservation."
+end
+
+function _release_metamdbg_submission_job!(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+        release_runner::Function,
+)::NamedTuple
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    release_result = try
+        release_runner(normalized_job_id)
+    catch caught
+        error(
+            "metaMDBG failed to release its durably bound scheduler job. " *
+            _metamdbg_submission_recovery_guidance(
+                reservation,
+                normalized_job_id,
+            ) * " Cause: $(sprint(showerror, caught))",
+        )
+    end
+    if !(release_result isa AbstractString) ||
+       String(release_result) != normalized_job_id
+        error(
+            "metaMDBG scheduler release was absent or ambiguous for exact job " *
+            "$(normalized_job_id); got $(repr(release_result)). " *
+            _metamdbg_submission_recovery_guidance(
+                reservation,
+                normalized_job_id,
+            ),
+        )
+    end
+    return ispath(reservation.path) ? reservation :
+           merge(reservation, (; submission_state = :consumed))
 end
 
 function _cleanup_metamdbg_submission_reservation_after_failure!(
@@ -6187,6 +6889,50 @@ function _cleanup_metamdbg_submission_reservation_after_failure!(
         _remove_metamdbg_submission_reservation!(reservation)
     end
     return nothing
+end
+
+function _bind_metamdbg_submission_job_after_submit!(
+        reservation::NamedTuple,
+        job_id::AbstractString,
+)::NamedTuple
+    return _with_metamdbg_output_lock(reservation.canonical_outdir) do
+        current = _metamdbg_submission_reservation_from_path(
+            reservation.path,
+            reservation.canonical_outdir,
+        )
+        current.workflow_signature == reservation.workflow_signature || error(
+            "metaMDBG submission reservation workflow changed before its " *
+            "held scheduler job could be bound.",
+        )
+        current.owner_token == reservation.owner_token || error(
+            "metaMDBG submission reservation owner changed before its held " *
+            "scheduler job could be bound.",
+        )
+        current.job_id === nothing || error(
+            "metaMDBG submission reservation already has a scheduler job id.",
+        )
+        return _bind_metamdbg_submission_job!(current, job_id)
+    end
+end
+
+function _metamdbg_dependency_toolchain(
+        dependency_checker::Function,
+        conda_runner::AbstractString,
+)::Any
+    if applicable(dependency_checker, conda_runner)
+        return dependency_checker(conda_runner)
+    end
+    return dependency_checker()
+end
+
+function _metamdbg_submission_acceptance_is_ambiguous(
+        submission::Any,
+        attempt_started::Bool,
+)::Bool
+    attempt_started || return false
+    submission isa Mycelia.SubmitResult || return true
+    acceptance = submission.scheduler_acceptance
+    return !(acceptance in (:not_attempted, :rejected))
 end
 
 function _run_metamdbg(;
@@ -6205,9 +6951,14 @@ function _run_metamdbg(;
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing,
-        dependency_checker::Function = _ensure_metamdbg_installed,
+        conda_runner::AbstractString = _conda_runner(),
+        dependency_checker::Function = runner ->
+            _ensure_metamdbg_installed(conda_runner = runner),
         local_runner::Function = Base.run,
         submission_runner::Function = Mycelia.execute,
+        submission_job_binder::Function =
+            _bind_metamdbg_submission_job_after_submit!,
+        submission_release_runner::Function = Mycelia.release_slurm_job,
         input_digest_function::Function = _metamdbg_sha256,
 )::NamedTuple
     selected_input = _metamdbg_selected_input(hifi_reads, ont_reads)
@@ -6215,6 +6966,8 @@ function _run_metamdbg(;
     threads > 0 || throw(ArgumentError("threads must be positive."))
     graph_k >= 0 || throw(ArgumentError("graph_k must be nonnegative."))
     outputs = _metamdbg_output_paths(outdir, graph_k)
+    resolved_conda_runner =
+        _canonical_metamdbg_conda_runner(conda_runner)
     toolchain = _metamdbg_expected_toolchain()
     resolved_executor = executor === nothing ?
                         Mycelia.LocalExecutor() :
@@ -6258,8 +7011,8 @@ function _run_metamdbg(;
         "--threads",
         string(threads),
     ]
-    asm_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(asm_cmd_args)`
-    gfa_command = `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(gfa_cmd_args)`
+    asm_command = `$(resolved_conda_runner) run --live-stream -n $(METAMDBG_ENV_NAME) $(asm_cmd_args)`
+    gfa_command = `$(resolved_conda_runner) run --live-stream -n $(METAMDBG_ENV_NAME) $(gfa_cmd_args)`
     if resolved_executor isa Mycelia.LocalExecutor
         return _with_metamdbg_output_lock(outputs.outdir) do
             _require_no_active_metamdbg_submission_reservation!(
@@ -6303,7 +7056,12 @@ function _run_metamdbg(;
             end
 
             realized_toolchain_before =
-                _require_expected_metamdbg_toolchain(dependency_checker())
+                _require_expected_metamdbg_toolchain(
+                    _metamdbg_dependency_toolchain(
+                        dependency_checker,
+                        resolved_conda_runner,
+                    ),
+                )
             staged = _stage_metamdbg_inputs!(
                 selected_input,
                 input_contract,
@@ -6323,7 +7081,7 @@ function _run_metamdbg(;
                     string(threads),
                 ]
                 staged_asm_command =
-                    `$(Mycelia.CONDA_RUNNER) run --live-stream -n $(METAMDBG_ENV_NAME) $(staged_asm_args)`
+                    `$(resolved_conda_runner) run --live-stream -n $(METAMDBG_ENV_NAME) $(staged_asm_args)`
                 _require_current_metamdbg_input_snapshot!(
                     selected_input,
                     input_contract.input_snapshot,
@@ -6347,7 +7105,10 @@ function _run_metamdbg(;
                     _require_metamdbg_artifacts!(outputs, graph_k)
                 toolchain_after = _require_unchanged_metamdbg_toolchain(
                     realized_toolchain_before,
-                    dependency_checker(),
+                    _metamdbg_dependency_toolchain(
+                        dependency_checker,
+                        resolved_conda_runner,
+                    ),
                 )
                 completed_artifacts, toolchain_after
             finally
@@ -6464,7 +7225,8 @@ function _run_metamdbg(;
     submission_reservation = _metamdbg_submission_reservation(
         outputs,
         input_contract,
-        graph_k,
+        graph_k;
+        job_name,
     )
 
     script = _metamdbg_executor_script(
@@ -6473,12 +7235,21 @@ function _run_metamdbg(;
         outputs,
         graph_k,
         input_contract;
+        conda_runner = resolved_conda_runner,
         submission_reservation,
         threads,
     )
+    scheduler_executor = if resolved_executor isa Mycelia.SlurmExecutor
+        Mycelia.SlurmExecutor(
+            dry_run = resolved_executor.dry_run,
+            hold = true,
+        )
+    else
+        resolved_executor
+    end
     job = Mycelia.build_execution_job(
         cmd = script,
-        job_name = job_name,
+        job_name = submission_reservation.scheduler_job_name,
         site = site,
         time_limit = time_limit,
         cpus_per_task = threads,
@@ -6489,7 +7260,7 @@ function _run_metamdbg(;
         mail_user = mail_user,
     )
     if is_planned
-        submission = submission_runner(job, resolved_executor)
+        submission = submission_runner(job, scheduler_executor)
         return _metamdbg_planned_result(
             :planned,
             submission,
@@ -6497,6 +7268,14 @@ function _run_metamdbg(;
             input_contract,
             graph_k,
         )
+    end
+    if resolved_executor isa Mycelia.SlurmExecutor
+        job.site in (:nersc, :lawrencium, :scg) || throw(ArgumentError(
+            "metaMDBG real Slurm submission requires a supported batch site.",
+        ))
+        Mycelia._is_interactive_job(job) && throw(ArgumentError(
+            "metaMDBG real Slurm submission does not support interactive jobs.",
+        ))
     end
 
     newly_complete = _with_metamdbg_output_lock(outputs.outdir) do
@@ -6539,7 +7318,12 @@ function _run_metamdbg(;
             input_contract.input_snapshot,
         )
         if resolved_executor isa Mycelia.SlurmExecutor
-            _require_expected_metamdbg_toolchain(dependency_checker())
+            _require_expected_metamdbg_toolchain(
+                _metamdbg_dependency_toolchain(
+                    dependency_checker,
+                    resolved_conda_runner,
+                ),
+            )
         end
         _create_metamdbg_submission_reservation!(
             submission_reservation,
@@ -6549,13 +7333,31 @@ function _run_metamdbg(;
     end
     newly_complete !== nothing && return newly_complete
 
+    submission_attempt = nothing
+    submission_attempt_started = false
     submission = try
-        result = submission_runner(job, resolved_executor)
+        submission_attempt_started = true
+        submission_attempt = submission_runner(job, scheduler_executor)
         _require_successful_metamdbg_submission(
-            result;
+            submission_attempt;
             require_sbatch = resolved_executor isa Mycelia.SlurmExecutor,
         )
     catch primary_error
+        if _metamdbg_submission_acceptance_is_ambiguous(
+            submission_attempt,
+            submission_attempt_started,
+        )
+            error(
+                "metaMDBG received an ambiguous response after attempting a " *
+                "held SLURM submission. The unbound reservation was preserved " *
+                "at $(submission_reservation.path); scheduler name " *
+                "$(submission_reservation.scheduler_job_name). Inspect that " *
+                "exact name with `squeue --name " *
+                "$(submission_reservation.scheduler_job_name)` before binding " *
+                "or reclaiming the reservation. Cause: " *
+                sprint(showerror, primary_error),
+            )
+        end
         try
             _cleanup_metamdbg_submission_reservation_after_failure!(
                 outputs,
@@ -6567,6 +7369,27 @@ function _run_metamdbg(;
         end
         Base.rethrow()
     end
+    submission_job_id = String(submission.job_id)
+    bound_submission_reservation = try
+        submission_job_binder(
+            submission_reservation,
+            submission_job_id,
+        )
+    catch caught
+        error(
+            "metaMDBG submitted SLURM job $(submission_job_id) held but could " *
+            "not durably bind job.json; the job was not released. " *
+            _metamdbg_submission_recovery_guidance(
+                submission_reservation,
+                submission_job_id,
+            ) * " Cause: $(sprint(showerror, caught))",
+        )
+    end
+    released_submission_reservation = _release_metamdbg_submission_job!(
+        bound_submission_reservation,
+        submission_job_id,
+        submission_release_runner,
+    )
     return _metamdbg_planned_result(
         :submitted,
         submission,
@@ -6574,7 +7397,7 @@ function _run_metamdbg(;
         input_contract,
         graph_k,
         ;
-        submission_reservation,
+        submission_reservation = released_submission_reservation,
     )
 end
 
@@ -6602,12 +7425,13 @@ function inspect_metamdbg_submission_reservations(
                 canonical_outdir = reservation.canonical_outdir,
                 path = reservation.path,
                 workflow_signature = reservation.workflow_signature,
+                scheduler_job_name = reservation.scheduler_job_name,
                 input_contract_signature =
                     reservation.input_contract_signature,
                 graph_k = reservation.graph_k,
                 owner_token = reservation.owner_token,
-                job_id = nothing,
-                submission_state = :unknown,
+                job_id = reservation.job_id,
+                submission_state = reservation.submission_state,
             )
         end
     end
@@ -6712,12 +7536,24 @@ function reclaim_metamdbg_submission_reservation!(
         "metaMDBG reservation graph_k metadata must be an Int.",
     ))
     outputs = _metamdbg_output_paths(String(metadata.canonical_outdir), graph_k)
+    requested_job_name = hasproperty(metadata, :scheduler_job_name) ?
+                         _metamdbg_scheduler_job_name_prefix(
+        String(metadata.scheduler_job_name),
+        String(metadata.workflow_signature),
+    ) : "metamdbg"
     expected_reservation = _metamdbg_submission_reservation(
         outputs,
         (; signature = String(metadata.input_contract_signature)),
         graph_k;
         owner_token = normalized_owner_token,
+        job_name = requested_job_name,
     )
+    if metadata.job_id isa AbstractString
+        expected_reservation = _metamdbg_bound_submission_reservation(
+            expected_reservation,
+            String(metadata.job_id),
+        )
+    end
     expected_reservation.workflow_signature == metadata.workflow_signature ||
         error("metaMDBG reservation workflow signature does not match metadata.")
     expected_reservation.path == metadata.path || error(
@@ -6847,6 +7683,7 @@ function run_metamdbg(;
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing,
+        conda_runner::AbstractString = _conda_runner(),
 )::NamedTuple
     return _run_metamdbg(;
         hifi_reads,
@@ -6864,6 +7701,7 @@ function run_metamdbg(;
         mem_gb,
         qos,
         mail_user,
+        conda_runner,
     )
 end
 
