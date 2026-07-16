@@ -27,12 +27,23 @@ const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
 const MYCELIA_SHOW_PLOTS = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
 
-# Suppress plot display during tests by default.
-# Set MYCELIA_SHOW_PLOTS=true to enable interactive plot display.
+# Suppress interactive plot display during tests by default; set
+# MYCELIA_SHOW_PLOTS=true for interactive display. The primary guard is at the
+# library level (Mycelia.present_figure / should_display_plots, which also honors
+# CI); this env block is defense-in-depth for any backend path not routed through
+# present_figure. NOTE: GR reads `GKSwstype` (no underscore) — the previous
+# `GKS_WSTYPE` spelling was ignored, so GR could still open windows.
 if !MYCELIA_SHOW_PLOTS
-    ENV["GKS_WSTYPE"] = "100"       # GR backend: render to memory (no windows)
+    ENV["GKSwstype"] = "100"        # GR backend: render to file, no window (canonical name)
+    ENV["GKS_WSTYPE"] = "100"       # legacy spelling kept for safety
     ENV["DISPLAY"] = ""              # Prevent X11/Wayland window creation
     ENV["MPLBACKEND"] = "Agg"       # Matplotlib non-interactive backend (if used)
+end
+
+# When MYCELIA_PLOT_ARTIFACTS is set (e.g. by CI), library plotting functions
+# save figures there via Mycelia.present_figure for upload as build artifacts.
+if haskey(ENV, "MYCELIA_PLOT_ARTIFACTS") && !isempty(ENV["MYCELIA_PLOT_ARTIFACTS"])
+    mkpath(ENV["MYCELIA_PLOT_ARTIFACTS"])
 end
 
 const TEST_ARTIFACT_DIRS = [
