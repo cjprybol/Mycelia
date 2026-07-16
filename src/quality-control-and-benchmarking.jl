@@ -519,14 +519,18 @@ ROC; this reduces that cloud defensibly:
     optimal operating points (no other point has both `>=` precision and `>=`
     recall, with at least one strict), sorted by recall ascending — the
     achievable precision/recall tradeoff. `frontier_indices` are positions in the
-    input vectors.
+    input vectors. Exact-duplicate operating points do not dominate each other,
+    so each is retained (the frontier may contain repeated entries).
   - `average_precision`: area under the all-points-interpolated precision step
     function over recall `[0, max_recall]`, where interpolated precision at
     recall `r` is `max{ precision_i : recall_i >= r }` (PASCAL-VOC all-points
     interpolation). Robust to non-monotone and to dominated points.
   - `auc_trapezoid`: trapezoidal area under the recall-sorted Pareto frontier,
     reported alongside `average_precision` for transparency; `NaN` for fewer than
-    two frontier points (a single operating point has no defined trapezoid).
+    two frontier points (a single operating point has no defined trapezoid). Note
+    it integrates only over `[min_recall, max_recall]` (the frontier's span),
+    whereas `average_precision` integrates from recall 0 — so the two areas are
+    not directly comparable.
   - `max_f1`, `best_index`, `best_precision`, `best_recall`: the operating point
     maximizing F1 (`best_index` is a position in the input vectors).
 

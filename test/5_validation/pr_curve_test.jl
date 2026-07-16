@@ -3,7 +3,7 @@ import Mycelia
 
 # Summarize a set of classifier operating points (a threshold GRID, i.e. an
 # unordered cloud of (precision, recall) pairs) into a precision-recall curve and
-# its area. Expected values below are hand-computed; see the doctstring of
+# its area. Expected values below are hand-computed; see the docstring of
 # Mycelia.precision_recall_curve_summary for the all-points-interpolation AP.
 Test.@testset "precision_recall_curve_summary" begin
     # Three non-dominated points: higher precision at lower recall.
@@ -40,12 +40,46 @@ Test.@testset "precision_recall_curve_summary" begin
     Test.@test sd.frontier_recall == [0.2, 0.5, 0.8]   # dominated point dropped
     Test.@test sd.n_points == 4
 
-    # NaN points are dropped before any computation.
+    # NaN points are dropped before any computation. The dropped point shifts
+    # later input positions, so frontier_indices / best_index must remap back to
+    # ORIGINAL positions (retained orig = [1,3,4]); a frontier-local-index bug
+    # would return [1,2,3] and pass every other assertion.
     Pn = [0.9, NaN, 0.6, 0.3]
     Rn = [0.2, 0.4, 0.5, 0.8]
     sn = Mycelia.precision_recall_curve_summary(Pn, Rn)
     Test.@test sn.n_points == 3
     Test.@test isapprox(sn.average_precision, 0.45; atol = 1e-9)
+    Test.@test sn.frontier_indices == [1, 3, 4]   # original positions, not [1,2,3]
+    Test.@test sn.best_index == 3                  # B=(0.6,0.5) is input position 3
+
+    # `missing` (not just NaN) is dropped too, via a distinct branch that must be
+    # checked before isnan (isnan(missing) === missing would throw). Same cloud.
+    Pm = [0.9, missing, 0.6, 0.3]
+    Rm = [0.2, 0.4, 0.5, 0.8]
+    sm = Mycelia.precision_recall_curve_summary(Pm, Rm)
+    Test.@test sm.n_points == 3
+    Test.@test isapprox(sm.average_precision, 0.45; atol = 1e-9)
+
+    # All-points interpolation LIFTING: a higher-recall point with higher precision
+    # raises interpolated precision at lower recall. This is the defining VOC
+    # behavior; without it AP would be 0.2*0.3 + 0.6*0.9 = 0.60 instead of 0.72.
+    #   uniq recall {0.2,0.8}: (0.2-0)*max(0.3,0.9) + (0.8-0.2)*0.9 = 0.18 + 0.54.
+    sl = Mycelia.precision_recall_curve_summary([0.3, 0.9], [0.2, 0.8])
+    Test.@test isapprox(sl.average_precision, 0.72; atol = 1e-9)
+    Test.@test sl.frontier_recall == [0.8]         # (0.3,0.2) is dominated
+    Test.@test isnan(sl.auc_trapezoid)             # single frontier point
+
+    # All-identical recalls collapse the frontier to the max-precision point
+    # (others dominated) -> trapezoid NaN; AP = max_recall * max_precision.
+    si = Mycelia.precision_recall_curve_summary([0.4, 0.6, 0.5], [0.5, 0.5, 0.5])
+    Test.@test si.frontier_recall == [0.5]
+    Test.@test isapprox(si.average_precision, 0.30; atol = 1e-9)
+    Test.@test isnan(si.auc_trapezoid)
+
+    # F1 divide-by-zero guard: a (0,0) operating point must not throw.
+    sz = Mycelia.precision_recall_curve_summary([0.5, 0.0], [0.5, 0.0])
+    Test.@test isapprox(sz.max_f1, 0.5; atol = 1e-9)
+    Test.@test sz.best_index == 1
 
     # Single point: AP = area of the interpolated step from recall 0 to r at p;
     # trapezoid is undefined (<2 frontier points) -> NaN.
