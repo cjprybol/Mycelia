@@ -2,19 +2,19 @@
 # decode the ML path's edges accumulate responsibility into a
 # SoftEdgeWeightAccumulator; `register_soft_edge_weights!` re-weights a graph so
 # `compute_edge_weight` returns probability-weighted evidence instead of raw
-# coverage counts, reverting byte-for-byte after `clear!`. This test exercises
-# those primitives at the UNIT level.
+# coverage counts. This test exercises those primitives at the UNIT level.
 #
 # SUPPORT FLOOR (td-h6w9): as of soft-EM v2, `register_soft_edge_weights!` clamps
 # a well-supported edge (raw coverage >= SOFT_EM_MIN_SUPPORT) to at least its raw
-# count, so a real skewed minority allele is never decayed below its own support;
-# only near-zero-support (error) edges are free to decay. The consumption test
+# count, so an edge meeting that threshold never receives a registered weight
+# below its own support; below-threshold edges remain free to decay. The test
 # below therefore checks `max(soft, floor)`: a soft weight ABOVE raw is consumed
 # verbatim, a soft weight BELOW raw on a supported edge is floored back to raw.
 #
-# The shipped pipeline (`mycelia_iterative_assemble`) now runs BOTH the E-step
-# accumulation and the M-step consumption (register the prior iteration's
-# accumulator, decode, clear). This file tests the primitives directly.
+# The shipped pipeline (`mycelia_iterative_assemble`) runs BOTH the E-step
+# accumulation and M-step consumption in a task-local scope that restores the
+# prior snapshot on exit. This file tests the primitives directly, including the
+# explicit register/clear API.
 #
 # Run directly:
 #   julia --project=. -e 'include("test/4_assembly/scalable_corrector_soft_em_test.jl")'
@@ -40,7 +40,7 @@ function _toy_fastq_records(rng; reflen = 1000, n_reads = 120, readlen = 80, err
     return records
 end
 
-Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
+Test.@testset "scalable corrector soft-EM primitives (td-e70t)" begin
     R = Mycelia.Rhizomorph
 
     Test.@testset "registry consumption (support-floored) + byte-identical revert" begin
@@ -130,14 +130,11 @@ Test.@testset "scalable corrector soft-EM v1 (td-e70t)" begin
     Test.@testset "rare (error) edge soft weight is non-increasing across iterations" begin
         # Two manual EM iterations. Iteration 2's graph is re-weighted from
         # iteration 1's accumulator (the M-step consumption), then decoded on the
-        # CORRECTED reads. The probability-memory / decay property is AGGREGATE in
-        # v1 (responsibility is always 1.0, so a single edge's soft weight is just
-        # its ML-path coverage and can rise if a read is corrected onto it): the
-        # rare-edge (error) POPULATION shrinks. We assert both the count of rare
-        # edges and their total tail mass are non-increasing.
-        #
-        # v1 CAVEAT: full coalescence to ~1 contig (and strict per-edge decay)
-        # needs the v2 competing-paths E-step; this asserts the v1 aggregate trend.
+        # CORRECTED reads. This legacy aggregate regression intentionally measures
+        # the rare-edge population and tail mass rather than requiring strict
+        # per-edge monotonicity: an individual edge can gain weight when a read is
+        # corrected onto it, while the active competing-path E-step can split
+        # responsibility among alternatives.
         reads = _toy_fastq_records(Random.MersenneTwister(9); n_reads = 150, err = 0.008)
         k = 13
         rare_threshold = 2.0   # <=2 supporting ML paths ⇒ error-like edge

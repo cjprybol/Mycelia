@@ -61,6 +61,9 @@ hpc-ci/hpc-results.json
 benchmarking/results/track_a_baseline/refs/
 benchmarking/results/track_a_baseline/cells/
 
+# Runtime-only frontier calibration and fixed-toy outputs are regenerable.
+benchmarking/results/td-jt7r-2-*/
+
 # Agent worktrees
 trees/
 

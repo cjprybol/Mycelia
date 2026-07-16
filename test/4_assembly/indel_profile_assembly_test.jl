@@ -17,8 +17,13 @@ import Test
 import Mycelia
 import FASTX
 import BioSequences
+import Kmers
 import Random
 import Statistics
+
+if !isdefined(Main, :test_throws_message)
+    include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
+end
 
 # Nanopore/illumina read set sampled from a random reference through
 # `Mycelia.observe(...)` at the requested tech (returns a (seq, quals) TUPLE).
@@ -86,10 +91,18 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
                    0.02
 
         pb = Mycelia.indel_error_profile(:pacbio)
-        # PacBio: base 0.11, split 0.40 / 0.40 ⇒ absolute indel rate ≈ 0.088.
+        # Legacy :pacbio remains the CLR-like compatibility alias.
         Test.@test pb.base_error_rate ≈ 0.11
         Test.@test pb.base_error_rate * (pb.insertion_fraction + pb.deletion_fraction) >
                    0.02
+        Test.@test Mycelia.indel_error_profile(:pacbio_clr) == pb
+
+        hifi = Mycelia.indel_error_profile(:pacbio_hifi)
+        # HiFi has an exact high-accuracy profile and deliberately stays off the
+        # CLR-like indel pair-HMM until a validated HiFi indel split is modeled.
+        Test.@test hifi.base_error_rate ≈ 0.001
+        Test.@test hifi.insertion_fraction == 0.0
+        Test.@test hifi.deletion_fraction == 0.0
 
         ul = Mycelia.indel_error_profile(:ultima)
         # Ultima carries its TRUE conditional fractions (observe(): base 1e-6,
@@ -99,13 +112,17 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test ul.base_error_rate * (ul.insertion_fraction + ul.deletion_fraction) <
                    0.02
 
-        Test.@test_throws Exception Mycelia.indel_error_profile(:bogus)
+        test_throws_message(ErrorException, "unknown sequencing technology") do
+            Mycelia.indel_error_profile(:bogus)
+        end
     end
 
     Test.@testset "threshold gate: profile -> indel_moves" begin
         # Above threshold => indel-aware; negligible => substitution-only.
         Test.@test Mycelia.profile_enables_indels(:nanopore) == true
         Test.@test Mycelia.profile_enables_indels(:pacbio) == true
+        Test.@test Mycelia.profile_enables_indels(:pacbio_clr) == true
+        Test.@test Mycelia.profile_enables_indels(:pacbio_hifi) == false
         Test.@test Mycelia.profile_enables_indels(:illumina) == false
         Test.@test Mycelia.profile_enables_indels(:ultima) == false
         # The gate is a strict threshold on the ABSOLUTE indel rate
@@ -118,12 +135,156 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test Mycelia.profile_enables_indels(:illumina; threshold = 1e-5) == true
     end
 
+    Test.@testset "substitution fallback-rate config + forwarding" begin
+        config_options = (;
+            alphabet = :DNA,
+            graph_mode = :canonical,
+            max_steps = 7,
+            beam_width = typemax(Int),
+            max_successors_per_state = typemax(Int),
+            beam_score_margin = Inf,
+            record_position_gaps = false,
+        )
+
+        # The default-nothing path deliberately omits `error_rate` from the
+        # ViterbiCorrectionConfig constructor. Illumina, Ultima, and legacy direct
+        # callers therefore retain the historical substitution-only 0.01 fallback.
+        legacy = Mycelia._iterative_viterbi_correction_config(; config_options...)
+        Test.@test legacy.error_rate == 0.01
+        Test.@test legacy.indel_moves == false
+
+        # HiFi remains substitution-only, but its quality-free fallback is the exact
+        # technology-profile rate rather than the legacy generic default.
+        hifi = Mycelia._iterative_viterbi_correction_config(
+            ; config_options..., substitution_error_rate = 0.001)
+        Test.@test hifi.error_rate == 0.001
+        Test.@test hifi.indel_moves == false
+        Test.@test R._substitution_error_rate(:pacbio_hifi) == 0.001
+        Test.@test R._substitution_error_rate(:illumina) === nothing
+        Test.@test R._substitution_error_rate(:ultima) === nothing
+
+        profile = Mycelia.indel_error_profile(:nanopore)
+        indel_params = Mycelia.IndelDecodeParams(
+            profile.base_error_rate,
+            profile.insertion_fraction,
+            profile.deletion_fraction,
+            profile.insertion_extend_probability,
+            profile.deletion_extend_probability,
+            3,
+            3,
+            16,
+        )
+        test_throws_message(ArgumentError, "mutually exclusive") do
+            Mycelia._iterative_viterbi_correction_config(
+                ; config_options..., indel_params,
+                substitution_error_rate = 0.001)
+        end
+        test_throws_message(ArgumentError, "error_rate must be in (0, 0.5)") do
+            Mycelia._iterative_viterbi_correction_config(
+                ; config_options..., substitution_error_rate = 0.0)
+        end
+
+        # Exercise the real non-windowed and windowed forwarding chains. The hard
+        # set contains every canonical k-mer in the probe, guaranteeing that the
+        # windowed arm reaches its per-window Viterbi config builder.
+        sequences = [
+            "ACGTACGTACGT",
+            "ACGTACGTACGT",
+            "ACGTTCGTACGT",
+        ]
+        records = FASTX.FASTQ.Record[
+            FASTX.FASTQ.Record("forward_$(index)", sequence, repeat("I", length(sequence)))
+            for (index, sequence) in enumerate(sequences)
+        ]
+        k = 5
+        graph = R.build_qualmer_graph(records, k; mode = :canonical)
+        probe = last(records)
+        probe_sequence = FASTX.sequence(BioSequences.LongDNA{4}, probe)
+        hard_vertices = Set(
+            BioSequences.canonical(kmer) for
+            (kmer, _) in Kmers.UnambiguousDNAMers{k}(probe_sequence)
+        )
+
+        direct = Mycelia.try_viterbi_path_improvement(
+            probe,
+            graph,
+            k;
+            graph_mode = :canonical,
+            substitution_error_rate = 0.001,
+        )
+        Test.@test direct isa Union{Nothing, Tuple{FASTX.FASTQ.Record, Float64}}
+        direct_diagnostics = Mycelia.CorrectorDiagnostics()
+        Test.@test Mycelia.try_viterbi_path_improvement(
+            probe,
+            graph,
+            k;
+            graph_mode = :canonical,
+            diagnostics = direct_diagnostics,
+            substitution_error_rate = 0.0,
+        ) === nothing
+        Test.@test direct_diagnostics.structural_errors[] > 0
+
+        windowed, _improved, decoded_windows,
+        divergent_windows = Mycelia.improve_read_likelihood_windowed_detail(
+            probe,
+            graph,
+            k,
+            hard_vertices;
+            graph_mode = :canonical,
+            substitution_error_rate = 0.001,
+        )
+        Test.@test decoded_windows >= 1
+        Test.@test divergent_windows == 0
+        Test.@test length(FASTX.sequence(windowed)) == length(FASTX.sequence(probe))
+        window_diagnostics = Mycelia.CorrectorDiagnostics()
+        Mycelia.improve_read_likelihood_windowed_detail(
+            probe,
+            graph,
+            k,
+            hard_vertices;
+            graph_mode = :canonical,
+            diagnostics = window_diagnostics,
+            substitution_error_rate = 0.0,
+        )
+        Test.@test window_diagnostics.structural_errors[] > 0
+
+        batch, _improvements, _skip_fraction, _cheap_corrections,
+        _decode_gated = Mycelia.improve_read_set_likelihood(
+            records,
+            graph,
+            k;
+            graph_mode = :canonical,
+            hard_vertices,
+            windowed_decode = true,
+            substitution_error_rate = 0.001,
+        )
+        Test.@test length(batch) == length(records)
+        batch_diagnostics = Mycelia.CorrectorDiagnostics()
+        Mycelia.improve_read_set_likelihood(
+            records,
+            graph,
+            k;
+            graph_mode = :canonical,
+            hard_vertices,
+            windowed_decode = true,
+            diagnostics = batch_diagnostics,
+            substitution_error_rate = 0.0,
+        )
+        Test.@test batch_diagnostics.structural_errors[] > 0
+    end
+
     Test.@testset "AssemblyConfig threads + validates sequencing_tech" begin
         # Default is :illumina (unchanged behavior).
         Test.@test R.AssemblyConfig(k = 13).sequencing_tech == :illumina
         Test.@test R.AssemblyConfig(k = 13, sequencing_tech = :nanopore).sequencing_tech ==
                    :nanopore
-        Test.@test_throws Exception R.AssemblyConfig(k = 13, sequencing_tech = :bogus)
+        Test.@test R.AssemblyConfig(
+            k = 13,
+            sequencing_tech = :pacbio_hifi,
+        ).sequencing_tech == :pacbio_hifi
+        test_throws_message(ErrorException, "sequencing_tech must be one of") do
+            R.AssemblyConfig(k = 13, sequencing_tech = :bogus)
+        end
     end
 
     Test.@testset "tier knobs carry indel bounds" begin
@@ -133,18 +294,24 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         Test.@test sc.band_width > 0
         Test.@test sc.deletion_max_run == 3
         Test.@test sc.max_insertion_run >= 1
+        Test.@test sc.indel_schedule == :frontier_budgeted
 
         ex = R._corrector_strategy_knobs(:exhaustive)
-        # :exhaustive => unbounded band + larger caps.
+        # :exhaustive => unbounded band + larger caps and no runtime classifier.
         Test.@test ex.band_width === nothing
         Test.@test ex.deletion_max_run > sc.deletion_max_run
+        Test.@test ex.indel_schedule == :unrestricted
     end
 
-    Test.@testset "illumina default is the substitution-only oracle (byte-identical)" begin
+    Test.@testset "illumina + ultima preserve substitution oracle bytes" begin
         reads, _ = _profile_reads(tech = :illumina, err = 0.01, seed = 7)
         base = R.assemble_genome(reads; k = 13, corrector = :iterative)
         il = R.assemble_genome(reads; k = 13, corrector = :iterative,
             sequencing_tech = :illumina)
+        ul = R.assemble_genome(reads; k = 13, corrector = :iterative,
+            sequencing_tech = :ultima)
+        hifi = R.assemble_genome(reads; k = 13, corrector = :iterative,
+            sequencing_tech = :pacbio_hifi)
         # Oracle guard (PR #408 review, FIX 4): the byte-identity check below is
         # only meaningful if the corrector actually produced contigs — otherwise
         # `[] == []` passes vacuously and hides a corrector that ate every read.
@@ -152,9 +319,30 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         # Contigs byte-identical: the illumina profile threads NO indel params, so
         # the corrector runs the substitution decode unchanged.
         Test.@test il.contigs == base.contigs
+        Test.@test ul.contigs == base.contigs
         Test.@test base.assembly_stats["indel_moves"] == false
         Test.@test il.assembly_stats["indel_moves"] == false
+        Test.@test ul.assembly_stats["indel_moves"] == false
+        Test.@test hifi.assembly_stats["indel_moves"] == false
         Test.@test il.assembly_stats["sequencing_tech"] == "illumina"
+        Test.@test ul.assembly_stats["sequencing_tech"] == "ultima"
+        Test.@test hifi.assembly_stats["sequencing_tech"] == "pacbio_hifi"
+        Test.@test hifi.assembly_stats["substitution_error_rate"] == 0.001
+        Test.@test il.assembly_stats["substitution_error_rate"] === nothing
+
+        il_telemetry = il.assembly_stats["indel_rung_telemetry"]
+        Test.@test il_telemetry isa AbstractVector
+        Test.@test all(row -> !get(row, :profile_requested, false), il_telemetry)
+        Test.@test all(row -> get(row, :requested, 0) == 0, il_telemetry)
+        Test.@test il.assembly_stats["indel_requested"] == 0
+        Test.@test il.assembly_stats["indel_attempted"] == 0
+        Test.@test il.assembly_stats["indel_completed"] == 0
+        Test.@test il.assembly_stats["indel_truncated"] == 0
+        Test.@test il.assembly_stats["indel_engaged"] == 0
+        Test.@test il.assembly_stats["indel_decodes"] ==
+                   il.assembly_stats["indel_completed"]
+        Test.@test il.assembly_stats["truncated_decodes"] ==
+                   il.assembly_stats["indel_truncated"]
     end
 
     Test.@testset "nanopore enables indel-aware correction" begin
@@ -163,11 +351,33 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             sequencing_tech = :nanopore)
         Test.@test np isa R.AssemblyResult
         Test.@test !isempty(np.contigs)
-        # The provenance stamp proves the indel decode path was engaged.
+        # The legacy provenance stamp records profile intent. Runtime engagement
+        # is surfaced separately by the aggregate and per-rung telemetry.
         Test.@test np.assembly_stats["indel_moves"] == true
         Test.@test np.assembly_stats["sequencing_tech"] == "nanopore"
-        Test.@test np.assembly_stats["indel_decodes"] >= 0
-        Test.@test np.assembly_stats["truncated_decodes"] >= 0
+        np_telemetry = np.assembly_stats["indel_rung_telemetry"]
+        Test.@test np_telemetry isa AbstractVector
+        Test.@test np.assembly_stats["indel_requested"] >= 0
+        Test.@test np.assembly_stats["indel_attempted"] >= 0
+        Test.@test np.assembly_stats["indel_completed"] >= 0
+        Test.@test np.assembly_stats["indel_truncated"] >= 0
+        Test.@test np.assembly_stats["indel_engaged"] >= 0
+        for field in (:requested, :attempted, :completed, :truncated, :engaged)
+            key = "indel_$(field)"
+            Test.@test np.assembly_stats[key] ==
+                       sum(get(row, field, 0) for row in np_telemetry)
+        end
+        Test.@test np.assembly_stats["indel_requested"] >=
+                   np.assembly_stats["indel_attempted"]
+        Test.@test np.assembly_stats["indel_attempted"] ==
+                   np.assembly_stats["indel_completed"] +
+                   np.assembly_stats["indel_truncated"]
+        Test.@test np.assembly_stats["indel_completed"] >=
+                   np.assembly_stats["indel_engaged"]
+        Test.@test np.assembly_stats["indel_decodes"] ==
+                   np.assembly_stats["indel_completed"]
+        Test.@test np.assembly_stats["truncated_decodes"] ==
+                   np.assembly_stats["indel_truncated"]
         Test.@test np.assembly_stats["trace_contract_errors"] == 0
         Test.@test np.assembly_stats["window_divergences"] >= 0
     end
@@ -194,7 +404,9 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         id_np = Float64[]
         id_il = Float64[]
         np_indel_moves = Bool[]
+        np_indel_requested = Int[]
         np_indel_decodes = Int[]
+        np_indel_engaged = Int[]
         np_nonempty = Bool[]
         for seed in seeds
             reads,
@@ -207,7 +419,9 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
             push!(id_np, _best_identity_to_ref(np.contigs, refseq))
             push!(id_il, _best_identity_to_ref(il.contigs, refseq))
             push!(np_indel_moves, np.assembly_stats["indel_moves"] == true)
+            push!(np_indel_requested, np.assembly_stats["indel_requested"])
             push!(np_indel_decodes, np.assembly_stats["indel_decodes"])
+            push!(np_indel_engaged, np.assembly_stats["indel_engaged"])
             push!(np_nonempty, !isempty(np.contigs))
         end
         mean_np = Statistics.mean(id_np)
@@ -215,9 +429,14 @@ Test.@testset "indel-aware correction wired via sequencing-tech error profile" b
         wins = count(id_np .>= id_il)
         @info "E2E nanopore-vs-illumina identity" seeds = collect(seeds) id_np id_il mean_np mean_il wins
 
-        # The nanopore arm actually engaged the indel decode and produced contigs.
+        # Every nanopore arm requests indel service. The branching/frontier
+        # classifier may correctly reject individual high-branching seeds, so the
+        # matrix requires actual completed and gap-engaged decodes across the
+        # fixed seeds rather than forcing every seed through an unaffordable rung.
         Test.@test all(np_indel_moves)
-        Test.@test all(>(0), np_indel_decodes)
+        Test.@test all(>(0), np_indel_requested)
+        Test.@test any(>(0), np_indel_decodes)
+        Test.@test any(>(0), np_indel_engaged)
         Test.@test all(np_nonempty)
         # DIFFERENTIAL (the PR's value): indel-aware correction lands closer to the
         # truth than substitution-only on the SAME nanopore reads, on average.

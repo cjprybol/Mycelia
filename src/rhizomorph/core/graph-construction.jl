@@ -417,7 +417,9 @@ function build_qualmer_graph_singlestrand(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1,
+        count_canonical::Bool = false
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
@@ -439,11 +441,11 @@ function build_qualmer_graph_singlestrand(
 
     # Dispatch to type-stable core function
     if sequence_alphabet == :DNA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.DNAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(records, Val(k), Kmers.DNAKmer{k}, dataset_id; min_count = min_count, count_canonical = count_canonical)
     elseif sequence_alphabet == :RNA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.RNAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(records, Val(k), Kmers.RNAKmer{k}, dataset_id; min_count = min_count, count_canonical = count_canonical)
     elseif sequence_alphabet == :AA
-        return _build_qualmer_graph_core(records, Val(k), Kmers.AAKmer{k}, dataset_id)
+        return _build_qualmer_graph_core(records, Val(k), Kmers.AAKmer{k}, dataset_id; min_count = min_count, count_canonical = count_canonical)
     else
         error("Unsupported sequence type for qualmer graph: $sequence_alphabet")
     end
@@ -459,8 +461,12 @@ function _build_qualmer_graph_core(
         records::Vector{FASTX.FASTQ.Record},
         ::Val{K},
         ::Type{KmerType},
-        dataset_id::String
+        dataset_id::String;
+        min_count::Int = 1,
+        count_canonical::Bool = false
 ) where {K, KmerType <: Kmers.Kmer}
+    min_count >= 1 ||
+        throw(ArgumentError("min_count must be >= 1, got $(min_count)"))
     # Determine sequence type and iterator
     if KmerType <: Kmers.DNAKmer
         SeqType = BioSequences.LongDNA{4}
@@ -507,6 +513,34 @@ function _build_qualmer_graph_core(
         weight_function = compute_edge_weight
     )
 
+    # Coverage prefilter (opt-in, td-ck03): streaming count pass over the
+    # IDENTICAL iterator used below (k-mers keyed AS OBSERVED, no canonicalization
+    # — canonicalization happens only in convert_to_canonical, after this core).
+    # Guarded so min_count == 1 is an exact no-op.
+
+    # In :doublestrand/:canonical mode (count_canonical=true) the threshold is
+    # applied to MERGED (canonical) coverage so a solid locus sequenced once on
+    # each strand (forward + RC = 2x biological coverage) is not pruned; in
+    # :singlestrand mode strands are legitimately distinct so we count as-observed.
+    # AA k-mers have no reverse complement, so canonicalization never applies.
+    use_canonical = count_canonical && !is_aa
+    kmer_counts = Dict{ActualKmerType, UInt32}()
+    if min_count > 1
+        for record in records
+            sequence = FASTX.sequence(SeqType, record)
+            if is_aa
+                for kmer in KmerIterator(sequence)
+                    kmer_counts[kmer] = get(kmer_counts, kmer, UInt32(0)) + UInt32(1)
+                end
+            else
+                for (kmer, _position) in KmerIterator(sequence)
+                    key = use_canonical ? BioSequences.canonical(kmer) : kmer
+                    kmer_counts[key] = get(kmer_counts, key, UInt32(0)) + UInt32(1)
+                end
+            end
+        end
+    end
+
     # Process each record
     for record in records
         observation_id = String(split(FASTX.identifier(record), ' ')[1])
@@ -525,6 +559,13 @@ function _build_qualmer_graph_core(
 
         # Add vertices and evidence
         for (kmer, position) in kmers_with_positions
+            # Coverage prefilter: skip low-count k-mers and their evidence.
+            if min_count > 1 &&
+               get(kmer_counts, use_canonical ? BioSequences.canonical(kmer) : kmer,
+                   UInt32(0)) < min_count
+                continue
+            end
+
             # Create vertex if it doesn't exist
             if !haskey(graph, kmer)
                 vertex_data = QualmerVertexData(kmer)
@@ -544,6 +585,15 @@ function _build_qualmer_graph_core(
         for i in 1:(length(kmers_with_positions) - 1)
             src_kmer, src_pos = kmers_with_positions[i]
             dst_kmer, dst_pos = kmers_with_positions[i + 1]
+
+            # Coverage prefilter: skip edge unless BOTH endpoints survive.
+            if min_count > 1 &&
+               (get(kmer_counts, use_canonical ? BioSequences.canonical(src_kmer) : src_kmer,
+                    UInt32(0)) < min_count ||
+                get(kmer_counts, use_canonical ? BioSequences.canonical(dst_kmer) : dst_kmer,
+                    UInt32(0)) < min_count)
+                continue
+            end
 
             # Only add edge if positions are consecutive
             if dst_pos == src_pos + 1
@@ -589,19 +639,23 @@ function build_qualmer_graph_doublestrand(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    # First build singlestrand qualmer graph
+    # First build singlestrand qualmer graph. count_canonical=true so the
+    # prefilter threshold applies to merged (canonical) coverage before RC merge.
     singlestrand_graph = build_qualmer_graph_singlestrand(
         records,
         k;
         dataset_id = dataset_id,
         type_hint = type_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        min_count = min_count,
+        count_canonical = true
     )
 
     # Convert to doublestrand representation (replicate vertices/edges)
@@ -865,19 +919,23 @@ function build_qualmer_graph_canonical(
         k::Int;
         dataset_id::String = "dataset_01",
         type_hint::Union{Nothing, Symbol} = nothing,
-        ambiguous_action::Symbol = :dna
+        ambiguous_action::Symbol = :dna,
+        min_count::Int = 1
 )
     if isempty(records)
         throw(ArgumentError("Cannot build graph from empty record set"))
     end
 
-    # First build singlestrand qualmer graph
+    # First build singlestrand qualmer graph. count_canonical=true so the
+    # prefilter threshold applies to merged (canonical) coverage before the merge.
     singlestrand_graph = build_qualmer_graph_singlestrand(
         records,
         k;
         dataset_id = dataset_id,
         type_hint = type_hint,
-        ambiguous_action = ambiguous_action
+        ambiguous_action = ambiguous_action,
+        min_count = min_count,
+        count_canonical = true
     )
 
     # Convert to canonical representation

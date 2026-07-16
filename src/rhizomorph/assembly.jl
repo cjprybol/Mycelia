@@ -143,6 +143,7 @@ struct AssemblyConfig
     dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
+    qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op on every path); DISTINCT from min_coverage (td-ck03)
 
     # Optional read-correction front-end (opt-in; default :none preserves today's
     # single-k-from-uncorrected-reads behavior byte-for-byte).
@@ -151,8 +152,9 @@ struct AssemblyConfig
 
     # Corrector TIER selector (td-fuo8). Only consulted when corrector=:iterative.
     # :scalable (DEFAULT) — coarse k-ladder + low iteration cap + skip-solid +
-    #   hard-read gating + soft-EM v2 competing-path responsibilities and an
-    #   M-step support floor. Built for real-scale inputs.
+    #   hard-read gating + soft-EM v2 competing-path responsibilities with an
+    #   M-step support floor + frontier-budgeted indel scheduling. Built for
+    #   real-scale inputs.
     # :exhaustive — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk,
     #   10 iterations/k, exact UNBOUNDED (typemax) Viterbi beam, no skip, no
     #   hard-window, no soft-EM. This is NOT a reproduction of the prior corrector
@@ -170,12 +172,13 @@ struct AssemblyConfig
     token_sequences::Union{Nothing, Vector{Vector{String}}}
 
     # Linear-time defragmentation of the (qualmer) assembly graph BEFORE contig
-    # extraction (td-969e): coverage-1 dead-end tip clipping + guarded low-coverage
-    # bubble collapse. Three-state sentinel so the DEFAULT can differ by context
-    # (see _qualmer_graph_to_assembly): `nothing` = context default (ON for the
-    # iterative corrector's re-assembly, OFF for a plain qualmer assembly), `true`
-    # / `false` = force. Removes only unambiguous errors; never collapses a
-    # data-supported variant (td-h6w9), so it cannot lose real sequence.
+    # extraction (td-969e): conservative support/length/topology heuristics for
+    # tips, bubbles, and disconnected components. Three-state sentinel so the
+    # DEFAULT can differ by context (see _qualmer_graph_to_assembly): `nothing` =
+    # context default (ON for the iterative corrector's re-assembly, OFF for a
+    # plain qualmer assembly), `true` / `false` = force. These heuristics can
+    # remove genuine low-coverage structures that meet the configured thresholds;
+    # cleanup therefore runs on a private copy and remains explicitly disableable.
     graph_cleanup::Union{Bool, Nothing}
 
     # Persistent directory for the Stage-1 corrector handoff (hybrid-OLC route,
@@ -191,10 +194,10 @@ struct AssemblyConfig
     # Sequencing-technology ERROR PROFILE driving the corrector's indel-aware decode
     # (td-9q84 / 4a). Only consulted when corrector=:iterative. The profile maps to
     # per-base indel fractions (see `Mycelia.indel_error_profile`); indel-prone
-    # technologies (:nanopore, :pacbio) enable the pair-HMM gap moves, while the
-    # DEFAULT :illumina (and :ultima) carry ~0 indel fractions and stay on the
-    # substitution-only path byte-for-byte. Wiring the profile — not read length or
-    # a hardcoded tech — keeps "correct with the profile you'd simulate".
+    # technologies (:nanopore, :pacbio_clr, and legacy :pacbio) enable the pair-HMM
+    # gap moves, while the DEFAULT :illumina, :ultima, and high-accuracy
+    # :pacbio_hifi profiles stay on the substitution-only path. Wiring the profile
+    # — not read length or a hardcoded tech — keeps the chemistry boundary explicit.
     sequencing_tech::Symbol
 
     # Stage-2 layout selector (hybrid-OLC route (a), td-yymj). `:native` (default)
@@ -207,7 +210,7 @@ struct AssemblyConfig
 
     # Which external assembler the `:olc` layout dispatches to. `:auto` (default)
     # picks by read type (sequencing_tech): short-read techs (:illumina, :ultima)
-    # → :megahit, long-read techs (:nanopore, :pacbio) → :flye. Explicit tools:
+    # → :megahit, long-read techs (:nanopore and PacBio profiles) → :flye. Tools:
     # short-read :megahit/:metaspades (td-yymj), long-read :flye/:metaflye/:canu/
     # :hifiasm (td-wvto). An explicit tool must match the corrected read type
     # (hifiasm is PacBio-HiFi only; canu also needs an olc_options genome_size).
@@ -237,6 +240,7 @@ struct AssemblyConfig
             dedup_revcomp::Union{Bool, Nothing} = nothing,
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
+            qualmer_prefilter_min_count::Union{Int, Nothing} = nothing,
             corrector::Symbol = :none,
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
@@ -266,6 +270,13 @@ struct AssemblyConfig
         # overridden by passing an explicit dedup_revcomp=true/false.
         effective_dedup_revcomp = dedup_revcomp === nothing ?
                                   (corrector == :iterative) : dedup_revcomp
+        # Opt-in qualmer coverage prefilter (td-ck03). Default 1 = EXACT no-op on
+        # every path (the prefilter drops low-coverage k-mers, which CHANGES
+        # assembly output, so it must be explicitly requested — not a silent
+        # default; e.g. bacterial-scale runs pass qualmer_prefilter_min_count=2).
+        # DISTINCT from min_coverage (the downstream solidity threshold).
+        effective_qualmer_prefilter_min_count = qualmer_prefilter_min_count === nothing ?
+                                                1 : qualmer_prefilter_min_count
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -312,13 +323,11 @@ struct AssemblyConfig
             error("strategy must be one of $(_valid_strategies), got :$(effective_strategy)")
         end
 
-        # Validation: sequencing_tech must be a recognized error profile (validate
-        # unconditionally so a typo is caught at construction, even for
-        # corrector=:none where it is not consulted). Derived from the OLC taxonomy
-        # so the short/long partition `:auto` resolution depends on stays a single
-        # source of truth — adding a tech in one place can't silently mislabel it.
-        _seq_tax = _olc_taxonomy()
-        _valid_seq_techs = (_seq_tax.short_read_techs..., _seq_tax.long_read_techs...)
+        # Validation: sequencing_tech selects a correction ERROR PROFILE, not an
+        # assembler family. Keep its exact-chemistry taxonomy independent from the
+        # OLC short/long adapter taxonomy so PacBio CLR and HiFi cannot collapse to
+        # the same corrector merely because both use long-read assemblers.
+        _valid_seq_techs = _correction_profile_technologies()
         if !(sequencing_tech in _valid_seq_techs)
             error("sequencing_tech must be one of $(_valid_seq_techs), got :$(sequencing_tech)")
         end
@@ -360,6 +369,10 @@ struct AssemblyConfig
         end
         if min_coverage < 1
             error("min_coverage must be positive, got min_coverage=$(min_coverage)")
+        end
+        if effective_qualmer_prefilter_min_count < 1
+            error("qualmer_prefilter_min_count must be positive, got " *
+                  "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
         end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
@@ -406,6 +419,12 @@ struct AssemblyConfig
         _tax = _olc_taxonomy()
         _valid_olc_tools = (:auto, _tax.short_read_tools..., _tax.long_read_tools...)
         if layout == :olc
+            if olc_tool == :hifiasm && sequencing_tech == :pacbio
+                @warn "sequencing_tech=:pacbio is deprecated for hifiasm; " *
+                      "normalizing this legacy contract to :pacbio_hifi. " *
+                      "Pass :pacbio_hifi explicitly."
+                sequencing_tech = :pacbio_hifi
+            end
             # An OLC layout with no correction is just the plain external assembler,
             # reachable via the wrapper directly — the route exists to compose Stage-1
             # correction with external layout, so it requires the corrector.
@@ -430,12 +449,15 @@ struct AssemblyConfig
                 sequencing_tech in _tax.long_read_techs ||
                     error("olc_tool=:$(olc_tool) is a " *
                           "long-read assembler but sequencing_tech=:$(sequencing_tech) is a short-read " *
-                          "tech; pair a long-read tool with :nanopore or :pacbio.")
-                # hifiasm assembles PacBio HiFi reads specifically — not Nanopore.
-                if olc_tool == :hifiasm && sequencing_tech != :pacbio
+                          "tech; pair a long-read tool with a long-read profile.")
+                # hifiasm assembles PacBio HiFi reads specifically. The legacy
+                # :pacbio symbol is CLR-like elsewhere, so it must not cross this
+                # exact chemistry boundary.
+                if olc_tool == :hifiasm && sequencing_tech != :pacbio_hifi
                     error("olc_tool=:hifiasm assembles PacBio HiFi reads; " *
-                          "sequencing_tech=:$(sequencing_tech) is not HiFi. Use :flye or :canu " *
-                          "for :nanopore.")
+                          "sequencing_tech=:$(sequencing_tech) is not HiFi. " *
+                          "Use :pacbio_hifi, or select " *
+                          ":flye/:canu for other long reads.")
                 end
                 # canu requires an estimated genome size (the wrapper has no default).
                 if olc_tool == :canu && !haskey(olc_options, :genome_size)
@@ -485,6 +507,7 @@ struct AssemblyConfig
             effective_dedup_revcomp,
             compact_unitigs,
             memory_profile,
+            effective_qualmer_prefilter_min_count,
             corrector,
             effective_skip_solid,
             effective_strategy,
@@ -495,6 +518,213 @@ struct AssemblyConfig
             layout,
             olc_tool,
             olc_options
+        )
+    end
+end
+
+"""
+Common supertype for paired-short plus long-read assembly workflow configs.
+
+These configs are deliberately separate from `AssemblyConfig`: the existing
+single-read-set route has a one-FASTQ contract, whereas these workflows correct
+three inputs independently and dispatch them through a sibling multi-input
+adapter.
+"""
+abstract type AbstractPairedShortLongAssemblyConfig end
+
+const _HYBRID_CORRECTION_RESERVED_KEYS = (
+    :corrector,
+    :layout,
+    :sequencing_tech,
+    :output_dir,
+    :olc_tool,
+    :olc_options,
+)
+
+function _reject_route_managed_options(
+        options::NamedTuple,
+        reserved::Tuple,
+        label::AbstractString,
+)::Nothing
+    for key in keys(options)
+        if key in reserved
+            throw(ArgumentError(
+                "$(label) option :$(key) is managed by the multi-input route " *
+                "and cannot be overridden.",
+            ))
+        end
+    end
+    return nothing
+end
+
+function _validate_hybrid_technology(
+        technology::Symbol,
+        allowed::Tuple,
+        label::AbstractString,
+)::Nothing
+    if !(technology in allowed)
+        throw(ArgumentError(
+            "$(label) must be one of $(allowed), got :$(technology).",
+        ))
+    end
+    return nothing
+end
+
+function _validate_hybrid_output_dir(
+        output_dir::Union{Nothing, AbstractString},
+)::Union{Nothing, String}
+    if output_dir === nothing
+        return nothing
+    end
+    isempty(output_dir) && throw(ArgumentError(
+        "output_dir must be a non-empty path; pass nothing for ephemeral output.",
+    ))
+    return String(output_dir)
+end
+
+"""
+Configuration for independently corrected paired short reads plus long reads,
+assembled with Unicycler.
+"""
+struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
+    short_read_tech::Symbol
+    long_read_tech::Symbol
+    correction_options::NamedTuple
+    assembler_options::NamedTuple
+    output_dir::Union{Nothing, String}
+    threads::Int
+
+    function UnicyclerHybridConfig(;
+            short_read_tech::Symbol = :illumina,
+            long_read_tech::Symbol = :nanopore,
+            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            assembler_options::NamedTuple = (;),
+            output_dir::Union{Nothing, AbstractString} = nothing,
+            threads::Int = Mycelia.get_default_threads(),
+    )
+        _validate_hybrid_technology(
+            short_read_tech,
+            _olc_taxonomy().short_read_techs,
+            "short_read_tech",
+        )
+        _validate_hybrid_technology(
+            long_read_tech,
+            _olc_taxonomy().long_read_techs,
+            "long_read_tech",
+        )
+        _reject_route_managed_options(
+            correction_options,
+            _HYBRID_CORRECTION_RESERVED_KEYS,
+            "correction",
+        )
+        _reject_route_managed_options(
+            assembler_options,
+            (:short_1, :short_2, :long_reads, :outdir, :threads, :executor),
+            "Unicycler",
+        )
+        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        return new(
+            short_read_tech,
+            long_read_tech,
+            correction_options,
+            assembler_options,
+            _validate_hybrid_output_dir(output_dir),
+            threads,
+        )
+    end
+end
+
+"""
+Configuration for a corrected long-read Autocycler consensus followed by
+paired-short Polypolish and careful Pypolca polishing.
+
+`autocycler_read_type` controls both the upstream assembler chemistry and the
+long-read correction chemistry route. In particular, PacBio CLR and HiFi never
+share a correction model. Correction emissions remain FASTQ-quality driven;
+the technology profile selects whether indel moves are enabled and their rates.
+"""
+struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
+    short_read_tech::Symbol
+    long_read_tech::Symbol
+    autocycler_read_type::Symbol
+    correction_options::NamedTuple
+    output_dir::Union{Nothing, String}
+    threads::Int
+    jobs::Int
+    polypolish_careful::Bool
+    keep_intermediates::Bool
+
+    function AutocyclerPolishConfig(;
+            short_read_tech::Symbol = :illumina,
+            long_read_tech::Symbol = :nanopore,
+            autocycler_read_type::Union{Nothing, Symbol} = nothing,
+            correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            output_dir::Union{Nothing, AbstractString} = nothing,
+            threads::Int = Mycelia.get_default_threads(),
+            jobs::Int = 1,
+            polypolish_careful::Bool = true,
+            keep_intermediates::Bool = false,
+    )
+        _validate_hybrid_technology(
+            short_read_tech,
+            _olc_taxonomy().short_read_techs,
+            "short_read_tech",
+        )
+        _validate_hybrid_technology(
+            long_read_tech,
+            _olc_taxonomy().long_read_techs,
+            "long_read_tech",
+        )
+        resolved_read_type = if autocycler_read_type === nothing
+            if long_read_tech == :nanopore
+                :ont_r10
+            elseif long_read_tech in (:pacbio, :pacbio_clr)
+                :pacbio_clr
+            else
+                :pacbio_hifi
+            end
+        else
+            autocycler_read_type
+        end
+        valid_read_types = (:ont_r9, :ont_r10, :pacbio_clr, :pacbio_hifi)
+        resolved_read_type in valid_read_types || throw(ArgumentError(
+            "autocycler_read_type must be one of $(valid_read_types), got " *
+            ":$(resolved_read_type).",
+        ))
+        compatible = if long_read_tech == :nanopore
+            resolved_read_type in (:ont_r9, :ont_r10)
+        elseif long_read_tech in (:pacbio, :pacbio_clr)
+            resolved_read_type == :pacbio_clr
+        elseif long_read_tech == :pacbio_hifi
+            resolved_read_type == :pacbio_hifi
+        end
+        compatible || throw(ArgumentError(
+            "autocycler_read_type=:$(resolved_read_type) is incompatible with " *
+            "long_read_tech=:$(long_read_tech).",
+        ))
+        _reject_route_managed_options(
+            correction_options,
+            _HYBRID_CORRECTION_RESERVED_KEYS,
+            "correction",
+        )
+        threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        jobs > 0 || throw(ArgumentError("jobs must be positive, got $(jobs)."))
+        normalized_output_dir = _validate_hybrid_output_dir(output_dir)
+        if keep_intermediates && normalized_output_dir === nothing
+            throw(ArgumentError(
+                "keep_intermediates=true requires a persistent output_dir.",
+            ))
+        end
+        return new(
+            short_read_tech,
+            long_read_tech,
+            resolved_read_type,
+            correction_options,
+            normalized_output_dir,
+            threads,
+            jobs,
+            polypolish_careful,
+            keep_intermediates,
         )
     end
 end
@@ -772,12 +1002,24 @@ result = Mycelia.Rhizomorph.assemble_genome(reads, config)
 - `graph_mode`: Mycelia.Rhizomorph.SingleStrand or Mycelia.Rhizomorph.DoubleStrand (auto-detected if not specified)
 - `corrector`: `:none` (default, single-k from uncorrected reads) or `:iterative`
   (route through the iterative maximum-likelihood read corrector before assembly)
-- `sequencing_tech`: error profile driving the corrector's indel-aware decode; only
-  consulted when `corrector=:iterative`. Default `:illumina` = substitution-only
-  correction (byte-identical to the pre-wiring corrector). Set `:nanopore` or
-  `:pacbio` to enable indel-aware pair-HMM correction of long / indel-prone reads;
-  `:ultima` is substitution-only. Correcting nanopore/pacbio reads under the default
-  `:illumina` leaves their indels uncorrected.
+- `strategy`: iterative-corrector scheduling tier. The default `:scalable` tier
+  uses a sparse three-rung ladder and applies the score-free branching/frontier
+  runtime classifier to each eligible hard window. Affordable windows are
+  admitted to pair-HMM decoding on the raw graph or a privately cleaned rescue
+  copy; rejected windows retain the bounded substitution-only decode when its
+  measured raw+weighted graph footprint fits the configured memory ceiling.
+  Otherwise the pass fails closed and records the memory gate. `:exhaustive`
+  selects explicit `:unrestricted` indel scheduling: it bypasses frontier
+  admission and its private rescue cleaning, uses an exact unbounded Viterbi
+  beam, and can exhaust memory on large or highly branching inputs.
+- `sequencing_tech`: exact error-profile intent driving iterative correction; only
+  consulted when `corrector=:iterative`. Default `:illumina` is substitution-only
+  and preserves the pre-wiring oracle. `:nanopore`, `:pacbio_clr`, and legacy
+  `:pacbio` request indel-aware pair-HMM correction; `:pacbio_hifi` and `:ultima`
+  remain substitution-only. A profile with indels records intent
+  (`assembly_stats["indel_moves"] == true`), not proof that a pair-HMM decode ran
+  or used a gap move; runtime admission and engagement are reported separately in
+  the indel telemetry below.
 - `error_rate`, `min_coverage`, etc.: Assembly parameters
 
 # Returns
@@ -789,6 +1031,33 @@ This interface automatically:
 2. **Chooses assembly method**: k-mer vs overlap-based on parameters
 3. **Validates compatibility**: AA/String sequences -> SingleStrand only
 4. **Dispatches optimally**: Based on input type and quality scores
+
+For an iterative correction, `assembly_stats["indel_rung_telemetry"]` contains
+one row per actual k-rung iteration. Its counters have the following meanings:
+
+- `requested`: eligible hard windows requesting pair-HMM service under
+  `:scalable`, or non-skipped reads under `:unrestricted` semantics.
+- `attempted`: pair-HMM kernel calls actually entered after scheduling.
+- `completed`: full, nontruncated, trace-valid pair-HMM decodes.
+- `truncated`: pair-HMM calls that did not produce a full trace-valid completion
+  (decoded prefix, valid no-path, malformed result, or post-dispatch failure).
+  These are rejected before correction or soft-EM side effects.
+- `engaged`: completed traces containing at least one insertion or deletion move.
+
+Every attempted call is exactly one `completed` or `truncated` outcome.
+`trace_contract_errors` is an orthogonal contract-failure flag, not another
+terminal outcome. It can accompany a malformed/failed truncated call or a
+completed kernel decode that is later rejected by the window-splice contract,
+and must not be added to the terminal counters.
+
+The aggregate `indel_requested`, `indel_attempted`, `indel_completed`,
+`indel_truncated`, and `indel_engaged` fields sum those counters over all rows.
+In particular, selecting `sequencing_tech=:nanopore`, `:pacbio_clr`, or legacy
+`:pacbio` does not imply
+`engaged > 0`: admission may reject every scalable window, or completed traces
+may remain substitution-only. Frontier metric samples are intentionally empty
+under `strategy=:exhaustive` because its `:unrestricted` semantics bypass the
+classifier entirely.
 
 **Method Selection Logic:**
 - String input + k -> N-gram graph
@@ -878,24 +1147,27 @@ function _write_reads_to_fastq(reads, path::String)
     placeholder_used = Ref(false)
     open(path, "w") do io
         writer = FASTX.FASTQ.Writer(io)
-        if reads isa Vector{String}
+        if reads isa AbstractVector{<:AbstractString}
             for file_path in reads
-                if endswith(file_path, ".fastq") || endswith(file_path, ".fq")
-                    open(FASTX.FASTQ.Reader, file_path) do reader
-                        for record in reader
+                reader = Mycelia.open_fastx(file_path)
+                try
+                    for record in reader
+                        if record isa FASTX.FASTQ.Record
                             write(writer, record)
-                        end
-                    end
-                else
-                    open(FASTX.FASTA.Reader, file_path) do reader
-                        for record in reader
+                        elseif record isa FASTX.FASTA.Record
                             seq = FASTX.FASTA.sequence(String, record)
                             placeholder_used[] = true
                             write(writer,
                                 FASTX.FASTQ.Record(
-                                    FASTX.FASTA.identifier(record), seq, _placeholder_qual(length(seq))))
+                                    FASTX.FASTA.identifier(record), seq,
+                                    _placeholder_qual(length(seq))))
+                        else
+                            error("Unsupported read type for iterative corrector: " *
+                                  "$(typeof(record))")
                         end
                     end
+                finally
+                    close(reader)
                 end
             end
         else
@@ -934,13 +1206,15 @@ routing can be unit-tested without running the (slow) corrector.
   skip-solid volume reduction, Stage 0 cheap k-mer-spectrum correction (td-bjnt,
   linear single-substitution fix before the decode), hard-read gating (Stage 3,
   now narrowed to bubble/repeat vertices only), soft-EM v2 competing-path
-  responsibilities plus an M-step support floor (Stage 2), the size-aware
+  responsibilities plus an M-step support floor (Stage 2),
+  branching/frontier-budgeted indel scheduling, the size-aware
   auto-beam (`beam_width=nothing`), and
   `graph_mode=:doublestrand` (td-nt69 — canonical was over-constrained by the skip
   machinery and was the cause of the quality gap; the skip/classification is
   coverage-based and mode-agnostic).
 - `:exhaustive` — maximum-sensitivity EXACT-ML tier: prime-by-prime k-walk
   (`n_k_rungs=nothing`), 10 iterations/k, no skip, no hard-window, no soft-EM,
+  unrestricted indel scheduling,
   `graph_mode=nothing` (derive from `config.graph_mode`, byte-identical
   passthrough), and an exact UNBOUNDED (`typemax(Int)`) Viterbi beam. This is NOT a reproduction
   of the prior corrector default: master's corrector route used the size-aware
@@ -949,7 +1223,7 @@ routing can be unit-tested without running the (slow) corrector.
   Intended for SMALL-SCALE / high-sensitivity inputs; the exact beam can OOM on
   very large reads — use `:scalable` at scale.
 """
-function _corrector_strategy_knobs(strategy::Symbol)
+function _corrector_strategy_knobs(strategy::Symbol)::NamedTuple
     if strategy == :scalable
         return (
             n_k_rungs = 3,
@@ -980,6 +1254,7 @@ function _corrector_strategy_knobs(strategy::Symbol)
             # caps (the bounded Bellman-Ford relaxation replacing the O(V³)
             # Floyd-Warshall). Ignored on substitution-only profiles (:illumina),
             # whose decode threads no indel params at all.
+            indel_schedule = :frontier_budgeted,
             band_width = 16,
             deletion_max_run = 3,
             max_insertion_run = 3
@@ -999,7 +1274,10 @@ function _corrector_strategy_knobs(strategy::Symbol)
             graph_mode = nothing,
             # Indel-decode bounds (td-9q84 / 4a): maximum-sensitivity tier ⇒ UNBOUNDED
             # band (`band_width=nothing`, the exact/oracle setting) + larger run caps.
+            # The unrestricted schedule preserves the tier's explicit exact/oracle
+            # semantics rather than applying the scalable frontier classifier.
             # Consulted only when the error profile enables indels.
+            indel_schedule = :unrestricted,
             band_width = nothing,
             deletion_max_run = 10,
             max_insertion_run = 10
@@ -1104,6 +1382,13 @@ caller owns cleanup (`ephemeral`), and the corrector's `result_dict`, tier
 path after this returns). Fails loud (never returns) on a missing/absent
 corrected FASTQ or a 0-read correction, guarding both callers.
 """
+function _substitution_error_rate(
+        sequencing_tech::Symbol,
+)::Union{Nothing, Float64}
+    sequencing_tech == :pacbio_hifi || return nothing
+    return Mycelia.indel_error_profile(sequencing_tech).base_error_rate
+end
+
 function _run_stage1_correction(
         reads,
         config::AssemblyConfig;
@@ -1116,13 +1401,14 @@ function _run_stage1_correction(
 
     # Discoverability nudge (PR #408 review, FIX 3): the corrector defaults to the
     # substitution-only :illumina profile, so a user correcting long / indel-prone
-    # reads (nanopore/pacbio) without setting sequencing_tech silently gets NO indel
+    # reads (Nanopore/CLR) without setting sequencing_tech silently gets NO indel
     # correction. Surface it once (@info, not @warn — :illumina is a valid, common
     # choice) so the off-by-default indel path is discoverable.
     if config.sequencing_tech == :illumina
         @info "corrector=:iterative is running with sequencing_tech=:illumina " *
               "(substitution-only correction). For long / indel-prone reads set " *
-              "sequencing_tech=:nanopore or :pacbio to enable indel-aware correction." maxlog = 1
+              "sequencing_tech=:nanopore or :pacbio_clr to enable indel-aware " *
+              "correction." maxlog = 1
     end
 
     # The corrector is k-mer based; a min_overlap-only config has no k, so the
@@ -1179,21 +1465,22 @@ function _run_stage1_correction(
                                _graph_mode_symbol(config.graph_mode) : knobs.graph_mode
         # Indel-aware correction wiring (td-9q84 / 4a): map the sequencing-tech error
         # profile to indel fractions and gate on the ABSOLUTE indel rate
-        # (base_error_rate × summed fractions). Only indel-prone profiles (:nanopore,
-        # :pacbio) build a non-nothing IndelDecodeParams; the DEFAULT :illumina (and
-        # :ultima) resolve to `nothing`, so the corrector threads NO indel params and
-        # runs the substitution decode byte-for-byte (oracle preservation). The
-        # base_error_rate (threaded into ViterbiCorrectionConfig.error_rate to scale
-        # the gap masses), gap-open fractions, and extend probabilities come from the
-        # profile; the run caps + band from the tier knobs above.
+        # (base_error_rate × summed fractions). Only indel-prone profiles
+        # (:nanopore, :pacbio_clr, and legacy :pacbio) build a non-nothing
+        # IndelDecodeParams; :illumina, :ultima, and :pacbio_hifi resolve to
+        # `nothing`, so the corrector threads NO indel params. The base error rate,
+        # gap-open fractions, and extend probabilities come from the profile; run
+        # caps + band come from the tier knobs above. HiFi is a separate low-error
+        # profile: it deliberately does not inherit CLR moves and threads 0.001 as
+        # the substitution decoder's quality-free fallback.
+        error_profile = Mycelia.indel_error_profile(config.sequencing_tech)
         indel_params = if Mycelia.profile_enables_indels(config.sequencing_tech)
-            profile = Mycelia.indel_error_profile(config.sequencing_tech)
             Mycelia.IndelDecodeParams(
-                profile.base_error_rate,
-                profile.insertion_fraction,
-                profile.deletion_fraction,
-                profile.insertion_extend_probability,
-                profile.deletion_extend_probability,
+                error_profile.base_error_rate,
+                error_profile.insertion_fraction,
+                error_profile.deletion_fraction,
+                error_profile.insertion_extend_probability,
+                error_profile.deletion_extend_probability,
                 knobs.deletion_max_run,
                 knobs.max_insertion_run,
                 knobs.band_width
@@ -1201,11 +1488,13 @@ function _run_stage1_correction(
         else
             nothing
         end
+        substitution_error_rate = _substitution_error_rate(config.sequencing_tech)
         result_dict = Mycelia.mycelia_iterative_assemble(
             temp_fastq;
             max_k = max_k,
             skip_solid = knobs.skip_solid,
             graph_mode = corrector_graph_mode,
+            qualmer_prefilter_min_count = config.qualmer_prefilter_min_count,
             n_k_rungs = knobs.n_k_rungs,
             max_iterations_per_k = knobs.max_iterations_per_k,
             hard_window = knobs.hard_window,
@@ -1214,6 +1503,8 @@ function _run_stage1_correction(
             cheap_correct = knobs.cheap_correct,
             beam_width = knobs.beam_width,
             indel_params = indel_params,
+            indel_schedule = knobs.indel_schedule,
+            substitution_error_rate = substitution_error_rate,
             verbose = false,
             enable_checkpointing = false,
             output_dir = corrector_output_dir,
@@ -1250,7 +1541,8 @@ function _run_stage1_correction(
         result_dict[:metadata][:final_fastq_file] = persistent_fastq
         return (; corrected_reads, corrected_read_count = n_corrected,
             corrected_fastq = persistent_fastq,
-            result_dict, knobs, max_k, ephemeral, indel_params)
+            result_dict, knobs, max_k, ephemeral, indel_params,
+            substitution_error_rate)
     catch
         # Invalid output never replaces a prior destination. If a later in-memory
         # bookkeeping error occurs after a first-time promotion, clean only the file
@@ -1296,7 +1588,8 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
     # `indel_params` is a correction-phase value the tail stamps into
     # assembly_stats["indel_moves"] (merged from the sequencing_tech/indel work) —
     # thread it through the helper's return so the extracted tail keeps that stamp.
-    (; corrected_reads, result_dict, knobs, max_k, indel_params) = stage1
+    (; corrected_reads, result_dict, knobs, max_k, indel_params,
+        substitution_error_rate) = stage1
     n_corrected = length(corrected_reads)
     try
         # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
@@ -1378,11 +1671,13 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         # Stamp the corrector provenance onto the real assembly's stats.
         assembly.assembly_stats["corrector"] = "iterative"
         assembly.assembly_stats["strategy"] = String(config.strategy)
-        # Indel-aware correction provenance (td-9q84 / 4a): the driving error profile
-        # and whether it engaged the pair-HMM gap moves. `indel_moves=false` (the
-        # :illumina default) marks the substitution-only oracle path.
+        # Indel-aware correction provenance (td-9q84 / 4a): the driving error
+        # profile and whether it requested pair-HMM gap moves. `indel_moves` is the
+        # retained profile-intent field; it does not claim that any rung engaged.
+        # `indel_engaged` below carries that runtime outcome explicitly.
         assembly.assembly_stats["sequencing_tech"] = String(config.sequencing_tech)
         assembly.assembly_stats["indel_moves"] = indel_params !== nothing
+        assembly.assembly_stats["substitution_error_rate"] = substitution_error_rate
         # Final-pass graph reuse provenance (td-04tb): true when the re-assembly
         # reused the corrector's already-built final-pass graph (converged run),
         # false when it rebuilt from scratch. Pure telemetry — does not affect the
@@ -1413,12 +1708,47 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         assembly.assembly_stats["windowed_decode"] = get(_corr_meta, :windowed_decode, false)
         corrector_errors = get(_corr_meta, :corrector_errors, Dict{Symbol, Int}())
         assembly.assembly_stats["corrector_errors"] = corrector_errors
-        assembly.assembly_stats["indel_decodes"] =
-            get(corrector_errors, :indel_decodes, 0)
-        assembly.assembly_stats["truncated_decodes"] =
-            get(corrector_errors, :truncated_decodes, 0)
+        indel_rung_telemetry = get(
+            _corr_meta,
+            :indel_rung_telemetry,
+            Dict{Symbol, Any}[],
+        )
+        indel_requested = get(_corr_meta, :indel_requested, 0)
+        indel_attempted = get(
+            _corr_meta,
+            :indel_attempted,
+            get(corrector_errors, :indel_attempts, 0),
+        )
+        indel_completed = get(
+            _corr_meta,
+            :indel_completed,
+            get(corrector_errors, :indel_decodes, 0),
+        )
+        indel_truncated = get(
+            _corr_meta,
+            :indel_truncated,
+            get(corrector_errors, :truncated_decodes, 0),
+        )
+        indel_engaged = get(
+            _corr_meta,
+            :indel_engaged,
+            get(corrector_errors, :indel_engaged, 0),
+        )
+        assembly.assembly_stats["indel_rung_telemetry"] = indel_rung_telemetry
+        assembly.assembly_stats["indel_schedule"] =
+            String(get(_corr_meta, :indel_schedule, knobs.indel_schedule))
+        assembly.assembly_stats["indel_requested"] = indel_requested
+        assembly.assembly_stats["indel_attempted"] = indel_attempted
+        assembly.assembly_stats["indel_completed"] = indel_completed
+        assembly.assembly_stats["indel_truncated"] = indel_truncated
+        assembly.assembly_stats["indel_engaged"] = indel_engaged
+        # Backward-compatible aliases for callers predating per-rung telemetry.
+        assembly.assembly_stats["indel_decodes"] = indel_completed
+        assembly.assembly_stats["truncated_decodes"] = indel_truncated
         assembly.assembly_stats["trace_contract_errors"] =
             get(corrector_errors, :trace_contract_errors, 0)
+        assembly.assembly_stats["window_anchor_rejections"] =
+            get(corrector_errors, :window_anchor_rejections, 0)
         assembly.assembly_stats["window_divergences"] =
             get(corrector_errors, :window_divergences, 0)
         # Hoist fail-open contract counters to the flat telemetry surface used by
@@ -1804,7 +2134,8 @@ function _assemble_qualmer_graph(observations, config)
 
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
-    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode)
+    graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode,
+        min_count = config.qualmer_prefilter_min_count)
 
     # Contig extraction + AssemblyResult assembly is factored into
     # `_qualmer_graph_to_assembly` so the iterative corrector can REUSE its already-
@@ -1852,15 +2183,14 @@ function _qualmer_graph_to_assembly(graph, num_input_sequences::Int, config;
         _log_info(config, "Repeat resolution enabled for qualmer graphs")
     end
 
-    # Linear-time graph defragmentation BEFORE contig extraction (td-969e). The
-    # scalable corrector's final graph keeps error-induced branch points (dead-end
-    # tips + coverage-1 bubbles); find_contigs_next breaks a unitig at every branch
-    # vertex, so each residual branch point is a contig boundary. clean_corrector_
-    # graph! removes ONLY unambiguous errors (coverage-1 dead-end tips + guarded
-    # low-coverage bubble collapse) in O(V+E), never collapsing a data-supported
-    # variant (the td-h6w9 invariant). Operate on a deepcopy so a REUSED corrector
-    # final-pass graph (td-04tb) is not mutated for other consumers; the cleaned
-    # copy is what we both extract contigs from AND return in the AssemblyResult.
+    # Linear-time graph defragmentation BEFORE contig extraction (td-969e).
+    # find_contigs_next breaks a unitig at every residual branch vertex, so the
+    # configured support/length/topology heuristics remove qualifying tips,
+    # bubbles, and components before extraction. These are conservative assembly
+    # heuristics, not biological proofs: genuine low-coverage structures can meet
+    # their thresholds. Operate on a deepcopy so a REUSED corrector final-pass
+    # graph (td-04tb) is not mutated for other consumers; the cleaned copy is what
+    # we both extract contigs from AND return in the AssemblyResult.
     cleanup_stats = nothing
     if graph_cleanup
         graph = deepcopy(graph)
@@ -2073,6 +2403,24 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
 end
 
 """
+    _correction_profile_technologies() -> Tuple
+
+Exact sequencing-technology profiles understood by the read corrector. This is
+intentionally distinct from assembler-family routing: PacBio CLR and HiFi are
+both long reads, but they must not share an error model.
+"""
+function _correction_profile_technologies()::Tuple
+    return (
+        :illumina,
+        :ultima,
+        :nanopore,
+        :pacbio,
+        :pacbio_clr,
+        :pacbio_hifi,
+    )
+end
+
+"""
     _olc_taxonomy() -> NamedTuple
 
 Single source of truth for the hybrid-OLC tool taxonomy: which sequencing techs
@@ -2088,7 +2436,12 @@ tool through `_run_olc_tool` needs an external-wrapper stub — a follow-up.)
 function _olc_taxonomy()
     return (
         short_read_techs = (:illumina, :ultima),
-        long_read_techs = (:nanopore, :pacbio),
+        long_read_techs = (
+            :nanopore,
+            :pacbio,
+            :pacbio_clr,
+            :pacbio_hifi,
+        ),
         short_read_tools = (:megahit, :metaspades),
         long_read_tools = (:flye, :metaflye, :canu, :hifiasm)
     )
@@ -2112,19 +2465,20 @@ end
     _flye_read_type(sequencing_tech::Symbol) -> String
 
 Map the corrector's read tech to a Flye/metaFlye `--read-type` flag. The reads are
-Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit. NOTE this
-means a native PacBio-HiFi set is assembled as `pacbio-corr`, not `pacbio-hifi` —
-`:pacbio` does not distinguish HiFi from CLR (finer tech granularity is a
-follow-up). Fails loud on an unexpected tech rather than silently defaulting.
+Stage-1 corrector output, so the error-corrected (`-corr`) profiles fit for
+Nanopore and CLR. HiFi retains Flye's exact `pacbio-hifi` chemistry flag.
+Fails loud on an unexpected tech rather than silently defaulting.
 """
-function _flye_read_type(sequencing_tech::Symbol)
+function _flye_read_type(sequencing_tech::Symbol)::String
     if sequencing_tech == :nanopore
         return "nano-corr"
-    elseif sequencing_tech == :pacbio
+    elseif sequencing_tech in (:pacbio, :pacbio_clr)
         return "pacbio-corr"
+    elseif sequencing_tech == :pacbio_hifi
+        return "pacbio-hifi"
     else
         error("_flye_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
-              "(expected :nanopore or :pacbio).")
+              "(expected :nanopore, :pacbio, :pacbio_clr, or :pacbio_hifi).")
     end
 end
 
@@ -2134,14 +2488,14 @@ end
 Canu's coarse read-type flag (`nanopore` | `pacbio`). Fails loud on an unexpected
 tech rather than silently defaulting to PacBio.
 """
-function _canu_read_type(sequencing_tech::Symbol)
+function _canu_read_type(sequencing_tech::Symbol)::String
     if sequencing_tech == :nanopore
         return "nanopore"
-    elseif sequencing_tech == :pacbio
+    elseif sequencing_tech in (:pacbio, :pacbio_clr, :pacbio_hifi)
         return "pacbio"
     else
         error("_canu_read_type: unexpected sequencing_tech :$(sequencing_tech) " *
-              "(expected :nanopore or :pacbio).")
+              "(expected :nanopore or a PacBio profile).")
     end
 end
 
@@ -2199,6 +2553,960 @@ function _run_olc_tool(tool::Symbol, corrected_fastq::AbstractString,
 end
 
 """
+One independently corrected read set supplied to a multi-input assembler.
+"""
+struct _CorrectedReadSet
+    path::String
+    count::Int
+    technology::Symbol
+end
+
+struct _CorrectedPairedShortLong
+    short_r1::_CorrectedReadSet
+    short_r2::_CorrectedReadSet
+    long_reads::_CorrectedReadSet
+end
+
+"""
+Minimal ownership record retained until multi-input workflow cleanup.
+
+Stage-1 correction results can contain full graphs and in-memory read vectors.
+Keeping only the corrected FASTQ path and its ownership bit prevents three
+independent correction graphs from remaining live while the external assembler
+runs.
+"""
+struct _Stage1CleanupToken
+    corrected_fastq::String
+    ephemeral::Bool
+end
+
+function _prepare_read_source(source::AbstractString)::Vector{String}
+    return [String(source)]
+end
+
+function _prepare_read_source(
+        sources::AbstractVector{<:AbstractString},
+)::Vector{String}
+    return String.(sources)
+end
+
+function _prepare_read_source(records::Any)::Any
+    return collect(records)
+end
+
+function _canonical_pair_identifier(identifier::AbstractString)::String
+    first_token = first(split(String(identifier)))
+    return replace(first_token, r"/[12]$" => "")
+end
+
+function _explicit_pair_role(identifier::AbstractString)::Union{Nothing, Int}
+    first_token = first(split(String(identifier)))
+    role_match = match(r"/([12])$", first_token)
+    return role_match === nothing ? nothing : parse(Int, only(role_match.captures))
+end
+
+function _validate_explicit_pair_roles(
+        r1_identifier::AbstractString,
+        r2_identifier::AbstractString,
+        stage::AbstractString,
+        record_number::Int,
+)::Nothing
+    r1_role = _explicit_pair_role(r1_identifier)
+    r2_role = _explicit_pair_role(r2_identifier)
+    roles_valid = (r1_role === nothing && r2_role === nothing) ||
+                  (r1_role == 1 && r2_role == 2)
+    roles_valid || throw(ArgumentError(
+        "$(stage) paired short reads have invalid explicit mate roles at " *
+        "record $(record_number): R1=$(repr(r1_identifier)), " *
+        "R2=$(repr(r2_identifier)); expected /1 then /2.",
+    ))
+    return nothing
+end
+
+abstract type _AbstractReadIdentifierCursor end
+
+mutable struct _FileReadIdentifierCursor <: _AbstractReadIdentifierCursor
+    sources::Vector{String}
+    source_index::Int
+    reader::Any
+    reader_state::Any
+    reader_started::Bool
+end
+
+mutable struct _RecordReadIdentifierCursor <: _AbstractReadIdentifierCursor
+    records::Any
+    record_index::Int
+end
+
+function _read_identifier_cursor(
+        sources::AbstractVector{<:AbstractString},
+)::_FileReadIdentifierCursor
+    return _FileReadIdentifierCursor(String.(sources), 1, nothing, nothing, false)
+end
+
+function _read_identifier_cursor(records::Any)::_RecordReadIdentifierCursor
+    return _RecordReadIdentifierCursor(records, 1)
+end
+
+function _next_read_identifier!(
+        cursor::_RecordReadIdentifierCursor,
+)::Union{Nothing, String}
+    if cursor.record_index > length(cursor.records)
+        return nothing
+    end
+    record = cursor.records[cursor.record_index]
+    cursor.record_index += 1
+    return String(FASTX.identifier(record))
+end
+
+function _next_read_identifier!(
+        cursor::_FileReadIdentifierCursor,
+)::Union{Nothing, String}
+    while cursor.source_index <= length(cursor.sources)
+        if cursor.reader === nothing
+            cursor.reader = Mycelia.open_fastx(cursor.sources[cursor.source_index])
+            cursor.reader_state = nothing
+            cursor.reader_started = false
+        end
+
+        next_record = if cursor.reader_started
+            iterate(cursor.reader, cursor.reader_state)
+        else
+            cursor.reader_started = true
+            iterate(cursor.reader)
+        end
+        if next_record === nothing
+            close(cursor.reader)
+            cursor.reader = nothing
+            cursor.source_index += 1
+            continue
+        end
+
+        record, cursor.reader_state = next_record
+        return String(FASTX.identifier(record))
+    end
+    return nothing
+end
+
+function _close_read_identifier_cursor!(
+        cursor::_RecordReadIdentifierCursor,
+)::Nothing
+    return nothing
+end
+
+function _close_read_identifier_cursor!(
+        cursor::_FileReadIdentifierCursor,
+)::Nothing
+    if cursor.reader !== nothing
+        close(cursor.reader)
+        cursor.reader = nothing
+    end
+    return nothing
+end
+
+function _drain_read_identifier_cursor!(
+        cursor::_AbstractReadIdentifierCursor,
+        count::Int,
+)::Int
+    while _next_read_identifier!(cursor) !== nothing
+        count += 1
+    end
+    return count
+end
+
+function _read_paths_refer_to_same_file(
+        path_1::AbstractString,
+        path_2::AbstractString,
+)::Bool
+    if ispath(path_1) && ispath(path_2)
+        return Base.Filesystem.samefile(path_1, path_2)
+    end
+    return abspath(path_1) == abspath(path_2)
+end
+
+function _read_sources_overlap(reads_1::Any, reads_2::Any)::Bool
+    reads_1 === reads_2 && return true
+    paths_1 = if reads_1 isa AbstractString
+        [String(reads_1)]
+    elseif reads_1 isa AbstractVector{<:AbstractString}
+        String.(reads_1)
+    end
+    paths_2 = if reads_2 isa AbstractString
+        [String(reads_2)]
+    elseif reads_2 isa AbstractVector{<:AbstractString}
+        String.(reads_2)
+    end
+    if paths_1 !== nothing && paths_2 !== nothing
+        return any(
+            _read_paths_refer_to_same_file(path_1, path_2)
+            for path_1 in paths_1 for path_2 in paths_2
+        )
+    end
+    return false
+end
+
+function _validate_paired_reads(
+        short_r1::Any,
+        short_r2::Any,
+        stage::AbstractString,
+)::Int
+    _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
+        "$(stage) paired short-read R1 and R2 sources must be distinct.",
+    ))
+    r1_cursor = _read_identifier_cursor(short_r1)
+    r2_cursor = _read_identifier_cursor(short_r2)
+    paired_count = 0
+    try
+        while true
+            raw_r1_identifier = _next_read_identifier!(r1_cursor)
+            raw_r2_identifier = _next_read_identifier!(r2_cursor)
+            if raw_r1_identifier === nothing && raw_r2_identifier === nothing
+                paired_count > 0 || throw(ArgumentError(
+                    "$(stage) paired short reads must be non-empty; observed " *
+                    "R1=0, R2=0.",
+                ))
+                return paired_count
+            elseif raw_r1_identifier === nothing || raw_r2_identifier === nothing
+                r1_count = paired_count + (raw_r1_identifier === nothing ? 0 : 1)
+                r2_count = paired_count + (raw_r2_identifier === nothing ? 0 : 1)
+                r1_count = _drain_read_identifier_cursor!(r1_cursor, r1_count)
+                r2_count = _drain_read_identifier_cursor!(r2_cursor, r2_count)
+                throw(ArgumentError(
+                    "$(stage) paired short reads have different counts: " *
+                    "R1=$(r1_count), R2=$(r2_count).",
+                ))
+            end
+
+            paired_count += 1
+            _validate_explicit_pair_roles(
+                raw_r1_identifier,
+                raw_r2_identifier,
+                stage,
+                paired_count,
+            )
+            r1_identifier = _canonical_pair_identifier(raw_r1_identifier)
+            r2_identifier = _canonical_pair_identifier(raw_r2_identifier)
+            if r1_identifier == r2_identifier
+                continue
+            end
+            throw(ArgumentError(
+                "$(stage) paired short reads are out of sync at record " *
+                "$(paired_count): R1=$(repr(raw_r1_identifier)), " *
+                "R2=$(repr(raw_r2_identifier)).",
+            ))
+        end
+    finally
+        _close_read_identifier_cursor!(r1_cursor)
+        _close_read_identifier_cursor!(r2_cursor)
+    end
+end
+
+function _validate_corrected_identifiers_preserved(
+        input_reads::Any,
+        corrected_fastq::AbstractString,
+        label::AbstractString,
+)::Int
+    input_cursor = _read_identifier_cursor(input_reads)
+    corrected_cursor = _read_identifier_cursor([String(corrected_fastq)])
+    record_count = 0
+    try
+        while true
+            input_identifier = _next_read_identifier!(input_cursor)
+            corrected_identifier = _next_read_identifier!(corrected_cursor)
+            if input_identifier === nothing && corrected_identifier === nothing
+                return record_count
+            elseif input_identifier === nothing || corrected_identifier === nothing
+                input_count = record_count + (input_identifier === nothing ? 0 : 1)
+                corrected_count =
+                    record_count + (corrected_identifier === nothing ? 0 : 1)
+                input_count = _drain_read_identifier_cursor!(
+                    input_cursor,
+                    input_count,
+                )
+                corrected_count = _drain_read_identifier_cursor!(
+                    corrected_cursor,
+                    corrected_count,
+                )
+                throw(ArgumentError(
+                    "$(label) correction changed read count: " *
+                    "input=$(input_count), corrected=$(corrected_count).",
+                ))
+            end
+
+            record_count += 1
+            input_identifier == corrected_identifier && continue
+            throw(ArgumentError(
+                "$(label) correction changed read order or identifier at " *
+                "record $(record_count): input=$(repr(input_identifier)), " *
+                "corrected=$(repr(corrected_identifier)).",
+            ))
+        end
+    finally
+        _close_read_identifier_cursor!(input_cursor)
+        _close_read_identifier_cursor!(corrected_cursor)
+    end
+end
+
+function _count_nonempty_reads(
+        sources::AbstractVector{<:AbstractString},
+        label::AbstractString,
+)::Int
+    count = 0
+    for source in sources
+        reader = Mycelia.open_fastx(source)
+        try
+            for _ in reader
+                count += 1
+            end
+        finally
+            close(reader)
+        end
+    end
+    count > 0 || throw(ArgumentError("$(label) must contain at least one read."))
+    return count
+end
+
+function _count_nonempty_reads(reads::Any, label::AbstractString)::Int
+    count = length(reads)
+    count > 0 || throw(ArgumentError("$(label) must contain at least one read."))
+    return count
+end
+
+function _count_nonempty_fastq_reads(
+        path::AbstractString,
+        label::AbstractString,
+)::Int
+    reader = Mycelia.open_fastx(path)
+    count = 0
+    try
+        for record in reader
+            record isa FASTX.FASTQ.Record || error(
+                "$(label) correction output is not FASTQ: $(path).",
+            )
+            count += 1
+        end
+    finally
+        close(reader)
+    end
+    count > 0 || error("$(label) correction produced 0 corrected FASTQ records.")
+    return count
+end
+
+function _prepare_workflow_root(
+        output_dir::Union{Nothing, String},
+)::NamedTuple
+    if output_dir === nothing
+        return (; path = mktempdir(), ephemeral = true)
+    end
+    path = abspath(output_dir)
+    if ispath(path) && !isdir(path)
+        throw(ArgumentError("output_dir exists but is not a directory: $(path)"))
+    end
+    if isdir(path) && !isempty(readdir(path))
+        throw(ArgumentError(
+            "output_dir must be absent or empty to prevent stale hybrid " *
+            "assembly reuse: $(path)",
+        ))
+    end
+    mkpath(path)
+    return (; path, ephemeral = false)
+end
+
+function _stage1_multi_input_config(
+        correction_options::NamedTuple,
+        technology::Symbol,
+        output_dir::Union{Nothing, String},
+)::AssemblyConfig
+    return AssemblyConfig(;
+        correction_options...,
+        corrector = :iterative,
+        sequencing_tech = technology,
+        layout = :native,
+        output_dir = output_dir,
+    )
+end
+
+function _run_multi_input_stage1_correction(
+        reads::Any,
+        config::AssemblyConfig,
+)::NamedTuple
+    return _run_stage1_correction(
+        reads,
+        config;
+        materialize_corrected_reads = false,
+    )
+end
+
+function _correct_read_set!(
+        cleanup_tokens::Vector{_Stage1CleanupToken},
+        reads::Any,
+        technology::Symbol,
+        label::Symbol,
+        correction_options::NamedTuple,
+        workflow_root::AbstractString,
+        persist::Bool,
+        correction_runner::Function,
+)::_CorrectedReadSet
+    stage_output_dir = persist ?
+                       joinpath(workflow_root, "corrected", String(label)) :
+                       nothing
+    stage_config = _stage1_multi_input_config(
+        correction_options,
+        technology,
+        stage_output_dir,
+    )
+    stage = correction_runner(reads, stage_config)
+    hasproperty(stage, :corrected_fastq) || error(
+        "$(label) correction result is missing corrected_fastq.",
+    )
+    corrected_fastq = String(stage.corrected_fastq)
+    ephemeral = hasproperty(stage, :ephemeral) ? Bool(stage.ephemeral) : !persist
+    push!(cleanup_tokens, _Stage1CleanupToken(corrected_fastq, ephemeral))
+    if !isfile(corrected_fastq) || filesize(corrected_fastq) == 0
+        error(
+            "$(label) correction produced no non-empty corrected FASTQ at " *
+            "$(corrected_fastq).",
+        )
+    end
+    corrected_count = if hasproperty(stage, :corrected_read_count)
+        Int(stage.corrected_read_count)
+    elseif hasproperty(stage, :corrected_reads)
+        length(stage.corrected_reads)
+    else
+        error(
+            "$(label) correction result is missing corrected_read_count " *
+            "and corrected_reads.",
+        )
+    end
+    corrected_count > 0 || error("$(label) correction produced 0 corrected reads.")
+    observed_count = _count_nonempty_fastq_reads(corrected_fastq, String(label))
+    corrected_count == observed_count || error(
+        "$(label) correction reported $(corrected_count) corrected reads, but " *
+        "$(corrected_fastq) contains $(observed_count) FASTQ records.",
+    )
+    return _CorrectedReadSet(corrected_fastq, corrected_count, technology)
+end
+
+function _cleanup_multi_input_stages!(
+        cleanup_tokens::Vector{_Stage1CleanupToken},
+)::Nothing
+    for token in cleanup_tokens
+        if token.ephemeral
+            try
+                rm(token.corrected_fastq; force = true)
+            catch cleanup_error
+                @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    _run_multi_input_assembler(Val(:unicycler), inputs, outdir, config)
+
+Sibling adapter for corrected paired-short plus long inputs. This is separate
+from `_run_olc_tool`, whose contract remains exactly one corrected FASTQ.
+"""
+function _run_multi_input_assembler(
+        ::Val{:unicycler},
+        inputs::_CorrectedPairedShortLong,
+        outdir::AbstractString,
+        config::UnicyclerHybridConfig;
+        runner::Function = Mycelia.run_unicycler,
+)::NamedTuple
+    return runner(;
+        config.assembler_options...,
+        short_1 = inputs.short_r1.path,
+        short_2 = inputs.short_r2.path,
+        long_reads = inputs.long_reads.path,
+        outdir = String(outdir),
+        threads = config.threads,
+    )
+end
+
+function _run_multi_input_assembler(
+        ::Val{:autocycler_polished},
+        inputs::_CorrectedPairedShortLong,
+        outdir::AbstractString,
+        config::AutocyclerPolishConfig;
+        runner::Function = Mycelia.run_autocycler_polished,
+)::NamedTuple
+    return runner(;
+        long_reads = inputs.long_reads.path,
+        short_reads_1 = inputs.short_r1.path,
+        short_reads_2 = inputs.short_r2.path,
+        out_dir = String(outdir),
+        threads = config.threads,
+        jobs = config.jobs,
+        read_type = String(config.autocycler_read_type),
+        polypolish_careful = config.polypolish_careful,
+        keep_intermediates = config.keep_intermediates,
+    )
+end
+
+function _primary_assembly_path(result::NamedTuple)::String
+    if hasproperty(result, :assembly)
+        return String(result.assembly)
+    elseif hasproperty(result, :contigs)
+        return String(result.contigs)
+    end
+    error("multi-input assembler result has neither :assembly nor :contigs.")
+end
+
+function _artifact_graph_path(result::NamedTuple)::Union{Nothing, String}
+    return hasproperty(result, :graph) ? String(result.graph) : nothing
+end
+
+function _normalize_provenance_value(value::Symbol)::String
+    return String(value)
+end
+
+function _normalize_provenance_value(value::NamedTuple)::Dict{String, Any}
+    normalized = Dict{String, Any}()
+    for key in sort!(collect(keys(value)); by = String)
+        normalized[String(key)] = _normalize_provenance_value(getproperty(value, key))
+    end
+    return normalized
+end
+
+function _normalize_provenance_value(value::Tuple)::Vector{Any}
+    return Any[_normalize_provenance_value(item) for item in value]
+end
+
+function _normalize_provenance_value(value::AbstractVector)::Vector{Any}
+    return Any[_normalize_provenance_value(item) for item in value]
+end
+
+function _normalize_provenance_value(
+        value::AbstractDict,
+)::Dict{String, Any}
+    normalized = Dict{String, Any}()
+    for key in sort!(collect(keys(value)); by = String)
+        normalized[String(key)] = _normalize_provenance_value(value[key])
+    end
+    return normalized
+end
+
+function _normalize_provenance_value(value::Any)::Any
+    return value
+end
+
+function _normalized_workflow_settings(
+        config::UnicyclerHybridConfig,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "workflow" => "unicycler",
+        "assembler" => "unicycler",
+        "threads" => config.threads,
+        "correction_options" => _normalize_provenance_value(
+            config.correction_options,
+        ),
+        "assembler_options" => _normalize_provenance_value(
+            config.assembler_options,
+        ),
+    )
+end
+
+function _normalized_workflow_settings(
+        config::AutocyclerPolishConfig,
+)::Dict{String, Any}
+    correction_technology = _long_read_correction_technology(config)
+    return Dict{String, Any}(
+        "workflow" => "autocycler_polished",
+        "assembler" => "autocycler",
+        "threads" => config.threads,
+        "jobs" => config.jobs,
+        "autocycler_read_type" => String(config.autocycler_read_type),
+        "long_read_correction_tech" => String(correction_technology),
+        "polypolish_careful" => config.polypolish_careful,
+        "pypolca_careful" => true,
+        "keep_intermediates" => config.keep_intermediates,
+        "correction_options" => _normalize_provenance_value(
+            config.correction_options,
+        ),
+    )
+end
+
+function _long_read_correction_technology(
+        config::UnicyclerHybridConfig,
+)::Symbol
+    return config.long_read_tech == :pacbio ? :pacbio_clr : config.long_read_tech
+end
+
+function _long_read_correction_technology(
+        config::AutocyclerPolishConfig,
+)::Symbol
+    if config.autocycler_read_type in (:ont_r9, :ont_r10)
+        return :nanopore
+    elseif config.autocycler_read_type == :pacbio_clr
+        return :pacbio_clr
+    end
+    return :pacbio_hifi
+end
+
+function _paired_input_technologies(
+        config::AbstractPairedShortLongAssemblyConfig,
+)::Dict{String, String}
+    long_read_technology = _long_read_correction_technology(config)
+    return Dict(
+        "short_r1" => String(config.short_read_tech),
+        "short_r2" => String(config.short_read_tech),
+        "long_reads" => String(long_read_technology),
+    )
+end
+
+function _require_tool_artifact(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = String(path)
+    if !isfile(normalized_path) || filesize(normalized_path) == 0
+        error("multi-input assembler produced no non-empty $(label) at $(normalized_path).")
+    end
+    return normalized_path
+end
+
+function _persistent_tool_artifacts(
+        result::NamedTuple,
+        output_dir::Union{Nothing, String},
+)::Union{Nothing, Dict{String, String}}
+    output_dir === nothing && return nothing
+    artifacts = Dict{String, String}(
+        "final_assembly" => _require_tool_artifact(
+            _primary_assembly_path(result),
+            "final assembly",
+        ),
+    )
+    artifact_fields = (
+        :graph => "raw_graph",
+        :autocycler_assembly => "autocycler_assembly",
+        :polypolish_assembly => "polypolish_assembly",
+        :pypolca_report => "pypolca_report",
+    )
+    for (field, label) in artifact_fields
+        if hasproperty(result, field)
+            artifacts[label] = _require_tool_artifact(
+                String(getproperty(result, field)),
+                replace(label, '_' => ' '),
+            )
+        end
+    end
+    return artifacts
+end
+
+function _read_external_fasta(path::AbstractString)::Vector{FASTX.FASTA.Record}
+    if !isfile(path) || filesize(path) == 0
+        error("external assembler produced no non-empty contigs FASTA at $(path).")
+    end
+    reader = Mycelia.open_fastx(path)
+    try
+        records = collect(reader)
+        if !all(record -> record isa FASTX.FASTA.Record, records)
+            error("external assembler output is not FASTA: $(path).")
+        end
+        return FASTX.FASTA.Record[record for record in records]
+    finally
+        close(reader)
+    end
+end
+
+function _wrap_multi_input_assembly(
+        result::NamedTuple,
+        workflow::Symbol;
+        input_counts::Dict{String, Int},
+        corrected_counts::Dict{String, Int},
+        corrected_paths::Union{Nothing, Dict{String, String}},
+        short_read_tech::Union{Nothing, Symbol},
+        long_read_tech::Union{Nothing, Symbol},
+        correction_options::NamedTuple,
+        output_dir::Union{Nothing, String},
+        polishers::Vector{String},
+        workflow_settings::Dict{String, Any},
+        input_technologies::Dict{String, String},
+)::AssemblyResult
+    assembly_path = _primary_assembly_path(result)
+    records = _read_external_fasta(assembly_path)
+    isempty(records) && error(
+        "multi-input workflow :$(workflow) produced 0 contigs from corrected reads.",
+    )
+    contigs = [FASTX.sequence(String, record) for record in records]
+    contig_names = [String(FASTX.identifier(record)) for record in records]
+    graph_path = _artifact_graph_path(result)
+    if graph_path !== nothing && (!isfile(graph_path) || filesize(graph_path) == 0)
+        error("multi-input workflow :$(workflow) produced no graph at $(graph_path).")
+    end
+    assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
+    tool_artifacts = _persistent_tool_artifacts(result, output_dir)
+    toolchain = hasproperty(result, :toolchain) ?
+                _normalize_provenance_value(result.toolchain) : nothing
+    retained_intermediates = hasproperty(result, :intermediates) ?
+                             String.(result.intermediates) : String[]
+    stats = Dict{String, Any}(
+        "method" => "HybridAssembly",
+        "workflow" => String(workflow),
+        "assembler" => assembler,
+        "input_contract" => "paired_short_long",
+        "polishers" => polishers,
+        "workflow_settings" => workflow_settings,
+        "toolchain" => toolchain,
+        "retained_intermediates" => retained_intermediates,
+        "input_technologies" => input_technologies,
+        "tool_artifacts" => tool_artifacts,
+        "short_read_tech" => short_read_tech === nothing ? nothing :
+                             String(short_read_tech),
+        "long_read_tech" => long_read_tech === nothing ? nothing :
+                            String(long_read_tech),
+        "input_read_counts" => input_counts,
+        "corrected_read_counts" => corrected_counts,
+        "corrected_fastqs" => corrected_paths,
+        "correction_options" => _normalize_provenance_value(correction_options),
+        "raw_graph" => output_dir === nothing ? nothing : graph_path,
+        "output_dir" => output_dir,
+        "num_contigs" => length(contigs),
+        "assembly_date" => string(Mycelia.Dates.now()),
+    )
+    return AssemblyResult(
+        contigs,
+        contig_names;
+        assembly_stats = stats,
+        gfa_compatible = false,
+    )
+end
+
+function _assemble_paired_short_long(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::AbstractPairedShortLongAssemblyConfig,
+        workflow::Symbol;
+        correction_runner::Function = _run_multi_input_stage1_correction,
+        assembler_runner::Function,
+)::AssemblyResult
+    _read_sources_overlap(short_reads[1], short_reads[2]) &&
+        throw(ArgumentError(
+            "input paired short-read R1 and R2 sources must be distinct.",
+        ))
+    if _read_sources_overlap(short_reads[1], long_reads) ||
+       _read_sources_overlap(short_reads[2], long_reads)
+        throw(ArgumentError(
+            "Long-read input must be distinct from paired short-read R1 and R2 sources.",
+        ))
+    end
+    short_r1 = _prepare_read_source(short_reads[1])
+    short_r2 = _prepare_read_source(short_reads[2])
+    prepared_long_reads = _prepare_read_source(long_reads)
+    paired_count = _validate_paired_reads(short_r1, short_r2, "input")
+    long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+    long_read_correction_technology = _long_read_correction_technology(config)
+    root = _prepare_workflow_root(config.output_dir)
+    cleanup_tokens = _Stage1CleanupToken[]
+    try
+        corrected_r1 = _correct_read_set!(
+            cleanup_tokens,
+            short_r1,
+            config.short_read_tech,
+            :short_r1,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_r2 = _correct_read_set!(
+            cleanup_tokens,
+            short_r2,
+            config.short_read_tech,
+            :short_r2,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_long = _correct_read_set!(
+            cleanup_tokens,
+            prepared_long_reads,
+            long_read_correction_technology,
+            :long_reads,
+            config.correction_options,
+            root.path,
+            !root.ephemeral,
+            correction_runner,
+        )
+        corrected_pair_count = _validate_paired_reads(
+            [corrected_r1.path],
+            [corrected_r2.path],
+            "corrected",
+        )
+        corrected_r1_count = _validate_corrected_identifiers_preserved(
+            short_r1,
+            corrected_r1.path,
+            "short_r1",
+        )
+        corrected_r2_count = _validate_corrected_identifiers_preserved(
+            short_r2,
+            corrected_r2.path,
+            "short_r2",
+        )
+        corrected_long_count = _validate_corrected_identifiers_preserved(
+            prepared_long_reads,
+            corrected_long.path,
+            "long_reads",
+        )
+        corrected_pair_count == paired_count || error(
+            "Corrected paired-short count diverged from the validated input count.",
+        )
+        corrected_r1_count == corrected_pair_count || error(
+            "Corrected R1 count diverged from the validated paired count.",
+        )
+        corrected_r2_count == corrected_pair_count || error(
+            "Corrected R2 count diverged from the validated paired count.",
+        )
+        corrected_long_count == long_count || error(
+            "Corrected long-read count diverged from the validated input count.",
+        )
+        inputs = _CorrectedPairedShortLong(
+            corrected_r1,
+            corrected_r2,
+            corrected_long,
+        )
+        tool_result = assembler_runner(
+            inputs,
+            joinpath(root.path, "assembler_$(workflow)"),
+        )
+        corrected_paths = if root.ephemeral
+            nothing
+        else
+            Dict(
+                "short_r1" => corrected_r1.path,
+                "short_r2" => corrected_r2.path,
+                "long_reads" => corrected_long.path,
+            )
+        end
+        polishers = if workflow == :autocycler_polished
+            polypolish = config.polypolish_careful ?
+                         "polypolish-careful" : "polypolish"
+            [polypolish, "pypolca-careful"]
+        else
+            String[]
+        end
+        persistent_output_dir = root.ephemeral ? nothing : root.path
+        return _wrap_multi_input_assembly(
+            tool_result,
+            workflow;
+            input_counts = Dict(
+                "short_r1" => paired_count,
+                "short_r2" => paired_count,
+                "long_reads" => long_count,
+            ),
+            corrected_counts = Dict(
+                "short_r1" => corrected_pair_count,
+                "short_r2" => corrected_pair_count,
+                "long_reads" => corrected_long.count,
+            ),
+            corrected_paths = corrected_paths,
+            short_read_tech = config.short_read_tech,
+            long_read_tech = long_read_correction_technology,
+            correction_options = config.correction_options,
+            output_dir = persistent_output_dir,
+            polishers = polishers,
+            workflow_settings = _normalized_workflow_settings(config),
+            input_technologies = _paired_input_technologies(config),
+        )
+    finally
+        _cleanup_multi_input_stages!(cleanup_tokens)
+        if root.ephemeral
+            try
+                rm(root.path; recursive = true, force = true)
+            catch cleanup_error
+                @warn "multi-input assembly: ephemeral output cleanup failed" cleanup_error
+            end
+        end
+    end
+end
+
+"""
+    assemble_hybrid((short_r1, short_r2), long_reads; config)
+
+Correct paired-short R1/R2 and long reads independently with their own
+sequencing-technology error profiles, validate mate preservation, and run the
+combined-input workflow selected by the typed config.
+"""
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any;
+        config::AbstractPairedShortLongAssemblyConfig = UnicyclerHybridConfig(),
+)::AssemblyResult
+    return assemble_hybrid(short_reads, long_reads, config)
+end
+
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::UnicyclerHybridConfig,
+)::AssemblyResult
+    function assembler_runner(
+            inputs::_CorrectedPairedShortLong,
+            outdir::AbstractString,
+    )::NamedTuple
+        return _run_multi_input_assembler(
+            Val(:unicycler),
+            inputs,
+            outdir,
+            config,
+        )
+    end
+    return _assemble_paired_short_long(
+        short_reads,
+        long_reads,
+        config,
+        :unicycler;
+        assembler_runner,
+    )
+end
+
+function assemble_hybrid(
+        short_reads::Tuple{Any, Any},
+        long_reads::Any,
+        config::AutocyclerPolishConfig,
+)::AssemblyResult
+    function assembler_runner(
+            inputs::_CorrectedPairedShortLong,
+            outdir::AbstractString,
+    )::NamedTuple
+        return _run_multi_input_assembler(
+            Val(:autocycler_polished),
+            inputs,
+            outdir,
+            config,
+        )
+    end
+    return _assemble_paired_short_long(
+        short_reads,
+        long_reads,
+        config,
+        :autocycler_polished;
+        assembler_runner,
+    )
+end
+
+function assemble_unicycler_hybrid(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any;
+        config::UnicyclerHybridConfig = UnicyclerHybridConfig(),
+)::AssemblyResult
+    return assemble_hybrid((short_r1, short_r2), long_reads, config)
+end
+
+function assemble_autocycler_polished(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any;
+        config::AutocyclerPolishConfig = AutocyclerPolishConfig(),
+)::AssemblyResult
+    return assemble_hybrid((short_r1, short_r2), long_reads, config)
+end
+
+"""
     _wrap_external_contigs(contigs_fasta, tool, config, stage1) -> AssemblyResult
 
 Read an external assembler's primary-contigs FASTA and wrap it in an
@@ -2210,9 +3518,7 @@ by `validate_assembly_structure`). Corrector + layout provenance is stamped into
 """
 function _wrap_external_contigs(contigs_fasta::AbstractString, tool::Symbol,
         config::AssemblyConfig, stage1)
-    records = open(FASTX.FASTA.Reader, contigs_fasta) do reader
-        collect(reader)
-    end
+    records = _read_external_fasta(contigs_fasta)
     # FASTX.sequence(String, r) already yields a String; FASTX.identifier returns a
     # StringView, so wrap it — AssemblyResult requires Vector{String} for both.
     contigs = [FASTX.sequence(String, r) for r in records]

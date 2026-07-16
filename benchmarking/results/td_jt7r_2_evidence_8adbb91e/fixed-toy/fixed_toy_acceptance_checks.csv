@@ -1,0 +1,20 @@
+check,passed,detail
+reads_are_1000bp_plus,true,observed range=1190-1214 bp
+nanopore_requested_indel_decode,true,requested=207
+noninitial_rung_attempted_and_completed,true,"initial_k=3, attempted=26, completed=26"
+nanopore_beats_identical_read_illumina,true,"nanopore=0.1, illumina=0.0655"
+nanopore_under_120_seconds,true,wall=100.055834625 s
+nanopore_decode_not_truncated,true,truncated=0
+nanopore_substitution_window_contract_clean,true,window_divergences=0
+illumina_all_indel_counters_zero,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+default_oracle_all_indel_counters_zero,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+illumina_byte_identical_to_default_oracle,true,"illumina_bytes=24062, oracle_bytes=24062"
+illumina_byte_identical_to_prewiring_oracle,true,"sha256=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311, origin_master=d36e3b6a10685346aa7b0238b48b4ab7fcefbed88f82cad7d959b0a831cdd311"
+per_rung_telemetry_schema_complete,true,required keys=requested/attempted/completed/truncated/engaged
+per_rung_telemetry_values_valid,true,all per-rung counters are exact nonnegative Int values with requested/attempted/completed/truncated/engaged inequalities satisfied
+nanopore_per_rung_totals_consistent,true,"requested/attempted/completed/truncated/engaged: stats=207/26/26/0/15, telemetry=207/26/26/0/15"
+illumina_per_rung_totals_consistent,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+default_oracle_per_rung_totals_consistent,true,"requested/attempted/completed/truncated/engaged: stats=0/0/0/0/0, telemetry=0/0/0/0/0"
+nanopore_attempts_all_classified,true,"attempted=26, completed=26, truncated=0"
+nanopore_trace_contract_clean,true,trace_contract_errors=0
+both_assemblies_nonempty,true,"nanopore=369, illumina=526"
