@@ -6285,8 +6285,9 @@ end
 
 Central policy for a library-generated figure. Saves it to the artifact
 directory `ENV["MYCELIA_PLOT_ARTIFACTS"]` when that is set and a `name` is given
-(as `<dir>/<name>.png` + `.svg` via [`save_plot`](@ref) — so CI can collect
-figures as build artifacts), and displays it interactively only when
+(as `<dir>/<name>.png` + `.svg` via [`save_plot`](@ref), so a CI job that sets the
+variable and uploads the directory can collect figures as build artifacts — no
+workflow wires this yet), and displays it interactively only when
 `display_plot` and [`should_display_plots`](@ref) both hold. Returns `figure`
 unchanged so callers can still capture and save it themselves. This replaces
 unconditional `display(...)` calls in plotting functions, which otherwise open
@@ -6302,6 +6303,10 @@ function present_figure(
         try
             save_plot(figure, joinpath(dir, String(name)))
         catch e
+            # Best-effort artifact save: a diagnostic figure is never worth
+            # crashing a pipeline. But do not swallow an interrupt (Ctrl-C during
+            # a batch) — re-raise it so the user stays in control.
+            e isa InterruptException && rethrow()
             @warn "failed to save plot artifact" name exception = e
         end
     end

@@ -1,6 +1,7 @@
 import Test
 import Mycelia
 import CairoMakie
+import StatsPlots
 
 # Locks the figure-display policy that keeps the suite headless: library plotting
 # functions must not open windows unless the user opts in, and must never open
@@ -31,6 +32,11 @@ Test.@testset "figure display policy" begin
             "GITHUB_ACTIONS" => nothing) do
             Test.@test Mycelia.should_display_plots() == false
         end
+        # Opt-in is case-insensitive (locks the lowercase() normalization).
+        withenv("MYCELIA_SHOW_PLOTS" => "TRUE", "CI" => nothing,
+            "GITHUB_ACTIONS" => nothing) do
+            Test.@test Mycelia.should_display_plots() == true
+        end
     end
 
     Test.@testset "present_figure" begin
@@ -50,6 +56,22 @@ Test.@testset "figure display policy" begin
         end
         Test.@test isfile(joinpath(dir, "unit_smoke.png"))
         Test.@test isfile(joinpath(dir, "unit_smoke.svg"))
+
+        # Also exercise the StatsPlots branch of save_plot — most routed sites
+        # (assess_dnamer_saturation, analyze_kmer_spectra, sankey, cluster
+        # assessment) emit StatsPlots plots, and save_plot handles them on a
+        # separate path. Assert non-empty to defeat a doubly-swallowed save
+        # failure (save_plot @warns internally; present_figure @warns on top).
+        sp = StatsPlots.plot([1, 2, 3], [3, 1, 2])
+        dir_sp = mktempdir()
+        withenv("MYCELIA_PLOT_ARTIFACTS" => dir_sp, "MYCELIA_SHOW_PLOTS" => nothing) do
+            Mycelia.present_figure(sp; name = "statsplots_smoke")
+        end
+        for ext in ("png", "svg")
+            path = joinpath(dir_sp, "statsplots_smoke.$(ext)")
+            Test.@test isfile(path)
+            Test.@test filesize(path) > 0
+        end
 
         # No artifact written when the dir is set but no name is given.
         dir2 = mktempdir()

@@ -40,8 +40,9 @@ if !MYCELIA_SHOW_PLOTS
     ENV["MPLBACKEND"] = "Agg"       # Matplotlib non-interactive backend (if used)
 end
 
-# When MYCELIA_PLOT_ARTIFACTS is set (e.g. by CI), library plotting functions
-# save figures there via Mycelia.present_figure for upload as build artifacts.
+# When MYCELIA_PLOT_ARTIFACTS is set, library plotting functions save figures
+# there via Mycelia.present_figure. A future CI job can set the variable and
+# upload the directory to collect figures as build artifacts (not yet wired).
 if haskey(ENV, "MYCELIA_PLOT_ARTIFACTS") && !isempty(ENV["MYCELIA_PLOT_ARTIFACTS"])
     mkpath(ENV["MYCELIA_PLOT_ARTIFACTS"])
 end
