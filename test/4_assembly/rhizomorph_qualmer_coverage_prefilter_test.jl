@@ -145,8 +145,39 @@ Test.@testset "Qualmer coverage prefilter (min_count)" begin
             qualmer_prefilter_min_count = 1)
         Test.@test cfg_ovr.qualmer_prefilter_min_count == 1
         # invalid rejected
-        Test.@test_throws Exception Mycelia.Rhizomorph.AssemblyConfig(k = k,
-            qualmer_prefilter_min_count = 0)
+        # Invalid rejected with a message that names the field (per repo
+        # convention: @test_throws must validate message content).
+        local threw = false
+        try
+            Mycelia.Rhizomorph.AssemblyConfig(k = k, qualmer_prefilter_min_count = 0)
+        catch err
+            threw = true
+            Test.@test occursin("qualmer_prefilter_min_count", sprint(showerror, err))
+        end
+        Test.@test threw
+    end
+
+    Test.@testset "F: doublestrand counts merged (canonical) coverage, not per-strand" begin
+        # A unique sequence and its reverse complement: every canonical k-mer has
+        # MERGED coverage 2 (once forward in A, once forward in revcomp(A)), but
+        # each FORWARD orientation has count 1. This is the strand-split case
+        # (CodeRabbit + code-review convergent finding). :doublestrand/:canonical
+        # is the DEFAULT corrector production mode with auto-2, so the threshold
+        # must apply to merged coverage, not per forward orientation.
+        A = "ATCGGCTAATGCCGATTGCACGTA"  # 24 bp, no k=7 repeats
+        rcA = String(BioSequences.reverse_complement(BioSequences.LongDNA{4}(A)))
+        reads = [
+            FASTX.FASTQ.Record("fwd", A, repeat("I", length(A))),
+            FASTX.FASTQ.Record("rc", rcA, repeat("I", length(rcA))),
+        ]
+        # doublestrand: threshold on MERGED coverage => canonical count 2 => KEPT.
+        # (Without the mode-aware fix this graph would be empty — the regression.)
+        ds = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :doublestrand, min_count = 2)
+        Test.@test pf_nv(ds) > 0
+        # singlestrand: strands are legitimately distinct => each forward k-mer
+        # has count 1 => correctly pruned.
+        ss = Mycelia.Rhizomorph.build_qualmer_graph(reads, k; mode = :singlestrand, min_count = 2)
+        Test.@test pf_nv(ss) == 0
     end
 end
 
