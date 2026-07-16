@@ -196,22 +196,22 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
     # -----------------------------------------------------------------------
     # E. AGGREGATE CORRECTOR — COMPLETES + NON-DEGENERATE (decision-2, honest bar).
     #
-    #    MATERIAL FINDING (td-n8ax, verified 2026-07-16): aggregate storage does NOT
-    #    reproduce the :full corrector's assembly quality, and the gap is NOT within
-    #    toy tolerance. On this 140 bp fixture, :full yields genome fraction ~0.98
-    #    (2 clean contigs) while :ultralight_quality yields ~0.77 (one over-extended
-    #    chimeric contig). ROOT CAUSE: aggregate storage discards per-observation
-    #    strand provenance; the re-assembly's rc_aware contig extraction reads
-    #    collect_evidence_strands / first_evidence_strand, which return DEFAULTS on a
-    #    reduced graph, so contig boundaries can be mis-joined. This is the inherent
-    #    O(distinct) tradeoff (decision-2's flagged risk), exposed once the CR-Major
-    #    fix made the re-assembly honor the aggregate profile (it previously used
-    #    :full silently). Therefore this test does NOT assert aggregate == :full
-    #    quality (that is false). It asserts the aggregate corrector COMPLETES and is
-    #    NON-DEGENERATE. The AUTHORITATIVE quality gate — whether the toy degradation
-    #    persists at bacterial scale, or is a below-regime toy artifact — is the
-    #    phix/lambda metric bar (genome_fraction/avg_identity vs baseline), which is
-    #    now REQUIRED before this profile is trusted for production correction.
+    #    This 140 bp fixture is BELOW the corrector's regime and shows a SPURIOUS
+    #    quality gap: :full -> genome fraction ~0.98 (2 clean contigs) vs
+    #    :ultralight_quality -> ~0.77 (one over-extended chimeric contig). The toy is
+    #    small/repetitive enough that the aggregate path's loss of per-observation
+    #    strand provenance (collect_evidence_strands / first_evidence_strand return
+    #    DEFAULTS on a reduced graph, so rc_aware contig extraction can mis-join)
+    #    tips it into a mis-assembly. So this test does NOT assert aggregate == :full
+    #    quality at toy scale (that is false here); it asserts the aggregate corrector
+    #    COMPLETES and is NON-DEGENERATE.
+    #
+    #    RESOLVED at real scale (2026-07-16): the AUTHORITATIVE quality gate is
+    #    benchmarking/qualmer_profile_quality_compare.jl on real genomes. phix174
+    #    (5.4 kb, @30x, k=19): :full and :ultralight_quality BOTH reach genome
+    #    fraction 0.987 with the identical single 5316 bp contig — aggregate storage
+    #    is QUALITY-PRESERVING in the corrector's regime; the toy gap does NOT
+    #    persist. (E. coli MEMORY gate on lr6 remains the separate memory acceptance.)
     # -----------------------------------------------------------------------
     Test.@testset "E: aggregate corrector completes and is non-degenerate" begin
         k = 11
