@@ -54,7 +54,7 @@ while [[ $# -gt 0 ]]; do
         --targets)  TARGETS="$2"; shift 2 ;;
         --coverage) COVERAGE="$2"; shift 2 ;;
         --seed)     SEED="$2"; shift 2 ;;
-        --smoke)    SMOKE="true"; shift ;;
+        --smoke)    SMOKE="true"; TARGETS="phix174"; COVERAGE="30"; shift ;;
         --no-sota)  SOTA="false"; shift ;;
         --help)     usage; exit 0 ;;
         *)          echo "unknown argument: $1" >&2; usage; exit 2 ;;

@@ -422,7 +422,13 @@ function run_arm(
             )
         elseif arm == :sota_spades
             # Independent SOTA contiguity anchor: SPAdes on the RAW (uncorrected)
-            # reads, using the same single-stream input as every other arm. Run
+            # reads, using the same single-stream input as every other arm.
+            # FAIR-COMPARISON CAVEAT: SPAdes is fed the de-paired R1-then-R2 stream
+            # (single-end -s), symmetric with the Mycelia arms — so this is a fair
+            # INTERNAL comparison, but SPAdes' published contiguity comes from
+            # PAIRED mode, so any EXTERNAL "parity/superiority vs SOTA" reading of
+            # these numbers is confounded and must say so. The harness asserts no
+            # automated parity claim (VALIDATION_SCOPE=interim_engineering_validation). Run
             # as a standalone assembler baseline — NOT routed through
             # assemble_genome, whose :olc layout requires the Stage-1 corrector,
             # so a raw (uncorrected) external assembly cannot go through it. This
