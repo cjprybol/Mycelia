@@ -2843,6 +2843,35 @@ function _validate_distinct_read_source_objects(
     return nothing
 end
 
+function _validate_distinct_in_memory_read_records(
+        short_r1::Any,
+        short_r2::Any,
+        long_reads::Any,
+)::Nothing
+    first_owners = IdDict{FASTX.FASTQ.Record, Tuple{String, Int}}()
+    for (label, reads) in (
+            ("short_r1", short_r1),
+            ("short_r2", short_r2),
+            ("long_reads", long_reads),
+    )
+        _read_source_paths(reads) === nothing || continue
+        for (record_index, record) in enumerate(reads)
+            record isa FASTX.FASTQ.Record || continue
+            if haskey(first_owners, record)
+                first_label, first_index = first_owners[record]
+                first_label == label && continue
+                throw(ArgumentError(
+                    "input read roles share an in-memory FASTQ record object: " *
+                    "$(first_label) record $(first_index) and $(label) record " *
+                    "$(record_index).",
+                ))
+            end
+            first_owners[record] = (label, record_index)
+        end
+    end
+    return nothing
+end
+
 function _canonical_pair_identifier(identifier::AbstractString)::String
     first_token = first(split(String(identifier)))
     return replace(first_token, r"/[12]$" => "")
@@ -3668,6 +3697,8 @@ end
 
 const _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS = 24 * 60 * 60
 
+const _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX = ".mycelia-hybrid.lock"
+
 function _multi_input_workflow_lock_path(
         workflow_root::AbstractString,
 )::String
@@ -3678,8 +3709,101 @@ function _multi_input_workflow_lock_path(
     normalized_root = _canonical_planned_workflow_path(workflow_root)
     return joinpath(
         dirname(normalized_root),
-        ".$(basename(normalized_root)).mycelia-hybrid.lock",
+        ".$(basename(normalized_root))$(_MULTI_INPUT_WORKFLOW_LOCK_SUFFIX)",
     )
+end
+
+function _multi_input_workflow_lock_is_active(
+        lock_path::AbstractString,
+)::Bool
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    _workflow_path_entry_exists(normalized_lock_path) || return false
+    stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS
+    lock_handle = try
+        Mycelia.FileWatching.Pidfile.trymkpidlock(
+            normalized_lock_path;
+            stale_age,
+            refresh = stale_age / 2,
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        throw(ArgumentError(
+            "Unable to validate hierarchical multi-input workflow reservation " *
+            "$(normalized_lock_path): $(sprint(showerror, caught))",
+        ))
+    end
+    lock_handle === false && return true
+    Base.close(lock_handle)
+    return false
+end
+
+function _multi_input_ancestor_workflow_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    lock_paths = String[]
+    ancestor = dirname(normalized_root)
+    while dirname(ancestor) != ancestor
+        push!(
+            lock_paths,
+            joinpath(
+                dirname(ancestor),
+                ".$(basename(ancestor))$(_MULTI_INPUT_WORKFLOW_LOCK_SUFFIX)",
+            ),
+        )
+        ancestor = dirname(ancestor)
+    end
+    return lock_paths
+end
+
+function _multi_input_descendant_workflow_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    if islink(normalized_root) || !isdir(normalized_root)
+        return String[]
+    end
+    lock_paths = String[]
+    for (directory, directories, files) in walkdir(
+            normalized_root;
+            follow_symlinks = false,
+    )
+        filter!(
+            child -> !islink(joinpath(directory, child)),
+            directories,
+        )
+        for file in files
+            startswith(file, ".") || continue
+            endswith(file, _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX) || continue
+            push!(lock_paths, joinpath(directory, file))
+        end
+    end
+    return sort!(lock_paths)
+end
+
+function _require_exclusive_multi_input_workflow_domain(
+        workflow_root::AbstractString,
+        own_lock_path::AbstractString,
+)::Nothing
+    normalized_root = normpath(abspath(String(workflow_root)))
+    normalized_own_lock = normpath(abspath(String(own_lock_path)))
+    for lock_path in _multi_input_ancestor_workflow_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        _multi_input_workflow_lock_is_active(lock_path) || continue
+        throw(ArgumentError(
+            "Persistent multi-input output_dir overlaps an active ancestor " *
+            "workflow reservation: $(lock_path)",
+        ))
+    end
+    for lock_path in _multi_input_descendant_workflow_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        _multi_input_workflow_lock_is_active(lock_path) || continue
+        throw(ArgumentError(
+            "Persistent multi-input output_dir overlaps an active descendant " *
+            "workflow reservation: $(lock_path)",
+        ))
+    end
+    return nothing
 end
 
 function _with_multi_input_workflow_lock(
@@ -4729,6 +4853,7 @@ function _wrap_multi_input_assembly(
         input_technologies::Dict{String, String},
         retained_cleanup_files::Vector{String},
         retained_cleanup_roots::Vector{String},
+        retained_intermediates::Union{Nothing, Vector{String}} = nothing,
         source_content_contract::Dict{String, Any} = Dict{String, Any}(),
         corrected_content_contract::Dict{String, Any} = Dict{String, Any}(),
         assembler_output_dir::Union{Nothing, String} = nothing,
@@ -4834,8 +4959,15 @@ function _wrap_multi_input_assembly(
     else
         nothing
     end
-    retained_intermediates = hasproperty(result, :intermediates) ?
+    reported_intermediates = hasproperty(result, :intermediates) ?
                              String.(result.intermediates) : String[]
+    effective_retained_intermediates = if retained_intermediates === nothing
+        reported_intermediates
+    else
+        empty!(retained_intermediates)
+        append!(retained_intermediates, reported_intermediates)
+        retained_intermediates
+    end
     stats = Dict{String, Any}(
         "method" => "HybridAssembly",
         "workflow" => String(workflow),
@@ -4844,7 +4976,7 @@ function _wrap_multi_input_assembly(
         "polishers" => polishers,
         "workflow_settings" => workflow_settings,
         "toolchain" => toolchain,
-        "retained_intermediates" => retained_intermediates,
+        "retained_intermediates" => effective_retained_intermediates,
         "input_technologies" => input_technologies,
         "tool_artifacts" => tool_artifacts,
         "short_read_tech" => short_read_tech === nothing ? nothing :
@@ -4901,6 +5033,11 @@ function _assemble_paired_short_long(
         short_r1 = _prepare_read_source(short_reads[1])
         short_r2 = _prepare_read_source(short_reads[2])
         prepared_long_reads = _prepare_read_source(long_reads)
+        _validate_distinct_in_memory_read_records(
+            short_r1,
+            short_r2,
+            prepared_long_reads,
+        )
         _validate_unique_read_source_paths(short_r1, "short_r1")
         _validate_unique_read_source_paths(short_r2, "short_r2")
         _validate_unique_read_source_paths(prepared_long_reads, "long_reads")
@@ -4939,6 +5076,7 @@ function _assemble_paired_short_long(
         # fills them only after all best-effort cleanup attempts have completed.
         retained_cleanup_files = String[]
         retained_cleanup_roots = String[]
+        retained_intermediates = String[]
         try
             corrected_r1 = _correct_read_set!(
                 cleanup_tokens,
@@ -5081,6 +5219,7 @@ function _assemble_paired_short_long(
                 input_technologies = _paired_input_technologies(config),
                 retained_cleanup_files = retained_cleanup_files,
                 retained_cleanup_roots = retained_cleanup_roots,
+                retained_intermediates = retained_intermediates,
                 source_content_contract,
                 corrected_content_contract,
                 assembler_output_dir,
@@ -5123,6 +5262,10 @@ function _assemble_paired_short_long(
                 _workflow_path_entry_exists,
                 retained_cleanup_files,
             )
+            filter!(
+                _workflow_path_entry_exists,
+                retained_intermediates,
+            )
         end
     end
 
@@ -5134,6 +5277,10 @@ function _assemble_paired_short_long(
         String(reserved_root_plan.path),
     )
     return workflow_lock_runner(lock_path) do
+        _require_exclusive_multi_input_workflow_domain(
+            String(reserved_root_plan.path),
+            lock_path,
+        )
         validated_root_plan = _validate_workflow_root(
             String(reserved_root_plan.path),
         )

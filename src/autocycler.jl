@@ -1061,6 +1061,97 @@ function _require_valid_autocycler_gfa(
     return _require_valid_metamdbg_gfa(path, label)
 end
 
+function _autocycler_fasta_sequence_map(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    normalized_path = _require_valid_autocycler_fasta(path, label)
+    sequences = Dict{String, String}()
+    reader = Mycelia.open_fastx(normalized_path)
+    try
+        for record in reader
+            identifier = String(FASTX.identifier(record))
+            sequences[identifier] = uppercase(FASTX.sequence(String, record))
+        end
+    finally
+        close(reader)
+    end
+    return sequences
+end
+
+function _autocycler_gfa_sequence_map(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    normalized_path = _require_valid_autocycler_gfa(path, label)
+    sequences = Dict{String, String}()
+    for (line_number, line) in enumerate(eachline(normalized_path))
+        startswith(line, "S\t") || continue
+        fields = split(line, '\t'; keepempty = true)
+        length(fields) >= 3 || throw(
+            ErrorException(
+                "$(label) has a malformed segment at line $(line_number): " *
+                "$(normalized_path).",
+            ),
+        )
+        identifier = fields[2]
+        sequence = uppercase(fields[3])
+        (isempty(sequence) || sequence == "*") && throw(
+            ErrorException(
+                "$(label) segment $(repr(identifier)) has no sequence, so it " *
+                "cannot be verified against the companion FASTA.",
+            ),
+        )
+        haskey(sequences, identifier) && throw(
+            ErrorException(
+                "$(label) contains duplicate segment identifier " *
+                "$(repr(identifier)).",
+            ),
+        )
+        sequences[identifier] = sequence
+    end
+    isempty(sequences) && throw(
+        ErrorException("$(label) contains no sequence-bearing GFA segments."),
+    )
+    return sequences
+end
+
+function _require_matching_autocycler_companion_artifacts(
+        assembly::AbstractString,
+        graph::AbstractString,
+)::Nothing
+    fasta_sequences = _autocycler_fasta_sequence_map(
+        assembly,
+        "Autocycler consensus FASTA",
+    )
+    gfa_sequences = _autocycler_gfa_sequence_map(
+        graph,
+        "Autocycler consensus GFA",
+    )
+    fasta_identifiers = Set(keys(fasta_sequences))
+    gfa_identifiers = Set(keys(gfa_sequences))
+    fasta_identifiers == gfa_identifiers || throw(
+        ErrorException(
+            "Autocycler consensus FASTA and GFA contain different contig " *
+            "identifiers: FASTA-only=" *
+            "$(repr(sort!(collect(setdiff(fasta_identifiers, gfa_identifiers))))), " *
+            "GFA-only=" *
+            "$(repr(sort!(collect(setdiff(gfa_identifiers, fasta_identifiers))))).",
+        ),
+    )
+    mismatched = sort!(String[
+        identifier for identifier in fasta_identifiers if
+        fasta_sequences[identifier] != gfa_sequences[identifier]
+    ])
+    isempty(mismatched) || throw(
+        ErrorException(
+            "Autocycler consensus FASTA and GFA contain different sequences " *
+            "for contigs $(repr(mismatched)).",
+        ),
+    )
+    return nothing
+end
+
 function _autocycler_pair_identifier(identifier::AbstractString)::String
     first_token = first(split(String(identifier)))
     return replace(first_token, r"/[12]$" => "")
@@ -1620,15 +1711,164 @@ function _autocycler_polishing_command_plan(
     )
 end
 
+function _require_planned_autocycler_path_containment(
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(workflow_root)))
+    isdir(normalized_root) && !islink(normalized_root) || throw(
+        ErrorException(
+            "Autocycler workflow root is not a regular directory while " *
+            "checking $(label): $(normalized_root).",
+        ),
+    )
+    realpath(normalized_root) == normalized_root || throw(
+        ErrorException(
+            "Autocycler workflow root resolves through a symbolic-link " *
+            "component while checking $(label): $(normalized_root).",
+        ),
+    )
+    normalized_path = normpath(abspath(String(path)))
+    relative_path = relpath(normalized_path, normalized_root)
+    components = splitpath(relative_path)
+    if relative_path == "."
+        return normalized_path
+    end
+    if isabspath(relative_path) || isempty(components) || first(components) == ".."
+        throw(
+            ErrorException(
+                "$(label) escapes the reserved Autocycler workflow root: " *
+                "$(normalized_path) is not contained by $(normalized_root).",
+            ),
+        )
+    end
+    cursor = normalized_root
+    for component in components
+        cursor = joinpath(cursor, component)
+        islink(cursor) && throw(
+            ErrorException(
+                "$(label) resolves through a symbolic-link component: " *
+                "$(cursor).",
+            ),
+        )
+        if ispath(cursor) && realpath(cursor) != cursor
+            throw(
+                ErrorException(
+                    "$(label) is not bound to its canonical path: " *
+                    "$(cursor) resolves to $(realpath(cursor)).",
+                ),
+            )
+        end
+    end
+    return normalized_path
+end
+
+function _autocycler_directory_identity(
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = _require_planned_autocycler_path_containment(
+        path,
+        workflow_root,
+        label,
+    )
+    isdir(normalized_path) && !islink(normalized_path) || throw(
+        ErrorException("$(label) is not a regular directory: $(normalized_path)."),
+    )
+    metadata = stat(normalized_path)
+    return (;
+        path = normalized_path,
+        device = metadata.device,
+        inode = metadata.inode,
+        label = String(label),
+    )
+end
+
+function _require_unchanged_autocycler_directory(
+        identity::NamedTuple,
+        workflow_root::AbstractString,
+)::String
+    normalized_path = _require_planned_autocycler_path_containment(
+        identity.path,
+        workflow_root,
+        identity.label,
+    )
+    isdir(normalized_path) && !islink(normalized_path) || throw(
+        ErrorException(
+            "$(identity.label) is no longer a regular directory: " *
+            "$(normalized_path).",
+        ),
+    )
+    metadata = stat(normalized_path)
+    if metadata.device != identity.device || metadata.inode != identity.inode
+        throw(
+            ErrorException(
+                "$(identity.label) changed physical identity during the " *
+                "Autocycler workflow: $(normalized_path).",
+            ),
+        )
+    end
+    return normalized_path
+end
+
+function _require_safe_autocycler_step_paths(
+        step::NamedTuple,
+        workflow_root::AbstractString,
+        directory_identities::Tuple,
+)::Nothing
+    for identity in directory_identities
+        _require_unchanged_autocycler_directory(identity, workflow_root)
+    end
+    command_directory = String(step.command.dir)
+    isempty(command_directory) || begin
+        normalized_directory = _require_planned_autocycler_path_containment(
+            command_directory,
+            workflow_root,
+            "Autocycler workflow step $(step.name) working directory",
+        )
+        isdir(normalized_directory) && !islink(normalized_directory) || throw(
+            ErrorException(
+                "Autocycler workflow step $(step.name) working directory is " *
+                "not a regular directory: $(normalized_directory).",
+            ),
+        )
+    end
+    candidate_paths = String[step.expected_outputs...]
+    isnothing(step.stdout) || push!(candidate_paths, String(step.stdout))
+    for output_path in unique(candidate_paths)
+        _require_planned_autocycler_path_containment(
+            output_path,
+            workflow_root,
+            "Autocycler workflow step $(step.name) output",
+        )
+    end
+    return nothing
+end
+
 function _cleanup_autocycler_polishing_intermediates!(
         paths::AbstractVector{<:AbstractString};
+        workflow_root::AbstractString,
+        directory_identities::Tuple = (),
         remover::Function = path -> rm(path; force = true),
 )::Vector{String}
     retained = String[]
     for path in paths
-        normalized_path = String(path)
+        normalized_path = normpath(abspath(String(path)))
         cleanup_error = nothing
         try
+            for identity in directory_identities
+                _require_unchanged_autocycler_directory(
+                    identity,
+                    workflow_root,
+                )
+            end
+            _require_planned_autocycler_path_containment(
+                normalized_path,
+                workflow_root,
+                "Autocycler polishing cleanup target",
+            )
             remover(normalized_path)
         catch error
             error isa InterruptException && rethrow()
@@ -1666,8 +1906,17 @@ end
 function _execute_autocycler_steps(
         steps::Tuple;
         runner::Function = _default_autocycler_step_runner,
+        workflow_root::Union{Nothing, AbstractString} = nothing,
+        directory_identities::Tuple = (),
 )::Nothing
     for step in steps
+        if workflow_root !== nothing
+            _require_safe_autocycler_step_paths(
+                step,
+                workflow_root,
+                directory_identities,
+            )
+        end
         try
             runner(step)
         catch error
@@ -1690,6 +1939,42 @@ function _execute_autocycler_steps(
         end
 
         for output_path in step.expected_outputs
+            if workflow_root !== nothing
+                if islink(output_path)
+                    throw(
+                        ErrorException(
+                            "Autocycler workflow step $(step.name) created a " *
+                            "symlinked artifact instead of a regular file: " *
+                            "$(output_path)",
+                        ),
+                    )
+                end
+                if !isfile(output_path) || filesize(output_path) == 0
+                    throw(
+                        ErrorException(
+                            "Autocycler workflow step $(step.name) did not " *
+                            "create a nonempty artifact: $(output_path)",
+                        ),
+                    )
+                end
+                for identity in directory_identities
+                    _require_unchanged_autocycler_directory(
+                        identity,
+                        workflow_root,
+                    )
+                end
+                _require_planned_autocycler_path_containment(
+                    output_path,
+                    workflow_root,
+                    "Autocycler workflow step $(step.name) output",
+                )
+                _require_contained_regular_autocycler_artifact(
+                    output_path,
+                    workflow_root,
+                    "Autocycler workflow step $(step.name) output",
+                )
+                continue
+            end
             if islink(output_path)
                 throw(
                     ErrorException(
@@ -1909,9 +2194,19 @@ function _run_autocycler_with_reserved_output(
         conda_runner,
         environment_prefix,
     )
+    output_root_identity = _autocycler_directory_identity(
+        prepared_out_dir,
+        prepared_out_dir,
+        "Autocycler workflow root",
+    )
 
     @info "Starting long-read-only Autocycler pipeline..."
-    _execute_autocycler_steps(plan.steps; runner = runner)
+    _execute_autocycler_steps(
+        plan.steps;
+        runner,
+        workflow_root = prepared_out_dir,
+        directory_identities = (output_root_identity,),
+    )
     contained_assembly = _require_contained_regular_autocycler_artifact(
         plan.assembly,
         prepared_out_dir,
@@ -1930,6 +2225,7 @@ function _run_autocycler_with_reserved_output(
         contained_graph,
         "Autocycler consensus GFA",
     )
+    _require_matching_autocycler_companion_artifacts(assembly, graph)
     @info "Autocycler pipeline complete" out_dir = prepared_out_dir
 
     return (
@@ -1937,6 +2233,7 @@ function _run_autocycler_with_reserved_output(
         assembly = assembly,
         graph = graph,
         toolchain = normalized_toolchain,
+        output_root_identity,
         requested_threads = plan.requested_threads,
         autocycler_assembly_threads = plan.autocycler_assembly_threads,
     )
@@ -2013,6 +2310,22 @@ function _run_autocycler(
                 toolchain_snapshotter(),
                 "long-read assembly",
             )
+            _require_unchanged_autocycler_directory(
+                result.output_root_identity,
+                result.outdir,
+            )
+            _require_matching_autocycler_companion_artifacts(
+                _require_contained_regular_autocycler_artifact(
+                    result.assembly,
+                    result.outdir,
+                    "Autocycler consensus FASTA",
+                ),
+                _require_contained_regular_autocycler_artifact(
+                    result.graph,
+                    result.outdir,
+                    "Autocycler consensus GFA",
+                ),
+            )
             return result
         end
     end
@@ -2026,10 +2339,12 @@ Run the upstream long-read-only Autocycler pipeline.
 Autocycler consumes one long-read FASTQ and writes its fixed `autocycler_out`
 directory relative to the isolated `out_dir` working directory. Its authoritative
 consensus FASTA and companion GFA are both validated and returned without
-rewriting either artifact. The output directory must be absent or empty and is
+rewriting either artifact. Their unique contig identifiers and sequences must
+agree exactly. The output directory must be absent or empty and is
 reserved by an adjacent interprocess lock for the full workflow lifecycle.
 Returned artifacts must remain regular non-symlink files contained by that
-canonical reserved directory.
+canonical reserved directory. Its canonical path, device, and inode are bound
+across execution, final toolchain inspection, and return validation.
 The shared Autocycler environment/install lock is also held from the initial
 dependency snapshot through artifact validation. The normalized full Conda
 inventory (name, version, build, and channel for every package) is checked before
@@ -2056,6 +2371,8 @@ to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies
 # Returns
 A named tuple with `outdir`, `assembly`, `graph`, and exact realized `toolchain`
 provenance, including the deterministic full Conda inventory and its SHA-256.
+`output_root_identity` records the bound canonical path, device, and inode used
+for lifecycle swap detection.
 `requested_threads` records the caller request and
 `autocycler_assembly_threads` records the explicit effective cap used by the
 alternative-assembly stage.
@@ -2139,6 +2456,21 @@ function _run_autocycler_polished_with_reserved_output(
         conda_runner,
         environment_prefix,
     )
+    _require_planned_autocycler_path_containment(
+        polishing_plan.polishing_dir,
+        normalized_out_dir,
+        "Autocycler polishing directory",
+    )
+    if islink(polishing_plan.polishing_dir) ||
+       (ispath(polishing_plan.polishing_dir) &&
+        !isdir(polishing_plan.polishing_dir))
+        throw(
+            ArgumentError(
+                "Autocycler polishing directory must be a regular " *
+                "non-symlink directory: $(polishing_plan.polishing_dir)",
+            ),
+        )
+    end
     if isdir(polishing_plan.polishing_dir) &&
        !isempty(readdir(polishing_plan.polishing_dir))
         throw(
@@ -2149,6 +2481,20 @@ function _run_autocycler_polished_with_reserved_output(
         )
     end
     mkpath(polishing_plan.polishing_dir)
+    output_root_identity = autocycler_result.output_root_identity
+    _require_unchanged_autocycler_directory(
+        output_root_identity,
+        normalized_out_dir,
+    )
+    polishing_directory_identity = _autocycler_directory_identity(
+        polishing_plan.polishing_dir,
+        normalized_out_dir,
+        "Autocycler polishing directory",
+    )
+    directory_identities = (
+        output_root_identity,
+        polishing_directory_identity,
+    )
 
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
     autocycler_assembly, graph, polypolish_assembly, final_assembly,
@@ -2156,7 +2502,9 @@ function _run_autocycler_polished_with_reserved_output(
         polypolish_snapshot = try
         _execute_autocycler_steps(
             polishing_plan.steps[1:(end - 1)];
-            runner = runner,
+            runner,
+            workflow_root = normalized_out_dir,
+            directory_identities,
         )
         contained_polypolish_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2197,7 +2545,9 @@ function _run_autocycler_polished_with_reserved_output(
         )
         _execute_autocycler_steps(
             (last(polishing_plan.steps),);
-            runner = runner,
+            runner,
+            workflow_root = normalized_out_dir,
+            directory_identities,
         )
         contained_final_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2275,6 +2625,10 @@ function _run_autocycler_polished_with_reserved_output(
             normalized_out_dir,
             "Polypolish Autocycler assembly",
         )
+        _require_matching_autocycler_companion_artifacts(
+            validated_autocycler_assembly,
+            validated_graph,
+        )
 
         final_autocycler_identifiers = _autocycler_fasta_identifier_set(
             validated_autocycler_assembly,
@@ -2314,6 +2668,8 @@ function _run_autocycler_polished_with_reserved_output(
         if !keep_intermediates
             _cleanup_autocycler_polishing_intermediates!(
                 polishing_plan.intermediate_files;
+                workflow_root = normalized_out_dir,
+                directory_identities,
                 remover = intermediate_remover,
             )
         end
@@ -2324,6 +2680,8 @@ function _run_autocycler_polished_with_reserved_output(
     else
         _cleanup_autocycler_polishing_intermediates!(
             polishing_plan.intermediate_files;
+            workflow_root = normalized_out_dir,
+            directory_identities,
             remover = intermediate_remover,
         )
     end
@@ -2343,6 +2701,10 @@ function _run_autocycler_polished_with_reserved_output(
             "Autocycler consensus GFA",
         ),
         "Autocycler consensus GFA",
+    )
+    _require_matching_autocycler_companion_artifacts(
+        autocycler_assembly,
+        graph,
     )
     polypolish_assembly = _require_valid_autocycler_fasta(
         _require_contained_regular_autocycler_artifact(
@@ -2430,6 +2792,7 @@ function _run_autocycler_polished_with_reserved_output(
         pypolca_report = pypolca_report,
         intermediates = retained_intermediates,
         toolchain = autocycler_result.toolchain,
+        output_root_identity,
         requested_threads = autocycler_result.requested_threads,
         autocycler_assembly_threads =
             autocycler_result.autocycler_assembly_threads,
@@ -2534,6 +2897,10 @@ function _run_autocycler_polished(
                 toolchain_snapshotter(),
                 "the complete Autocycler and paired-short polishing lifecycle",
             )
+            _require_unchanged_autocycler_directory(
+                result.output_root_identity,
+                result.outdir,
+            )
             return result
         end
     end
@@ -2566,6 +2933,9 @@ must remain byte-identical through every downstream command. Immediately before
 return, every reported artifact is revalidated as a contained regular non-symlink
 file; all FASTAs/GFA are parsed again, all three identifier sets are compared
 again, and the Pypolca report must still be nonempty.
+The workflow root and polishing directory are bound by canonical path, device,
+and inode. Every step output is checked before and after execution, and cleanup
+refuses any target whose ancestor or bound directory changed identity.
 
 This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
 same bacterial-isolate/mostly-complete-alternative-assemblies applicability
@@ -2593,6 +2963,8 @@ ensemble method.
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
 `polypolish_assembly`, `pypolca_report`, `outdir`, and exact realized `toolchain`
 provenance, including the deterministic full Conda inventory and its SHA-256.
+`output_root_identity` records the bound canonical path, device, and inode used
+for lifecycle swap detection.
 `intermediates` lists files retained by an explicit
 `keep_intermediates=true` request or because best-effort cleanup could not remove
 them. `requested_threads` and `autocycler_assembly_threads` distinguish the caller

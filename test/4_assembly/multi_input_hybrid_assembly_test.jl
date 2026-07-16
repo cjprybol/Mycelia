@@ -844,6 +844,92 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 "retargeted-hybrid-output",
             ))
             Test.@test !ispath(captured_lock)
+
+            hierarchy_parent = joinpath(temp_dir, "hierarchy-parent")
+            hierarchy_child = joinpath(hierarchy_parent, "nested")
+            parent_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    hierarchy_parent,
+                )
+            child_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    hierarchy_child,
+                )
+            hierarchy_correction_calls = Ref(0)
+            hierarchy_assembler_calls = Ref(0)
+            function hierarchy_correction_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                hierarchy_correction_calls[] += 1
+                error("hierarchical correction must not run")
+            end
+            function hierarchy_assembler_runner(
+                    inputs::Any,
+                    outdir::AbstractString,
+            )::NamedTuple
+                hierarchy_assembler_calls[] += 1
+                error("hierarchical assembler must not run")
+            end
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(parent_lock) do
+                test_throws_message(
+                    ArgumentError,
+                    "active ancestor workflow reservation",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = hierarchy_child,
+                        ),
+                        :unicycler;
+                        correction_runner = hierarchy_correction_runner,
+                        assembler_runner = hierarchy_assembler_runner,
+                    )
+                end
+            end
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(child_lock) do
+                test_throws_message(
+                    ArgumentError,
+                    "active descendant workflow reservation",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = hierarchy_parent,
+                        ),
+                        :unicycler;
+                        correction_runner = hierarchy_correction_runner,
+                        assembler_runner = hierarchy_assembler_runner,
+                    )
+                end
+            end
+            Test.@test hierarchy_correction_calls[] == 0
+            Test.@test hierarchy_assembler_calls[] == 0
+            Test.@test !ispath(parent_lock)
+            Test.@test !ispath(child_lock)
+
+            sibling_a = joinpath(temp_dir, "hierarchy-sibling-a")
+            sibling_b = joinpath(temp_dir, "hierarchy-sibling-b")
+            sibling_a_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(sibling_a)
+            sibling_b_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(sibling_b)
+            Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                sibling_a_lock,
+            ) do
+                Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+                    sibling_b_lock,
+                ) do
+                    sibling_reservation =
+                        Mycelia.Rhizomorph._require_exclusive_multi_input_workflow_domain(
+                            sibling_b,
+                            sibling_b_lock,
+                        )
+                    Test.@test sibling_reservation === nothing
+                end
+            end
         end
     end
 
@@ -853,6 +939,42 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             MULTI_INPUT_R2,
             "input",
         ) == 2
+
+        distinct_equal_r1 = [multi_input_fastq_record("equal_pair")]
+        distinct_equal_r2 = [multi_input_fastq_record("equal_pair")]
+        Test.@test distinct_equal_r1[1] == distinct_equal_r2[1]
+        Test.@test distinct_equal_r1[1] !== distinct_equal_r2[1]
+        Test.@test Mycelia.Rhizomorph._validate_distinct_in_memory_read_records(
+            distinct_equal_r1,
+            distinct_equal_r2,
+            MULTI_INPUT_LONG,
+        ) === nothing
+        distinct_equal_calls = NamedTuple[]
+        function distinct_equal_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            return multi_input_fake_assembler_result(outdir)
+        end
+        distinct_equal_result =
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (distinct_equal_r1, distinct_equal_r2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = multi_input_fake_correction_runner(
+                    distinct_equal_calls,
+                ),
+                assembler_runner = distinct_equal_assembler_runner,
+            )
+        Test.@test length(distinct_equal_calls) == 3
+        expected_distinct_equal_counts = Dict(
+            "short_r1" => 1,
+            "short_r2" => 1,
+            "long_reads" => length(MULTI_INPUT_LONG),
+        )
+        Test.@test distinct_equal_result.assembly_stats["input_read_counts"] ==
+                   expected_distinct_equal_counts
 
         test_throws_message(ArgumentError, "different counts") do
             Mycelia.Rhizomorph._validate_paired_reads(
@@ -2551,9 +2673,19 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         correction_calls = NamedTuple[]
         correction_runner = multi_input_fake_correction_runner(correction_calls)
         workflow_root = Ref("")
-        assembler_runner = function (inputs::Any, outdir::AbstractString)
+        reported_intermediate = Ref("")
+        function assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
             workflow_root[] = dirname(String(outdir))
-            return multi_input_fake_assembler_result(outdir)
+            assembler_result = multi_input_fake_assembler_result(outdir)
+            reported_intermediate[] = joinpath(outdir, "retained.sam")
+            write(reported_intermediate[], "retained\n")
+            return merge(
+                assembler_result,
+                (; intermediates = [reported_intermediate[]]),
+            )
         end
         function selective_corrected_remover(path::AbstractString)::Nothing
             if path == correction_calls[1].corrected_fastq
@@ -2580,7 +2712,10 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                    [retained_file]
         Test.@test result.assembly_stats["retained_cleanup_roots"] ==
                    [workflow_root[]]
+        Test.@test result.assembly_stats["retained_intermediates"] ==
+                   [reported_intermediate[]]
         Test.@test isfile(retained_file)
+        Test.@test isfile(reported_intermediate[])
         Test.@test all(
             call -> !isfile(call.corrected_fastq),
             correction_calls[2:3],
@@ -2588,6 +2723,41 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         Test.@test isdir(workflow_root[])
         rm(retained_file; force = true)
         rm(workflow_root[]; recursive = true, force = true)
+
+        cleaned_correction_calls = NamedTuple[]
+        cleaned_intermediate = Ref("")
+        function cleaned_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            assembler_result = multi_input_fake_assembler_result(outdir)
+            cleaned_intermediate[] = joinpath(outdir, "cleaned.sam")
+            write(cleaned_intermediate[], "cleaned\n")
+            return merge(
+                assembler_result,
+                (; intermediates = [cleaned_intermediate[]]),
+            )
+        end
+        cleaned_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                cleaned_correction_calls,
+            ),
+            assembler_runner = cleaned_assembler_runner,
+        )
+        Test.@test length(cleaned_correction_calls) == 3
+        Test.@test isempty(
+            cleaned_result.assembly_stats["retained_intermediates"],
+        )
+        Test.@test !ispath(cleaned_intermediate[])
+        Test.@test cleaned_result.assembly_stats["input_technologies"] == Dict(
+            "short_r1" => "illumina",
+            "short_r2" => "illumina",
+            "long_reads" => "nanopore",
+        )
     end
 
     Test.@testset "caller-owned artifacts persist" begin
@@ -3413,6 +3583,31 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             Mycelia.Rhizomorph.assemble_hybrid(
                 (MULTI_INPUT_R1, MULTI_INPUT_R2),
                 MULTI_INPUT_R1;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
+        shared_pair_record = multi_input_fastq_record("shared_pair")
+        shared_pair_r1 = [shared_pair_record]
+        shared_pair_r2 = copy(shared_pair_r1)
+        test_throws_message(
+            ArgumentError,
+            "share an in-memory FASTQ record object",
+        ) do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (shared_pair_r1, shared_pair_r2),
+                MULTI_INPUT_LONG;
+                config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            )
+        end
+        shared_long_r1 = [multi_input_fastq_record("shared_long/1")]
+        shared_long_r2 = [multi_input_fastq_record("shared_long/2")]
+        test_throws_message(
+            ArgumentError,
+            "share an in-memory FASTQ record object",
+        ) do
+            Mycelia.Rhizomorph.assemble_hybrid(
+                (shared_long_r1, shared_long_r2),
+                copy(shared_long_r1);
                 config = Mycelia.Rhizomorph.UnicyclerHybridConfig(),
             )
         end

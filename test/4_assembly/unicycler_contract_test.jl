@@ -37,6 +37,20 @@ function _test_unicycler_toolchain(;
     )
 end
 
+function _test_unicycler_input_fingerprint(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, Any}
+    contents = "$(label):$(abspath(path))"
+    return Dict{String, Any}(
+        "canonical_path" => abspath(path),
+        "size_bytes" => ncodeunits(contents),
+        "sha256" => Mycelia.SHA.bytes2hex(
+            Mycelia.SHA.sha256(codeunits(contents)),
+        ),
+    )
+end
+
 function _test_unicycler_error(
         thunk::Function,
         expected_message::AbstractString,
@@ -139,6 +153,7 @@ Test.@testset "common Unicycler wrapper contract" begin
                     outdir = output_dir,
                     threads = 3,
                     executor = Mycelia.LocalExecutor(),
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
                     environment_preparer = runner -> begin
                         Test.@test runner == abspath(conda_runner)
                         observe(:prepare)
@@ -152,6 +167,12 @@ Test.@testset "common Unicycler wrapper contract" begin
                     command_runner = command -> begin
                         observe(:runner)
                         Test.@test first(command.exec) == abspath(conda_runner)
+                        prefix_flag = findfirst(==("-p"), command.exec)
+                        Test.@test prefix_flag !== nothing
+                        Test.@test command.exec[something(prefix_flag) + 1] ==
+                                   Mycelia._unicycler_environment_prefix(
+                            conda_runner,
+                        )
                         Test.@test "/reads/short R1.fastq" in command.exec
                         Test.@test "/reads/short R2.fastq" in command.exec
                         mkpath(output_dir)
@@ -173,6 +194,8 @@ Test.@testset "common Unicycler wrapper contract" begin
             Test.@test !ispath(lock_path)
             Test.@test !ispath(output_lock_path)
             Test.@test result.provenance_status == "realized-local-exact"
+            Test.@test result.status == :completed
+            Test.@test isfile(result.contract)
             Test.@test result.toolchain == _test_unicycler_toolchain()
             Test.@test result.outdir == abspath(output_dir)
             Test.@test result.requested_outdir == output_dir
@@ -197,6 +220,7 @@ Test.@testset "common Unicycler wrapper contract" begin
                     short_2 = "/reads/r2.fastq",
                     long_reads = "/reads/long.fastq",
                     outdir = output_dir,
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
                     environment_preparer = runner -> nothing,
                     toolchain_inspector = runner -> _test_unicycler_toolchain(),
                     environment_lock_path = lock_path,
@@ -224,6 +248,7 @@ Test.@testset "common Unicycler wrapper contract" begin
                     short_2 = "/reads/r2.fastq",
                     long_reads = "/reads/long.fastq",
                     outdir = output_dir,
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
                     environment_preparer = runner -> nothing,
                     toolchain_inspector = runner -> popfirst!(snapshots),
                     environment_lock_path = lock_path,
@@ -246,7 +271,64 @@ Test.@testset "common Unicycler wrapper contract" begin
         end
     end
 
-    Test.@testset "reuse is unclaimed and nonlocal executors are rejected" begin
+    Test.@testset "assembly FASTA and GFA are semantic companions" begin
+        cases = (
+            (
+                name = "malformed-fasta",
+                fasta = "not FASTA\n",
+                gfa = "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                message = "not valid FASTA",
+            ),
+            (
+                name = "malformed-gfa",
+                fasta = ">contig\nACGT\n",
+                gfa = "not GFA\n",
+                message = "unknown GFA record type",
+            ),
+            (
+                name = "mismatched-companions",
+                fasta = ">contig\nACGT\n",
+                gfa = "H\tVN:Z:1.0\nS\tcontig\tTGCA\n",
+                message = "contain different sequences",
+            ),
+        )
+        mktempdir() do temp_dir
+            for case in cases
+                output_dir = joinpath(temp_dir, case.name)
+                _test_unicycler_error(
+                    () -> Mycelia._run_unicycler_with_contract(
+                        short_1 = "/reads/r1.fastq",
+                        short_2 = "/reads/r2.fastq",
+                        long_reads = "/reads/long.fastq",
+                        outdir = output_dir,
+                        input_fingerprinter =
+                            _test_unicycler_input_fingerprint,
+                        environment_preparer = runner -> nothing,
+                        toolchain_inspector = runner ->
+                            _test_unicycler_toolchain(),
+                        environment_lock_path = joinpath(
+                            temp_dir,
+                            "$(case.name).pid",
+                        ),
+                        command_runner = command -> begin
+                            mkpath(output_dir)
+                            write(
+                                joinpath(output_dir, "assembly.fasta"),
+                                case.fasta,
+                            )
+                            write(
+                                joinpath(output_dir, "assembly.gfa"),
+                                case.gfa,
+                            )
+                        end,
+                    ),
+                    case.message,
+                )
+            end
+        end
+    end
+
+    Test.@testset "reuse is contract-bound and nonlocal work is planned" begin
         mktempdir() do temp_dir
             lock_path = joinpath(temp_dir, "unicycler-environment.pid")
             reused_dir = joinpath(temp_dir, "reused")
@@ -256,27 +338,72 @@ Test.@testset "common Unicycler wrapper contract" begin
                 joinpath(reused_dir, "assembly.gfa"),
                 "H\tVN:Z:1.0\nS\told\tACGT\n",
             )
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = reused_dir,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command ->
+                        error("reuse unexpectedly executed"),
+                ),
+                "Refusing unbound legacy Unicycler output reuse",
+            )
+
+            contract_dir = joinpath(temp_dir, "contract-reuse")
+            fresh = Mycelia._run_unicycler_with_contract(
+                short_1 = "/reads/r1.fastq",
+                short_2 = "/reads/r2.fastq",
+                long_reads = "/reads/long.fastq",
+                outdir = contract_dir,
+                input_fingerprinter = _test_unicycler_input_fingerprint,
+                environment_preparer = runner -> nothing,
+                toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                environment_lock_path = lock_path,
+                command_runner = command -> begin
+                    mkpath(contract_dir)
+                    write(
+                        joinpath(contract_dir, "assembly.fasta"),
+                        ">bound\nACGT\n",
+                    )
+                    write(
+                        joinpath(contract_dir, "assembly.gfa"),
+                        "H\tVN:Z:1.0\nS\tbound\tACGT\n",
+                    )
+                end,
+            )
+            Test.@test fresh.status == :completed
+            Test.@test isfile(fresh.contract)
             reused = Mycelia._run_unicycler_with_contract(
                 short_1 = "/reads/r1.fastq",
                 short_2 = "/reads/r2.fastq",
                 long_reads = "/reads/long.fastq",
-                outdir = reused_dir,
+                outdir = contract_dir,
+                input_fingerprinter = _test_unicycler_input_fingerprint,
                 environment_preparer = runner -> nothing,
                 toolchain_inspector = runner -> _test_unicycler_toolchain(),
                 environment_lock_path = lock_path,
                 command_runner = command -> error("reuse unexpectedly executed"),
             )
-            Test.@test reused.toolchain === nothing
-            Test.@test reused.provenance_status == "unavailable-reused-output"
-            Test.@test reused.outdir == realpath(reused_dir)
-            Test.@test reused.requested_outdir == reused_dir
-            Test.@test reused.assembly == joinpath(
-                realpath(reused_dir),
-                "assembly.fasta",
-            )
-            Test.@test reused.graph == joinpath(
-                realpath(reused_dir),
-                "assembly.gfa",
+            Test.@test reused.status == :reused
+            Test.@test reused.toolchain == _test_unicycler_toolchain()
+            Test.@test reused.provenance_status == "reused-verified-contract"
+            Test.@test reused.contract == fresh.contract
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/different-long.fastq",
+                    outdir = contract_dir,
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                ),
+                "contract does not match this request",
             )
 
             incomplete_dir = joinpath(temp_dir, "incomplete-reuse")
@@ -340,23 +467,64 @@ Test.@testset "common Unicycler wrapper contract" begin
             )
 
             collector = Mycelia.CollectExecutor()
+            planned = Mycelia._run_unicycler_with_contract(
+                short_1 = "/reads/r1.fastq",
+                short_2 = "/reads/r2.fastq",
+                long_reads = "/reads/long.fastq",
+                outdir = joinpath(temp_dir, "submitted"),
+                executor = collector,
+                environment_preparer = runner ->
+                    error("unexpected preparation"),
+                toolchain_inspector = runner ->
+                    error("unexpected inspection"),
+                environment_lock_path = lock_path,
+            )
+            Test.@test planned.status == :planned
+            Test.@test planned.provenance_status == "planned-unrealized"
+            Test.@test planned.submission == 1
+            Test.@test length(collector.jobs) == 1
+            Test.@test occursin(" -p ", collector.jobs[1].cmd)
+            Test.@test planned.expected_artifacts.assembly == planned.assembly
+            Test.@test planned.expected_artifacts.graph == planned.graph
+            Test.@test planned.expected_artifacts.contract == planned.contract
+
+            dry_executor = Mycelia.DryRunExecutor()
+            dry_planned = redirect_stdout(devnull) do
+                Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = joinpath(temp_dir, "dry-run"),
+                    executor = dry_executor,
+                )
+            end
+            Test.@test dry_planned.status == :planned
+            Test.@test length(dry_executor.jobs) == 1
+            Test.@test dry_planned.submission.dry_run
+
+            slurm_dry_planned = redirect_stdout(devnull) do
+                Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = joinpath(temp_dir, "slurm-dry-run"),
+                    executor = Mycelia.SlurmExecutor(dry_run = true),
+                )
+            end
+            Test.@test slurm_dry_planned.status == :planned
+            Test.@test slurm_dry_planned.submission.dry_run
+
             _test_unicycler_error(
                 () -> Mycelia._run_unicycler_with_contract(
                     short_1 = "/reads/r1.fastq",
                     short_2 = "/reads/r2.fastq",
                     long_reads = "/reads/long.fastq",
-                    outdir = joinpath(temp_dir, "submitted"),
-                    executor = collector,
-                    environment_preparer = runner ->
-                        error("unexpected preparation"),
-                    toolchain_inspector = runner ->
-                        error("unexpected inspection"),
-                    environment_lock_path = lock_path,
+                    outdir = joinpath(temp_dir, "real-slurm"),
+                    executor = Mycelia.SlurmExecutor(dry_run = false),
                 ),
-                "supports only synchronous local execution",
+                "real nonlocal execution is disabled",
                 ArgumentError,
             )
-            Test.@test isempty(collector.jobs)
             Test.@test !ispath(lock_path)
         end
     end
@@ -376,13 +544,27 @@ Test.@testset "common Unicycler wrapper contract" begin
             script = replace(
                 raw"""#!/bin/sh
 if [ "$1" = "env" ] && [ "$2" = "list" ]; then
-    printf '%s\n' '__ENVIRONMENT_PREFIX__'
+    printf 'unicycler * %s\n' '__ENVIRONMENT_PREFIX__'
     exit 0
 fi
-if [ "$1" = "list" ] && [ "$2" = "-n" ] && [ "$3" = "unicycler" ]; then
+if [ "$1" = "list" ] && [ "$2" = "-p" ] && [ "$3" = "__ENVIRONMENT_PREFIX__" ]; then
     cat <<'MYCELIA_UNICYCLER_JSON'
 __PACKAGE_INVENTORY__
 MYCELIA_UNICYCLER_JSON
+    exit 0
+fi
+if [ "$1" = "run" ]; then
+    output_dir=''
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = "-o" ]; then
+            shift
+            output_dir="$1"
+        fi
+        shift
+    done
+    mkdir -p "$output_dir"
+    printf '>contig\nACGT\n' > "$output_dir/assembly.fasta"
+    printf 'H\tVN:Z:1.0\nS\tcontig\tACGT\n' > "$output_dir/assembly.gfa"
     exit 0
 fi
 exit 66
@@ -395,15 +577,10 @@ exit 66
 
             cd(temp_dir) do
                 requested_outdir = "relative-unicycler-output"
-                mkpath(requested_outdir)
-                write(
-                    joinpath(requested_outdir, "assembly.fasta"),
-                    ">contig\nACGT\n",
-                )
-                write(
-                    joinpath(requested_outdir, "assembly.gfa"),
-                    "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
-                )
+                mkpath("reads")
+                write("reads/r1.fastq", "@r1\nACGT\n+\nIIII\n")
+                write("reads/r2.fastq", "@r2\nACGT\n+\nIIII\n")
+                write("reads/long.fastq", "@long\nACGT\n+\nIIII\n")
                 result = withenv(
                     "MYCELIA_CONDA_RUNNER" => conda_runner,
                 ) do
@@ -412,6 +589,8 @@ exit 66
                         short_2 = "reads/r2.fastq",
                         long_reads = "reads/long.fastq",
                         outdir = requested_outdir,
+                        conda_runner = conda_runner,
+                        environment_prefix = environment_prefix,
                     )
                 end
                 canonical_outdir = realpath(requested_outdir)
@@ -425,9 +604,10 @@ exit 66
                     "assembly.gfa",
                 )
                 Test.@test result.requested_outdir == requested_outdir
-                Test.@test result.toolchain === nothing
-                Test.@test result.provenance_status ==
-                           "unavailable-reused-output"
+                Test.@test result.status == :completed
+                Test.@test result.toolchain == _test_unicycler_toolchain()
+                Test.@test result.provenance_status == "realized-local-exact"
+                Test.@test isfile(result.contract)
             end
         end
     end
@@ -507,6 +687,7 @@ exit 66
                 short_2 = "/reads/r2.fastq",
                 long_reads = "/reads/long.fastq",
                 outdir = alias_outdir,
+                input_fingerprinter = _test_unicycler_input_fingerprint,
                 environment_preparer = runner -> nothing,
                 toolchain_inspector = runner -> _test_unicycler_toolchain(),
                 environment_lock_path = joinpath(
@@ -561,6 +742,7 @@ exit 66
                     short_2 = "/reads/r2.fastq",
                     long_reads = "/reads/long.fastq",
                     outdir = retarget_alias_outdir,
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
                     environment_preparer = runner -> nothing,
                     toolchain_inspector = runner -> begin
                         inspection_count[] += 1

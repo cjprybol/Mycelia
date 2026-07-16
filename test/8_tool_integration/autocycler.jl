@@ -109,7 +109,7 @@ function _autocycler_test_runner!(step::NamedTuple)::Nothing
             )
         elseif endswith(output_path, ".fasta") ||
                endswith(output_path, ".fa")
-            write(output_path, ">authoritative_consensus\nTTAACCGG\n")
+            write(output_path, ">contig_1\nACGTACGT\n")
         elseif endswith(output_path, ".sam")
             write(output_path, "@HD\tVN:1.6\n")
         else
@@ -1468,6 +1468,7 @@ Test.@testset "Autocycler wrapper" begin
             cleanup_interrupt = _autocycler_test_error() do
                 Mycelia._cleanup_autocycler_polishing_intermediates!(
                     [intermediate];
+                    workflow_root = temp_dir,
                     remover = (_path::AbstractString) ->
                         throw(InterruptException()),
                 )
@@ -1482,10 +1483,11 @@ Test.@testset "Autocycler wrapper" begin
             )
             dangling_retained = Test.@test_logs (
                 :warn,
-                r"retained a polishing intermediate",
+                r"could not remove a polishing intermediate",
             ) min_level=Logging.Warn begin
                 Mycelia._cleanup_autocycler_polishing_intermediates!(
                     [dangling_intermediate];
+                    workflow_root = temp_dir,
                     remover = (_path::AbstractString) -> nothing,
                 )
             end
@@ -1558,13 +1560,38 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test isfile(result.graph)
             Test.@test isfile(result.assembly)
             Test.@test read(result.assembly, String) ==
-                       ">authoritative_consensus\nTTAACCGG\n"
+                       ">contig_1\nACGTACGT\n"
             Test.@test read(result.graph, String) ==
                        "H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\tdp:f:20.0\n"
             Test.@test result.outdir == abspath(joinpath(temp_dir, "autocycler-run"))
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
             Test.@test !ispath(output_lock_path)
+
+            mismatched_companion_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    fasta_path = only(filter(
+                        path -> endswith(path, ".fasta"),
+                        step.expected_outputs,
+                    ))
+                    write(fasta_path, ">contig_1\nTTAACCGG\n")
+                end
+                return nothing
+            end
+            mismatched_companion_error = _autocycler_test_error() do
+                Mycelia._run_autocycler(
+                    long_reads,
+                    joinpath(temp_dir, "mismatched-companion");
+                    dependency_checker = () -> expected_toolchain,
+                    runner = mismatched_companion_runner,
+                )
+            end
+            Test.@test mismatched_companion_error isa ErrorException
+            Test.@test occursin(
+                "contain different sequences",
+                sprint(showerror, mismatched_companion_error),
+            )
 
             mutation_checks = Ref(0)
             mutated_toolchain = _autocycler_test_toolchain(
@@ -2068,6 +2095,45 @@ Test.@testset "Autocycler wrapper" begin
                 "$(result.autocycler_assembly).$(extension)" for
                 extension in ("amb", "ann", "bwt", "pac", "sa")
             ])
+
+            external_polishing_dir = joinpath(temp_dir, "external-polishing")
+            mkpath(external_polishing_dir)
+            external_sentinel = joinpath(external_polishing_dir, "sentinel.txt")
+            write(external_sentinel, "preserve\n")
+            symlinked_polishing_out = joinpath(
+                temp_dir,
+                "symlinked-polishing-directory",
+            )
+            symlinked_polishing_runner = function (step::NamedTuple)
+                _autocycler_test_runner!(step)
+                if step.name == :autocycler
+                    symlink(
+                        external_polishing_dir,
+                        joinpath(
+                            symlinked_polishing_out,
+                            "short_read_polishing",
+                        ),
+                    )
+                end
+                return nothing
+            end
+            symlinked_polishing_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    symlinked_polishing_out;
+                    dependency_checker = _autocycler_test_toolchain,
+                    runner = symlinked_polishing_runner,
+                )
+            end
+            Test.@test symlinked_polishing_error isa ErrorException
+            Test.@test occursin(
+                "symbolic-link component",
+                sprint(showerror, symlinked_polishing_error),
+            )
+            Test.@test read(external_sentinel, String) == "preserve\n"
+            Test.@test readdir(external_polishing_dir) == ["sentinel.txt"]
 
             initial_toolchain = _autocycler_test_toolchain()
             assembly_mutation_toolchain = _autocycler_test_toolchain(

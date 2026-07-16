@@ -494,6 +494,22 @@ Test.@testset "Scheduler utility helpers" begin
             Mycelia.command_string(only(captured_commands)),
         )
 
+        accepted_with_nonzero_exit = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "accepted-nonzero.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = 1,
+                term_signal = 0,
+                stdout = "12346;cluster-a\n",
+                stderr = "client cleanup failed after controller response",
+            ),
+        )
+        Test.@test accepted_with_nonzero_exit.ok
+        Test.@test accepted_with_nonzero_exit.scheduler_acceptance == :accepted
+        Test.@test accepted_with_nonzero_exit.job_id == "12346"
+
         ambiguous = Mycelia.submit(
             job;
             dry_run = false,
@@ -510,11 +526,11 @@ Test.@testset "Scheduler utility helpers" begin
         Test.@test ambiguous.scheduler_acceptance == :unknown
         Test.@test ambiguous.job_id === nothing
 
-        rejected = Mycelia.submit(
+        nonzero_without_id = Mycelia.submit(
             job;
             dry_run = false,
             hold = true,
-            path = joinpath(temporary_root, "rejected.sbatch"),
+            path = joinpath(temporary_root, "nonzero-without-id.sbatch"),
             sbatch_runner = _command -> (;
                 exit_code = 1,
                 term_signal = 0,
@@ -522,11 +538,11 @@ Test.@testset "Scheduler utility helpers" begin
                 stderr = "invalid account",
             ),
         )
-        Test.@test !rejected.ok
-        Test.@test rejected.scheduler_acceptance == :rejected
+        Test.@test !nonzero_without_id.ok
+        Test.@test nonzero_without_id.scheduler_acceptance == :unknown
         Test.@test any(
             error -> occursin("invalid account", error),
-            rejected.errors,
+            nonzero_without_id.errors,
         )
 
         signalled = Mycelia.submit(

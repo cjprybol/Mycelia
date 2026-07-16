@@ -504,6 +504,47 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test command_count[] == 2
         end
 
+        Test.@testset "local output root identity rejects symlink swaps" begin
+            outdir = joinpath(temporary_root, "local-output-root-swap")
+            outputs = Mycelia._metamdbg_output_paths(outdir, 21)
+            output_lock_path = Mycelia._metamdbg_output_lock_path(outdir)
+            attack_target =
+                joinpath(temporary_root, "local-output-root-swap-target")
+            mkpath(attack_target)
+            command_count = Ref(0)
+            _test_metamdbg_error(
+                () -> Mycelia._run_metamdbg(;
+                    hifi_reads = valid_reads,
+                    outdir,
+                    dependency_checker = _test_metamdbg_toolchain,
+                    local_runner = function (_command::Cmd)
+                        command_count[] += 1
+                        rm(outdir; recursive = true)
+                        symlink(attack_target, outdir)
+                        write(
+                            joinpath(attack_target, "contigs.fasta"),
+                            ">escaped-contig\nACGT\n",
+                        )
+                        return nothing
+                    end,
+                ),
+                ErrorException,
+                r"output root.*changed",
+            )
+            Test.@test command_count[] == 1
+            Test.@test islink(outdir)
+            Test.@test isfile(joinpath(attack_target, "contigs.fasta"))
+            Test.@test !ispath(joinpath(
+                attack_target,
+                basename(outputs.contract_marker),
+            ))
+            Test.@test !ispath(joinpath(
+                attack_target,
+                basename(outputs.completion_marker),
+            ))
+            Test.@test !ispath(output_lock_path)
+        end
+
         Test.@testset "local input mutation never stamps stale contract" begin
             mutation_reads = joinpath(temporary_root, "local-mutation.fastq")
             write(mutation_reads, "@local-mutation\nACGT\n+\nIIII\n")
@@ -2082,6 +2123,66 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "P\\tpath-1\\tcontig-1+,contig-2-\\t4M\\n" *
                 "P\\tcomma-path\\tcontig,with,comma+\\t*\\n' " *
                 "> \"\$outdir/assemblyGraph_k21_4bps.gfa\""
+
+            swapped_runtime_outdir =
+                joinpath(temporary_root, "executor-output-root-swap")
+            swapped_runtime_outputs =
+                Mycelia._metamdbg_output_paths(swapped_runtime_outdir, 21)
+            swapped_runtime_lock =
+                Mycelia._metamdbg_output_lock_path(swapped_runtime_outdir)
+            swapped_runtime_target =
+                joinpath(temporary_root, "executor-output-root-swap-target")
+            mkpath(swapped_runtime_target)
+            swapped_runtime_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    swapped_runtime_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "executor-output-root-swap-fixture",
+                )
+            Mycelia._with_metamdbg_output_lock(swapped_runtime_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    swapped_runtime_reservation,
+                    swapped_runtime_outdir,
+                )
+            end
+            swapped_runtime_reservation =
+                Mycelia._bind_metamdbg_submission_job!(
+                    swapped_runtime_reservation,
+                    "900",
+                )
+            swapped_runtime_asm =
+                "rm -rf -- \"\$outdir\"; " *
+                "ln -s -- $(Base.shell_escape(swapped_runtime_target)) " *
+                "\"\$outdir\"; " *
+                "printf '>escaped-contig\\nACGT\\n' > " *
+                "\"\$outdir/contigs.fasta\""
+            swapped_runtime_script = Mycelia._metamdbg_executor_script(
+                swapped_runtime_asm,
+                fake_gfa,
+                swapped_runtime_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = swapped_runtime_reservation,
+            )
+            swapped_runtime_script_path =
+                joinpath(temporary_root, "executor-output-root-swap.sh")
+            write(swapped_runtime_script_path, swapped_runtime_script)
+            Test.@test !Base.withenv(
+                "SLURM_JOB_ID" => swapped_runtime_reservation.job_id,
+            ) do
+                success(`bash $(swapped_runtime_script_path)`)
+            end
+            Test.@test islink(swapped_runtime_outdir)
+            Test.@test isfile(joinpath(
+                swapped_runtime_target,
+                "contigs.fasta",
+            ))
+            Test.@test !ispath(swapped_runtime_outputs.contract_marker)
+            Test.@test !ispath(swapped_runtime_outputs.completion_marker)
+            Test.@test !ispath(swapped_runtime_reservation.path)
+            Test.@test !ispath(swapped_runtime_lock)
 
             mixed_k_runtime_outdir =
                 joinpath(temporary_root, "executor-mixed-graph-k")
@@ -3879,14 +3980,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             Test.@test thrown_reclaimed.recovery_reason == :not_submitted
 
-            failed_result_outdir = joinpath(
+            legacy_rejected_result_outdir = joinpath(
                 temporary_root,
-                "failed-result-submission-output",
+                "legacy-rejected-result-submission-output",
             )
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     hifi_reads = valid_reads,
-                    outdir = failed_result_outdir,
+                    outdir = legacy_rejected_result_outdir,
                     executor = Mycelia.SlurmExecutor(dry_run = false),
                     site = :scg,
                     dependency_checker = _test_metamdbg_toolchain,
@@ -3906,12 +4007,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                         ),
                 ),
                 ErrorException,
-                r"submission failed.*synthetic sbatch rejection",
+                r"ambiguous response.*synthetic sbatch rejection",
             )
-            Test.@test isempty(
-                Mycelia._metamdbg_submission_reservation_paths(
-                    failed_result_outdir,
+            legacy_rejected_reservation = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    legacy_rejected_result_outdir,
                 ),
+            )
+            Mycelia.reclaim_metamdbg_submission_reservation!(
+                legacy_rejected_reservation;
+                owner_token = legacy_rejected_reservation.owner_token,
+                confirm_not_submitted = true,
             )
 
             no_stdout_outdir = joinpath(

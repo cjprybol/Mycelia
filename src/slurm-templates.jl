@@ -43,6 +43,18 @@ Base.@kwdef struct JobSpecValidation
     warnings::Vector{String} = String[]
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Record a backend submission result.
+
+For `sbatch`, `scheduler_acceptance` is `:accepted` only when an exact parsable
+job id was returned. Once `sbatch` has been invoked, every result without that
+proof is `:unknown`; a client exit code or diagnostic text cannot prove that
+the controller rejected the request. `:not_attempted` and the legacy
+`:rejected` state are reserved for failures established before invoking the
+scheduler.
+"""
 Base.@kwdef struct SubmitResult
     ok::Bool = false
     dry_run::Bool = true
@@ -2035,27 +2047,15 @@ function submit(
         execution = _normalize_sbatch_execution(sbatch_runner(submit_cmd))
         output = execution.stdout
         job_id = _extract_sbatch_job_id(output)
-        scheduler_acceptance = if execution.term_signal != 0
-            :unknown
-        elseif execution.exit_code == 0 && job_id !== nothing
-            :accepted
-        elseif execution.exit_code == 0 ||
-               job_id !== nothing ||
-               !isempty(strip(output))
-            :unknown
-        else
-            :rejected
-        end
+        scheduler_acceptance = job_id === nothing ? :unknown : :accepted
         if scheduler_acceptance != :accepted
-            diagnostic = if scheduler_acceptance == :rejected
-                "sbatch explicitly rejected the submission with exit code " *
-                "$(execution.exit_code)"
-            elseif execution.term_signal != 0
+            diagnostic = if execution.term_signal != 0
                 "sbatch terminated by signal $(execution.term_signal); " *
                 "scheduler acceptance is unknown"
             else
                 "sbatch returned no single exact parsable '<digits>' or " *
-                "'<digits>;<cluster>' record; scheduler acceptance is unknown"
+                "'<digits>;<cluster>' record after exiting with code " *
+                "$(execution.exit_code); scheduler acceptance is unknown"
             end
             if !isempty(strip(execution.stderr))
                 diagnostic *= ": $(strip(execution.stderr))"

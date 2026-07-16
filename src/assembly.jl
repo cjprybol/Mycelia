@@ -1154,6 +1154,8 @@ end
 const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
 const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
 const _UNICYCLER_OUTPUT_LOCK_SUFFIX = ".mycelia-unicycler.lock"
+const _UNICYCLER_CONTRACT_FILENAME = ".mycelia-unicycler-contract.json"
+const _UNICYCLER_CONTRACT_SCHEMA = "mycelia-unicycler-run-contract-v1"
 
 function _normalize_unicycler_package_inventory(
         package_records::Any,
@@ -1223,13 +1225,19 @@ end
 
 function _unicycler_conda_package_inventory(;
         conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::AbstractString =
+            _unicycler_environment_prefix(conda_runner),
         command_reader::Function = command -> read(command, String),
 )::Vector{NamedTuple}
+    resolved_runner = _canonical_unicycler_conda_runner(conda_runner)
+    resolved_prefix = _canonical_unicycler_environment_prefix(
+        environment_prefix,
+    )
     command = Cmd(String[
-        String(conda_runner),
+        resolved_runner,
         "list",
-        "-n",
-        "unicycler",
+        "-p",
+        resolved_prefix,
         "--json",
     ])
     package_records = JSON.parse(command_reader(command))
@@ -1331,23 +1339,60 @@ function _canonical_unicycler_conda_runner(
     return ispath(candidate) ? realpath(candidate) : normpath(candidate)
 end
 
+function _canonical_unicycler_environment_prefix(
+        environment_prefix::AbstractString,
+)::String
+    normalized_prefix = normpath(abspath(String(environment_prefix)))
+    existing_ancestor = normalized_prefix
+    missing_components = String[]
+    while !ispath(existing_ancestor) && !islink(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    isdir(existing_ancestor) || throw(ArgumentError(
+        "Unicycler environment prefix has a non-directory existing " *
+        "ancestor: $(repr(existing_ancestor)).",
+    ))
+    canonical_ancestor = realpath(existing_ancestor)
+    return isempty(missing_components) ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, missing_components...))
+end
+
 function _unicycler_environment_prefix(
         conda_runner::AbstractString,
 )::String
     canonical_runner = _canonical_unicycler_conda_runner(conda_runner)
-    conda_root = normpath(joinpath(dirname(canonical_runner), ".."))
-    return joinpath(conda_root, "envs", "unicycler")
+    existing_prefix = _conda_env_prefix_from_runner(
+        "unicycler",
+        canonical_runner,
+    )
+    candidate = if existing_prefix === nothing
+        conda_root = normpath(joinpath(dirname(canonical_runner), ".."))
+        joinpath(conda_root, "envs", "unicycler")
+    else
+        String(existing_prefix)
+    end
+    return _canonical_unicycler_environment_prefix(candidate)
 end
 
 function _unicycler_environment_lock_path(
         conda_runner::AbstractString = _conda_runner(),
 )::String
     environment_prefix = _unicycler_environment_prefix(conda_runner)
-    conda_root = dirname(dirname(environment_prefix))
+    return _unicycler_environment_lock_path_from_prefix(environment_prefix)
+end
+
+function _unicycler_environment_lock_path_from_prefix(
+        environment_prefix::AbstractString,
+)::String
+    normalized_prefix = _canonical_unicycler_environment_prefix(
+        environment_prefix,
+    )
     return joinpath(
-        conda_root,
-        ".mycelia-locks",
-        "unicycler.pid",
+        dirname(normalized_prefix),
+        ".$(basename(normalized_prefix)).mycelia-unicycler.pid",
     )
 end
 
@@ -1453,6 +1498,7 @@ end
 
 function _unicycler_command(;
         conda_runner::AbstractString,
+        environment_prefix::AbstractString,
         short_1::AbstractString,
         short_2::Union{Nothing, AbstractString},
         long_reads::AbstractString,
@@ -1461,12 +1507,16 @@ function _unicycler_command(;
         spades_options::Union{Nothing, String},
         kmers::Union{Nothing, String},
 )::Cmd
+    resolved_runner = _canonical_unicycler_conda_runner(conda_runner)
+    resolved_prefix = _canonical_unicycler_environment_prefix(
+        environment_prefix,
+    )
     arguments = String[
-        String(conda_runner),
+        resolved_runner,
         "run",
         "--live-stream",
-        "-n",
-        "unicycler",
+        "-p",
+        resolved_prefix,
         "unicycler",
     ]
     if isnothing(short_2)
@@ -1490,14 +1540,13 @@ end
 
 function _prepare_unicycler_environment(
         conda_runner::AbstractString,
+        environment_prefix::AbstractString,
 )::Nothing
     resolved_runner = _canonical_unicycler_conda_runner(conda_runner)
-    environment_prefix = _unicycler_environment_prefix(resolved_runner)
-    environment_names = _conda_environment_names(
-        resolved_runner,
-        dirname(environment_prefix),
+    resolved_prefix = _canonical_unicycler_environment_prefix(
+        environment_prefix,
     )
-    if !("unicycler" in environment_names)
+    if !isdir(joinpath(resolved_prefix, "conda-meta"))
         run(Cmd([
             resolved_runner,
             "create",
@@ -1508,8 +1557,8 @@ function _prepare_unicycler_environment(
             "-c",
             "defaults",
             "--strict-channel-priority",
-            "-n",
-            "unicycler",
+            "-p",
+            resolved_prefix,
             "unicycler",
             "-y",
         ]))
@@ -1551,6 +1600,289 @@ function _require_unicycler_artifact(
     return normalized_path
 end
 
+function _unicycler_sha256(path::AbstractString)::String
+    return open(path, "r") do input
+        SHA.bytes2hex(SHA.sha256(input))
+    end
+end
+
+function _unicycler_input_fingerprint(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, Any}
+    normalized_path = normpath(abspath(String(path)))
+    isfile(normalized_path) || throw(ArgumentError(
+        "Unicycler $(label) is not a regular file: $(repr(normalized_path)).",
+    ))
+    canonical_path = realpath(normalized_path)
+    isfile(canonical_path) && filesize(canonical_path) > 0 || throw(
+        ArgumentError(
+            "Unicycler $(label) must be a non-empty regular file: " *
+            repr(canonical_path),
+        ),
+    )
+    return Dict{String, Any}(
+        "canonical_path" => canonical_path,
+        "size_bytes" => filesize(canonical_path),
+        "sha256" => _unicycler_sha256(canonical_path),
+    )
+end
+
+function _unicycler_input_fingerprints(
+        short_1::AbstractString,
+        short_2::Union{Nothing, AbstractString},
+        long_reads::AbstractString;
+        fingerprinter::Function = _unicycler_input_fingerprint,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "short_1" => fingerprinter(short_1, "short-read input R1"),
+        "short_2" => short_2 === nothing ? nothing :
+                     fingerprinter(short_2, "short-read input R2"),
+        "long_reads" => fingerprinter(long_reads, "long-read input"),
+    )
+end
+
+function _unicycler_fasta_sequences(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    records = Dict{String, String}()
+    reader = try
+        Mycelia.open_fastx(path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "Unicycler $(label) is not valid FASTA: $(repr(path)). Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    try
+        for record in reader
+            record isa FASTX.FASTA.Record || error(
+                "Unicycler $(label) is not valid FASTA: $(repr(path)).",
+            )
+            identifier = strip(String(FASTX.identifier(record)))
+            isempty(identifier) && error(
+                "Unicycler $(label) contains an empty FASTA identifier.",
+            )
+            haskey(records, identifier) && error(
+                "Unicycler $(label) contains duplicate FASTA identifier " *
+                repr(identifier),
+            )
+            sequence = uppercase(String(FASTX.sequence(record)))
+            isempty(sequence) && error(
+                "Unicycler $(label) contains an empty FASTA sequence for " *
+                repr(identifier),
+            )
+            occursin(r"^[ACGTRYSWKMBDHVN]+$", sequence) || error(
+                "Unicycler $(label) contains invalid DNA for FASTA record " *
+                repr(identifier),
+            )
+            records[identifier] = sequence
+        end
+    catch caught
+        caught isa InterruptException && rethrow()
+        if caught isa ErrorException && startswith(caught.msg, "Unicycler ")
+            rethrow()
+        end
+        error(
+            "Unicycler $(label) is not valid FASTA: $(repr(path)). Cause: " *
+            sprint(showerror, caught),
+        )
+    finally
+        close(reader)
+    end
+    isempty(records) && error(
+        "Unicycler $(label) contains no FASTA records: $(repr(path)).",
+    )
+    return records
+end
+
+function _unicycler_gfa_segment_sequences(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    _require_valid_metamdbg_gfa(path, "Unicycler $(label)")
+    segments = Dict{String, String}()
+    for (line_number, line) in enumerate(eachline(path))
+        isempty(line) && continue
+        startswith(line, "#") && continue
+        fields = split(line, '\t'; keepempty = true)
+        isempty(fields) && continue
+        fields[1] == "S" || continue
+        length(fields) >= 3 || error(
+            "Unicycler $(label) has a malformed segment at line " *
+            "$(line_number): $(repr(path)).",
+        )
+        identifier = strip(fields[2])
+        isempty(identifier) && error(
+            "Unicycler $(label) has an empty segment identifier at line " *
+            "$(line_number).",
+        )
+        haskey(segments, identifier) && error(
+            "Unicycler $(label) contains duplicate segment identifier " *
+            repr(identifier),
+        )
+        sequence = uppercase(strip(fields[3]))
+        (isempty(sequence) || sequence == "*") && error(
+            "Unicycler $(label) segment $(repr(identifier)) has no sequence.",
+        )
+        occursin(r"^[ACGTRYSWKMBDHVN]+$", sequence) || error(
+            "Unicycler $(label) segment $(repr(identifier)) contains invalid DNA.",
+        )
+        segments[identifier] = sequence
+    end
+    isempty(segments) && error(
+        "Unicycler $(label) contains no GFA segment records: $(repr(path)).",
+    )
+    return segments
+end
+
+function _require_valid_unicycler_artifacts(
+        assembly_path::AbstractString,
+        graph_path::AbstractString,
+        outdir::AbstractString,
+)::NamedTuple
+    assembly = _require_unicycler_artifact(
+        assembly_path,
+        "assembly FASTA",
+        outdir,
+    )
+    graph = _require_unicycler_artifact(
+        graph_path,
+        "assembly GFA",
+        outdir,
+    )
+    fasta_sequences = _unicycler_fasta_sequences(
+        assembly,
+        "assembly FASTA",
+    )
+    gfa_sequences = _unicycler_gfa_segment_sequences(
+        graph,
+        "assembly GFA",
+    )
+    fasta_identifiers = Set(keys(fasta_sequences))
+    gfa_identifiers = Set(keys(gfa_sequences))
+    fasta_identifiers == gfa_identifiers || error(
+        "Unicycler assembly FASTA and GFA contain different contig " *
+        "identifiers: FASTA-only=" *
+        "$(repr(sort!(collect(setdiff(fasta_identifiers, gfa_identifiers))))), " *
+        "GFA-only=" *
+        "$(repr(sort!(collect(setdiff(gfa_identifiers, fasta_identifiers))))).",
+    )
+    mismatched = sort!(String[
+        identifier for identifier in fasta_identifiers if
+        fasta_sequences[identifier] != gfa_sequences[identifier]
+    ])
+    isempty(mismatched) || error(
+        "Unicycler assembly FASTA and GFA contain different sequences for " *
+        "contigs $(repr(mismatched)).",
+    )
+    return (; assembly, graph)
+end
+
+function _unicycler_artifact_fingerprint(path::AbstractString)::Dict{String, Any}
+    normalized_path = normpath(abspath(String(path)))
+    return Dict{String, Any}(
+        "canonical_path" => realpath(normalized_path),
+        "size_bytes" => filesize(normalized_path),
+        "sha256" => _unicycler_sha256(normalized_path),
+    )
+end
+
+function _unicycler_run_contract(
+        input_fingerprints::AbstractDict,
+        threads::Int,
+        spades_options::Union{Nothing, String},
+        kmers::Union{Nothing, String},
+        environment_prefix::AbstractString,
+        toolchain::AbstractDict,
+        assembly::AbstractString,
+        graph::AbstractString,
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "schema" => _UNICYCLER_CONTRACT_SCHEMA,
+        "inputs" => deepcopy(input_fingerprints),
+        "parameters" => Dict{String, Any}(
+            "threads" => threads,
+            "spades_options" => spades_options,
+            "kmers" => kmers,
+            "environment_prefix" => String(environment_prefix),
+        ),
+        "toolchain" => deepcopy(toolchain),
+        "artifacts" => Dict{String, Any}(
+            "assembly" => _unicycler_artifact_fingerprint(assembly),
+            "graph" => _unicycler_artifact_fingerprint(graph),
+        ),
+    )
+end
+
+function _write_unicycler_run_contract(
+        outdir::AbstractString,
+        contract::AbstractDict,
+)::String
+    normalized_outdir = _require_exact_unicycler_output_dir(outdir)
+    marker = joinpath(normalized_outdir, _UNICYCLER_CONTRACT_FILENAME)
+    (ispath(marker) || islink(marker)) && error(
+        "Refusing to overwrite an existing Unicycler run-contract marker: " *
+        repr(marker),
+    )
+    temporary_path, temporary_io = mktemp(normalized_outdir)
+    try
+        JSON.print(temporary_io, contract, 2)
+        write(temporary_io, '\n')
+        flush(temporary_io)
+        close(temporary_io)
+        mv(temporary_path, marker)
+    finally
+        isopen(temporary_io) && close(temporary_io)
+        (ispath(temporary_path) || islink(temporary_path)) &&
+            rm(temporary_path; force = true)
+    end
+    _require_unicycler_artifact(marker, "run-contract marker", normalized_outdir)
+    return marker
+end
+
+function _require_matching_unicycler_run_contract(
+        outdir::AbstractString,
+        expected_contract::AbstractDict,
+)::String
+    marker = joinpath(
+        _require_exact_unicycler_output_dir(outdir),
+        _UNICYCLER_CONTRACT_FILENAME,
+    )
+    (ispath(marker) || islink(marker)) || error(
+        "Refusing unbound legacy Unicycler output reuse: missing durable " *
+        "run-contract marker $(repr(marker)).",
+    )
+    _require_unicycler_artifact(marker, "run-contract marker", outdir)
+    observed_contract = try
+        JSON.parsefile(marker)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "Unicycler run-contract marker is not valid JSON: " *
+            "$(repr(marker)). Cause: $(sprint(showerror, caught))",
+        )
+    end
+    observed_contract == expected_contract || error(
+        "Refusing Unicycler output reuse because its durable input, parameter, " *
+        "toolchain, or artifact contract does not match this request.",
+    )
+    return marker
+end
+
+function _invoke_unicycler_environment_callback(
+        callback::Function,
+        conda_runner::AbstractString,
+        environment_prefix::AbstractString,
+)::Any
+    if applicable(callback, conda_runner, environment_prefix)
+        return callback(conda_runner, environment_prefix)
+    end
+    return callback(conda_runner)
+end
+
 function _run_unicycler_with_contract(;
         short_1::AbstractString,
         short_2::Union{Nothing, AbstractString} = nothing,
@@ -1569,14 +1901,17 @@ function _run_unicycler_with_contract(;
         qos::Union{Nothing, String} = nothing,
         mail_user::Union{Nothing, String} = nothing,
         conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
         environment_preparer::Function = _prepare_unicycler_environment,
-        toolchain_inspector::Function = runner ->
+        toolchain_inspector::Function = (runner, prefix) ->
             _unicycler_toolchain_provenance(
                 inventory_reader = () ->
                     _unicycler_conda_package_inventory(
                         conda_runner = runner,
+                        environment_prefix = prefix,
                     ),
             ),
+        input_fingerprinter::Function = _unicycler_input_fingerprint,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_unicycler_environment_lock,
         output_lock_runner::Function = _with_unicycler_output_lock,
@@ -1589,13 +1924,75 @@ function _run_unicycler_with_contract(;
     normalized_outdir = abspath(String(outdir))
     planned_outdir = _canonical_planned_unicycler_output_path(normalized_outdir)
     resolved_conda_runner = _canonical_unicycler_conda_runner(conda_runner)
-    resolved_executor = resolve_executor(executor)
-    resolved_executor isa LocalExecutor || throw(ArgumentError(
-        "Unicycler exact toolchain provenance supports only synchronous " *
-        "local execution; refusing $(typeof(resolved_executor)).",
+    resolved_environment_prefix = environment_prefix === nothing ?
+                                  _unicycler_environment_prefix(
+        resolved_conda_runner,
+    ) : _canonical_unicycler_environment_prefix(environment_prefix)
+    threads > 0 || throw(ArgumentError(
+        "Unicycler threads must be positive, got $(threads).",
     ))
+    resolved_executor = resolve_executor(executor)
+    assembly = joinpath(planned_outdir, "assembly.fasta")
+    graph = joinpath(planned_outdir, "assembly.gfa")
+    contract_marker = joinpath(planned_outdir, _UNICYCLER_CONTRACT_FILENAME)
+    command = _unicycler_command(;
+        conda_runner = resolved_conda_runner,
+        environment_prefix = resolved_environment_prefix,
+        short_1,
+        short_2,
+        long_reads,
+        outdir = planned_outdir,
+        threads,
+        spades_options,
+        kmers,
+    )
+    if !(resolved_executor isa LocalExecutor)
+        plannable = resolved_executor isa CollectExecutor ||
+                    resolved_executor isa DryRunExecutor ||
+                    (resolved_executor isa SlurmExecutor &&
+                     resolved_executor.dry_run)
+        plannable || throw(ArgumentError(
+            "Unicycler real nonlocal execution is disabled until the remote " *
+            "runtime can hold its output and environment locks. Use " *
+            "CollectExecutor, DryRunExecutor, or SlurmExecutor(dry_run=true) " *
+            "to obtain an explicit plan.",
+        ))
+        job = Mycelia.build_execution_job(
+            cmd = Mycelia.command_string(command),
+            job_name = job_name,
+            site = site,
+            time_limit = time_limit,
+            cpus_per_task = threads,
+            mem_gb = mem_gb,
+            partition = partition,
+            qos = qos,
+            account = account,
+            mail_user = mail_user,
+        )
+        submission = Mycelia.execute(job, resolved_executor)
+        return (;
+            status = :planned,
+            submission,
+            outdir = planned_outdir,
+            assembly,
+            graph,
+            contract = contract_marker,
+            expected_artifacts = (;
+                assembly,
+                graph,
+                contract = contract_marker,
+            ),
+            requested_outdir = reported_outdir,
+            toolchain = nothing,
+            provenance_status = "planned-unrealized",
+            conda_runner = resolved_conda_runner,
+            environment_prefix = resolved_environment_prefix,
+        )
+    end
     lock_path = environment_lock_path === nothing ?
-                _unicycler_environment_lock_path(resolved_conda_runner) :
+                _unicycler_environment_lock_path_from_prefix(
+        resolved_environment_prefix,
+    ) :
                 String(environment_lock_path)
     return output_lock_runner(planned_outdir) do reserved_outdir
         reserved_outdir = _require_unchanged_unicycler_output_plan(
@@ -1603,40 +2000,79 @@ function _run_unicycler_with_contract(;
             reserved_outdir,
         )
         return environment_lock_runner(lock_path) do
-            environment_preparer(resolved_conda_runner)
+            _invoke_unicycler_environment_callback(
+                environment_preparer,
+                resolved_conda_runner,
+                resolved_environment_prefix,
+            )
             toolchain_before = _require_unicycler_toolchain_provenance(
-                toolchain_inspector(resolved_conda_runner),
+                _invoke_unicycler_environment_callback(
+                    toolchain_inspector,
+                    resolved_conda_runner,
+                    resolved_environment_prefix,
+                ),
             )
             assembly = joinpath(reserved_outdir, "assembly.fasta")
             graph = joinpath(reserved_outdir, "assembly.gfa")
+            contract_marker = joinpath(
+                reserved_outdir,
+                _UNICYCLER_CONTRACT_FILENAME,
+            )
             if ispath(assembly) || islink(assembly) ||
-               ispath(graph) || islink(graph)
-                assembly = _require_unicycler_artifact(
+               ispath(graph) || islink(graph) ||
+               ispath(contract_marker) || islink(contract_marker)
+                validated_artifacts = _require_valid_unicycler_artifacts(
                     assembly,
-                    "assembly FASTA",
+                    graph,
                     reserved_outdir,
                 )
-                graph = _require_unicycler_artifact(
+                (ispath(contract_marker) || islink(contract_marker)) || error(
+                    "Refusing unbound legacy Unicycler output reuse: missing " *
+                    "durable run-contract marker $(repr(contract_marker)).",
+                )
+                assembly = validated_artifacts.assembly
+                graph = validated_artifacts.graph
+                input_fingerprints = _unicycler_input_fingerprints(
+                    short_1,
+                    short_2,
+                    long_reads;
+                    fingerprinter = input_fingerprinter,
+                )
+                expected_contract = _unicycler_run_contract(
+                    input_fingerprints,
+                    threads,
+                    spades_options,
+                    kmers,
+                    resolved_environment_prefix,
+                    toolchain_before,
+                    assembly,
                     graph,
-                    "assembly GFA",
+                )
+                contract_marker = _require_matching_unicycler_run_contract(
                     reserved_outdir,
+                    expected_contract,
                 )
                 _require_unchanged_unicycler_output_plan(
                     normalized_outdir,
                     reserved_outdir,
                 )
                 return (;
+                    status = :reused,
                     outdir = reserved_outdir,
                     assembly,
                     graph,
+                    contract = contract_marker,
                     requested_outdir = reported_outdir,
-                    toolchain = nothing,
-                    provenance_status = "unavailable-reused-output",
+                    toolchain = toolchain_before,
+                    provenance_status = "reused-verified-contract",
+                    conda_runner = resolved_conda_runner,
+                    environment_prefix = resolved_environment_prefix,
                 )
             end
 
             command = _unicycler_command(;
                 conda_runner = resolved_conda_runner,
+                environment_prefix = resolved_environment_prefix,
                 short_1,
                 short_2,
                 long_reads,
@@ -1668,23 +2104,30 @@ function _run_unicycler_with_contract(;
                     ))
                 end
             end
+            input_fingerprints = _unicycler_input_fingerprints(
+                short_1,
+                short_2,
+                long_reads;
+                fingerprinter = input_fingerprinter,
+            )
             command_runner(command)
             _require_unchanged_unicycler_output_plan(
                 normalized_outdir,
                 reserved_outdir,
             )
-            assembly = _require_unicycler_artifact(
+            validated_artifacts = _require_valid_unicycler_artifacts(
                 assembly,
-                "assembly FASTA",
-                reserved_outdir,
-            )
-            graph = _require_unicycler_artifact(
                 graph,
-                "assembly GFA",
                 reserved_outdir,
             )
+            assembly = validated_artifacts.assembly
+            graph = validated_artifacts.graph
             toolchain_after = _require_unicycler_toolchain_provenance(
-                toolchain_inspector(resolved_conda_runner),
+                _invoke_unicycler_environment_callback(
+                    toolchain_inspector,
+                    resolved_conda_runner,
+                    resolved_environment_prefix,
+                ),
             )
             toolchain_before == toolchain_after || error(
                 "Unicycler realized Conda package inventory changed while the " *
@@ -1694,23 +2137,56 @@ function _run_unicycler_with_contract(;
                 normalized_outdir,
                 reserved_outdir,
             )
-            assembly = _require_unicycler_artifact(
+            validated_artifacts = _require_valid_unicycler_artifacts(
                 assembly,
-                "assembly FASTA",
+                graph,
                 reserved_outdir,
             )
-            graph = _require_unicycler_artifact(
+            assembly = validated_artifacts.assembly
+            graph = validated_artifacts.graph
+            observed_inputs = _unicycler_input_fingerprints(
+                short_1,
+                short_2,
+                long_reads;
+                fingerprinter = input_fingerprinter,
+            )
+            observed_inputs == input_fingerprints || error(
+                "Unicycler input content changed while the assembler ran; " *
+                "refusing a stale run contract.",
+            )
+            contract = _unicycler_run_contract(
+                input_fingerprints,
+                threads,
+                spades_options,
+                kmers,
+                resolved_environment_prefix,
+                toolchain_after,
+                assembly,
                 graph,
-                "assembly GFA",
+            )
+            contract_marker = _write_unicycler_run_contract(
                 reserved_outdir,
+                contract,
+            )
+            _require_unchanged_unicycler_output_plan(
+                normalized_outdir,
+                reserved_outdir,
+            )
+            _require_matching_unicycler_run_contract(
+                reserved_outdir,
+                contract,
             )
             return (;
+                status = :completed,
                 outdir = reserved_outdir,
                 assembly,
                 graph,
+                contract = contract_marker,
                 requested_outdir = reported_outdir,
                 toolchain = toolchain_after,
                 provenance_status = "realized-local-exact",
+                conda_runner = resolved_conda_runner,
+                environment_prefix = resolved_environment_prefix,
             )
         end
     end
@@ -1729,26 +2205,39 @@ Run hybrid assembly combining short and long reads using Unicycler.
 - `threads::Int`: Number of threads to use (default: `get_default_threads()`)
 - `spades_options::Union{Nothing,String}`: Extra SPAdes options (default: `nothing`)
 - `kmers::Union{Nothing,String}`: Explicit SPAdes k-mers (e.g., "21,33,55")
+- `conda_runner::AbstractString`: Conda-compatible executable used for every
+  environment operation.
+- `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
+  used for provisioning, inventory, execution, and lifecycle locking.
 
 # Returns
 Named tuple containing:
+- `status::Symbol`: `:completed`, `:reused`, or `:planned`
 - `outdir::String`: Canonical physical path to the validated output directory
 - `assembly::String`: Path to final assembly file
 - `graph::String`: Path to assembly graph in GFA format
+- `contract::String`: Durable contract marker path, realized for completed or
+  reused work and expected for planned work
 - `requested_outdir::String`: Caller-supplied output spelling retained for audit
 - `toolchain::Union{Nothing,Dict}`: Exact realized package inventory for a
-  fresh local run; `nothing` for reused work
+  completed or contract-verified reused run; `nothing` for a plan
 - `provenance_status::String`: Why exact toolchain provenance is available or
   intentionally unavailable
+- Planned results additionally contain `submission` and `expected_artifacts`.
 
 # Details
-- Automatically creates and uses a conda environment with unicycler
+- Automatically creates and uses one explicit prefix-addressed Conda
+  environment with Unicycler.
 - Combines short read accuracy with long read scaffolding
-- Reuses output only when both the assembly FASTA and GFA are regular,
-  non-symlink, non-empty files. Reused outputs report no realized toolchain
-  provenance; partial artifacts fail loudly. Fresh local runs report a locked
-  before/after package inventory. Nonlocal executors are rejected because their
-  execution would outlive the mutable-environment lock.
+- Reuses output only when the semantic FASTA/GFA companion pair and an atomic
+  durable contract exactly match canonical input paths, sizes, SHA-256 values,
+  command-relevant parameters, realized toolchain, and artifact hashes. Legacy
+  unbound output fails loudly. Fresh local runs report a locked before/after
+  package inventory.
+- `CollectExecutor`, `DryRunExecutor`, and `SlurmExecutor(dry_run=true)` return
+  `status=:planned`, the submission result, and expected artifact paths without
+  pretending that execution completed. Real nonlocal submission remains
+  disabled until the remote runtime can hold the same lifecycle locks.
 - Rejects an incomplete non-empty output directory instead of deleting
   caller-owned contents. An empty output directory may be removed because
   Unicycler requires the output path to be absent.
@@ -1774,7 +2263,10 @@ function run_unicycler(;
         account::Union{Nothing, String} = nothing,
         mem_gb::Union{Nothing, Real} = nothing,
         qos::Union{Nothing, String} = nothing,
-        mail_user::Union{Nothing, String} = nothing)::NamedTuple
+        mail_user::Union{Nothing, String} = nothing,
+        conda_runner::AbstractString = _conda_runner(),
+        environment_prefix::Union{Nothing, AbstractString} = nothing,
+)::NamedTuple
     return _run_unicycler_with_contract(;
         short_1,
         short_2,
@@ -1792,6 +2284,8 @@ function run_unicycler(;
         mem_gb,
         qos,
         mail_user,
+        conda_runner,
+        environment_prefix,
     )
 end
 
@@ -4021,6 +4515,126 @@ function _metamdbg_canonical_output_path(outdir::AbstractString)::String
     return canonical_path
 end
 
+function _metamdbg_output_root_identity(
+        outdir::AbstractString,
+)::NamedTuple
+    normalized_outdir = normpath(abspath(String(outdir)))
+    canonical_outdir = _metamdbg_canonical_output_path(normalized_outdir)
+    canonical_outdir == normalized_outdir || error(
+        "metaMDBG output root is not bound to its canonical physical " *
+        "location: $(normalized_outdir) resolves to $(canonical_outdir).",
+    )
+    isdir(canonical_outdir) && !islink(canonical_outdir) || error(
+        "metaMDBG output root must be a regular directory before binding its " *
+        "physical identity: $(canonical_outdir).",
+    )
+    metadata = stat(canonical_outdir)
+    return (;
+        canonical_outdir,
+        device = metadata.device,
+        inode = metadata.inode,
+    )
+end
+
+function _require_unchanged_metamdbg_output_root(
+        identity::NamedTuple,
+        outdir::AbstractString,
+)::String
+    expected_outdir = String(identity.canonical_outdir)
+    normalized_outdir = normpath(abspath(String(outdir)))
+    normalized_outdir == expected_outdir || error(
+        "metaMDBG output root path changed after its physical identity was " *
+        "bound: expected $(expected_outdir), observed $(normalized_outdir).",
+    )
+    observed_outdir = try
+        _metamdbg_canonical_output_path(normalized_outdir)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "metaMDBG output root physical identity changed after it was " *
+            "bound: $(normalized_outdir). Cause: $(sprint(showerror, caught))",
+        )
+    end
+    observed_outdir == expected_outdir || error(
+        "metaMDBG output root canonical physical location changed after it " *
+        "was bound: expected $(expected_outdir), observed " *
+        "$(observed_outdir).",
+    )
+    isdir(observed_outdir) && !islink(observed_outdir) || error(
+        "metaMDBG output root is no longer a regular directory: " *
+        "$(observed_outdir).",
+    )
+    metadata = stat(observed_outdir)
+    if metadata.device != identity.device || metadata.inode != identity.inode
+        error(
+            "metaMDBG output root physical identity changed after it was " *
+            "bound: $(observed_outdir).",
+        )
+    end
+    return observed_outdir
+end
+
+function _with_metamdbg_output_root_guard(
+        action::Function,
+        output_root_identity::NamedTuple,
+        operation::AbstractString,
+)::Any
+    _require_unchanged_metamdbg_output_root(
+        output_root_identity,
+        output_root_identity.canonical_outdir,
+    )
+    result = try
+        action()
+    catch primary_error
+        try
+            _require_unchanged_metamdbg_output_root(
+                output_root_identity,
+                output_root_identity.canonical_outdir,
+            )
+        catch identity_error
+            identity_error isa InterruptException && rethrow()
+            error(
+                "metaMDBG output root changed while $(operation) failed. " *
+                "Operation cause: $(sprint(showerror, primary_error)). " *
+                "Identity cause: $(sprint(showerror, identity_error))",
+            )
+        end
+        Base.rethrow()
+    end
+    _require_unchanged_metamdbg_output_root(
+        output_root_identity,
+        output_root_identity.canonical_outdir,
+    )
+    return result
+end
+
+function _require_metamdbg_artifact_containment(
+        path::AbstractString,
+        label::AbstractString,
+        output_root_identity::NamedTuple,
+)::String
+    canonical_outdir = _require_unchanged_metamdbg_output_root(
+        output_root_identity,
+        output_root_identity.canonical_outdir,
+    )
+    normalized_path = normpath(abspath(String(path)))
+    canonical_path = try
+        realpath(normalized_path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "$(label) cannot be resolved within the bound metaMDBG output " *
+            "root: $(normalized_path). Cause: $(sprint(showerror, caught))",
+        )
+    end
+    dirname(canonical_path) == canonical_outdir || error(
+        "$(label) escaped the bound metaMDBG output root: " *
+        "$(canonical_path) is not directly contained by " *
+        "$(canonical_outdir).",
+    )
+    return canonical_path
+end
+
 function _metamdbg_output_lock_path(outdir::AbstractString)::String
     normalized_outdir = _metamdbg_canonical_output_path(outdir)
     return joinpath(
@@ -5772,7 +6386,15 @@ end
 function _require_metamdbg_artifacts!(
         outputs::NamedTuple,
         graph_k::Int,
+        ;
+        output_root_identity::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
+    if output_root_identity !== nothing
+        _require_unchanged_metamdbg_output_root(
+            output_root_identity,
+            outputs.outdir,
+        )
+    end
     contigs = _normalize_metamdbg_contigs!(outputs)
     contigs === nothing && error(
         "metaMDBG produced neither contigs.fasta.gz nor contigs.fasta in " *
@@ -5783,6 +6405,22 @@ function _require_metamdbg_artifacts!(
         "metaMDBG produced no nonempty assemblyGraph_k$(graph_k)_*bps.gfa " *
         "artifact in $(outputs.outdir).",
     )
+    if output_root_identity !== nothing
+        _require_unchanged_metamdbg_output_root(
+            output_root_identity,
+            outputs.outdir,
+        )
+        _require_metamdbg_artifact_containment(
+            contigs,
+            "metaMDBG contigs artifact",
+            output_root_identity,
+        )
+        _require_metamdbg_artifact_containment(
+            graph,
+            "metaMDBG graph artifact",
+            output_root_identity,
+        )
+    end
     return (; outdir = outputs.outdir, contigs, graph)
 end
 
@@ -6065,6 +6703,7 @@ function _metamdbg_executor_script(
     input_declaration_lines = String[]
     input_validation_function_lines = String[
         "validate_metamdbg_inputs() {",
+        "  require_unchanged_metamdbg_output_root",
     ]
     for (input_index, input) in enumerate(input_contract.contract.inputs)
         input_path_variable = "input_path_$(input_index)"
@@ -6086,7 +6725,10 @@ function _metamdbg_executor_script(
             "fi",
         ])
     end
-    push!(input_validation_function_lines, "}")
+    append!(input_validation_function_lines, String[
+        "  require_unchanged_metamdbg_output_root",
+        "}",
+    ])
     staged_input_declaration_lines = String[]
     staged_input_creation_lines = String[
         "staged_inputs_dir=\"\$secure_tmpdir/inputs\"",
@@ -6094,6 +6736,7 @@ function _metamdbg_executor_script(
     ]
     staged_input_validation_lines = String[
         "validate_staged_metamdbg_inputs() {",
+        "  require_unchanged_metamdbg_output_root",
     ]
     staged_input_references = String[]
     for (input_index, input) in enumerate(input_contract.contract.inputs)
@@ -6128,7 +6771,10 @@ function _metamdbg_executor_script(
         ])
         push!(staged_input_references, "\"\$$(staged_path_variable)\"")
     end
-    push!(staged_input_validation_lines, "}")
+    append!(staged_input_validation_lines, String[
+        "  require_unchanged_metamdbg_output_root",
+        "}",
+    ])
     runtime_asm_cmd = if threads === nothing
         asm_cmd
     else
@@ -6253,6 +6899,7 @@ function _metamdbg_executor_script(
         reservation_declaration_lines...,
         input_declaration_lines...,
         "secure_tmpdir=",
+        "bound_outdir_identity=",
         "lock_acquired=0",
         "lock_retry_attempts=$(lock_retry_attempts)",
         "lock_retry_delay_seconds=$(Float64(lock_retry_delay_seconds))",
@@ -6279,6 +6926,60 @@ function _metamdbg_executor_script(
         "}",
         "sha256_text() {",
         "  printf '%s' \"\$1\" | sha256_stream",
+        "}",
+        "metamdbg_directory_identity() {",
+        "  local path=\"\$1\"",
+        "  if stat -Lc '%d:%i' -- \"\$path\" >/dev/null 2>&1; then",
+        "    stat -Lc '%d:%i' -- \"\$path\"",
+        "  else",
+        "    stat -f '%d:%i' -- \"\$path\"",
+        "  fi",
+        "}",
+        "bind_metamdbg_output_root() {",
+        "  if [ ! -d \"\$outdir\" ] || [ -L \"\$outdir\" ]; then",
+        "    echo \"metaMDBG output root must be a regular directory before binding its physical identity: \$outdir\" >&2",
+        "    return 1",
+        "  fi",
+        "  local observed_outdir",
+        "  observed_outdir=\$(cd -- \"\$outdir\" && pwd -P)",
+        "  if [ \"\$observed_outdir\" != \"\$outdir\" ]; then",
+        "    echo \"metaMDBG output root is not at its canonical physical location: \$outdir resolves to \$observed_outdir\" >&2",
+        "    return 1",
+        "  fi",
+        "  bound_outdir_identity=\$(metamdbg_directory_identity \"\$outdir\")",
+        "  if [ -z \"\$bound_outdir_identity\" ]; then",
+        "    echo \"metaMDBG could not bind the output root physical identity\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
+        "require_unchanged_metamdbg_output_root() {",
+        "  if [ ! -d \"\$outdir\" ] || [ -L \"\$outdir\" ]; then",
+        "    echo \"metaMDBG output root physical identity changed after binding: \$outdir\" >&2",
+        "    return 1",
+        "  fi",
+        "  local observed_outdir",
+        "  local observed_identity",
+        "  observed_outdir=\$(cd -- \"\$outdir\" && pwd -P)",
+        "  observed_identity=\$(metamdbg_directory_identity \"\$outdir\")",
+        "  if [ \"\$observed_outdir\" != \"\$outdir\" ] || [ \"\$observed_identity\" != \"\$bound_outdir_identity\" ]; then",
+        "    echo \"metaMDBG output root physical identity changed after binding: \$outdir\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
+        "require_metamdbg_artifact_containment() {",
+        "  local path=\"\$1\"",
+        "  local label=\"\$2\"",
+        "  local physical_parent",
+        "  require_unchanged_metamdbg_output_root",
+        "  if [ ! -e \"\$path\" ] && [ ! -L \"\$path\" ]; then",
+        "    echo \"\$label is missing from the bound metaMDBG output root: \$path\" >&2",
+        "    return 1",
+        "  fi",
+        "  physical_parent=\$(cd -- \"\$(dirname -- \"\$path\")\" && pwd -P)",
+        "  if [ \"\$physical_parent\" != \"\$outdir\" ]; then",
+        "    echo \"\$label escaped the bound metaMDBG output root: \$path\" >&2",
+        "    return 1",
+        "  fi",
         "}",
         input_validation_function_lines...,
         reservation_validation_function_lines...,
@@ -6348,6 +7049,7 @@ function _metamdbg_executor_script(
         "  exit 1",
         "fi",
         "mkdir -p -- \"\$outdir\"",
+        "bind_metamdbg_output_root",
         "validate_metamdbg_inputs",
         "contract_exists=0",
         "if [ -n \"\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
@@ -6384,11 +7086,14 @@ function _metamdbg_executor_script(
         "capture_package_inventory() {",
         "  local json_path=\"\$1\"",
         "  local normalized_path=\"\$2\"",
+        "  require_unchanged_metamdbg_output_root",
         "  \"\$conda_runner\" list -n \"\$environment_name\" --json > \"\$json_path\"",
+        "  require_unchanged_metamdbg_output_root",
         "  \"\$conda_runner\" run -n \"\$environment_name\" python -c $(inventory_canonicalizer) \"\$json_path\" \"\$normalized_path\" || {",
         "    echo \"metaMDBG environment package inventory is incomplete or malformed\" >&2",
         "    return 1",
         "  }",
+        "  require_unchanged_metamdbg_output_root",
         "}",
         "capture_package_inventory \"\$package_inventory_before\" \"\$package_inventory_normalized\"",
         "package_count=\$(awk 'END { print NR }' \"\$package_inventory_normalized\")",
@@ -6408,9 +7113,11 @@ function _metamdbg_executor_script(
         "  exit 1",
         "}",
         "package_inventory_sha256=\$(sha256_file \"\$package_inventory_normalized\")",
+        "require_unchanged_metamdbg_output_root",
         staged_input_creation_lines[1:2]...,
         staged_input_declaration_lines...,
         staged_input_creation_lines[3:end]...,
+        "require_unchanged_metamdbg_output_root",
         staged_input_validation_lines...,
         "validate_fasta_stream() {",
         "  awk '",
@@ -6437,6 +7144,7 @@ function _metamdbg_executor_script(
         "}",
         "validate_contigs() {",
         "  local path=\$1",
+        "  require_unchanged_metamdbg_output_root",
         "  if [ ! -f \"\$path\" ] || [ -L \"\$path\" ] || [ ! -s \"\$path\" ]; then",
         "    echo \"metaMDBG contigs are missing, empty, or not regular: \$path\" >&2",
         "    return 1",
@@ -6452,9 +7160,11 @@ function _metamdbg_executor_script(
         "      return 1",
         "    }",
         "  fi",
+        "  require_unchanged_metamdbg_output_root",
         "}",
         "validate_gfa() {",
         "  local path=\$1",
+        "  require_unchanged_metamdbg_output_root",
         "  if [ ! -f \"\$path\" ] || [ -L \"\$path\" ] || [ ! -s \"\$path\" ]; then",
         "    echo \"metaMDBG graph is missing, empty, or not regular: \$path\" >&2",
         "    return 1",
@@ -6463,6 +7173,7 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG graph has malformed, unknown, duplicate, typed-tag, version, or dangling GFA1 records: \$path\" >&2",
         "    return 1",
         "  }",
+        "  require_unchanged_metamdbg_output_root",
         "}",
         "find_metamdbg_graph() {",
         "  local all_candidates=()",
@@ -6502,7 +7213,9 @@ function _metamdbg_executor_script(
         "elif [ -e \"\$contigs_plain\" ] || [ -L \"\$contigs_plain\" ]; then",
         "  validate_contigs \"\$contigs_plain\"",
         "else",
+        "  require_unchanged_metamdbg_output_root",
         "  $(runtime_asm_cmd)",
+        "  require_unchanged_metamdbg_output_root",
         "fi",
         "if [ -e \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ]; then",
         "  validate_contigs \"\$contigs_gz\"",
@@ -6511,14 +7224,18 @@ function _metamdbg_executor_script(
         "  gzip -c -- \"\$contigs_plain\" > \"\$contigs_new\"",
         "  chmod 600 \"\$contigs_new\"",
         "  validate_contigs \"\$contigs_new\"",
+        "  require_unchanged_metamdbg_output_root",
         "  mv -f -- \"\$contigs_new\" \"\$contigs_gz\"",
+        "  require_unchanged_metamdbg_output_root",
         "fi",
         "validate_contigs \"\$contigs_gz\"",
         "graph_status=0",
         "graph_source=\"\"",
         "graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
         "if [ \"\$graph_status\" -eq 1 ]; then",
+        "  require_unchanged_metamdbg_output_root",
         "  $(runtime_gfa_cmd)",
+        "  require_unchanged_metamdbg_output_root",
         "  graph_status=0",
         "  graph_source=\$(find_metamdbg_graph) || graph_status=\$?",
         "fi",
@@ -6527,8 +7244,12 @@ function _metamdbg_executor_script(
         "  exit \"\$graph_status\"",
         "fi",
         "validate_gfa \"\$graph_source\"",
+        "require_unchanged_metamdbg_output_root",
+        "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact\"",
+        "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact\"",
         "rm -f -- \"\$graph_alias\"",
         "ln -s -- \"\$(basename \"\$graph_source\")\" \"\$graph_alias\"",
+        "require_unchanged_metamdbg_output_root",
         "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
         "validate_contigs \"\$contigs_gz\"",
         "validate_gfa \"\$graph_source\"",
@@ -6543,6 +7264,9 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG refuses to overwrite an existing completion manifest\" >&2",
         "  exit 1",
         "fi",
+        "require_unchanged_metamdbg_output_root",
+        "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact before provenance publication\"",
+        "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact before provenance publication\"",
         "contigs_canonical=\"\$outdir/contigs.fasta.gz\"",
         "graph_source_parent=\$(cd -- \"\$(dirname -- \"\$graph_source\")\" && pwd -P)",
         "graph_source_canonical=\"\$graph_source_parent/\$(basename -- \"\$graph_source\")\"",
@@ -6580,6 +7304,7 @@ function _metamdbg_executor_script(
         "expected_completion_sha256=\$(sha256_file \"\$completion_new\")",
         "validate_metamdbg_inputs",
         "if [ \"\$contract_exists\" -eq 1 ]; then",
+        "  require_unchanged_metamdbg_output_root",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
         "else",
         "  if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
@@ -6588,14 +7313,20 @@ function _metamdbg_executor_script(
         "  fi",
         "  cp -- \"\$expected_contract\" \"\$contract_new\"",
         "  chmod 600 \"\$contract_new\"",
+        "  require_unchanged_metamdbg_output_root",
         "  mv -n -- \"\$contract_new\" \"\$contract_marker\"",
+        "  require_unchanged_metamdbg_output_root",
         "  if [ -e \"\$contract_new\" ]; then",
         "    echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
         "    exit 1",
         "  fi",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
         "fi",
+        "require_unchanged_metamdbg_output_root",
+        "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact before completion publication\"",
+        "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact before completion publication\"",
         "mv -n -- \"\$completion_new\" \"\$completion_marker\"",
+        "require_unchanged_metamdbg_output_root",
         "if [ -e \"\$completion_new\" ]; then",
         "  echo \"metaMDBG refused to overwrite a concurrent completion manifest\" >&2",
         "  exit 1",
@@ -6605,6 +7336,7 @@ function _metamdbg_executor_script(
         "  exit 1",
         "fi",
         completion_publication_hook...,
+        "require_unchanged_metamdbg_output_root",
         "actual_completion_sha256=\$(sha256_file \"\$completion_marker\")",
         "if [ \"\$actual_completion_sha256\" != \"\$expected_completion_sha256\" ]; then",
         "  rm -f -- \"\$completion_marker\"",
@@ -6738,7 +7470,15 @@ end
 function _metamdbg_existing_artifacts(
         outputs::NamedTuple,
         graph_k::Int,
+        ;
+        output_root_identity::Union{Nothing, NamedTuple} = nothing,
 )::Union{Nothing, NamedTuple}
+    if output_root_identity !== nothing
+        _require_unchanged_metamdbg_output_root(
+            output_root_identity,
+            outputs.outdir,
+        )
+    end
     existing_contigs = _normalize_metamdbg_contigs!(outputs)
     requested_graphs = _metamdbg_graph_candidates(outputs, graph_k)
     all_graphs = _metamdbg_all_graph_candidates(outputs)
@@ -6754,6 +7494,22 @@ function _metamdbg_existing_artifacts(
         _normalize_metamdbg_graph!(outputs, graph_k)
     end
     if existing_contigs !== nothing && existing_graph !== nothing
+        if output_root_identity !== nothing
+            _require_unchanged_metamdbg_output_root(
+                output_root_identity,
+                outputs.outdir,
+            )
+            _require_metamdbg_artifact_containment(
+                existing_contigs,
+                "metaMDBG existing contigs artifact",
+                output_root_identity,
+            )
+            _require_metamdbg_artifact_containment(
+                existing_graph,
+                "metaMDBG existing graph artifact",
+                output_root_identity,
+            )
+        end
         return (;
             outdir = outputs.outdir,
             contigs = existing_contigs,
@@ -6932,7 +7688,7 @@ function _metamdbg_submission_acceptance_is_ambiguous(
     attempt_started || return false
     submission isa Mycelia.SubmitResult || return true
     acceptance = submission.scheduler_acceptance
-    return !(acceptance in (:not_attempted, :rejected))
+    return acceptance != :not_attempted
 end
 
 function _run_metamdbg(;
@@ -7026,7 +7782,13 @@ function _run_metamdbg(;
                 outputs,
                 input_contract,
             )
-            existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
+            output_root_identity =
+                _metamdbg_output_root_identity(outputs.outdir)
+            existing_artifacts = _metamdbg_existing_artifacts(
+                outputs,
+                graph_k;
+                output_root_identity,
+            )
             if existing_artifacts !== nothing
                 has_contract || error(
                     "metaMDBG complete output is missing its provenance contract.",
@@ -7046,6 +7808,10 @@ function _run_metamdbg(;
                     input_contract,
                     graph_k,
                 )
+                _require_unchanged_metamdbg_output_root(
+                    output_root_identity,
+                    outputs.outdir,
+                )
                 return _metamdbg_complete_result(
                     outputs,
                     existing_artifacts,
@@ -7055,13 +7821,17 @@ function _run_metamdbg(;
                 )
             end
 
-            realized_toolchain_before =
-                _require_expected_metamdbg_toolchain(
+            realized_toolchain_before = _require_expected_metamdbg_toolchain(
+                _with_metamdbg_output_root_guard(
+                    output_root_identity,
+                    "checking the pre-execution dependency toolchain",
+                ) do
                     _metamdbg_dependency_toolchain(
                         dependency_checker,
                         resolved_conda_runner,
-                    ),
-                )
+                    )
+                end,
+            )
             staged = _stage_metamdbg_inputs!(
                 selected_input,
                 input_contract,
@@ -7086,7 +7856,12 @@ function _run_metamdbg(;
                     selected_input,
                     input_contract.input_snapshot,
                 )
-                local_runner(staged_asm_command)
+                _with_metamdbg_output_root_guard(
+                    output_root_identity,
+                    "running metaMDBG assembly",
+                ) do
+                    local_runner(staged_asm_command)
+                end
                 existing_contigs = _normalize_metamdbg_contigs!(outputs)
                 existing_contigs === nothing && error(
                     "metaMDBG assembly produced no sequence-bearing contigs " *
@@ -7096,19 +7871,32 @@ function _run_metamdbg(;
                     selected_input,
                     input_contract.input_snapshot,
                 )
-                local_runner(gfa_command)
+                _with_metamdbg_output_root_guard(
+                    output_root_identity,
+                    "running metaMDBG graph generation",
+                ) do
+                    local_runner(gfa_command)
+                end
                 _require_unchanged_staged_metamdbg_inputs!(
                     staged,
                     input_contract,
                 )
-                completed_artifacts =
-                    _require_metamdbg_artifacts!(outputs, graph_k)
+                completed_artifacts = _require_metamdbg_artifacts!(
+                    outputs,
+                    graph_k;
+                    output_root_identity,
+                )
                 toolchain_after = _require_unchanged_metamdbg_toolchain(
                     realized_toolchain_before,
-                    _metamdbg_dependency_toolchain(
-                        dependency_checker,
-                        resolved_conda_runner,
-                    ),
+                    _with_metamdbg_output_root_guard(
+                        output_root_identity,
+                        "checking the post-execution dependency toolchain",
+                    ) do
+                        _metamdbg_dependency_toolchain(
+                            dependency_checker,
+                            resolved_conda_runner,
+                        )
+                    end,
                 )
                 completed_artifacts, toolchain_after
             finally
@@ -7129,16 +7917,38 @@ function _run_metamdbg(;
                 ;
                 digest_function = input_digest_function,
             )
+            _require_unchanged_metamdbg_output_root(
+                output_root_identity,
+                outputs.outdir,
+            )
+            _require_metamdbg_artifact_containment(
+                artifacts.contigs,
+                "metaMDBG contigs artifact before provenance publication",
+                output_root_identity,
+            )
+            _require_metamdbg_artifact_containment(
+                artifacts.graph,
+                "metaMDBG graph artifact before provenance publication",
+                output_root_identity,
+            )
             wrote_contract = false
             wrote_completion = false
             try
                 if has_contract
                     _require_metamdbg_contract!(outputs, input_contract)
                 else
+                    _require_unchanged_metamdbg_output_root(
+                        output_root_identity,
+                        outputs.outdir,
+                    )
                     _write_metamdbg_contract!(outputs, input_contract)
                     wrote_contract = true
                 end
                 _require_metamdbg_contract!(outputs, input_contract)
+                _require_unchanged_metamdbg_output_root(
+                    output_root_identity,
+                    outputs.outdir,
+                )
                 _write_metamdbg_completion_manifest!(outputs, completion)
                 wrote_completion = true
                 completion = _require_metamdbg_completion_manifest!(
@@ -7146,6 +7956,10 @@ function _run_metamdbg(;
                     artifacts,
                     input_contract,
                     graph_k,
+                )
+                _require_unchanged_metamdbg_output_root(
+                    output_root_identity,
+                    outputs.outdir,
                 )
                 return _metamdbg_complete_result(
                     outputs,
