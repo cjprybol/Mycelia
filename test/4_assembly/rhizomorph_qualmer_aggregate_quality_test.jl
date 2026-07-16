@@ -83,6 +83,77 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
         end
         Test.@test compared == length(full_labels)
     end
+
+    # -----------------------------------------------------------------------
+    # B. MODE HONORED: the aggregate profile must build canonical/doublestrand
+    #    when asked (today it silently returns singlestrand), AND the exact-mean
+    #    accessor must survive the reduced strand conversion (proves the merge
+    #    carries dataset_quality_sum with RC reversal). Part of B4.
+    # -----------------------------------------------------------------------
+    Test.@testset "B: mode honored + mean survives strand conversion" begin
+        k = 7
+        reads = agg_identical_fastq_reads(AGG_REF; n = 4)
+        fq = Mycelia.Rhizomorph._prepare_fastq_observations(reads)
+
+        ss = Mycelia.Rhizomorph.build_qualmer_graph(
+            fq, k; mode = :singlestrand, memory_profile = :lightweight_quality)
+        dsg = Mycelia.Rhizomorph.build_qualmer_graph(
+            fq, k; mode = :doublestrand, memory_profile = :lightweight_quality)
+        cn = Mycelia.Rhizomorph.build_qualmer_graph(
+            fq, k; mode = :canonical, memory_profile = :lightweight_quality)
+
+        n_ss = length(collect(MetaGraphsNext.labels(ss)))
+        n_ds = length(collect(MetaGraphsNext.labels(dsg)))
+        n_cn = length(collect(MetaGraphsNext.labels(cn)))
+
+        # Doublestrand adds reverse-complement vertices (NOT a silent singlestrand).
+        Test.@test n_ds > n_ss
+        Test.@test n_ds <= 2 * n_ss
+        Test.@test n_cn <= n_ss
+
+        # The reduced doublestrand vertices still expose an exact mean (the merge
+        # must carry dataset_quality_sum through conversion, reversing for RC).
+        for label in MetaGraphsNext.labels(dsg)
+            m = Mycelia.Rhizomorph.get_vertex_mean_quality(dsg[label], "dataset_01")
+            Test.@test m !== nothing
+            Test.@test length(m) == k
+        end
+    end
+
+    # -----------------------------------------------------------------------
+    # C. PREFILTER COMPOSES: the PR #425 coverage prefilter (min_count) must
+    #    thread into the aggregate builders so singleton error k-mers are pruned
+    #    BEFORE aggregate vertex creation — the composition that bounds memory.
+    #    Part of B4.
+    # -----------------------------------------------------------------------
+    Test.@testset "C: coverage prefilter composes with aggregate storage" begin
+        k = 7
+        # Solid backbone at 8x + one read carrying a unique substitution, whose
+        # k-mers spanning the edit appear exactly once (singleton error k-mers).
+        solid = agg_identical_fastq_reads(AGG_REF; n = 8)
+        # Single-base substitution at pos 20, guaranteed different from the original.
+        orig_base = AGG_REF[20]
+        new_base = orig_base == 'A' ? 'C' : 'A'
+        err_seq = AGG_REF[1:19] * string(new_base) * AGG_REF[21:end]
+        Test.@test err_seq != AGG_REF
+        qual = join(Char(min(35 + j, 60) + 33) for j in 1:length(err_seq))
+        push!(solid, FASTX.FASTQ.Record("err", err_seq, qual))
+        fq = Mycelia.Rhizomorph._prepare_fastq_observations(solid)
+
+        g1 = Mycelia.Rhizomorph.build_qualmer_graph(
+            fq, k; mode = :singlestrand, memory_profile = :lightweight_quality, min_count = 1)
+        g2 = Mycelia.Rhizomorph.build_qualmer_graph(
+            fq, k; mode = :singlestrand, memory_profile = :lightweight_quality, min_count = 2)
+
+        n1 = length(collect(MetaGraphsNext.labels(g1)))
+        n2 = length(collect(MetaGraphsNext.labels(g2)))
+        # min_count=1 is a no-op superset; floor 2 prunes the singleton error k-mers.
+        Test.@test n2 < n1
+        # Every survivor under floor 2 has coverage >= 2.
+        for label in MetaGraphsNext.labels(g2)
+            Test.@test g2[label].total_count >= 2
+        end
+    end
 end
 
 println("✓ Rhizomorph aggregate qualmer quality tests completed")

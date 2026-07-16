@@ -494,6 +494,21 @@ function _merge_quality_vector!(dest::Vector{UInt8}, src::Vector{UInt8})
     end
 end
 
+# UNCLAMPED per-position sum merge for the exact-mean accumulator
+# (dataset_quality_sum, td-n8ax). Must NOT saturate: the whole point of the wide
+# UInt32 sum is that get_vertex_mean_quality recovers the exact mean at any depth.
+function _merge_quality_vector!(dest::Vector{UInt32}, src::Vector{UInt32})
+    if !isempty(src)
+        if isempty(dest)
+            append!(dest, src)
+        else
+            for i in eachindex(src)
+                dest[i] += src[i]
+            end
+        end
+    end
+end
+
 function _create_reduced_vertex(kmer, memory_profile::Symbol)
     if memory_profile == :ultralight
         return UltralightKmerVertexData(kmer)

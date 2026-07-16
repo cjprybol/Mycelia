@@ -92,23 +92,46 @@ function build_qualmer_graph(
         memory_profile::Symbol = :full,
         min_count::Int = 1
 )
-    # Reduced quality profiles route through build_kmer_graph
-    # (aggregate profiles do NOT accept min_count — they are O(distinct kmers) already
-    # and are singlestrand-only; the prefilter applies to the :full qualmer path).
-    if memory_profile == :ultralight_quality
-        return build_kmer_graph_singlestrand_ultralight_quality(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
-    elseif memory_profile == :lightweight_quality
-        return build_kmer_graph_singlestrand_lightweight_quality(
-            records, k;
-            dataset_id = dataset_id,
-            type_hint = type_hint,
-            ambiguous_action = ambiguous_action
-        )
+    # Reduced quality (aggregate) profiles: O(distinct kmers) storage. Build the
+    # singlestrand reduced graph, then convert per `mode` using the quality-aware
+    # reduced converters (td-n8ax — previously `mode` was dropped and these always
+    # returned singlestrand, which the DoubleStrand/Canonical corrector could not
+    # use). :lightweight_quality composes the PR #425 coverage prefilter (min_count);
+    # in doublestrand/canonical mode the floor is applied to MERGED canonical
+    # coverage (count_canonical) so a locus sequenced once per strand is not pruned.
+    if memory_profile == :ultralight_quality || memory_profile == :lightweight_quality
+        count_canonical = (mode == :doublestrand || mode == :canonical)
+        singlestrand_graph = if memory_profile == :lightweight_quality
+            build_kmer_graph_singlestrand_lightweight_quality(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action,
+                min_count = min_count,
+                count_canonical = count_canonical
+            )
+        else
+            # :ultralight_quality has no exact-mean accumulator and does not (yet)
+            # thread the prefilter; reject the unsupported combination loudly rather
+            # than silently ignoring min_count.
+            min_count == 1 || throw(ArgumentError(
+                "min_count prefilter is only supported with memory_profile=:lightweight_quality, not :ultralight_quality"))
+            build_kmer_graph_singlestrand_ultralight_quality(
+                records, k;
+                dataset_id = dataset_id,
+                type_hint = type_hint,
+                ambiguous_action = ambiguous_action
+            )
+        end
+        if mode == :singlestrand
+            return singlestrand_graph
+        elseif mode == :doublestrand
+            return convert_to_doublestrand(singlestrand_graph)
+        elseif mode == :canonical
+            return convert_to_canonical(singlestrand_graph)
+        else
+            error("Invalid mode: $mode. Must be :singlestrand, :doublestrand, or :canonical")
+        end
     elseif memory_profile != :full
         error("Invalid memory_profile for qualmer graph: :$memory_profile. Use :full, :ultralight_quality, or :lightweight_quality")
     end
