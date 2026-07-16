@@ -6,6 +6,7 @@
 # with:
 #
 #   MYCELIA_RUN_EXTERNAL=true
+#   MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
 #   MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz
 #   MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz
 #   MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz
@@ -30,6 +31,13 @@
 
 import Test
 import Mycelia
+
+if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
+    Base.include(
+        @__MODULE__,
+        joinpath(dirname(@__DIR__), "multi_input_hybrid_smoke_support.jl"),
+    )
+end
 
 function _assert_persistent_hybrid_result(
         result::Mycelia.Rhizomorph.AssemblyResult,
@@ -289,13 +297,13 @@ function _assert_autocycler_toolchain(
 end
 
 Test.@testset "multi-input hybrid external smoke" begin
-    prerequisites =
-        Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(ENV)
+    prerequisites = _multi_input_hybrid_smoke_prerequisites(ENV)
 
-    if !prerequisites.run_external
+    if !prerequisites.run_smoke
         @info (
             "Multi-input hybrid smoke skipped: set " *
-            "MYCELIA_RUN_EXTERNAL=true to enable external tools."
+            "MYCELIA_RUN_EXTERNAL=true and " *
+            "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true to opt in."
         )
         Test.@test_skip false
     else

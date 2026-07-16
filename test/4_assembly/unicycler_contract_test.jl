@@ -486,7 +486,13 @@ Test.@testset "common Unicycler wrapper contract" begin
             Test.@test occursin(" -p ", collector.jobs[1].cmd)
             Test.@test planned.expected_artifacts.assembly == planned.assembly
             Test.@test planned.expected_artifacts.graph == planned.graph
-            Test.@test planned.expected_artifacts.contract == planned.contract
+            Test.@test propertynames(planned.expected_artifacts) ==
+                       (:assembly, :graph)
+            Test.@test planned.contract === nothing
+            Test.@test !occursin(
+                Mycelia._UNICYCLER_CONTRACT_FILENAME,
+                collector.jobs[1].cmd,
+            )
 
             dry_executor = Mycelia.DryRunExecutor()
             dry_planned = redirect_stdout(devnull) do

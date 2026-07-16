@@ -6,12 +6,18 @@
 #
 # Usage:
 #   Core tests (CI/local):      julia --project=. -e "import Pkg; Pkg.test()"
-#   Full tests (HPC):           MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Full tests (alt):           MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   Full tests (portable):      LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   External suite (HPC):       MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   External suite (alt):       MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   External suite (portable):  LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
 #   Show plots interactively:   MYCELIA_SHOW_PLOTS=true julia --project=. -e "import Pkg; Pkg.test()"
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
+#
+# Private-fixture smokes are not enabled by the broad external-suite flags.
+# Their test files document the additional workflow-specific gates and inputs:
+#   - MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
+#   - MYCELIA_RUN_AUTOCYCLER_POLISHED=true (hybrid-smoke subgate)
+#   - MYCELIA_RUN_AUTOCYCLER_SMOKE=true
 #
 # External dependencies (skipped by default):
 #   - NCBI datasets CLI, SRA tools (prefetch, fasterq_dump)

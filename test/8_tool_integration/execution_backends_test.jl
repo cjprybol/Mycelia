@@ -41,7 +41,65 @@ Test.@testset "Execution backend helpers" begin
     )
     Test.@test legacy_submit_result.ok
     Test.@test !legacy_submit_result.held
-    Test.@test legacy_submit_result.scheduler_acceptance == :not_attempted
+    Test.@test legacy_submit_result.scheduler_acceptance == :accepted
+    legacy_failed_sbatch = Mycelia.SubmitResult(
+        false,
+        false,
+        :scg,
+        :sbatch,
+        nothing,
+        nothing,
+        "sbatch --parsable fixture.sbatch",
+        nothing,
+        "",
+        String[],
+        ["submission transport failed"],
+    )
+    Test.@test !legacy_failed_sbatch.ok
+    Test.@test !legacy_failed_sbatch.held
+    Test.@test legacy_failed_sbatch.scheduler_acceptance == :unknown
+    legacy_dry_run = Mycelia.SubmitResult(
+        true,
+        true,
+        :scg,
+        :sbatch,
+        nothing,
+        nothing,
+        "sbatch --parsable fixture.sbatch",
+        nothing,
+        nothing,
+        String[],
+        String[],
+    )
+    Test.@test legacy_dry_run.scheduler_acceptance == :not_attempted
+    legacy_validation_failure = Mycelia.SubmitResult(
+        false,
+        false,
+        :scg,
+        :validation,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        nothing,
+        String[],
+        ["invalid job"],
+    )
+    Test.@test legacy_validation_failure.scheduler_acceptance == :not_attempted
+    legacy_malformed_job_id = Mycelia.SubmitResult(
+        true,
+        false,
+        :scg,
+        :sbatch,
+        nothing,
+        nothing,
+        "sbatch --parsable fixture.sbatch",
+        " 12345 ",
+        " 12345 \n",
+        String[],
+        String[],
+    )
+    Test.@test legacy_malformed_job_id.scheduler_acceptance == :unknown
     Test.@test Mycelia.resolve_executor(:collect) isa Mycelia.CollectExecutor
     Test.@test Mycelia.resolve_executor(:dry_run) isa Mycelia.DryRunExecutor
     Test.@test Mycelia.resolve_executor(:dryrun) isa Mycelia.DryRunExecutor

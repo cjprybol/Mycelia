@@ -17,6 +17,13 @@ if !isdefined(Main, :test_throws_message)
     include(joinpath(dirname(@__DIR__), "test_helpers.jl"))
 end
 
+if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
+    Base.include(
+        @__MODULE__,
+        joinpath(dirname(@__DIR__), "multi_input_hybrid_smoke_support.jl"),
+    )
+end
+
 function multi_input_fastq_record(
         identifier::AbstractString,
         sequence::AbstractString = "ACGTACGT",
@@ -390,25 +397,53 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         end
     end
 
-    Test.@testset "external smoke prerequisites fail loud in default CI" begin
-        disabled = Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+    Test.@testset "private-fixture smoke gates fail closed" begin
+        disabled = _multi_input_hybrid_smoke_prerequisites(
             Dict{String, String}(),
         )
         Test.@test disabled == (;
-            run_external = false,
+            run_smoke = false,
             run_autocycler = false,
         )
+        for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
+            broad_only =
+                _multi_input_hybrid_smoke_prerequisites(
+                    Dict(broad_gate => "true"),
+                )
+            Test.@test broad_only == (;
+                run_smoke = false,
+                run_autocycler = false,
+            )
+        end
         test_throws_message(
             ArgumentError,
-            "also requires MYCELIA_RUN_EXTERNAL=true",
+            "also require MYCELIA_RUN_EXTERNAL=true",
         ) do
-            Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(Dict(
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+            ))
+        end
+        test_throws_message(
+            ArgumentError,
+            "also require MYCELIA_RUN_EXTERNAL=true",
+        ) do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+            ))
+        end
+        test_throws_message(
+            ArgumentError,
+            "also requires MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true",
+        ) do
+            _multi_input_hybrid_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
                 "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
             ))
         end
         test_throws_message(ArgumentError, "missing:") do
-            Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(Dict(
+            _multi_input_hybrid_smoke_prerequisites(Dict(
                 "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
             ))
         end
 
@@ -427,6 +462,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             )
             environment = Dict(
                 "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
                 "MYCELIA_HYBRID_SHORT_R1" => r1,
                 "MYCELIA_HYBRID_SHORT_R2" => r2,
                 "MYCELIA_HYBRID_LONG_READS" => long_reads,
@@ -435,7 +471,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             missing_file_environment["MYCELIA_HYBRID_LONG_READS"] =
                 joinpath(temp_dir, "missing.fastq")
             test_throws_message(ArgumentError, "FASTQ not found") do
-                Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+                _multi_input_hybrid_smoke_prerequisites(
                     missing_file_environment,
                 )
             end
@@ -446,7 +482,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 invalid_environment = copy(environment)
                 invalid_environment[name] = value
                 test_throws_message(ArgumentError, "must be one of") do
-                    Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+                    _multi_input_hybrid_smoke_prerequisites(
                         invalid_environment,
                     )
                 end
@@ -457,7 +493,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 Dict("MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true"),
             )
             test_throws_message(ArgumentError, "READ_TYPE is required") do
-                Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+                _multi_input_hybrid_smoke_prerequisites(
                     autocycler_environment,
                 )
             end
@@ -486,7 +522,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     ),
                 )
                 test_throws_message(ArgumentError, message) do
-                    Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+                    _multi_input_hybrid_smoke_prerequisites(
                         invalid_environment,
                     )
                 end
@@ -499,10 +535,10 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 ),
             )
             prerequisites =
-                Mycelia.Rhizomorph._multi_input_hybrid_smoke_prerequisites(
+                _multi_input_hybrid_smoke_prerequisites(
                     valid_environment,
                 )
-            Test.@test prerequisites.run_external
+            Test.@test prerequisites.run_smoke
             Test.@test prerequisites.run_autocycler
             Test.@test prerequisites.input_paths == (;
                 short_r1 = abspath(r1),
@@ -3764,5 +3800,126 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 Test.@test !ispath(empty_outdir)
             end
         end
+    end
+end
+
+Test.@testset "cross-wrapper hierarchical output-root reservations" begin
+    mktempdir() do temp_dir
+        shared_root = joinpath(temp_dir, "shared-root")
+        Test.@test Mycelia._unicycler_output_lock_path(shared_root) ==
+                   Mycelia._autocycler_output_lock_path(shared_root)
+        Test.@test Mycelia._autocycler_output_lock_path(shared_root) ==
+                   Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+            shared_root,
+        )
+
+        Mycelia._with_unicycler_output_lock(shared_root) do _reserved
+            conflict_task = @async begin
+                try
+                    Mycelia._with_autocycler_output_lock(
+                        shared_root,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            conflict = fetch(conflict_task)
+            Test.@test conflict isa ArgumentError
+            Test.@test occursin(
+                "already reserved",
+                sprint(showerror, conflict),
+            )
+        end
+
+        hierarchy_parent = joinpath(temp_dir, "hierarchy-parent")
+        hierarchy_child = joinpath(hierarchy_parent, "child")
+        Mycelia._with_unicycler_output_lock(hierarchy_parent) do _reserved
+            ancestor_task = @async begin
+                try
+                    Mycelia._with_autocycler_output_lock(
+                        hierarchy_child,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            ancestor_conflict = fetch(ancestor_task)
+            Test.@test ancestor_conflict isa ArgumentError
+            Test.@test occursin(
+                "active ancestor output-root reservation",
+                sprint(showerror, ancestor_conflict),
+            )
+        end
+
+        child_hybrid_lock =
+            Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                hierarchy_child,
+            )
+        Mycelia.Rhizomorph._with_multi_input_workflow_lock(
+            child_hybrid_lock,
+        ) do
+            descendant_task = @async begin
+                try
+                    Mycelia._with_unicycler_output_lock(
+                        hierarchy_parent,
+                    ) do _reserved
+                        :unexpected
+                    end
+                catch caught
+                    caught
+                end
+            end
+            descendant_conflict = fetch(descendant_task)
+            Test.@test descendant_conflict isa ArgumentError
+            Test.@test occursin(
+                "active descendant output-root reservation",
+                sprint(showerror, descendant_conflict),
+            )
+        end
+
+        sibling_a = joinpath(temp_dir, "sibling-a")
+        sibling_b = joinpath(temp_dir, "sibling-b")
+        Mycelia._with_unicycler_output_lock(sibling_a) do _reserved
+            sibling_task = @async begin
+                Mycelia._with_autocycler_output_lock(
+                    sibling_b,
+                ) do _reserved
+                    :sibling_reserved
+                end
+            end
+            sibling_result = fetch(sibling_task)
+            Test.@test sibling_result == :sibling_reserved
+        end
+
+        nested_output = joinpath(temp_dir, "nested-hybrid")
+        nested_calls = NamedTuple[]
+        function nested_assembler_runner(
+                inputs::Any,
+                outdir::AbstractString,
+        )::NamedTuple
+            return Mycelia._with_autocycler_output_lock(outdir) do reserved
+                multi_input_fake_assembler_result(reserved)
+            end
+        end
+        nested_result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = nested_output,
+            ),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                nested_calls,
+            ),
+            assembler_runner = nested_assembler_runner,
+        )
+        Test.@test length(nested_calls) == 3
+        Test.@test isfile(
+            nested_result.assembly_stats["tool_artifacts"]["final_assembly"],
+        )
     end
 end

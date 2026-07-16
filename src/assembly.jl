@@ -1153,7 +1153,8 @@ end
 
 const _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
 const _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS = 60
-const _UNICYCLER_OUTPUT_LOCK_SUFFIX = ".mycelia-unicycler.lock"
+const _UNICYCLER_OUTPUT_LOCK_SUFFIX =
+    _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX
 const _UNICYCLER_CONTRACT_FILENAME = ".mycelia-unicycler-contract.json"
 const _UNICYCLER_CONTRACT_SCHEMA = "mycelia-unicycler-run-contract-v1"
 
@@ -1443,24 +1444,47 @@ end
 
 function _unicycler_output_lock_path(outdir::AbstractString)::String
     canonical_outdir = _canonical_planned_unicycler_output_path(outdir)
-    lock_name = ".$(basename(canonical_outdir))$(_UNICYCLER_OUTPUT_LOCK_SUFFIX)"
-    return joinpath(dirname(canonical_outdir), lock_name)
+    return _output_root_reservation_lock_path_from_canonical(canonical_outdir)
 end
 
 function _with_unicycler_output_lock(
         action::Function,
         outdir::AbstractString;
-        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
+        pidlock_runner::Function = FileWatching.Pidfile.trymkpidlock,
 )::Any
     canonical_outdir = _canonical_planned_unicycler_output_path(outdir)
     lock_path = _unicycler_output_lock_path(canonical_outdir)
     mkpath(dirname(lock_path))
-    return pidlock_runner(
+    locked_action = function ()
+        _require_exclusive_output_root_reservation(
+            canonical_outdir,
+            lock_path;
+            subject = "Unicycler outdir",
+            stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+        )
+        return action(canonical_outdir)
+    end
+    if pidlock_runner !== FileWatching.Pidfile.trymkpidlock
+        return pidlock_runner(
+            locked_action,
+            lock_path;
+            stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+            refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
+        )
+    end
+    lock_handle = pidlock_runner(
         lock_path;
         stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
         refresh = _UNICYCLER_ENVIRONMENT_LOCK_REFRESH_SECONDS,
-    ) do
-        action(canonical_outdir)
+    )
+    lock_handle === false && throw(ArgumentError(
+        "Unicycler outdir is already reserved by another output-root " *
+        "workflow: $(lock_path)",
+    ))
+    try
+        return locked_action()
+    finally
+        Base.close(lock_handle)
     end
 end
 
@@ -1976,11 +2000,10 @@ function _run_unicycler_with_contract(;
             outdir = planned_outdir,
             assembly,
             graph,
-            contract = contract_marker,
+            contract = nothing,
             expected_artifacts = (;
                 assembly,
                 graph,
-                contract = contract_marker,
             ),
             requested_outdir = reported_outdir,
             toolchain = nothing,
@@ -2198,10 +2221,10 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Run hybrid assembly combining short and long reads using Unicycler.
 
 # Arguments
-- `short_1::String`: Path to first short read FASTQ file
-- `short_2::String`: Path to second short read FASTQ file (optional)
-- `long_reads::String`: Path to long read FASTQ file
-- `outdir::String`: Output directory path (default: "unicycler_output")
+- `short_1::AbstractString`: Path to first short read FASTQ file
+- `short_2::Union{Nothing,AbstractString}`: Optional second short read FASTQ file
+- `long_reads::AbstractString`: Path to long read FASTQ file
+- `outdir::AbstractString`: Output directory path (default: "unicycler_output")
 - `threads::Int`: Number of threads to use (default: `get_default_threads()`)
 - `spades_options::Union{Nothing,String}`: Extra SPAdes options (default: `nothing`)
 - `kmers::Union{Nothing,String}`: Explicit SPAdes k-mers (e.g., "21,33,55")
@@ -2213,11 +2236,15 @@ Run hybrid assembly combining short and long reads using Unicycler.
 # Returns
 Named tuple containing:
 - `status::Symbol`: `:completed`, `:reused`, or `:planned`
-- `outdir::String`: Canonical physical path to the validated output directory
-- `assembly::String`: Path to final assembly file
-- `graph::String`: Path to assembly graph in GFA format
-- `contract::String`: Durable contract marker path, realized for completed or
-  reused work and expected for planned work
+- `outdir::String`: Canonical physical output path; validated and realized for
+  completed or reused work and expected but unrealized for planned work
+- `assembly::String`: Canonical final-assembly path, expected but unrealized for
+  planned work
+- `graph::String`: Canonical assembly-graph path, expected but unrealized for
+  planned work
+- `contract::Union{Nothing,String}`: Durable contract marker path for completed
+  or reused local work; `nothing` for planned work because its raw command does
+  not create Mycelia's reusable lifecycle marker
 - `requested_outdir::String`: Caller-supplied output spelling retained for audit
 - `toolchain::Union{Nothing,Dict}`: Exact realized package inventory for a
   completed or contract-verified reused run; `nothing` for a plan
@@ -2235,9 +2262,11 @@ Named tuple containing:
   unbound output fails loudly. Fresh local runs report a locked before/after
   package inventory.
 - `CollectExecutor`, `DryRunExecutor`, and `SlurmExecutor(dry_run=true)` return
-  `status=:planned`, the submission result, and expected artifact paths without
-  pretending that execution completed. Real nonlocal submission remains
-  disabled until the remote runtime can hold the same lifecycle locks.
+  `status=:planned`, the submission result, and only the FASTA/GFA paths
+  actually produced by the planned raw command. Such output has no reusable
+  Mycelia contract marker and therefore cannot be reused by a later local call.
+  Real nonlocal submission remains disabled until the remote runtime can hold
+  the same lifecycle locks and finalize the durable contract.
 - Rejects an incomplete non-empty output directory instead of deleting
   caller-owned contents. An empty output directory may be removed because
   Unicycler requires the output path to be absent.
@@ -3655,7 +3684,7 @@ Run VelvetG with optimized parameters for genome assembly.
 - `velvet_dir::String`: Path to velveth output directory
 - `outdir::String`: Output directory path (default: velvet_dir)
 - `exp_cov::Union{String,Float64}`: Expected coverage (default: "auto")
-- `cov_cutoff::Union{String,Float64}`: Coverage cutoff (default: "auto")  
+- `cov_cutoff::Union{String,Float64}`: Coverage cutoff (default: "auto")
 - `min_contig_lgth::Int`: Minimum contig length (default: 200)
 - `scaffolding::Bool`: Enable scaffolding (default: true)
 
@@ -5535,6 +5564,7 @@ function bind_metamdbg_submission_reservation_job!(
         :canonical_outdir,
         :path,
         :workflow_signature,
+        :scheduler_job_name,
         :input_contract_signature,
         :graph_k,
         :owner_token,
@@ -5559,11 +5589,16 @@ function bind_metamdbg_submission_reservation_job!(
         "metaMDBG reservation graph_k metadata must be an Int.",
     ))
     outputs = _metamdbg_output_paths(String(metadata.canonical_outdir), graph_k)
+    requested_job_name = _metamdbg_scheduler_job_name_prefix(
+        String(metadata.scheduler_job_name),
+        String(metadata.workflow_signature),
+    )
     expected = _metamdbg_submission_reservation(
         outputs,
         (; signature = String(metadata.input_contract_signature)),
         graph_k;
         owner_token = normalized_owner_token,
+        job_name = requested_job_name,
     )
     expected.path == metadata.path || error(
         "metaMDBG reservation path does not match its recomputed workflow path.",
@@ -5576,6 +5611,20 @@ function bind_metamdbg_submission_reservation_job!(
             expected.path,
             outputs.outdir,
         )
+        for field in (
+                :canonical_outdir,
+                :path,
+                :workflow_signature,
+                :scheduler_job_name,
+                :input_contract_signature,
+                :graph_k,
+                :owner_token,
+        )
+            getproperty(current, field) == getproperty(expected, field) || error(
+                "metaMDBG submission reservation $(field) changed before its " *
+                "scheduler job could be bound.",
+            )
+        end
         current.job_id === nothing || error(
             "metaMDBG submission reservation already has a scheduler job id.",
         )

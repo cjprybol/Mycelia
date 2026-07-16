@@ -3610,6 +3610,87 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 Mycelia.inspect_metamdbg_submission_reservations(crashed_outdir),
             )
 
+            replacement_bind_outdir =
+                joinpath(temporary_root, "replacement-owner-before-bind")
+            replacement_bind_outputs = Mycelia._metamdbg_output_paths(
+                replacement_bind_outdir,
+                21,
+            )
+            replacement_bind_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            original_bind_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    replacement_bind_outputs,
+                    replacement_bind_contract,
+                    21;
+                    owner_token = "original-bind-owner",
+                    job_name = "custom-bind-job",
+                )
+            replacement_bind_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    replacement_bind_outputs,
+                    replacement_bind_contract,
+                    21;
+                    owner_token = "replacement-bind-owner",
+                    job_name = "custom-bind-job",
+                )
+            Mycelia._with_metamdbg_output_lock(replacement_bind_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    original_bind_reservation,
+                    replacement_bind_outdir,
+                )
+            end
+            stale_bind_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    replacement_bind_outdir,
+                ),
+            )
+            Mycelia._with_metamdbg_output_lock(replacement_bind_outdir) do
+                Mycelia._remove_metamdbg_submission_reservation!(
+                    original_bind_reservation,
+                )
+                Mycelia._create_metamdbg_submission_reservation!(
+                    replacement_bind_reservation,
+                    replacement_bind_outdir,
+                )
+            end
+            _test_metamdbg_error(
+                () -> Mycelia.bind_metamdbg_submission_reservation_job!(
+                    stale_bind_metadata;
+                    owner_token = stale_bind_metadata.owner_token,
+                    job_id = "777",
+                    confirm_submitted = true,
+                ),
+                ErrorException,
+                r"owner_token changed before its scheduler job could be bound",
+            )
+            current_bind_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    replacement_bind_outdir,
+                ),
+            )
+            Test.@test current_bind_metadata.owner_token ==
+                       replacement_bind_reservation.owner_token
+            Test.@test current_bind_metadata.job_id === nothing
+            current_bound_metadata =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    current_bind_metadata;
+                    owner_token = current_bind_metadata.owner_token,
+                    job_id = "778",
+                    confirm_submitted = true,
+                )
+            Test.@test current_bound_metadata.job_id == "778"
+            Test.@test current_bound_metadata.scheduler_job_name ==
+                       replacement_bind_reservation.scheduler_job_name
+            Mycelia.reclaim_metamdbg_submission_reservation!(
+                current_bound_metadata;
+                owner_token = current_bound_metadata.owner_token,
+                job_id = current_bound_metadata.job_id,
+                confirm_cancelled = true,
+            )
+
             post_submit_crash_outdir =
                 joinpath(temporary_root, "post-submit-pre-bind-death")
             post_submit_crash_outputs =
@@ -3980,14 +4061,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             Test.@test thrown_reclaimed.recovery_reason == :not_submitted
 
-            legacy_rejected_result_outdir = joinpath(
+            legacy_failed_result_outdir = joinpath(
                 temporary_root,
-                "legacy-rejected-result-submission-output",
+                "legacy-failed-result-submission-output",
             )
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     hifi_reads = valid_reads,
-                    outdir = legacy_rejected_result_outdir,
+                    outdir = legacy_failed_result_outdir,
                     executor = Mycelia.SlurmExecutor(dry_run = false),
                     site = :scg,
                     dependency_checker = _test_metamdbg_toolchain,
@@ -3997,26 +4078,30 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                         _executor::Mycelia.AbstractExecutor,
                     ) ->
                         Mycelia.SubmitResult(
-                            ok = false,
-                            dry_run = false,
-                            held = true,
-                            scheduler_acceptance = :rejected,
-                            site = :scg,
-                            backend = :sbatch,
-                            errors = ["synthetic sbatch rejection"],
+                            false,
+                            false,
+                            :scg,
+                            :sbatch,
+                            nothing,
+                            nothing,
+                            "sbatch --hold --parsable fixture.sbatch",
+                            nothing,
+                            "",
+                            String[],
+                            ["synthetic legacy sbatch failure"],
                         ),
                 ),
                 ErrorException,
-                r"ambiguous response.*synthetic sbatch rejection",
+                r"ambiguous response.*synthetic legacy sbatch failure",
             )
-            legacy_rejected_reservation = only(
+            legacy_failed_reservation = only(
                 Mycelia.inspect_metamdbg_submission_reservations(
-                    legacy_rejected_result_outdir,
+                    legacy_failed_result_outdir,
                 ),
             )
             Mycelia.reclaim_metamdbg_submission_reservation!(
-                legacy_rejected_reservation;
-                owner_token = legacy_rejected_reservation.owner_token,
+                legacy_failed_reservation;
+                owner_token = legacy_failed_reservation.owner_token,
                 confirm_not_submitted = true,
             )
 
@@ -4094,6 +4179,22 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
 
             ambiguous_results = (
+                legacy_unheld_success = (
+                    result = Mycelia.SubmitResult(
+                        true,
+                        false,
+                        :scg,
+                        :sbatch,
+                        nothing,
+                        nothing,
+                        "sbatch --hold --parsable fixture.sbatch",
+                        "1001",
+                        "1001\n",
+                        String[],
+                        String[],
+                    ),
+                    message = r"was not verified as held",
+                ),
                 missing_job_id = (
                     result = Mycelia.SubmitResult(
                         ok = true,

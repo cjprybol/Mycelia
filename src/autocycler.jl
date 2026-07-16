@@ -15,7 +15,8 @@ const AUTOCYCLER_ENV_NAME =
 const AUTOCYCLER_MAX_ASSEMBLY_THREADS = 128
 const AUTOCYCLER_INSTALL_LOCK_STALE_SECONDS = 6 * 60 * 60
 const AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS = 7 * 24 * 60 * 60
-const _AUTOCYCLER_OUTPUT_LOCK_SUFFIX = ".mycelia-autocycler.pid"
+const _AUTOCYCLER_OUTPUT_LOCK_SUFFIX =
+    _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX
 const AUTOCYCLER_SCRIPT_REVISION =
     "c98b126eb45727584623041db1bfdbdaf7aa0923"
 const AUTOCYCLER_SCRIPT_SHA256 =
@@ -134,6 +135,44 @@ function _autocycler_sha256(path::AbstractString)::String
     return open(path, "r") do input
         SHA.bytes2hex(SHA.sha256(input))
     end
+end
+
+function _autocycler_input_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = _require_nonempty_autocycler_file(path, label)
+    return (
+        path = normalized_path,
+        canonical_path = realpath(normalized_path),
+        size_bytes = filesize(normalized_path),
+        sha256 = _autocycler_sha256(normalized_path),
+    )
+end
+
+function _require_unchanged_autocycler_input(
+        expected_snapshot::NamedTuple,
+        label::AbstractString,
+)::NamedTuple
+    observed_snapshot = try
+        _autocycler_input_snapshot(expected_snapshot.path, label)
+    catch caught
+        caught isa InterruptException && rethrow()
+        throw(ErrorException(
+            "$(label) changed after its initial path/size/SHA-256 snapshot. " *
+            "Cause: $(sprint(showerror, caught))",
+        ))
+    end
+    observed_snapshot == expected_snapshot || throw(ErrorException(
+        "$(label) changed after its initial path/size/SHA-256 snapshot: " *
+        "expected canonical_path=$(expected_snapshot.canonical_path), " *
+        "size=$(expected_snapshot.size_bytes), " *
+        "sha256=$(expected_snapshot.sha256); observed " *
+        "canonical_path=$(observed_snapshot.canonical_path), " *
+        "size=$(observed_snapshot.size_bytes), " *
+        "sha256=$(observed_snapshot.sha256).",
+    ))
+    return observed_snapshot
 end
 
 function _require_verified_autocycler_environment_spec(
@@ -1351,8 +1390,7 @@ end
 function _autocycler_output_lock_path_from_canonical(
         canonical_out_dir::AbstractString,
 )::String
-    lock_name = ".$(basename(canonical_out_dir))$(_AUTOCYCLER_OUTPUT_LOCK_SUFFIX)"
-    return joinpath(dirname(canonical_out_dir), lock_name)
+    return _output_root_reservation_lock_path_from_canonical(canonical_out_dir)
 end
 
 function _with_autocycler_output_lock(
@@ -1360,20 +1398,44 @@ function _with_autocycler_output_lock(
         out_dir::AbstractString;
         stale_age::Real = AUTOCYCLER_OUTPUT_LOCK_STALE_SECONDS,
         poll_interval::Real = 10,
-        pidlock_runner::Function = FileWatching.Pidfile.mkpidlock,
+        pidlock_runner::Function = FileWatching.Pidfile.trymkpidlock,
 )::Any
     stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
     poll_interval > 0 || throw(ArgumentError("poll_interval must be positive."))
     canonical_out_dir = _canonical_autocycler_output_path(out_dir)
     lock_path = _autocycler_output_lock_path_from_canonical(canonical_out_dir)
     mkpath(dirname(lock_path))
-    locked_action = () -> action(canonical_out_dir)
-    return pidlock_runner(
-        locked_action,
+    locked_action = function ()
+        _require_exclusive_output_root_reservation(
+            canonical_out_dir,
+            lock_path;
+            subject = "Autocycler output directory",
+            stale_age,
+        )
+        return action(canonical_out_dir)
+    end
+    if pidlock_runner !== FileWatching.Pidfile.trymkpidlock
+        return pidlock_runner(
+            locked_action,
+            lock_path;
+            stale_age,
+            poll_interval,
+        )
+    end
+    lock_handle = pidlock_runner(
         lock_path;
         stale_age,
-        poll_interval,
+        refresh = stale_age / 2,
     )
+    lock_handle === false && throw(ArgumentError(
+        "Autocycler output directory is already reserved by another " *
+        "output-root workflow: $(lock_path)",
+    ))
+    try
+        return locked_action()
+    finally
+        Base.close(lock_handle)
+    end
 end
 
 function _validate_autocycler_parameters(
@@ -1908,6 +1970,7 @@ function _execute_autocycler_steps(
         runner::Function = _default_autocycler_step_runner,
         workflow_root::Union{Nothing, AbstractString} = nothing,
         directory_identities::Tuple = (),
+        before_step::Function = step -> nothing,
 )::Nothing
     for step in steps
         if workflow_root !== nothing
@@ -1917,6 +1980,7 @@ function _execute_autocycler_steps(
                 directory_identities,
             )
         end
+        before_step(step)
         try
             runner(step)
         catch error
@@ -2178,6 +2242,7 @@ function _run_autocycler_with_reserved_output(
         runner::Function,
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
+        long_read_snapshot::NamedTuple,
 )::NamedTuple
     validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
     normalized_toolchain =
@@ -2199,6 +2264,15 @@ function _run_autocycler_with_reserved_output(
         prepared_out_dir,
         "Autocycler workflow root",
     )
+    function verify_long_read_before_step(step::NamedTuple)::Nothing
+        if step.name == :autocycler
+            _require_unchanged_autocycler_input(
+                long_read_snapshot,
+                "Long-read FASTQ",
+            )
+        end
+        return nothing
+    end
 
     @info "Starting long-read-only Autocycler pipeline..."
     _execute_autocycler_steps(
@@ -2206,6 +2280,7 @@ function _run_autocycler_with_reserved_output(
         runner,
         workflow_root = prepared_out_dir,
         directory_identities = (output_root_identity,),
+        before_step = verify_long_read_before_step,
     )
     contained_assembly = _require_contained_regular_autocycler_artifact(
         plan.assembly,
@@ -2277,6 +2352,10 @@ function _run_autocycler(
     )
     validate_long_reads &&
         _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
+    long_read_snapshot = _autocycler_input_snapshot(
+        normalized_long_reads,
+        "Long-read FASTQ",
+    )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do
             toolchain_snapshotter = _autocycler_toolchain_snapshotter(
@@ -2304,6 +2383,7 @@ function _run_autocycler(
                 runner,
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
+                long_read_snapshot,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -2326,7 +2406,14 @@ function _run_autocycler(
                     "Autocycler consensus GFA",
                 ),
             )
-            return result
+            _require_unchanged_autocycler_input(
+                long_read_snapshot,
+                "Long-read FASTQ",
+            )
+            return merge(
+                result,
+                (; input_snapshots = (; long_reads = long_read_snapshot)),
+            )
         end
     end
 end
@@ -2371,6 +2458,9 @@ to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies
 # Returns
 A named tuple with `outdir`, `assembly`, `graph`, and exact realized `toolchain`
 provenance, including the deterministic full Conda inventory and its SHA-256.
+`input_snapshots.long_reads` records the normalized and canonical input path,
+byte size, and SHA-256 value that were verified immediately before consumption
+and again after final artifact validation.
 `output_root_identity` records the bound canonical path, device, and inode used
 for lifecycle swap detection.
 `requested_threads` records the caller request and
@@ -2413,6 +2503,7 @@ function _run_autocycler_polished_with_reserved_output(
         intermediate_remover::Function,
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
+        input_snapshots::NamedTuple,
 )::NamedTuple
     autocycler_result = _run_autocycler_with_reserved_output(
         normalized_long_reads,
@@ -2424,6 +2515,7 @@ function _run_autocycler_polished_with_reserved_output(
         runner,
         conda_runner,
         environment_prefix,
+        long_read_snapshot = input_snapshots.long_reads,
     )
     normalized_out_dir = autocycler_result.outdir
     _require_unchanged_autocycler_toolchain(
@@ -2495,6 +2587,29 @@ function _run_autocycler_polished_with_reserved_output(
         output_root_identity,
         polishing_directory_identity,
     )
+    function verify_polishing_inputs_before_step(step::NamedTuple)::Nothing
+        if step.name == :bwa_mem_1
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_1,
+                "Paired short-read R1 FASTQ",
+            )
+        elseif step.name == :bwa_mem_2
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_2,
+                "Paired short-read R2 FASTQ",
+            )
+        elseif step.name == :pypolca
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_1,
+                "Paired short-read R1 FASTQ",
+            )
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_2,
+                "Paired short-read R2 FASTQ",
+            )
+        end
+        return nothing
+    end
 
     @info "Starting paired-short polishing with Polypolish and Pypolca..."
     autocycler_assembly, graph, polypolish_assembly, final_assembly,
@@ -2505,6 +2620,7 @@ function _run_autocycler_polished_with_reserved_output(
             runner,
             workflow_root = normalized_out_dir,
             directory_identities,
+            before_step = verify_polishing_inputs_before_step,
         )
         contained_polypolish_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2548,6 +2664,7 @@ function _run_autocycler_polished_with_reserved_output(
             runner,
             workflow_root = normalized_out_dir,
             directory_identities,
+            before_step = verify_polishing_inputs_before_step,
         )
         contained_final_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2858,6 +2975,20 @@ function _run_autocycler_polished(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
+    input_snapshots = (
+        long_reads = _autocycler_input_snapshot(
+            normalized_long_reads,
+            "Long-read FASTQ",
+        ),
+        short_reads_1 = _autocycler_input_snapshot(
+            normalized_short_reads_1,
+            "Paired short-read R1 FASTQ",
+        ),
+        short_reads_2 = _autocycler_input_snapshot(
+            normalized_short_reads_2,
+            "Paired short-read R2 FASTQ",
+        ),
+    )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do
             toolchain_snapshotter = _autocycler_toolchain_snapshotter(
@@ -2891,6 +3022,7 @@ function _run_autocycler_polished(
                 intermediate_remover,
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
+                input_snapshots,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -2901,7 +3033,19 @@ function _run_autocycler_polished(
                 result.output_root_identity,
                 result.outdir,
             )
-            return result
+            _require_unchanged_autocycler_input(
+                input_snapshots.long_reads,
+                "Long-read FASTQ",
+            )
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_1,
+                "Paired short-read R1 FASTQ",
+            )
+            _require_unchanged_autocycler_input(
+                input_snapshots.short_reads_2,
+                "Paired short-read R2 FASTQ",
+            )
+            return merge(result, (; input_snapshots))
         end
     end
 end
@@ -2933,6 +3077,10 @@ must remain byte-identical through every downstream command. Immediately before
 return, every reported artifact is revalidated as a contained regular non-symlink
 file; all FASTAs/GFA are parsed again, all three identifier sets are compared
 again, and the Pypolca report must still be nonempty.
+The long-read and both paired-short inputs are bound to normalized and canonical
+paths, byte sizes, and SHA-256 values before execution. Each input is rechecked
+immediately before every command that consumes it and after final artifact
+validation.
 The workflow root and polishing directory are bound by canonical path, device,
 and inode. Every step output is checked before and after execution, and cleanup
 refuses any target whose ancestor or bound directory changed identity.
@@ -2963,6 +3111,8 @@ ensemble method.
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
 `polypolish_assembly`, `pypolca_report`, `outdir`, and exact realized `toolchain`
 provenance, including the deterministic full Conda inventory and its SHA-256.
+`input_snapshots` records the normalized and canonical paths, byte sizes, and
+SHA-256 values bound for the long-read and both paired-short inputs.
 `output_root_identity` records the bound canonical path, device, and inode used
 for lifecycle swap detection.
 `intermediates` lists files retained by an explicit

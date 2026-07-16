@@ -84,11 +84,20 @@ function SubmitResult(
         warnings::Vector{String},
         errors::Vector{String},
 )::SubmitResult
+    scheduler_acceptance = if dry_run || backend != :sbatch
+        :not_attempted
+    elseif ok &&
+           job_id isa AbstractString &&
+           occursin(r"^[0-9]+$", job_id)
+        :accepted
+    else
+        :unknown
+    end
     return SubmitResult(;
         ok,
         dry_run,
         held = false,
-        scheduler_acceptance = :not_attempted,
+        scheduler_acceptance,
         site,
         backend,
         artifact_path,

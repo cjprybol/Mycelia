@@ -9,6 +9,7 @@
 #
 # ```bash
 # MYCELIA_RUN_EXTERNAL=true \
+# MYCELIA_RUN_AUTOCYCLER_SMOKE=true \
 # MYCELIA_AUTOCYCLER_LONG_READS=/path/to/long.fastq \
 # MYCELIA_AUTOCYCLER_SHORT_READS_1=/path/to/R1.fastq \
 # MYCELIA_AUTOCYCLER_SHORT_READS_2=/path/to/R2.fastq \
@@ -195,6 +196,33 @@ function _autocycler_test_toolchain(;
     )
 end
 
+function _autocycler_smoke_env_enabled(
+        environment::AbstractDict,
+        name::AbstractString,
+)::Bool
+    value = String(get(environment, name, "false"))
+    return lowercase(strip(value)) == "true"
+end
+
+function _autocycler_real_smoke_enabled(
+        environment::AbstractDict,
+)::Bool
+    external_enabled =
+        _autocycler_smoke_env_enabled(environment, "MYCELIA_RUN_ALL") ||
+        _autocycler_smoke_env_enabled(environment, "MYCELIA_RUN_EXTERNAL")
+    smoke_enabled = _autocycler_smoke_env_enabled(
+        environment,
+        "MYCELIA_RUN_AUTOCYCLER_SMOKE",
+    )
+    if smoke_enabled && !external_enabled
+        throw(ArgumentError(
+            "MYCELIA_RUN_AUTOCYCLER_SMOKE=true also requires " *
+            "MYCELIA_RUN_EXTERNAL=true (or MYCELIA_RUN_ALL=true).",
+        ))
+    end
+    return smoke_enabled
+end
+
 function _autocycler_real_smoke_inputs(
         environment::AbstractDict,
 )::NamedTuple
@@ -220,7 +248,7 @@ function _autocycler_real_smoke_inputs(
     ))
     isempty(long_reads) && throw(
         ArgumentError(
-            "MYCELIA_RUN_EXTERNAL=true requires " *
+            "MYCELIA_RUN_AUTOCYCLER_SMOKE=true requires " *
             "MYCELIA_AUTOCYCLER_LONG_READS.",
         ),
     )
@@ -232,6 +260,10 @@ function _autocycler_real_smoke_inputs(
     )
     return (; long_reads, short_reads_1, short_reads_2, read_type)
 end
+
+run_autocycler_smoke = _autocycler_real_smoke_enabled(ENV)
+autocycler_smoke_inputs = run_autocycler_smoke ?
+                          _autocycler_real_smoke_inputs(ENV) : nothing
 
 Test.@testset "Autocycler wrapper" begin
     Test.@testset "Constants, paths, and bundled environment" begin
@@ -1254,7 +1286,7 @@ Test.@testset "Autocycler wrapper" begin
             expected_alias_lock = joinpath(
                 realpath(symlink_target),
                 "nested",
-                ".results.mycelia-autocycler.pid",
+                ".results.mycelia-output-root.pid",
             )
             Test.@test Mycelia._autocycler_output_lock_path(aliased_output) ==
                        expected_alias_lock
@@ -2090,6 +2122,13 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
             Test.@test result.polishing_threads == 4
+            Test.@test result.input_snapshots.long_reads.path ==
+                       abspath(long_reads)
+            Test.@test result.input_snapshots.short_reads_1.size_bytes ==
+                       filesize(short_reads_1)
+            Test.@test length(
+                result.input_snapshots.short_reads_2.sha256,
+            ) == 64
             Test.@test !ispath(polished_lock_path)
             Test.@test !any(isfile, String[
                 "$(result.autocycler_assembly).$(extension)" for
@@ -3208,9 +3247,31 @@ Test.@testset "Autocycler wrapper" begin
         end
     end
 
-    Test.@testset "Real-smoke fixtures fail loudly when enabled" begin
+    Test.@testset "Real-smoke gate and fixtures fail closed" begin
+        Test.@test !_autocycler_real_smoke_enabled(Dict{String, String}())
+        for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
+            Test.@test !_autocycler_real_smoke_enabled(Dict(
+                broad_gate => "true",
+            ))
+        end
+        missing_broad_gate_error = _autocycler_test_error() do
+            _autocycler_real_smoke_enabled(Dict(
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+            ))
+        end
+        Test.@test missing_broad_gate_error isa ArgumentError
+        Test.@test occursin(
+            "also requires MYCELIA_RUN_EXTERNAL=true",
+            sprint(showerror, missing_broad_gate_error),
+        )
+
+        enabled_without_fixtures = Dict(
+            "MYCELIA_RUN_EXTERNAL" => "true",
+            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+        )
+        Test.@test _autocycler_real_smoke_enabled(enabled_without_fixtures)
         missing_long_reads_error = _autocycler_test_error() do
-            _autocycler_real_smoke_inputs(Dict{String, String}())
+            _autocycler_real_smoke_inputs(enabled_without_fixtures)
         end
         Test.@test missing_long_reads_error isa ArgumentError
         Test.@test occursin(
@@ -3240,17 +3301,9 @@ Test.@testset "Autocycler wrapper" begin
     end
 end
 
-function _autocycler_test_env_enabled(name::AbstractString)::Bool
-    value = Base.get(ENV, name, "false")
-    return Base.lowercase(Base.strip(value)) == "true"
-end
-
-run_all = _autocycler_test_env_enabled("MYCELIA_RUN_ALL")
-run_external = run_all || _autocycler_test_env_enabled("MYCELIA_RUN_EXTERNAL")
-
-if run_external
+if run_autocycler_smoke
     Test.@testset "Autocycler gated real smoke" begin
-        smoke_inputs = _autocycler_real_smoke_inputs(ENV)
+        smoke_inputs = something(autocycler_smoke_inputs)
 
         Mycelia.install_autocycler()
         mktempdir() do temp_dir
@@ -3286,5 +3339,161 @@ if run_external
         end
     end
 else
-    @info "Skipping Autocycler real smoke; set MYCELIA_RUN_EXTERNAL=true to enable"
+    @info (
+        "Skipping Autocycler real smoke; set MYCELIA_RUN_EXTERNAL=true and " *
+        "MYCELIA_RUN_AUTOCYCLER_SMOKE=true to opt in."
+    )
+end
+
+Test.@testset "Autocycler input content lifecycle binding" begin
+    mktempdir() do temp_dir
+        toolchain = _autocycler_test_toolchain()
+        function write_inputs(name::AbstractString)::NamedTuple
+            input_dir = joinpath(temp_dir, String(name))
+            mkpath(input_dir)
+            long_reads = joinpath(input_dir, "long.fastq")
+            short_reads_1 = joinpath(input_dir, "R1.fastq")
+            short_reads_2 = joinpath(input_dir, "R2.fastq")
+            write(long_reads, "@long\nACGT\n+\nIIII\n")
+            write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
+            return (; long_reads, short_reads_1, short_reads_2)
+        end
+
+        before_inputs = write_inputs("before-consumption")
+        before_dependency_calls = Ref(0)
+        before_runner_calls = Ref(0)
+        before_error = _autocycler_test_error() do
+            Mycelia._run_autocycler(
+                before_inputs.long_reads,
+                joinpath(temp_dir, "before-consumption-output");
+                dependency_checker = () -> begin
+                    before_dependency_calls[] += 1
+                    if before_dependency_calls[] == 1
+                        write(
+                            before_inputs.long_reads,
+                            "@long\nTGCA\n+\nIIII\n",
+                        )
+                    end
+                    return toolchain
+                end,
+                runner = step -> begin
+                    before_runner_calls[] += 1
+                    _autocycler_test_runner!(step)
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "before-consumption-environment.pid",
+                ),
+            )
+        end
+        Test.@test before_error isa ErrorException
+        Test.@test occursin(
+            "Long-read FASTQ changed after its initial path/size/SHA-256 snapshot",
+            sprint(showerror, before_error),
+        )
+        Test.@test before_runner_calls[] == 0
+
+        during_inputs = write_inputs("during-consumption")
+        during_runner_calls = Ref(0)
+        during_error = _autocycler_test_error() do
+            Mycelia._run_autocycler(
+                during_inputs.long_reads,
+                joinpath(temp_dir, "during-consumption-output");
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    during_runner_calls[] += 1
+                    _autocycler_test_runner!(step)
+                    write(
+                        during_inputs.long_reads,
+                        "@long\nTGCA\n+\nIIII\n",
+                    )
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "during-consumption-environment.pid",
+                ),
+            )
+        end
+        Test.@test during_error isa ErrorException
+        Test.@test occursin(
+            "Long-read FASTQ changed after its initial path/size/SHA-256 snapshot",
+            sprint(showerror, during_error),
+        )
+        Test.@test during_runner_calls[] == 1
+
+        pre_polish_inputs = write_inputs("pre-polish-consumption")
+        pre_polish_steps = Symbol[]
+        pre_polish_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                pre_polish_inputs.long_reads,
+                pre_polish_inputs.short_reads_1,
+                pre_polish_inputs.short_reads_2,
+                joinpath(temp_dir, "pre-polish-consumption-output");
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    push!(pre_polish_steps, step.name)
+                    _autocycler_test_runner!(step)
+                    if step.name == :autocycler
+                        write(
+                            pre_polish_inputs.short_reads_1,
+                            "@pair/1\nTGCA\n+\nIIII\n",
+                        )
+                    end
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "pre-polish-consumption-environment.pid",
+                ),
+            )
+        end
+        Test.@test pre_polish_error isa ErrorException
+        Test.@test occursin(
+            "Paired short-read R1 FASTQ changed after its initial " *
+            "path/size/SHA-256 snapshot",
+            sprint(showerror, pre_polish_error),
+        )
+        Test.@test pre_polish_steps == [:autocycler, :bwa_index]
+
+        final_inputs = write_inputs("after-final-consumption")
+        final_steps = Symbol[]
+        final_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                final_inputs.long_reads,
+                final_inputs.short_reads_1,
+                final_inputs.short_reads_2,
+                joinpath(temp_dir, "after-final-consumption-output");
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    push!(final_steps, step.name)
+                    _autocycler_test_runner!(step)
+                    if step.name == :pypolca
+                        write(
+                            final_inputs.short_reads_2,
+                            "@pair/2\nTGCA\n+\nIIII\n",
+                        )
+                    end
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "after-final-consumption-environment.pid",
+                ),
+            )
+        end
+        Test.@test final_error isa ErrorException
+        Test.@test occursin(
+            "Paired short-read R2 FASTQ changed after its initial " *
+            "path/size/SHA-256 snapshot",
+            sprint(showerror, final_error),
+        )
+        Test.@test final_steps == [
+            :autocycler,
+            :bwa_index,
+            :bwa_mem_1,
+            :bwa_mem_2,
+            :polypolish_filter,
+            :polypolish,
+            :pypolca,
+        ]
+    end
 end

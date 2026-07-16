@@ -186,13 +186,15 @@ the complete normalized package inventory (name, version, build, and channel),
 and fresh local assembly. It requires both Unicycler and SPAdes and verifies
 that the inventory and its SHA-256 digest are identical immediately before and
 after assembly. Reused historical outputs do not claim current realized-
-execution provenance, and nonlocal executors are rejected because their work
-would outlive the mutable-environment lock; the higher-level exact hybrid route
-therefore receives only a fresh local exact result. Incomplete non-empty legacy
-output directories are preserved and rejected rather than deleted. Its public
-result treats `outdir`, `assembly`, and `graph` as canonical absolute safety
-fields; `requested_outdir` preserves caller spelling for audit only and carries
-no artifact-access or cleanup authority. Autocycler additionally records:
+execution provenance. Collectors and dry-run executors return an unrealized
+plan with expected FASTA/GFA paths but no durable reuse-contract path; real
+nonlocal execution is rejected because it would outlive the mutable-environment
+lock. The higher-level exact hybrid route therefore receives only a fresh local
+exact result. Incomplete non-empty legacy output directories are preserved and
+rejected rather than deleted. Its public result treats `outdir`, `assembly`, and
+`graph` as canonical absolute safety fields; `requested_outdir` preserves caller
+spelling for audit only and carries no artifact-access or cleanup authority.
+Autocycler additionally records:
 
 - the immutable upstream script revision and verified SHA-256;
 - the bundled environment specification SHA-256; and
@@ -281,11 +283,13 @@ suite remains part of the regression gate.
 
 The real **multi-input Autocycler-polished** smoke is opt-in because it is
 compute intensive. The fixture must be a bacterial isolate for which mostly
-complete alternative long-read assemblies are expected. Set both external-tool
-gates, provide all three FASTQs, and select the exact Autocycler chemistry:
+complete alternative long-read assemblies are expected. Set the broad
+external-suite gate and both workflow-specific gates, provide all three FASTQs,
+and select the exact Autocycler chemistry:
 
 ```bash
 MYCELIA_RUN_EXTERNAL=true \
+MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true \
 MYCELIA_RUN_AUTOCYCLER_POLISHED=true \
 MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz \
 MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz \
@@ -295,14 +299,17 @@ julia --project=. -e \
   'include("test/4_assembly/third_party_assemblers_multi_input_hybrid.jl")'
 ```
 
-Default CI leaves the dedicated Autocycler gate disabled. Once it is enabled,
-missing or invalid gate prerequisites fail loudly rather than producing a green
-skip.
+The broad external-suite gates alone leave private-fixture smokes disabled.
+`MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true` opts into the Unicycler
+hybrid smoke, and `MYCELIA_RUN_AUTOCYCLER_POLISHED=true` additionally opts into
+the Autocycler-polished arm. A dedicated gate without the broad external gate,
+or a dedicated-plus-external run with missing prerequisites, fails loudly.
 
 The lower-level direct-wrapper smoke in
 `test/8_tool_integration/autocycler.jl` is a separate gate: it uses
-`MYCELIA_RUN_EXTERNAL=true` with `MYCELIA_AUTOCYCLER_LONG_READS` and optional
-paired `MYCELIA_AUTOCYCLER_SHORT_READS_1` / `_2` fixtures.
+`MYCELIA_RUN_EXTERNAL=true` plus `MYCELIA_RUN_AUTOCYCLER_SMOKE=true`, with
+`MYCELIA_AUTOCYCLER_LONG_READS` and optional paired
+`MYCELIA_AUTOCYCLER_SHORT_READS_1` / `_2` fixtures.
 
 ## Downstream benchmark and ensemble boundary
 

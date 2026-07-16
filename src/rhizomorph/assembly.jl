@@ -729,151 +729,6 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
     end
 end
 
-const _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS = (
-    "MYCELIA_HYBRID_SHORT_R1",
-    "MYCELIA_HYBRID_SHORT_R2",
-    "MYCELIA_HYBRID_LONG_READS",
-)
-
-function _multi_input_hybrid_smoke_env_enabled(
-        environment::AbstractDict,
-        name::AbstractString,
-)::Bool
-    return lowercase(strip(String(get(environment, name, "false")))) == "true"
-end
-
-function _multi_input_hybrid_smoke_symbol(
-        environment::AbstractDict,
-        name::AbstractString,
-        default::Symbol,
-        allowed::Tuple,
-)::Symbol
-    configured = get(environment, name, String(default))
-    value = Symbol(lowercase(strip(String(configured))))
-    value in allowed || throw(ArgumentError(
-        "$(name) must be one of $(allowed), got :$(value).",
-    ))
-    return value
-end
-
-function _multi_input_hybrid_smoke_integer(
-        environment::AbstractDict,
-        name::AbstractString,
-        default::Int,
-        minimum::Int,
-        maximum::Int,
-)::Int
-    text = strip(String(get(environment, name, string(default))))
-    value = tryparse(Int, text)
-    value === nothing && throw(ArgumentError(
-        "$(name) must be an integer, got $(repr(text)).",
-    ))
-    minimum <= value <= maximum || throw(ArgumentError(
-        "$(name) must be between $(minimum) and $(maximum), got $(value).",
-    ))
-    return value
-end
-
-function _multi_input_hybrid_smoke_prerequisites(
-        environment::AbstractDict,
-)::NamedTuple
-    run_external =
-        _multi_input_hybrid_smoke_env_enabled(environment, "MYCELIA_RUN_ALL") ||
-        _multi_input_hybrid_smoke_env_enabled(
-            environment,
-            "MYCELIA_RUN_EXTERNAL",
-        )
-    run_autocycler = _multi_input_hybrid_smoke_env_enabled(
-        environment,
-        "MYCELIA_RUN_AUTOCYCLER_POLISHED",
-    )
-    if run_autocycler && !run_external
-        throw(ArgumentError(
-            "MYCELIA_RUN_AUTOCYCLER_POLISHED=true also requires " *
-            "MYCELIA_RUN_EXTERNAL=true (or MYCELIA_RUN_ALL=true).",
-        ))
-    end
-    run_external || return (;
-        run_external = false,
-        run_autocycler = false,
-    )
-
-    missing_inputs = String[
-        name for name in _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS
-        if isempty(strip(String(get(environment, name, ""))))
-    ]
-    isempty(missing_inputs) || throw(ArgumentError(
-        "Enabled multi-input hybrid smoke requires all FASTQ variables; " *
-        "missing: $(join(missing_inputs, ", ")).",
-    ))
-    input_paths = (
-        short_r1 = abspath(String(environment[
-            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[1]
-        ])),
-        short_r2 = abspath(String(environment[
-            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[2]
-        ])),
-        long_reads = abspath(String(environment[
-            _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[3]
-        ])),
-    )
-    for (label, path) in pairs(input_paths)
-        isfile(path) || throw(ArgumentError(
-            "Hybrid smoke $(label) FASTQ not found: $(path)",
-        ))
-        filesize(path) > 0 || throw(ArgumentError(
-            "Hybrid smoke $(label) FASTQ is empty: $(path)",
-        ))
-    end
-    short_read_tech = _multi_input_hybrid_smoke_symbol(
-        environment,
-        "MYCELIA_HYBRID_SHORT_TECH",
-        :illumina,
-        (:illumina, :ultima),
-    )
-    long_read_tech = _multi_input_hybrid_smoke_symbol(
-        environment,
-        "MYCELIA_HYBRID_LONG_TECH",
-        :nanopore,
-        (:nanopore, :pacbio_clr, :pacbio_hifi),
-    )
-    autocycler_read_type = nothing
-    autocycler_jobs = nothing
-    if run_autocycler
-        read_type_text = strip(String(get(
-            environment,
-            "MYCELIA_AUTOCYCLER_READ_TYPE",
-            "",
-        )))
-        isempty(read_type_text) && throw(ArgumentError(
-            "MYCELIA_AUTOCYCLER_READ_TYPE is required when " *
-            "MYCELIA_RUN_AUTOCYCLER_POLISHED=true.",
-        ))
-        autocycler_read_type = _multi_input_hybrid_smoke_symbol(
-            environment,
-            "MYCELIA_AUTOCYCLER_READ_TYPE",
-            :ont_r10,
-            (:ont_r9, :ont_r10, :pacbio_clr, :pacbio_hifi),
-        )
-        autocycler_jobs = _multi_input_hybrid_smoke_integer(
-            environment,
-            "MYCELIA_AUTOCYCLER_TEST_JOBS",
-            1,
-            1,
-            4,
-        )
-    end
-    return (;
-        run_external,
-        run_autocycler,
-        input_paths,
-        short_read_tech,
-        long_read_tech,
-        autocycler_read_type,
-        autocycler_jobs,
-    )
-end
-
 """
 Assembly result structure containing contigs and metadata.
 """
@@ -3695,9 +3550,11 @@ function _workflow_path_entry_exists(path::AbstractString)::Bool
     return ispath(path) || islink(path)
 end
 
-const _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS = 24 * 60 * 60
+const _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS =
+    Mycelia._OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
 
-const _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX = ".mycelia-hybrid.lock"
+const _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX =
+    Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX
 
 function _multi_input_workflow_lock_path(
         workflow_root::AbstractString,
@@ -3707,103 +3564,43 @@ function _multi_input_workflow_lock_path(
     # Canonicalizing the existing ancestor collapses symlink aliases onto one
     # interprocess claim even when the final workflow directory is still absent.
     normalized_root = _canonical_planned_workflow_path(workflow_root)
-    return joinpath(
-        dirname(normalized_root),
-        ".$(basename(normalized_root))$(_MULTI_INPUT_WORKFLOW_LOCK_SUFFIX)",
+    return Mycelia._output_root_reservation_lock_path_from_canonical(
+        normalized_root,
     )
 end
 
 function _multi_input_workflow_lock_is_active(
         lock_path::AbstractString,
 )::Bool
-    normalized_lock_path = normpath(abspath(String(lock_path)))
-    _workflow_path_entry_exists(normalized_lock_path) || return false
-    stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS
-    lock_handle = try
-        Mycelia.FileWatching.Pidfile.trymkpidlock(
-            normalized_lock_path;
-            stale_age,
-            refresh = stale_age / 2,
-        )
-    catch caught
-        caught isa InterruptException && rethrow()
-        throw(ArgumentError(
-            "Unable to validate hierarchical multi-input workflow reservation " *
-            "$(normalized_lock_path): $(sprint(showerror, caught))",
-        ))
-    end
-    lock_handle === false && return true
-    Base.close(lock_handle)
-    return false
+    return Mycelia._output_root_reservation_is_active(
+        lock_path;
+        stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS,
+    )
 end
 
 function _multi_input_ancestor_workflow_lock_paths(
         workflow_root::AbstractString,
 )::Vector{String}
-    normalized_root = normpath(abspath(String(workflow_root)))
-    lock_paths = String[]
-    ancestor = dirname(normalized_root)
-    while dirname(ancestor) != ancestor
-        push!(
-            lock_paths,
-            joinpath(
-                dirname(ancestor),
-                ".$(basename(ancestor))$(_MULTI_INPUT_WORKFLOW_LOCK_SUFFIX)",
-            ),
-        )
-        ancestor = dirname(ancestor)
-    end
-    return lock_paths
+    return Mycelia._ancestor_output_root_reservation_lock_paths(workflow_root)
 end
 
 function _multi_input_descendant_workflow_lock_paths(
         workflow_root::AbstractString,
 )::Vector{String}
-    normalized_root = normpath(abspath(String(workflow_root)))
-    if islink(normalized_root) || !isdir(normalized_root)
-        return String[]
-    end
-    lock_paths = String[]
-    for (directory, directories, files) in walkdir(
-            normalized_root;
-            follow_symlinks = false,
-    )
-        filter!(
-            child -> !islink(joinpath(directory, child)),
-            directories,
-        )
-        for file in files
-            startswith(file, ".") || continue
-            endswith(file, _MULTI_INPUT_WORKFLOW_LOCK_SUFFIX) || continue
-            push!(lock_paths, joinpath(directory, file))
-        end
-    end
-    return sort!(lock_paths)
+    return Mycelia._descendant_output_root_reservation_lock_paths(workflow_root)
 end
 
 function _require_exclusive_multi_input_workflow_domain(
         workflow_root::AbstractString,
         own_lock_path::AbstractString,
 )::Nothing
-    normalized_root = normpath(abspath(String(workflow_root)))
-    normalized_own_lock = normpath(abspath(String(own_lock_path)))
-    for lock_path in _multi_input_ancestor_workflow_lock_paths(normalized_root)
-        lock_path == normalized_own_lock && continue
-        _multi_input_workflow_lock_is_active(lock_path) || continue
-        throw(ArgumentError(
-            "Persistent multi-input output_dir overlaps an active ancestor " *
-            "workflow reservation: $(lock_path)",
-        ))
-    end
-    for lock_path in _multi_input_descendant_workflow_lock_paths(normalized_root)
-        lock_path == normalized_own_lock && continue
-        _multi_input_workflow_lock_is_active(lock_path) || continue
-        throw(ArgumentError(
-            "Persistent multi-input output_dir overlaps an active descendant " *
-            "workflow reservation: $(lock_path)",
-        ))
-    end
-    return nothing
+    return Mycelia._require_exclusive_output_root_reservation(
+        workflow_root,
+        own_lock_path;
+        subject = "Persistent multi-input output_dir",
+        reservation_kind = "workflow",
+        stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS,
+    )
 end
 
 function _with_multi_input_workflow_lock(
@@ -5029,6 +4826,7 @@ function _assemble_paired_short_long(
     )
     function run_reserved_workflow(
             reserved_root_plan::NamedTuple,
+            assembler_ancestor_locks::Tuple = (),
     )::AssemblyResult
         short_r1 = _prepare_read_source(short_reads[1])
         short_r2 = _prepare_read_source(short_reads[2])
@@ -5153,7 +4951,12 @@ function _assemble_paired_short_long(
                 root.path,
                 assembler_label,
             )
-            tool_result = assembler_runner(inputs, assembler_output_dir)
+            tool_result =
+                Mycelia._with_allowed_output_root_ancestor_locks(
+                assembler_ancestor_locks,
+            ) do
+                assembler_runner(inputs, assembler_output_dir)
+            end
             _require_unchanged_workflow_path_identity(
                 root.path,
                 root.identity,
@@ -5289,7 +5092,7 @@ function _assemble_paired_short_long(
             "reservation: planned $(reserved_root_plan.path), observed " *
             "$(validated_root_plan.path).",
         ))
-        return run_reserved_workflow(reserved_root_plan)
+        return run_reserved_workflow(reserved_root_plan, (lock_path,))
     end
 end
 

@@ -6,6 +6,189 @@ function nonempty_file(path::AbstractString)
     return isfile(path) && filesize(path) > 0
 end
 
+const _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX = ".mycelia-output-root.pid"
+const _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS = 7 * 24 * 60 * 60
+const _OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK = ReentrantLock()
+const _OUTPUT_ROOT_ALLOWED_ANCESTORS = IdDict{Task, Vector{String}}()
+
+function _output_root_path_entry_exists(path::AbstractString)::Bool
+    return ispath(path) || islink(path)
+end
+
+function _canonical_planned_output_root(path::AbstractString)::String
+    normalized_path = normpath(abspath(String(path)))
+    existing_ancestor = normalized_path
+    missing_components = String[]
+    while !_output_root_path_entry_exists(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    isdir(existing_ancestor) || throw(ArgumentError(
+        "Output root has a non-directory existing ancestor: " *
+        "$(existing_ancestor)",
+    ))
+    canonical_ancestor = realpath(existing_ancestor)
+    return isempty(missing_components) ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, missing_components...))
+end
+
+function _output_root_reservation_lock_path_from_canonical(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    lock_name =
+        ".$(basename(normalized_root))$(_OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX)"
+    return joinpath(dirname(normalized_root), lock_name)
+end
+
+function _output_root_reservation_lock_path(
+        workflow_root::AbstractString,
+)::String
+    canonical_root = _canonical_planned_output_root(workflow_root)
+    return _output_root_reservation_lock_path_from_canonical(canonical_root)
+end
+
+function _output_root_reservation_is_active(
+        lock_path::AbstractString;
+        stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
+)::Bool
+    stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    _output_root_path_entry_exists(normalized_lock_path) || return false
+    lock_handle = try
+        FileWatching.Pidfile.trymkpidlock(
+            normalized_lock_path;
+            stale_age,
+            refresh = stale_age / 2,
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        throw(ArgumentError(
+            "Unable to validate output-root reservation " *
+            "$(normalized_lock_path): $(sprint(showerror, caught))",
+        ))
+    end
+    lock_handle === false && return true
+    Base.close(lock_handle)
+    return false
+end
+
+function _ancestor_output_root_reservation_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    lock_paths = String[]
+    ancestor = dirname(normalized_root)
+    while dirname(ancestor) != ancestor
+        push!(
+            lock_paths,
+            _output_root_reservation_lock_path_from_canonical(ancestor),
+        )
+        ancestor = dirname(ancestor)
+    end
+    return lock_paths
+end
+
+function _descendant_output_root_reservation_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    if islink(normalized_root) || !isdir(normalized_root)
+        return String[]
+    end
+    lock_paths = String[]
+    for (directory, directories, files) in walkdir(
+            normalized_root;
+            follow_symlinks = false,
+    )
+        filter!(
+            child -> !islink(joinpath(directory, child)),
+            directories,
+        )
+        for file in files
+            startswith(file, ".") || continue
+            endswith(file, _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX) || continue
+            push!(lock_paths, joinpath(directory, file))
+        end
+    end
+    return sort!(lock_paths)
+end
+
+function _current_allowed_output_root_ancestor_locks()::Set{String}
+    task = current_task()
+    return Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+        return Set(get(_OUTPUT_ROOT_ALLOWED_ANCESTORS, task, String[]))
+    end
+end
+
+function _with_allowed_output_root_ancestor_locks(
+        action::Function,
+        lock_paths::Tuple,
+)::Any
+    normalized_lock_paths = String[
+        normpath(abspath(String(lock_path))) for lock_path in lock_paths
+    ]
+    isempty(normalized_lock_paths) && return action()
+    task = current_task()
+    previous_lock_paths = Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+        previous = copy(get(
+            _OUTPUT_ROOT_ALLOWED_ANCESTORS,
+            task,
+            String[],
+        ))
+        _OUTPUT_ROOT_ALLOWED_ANCESTORS[task] = vcat(
+            previous,
+            normalized_lock_paths,
+        )
+        return previous
+    end
+    try
+        return action()
+    finally
+        Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+            if isempty(previous_lock_paths)
+                delete!(_OUTPUT_ROOT_ALLOWED_ANCESTORS, task)
+            else
+                _OUTPUT_ROOT_ALLOWED_ANCESTORS[task] = previous_lock_paths
+            end
+        end
+    end
+end
+
+function _require_exclusive_output_root_reservation(
+        workflow_root::AbstractString,
+        own_lock_path::AbstractString;
+        subject::AbstractString,
+        reservation_kind::AbstractString = "output-root",
+        stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
+)::Nothing
+    normalized_root = normpath(abspath(String(workflow_root)))
+    normalized_own_lock = normpath(abspath(String(own_lock_path)))
+    allowed_ancestor_locks = _current_allowed_output_root_ancestor_locks()
+    for lock_path in
+        _ancestor_output_root_reservation_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        lock_path in allowed_ancestor_locks && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active ancestor " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
+    for lock_path in
+        _descendant_output_root_reservation_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active descendant " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
+    return nothing
+end
+
 """
 Collapse duplicate rows in a DataFrame by consolidating non-missing values.
 
