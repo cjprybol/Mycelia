@@ -891,6 +891,7 @@ function _iterative_checkpoint_configuration(;
         k_ladder::Union{Nothing, Vector{Int}},
         n_k_rungs::Union{Nothing, Int},
         graph_mode::Symbol,
+        qualmer_prefilter_min_count::Int,
         enable_parallel::Bool,
         skip_solid::Bool,
         hard_window::Bool,
@@ -917,6 +918,7 @@ function _iterative_checkpoint_configuration(;
         "k_ladder" => k_ladder,
         "n_k_rungs" => n_k_rungs,
         "graph_mode" => string(graph_mode),
+        "qualmer_prefilter_min_count" => qualmer_prefilter_min_count,
         "enable_parallel" => enable_parallel,
         "skip_solid" => skip_solid,
         "hard_window" => hard_window,
@@ -1730,6 +1732,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         k_ladder::Union{Nothing, Vector{Int}} = nothing,
         n_k_rungs::Union{Nothing, Int} = nothing,
         graph_mode::Symbol = :canonical,
+        qualmer_prefilter_min_count::Int = 1,
         verbose::Bool = true,
         enable_parallel::Bool = false,
         batch_size::Int = 10000,
@@ -1897,6 +1900,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         k_ladder = k_ladder,
         n_k_rungs = n_k_rungs,
         graph_mode = graph_mode,
+        qualmer_prefilter_min_count = qualmer_prefilter_min_count,
         enable_parallel = enable_parallel,
         skip_solid = skip_solid,
         hard_window = hard_window,
@@ -2309,7 +2313,8 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Building qualmer graph with k=$k...")
             end
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode)
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode,
+                min_count = qualmer_prefilter_min_count)
             num_kmers = length(MetaGraphsNext.labels(graph))
 
             if verbose
