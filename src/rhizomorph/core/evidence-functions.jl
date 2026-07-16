@@ -1160,6 +1160,13 @@ function add_evidence!(
             raw = Int(scores[i]) - 33
             ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
         end
+        # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax).
+        ds_qsum = get!(vertex.dataset_quality_sum, dataset_id) do
+            zeros(UInt32, length(scores))
+        end
+        for i in eachindex(scores)
+            ds_qsum[i] += UInt32(Int(scores[i]) - 33)
+        end
     end
 
     return vertex
@@ -1281,6 +1288,23 @@ end
 
 function get_vertex_joint_quality(data::UltralightQualityVertexData)
     return isempty(data.joint_quality) ? nothing : data.joint_quality
+end
+
+"""
+    get_vertex_mean_quality(data::UltralightQualityVertexData, dataset_id::String)
+
+Corrector-compatible per-position MEAN Phred for the truly O(distinct) ultralight-
+quality storage (no per-observation ID tracking) — exact mean from the unclamped
+`dataset_quality_sum ./ dataset_counts` (td-n8ax). See the LightweightQuality
+overload for the contract.
+"""
+function get_vertex_mean_quality(data::UltralightQualityVertexData, dataset_id::String)
+    qsum = get(data.dataset_quality_sum, dataset_id, nothing)
+    count = get(data.dataset_counts, dataset_id, 0)
+    if isnothing(qsum) || isempty(qsum) || count == 0
+        return nothing
+    end
+    return Float64.(qsum) ./ count
 end
 
 # ============================================================================

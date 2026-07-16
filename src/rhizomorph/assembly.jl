@@ -384,8 +384,8 @@ struct AssemblyConfig
             error("qualmer_prefilter_min_count must be positive, got " *
                   "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
         end
-        if !(effective_qualmer_memory_profile in (:full, :lightweight_quality))
-            error("qualmer_memory_profile must be :full or :lightweight_quality, " *
+        if !(effective_qualmer_memory_profile in (:full, :lightweight_quality, :ultralight_quality))
+            error("qualmer_memory_profile must be :full, :lightweight_quality, or :ultralight_quality, " *
                   "got qualmer_memory_profile=:$(effective_qualmer_memory_profile)")
         end
 

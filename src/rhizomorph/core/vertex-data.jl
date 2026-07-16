@@ -434,9 +434,11 @@ mutable struct UltralightQualityKmerVertexData{T}
     const dataset_counts::Dict{String, Int}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}  # UNCLAMPED exact-mean accumulator (td-n8ax)
 
     function UltralightQualityKmerVertexData(kmer::T) where {T}
-        new{T}(kmer, 0, Dict{String, Int}(), Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+        new{T}(kmer, 0, Dict{String, Int}(), Vector{UInt8}(),
+            Dict{String, Vector{UInt8}}(), Dict{String, Vector{UInt32}}())
     end
 end
 
@@ -461,10 +463,11 @@ mutable struct UltralightQualityBioSequenceVertexData{T}
     const dataset_counts::Dict{String, Int}
     const joint_quality::Vector{UInt8}
     const dataset_joint_quality::Dict{String, Vector{UInt8}}
+    const dataset_quality_sum::Dict{String, Vector{UInt32}}  # UNCLAMPED exact-mean accumulator (td-n8ax)
 
     function UltralightQualityBioSequenceVertexData(sequence::T) where {T}
         new{T}(sequence, 0, Dict{String, Int}(),
-            Vector{UInt8}(), Dict{String, Vector{UInt8}}())
+            Vector{UInt8}(), Dict{String, Vector{UInt8}}(), Dict{String, Vector{UInt32}}())
     end
 end
 

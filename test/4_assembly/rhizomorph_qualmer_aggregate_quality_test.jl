@@ -63,10 +63,11 @@ end
 Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
 
     # -----------------------------------------------------------------------
-    # A. EXACT-MEAN EQUIVALENCE: get_vertex_mean_quality on the aggregate
-    #    (:lightweight_quality) graph == the :full graph, per position, even at
-    #    coverage that saturates a UInt8 running sum. Proves B1 (accessor) + B2
-    #    (unclamped storage).
+    # A. EXACT-MEAN EQUIVALENCE: get_vertex_mean_quality on BOTH aggregate
+    #    profiles (:lightweight_quality WITH obs-tracking, :ultralight_quality the
+    #    truly O(distinct) one) == the :full graph, per position, even at coverage
+    #    that saturates a UInt8 running sum. Proves B1 (accessor) + B2 (unclamped
+    #    storage) for both.
     # -----------------------------------------------------------------------
     Test.@testset "A: exact per-position mean quality matches :full" begin
         k = 7
@@ -75,29 +76,28 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
 
         full_graph = Mycelia.Rhizomorph.build_qualmer_graph(
             fq, k; mode = :singlestrand, memory_profile = :full)
-        agg_graph = Mycelia.Rhizomorph.build_qualmer_graph(
-            fq, k; mode = :singlestrand, memory_profile = :lightweight_quality)
-
         full_labels = Set(MetaGraphsNext.labels(full_graph))
-        agg_labels = Set(MetaGraphsNext.labels(agg_graph))
-        # Same distinct k-mers (as-observed keys) in both storage modes.
-        Test.@test full_labels == agg_labels
-        Test.@test !isempty(agg_labels)
-
         ds = "dataset_01"
-        compared = 0
-        for label in full_labels
-            full_mean = Mycelia.Rhizomorph.get_vertex_mean_quality(full_graph[label], ds)
-            agg_mean = Mycelia.Rhizomorph.get_vertex_mean_quality(agg_graph[label], ds)
-            # The aggregate MUST expose a real mean, not the nothing/UInt8(2) filler.
-            Test.@test agg_mean !== nothing
-            Test.@test full_mean !== nothing
-            Test.@test length(agg_mean) == k
-            # Numerically equal to the per-observation mean (exact, not clamped).
-            Test.@test all(isapprox.(agg_mean, full_mean; atol = 1e-9))
-            compared += 1
+
+        for profile in (:lightweight_quality, :ultralight_quality)
+            agg_graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                fq, k; mode = :singlestrand, memory_profile = profile)
+            agg_labels = Set(MetaGraphsNext.labels(agg_graph))
+            # Same distinct k-mers (as-observed keys) in both storage modes.
+            Test.@test full_labels == agg_labels
+            Test.@test !isempty(agg_labels)
+
+            for label in full_labels
+                full_mean = Mycelia.Rhizomorph.get_vertex_mean_quality(full_graph[label], ds)
+                agg_mean = Mycelia.Rhizomorph.get_vertex_mean_quality(agg_graph[label], ds)
+                # A real mean, not the nothing/UInt8(2) filler.
+                Test.@test agg_mean !== nothing
+                Test.@test full_mean !== nothing
+                Test.@test length(agg_mean) == k
+                # Numerically equal to the per-observation mean (exact, not clamped).
+                Test.@test all(isapprox.(agg_mean, full_mean; atol = 1e-9))
+            end
         end
-        Test.@test compared == length(full_labels)
     end
 
     # -----------------------------------------------------------------------
@@ -218,7 +218,7 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
             qualmer_memory_profile = :full, qualmer_prefilter_min_count = 2)
         cfg_agg = Mycelia.Rhizomorph.AssemblyConfig(;
             k = k, corrector = :iterative,
-            qualmer_memory_profile = :lightweight_quality, qualmer_prefilter_min_count = 2)
+            qualmer_memory_profile = :ultralight_quality, qualmer_prefilter_min_count = 2)
 
         res_full = Mycelia.Rhizomorph.assemble_genome(reads, cfg_full)
         res_agg = Mycelia.Rhizomorph.assemble_genome(reads, cfg_agg)
@@ -230,6 +230,51 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
         # And every :full contig (any length) is recovered by the aggregate path —
         # the divergence is only EXTRA sub-2k tips, never a missing/altered contig.
         Test.@test issubset(Set(String.(res_full.contigs)), Set(String.(res_agg.contigs)))
+    end
+
+    # -----------------------------------------------------------------------
+    # F. MEMORY IS O(DISTINCT): aggregate storage footprint stays ~flat as
+    #    coverage grows (fixed per-k-mer counter + k-length sum), while the :full
+    #    per-observation store grows ~linearly. The laptop-scale proxy for the HPC
+    #    E. coli memory gate.
+    # -----------------------------------------------------------------------
+    Test.@testset "F: ultralight aggregate is O(distinct), :full is O(occurrences)" begin
+        k = 11
+        function cov_reads(ref; read_len = 25, cov = 1)
+            reads = FASTX.FASTQ.Record[]
+            qual = repeat("I", read_len)
+            for c in 1:cov, i in 1:(length(ref) - read_len + 1)
+
+                push!(reads,
+                    FASTX.FASTQ.Record("c$(c)_r$(i)", ref[i:(i + read_len - 1)], qual))
+            end
+            return reads
+        end
+
+        # :ultralight_quality is the TRULY O(distinct) profile (no per-observation
+        # ID tracking) — the memory-bound profile the bacterial-scale corrector/gate
+        # uses. :lightweight_quality retains a per-occurrence obs-id Set, so it is
+        # only a partial (~2x) reduction and is NOT the memory-bound profile.
+        agg(cov) = Mycelia.Rhizomorph.build_qualmer_graph(
+            Mycelia.Rhizomorph._prepare_fastq_observations(cov_reads(CORR_REF; cov = cov)),
+            k; mode = :singlestrand, memory_profile = :ultralight_quality)
+        full(cov) = Mycelia.Rhizomorph.build_qualmer_graph(
+            Mycelia.Rhizomorph._prepare_fastq_observations(cov_reads(CORR_REF; cov = cov)),
+            k; mode = :singlestrand, memory_profile = :full)
+
+        a1, a8 = agg(1), agg(8)
+        f1, f8 = full(1), full(8)
+
+        # Distinct-k-mer count is coverage-invariant.
+        Test.@test length(collect(MetaGraphsNext.labels(a8))) ==
+                   length(collect(MetaGraphsNext.labels(a1)))
+
+        agg_ratio = Base.summarysize(a8) / Base.summarysize(a1)
+        full_ratio = Base.summarysize(f8) / Base.summarysize(f1)
+        # Ultralight footprint stays ~flat across 8x coverage; :full grows with
+        # occurrences and must be substantially steeper.
+        Test.@test agg_ratio < 1.5
+        Test.@test full_ratio > 2.0 * agg_ratio
     end
 
     # -----------------------------------------------------------------------

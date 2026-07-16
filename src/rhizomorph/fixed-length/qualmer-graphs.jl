@@ -111,16 +111,13 @@ function build_qualmer_graph(
                 count_canonical = count_canonical
             )
         else
-            # :ultralight_quality has no exact-mean accumulator and does not (yet)
-            # thread the prefilter; reject the unsupported combination loudly rather
-            # than silently ignoring min_count.
-            min_count == 1 || throw(ArgumentError(
-                "min_count prefilter is only supported with memory_profile=:lightweight_quality, not :ultralight_quality"))
             build_kmer_graph_singlestrand_ultralight_quality(
                 records, k;
                 dataset_id = dataset_id,
                 type_hint = type_hint,
-                ambiguous_action = ambiguous_action
+                ambiguous_action = ambiguous_action,
+                min_count = min_count,
+                count_canonical = count_canonical
             )
         end
         if mode == :singlestrand
