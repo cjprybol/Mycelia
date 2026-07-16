@@ -508,6 +508,112 @@ function evaluate_taxonomy_presence_metrics(reference_table::DataFrames.DataFram
 end
 
 """
+    precision_recall_curve_summary(precisions, recalls) -> NamedTuple
+
+Summarize a set of classifier operating points into a precision-recall curve and
+its area. A threshold GRID (e.g. sweeping breadth/depth/count cutoffs) yields an
+unordered cloud of `(precision, recall)` points rather than a single monotone
+ROC; this reduces that cloud defensibly:
+
+  - `frontier_precision` / `frontier_recall` / `frontier_indices`: the Pareto-
+    optimal operating points (no other point has both `>=` precision and `>=`
+    recall, with at least one strict), sorted by recall ascending — the
+    achievable precision/recall tradeoff. `frontier_indices` are positions in the
+    input vectors.
+  - `average_precision`: area under the all-points-interpolated precision step
+    function over recall `[0, max_recall]`, where interpolated precision at
+    recall `r` is `max{ precision_i : recall_i >= r }` (PASCAL-VOC all-points
+    interpolation). Robust to non-monotone and to dominated points.
+  - `auc_trapezoid`: trapezoidal area under the recall-sorted Pareto frontier,
+    reported alongside `average_precision` for transparency; `NaN` for fewer than
+    two frontier points (a single operating point has no defined trapezoid).
+  - `max_f1`, `best_index`, `best_precision`, `best_recall`: the operating point
+    maximizing F1 (`best_index` is a position in the input vectors).
+
+`precisions` and `recalls` must have equal length. Points with a NaN/missing
+precision or recall are dropped first. Empty (or all-dropped) input yields NaN
+metrics, an empty frontier, and `best_index == 0`. This is the general,
+task-agnostic counterpart to the variant-caller-specific ROC summary in
+`calculate_evaluation_summary`.
+"""
+function precision_recall_curve_summary(
+        precisions::AbstractVector, recalls::AbstractVector)
+    length(precisions) == length(recalls) ||
+        error("precisions and recalls must have equal length: " *
+              "$(length(precisions)) vs $(length(recalls))")
+
+    # Drop NaN/missing points, remembering each retained point's input position.
+    ps = Float64[]
+    rs = Float64[]
+    orig = Int[]
+    for i in eachindex(precisions)
+        p = precisions[i]
+        r = recalls[i]
+        (p === missing || r === missing) && continue
+        (isnan(p) || isnan(r)) && continue
+        push!(ps, Float64(p))
+        push!(rs, Float64(r))
+        push!(orig, i)
+    end
+
+    n = length(ps)
+    if n == 0
+        return (n_points = 0,
+            frontier_precision = Float64[], frontier_recall = Float64[],
+            frontier_indices = Int[],
+            average_precision = NaN, auc_trapezoid = NaN,
+            max_f1 = NaN, best_index = 0, best_precision = NaN, best_recall = NaN)
+    end
+
+    # F1 per retained point; the max-F1 point is the single best operating point.
+    f1s = [(ps[i] + rs[i]) == 0 ? 0.0 : 2 * ps[i] * rs[i] / (ps[i] + rs[i])
+           for i in 1:n]
+    bi = argmax(f1s)
+
+    # Pareto frontier: point i survives unless some j dominates it on both axes.
+    frontier = Int[]
+    for i in 1:n
+        dominated = false
+        for j in 1:n
+            i == j && continue
+            if ps[j] >= ps[i] && rs[j] >= rs[i] && (ps[j] > ps[i] || rs[j] > rs[i])
+                dominated = true
+                break
+            end
+        end
+        dominated || push!(frontier, i)
+    end
+    sort!(frontier; by = i -> (rs[i], -ps[i]))
+    fr = [rs[i] for i in frontier]
+    fp = [ps[i] for i in frontier]
+
+    # All-points-interpolated average precision over ALL retained points.
+    ap = 0.0
+    prev = 0.0
+    for r in sort(unique(rs))
+        pinterp = maximum(ps[k] for k in 1:n if rs[k] >= r)
+        ap += (r - prev) * pinterp
+        prev = r
+    end
+
+    # Trapezoid under the recall-sorted frontier (needs >= 2 frontier points).
+    auc = NaN
+    if length(frontier) >= 2
+        auc = 0.0
+        for k in 2:length(frontier)
+            auc += (fr[k] - fr[k - 1]) * (fp[k] + fp[k - 1]) / 2
+        end
+    end
+
+    return (n_points = n,
+        frontier_precision = fp, frontier_recall = fr,
+        frontier_indices = [orig[i] for i in frontier],
+        average_precision = ap, auc_trapezoid = auc,
+        max_f1 = f1s[bi], best_index = orig[bi],
+        best_precision = ps[bi], best_recall = rs[bi])
+end
+
+"""
     accuracy(true_labels, pred_labels)
 
 Returns the overall accuracy.
