@@ -1042,7 +1042,7 @@ function visualize_xam_classifications(; xam, sample_id, accession_to_taxid_tabl
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.png")
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.svg")
     StatsPlots.savefig(p, xam * ".$(sample_id).sankey.pdf")
-    display(p)
+    present_figure(p; name = "xam_$(sample_id)_sankey")
 
     for taxa_level in ["domain", "family", "genus", "species"]
         taxa_counts = sort(
@@ -1056,14 +1056,14 @@ function visualize_xam_classifications(; xam, sample_id, accession_to_taxid_tabl
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.png", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.svg", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).counts.pdf", fig)
-        display(fig)
+        present_figure(fig; name = "xam_$(sample_id)_$(taxa_level)_counts")
 
         fig = Mycelia.visualize_single_sample_taxa_count_pair_proportions(taxa_count_pairs,
             title = "Distribution of Relative Abundance by Taxa:$(taxa_level) - sample_id:$(sample_id)")
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.png", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.svg", fig)
         CairoMakie.save(xam * ".$(sample_id).$(taxa_level).proportion.pdf", fig)
-        display(fig)
+        present_figure(fig; name = "xam_$(sample_id)_$(taxa_level)_proportion")
     end
 end
 
@@ -1312,10 +1312,7 @@ function plot_kmer_rarefaction(
             marker = marker, markersize = markersize)
     end
 
-    if display_plot
-        Base.@info "Displaying rarefaction plot..."
-        Makie.display(fig)
-    end
+    present_figure(fig; name = "kmer_rarefaction", display_plot = display_plot)
 
     output_path_png = Base.Filesystem.joinpath(output_dir, output_basename * ".png")
     output_path_pdf = Base.Filesystem.joinpath(output_dir, output_basename * ".pdf")
@@ -3129,9 +3126,9 @@ function plot_optimal_cluster_assessment_results(clustering_results)
         legend = false
     )
     StatsPlots.vline!(p2, [optimal_number_of_clusters])
-    display(p2)
+    present_figure(p2; name = "cluster_assessment_silhouette")
     StatsPlots.savefig(p1, "$DIR/wcss.svg")
-    display(p1)
+    present_figure(p1; name = "cluster_assessment_wcss")
     StatsPlots.savefig(p2, "$DIR/silhouette.svg")
 end
 
@@ -6267,4 +6264,54 @@ function plot_alpha_diversity_violins(alpha_df::DataFrames.DataFrame;
     end
 
     return fig
+end
+
+"""
+    should_display_plots() -> Bool
+
+Whether library plotting functions should open figures interactively. Off by
+default so tests, scripts, batch pipelines, and CI never pop windows on the
+user's machine; enable interactive display with `ENV["MYCELIA_SHOW_PLOTS"] =
+"true"`. Always `false` under CI (`CI` / `GITHUB_ACTIONS`).
+"""
+function should_display_plots()
+    (get(ENV, "CI", "") == "true" || get(ENV, "GITHUB_ACTIONS", "") == "true") &&
+        return false
+    return lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
+end
+
+"""
+    present_figure(figure; name=nothing, display_plot=true) -> figure
+
+Central policy for a library-generated figure. Saves it to the artifact
+directory `ENV["MYCELIA_PLOT_ARTIFACTS"]` when that is set and a `name` is given
+(as `<dir>/<name>.png` + `.svg` via [`save_plot`](@ref), so a CI job that sets the
+variable and uploads the directory can collect figures as build artifacts — no
+workflow wires this yet), and displays it interactively only when
+`display_plot` and [`should_display_plots`](@ref) both hold. Returns `figure`
+unchanged so callers can still capture and save it themselves. This replaces
+unconditional `display(...)` calls in plotting functions, which otherwise open
+windows during tests and non-interactive runs.
+"""
+function present_figure(
+        figure;
+        name::Union{AbstractString, Nothing} = nothing,
+        display_plot::Bool = true
+)
+    dir = get(ENV, "MYCELIA_PLOT_ARTIFACTS", "")
+    if !isempty(dir) && name !== nothing
+        try
+            save_plot(figure, joinpath(dir, String(name)))
+        catch e
+            # Best-effort artifact save: a diagnostic figure is never worth
+            # crashing a pipeline. But do not swallow an interrupt (Ctrl-C during
+            # a batch) — re-raise it so the user stays in control.
+            e isa InterruptException && rethrow()
+            @warn "failed to save plot artifact" name exception = e
+        end
+    end
+    if display_plot && should_display_plots()
+        display(figure)
+    end
+    return figure
 end

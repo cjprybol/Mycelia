@@ -6,14 +6,14 @@
 #
 # Usage:
 #   Core tests (CI/local):      julia --project=. -e "import Pkg; Pkg.test()"
-#   External suite (HPC):       MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   External suite (alt):       MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
-#   External suite (portable):  LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
+#   Full tests (HPC):           MYCELIA_RUN_ALL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full tests (alt):           MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.test()'
+#   Full tests (portable):      LD_LIBRARY_PATH="" MYCELIA_RUN_EXTERNAL=true julia --project=. -e 'import Pkg; Pkg.update(); Pkg.instantiate(); Pkg.precompile(); Pkg.test()'
 #   Show plots interactively:   MYCELIA_SHOW_PLOTS=true julia --project=. -e "import Pkg; Pkg.test()"
 #   Benchmarks:                 julia --project=. benchmarking/run_all_benchmarks.jl
 #   Tutorials:                  julia --project=. tutorials/run_all_tutorials.jl
 #
-# Private-fixture smokes are not enabled by the broad external-suite flags.
+# Private-fixture smokes are not enabled by the broad full-suite flags.
 # Their test files document the additional workflow-specific gates and inputs:
 #   - MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
 #   - MYCELIA_RUN_AUTOCYCLER_POLISHED=true (hybrid-smoke subgate)
@@ -40,12 +40,24 @@ Base.include(
     joinpath(@__DIR__, "multi_input_hybrid_smoke_preflight.jl"),
 )
 
-# Suppress plot display during tests by default.
-# Set MYCELIA_SHOW_PLOTS=true to enable interactive plot display.
+# Suppress interactive plot display during tests by default; set
+# MYCELIA_SHOW_PLOTS=true for interactive display. The primary guard is at the
+# library level (Mycelia.present_figure / should_display_plots, which also honors
+# CI); this env block is defense-in-depth for any backend path not routed through
+# present_figure. NOTE: GR reads `GKSwstype` (no underscore) — the previous
+# `GKS_WSTYPE` spelling was ignored, so GR could still open windows.
 if !MYCELIA_SHOW_PLOTS
-    ENV["GKS_WSTYPE"] = "100"       # GR backend: render to memory (no windows)
+    ENV["GKSwstype"] = "100"        # GR backend: render to file, no window (canonical name)
+    ENV["GKS_WSTYPE"] = "100"       # legacy spelling kept for safety
     ENV["DISPLAY"] = ""              # Prevent X11/Wayland window creation
     ENV["MPLBACKEND"] = "Agg"       # Matplotlib non-interactive backend (if used)
+end
+
+# When MYCELIA_PLOT_ARTIFACTS is set, library plotting functions save figures
+# there via Mycelia.present_figure. A future CI job can set the variable and
+# upload the directory to collect figures as build artifacts (not yet wired).
+if haskey(ENV, "MYCELIA_PLOT_ARTIFACTS") && !isempty(ENV["MYCELIA_PLOT_ARTIFACTS"])
+    mkpath(ENV["MYCELIA_PLOT_ARTIFACTS"])
 end
 
 const TEST_ARTIFACT_DIRS = [
