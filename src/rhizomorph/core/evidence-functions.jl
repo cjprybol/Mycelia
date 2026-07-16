@@ -591,7 +591,7 @@ function _current_soft_edge_weight_snapshot()::Union{Nothing, _SoftEdgeWeightSna
     snapshot = get(
         Base.task_local_storage(),
         _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY,
-        nothing,
+        nothing
     )
     snapshot === nothing && return nothing
     return snapshot::_SoftEdgeWeightSnapshot
@@ -599,12 +599,12 @@ end
 
 function _with_soft_edge_weight_snapshot(
         f::Function,
-        snapshot::Union{Nothing, _SoftEdgeWeightSnapshot},
+        snapshot::Union{Nothing, _SoftEdgeWeightSnapshot}
 )::Any
     return Base.task_local_storage(
         f,
         _SOFT_EDGE_WEIGHT_SNAPSHOT_KEY,
-        snapshot,
+        snapshot
     )
 end
 
@@ -820,7 +820,7 @@ const SOFT_EM_MIN_SUPPORT = 3
 function _soft_edge_weight_snapshot_with_graph(
         graph::Any,
         acc::SoftEdgeWeightAccumulator;
-        min_support::Integer = SOFT_EM_MIN_SUPPORT,
+        min_support::Integer = SOFT_EM_MIN_SUPPORT
 )::_SoftEdgeWeightSnapshot
     current = _current_soft_edge_weight_snapshot()
     weights = current === nothing ?
@@ -861,12 +861,12 @@ classification guarantee or a replacement for configured graph cleaning.
 function register_soft_edge_weights!(
         graph::GRAPH,
         acc::SoftEdgeWeightAccumulator;
-        min_support::Integer = SOFT_EM_MIN_SUPPORT,
+        min_support::Integer = SOFT_EM_MIN_SUPPORT
 )::GRAPH where {GRAPH}
     snapshot = _soft_edge_weight_snapshot_with_graph(
         graph,
         acc;
-        min_support = min_support,
+        min_support = min_support
     )
     Base.task_local_storage(_SOFT_EDGE_WEIGHT_SNAPSHOT_KEY, snapshot)
     return graph
@@ -895,7 +895,7 @@ raw/cleaned graph scopes remain deterministic without a process-global lock.
 function _with_soft_edge_weight_scope(
         f::Function,
         graph::Any,
-        acc::Union{Nothing, SoftEdgeWeightAccumulator},
+        acc::Union{Nothing, SoftEdgeWeightAccumulator}
 )::Any
     snapshot = acc === nothing ?
                _current_soft_edge_weight_snapshot() :
@@ -1335,6 +1335,15 @@ function add_evidence!(
             raw = Int(scores[i]) - 33
             ds_qual[i] = UInt8(clamp(Int(ds_qual[i]) + raw, 0, 255))
         end
+        # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax). Kept
+        # separate from the clamped joint_quality so corrector-facing mean
+        # (sum ./ dataset_counts) is numerically identical to the :full path.
+        ds_qsum = get!(vertex.dataset_quality_sum, dataset_id) do
+            zeros(UInt32, length(scores))
+        end
+        for i in eachindex(scores)
+            ds_qsum[i] += UInt32(Int(scores[i]) - 33)
+        end
     end
 
     return vertex
@@ -1480,6 +1489,25 @@ end
 
 function get_vertex_joint_quality(data::LightweightQualityVertexData)
     return isempty(data.joint_quality) ? nothing : data.joint_quality
+end
+
+"""
+    get_vertex_mean_quality(data::LightweightQualityVertexData, dataset_id::String)
+
+Corrector-compatible per-position MEAN Phred for aggregate (lightweight-quality)
+storage (td-n8ax). Recovers the exact mean from the UNCLAMPED per-dataset running
+sum (`dataset_quality_sum`) divided by the per-dataset observation count
+(`dataset_counts`), matching the :full path's per-observation mean numerically.
+Returns `nothing` when the dataset has no aggregated quality (count 0 / empty),
+mirroring the :full accessor's contract so downstream `nothing`-guards still hold.
+"""
+function get_vertex_mean_quality(data::LightweightQualityVertexData, dataset_id::String)
+    qsum = get(data.dataset_quality_sum, dataset_id, nothing)
+    count = get(data.dataset_counts, dataset_id, 0)
+    if isnothing(qsum) || isempty(qsum) || count == 0
+        return nothing
+    end
+    return Float64.(qsum) ./ count
 end
 
 # ============================================================================
