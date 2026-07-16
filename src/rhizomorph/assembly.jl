@@ -143,7 +143,7 @@ struct AssemblyConfig
     dedup_revcomp::Bool                     # Collapse RC-pair contigs to one canonical rep
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
-    qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op); DISTINCT from min_coverage (td-ck03)
+    qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op on every path); DISTINCT from min_coverage (td-ck03)
 
     # Optional read-correction front-end (opt-in; default :none preserves today's
     # single-k-from-uncorrected-reads behavior byte-for-byte).
@@ -270,15 +270,13 @@ struct AssemblyConfig
         # overridden by passing an explicit dedup_revcomp=true/false.
         effective_dedup_revcomp = dedup_revcomp === nothing ?
                                   (corrector == :iterative) : dedup_revcomp
-        # Opt-in qualmer coverage prefilter (td-ck03). Default 1 = exact no-op.
-        # The iterative corrector re-assembles from a qualmer graph whose dominant
-        # memory sink is singleton error k-mers, so it auto-defaults to 2 (drops
-        # ONLY coverage-1 k-mers). DISTINCT from min_coverage (downstream solidity
-        # threshold) so the td-h6w9 variation-preservation holdout stays safe. An
-        # explicit value overrides the auto-default.
+        # Opt-in qualmer coverage prefilter (td-ck03). Default 1 = EXACT no-op on
+        # every path (the prefilter drops low-coverage k-mers, which CHANGES
+        # assembly output, so it must be explicitly requested — not a silent
+        # default; e.g. bacterial-scale runs pass qualmer_prefilter_min_count=2).
+        # DISTINCT from min_coverage (the downstream solidity threshold).
         effective_qualmer_prefilter_min_count = qualmer_prefilter_min_count === nothing ?
-                                                (corrector == :iterative ? 2 : 1) :
-                                                qualmer_prefilter_min_count
+                                                1 : qualmer_prefilter_min_count
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31

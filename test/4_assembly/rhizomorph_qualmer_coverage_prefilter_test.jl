@@ -134,16 +134,16 @@ Test.@testset "Qualmer coverage prefilter (min_count)" begin
         end
     end
 
-    Test.@testset "D: config prefilter default is opt-in no-op; iterative auto-2" begin
-        # E6 config field: default no-op (1) on the plain path, auto-2 on the corrector.
+    Test.@testset "D: config prefilter is fully opt-in (default 1 = no-op everywhere)" begin
+        # The prefilter drops low-coverage k-mers => it CHANGES assembly output, so
+        # it is NEVER auto-enabled — default 1 on every path incl. the corrector.
         cfg_default = Mycelia.Rhizomorph.AssemblyConfig(k = k)
         cfg_iter = Mycelia.Rhizomorph.AssemblyConfig(k = k, corrector = :iterative)
         Test.@test cfg_default.qualmer_prefilter_min_count == 1
-        Test.@test cfg_iter.qualmer_prefilter_min_count == 2
-        # explicit override wins
-        cfg_ovr = Mycelia.Rhizomorph.AssemblyConfig(k = k, corrector = :iterative,
-            qualmer_prefilter_min_count = 1)
-        Test.@test cfg_ovr.qualmer_prefilter_min_count == 1
+        Test.@test cfg_iter.qualmer_prefilter_min_count == 1  # NOT auto-enabled (opt-in only)
+        # explicit opt-in works
+        cfg_opt = Mycelia.Rhizomorph.AssemblyConfig(k = k, qualmer_prefilter_min_count = 2)
+        Test.@test cfg_opt.qualmer_prefilter_min_count == 2
         # invalid rejected
         # Invalid rejected with a message that names the field (per repo
         # convention: @test_throws must validate message content).
