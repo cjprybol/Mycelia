@@ -100,6 +100,18 @@ Test.@testset "Execution backend helpers" begin
         String[],
     )
     Test.@test legacy_malformed_job_id.scheduler_acceptance == :unknown
+    # The backward-compatible positional constructor maps every historical
+    # outcome onto the current three-state contract; it never emits :rejected.
+    Test.@test all(
+        result.scheduler_acceptance in (:not_attempted, :accepted, :unknown)
+        for result in (
+            legacy_submit_result,
+            legacy_failed_sbatch,
+            legacy_dry_run,
+            legacy_validation_failure,
+            legacy_malformed_job_id,
+        )
+    )
     Test.@test Mycelia.resolve_executor(:collect) isa Mycelia.CollectExecutor
     Test.@test Mycelia.resolve_executor(:dry_run) isa Mycelia.DryRunExecutor
     Test.@test Mycelia.resolve_executor(:dryrun) isa Mycelia.DryRunExecutor

@@ -263,11 +263,11 @@ releases that exact job with `scontrol release`. Runtime execution requires the
 bound sidecar and an exact `SLURM_JOB_ID` match before consuming the reservation.
 A crash before binding therefore leaves a non-runnable held job, while a crash
 after binding leaves an inspectable job ID that can be released or cancelled.
-Scheduler acceptance is recorded as not attempted, explicitly rejected,
-accepted, or unknown. Only the first two states permit automatic reservation
-cleanup; malformed output, transport interruption, a thrown post-attempt runner,
-or any other unknown outcome preserves the unbound reservation for inspection,
-explicit recovery binding, or confirmed-not-submitted reclamation.
+Scheduler acceptance is recorded as not attempted, accepted, or unknown. Only
+the not-attempted state permits automatic reservation cleanup; malformed output,
+transport interruption, a thrown post-attempt runner, or any other unknown
+outcome preserves the unbound reservation for inspection, explicit recovery
+binding, or confirmed-not-submitted reclamation.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream

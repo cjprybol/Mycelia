@@ -51,9 +51,9 @@ Record a backend submission result.
 For `sbatch`, `scheduler_acceptance` is `:accepted` only when an exact parsable
 job id was returned. Once `sbatch` has been invoked, every result without that
 proof is `:unknown`; a client exit code or diagnostic text cannot prove that
-the controller rejected the request. `:not_attempted` and the legacy
-`:rejected` state are reserved for failures established before invoking the
-scheduler.
+the controller rejected the request. The supported states are `:not_attempted`,
+`:accepted`, and `:unknown`; failures established before invoking the scheduler
+use `:not_attempted`.
 """
 Base.@kwdef struct SubmitResult
     ok::Bool = false

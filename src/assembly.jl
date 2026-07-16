@@ -1956,7 +1956,6 @@ function _run_unicycler_with_contract(;
     resolved_executor = resolve_executor(executor)
     assembly = joinpath(planned_outdir, "assembly.fasta")
     graph = joinpath(planned_outdir, "assembly.gfa")
-    contract_marker = joinpath(planned_outdir, _UNICYCLER_CONTRACT_FILENAME)
     command = _unicycler_command(;
         conda_runner = resolved_conda_runner,
         environment_prefix = resolved_environment_prefix,
@@ -4665,10 +4664,36 @@ end
 
 function _metamdbg_output_lock_path(outdir::AbstractString)::String
     normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    output_identity = _output_root_reservation_identity(normalized_outdir)
     return joinpath(
         dirname(normalized_outdir),
-        ".$(basename(normalized_outdir)).mycelia-metamdbg.lock",
+        ".mycelia-metamdbg.lock.$(output_identity)",
     )
+end
+
+function _metamdbg_output_lock_identity(
+        lock_path::AbstractString,
+)::NamedTuple
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    isdir(normalized_lock_path) && !islink(normalized_lock_path) || error(
+        "metaMDBG lifecycle lock is missing, replaced, or not a regular " *
+        "directory: $(normalized_lock_path).",
+    )
+    metadata = stat(normalized_lock_path)
+    return (; device = metadata.device, inode = metadata.inode)
+end
+
+function _require_unchanged_metamdbg_output_lock(
+        lock_path::AbstractString,
+        expected_identity::NamedTuple,
+)::String
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    observed_identity = _metamdbg_output_lock_identity(normalized_lock_path)
+    observed_identity == expected_identity || error(
+        "metaMDBG lifecycle lock was replaced before cleanup: " *
+        "$(normalized_lock_path).",
+    )
+    return normalized_lock_path
 end
 
 function _with_metamdbg_output_lock(
@@ -4676,6 +4701,8 @@ function _with_metamdbg_output_lock(
         outdir::AbstractString,
         ;
         lock_remover::Function = path -> rm(path),
+        lock_cleanup_failure_handler::Function =
+            (_path::AbstractString, _cleanup_error::Any) -> nothing,
 )::Any
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
     lock_path = _metamdbg_output_lock_path(canonical_outdir)
@@ -4690,21 +4717,85 @@ function _with_metamdbg_output_lock(
             sprint(showerror, caught),
         )
     end
+    lock_identity = _metamdbg_output_lock_identity(lock_path)
+    cleanup_lock = function ()
+        _require_unchanged_metamdbg_output_lock(lock_path, lock_identity)
+        lock_remover(lock_path)
+        !_output_root_path_entry_exists(lock_path) || error(
+            "metaMDBG lifecycle lock remover returned without removing " *
+            "the exact private lock: $(lock_path).",
+        )
+        return nothing
+    end
     result = try
         _metamdbg_canonical_output_path(canonical_outdir) == canonical_outdir ||
             error("metaMDBG output path changed while acquiring its lock.")
         action()
     catch primary_error
         try
-            lock_remover(lock_path)
+            cleanup_lock()
         catch cleanup_error
+            try
+                lock_cleanup_failure_handler(lock_path, cleanup_error)
+            catch preservation_error
+                @error "metaMDBG could not preserve a shared fail-closed " *
+                       "reservation after private lifecycle cleanup failed" lock_path primary_error cleanup_error preservation_error
+            end
             @warn "metaMDBG failed to release its output lock while preserving " *
                   "the primary workflow failure" lock_path primary_error cleanup_error
         end
         Base.rethrow()
     end
-    lock_remover(lock_path)
+    try
+        cleanup_lock()
+    catch cleanup_error
+        try
+            lock_cleanup_failure_handler(lock_path, cleanup_error)
+        catch preservation_error
+            error(
+                "metaMDBG private lifecycle cleanup failed and its shared " *
+                "fail-closed reservation could not be published. Private " *
+                "cause: $(sprint(showerror, cleanup_error)). Preservation " *
+                "cause: $(sprint(showerror, preservation_error))",
+            )
+        end
+        throw(cleanup_error)
+    end
     return result
+end
+
+function _metamdbg_lifecycle_cleanup_reservation_path(
+        outdir::AbstractString,
+)::String
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    return _output_root_durable_reservation_path_from_canonical(
+        canonical_outdir,
+        "metamdbg-private-lifecycle-cleanup-failed",
+    )
+end
+
+function _publish_metamdbg_lifecycle_cleanup_reservation!(
+        outdir::AbstractString,
+)::String
+    reservation_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(outdir)
+    if !_output_root_path_entry_exists(reservation_path)
+        reservation_created = false
+        try
+            Base.Filesystem.mkdir(reservation_path; mode = 0o700)
+            reservation_created = true
+        catch
+            _output_root_path_entry_exists(reservation_path) || rethrow()
+        end
+        if reservation_created
+            _fsync_metamdbg_directory(dirname(reservation_path))
+        end
+    end
+    _output_root_path_entry_exists(reservation_path) || error(
+        "metaMDBG failed to publish its lifecycle cleanup reservation: " *
+        "$(reservation_path).",
+    )
+    return reservation_path
 end
 
 function _with_metamdbg_output_domain_lock(
@@ -4725,6 +4816,19 @@ function _with_metamdbg_output_domain_lock(
         "metaMDBG output is already reserved by another output-root " *
         "workflow: $(reservation_lock_path)",
     ))
+    preserve_generic_reservation = Ref(false)
+    cleanup_reservation_confirmed = Ref(false)
+    cleanup_reservation_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    cleanup_failure_handler = function (
+            _lock_path::AbstractString,
+            _cleanup_error::Any,
+    )
+        preserve_generic_reservation[] = true
+        _publish_metamdbg_lifecycle_cleanup_reservation!(canonical_outdir)
+        cleanup_reservation_confirmed[] = true
+        return nothing
+    end
     try
         _require_exclusive_output_root_reservation(
             canonical_outdir,
@@ -4732,9 +4836,21 @@ function _with_metamdbg_output_domain_lock(
             subject = "metaMDBG outdir",
             stale_age,
         )
-        return _with_metamdbg_output_lock(action, canonical_outdir)
+        return _with_metamdbg_output_lock(
+            action,
+            canonical_outdir;
+            lock_cleanup_failure_handler = cleanup_failure_handler,
+        )
     finally
-        Base.close(lock_handle)
+        if preserve_generic_reservation[] &&
+           (!cleanup_reservation_confirmed[] ||
+            !_output_root_path_entry_exists(cleanup_reservation_path))
+            @error "metaMDBG retained its live generic PID reservation " *
+                   "because private lifecycle cleanup failed and its durable " *
+                   "cleanup sentinel was not confirmed" canonical_outdir reservation_lock_path cleanup_reservation_path cleanup_reservation_confirmed
+        else
+            Base.close(lock_handle)
+        end
     end
 end
 
@@ -4941,7 +5057,8 @@ function _metamdbg_submission_reservation_prefix(
         outdir::AbstractString,
 )::String
     normalized_outdir = _metamdbg_canonical_output_path(outdir)
-    return ".$(basename(normalized_outdir)).mycelia-metamdbg-submission."
+    output_identity = _output_root_reservation_identity(normalized_outdir)
+    return ".mycelia-metamdbg-submission.$(output_identity)."
 end
 
 function _metamdbg_submission_reservation_path(
@@ -6935,7 +7052,7 @@ function _metamdbg_executor_script(
     verified_environment_path =
         _require_verified_metamdbg_environment_spec(environment_path)
     outdir_parent = dirname(outputs.outdir)
-    outdir_base = basename(outputs.outdir)
+    outdir_identity = _output_root_reservation_identity(outputs.outdir)
     lock_path = _metamdbg_output_lock_path(outputs.outdir)
     effective_submission_reservation = if submission_reservation === nothing
         _metamdbg_submission_reservation(outputs, input_contract, graph_k)
@@ -7048,6 +7165,7 @@ function _metamdbg_executor_script(
         "submission_reservation_job=$(_metamdbg_shell_literal(effective_submission_reservation.job_marker))",
         "submission_output_root_reservation=$(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_marker))",
         "runtime_output_root_reservation=$(_metamdbg_shell_literal(effective_submission_reservation.runtime_output_root_reservation_marker))",
+        "runtime_cleanup_failure_reservation=$(_metamdbg_shell_literal(_metamdbg_lifecycle_cleanup_reservation_path(outputs.outdir)))",
     ]
     reservation_validation_function_lines = String[
         "metamdbg_file_mode() {",
@@ -7097,7 +7215,11 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG shared output-root reservation does not match this owner capability\" >&2",
         "  return 1",
         "}",
-        "reservation_entry_count=\$(find \"\$submission_reservation_dir\" -mindepth 1 -maxdepth 1 -print | awk 'END { print NR }')",
+        "collect_metamdbg_directory_entries \"\$submission_reservation_dir\" \"\$reservation_entries_file\" \"submission reservation\"",
+        "reservation_entry_count=0",
+        "while IFS= read -r -d '' reservation_entry; do",
+        "  reservation_entry_count=\$((reservation_entry_count + 1))",
+        "done < \"\$reservation_entries_file\"",
         "if [ \"\$reservation_entry_count\" -ne 2 ] || [ ! -f \"\$submission_reservation_job\" ] || [ -L \"\$submission_reservation_job\" ] || [ ! -s \"\$submission_reservation_job\" ]; then",
         "  echo \"metaMDBG runtime refuses an unbound or invalid submission reservation\" >&2",
         "  return 1",
@@ -7119,43 +7241,133 @@ function _metamdbg_executor_script(
         "}",
         "}",
     ]
+    output_root_identity_function_lines = String[
+        "metamdbg_output_root_identity() {",
+        "  local requested_root=\"\$1\"",
+    ]
+    reservation_identity_root = outputs.outdir
+    while dirname(reservation_identity_root) != reservation_identity_root
+        push!(output_root_identity_function_lines,
+            "  if [ \"\$requested_root\" = " *
+            "$(_metamdbg_shell_literal(reservation_identity_root)) ]; then",
+            "    printf '%s' " *
+            _metamdbg_shell_literal(_output_root_reservation_identity(
+                reservation_identity_root,
+            )),
+            "    return 0",
+            "  fi",
+        )
+        reservation_identity_root = dirname(reservation_identity_root)
+    end
+    append!(output_root_identity_function_lines, String[
+        "  echo \"metaMDBG cannot identify an unexpected output-root domain: \$requested_root\" >&2",
+        "  return 1",
+        "}",
+    ])
     output_root_domain_function_lines = String[
+        output_root_identity_function_lines...,
+        "require_owned_runtime_output_root_reservation() {",
+        "  local observed_runtime_reservation_identity",
+        "  if [ ! -d \"\$runtime_output_root_reservation\" ] || [ -L \"\$runtime_output_root_reservation\" ]; then",
+        "    echo \"metaMDBG runtime output-root reservation is missing, replaced, or not a regular directory\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_runtime_reservation_identity=\$(metamdbg_directory_identity \"\$runtime_output_root_reservation\") || observed_runtime_reservation_identity=",
+        "  if [ -z \"\$observed_runtime_reservation_identity\" ] || [ \"\$observed_runtime_reservation_identity\" != \"\$bound_runtime_output_root_reservation_identity\" ]; then",
+        "    echo \"metaMDBG runtime output-root reservation identity changed after acquisition\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
+        "publish_metamdbg_runtime_cleanup_reservation() {",
+        "  if [ -e \"\$runtime_cleanup_failure_reservation\" ] || [ -L \"\$runtime_cleanup_failure_reservation\" ]; then",
+        "    return 0",
+        "  fi",
+        "  if mkdir -m 700 -- \"\$runtime_cleanup_failure_reservation\" 2>/dev/null; then",
+        "    return 0",
+        "  fi",
+        "  if [ -e \"\$runtime_cleanup_failure_reservation\" ] || [ -L \"\$runtime_cleanup_failure_reservation\" ]; then",
+        "    return 0",
+        "  fi",
+        "  echo \"metaMDBG could not publish its runtime cleanup failure reservation\" >&2",
+        "  return 1",
+        "}",
+        "collect_metamdbg_directory_entries() {",
+        "  local enumeration_root=\"\$1\"",
+        "  local inventory_path=\"\$2\"",
+        "  local inventory_label=\"\$3\"",
+        "  if [ ! -d \"\$enumeration_root\" ] || [ -L \"\$enumeration_root\" ]; then",
+        "    echo \"metaMDBG cannot enumerate \$inventory_label because its root is missing, replaced, or not a regular directory: \$enumeration_root\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! find -P \"\$enumeration_root\" -mindepth 1 -maxdepth 1 -print0 > \"\$inventory_path\"; then",
+        "    rm -f -- \"\$inventory_path\"",
+        "    echo \"metaMDBG could not completely enumerate \$inventory_label; refusing execution\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
         "require_exclusive_output_root_domain() {",
         "  local reservation_root=\"\$outdir\"",
         "  local reservation_parent",
-        "  local reservation_base",
+        "  local root_identity",
         "  local pid_reservation",
         "  local durable_prefix",
         "  local candidate",
+        "  local inventory_path",
         "  while [ \"\$(dirname -- \"\$reservation_root\")\" != \"\$reservation_root\" ]; do",
         "    reservation_parent=\$(dirname -- \"\$reservation_root\")",
-        "    reservation_base=\$(basename -- \"\$reservation_root\")",
-        "    pid_reservation=\"\$reservation_parent/.\$reservation_base$(_OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX)\"",
-        "    if [ -e \"\$pid_reservation\" ] || [ -L \"\$pid_reservation\" ]; then",
-        "      echo \"metaMDBG overlaps an active shared output-root reservation: \$pid_reservation\" >&2",
-        "      return 1",
+        "    root_identity=\$(metamdbg_output_root_identity \"\$reservation_root\")",
+        "    if [ \"\$reservation_parent\" = / ]; then",
+        "      pid_reservation=\"/$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)\$root_identity\"",
+        "      durable_prefix=\"/$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)\$root_identity.\"",
+        "    else",
+        "      pid_reservation=\"\$reservation_parent/$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)\$root_identity\"",
+        "      durable_prefix=\"\$reservation_parent/$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)\$root_identity.\"",
         "    fi",
-        "    durable_prefix=\"\$reservation_parent/.\$reservation_base$(_OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR)\"",
-        "    for candidate in \"\$durable_prefix\"*; do",
-        "      if [ ! -e \"\$candidate\" ] && [ ! -L \"\$candidate\" ]; then",
-        "        continue",
+        "    output_root_scan_index=\$((output_root_scan_index + 1))",
+        "    inventory_path=\"\$secure_tmpdir/output-root-domain-\$output_root_scan_index.paths\"",
+        "    collect_metamdbg_directory_entries \"\$reservation_parent\" \"\$inventory_path\" \"same-root or ancestor output reservations\"",
+        "    while IFS= read -r -d '' candidate; do",
+        "      if [ \"\$candidate\" = \"\$pid_reservation\" ]; then",
+        "        echo \"metaMDBG overlaps an active shared output-root reservation: \$candidate\" >&2",
+        "        return 1",
         "      fi",
-        "      if [ \"\$candidate\" = \"\$submission_output_root_reservation\" ] || [ \"\$candidate\" = \"\$runtime_output_root_reservation\" ]; then",
-        "        continue",
+        "      if [[ \"\$candidate\" == \"\$durable_prefix\"* ]]; then",
+        "        if [ \"\$candidate\" = \"\$submission_output_root_reservation\" ]; then",
+        "          continue",
+        "        fi",
+        "        if [ \"\$candidate\" = \"\$runtime_output_root_reservation\" ]; then",
+        "          require_owned_runtime_output_root_reservation",
+        "          continue",
+        "        fi",
+        "        echo \"metaMDBG overlaps an active shared output-root reservation: \$candidate\" >&2",
+        "        return 1",
         "      fi",
-        "      echo \"metaMDBG overlaps an active shared output-root reservation: \$candidate\" >&2",
-        "      return 1",
-        "    done",
+        "    done < \"\$inventory_path\"",
         "    reservation_root=\"\$reservation_parent\"",
         "  done",
-        "  if [ -d \"\$outdir\" ] && [ ! -L \"\$outdir\" ]; then",
+        "  if [ -L \"\$outdir\" ] || { [ -e \"\$outdir\" ] && [ ! -d \"\$outdir\" ]; }; then",
+        "    echo \"metaMDBG cannot enumerate descendant output reservations because outdir is replaced or not a regular directory\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -d \"\$outdir\" ]; then",
+        "    output_root_scan_index=\$((output_root_scan_index + 1))",
+        "    inventory_path=\"\$secure_tmpdir/output-root-domain-\$output_root_scan_index.paths\"",
+        "    if ! find -P \"\$outdir\" -mindepth 1 \\( -name '$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)*' -o -name '$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)*' \\) -print0 > \"\$inventory_path\"; then",
+        "      rm -f -- \"\$inventory_path\"",
+        "      echo \"metaMDBG could not completely enumerate descendant output reservations; refusing execution\" >&2",
+        "      return 1",
+        "    fi",
         "    while IFS= read -r -d '' candidate; do",
-        "      if [ \"\$candidate\" = \"\$submission_output_root_reservation\" ] || [ \"\$candidate\" = \"\$runtime_output_root_reservation\" ]; then",
+        "      if [ \"\$candidate\" = \"\$submission_output_root_reservation\" ]; then",
+        "        continue",
+        "      fi",
+        "      if [ \"\$candidate\" = \"\$runtime_output_root_reservation\" ]; then",
+        "        require_owned_runtime_output_root_reservation",
         "        continue",
         "      fi",
         "      echo \"metaMDBG overlaps an active descendant shared output-root reservation: \$candidate\" >&2",
         "      return 1",
-        "    done < <(find -P \"\$outdir\" \\( -name '.*$(_OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX)' -o -name '.*$(_OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR)*' \\) -print0)",
+        "    done < \"\$inventory_path\"",
         "  fi",
         "}",
     ]
@@ -7163,7 +7375,15 @@ function _metamdbg_executor_script(
         "validate_submission_reservation",
         "reservation_tombstone=\"\$secure_tmpdir/consumed-reservation\"",
         "mv -- \"\$submission_reservation_dir\" \"\$reservation_tombstone\"",
-        "rm -- \"\$submission_output_root_reservation\"",
+        "if ! rm -- \"\$submission_output_root_reservation\"; then",
+        "  echo \"metaMDBG failed to consume its queued shared output-root reservation\" >&2",
+        "  if ! mv -- \"\$reservation_tombstone\" \"\$submission_reservation_dir\"; then",
+        "    preserve_secure_tmpdir=1",
+        "    cleanup_safe_to_release_domain=0",
+        "    echo \"metaMDBG could not restore its private owner reservation; retaining all locks and recovery state at \$reservation_tombstone\" >&2",
+        "  fi",
+        "  exit 1",
+        "fi",
         "rm -rf -- \"\$reservation_tombstone\"",
     ]
     inventory_canonicalizer = _metamdbg_shell_literal(
@@ -7179,7 +7399,7 @@ function _metamdbg_executor_script(
         "umask 077",
         "outdir=$(_metamdbg_shell_literal(outputs.outdir))",
         "outdir_parent=$(_metamdbg_shell_literal(outdir_parent))",
-        "outdir_base=$(_metamdbg_shell_literal(outdir_base))",
+        "outdir_identity=$(_metamdbg_shell_literal(outdir_identity))",
         "lock_dir=$(_metamdbg_shell_literal(lock_path))",
         "contigs_plain=\"\$outdir/contigs.fasta\"",
         "contigs_gz=\"\$outdir/contigs.fasta.gz\"",
@@ -7197,8 +7417,13 @@ function _metamdbg_executor_script(
         input_declaration_lines...,
         "secure_tmpdir=",
         "bound_outdir_identity=",
+        "bound_lock_identity=",
+        "bound_runtime_output_root_reservation_identity=",
         "lock_acquired=0",
         "output_root_runtime_reservation_acquired=0",
+        "output_root_scan_index=0",
+        "preserve_secure_tmpdir=0",
+        "cleanup_safe_to_release_domain=1",
         "lock_retry_attempts=$(lock_retry_attempts)",
         "lock_retry_delay_seconds=$(Float64(lock_retry_delay_seconds))",
         "sha256_file() {",
@@ -7290,22 +7515,57 @@ function _metamdbg_executor_script(
         "fi",
         "cleanup_metamdbg_lifecycle() {",
         "  local status=\$?",
+        "  local observed_lock_identity",
         "  trap - EXIT INT TERM HUP",
         "  if [ -n \"\$secure_tmpdir\" ]; then",
-        "    if ! rm -rf -- \"\$secure_tmpdir\"; then",
-        "      echo \"metaMDBG failed to remove secure lifecycle temporary directory\" >&2",
+        "    if [ \"\$preserve_secure_tmpdir\" -eq 1 ]; then",
+        "      echo \"metaMDBG retained secure lifecycle recovery state: \$secure_tmpdir\" >&2",
+        "      cleanup_safe_to_release_domain=0",
         "      [ \"\$status\" -ne 0 ] || status=1",
+        "    elif ! rm -rf -- \"\$secure_tmpdir\"; then",
+        "      echo \"metaMDBG failed to remove secure lifecycle temporary directory\" >&2",
+        "      cleanup_safe_to_release_domain=0",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    fi",
+        "  fi",
+        "  if [ \"\$output_root_runtime_reservation_acquired\" -eq 1 ] && ! require_owned_runtime_output_root_reservation; then",
+        "    publish_metamdbg_runtime_cleanup_reservation || true",
+        "    cleanup_safe_to_release_domain=0",
+        "    [ \"\$status\" -ne 0 ] || status=1",
+        "  fi",
+        "  if [ \"\$lock_acquired\" -eq 1 ]; then",
+        "    if [ \"\$cleanup_safe_to_release_domain\" -eq 1 ] && [ -d \"\$lock_dir\" ] && [ ! -L \"\$lock_dir\" ]; then",
+        "      observed_lock_identity=\$(metamdbg_directory_identity \"\$lock_dir\") || observed_lock_identity=",
+        "    else",
+        "      observed_lock_identity=",
+        "    fi",
+        "    if [ \"\$cleanup_safe_to_release_domain\" -ne 1 ] || [ -z \"\$observed_lock_identity\" ] || [ \"\$observed_lock_identity\" != \"\$bound_lock_identity\" ] || ! rmdir -- \"\$lock_dir\"; then",
+        "      echo \"metaMDBG failed to release its exact private lifecycle lock; retaining the shared runtime reservation fail-closed: \$lock_dir\" >&2",
+        "      cleanup_safe_to_release_domain=0",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    elif [ -e \"\$lock_dir\" ] || [ -L \"\$lock_dir\" ]; then",
+        "      echo \"metaMDBG private lifecycle lock reappeared after cleanup; retaining the shared runtime reservation fail-closed: \$lock_dir\" >&2",
+        "      cleanup_safe_to_release_domain=0",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    else",
+        "      lock_acquired=0",
         "    fi",
         "  fi",
         "  if [ \"\$output_root_runtime_reservation_acquired\" -eq 1 ]; then",
-        "    if ! rmdir -- \"\$runtime_output_root_reservation\"; then",
-        "      echo \"metaMDBG failed to release shared output-root reservation: \$runtime_output_root_reservation\" >&2",
-        "      [ \"\$status\" -ne 0 ] || status=1",
-        "    fi",
-        "  fi",
-        "  if [ \"\$lock_acquired\" -eq 1 ]; then",
-        "    if ! rmdir -- \"\$lock_dir\"; then",
-        "      echo \"metaMDBG failed to release lifecycle lock: \$lock_dir\" >&2",
+        "    if [ \"\$cleanup_safe_to_release_domain\" -eq 1 ] && [ \"\$lock_acquired\" -eq 0 ]; then",
+        "      if ! require_owned_runtime_output_root_reservation; then",
+        "        publish_metamdbg_runtime_cleanup_reservation || true",
+        "        cleanup_safe_to_release_domain=0",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      elif rmdir -- \"\$runtime_output_root_reservation\"; then",
+        "        output_root_runtime_reservation_acquired=0",
+        "      else",
+        "        publish_metamdbg_runtime_cleanup_reservation || true",
+        "        echo \"metaMDBG failed to release shared output-root reservation: \$runtime_output_root_reservation\" >&2",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      fi",
+        "    else",
+        "      echo \"metaMDBG retained shared output-root reservation after inner cleanup failure: \$runtime_output_root_reservation\" >&2",
         "      [ \"\$status\" -ne 0 ] || status=1",
         "    fi",
         "  fi",
@@ -7315,7 +7575,7 @@ function _metamdbg_executor_script(
         "trap 'exit 129' HUP",
         "trap 'exit 130' INT",
         "trap 'exit 143' TERM",
-        "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.\${outdir_base}.mycelia.XXXXXXXXXX\")",
+        "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.mycelia-metamdbg-tmp.\${outdir_identity}.XXXXXXXXXX\")",
         "chmod 700 \"\$secure_tmpdir\"",
         "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
         "contract_new=\"\$secure_tmpdir/contract.new\"",
@@ -7331,6 +7591,7 @@ function _metamdbg_executor_script(
         "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
         "expected_reservation_job=\"\$secure_tmpdir/expected-reservation-job.json\"",
         "expected_output_root_reservation=\"\$secure_tmpdir/expected-output-root-reservation.json\"",
+        "reservation_entries_file=\"\$secure_tmpdir/submission-reservation.paths\"",
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
         "chmod 600 \"\$expected_reservation\"",
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_contents)) > \"\$expected_output_root_reservation\"",
@@ -7347,11 +7608,21 @@ function _metamdbg_executor_script(
         "  lock_attempt=\$((lock_attempt + 1))",
         "done",
         "lock_acquired=1",
+        "bound_lock_identity=\$(metamdbg_directory_identity \"\$lock_dir\")",
+        "if [ -z \"\$bound_lock_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its private lifecycle lock identity\" >&2",
+        "  exit 1",
+        "fi",
         "if ! mkdir -m 700 -- \"\$runtime_output_root_reservation\" 2>/dev/null; then",
         "  echo \"metaMDBG could not acquire its exact runtime output-root reservation: \$runtime_output_root_reservation\" >&2",
         "  exit 1",
         "fi",
         "output_root_runtime_reservation_acquired=1",
+        "bound_runtime_output_root_reservation_identity=\$(metamdbg_directory_identity \"\$runtime_output_root_reservation\") || bound_runtime_output_root_reservation_identity=",
+        "if [ -z \"\$bound_runtime_output_root_reservation_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its runtime output-root reservation identity\" >&2",
+        "  exit 1",
+        "fi",
         "require_exclusive_output_root_domain",
         reservation_consumption_lines...,
         "if [ -L \"\$outdir\" ]; then",
@@ -7365,8 +7636,18 @@ function _metamdbg_executor_script(
         "mkdir -p -- \"\$outdir\"",
         "bind_metamdbg_output_root",
         "validate_metamdbg_inputs",
+        "outdir_entries_file=\"\$secure_tmpdir/outdir.paths\"",
+        "collect_metamdbg_directory_entries \"\$outdir\" \"\$outdir_entries_file\" \"metaMDBG output root\"",
+        "outdir_entry_count=0",
+        "partial_entry=",
+        "while IFS= read -r -d '' outdir_entry; do",
+        "  outdir_entry_count=\$((outdir_entry_count + 1))",
+        "  if [ \"\$outdir_entry\" != \"\$contract_marker\" ] && [ -z \"\$partial_entry\" ]; then",
+        "    partial_entry=\"\$outdir_entry\"",
+        "  fi",
+        "done < \"\$outdir_entries_file\"",
         "contract_exists=0",
-        "if [ -n \"\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 -print -quit)\" ]; then",
+        "if [ \"\$outdir_entry_count\" -gt 0 ]; then",
         "  if [ ! -f \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
         "    echo \"metaMDBG refuses to adopt a nonempty output root without its regular provenance contract marker\" >&2",
         "    exit 1",
@@ -7382,7 +7663,6 @@ function _metamdbg_executor_script(
         "  contract_exists=1",
         "fi",
         "if [ \"\$contract_exists\" -eq 1 ] && [ ! -e \"\$completion_marker\" ]; then",
-        "  partial_entry=\$(find \"\$outdir\" -mindepth 1 -maxdepth 1 ! -name '$(_METAMDBG_CONTRACT_FILENAME)' -print -quit)",
         "  if [ -n \"\$partial_entry\" ]; then",
         "    echo \"metaMDBG refuses partial contracted output without realized-stage completion provenance; use a fresh output root\" >&2",
         "    exit 1",

@@ -1979,6 +1979,13 @@ function _execute_autocycler_steps(
             )
         end
         before_step(step)
+        if workflow_root !== nothing
+            _require_safe_autocycler_step_paths(
+                step,
+                workflow_root,
+                directory_identities,
+            )
+        end
         try
             runner(step)
         catch error

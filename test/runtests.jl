@@ -32,24 +32,13 @@ const MYCELIA_RUN_EXTERNAL = MYCELIA_RUN_ALL ||
                              lowercase(get(ENV, "MYCELIA_RUN_EXTERNAL", "false")) == "true"
 const MYCELIA_SHOW_PLOTS = lowercase(get(ENV, "MYCELIA_SHOW_PLOTS", "false")) == "true"
 const PROJECT_ROOT = dirname(@__DIR__)
-const MYCELIA_TEST_DISCOVERY_ONLY =
-    lowercase(get(ENV, "MYCELIA_TEST_DISCOVERY_ONLY", "false")) == "true"
-
-if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
-    Base.include(
-        @__MODULE__,
-        joinpath(@__DIR__, "multi_input_hybrid_smoke_support.jl"),
-    )
-end
 
 # Validate private-fixture opt-ins before external-file discovery can filter the
 # corresponding smoke file out of the suite.
-_multi_input_hybrid_smoke_prerequisites(ENV)
-
-if MYCELIA_TEST_DISCOVERY_ONLY
-    println("Mycelia smoke discovery preflight passed.")
-    Base.exit(0)
-end
+Base.include(
+    @__MODULE__,
+    joinpath(@__DIR__, "multi_input_hybrid_smoke_preflight.jl"),
+)
 
 # Suppress plot display during tests by default.
 # Set MYCELIA_SHOW_PLOTS=true to enable interactive plot display.

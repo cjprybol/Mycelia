@@ -4879,6 +4879,13 @@ function _assemble_paired_short_long(
         retained_cleanup_roots = String[]
         retained_intermediates = String[]
         try
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "before short_r1 correction",
+            )
             corrected_r1 = _correct_read_set!(
                 cleanup_tokens,
                 short_r1,
@@ -4890,6 +4897,20 @@ function _assemble_paired_short_long(
                 correction_runner,
                 protected_source_paths,
                 root.identity,
+            )
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "during short_r1 correction",
+            )
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "before short_r2 correction",
             )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
@@ -4903,6 +4924,20 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "during short_r2 correction",
+            )
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "before long_reads correction",
+            )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
                 prepared_long_reads,
@@ -4914,6 +4949,13 @@ function _assemble_paired_short_long(
                 correction_runner,
                 protected_source_paths,
                 root.identity,
+            )
+            _verify_multi_input_source_content_contract(
+                source_content_contract,
+                short_r1,
+                short_r2,
+                prepared_long_reads;
+                change_context = "during long_reads correction",
             )
             inputs = _CorrectedPairedShortLong(
                 corrected_r1,

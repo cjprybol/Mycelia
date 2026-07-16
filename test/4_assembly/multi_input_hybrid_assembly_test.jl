@@ -2288,7 +2288,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             end
             test_throws_message(
                 ErrorException,
-                "input short_r1 content changed during independent correction",
+                "input short_r1 content changed during short_r1 correction",
             ) do
                 Mycelia.Rhizomorph._assemble_paired_short_long(
                     (path_r1, path_r2),
@@ -2299,7 +2299,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     assembler_runner = path_assembler_runner,
                 )
             end
-            Test.@test length(path_calls) == 3
+            Test.@test length(path_calls) == 1
             Test.@test path_assembler_calls[] == 0
             Test.@test all(call -> !isfile(call.corrected_fastq), path_calls)
         end
@@ -2330,7 +2330,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         end
         test_throws_message(
             ErrorException,
-            "input short_r1 content changed during independent correction",
+            "input short_r1 content changed during short_r1 correction",
         ) do
             Mycelia.Rhizomorph._assemble_paired_short_long(
                 (in_memory_r1, in_memory_r2),
@@ -2341,7 +2341,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 assembler_runner = in_memory_assembler_runner,
             )
         end
-        Test.@test length(in_memory_calls) == 3
+        Test.@test length(in_memory_calls) == 1
         Test.@test in_memory_assembler_calls[] == 0
         Test.@test all(
             call -> !isfile(call.corrected_fastq),
@@ -2439,6 +2439,116 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     )
                 end
                 Test.@test isempty(correction_calls)
+                Test.@test assembler_calls[] == 0
+            end
+        end
+
+        mktempdir() do temp_dir
+            source_paths = (
+                short_r1 = multi_input_write_fastq(
+                    joinpath(temp_dir, "R1.fastq"),
+                    MULTI_INPUT_R1,
+                ),
+                short_r2 = multi_input_write_fastq(
+                    joinpath(temp_dir, "R2.fastq"),
+                    MULTI_INPUT_R2,
+                ),
+                long_reads = multi_input_write_fastq(
+                    joinpath(temp_dir, "long.fastq"),
+                    MULTI_INPUT_LONG,
+                ),
+            )
+            correction_calls = NamedTuple[]
+            assembler_calls = Ref(0)
+            base_runner = multi_input_fake_correction_runner(correction_calls)
+            original_r2 = read(source_paths.short_r2, String)
+            function cross_stage_runner(
+                    reads::Any,
+                    config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                result = base_runner(reads, config)
+                if length(correction_calls) == 1
+                    multi_input_mutate_first_sequence!(source_paths.short_r2)
+                elseif length(correction_calls) == 3
+                    write(source_paths.short_r2, original_r2)
+                end
+                return result
+            end
+            test_throws_message(
+                ErrorException,
+                "input short_r2 content changed during short_r1 correction",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (source_paths.short_r1, source_paths.short_r2),
+                    source_paths.long_reads,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                    :unicycler;
+                    correction_runner = cross_stage_runner,
+                    assembler_runner = (inputs, outdir) -> begin
+                        assembler_calls[] += 1
+                        return multi_input_fake_assembler_result(outdir)
+                    end,
+                )
+            end
+            Test.@test length(correction_calls) == 1
+            Test.@test assembler_calls[] == 0
+        end
+
+        stage_indices = Dict(
+            :short_r1 => 1,
+            :short_r2 => 2,
+            :long_reads => 3,
+        )
+        for role in (:short_r1, :short_r2, :long_reads)
+            mktempdir() do temp_dir
+                source_paths = (
+                    short_r1 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R1.fastq"),
+                        MULTI_INPUT_R1,
+                    ),
+                    short_r2 = multi_input_write_fastq(
+                        joinpath(temp_dir, "R2.fastq"),
+                        MULTI_INPUT_R2,
+                    ),
+                    long_reads = multi_input_write_fastq(
+                        joinpath(temp_dir, "long.fastq"),
+                        MULTI_INPUT_LONG,
+                    ),
+                )
+                correction_calls = NamedTuple[]
+                assembler_calls = Ref(0)
+                base_runner = multi_input_fake_correction_runner(
+                    correction_calls,
+                )
+                function after_stage_mutation_runner(
+                        reads::Any,
+                        config::Mycelia.Rhizomorph.AssemblyConfig,
+                )::NamedTuple
+                    result = base_runner(reads, config)
+                    if length(correction_calls) == stage_indices[role]
+                        multi_input_mutate_first_sequence!(
+                            getproperty(source_paths, role),
+                        )
+                    end
+                    return result
+                end
+                test_throws_message(
+                    ErrorException,
+                    "input $(role) content changed during $(role) correction",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (source_paths.short_r1, source_paths.short_r2),
+                        source_paths.long_reads,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                        :unicycler;
+                        correction_runner = after_stage_mutation_runner,
+                        assembler_runner = (inputs, outdir) -> begin
+                            assembler_calls[] += 1
+                            return multi_input_fake_assembler_result(outdir)
+                        end,
+                    )
+                end
+                Test.@test length(correction_calls) == stage_indices[role]
                 Test.@test assembler_calls[] == 0
             end
         end

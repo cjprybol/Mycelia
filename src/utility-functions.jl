@@ -6,8 +6,8 @@ function nonempty_file(path::AbstractString)
     return isfile(path) && filesize(path) > 0
 end
 
-const _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX = ".mycelia-output-root.pid"
-const _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR =
+const _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX = ".mycelia-output-root.pid."
+const _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX =
     ".mycelia-output-root.reservation."
 const _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS = 7 * 24 * 60 * 60
 const _OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK = ReentrantLock()
@@ -40,9 +40,24 @@ function _output_root_reservation_lock_path_from_canonical(
         canonical_root::AbstractString,
 )::String
     normalized_root = normpath(abspath(String(canonical_root)))
-    lock_name =
-        ".$(basename(normalized_root))$(_OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX)"
+    root_identity = _output_root_reservation_identity(normalized_root)
+    lock_name = "$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)$(root_identity)"
     return joinpath(dirname(normalized_root), lock_name)
+end
+
+function _output_root_reservation_identity(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    # Use a fail-closed filesystem-equivalence key so case and Unicode
+    # spelling aliases cannot split one physical reservation domain.
+    filesystem_equivalence_key = Base.Unicode.normalize(
+        normalized_root;
+        casefold = true,
+        compose = true,
+        stable = true,
+    )
+    return SHA.bytes2hex(SHA.sha256(filesystem_equivalence_key))
 end
 
 function _output_root_reservation_lock_path(
@@ -63,10 +78,12 @@ function _output_root_durable_reservation_path_from_canonical(
             "Output-root durable reservation capability must contain only " *
             "letters, digits, period, underscore, or hyphen.",
         ))
+    root_identity = _output_root_reservation_identity(normalized_root)
+    capability_identity =
+        SHA.bytes2hex(SHA.sha256(normalized_capability))
     reservation_name =
-        ".$(basename(normalized_root))" *
-        "$(_OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR)" *
-        normalized_capability
+        "$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)$(root_identity)." *
+        capability_identity
     return joinpath(dirname(normalized_root), reservation_name)
 end
 
@@ -74,16 +91,25 @@ function _output_root_durable_reservation_prefix_from_canonical(
         canonical_root::AbstractString,
 )::String
     normalized_root = normpath(abspath(String(canonical_root)))
-    return ".$(basename(normalized_root))" *
-           _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR
+    root_identity = _output_root_reservation_identity(normalized_root)
+    return "$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)$(root_identity)."
 end
 
 function _is_output_root_durable_reservation_path(
         reservation_path::AbstractString,
 )::Bool
-    return occursin(
-        _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR,
+    return startswith(
         basename(String(reservation_path)),
+        _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX,
+    )
+end
+
+function _is_output_root_pid_reservation_path(
+        reservation_path::AbstractString,
+)::Bool
+    return startswith(
+        basename(String(reservation_path)),
+        _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX,
     )
 end
 
@@ -94,10 +120,8 @@ function _output_root_reservation_is_active(
     stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
     normalized_lock_path = normpath(abspath(String(lock_path)))
     _output_root_path_entry_exists(normalized_lock_path) || return false
-    !endswith(
-        basename(normalized_lock_path),
-        _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX,
-    ) && _is_output_root_durable_reservation_path(normalized_lock_path) &&
+    !_is_output_root_pid_reservation_path(normalized_lock_path) &&
+        _is_output_root_durable_reservation_path(normalized_lock_path) &&
         return true
     lock_handle = try
         FileWatching.Pidfile.trymkpidlock(
@@ -168,11 +192,8 @@ function _descendant_output_root_reservation_lock_paths(
         for entry in Iterators.flatten((directory_entries, files))
             startswith(entry, ".") || continue
             is_reservation =
-                endswith(entry, _OUTPUT_ROOT_RESERVATION_LOCK_SUFFIX) ||
-                occursin(
-                    _OUTPUT_ROOT_DURABLE_RESERVATION_SEPARATOR,
-                    entry,
-                )
+                startswith(entry, _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX) ||
+                startswith(entry, _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)
             is_reservation || continue
             push!(lock_paths, joinpath(directory, entry))
         end

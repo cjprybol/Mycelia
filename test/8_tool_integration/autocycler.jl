@@ -1283,11 +1283,15 @@ Test.@testset "Autocycler wrapper" begin
             aliased_output = joinpath(symlink_ancestor, "nested", "results")
             Test.@test Mycelia._validate_autocycler_output_dir(aliased_output) ==
                        abspath(aliased_output)
-            expected_alias_lock = joinpath(
+            expected_canonical_alias = joinpath(
                 realpath(symlink_target),
                 "nested",
-                ".results.mycelia-output-root.pid",
+                "results",
             )
+            expected_alias_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    expected_canonical_alias,
+                )
             Test.@test Mycelia._autocycler_output_lock_path(aliased_output) ==
                        expected_alias_lock
 
@@ -1468,6 +1472,46 @@ Test.@testset "Autocycler wrapper" begin
             "install_autocycler(force=true)",
             sprint(showerror, process_error),
         )
+
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "workflow-root")
+            moved_root = joinpath(temp_dir, "moved-root")
+            mkpath(workflow_root)
+            root_identity = Mycelia._autocycler_directory_identity(
+                workflow_root,
+                workflow_root,
+                "Autocycler workflow root",
+            )
+            expected_output = joinpath(workflow_root, "artifact.txt")
+            identity_step = (
+                name = :identity_recheck,
+                command = `true`,
+                stdout = nothing,
+                expected_outputs = String[expected_output],
+            )
+            identity_runner_calls = Ref(0)
+            identity_error = _autocycler_test_error() do
+                Mycelia._execute_autocycler_steps(
+                    (identity_step,);
+                    workflow_root,
+                    directory_identities = (root_identity,),
+                    before_step = _ -> begin
+                        mv(workflow_root, moved_root)
+                        mkpath(workflow_root)
+                    end,
+                    runner = _ -> begin
+                        identity_runner_calls[] += 1
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test identity_error isa ErrorException
+            Test.@test occursin(
+                "changed physical identity",
+                sprint(showerror, identity_error),
+            )
+            Test.@test identity_runner_calls[] == 0
+        end
 
         mktempdir() do temp_dir
             intermediate_target = joinpath(temp_dir, "intermediate-target.sam")
