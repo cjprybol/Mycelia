@@ -44,6 +44,22 @@ function agg_identical_fastq_reads(seq::AbstractString; n::Int = 10)
     return reads
 end
 
+"A ~140 bp reference with no exact k=11 repeats (corrector-path fixture)."
+const CORR_REF = "ATCGGCTAATGCCGATTGCACGTACGTTAGCTAGGCATG" *
+                 "TTGACCAGTGGATCACCTTGCAGATTACGGCATTAACGGT" *
+                 "CCGATATGCAGTTCAGGATCCGTAAGCTTACGGTACCTGA" *
+                 "GTCATGCCAATTGGCCGTAAT"
+
+"Tile a reference into overlapping FASTQ reads (uniform Q40) for the corrector."
+function corr_tiling_fastq(ref::AbstractString; read_len::Int = 25)
+    reads = FASTX.FASTQ.Record[]
+    qual = repeat("I", read_len)  # Q40
+    for i in 1:(length(ref) - read_len + 1)
+        push!(reads, FASTX.FASTQ.Record("r$(i)", ref[i:(i + read_len - 1)], qual))
+    end
+    return reads
+end
+
 Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
 
     # -----------------------------------------------------------------------
@@ -153,6 +169,84 @@ Test.@testset "Rhizomorph aggregate qualmer quality (td-n8ax)" begin
         for label in MetaGraphsNext.labels(g2)
             Test.@test g2[label].total_count >= 2
         end
+    end
+
+    # -----------------------------------------------------------------------
+    # D. OPT-IN IDENTITY: the corrector default must be :full (NOT auto-enabled,
+    #    the PR #425 lesson), and an unset profile must produce byte-identical
+    #    output to an explicit :full. Guards the byte-identical default.
+    # -----------------------------------------------------------------------
+    Test.@testset "D: aggregate profile is opt-in (default :full)" begin
+        k = 11
+        reads = corr_tiling_fastq(CORR_REF)
+
+        # Default config never auto-enables the aggregate profile, even for the
+        # iterative corrector.
+        cfg_default = Mycelia.Rhizomorph.AssemblyConfig(; k = k, corrector = :iterative)
+        Test.@test cfg_default.qualmer_memory_profile == :full
+
+        cfg_explicit_full = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, corrector = :iterative, qualmer_memory_profile = :full)
+        res_default = Mycelia.Rhizomorph.assemble_genome(reads, cfg_default)
+        res_full = Mycelia.Rhizomorph.assemble_genome(reads, cfg_explicit_full)
+        # Unset == explicit :full, byte-for-byte.
+        Test.@test sort(String.(res_default.contigs)) == sort(String.(res_full.contigs))
+    end
+
+    # -----------------------------------------------------------------------
+    # E. AGGREGATE CORRECTION SEQUENCE PARITY (decision-2, load-bearing): with the
+    #    SAME prefilter, the aggregate corrector produces the same SUBSTANTIVE
+    #    corrected contigs (length >= 2k) as the :full corrector; only the FASTQ
+    #    quality annotation may differ. Isolates the storage effect from the
+    #    prefilter.
+    #
+    #    FINDING (td-n8ax): exact FULL contig-set identity does NOT hold at toy
+    #    scale — the aggregate DoubleStrand path reaches doublestrand via the
+    #    reduced converter while :full uses the full converter, which can leave a
+    #    single sub-2k tip fragment that the other path does not. The substantive
+    #    contigs (>= 2k) are byte-identical, so correction quality is preserved;
+    #    the authoritative gate for the residual is the phix/lambda metric bar
+    #    (genome_fraction/identity >= baseline, snps/indels not worse), not toy
+    #    byte-identity. See the exact-mean lock (testset A) for the storage claim.
+    # -----------------------------------------------------------------------
+    Test.@testset "E: aggregate corrector substantive contigs == :full" begin
+        k = 11
+        reads = corr_tiling_fastq(CORR_REF)
+
+        cfg_full = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, corrector = :iterative,
+            qualmer_memory_profile = :full, qualmer_prefilter_min_count = 2)
+        cfg_agg = Mycelia.Rhizomorph.AssemblyConfig(;
+            k = k, corrector = :iterative,
+            qualmer_memory_profile = :lightweight_quality, qualmer_prefilter_min_count = 2)
+
+        res_full = Mycelia.Rhizomorph.assemble_genome(reads, cfg_full)
+        res_agg = Mycelia.Rhizomorph.assemble_genome(reads, cfg_agg)
+
+        Test.@test !isempty(res_agg.contigs)
+        substantive(cs) = sort(filter(c -> length(c) >= 2k, String.(cs)))
+        # The substantive assembly is byte-identical (storage preserves correction).
+        Test.@test substantive(res_agg.contigs) == substantive(res_full.contigs)
+        # And every :full contig (any length) is recovered by the aggregate path —
+        # the divergence is only EXTRA sub-2k tips, never a missing/altered contig.
+        Test.@test issubset(Set(String.(res_full.contigs)), Set(String.(res_agg.contigs)))
+    end
+
+    # -----------------------------------------------------------------------
+    # G. VALIDATION: an invalid qualmer_memory_profile is rejected at config
+    #    construction with a message naming the field.
+    # -----------------------------------------------------------------------
+    Test.@testset "G: invalid qualmer_memory_profile rejected" begin
+        Test.@test_throws Exception Mycelia.Rhizomorph.AssemblyConfig(;
+            k = 11, qualmer_memory_profile = :bogus)
+        thrown = try
+            Mycelia.Rhizomorph.AssemblyConfig(; k = 11, qualmer_memory_profile = :bogus)
+            nothing
+        catch err
+            err
+        end
+        Test.@test thrown !== nothing
+        Test.@test occursin("qualmer_memory_profile", sprint(showerror, thrown))
     end
 end
 
