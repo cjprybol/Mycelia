@@ -144,7 +144,7 @@ struct AssemblyConfig
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
     qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op on every path); DISTINCT from min_coverage (td-ck03)
-    qualmer_memory_profile::Symbol          # Opt-in qualmer-graph quality storage (:full = per-observation byte-identical default; :lightweight_quality = O(distinct) aggregate exact-mean, td-n8ax)
+    qualmer_memory_profile::Symbol          # Opt-in qualmer-graph quality storage: :full = per-observation (byte-identical default); :ultralight_quality = O(distinct) exact-mean (memory-bound profile); :lightweight_quality = exact-mean but keeps a per-occurrence obs-id Set (O(occurrences), ~2x only) for multi-sample tracking (td-n8ax)
 
     # Optional read-correction front-end (opt-in; default :none preserves today's
     # single-k-from-uncorrected-reads behavior byte-for-byte).
@@ -280,10 +280,13 @@ struct AssemblyConfig
         effective_qualmer_prefilter_min_count = qualmer_prefilter_min_count === nothing ?
                                                 1 : qualmer_prefilter_min_count
         # Opt-in aggregate qualmer quality storage (td-n8ax). Default :full =
-        # per-observation evidence = byte-identical to today. :lightweight_quality
-        # stores a coverage counter + exact per-position mean per DISTINCT k-mer
-        # (O(distinct)), composing with the prefilter to bound bacterial-scale
-        # memory; like the prefilter it CHANGES output, so it is never a silent
+        # per-observation evidence = byte-identical to today. Both aggregate
+        # profiles store a coverage counter + exact per-position mean and compose
+        # with the prefilter. ONLY :ultralight_quality is truly O(distinct) (no
+        # per-observation tracking) — the memory-bound profile for bacterial scale.
+        # :lightweight_quality ALSO keeps a per-occurrence obs-id Set (O(occurrences),
+        # ~2x reduction only) for multi-sample provenance, NOT the memory bound. Like
+        # the prefilter, aggregate storage CHANGES output, so it is never a silent
         # default.
         effective_qualmer_memory_profile = qualmer_memory_profile === nothing ?
                                            :full : qualmer_memory_profile
@@ -1658,7 +1661,12 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
             dedup_revcomp = config.dedup_revcomp,
-            graph_cleanup = corrector_cleanup)
+            graph_cleanup = corrector_cleanup,
+            # Forward the memory levers (td-n8ax): on the REBUILD-fallback path the
+            # re-assembly builds a fresh qualmer graph, so without these it would
+            # revert to :full / no-prefilter and re-inflate memory at bacterial scale.
+            qualmer_memory_profile = config.qualmer_memory_profile,
+            qualmer_prefilter_min_count = config.qualmer_prefilter_min_count)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&

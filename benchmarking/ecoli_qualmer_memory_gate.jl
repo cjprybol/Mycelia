@@ -164,6 +164,11 @@ config = Mycelia.Rhizomorph.AssemblyConfig(;
     verbose = false)
 
 completed::Bool = false
+# failure_kind distinguishes a genuine OOM (the memory result this gate exists to
+# measure) from a plain code error (MethodError/etc). Both would otherwise print the
+# identical "did NOT complete" verdict and mislead an operator into chasing memory
+# when the fault is code — so we branch on OutOfMemoryError and use a distinct exit.
+failure_kind::Symbol = :none
 elapsed_s::Union{Missing, Float64} = missing
 n_contigs::Union{Missing, Int} = missing
 contigs_path::String = joinpath(benchmark_dir, "$(ORGANISM)_cov$(COVERAGE)x_seed$(SEED)_contigs.fasta")
@@ -185,8 +190,9 @@ try
 catch e
     global elapsed_s = round(time() - t0; digits = 3)
     global completed = false
-    @warn "Assembly FAILED/crashed for E. coli $(COVERAGE)x seed=$(SEED) after $(elapsed_s)s " *
-          "— recording as a crash, not aborting" exception = (e, catch_backtrace())
+    global failure_kind = e isa OutOfMemoryError ? :oom : :error
+    @warn "Assembly FAILED ($(failure_kind)) for E. coli $(COVERAGE)x seed=$(SEED) after " *
+          "$(elapsed_s)s — recording, not aborting" exception = (e, catch_backtrace())
 end
 
 # Whole-process peak RSS (monotonic; captured after the assemble attempt).
@@ -215,7 +221,8 @@ if completed && RUN_QUAST && !ismissing(n_contigs) && n_contigs > 0 &&
         global genome_fraction = parse_quast_metric(report_tsv, "Genome fraction (%)")
         println("  NGA50=$(nga50), misasm=$(num_misassemblies), dup_ratio=$(dup_ratio), GF=$(genome_fraction)%")
     catch e
-        @warn "QUAST failed — leaving accuracy metrics missing" exception = (e,)
+        @warn "QUAST failed — leaving accuracy metrics missing" exception = (
+            e, catch_backtrace())
     end
 elseif !completed
     println("\n--- Phase 4: skipped (assembly did not complete) ---")
@@ -263,10 +270,16 @@ if gate_pass
 elseif completed && !under_ceiling
     println("FAIL: E. coli $(COVERAGE)x COMPLETED but peak $(peak_rss_gb) GB EXCEEDS the " *
             "$(MEMORY_CEILING_GB) GB ceiling — memory not yet bounded to target.")
+elseif failure_kind == :error
+    println("ERROR: E. coli $(COVERAGE)x assembly threw a NON-OOM exception after $(elapsed_s)s " *
+            "at $(peak_rss_gb) GB — this is a CODE failure, NOT a memory-gate result. " *
+            "See the backtrace above. (Do not read this as 'memory unbounded'.)")
 else
-    println("FAIL: E. coli $(COVERAGE)x did NOT complete (crash/OOM after $(elapsed_s)s at " *
-            "$(peak_rss_gb) GB peak) — see the warning above.")
+    println("FAIL: E. coli $(COVERAGE)x did NOT complete — OUT OF MEMORY after $(elapsed_s)s at " *
+            "$(peak_rss_gb) GB peak. Memory not bounded to target.")
 end
 
 println("\n=== E. coli Qualmer-Path Memory Gate complete (UTC): $(Dates.now(Dates.UTC)) ===")
-exit(gate_pass ? 0 : 1)
+# Exit codes: 0 = gate PASS; 1 = memory FAIL (OOM or over-ceiling, a real gate result);
+# 2 = CODE error (non-OOM exception — NOT a memory result, needs a code fix).
+exit(gate_pass ? 0 : (failure_kind == :error ? 2 : 1))

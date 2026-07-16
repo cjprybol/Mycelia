@@ -1165,7 +1165,10 @@ function add_evidence!(
             zeros(UInt32, length(scores))
         end
         for i in eachindex(scores)
-            ds_qsum[i] += UInt32(Int(scores[i]) - 33)
+            # max(0, ...) guards malformed sub-33 quality bytes (would throw
+            # InexactError); valid Phred+33 input is always >= 33 so this is a no-op
+            # there and preserves qsum == dataset_joint_quality below the 255 clamp.
+            ds_qsum[i] += UInt32(max(0, Int(scores[i]) - 33))
         end
     end
 
@@ -1361,12 +1364,18 @@ function add_evidence!(
         end
         # UNCLAMPED per-position sum for exact-mean recovery (td-n8ax). Kept
         # separate from the clamped joint_quality so corrector-facing mean
-        # (sum ./ dataset_counts) is numerically identical to the :full path.
+        # (sum ./ dataset_counts) matches the :full path's per-observation mean
+        # for well-formed (unique read-ID) input, which the qualmer builders
+        # guarantee. dataset_counts increments in lockstep with this sum (same
+        # !isempty(scores) block), so the divisor equals the quality-obs count.
         ds_qsum = get!(vertex.dataset_quality_sum, dataset_id) do
             zeros(UInt32, length(scores))
         end
         for i in eachindex(scores)
-            ds_qsum[i] += UInt32(Int(scores[i]) - 33)
+            # max(0, ...) guards malformed sub-33 quality bytes (would throw
+            # InexactError); valid Phred+33 input is always >= 33 so this is a no-op
+            # there and preserves qsum == dataset_joint_quality below the 255 clamp.
+            ds_qsum[i] += UInt32(max(0, Int(scores[i]) - 33))
         end
     end
 
@@ -1521,7 +1530,9 @@ end
 Corrector-compatible per-position MEAN Phred for aggregate (lightweight-quality)
 storage (td-n8ax). Recovers the exact mean from the UNCLAMPED per-dataset running
 sum (`dataset_quality_sum`) divided by the per-dataset observation count
-(`dataset_counts`), matching the :full path's per-observation mean numerically.
+(`dataset_counts`), matching the :full path's per-observation mean for well-formed
+(unique read-ID) input (the qualmer builders guarantee this; :full dedups a per-
+observation Set keyed on read-ID, so the two diverge only for duplicate read IDs).
 Returns `nothing` when the dataset has no aggregated quality (count 0 / empty),
 mirroring the :full accessor's contract so downstream `nothing`-guards still hold.
 """

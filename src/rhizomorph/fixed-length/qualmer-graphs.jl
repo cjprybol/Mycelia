@@ -92,12 +92,14 @@ function build_qualmer_graph(
         memory_profile::Symbol = :full,
         min_count::Int = 1
 )
-    # Reduced quality (aggregate) profiles: O(distinct kmers) storage. Build the
-    # singlestrand reduced graph, then convert per `mode` using the quality-aware
-    # reduced converters (td-n8ax — previously `mode` was dropped and these always
-    # returned singlestrand, which the DoubleStrand/Canonical corrector could not
-    # use). :lightweight_quality composes the PR #425 coverage prefilter (min_count);
-    # in doublestrand/canonical mode the floor is applied to MERGED canonical
+    # Reduced quality (aggregate) profiles: O(distinct kmers) VERTEX COUNT. Per-vertex
+    # storage is O(distinct) only for :ultralight_quality (no per-observation tracking);
+    # :lightweight_quality also keeps a per-occurrence obs-id Set (O(occurrences),
+    # ~2x reduction only). Build the singlestrand reduced graph, then convert per `mode`
+    # using the quality-aware reduced converters (td-n8ax — previously `mode` was dropped
+    # and these always returned singlestrand, which the DoubleStrand/Canonical corrector
+    # could not use). BOTH aggregate profiles compose the PR #425 coverage prefilter
+    # (min_count); in doublestrand/canonical mode the floor is applied to MERGED canonical
     # coverage (count_canonical) so a locus sequenced once per strand is not pruned.
     if memory_profile == :ultralight_quality || memory_profile == :lightweight_quality
         count_canonical = (mode == :doublestrand || mode == :canonical)
@@ -402,13 +404,17 @@ function get_qualmer_statistics(
 
     for kmer in MetaGraphsNext.labels(graph)
         vertex_data = graph[kmer]
-        union!(all_dataset_ids, keys(vertex_data.evidence))
+        # Use the polymorphic accessor, not the `.evidence` field directly: reduced/
+        # aggregate vertex types (ultralight/lightweight-quality, td-n8ax) have no
+        # `.evidence` field and expose datasets via `dataset_counts` instead. This
+        # runs on the corrector's re-assembly graph, which is now aggregate-storage.
+        union!(all_dataset_ids, get_all_dataset_ids(vertex_data))
         total_observations += count_total_observations(vertex_data)
 
         # Get joint quality for this k-mer
         if isnothing(dataset_id)
             # Aggregate across all datasets
-            for ds_id in keys(vertex_data.evidence)
+            for ds_id in get_all_dataset_ids(vertex_data)
                 joint_qual = get_vertex_joint_quality(vertex_data, ds_id)
                 if !isnothing(joint_qual) && !isempty(joint_qual)
                     push!(quality_scores, Statistics.mean(joint_qual))
@@ -474,9 +480,10 @@ function find_high_quality_kmers(
 
         # Check quality for specified dataset(s)
         meets_threshold = if isnothing(dataset_id)
-            # Check all datasets
+            # Check all datasets — polymorphic accessor (reduced/aggregate types
+            # have no `.evidence` field), td-n8ax.
             any_meets = false
-            for ds_id in keys(vertex_data.evidence)
+            for ds_id in get_all_dataset_ids(vertex_data)
                 joint_qual = get_vertex_joint_quality(vertex_data, ds_id)
                 if !isnothing(joint_qual) && all(q >= min_quality for q in joint_qual)
                     any_meets = true
