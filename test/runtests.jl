@@ -18,7 +18,7 @@
 #   - MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
 #   - MYCELIA_RUN_AUTOCYCLER_POLISHED=true (hybrid-smoke subgate)
 #   - MYCELIA_RUN_AUTOCYCLER_SMOKE=true
-#   - MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10|ont_r9|pacbio_hifi (required by
+#   - MYCELIA_AUTOCYCLER_READ_TYPE=ont_r9|ont_r10|pacbio_clr|pacbio_hifi (required by
 #     the standalone Autocycler smoke; never inferred from a fixture path)
 #
 # External dependencies (skipped by default):

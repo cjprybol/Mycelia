@@ -1333,16 +1333,24 @@ end
 function _canonical_unicycler_conda_runner(
         conda_runner::AbstractString,
 )::String
-    executable = Sys.which(String(conda_runner))
+    reported_runner = String(conda_runner)
+    isempty(strip(reported_runner)) && throw(ArgumentError(
+        "Unicycler conda_runner must be a non-empty executable name or path.",
+    ))
+    executable = Sys.which(reported_runner)
     candidate = executable === nothing ?
-                abspath(String(conda_runner)) : String(executable)
+                abspath(reported_runner) : String(executable)
     return ispath(candidate) ? realpath(candidate) : normpath(candidate)
 end
 
 function _canonical_unicycler_environment_prefix(
         environment_prefix::AbstractString,
 )::String
-    normalized_prefix = normpath(abspath(String(environment_prefix)))
+    reported_prefix = String(environment_prefix)
+    isempty(strip(reported_prefix)) && throw(ArgumentError(
+        "Unicycler environment_prefix must be a non-empty path.",
+    ))
+    normalized_prefix = normpath(abspath(reported_prefix))
     existing_ancestor = normalized_prefix
     missing_components = String[]
     while !ispath(existing_ancestor) && !islink(existing_ancestor)
@@ -1993,6 +2001,221 @@ function _require_unchanged_unicycler_input_source(
     return nothing
 end
 
+function _normalize_unicycler_prebound_input(
+        descriptor::NamedTuple,
+        path::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    required_fields = (
+        :path,
+        :canonical_path,
+        :size_bytes,
+        :sha256,
+        :device,
+        :inode,
+    )
+    keys(descriptor) == required_fields || throw(ArgumentError(
+        "Unicycler prebound $(label) contract must have fields " *
+        "$(required_fields), got $(keys(descriptor)).",
+    ))
+    normalized_path = normpath(abspath(String(path)))
+    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
+        ArgumentError(
+            "Unicycler prebound $(label) path does not match its contract.",
+        ),
+    )
+    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
+        "Unicycler prebound $(label) must be a regular non-symlink file.",
+    ))
+    canonical_path = realpath(normalized_path)
+    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
+        "Unicycler prebound $(label) canonical path does not match its contract.",
+    ))
+    status = stat(normalized_path)
+    normalized = (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = Int(descriptor.size_bytes),
+        sha256 = String(descriptor.sha256),
+        device = UInt64(descriptor.device),
+        inode = UInt64(descriptor.inode),
+    )
+    normalized.size_bytes > 0 || throw(ArgumentError(
+        "Unicycler prebound $(label) must be non-empty.",
+    ))
+    UInt64(status.device) == normalized.device &&
+        UInt64(status.inode) == normalized.inode &&
+        filesize(normalized_path) == normalized.size_bytes || throw(
+        ArgumentError(
+            "Unicycler prebound $(label) physical identity or size changed " *
+            "before child-lock acquisition.",
+        ),
+    )
+    return normalized
+end
+
+function _require_unchanged_unicycler_prebound_input(
+        expected::NamedTuple,
+        label::AbstractString,
+)::Dict{String, Any}
+    isfile(expected.path) && !islink(expected.path) || error(
+        "Unicycler prebound $(label) is missing or no longer a regular file.",
+    )
+    realpath(expected.path) == expected.canonical_path || error(
+        "Unicycler prebound $(label) canonical path changed under child locks.",
+    )
+    input = Base.Filesystem.open(
+        expected.canonical_path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    try
+        before = stat(input)
+        UInt64(before.device) == expected.device &&
+            UInt64(before.inode) == expected.inode &&
+            filesize(input) == expected.size_bytes || error(
+            "Unicycler prebound $(label) physical identity or size changed " *
+            "under child locks.",
+        )
+        observed_sha256 = SHA.bytes2hex(SHA.sha256(input))
+        after = stat(input)
+        UInt64(after.device) == expected.device &&
+            UInt64(after.inode) == expected.inode &&
+            filesize(input) == expected.size_bytes || error(
+            "Unicycler prebound $(label) changed while it was revalidated " *
+            "under child locks.",
+        )
+        observed_sha256 == expected.sha256 || error(
+            "Unicycler prebound $(label) content changed before any child " *
+            "tool side effect.",
+        )
+        return Dict{String, Any}(
+            "canonical_path" => expected.canonical_path,
+            "size_bytes" => expected.size_bytes,
+            "sha256" => expected.sha256,
+            "consumed_snapshot" => Dict{String, Any}(
+                "size_bytes" => expected.size_bytes,
+                "sha256" => expected.sha256,
+            ),
+        )
+    finally
+        close(input)
+    end
+end
+
+function _normalize_unicycler_prebound_input_contract(
+        contract::NamedTuple,
+        short_1::AbstractString,
+        short_2::Union{Nothing, AbstractString},
+        long_reads::AbstractString,
+)::NamedTuple
+    keys(contract) == (:short_1, :short_2, :long_reads) || throw(
+        ArgumentError(
+            "Unicycler prebound input contract must bind short_1, short_2, " *
+            "and long_reads.",
+        ),
+    )
+    contract.short_1 isa NamedTuple || throw(ArgumentError(
+        "Unicycler prebound short_1 contract has an invalid shape.",
+    ))
+    contract.long_reads isa NamedTuple || throw(ArgumentError(
+        "Unicycler prebound long_reads contract has an invalid shape.",
+    ))
+    short_1_bound = _normalize_unicycler_prebound_input(
+        contract.short_1,
+        short_1,
+        "short-read input R1",
+    )
+    short_2_bound = if short_2 === nothing
+        contract.short_2 === nothing || throw(ArgumentError(
+            "Unicycler prebound short_2 contract appeared without short_2.",
+        ))
+        nothing
+    else
+        contract.short_2 isa NamedTuple || throw(ArgumentError(
+            "Unicycler prebound short_2 contract is missing.",
+        ))
+        _normalize_unicycler_prebound_input(
+            contract.short_2,
+            short_2,
+            "short-read input R2",
+        )
+    end
+    long_reads_bound = _normalize_unicycler_prebound_input(
+        contract.long_reads,
+        long_reads,
+        "long-read input",
+    )
+    bound_inputs = short_2_bound === nothing ?
+                   (short_1_bound, long_reads_bound) :
+                   (short_1_bound, short_2_bound, long_reads_bound)
+    for first_index in eachindex(bound_inputs)
+        for second_index in (first_index + 1):lastindex(bound_inputs)
+            Base.Filesystem.samefile(
+                bound_inputs[first_index].path,
+                bound_inputs[second_index].path,
+            ) && throw(ArgumentError(
+                "Unicycler prebound inputs must be physically distinct.",
+            ))
+        end
+    end
+    return (;
+        short_1 = short_1_bound,
+        short_2 = short_2_bound,
+        long_reads = long_reads_bound,
+    )
+end
+
+function _unicycler_prebound_input_fingerprints(
+        contract::NamedTuple,
+)::Dict{String, Any}
+    function expected_fingerprint(
+            bound::Union{Nothing, NamedTuple},
+    )::Union{Nothing, Dict{String, Any}}
+        bound === nothing && return nothing
+        return Dict{String, Any}(
+            "canonical_path" => bound.canonical_path,
+            "size_bytes" => bound.size_bytes,
+            "sha256" => bound.sha256,
+            "consumed_snapshot" => Dict{String, Any}(
+                "size_bytes" => bound.size_bytes,
+                "sha256" => bound.sha256,
+            ),
+        )
+    end
+    return Dict{String, Any}(
+        "short_1" => expected_fingerprint(contract.short_1),
+        "short_2" => expected_fingerprint(contract.short_2),
+        "long_reads" => expected_fingerprint(contract.long_reads),
+    )
+end
+
+function _require_unchanged_unicycler_prebound_inputs(
+        contract::NamedTuple,
+)::Dict{String, Any}
+    observed = Dict{String, Any}(
+        "short_1" => _require_unchanged_unicycler_prebound_input(
+            contract.short_1,
+            "short-read input R1",
+        ),
+        "short_2" => contract.short_2 === nothing ? nothing :
+                     _require_unchanged_unicycler_prebound_input(
+            contract.short_2,
+            "short-read input R2",
+        ),
+        "long_reads" => _require_unchanged_unicycler_prebound_input(
+            contract.long_reads,
+            "long-read input",
+        ),
+    )
+    expected = _unicycler_prebound_input_fingerprints(contract)
+    observed == expected || error(
+        "Unicycler prebound input contract changed under child locks.",
+    )
+    return observed
+end
+
 function _unicycler_spool_root_identity(
         spool_root::AbstractString,
 )::NamedTuple
@@ -2211,6 +2434,7 @@ function _with_unicycler_stable_input_snapshots(
     spool_root = mktempdir(
         resolved_parent;
         prefix = "mycelia-unicycler-input-",
+        cleanup = false,
     )
     chmod(spool_root, 0o700)
     spool_root_identity = _unicycler_spool_root_identity(spool_root)
@@ -2433,10 +2657,15 @@ function _unicycler_observed_input_fingerprints(
             )
         expected_consumed = expected["consumed_snapshot"]
         consumed_path = something(consumed_paths[label])
-        observed_consumed = _unicycler_input_fingerprint(
-            consumed_path,
-            "stable consumed $(label) snapshot",
-        )
+        observed_consumed = if normpath(abspath(consumed_path)) ==
+                               observed_identity["canonical_path"]
+            observed_identity
+        else
+            _unicycler_input_fingerprint(
+                consumed_path,
+                "stable consumed $(label) snapshot",
+            )
+        end
         observed_consumed["size_bytes"] ==
             expected_consumed["size_bytes"] &&
             observed_consumed["sha256"] ==
@@ -2779,7 +3008,10 @@ function _write_unicycler_run_contract(
         "Refusing to overwrite an existing Unicycler run-contract marker: " *
         repr(marker),
     )
-    temporary_path, temporary_io = mktemp(normalized_outdir)
+    temporary_path, temporary_io = mktemp(
+        normalized_outdir;
+        cleanup = false,
+    )
     try
         JSON.print(temporary_io, contract, 2)
         write(temporary_io, '\n')
@@ -3252,6 +3484,7 @@ function _run_unicycler(;
             parent -> diskstat(parent).available,
         after_input_spool_copy_hook::Function = binding -> nothing,
         after_input_spool_materialization_hook::Function = snapshots -> nothing,
+        prebound_input_contract::Union{Nothing, NamedTuple} = nothing,
         environment_preparer::Function = _prepare_unicycler_environment,
         toolchain_inspector::Function = (runner, prefix) ->
             _unicycler_toolchain_provenance(
@@ -3269,12 +3502,37 @@ function _run_unicycler(;
         output_lock_runner::Function = _with_unicycler_output_lock,
         command_runner::Function = run,
 )::NamedTuple
-    validated_inputs = _validate_unicycler_inputs(
+    _canonical_unicycler_conda_runner(conda_runner)
+    environment_prefix === nothing ||
+        _canonical_unicycler_environment_prefix(environment_prefix)
+    normalized_prebound_contract = prebound_input_contract === nothing ?
+                                   nothing :
+                                   _normalize_unicycler_prebound_input_contract(
+        prebound_input_contract,
         short_1,
         short_2,
         long_reads,
     )
+    validated_inputs = if normalized_prebound_contract === nothing
+        _validate_unicycler_inputs(short_1, short_2, long_reads)
+    else
+        (;
+            short_1 = normalized_prebound_contract.short_1.path,
+            short_2 = normalized_prebound_contract.short_2 === nothing ?
+                      nothing : normalized_prebound_contract.short_2.path,
+            long_reads = normalized_prebound_contract.long_reads.path,
+            short_count = 0,
+            long_count = 0,
+        )
+    end
     resolved_executor = resolve_executor(executor)
+    if normalized_prebound_contract !== nothing &&
+       !(resolved_executor isa LocalExecutor)
+        throw(ArgumentError(
+            "Unicycler prebound inputs are internal local snapshots and " *
+            "cannot be submitted to a nonlocal executor.",
+        ))
+    end
     function run_with_inputs(
             consumed_short_1::AbstractString,
             consumed_short_2::Union{Nothing, AbstractString},
@@ -3332,6 +3590,48 @@ function _run_unicycler(;
     planned_outdir = _canonical_planned_unicycler_output_path(
         normalized_outdir,
     )
+    if normalized_prebound_contract !== nothing
+        return output_lock_runner(planned_outdir) do reserved_outdir
+            reserved_outdir = _require_unchanged_unicycler_output_plan(
+                normalized_outdir,
+                reserved_outdir,
+            )
+            function held_output_lock_runner(
+                    action::Function,
+                    requested_outdir::AbstractString,
+            )::Any
+                inner_reserved_outdir = _require_unchanged_unicycler_output_plan(
+                    requested_outdir,
+                    reserved_outdir,
+                )
+                inner_reserved_outdir == reserved_outdir || error(
+                    "Unicycler prebound lifecycle escaped its held output " *
+                    "reservation.",
+                )
+                return action(reserved_outdir)
+            end
+            expected_fingerprints = _unicycler_prebound_input_fingerprints(
+                normalized_prebound_contract,
+            )
+            function validate_held_prebound_inputs()::Nothing
+                _require_unchanged_unicycler_prebound_inputs(
+                    normalized_prebound_contract,
+                ) == expected_fingerprints || error(
+                    "Unicycler prebound inputs changed before environment " *
+                    "preparation.",
+                )
+                return nothing
+            end
+            return run_with_inputs(
+                validated_inputs.short_1,
+                validated_inputs.short_2,
+                validated_inputs.long_reads,
+                expected_fingerprints,
+                held_output_lock_runner,
+                validate_held_prebound_inputs,
+            )
+        end
+    end
     return output_lock_runner(planned_outdir) do reserved_outdir
         reserved_outdir = _require_unchanged_unicycler_output_plan(
             normalized_outdir,
@@ -3843,7 +4143,7 @@ function install_plassembler_db(db_dir::AbstractString; force::Bool = false)
         tarball = length(tarballs) == 1 ? tarballs[1] : sort(tarballs)[end]
         @warn "Plassembler download failed; attempting manual extraction." exception=(
             e, catch_backtrace())
-        tmp_dir = mktempdir(dirname(db_dir))
+        tmp_dir = mktempdir(dirname(db_dir); cleanup = false)
         try
             Tar.extract(tarball, tmp_dir)
         catch extract_error
@@ -4507,7 +4807,7 @@ Run HyLight for hybrid strain-resolved metagenomic assembly.
 
 # Arguments
 - `short_reads_1::String`: Path to first short read FASTQ file
-- `short_reads_2::String`: Path to second short read FASTQ file  
+- `short_reads_2::String`: Path to second short read FASTQ file
 - `long_reads::String`: Path to long read FASTQ file
 - `outdir::String`: Output directory path (default: "hylight_output")
 - `threads::Int`: Number of threads to use (default: `get_default_threads()`)
@@ -4677,7 +4977,7 @@ end
 #             # Paired-end reads
 #             push!(cmd_args, "-p", reads_files[1], reads_files[2])
 #         elseif length(reads_files) == 1
-#             # Single-end reads  
+#             # Single-end reads
 #             push!(cmd_args, "-s", reads_files[1])
 #         else
 #             # Multiple libraries - treat as single-end
@@ -7049,20 +7349,178 @@ end
 function _copy_metamdbg_input!(
         source::AbstractString,
         destination::AbstractString,
+        staging_directory::Base.Filesystem.File,
+        staging_root_identity::NamedTuple;
+        pre_destination_open_hook::Function =
+            (_root::NamedTuple, _destination::AbstractString) -> nothing,
 )::String
-    open(source, "r") do input
-        open(destination, "w") do output
+    normalized_destination = normpath(abspath(String(destination)))
+    dirname(normalized_destination) == staging_root_identity.path || error(
+        "metaMDBG staged input destination escaped its bound staging root: " *
+        "$(normalized_destination).",
+    )
+    destination_name = _metamdbg_require_single_path_component(
+        basename(normalized_destination),
+    )
+    _require_unchanged_metamdbg_directory_descriptor(
+        staging_directory,
+        staging_root_identity,
+        staging_root_identity.path,
+    )
+    pre_destination_open_hook(
+        staging_root_identity,
+        normalized_destination,
+    )
+    _metamdbg_directory_path_identity(staging_root_identity.path) ==
+        staging_root_identity || error(
+        "metaMDBG staged-input root changed before child creation: " *
+        "$(staging_root_identity.path).",
+    )
+    output = _metamdbg_openat(
+        staging_directory,
+        destination_name,
+        Base.JL_O_WRONLY |
+        Base.JL_O_CREAT |
+        Base.JL_O_EXCL |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC;
+        mode = 0o600,
+    )
+    output_identity = try
+        output_status = stat(output)
+        isfile(output_status) || error(
+            "metaMDBG staged input child is not a regular file: " *
+            "$(normalized_destination).",
+        )
+        output_status.uid == Base.Libc.getuid() || error(
+            "metaMDBG staged input child is not owned by the current user: " *
+            "$(normalized_destination).",
+        )
+        fchmod_result = ccall(
+            :fchmod,
+            Cint,
+            (Cint, Base.Cmode_t),
+            _metamdbg_file_descriptor_number(output),
+            Base.Cmode_t(0o600),
+        )
+        if fchmod_result != 0
+            saved_errno = Base.Libc.errno()
+            throw(SystemError(
+                "fchmod metaMDBG staged input $(normalized_destination)",
+                saved_errno,
+            ))
+        end
+        open(source, "r") do input
             buffer = Vector{UInt8}(undef, 1024 * 1024)
             while !eof(input)
                 bytes_read = readbytes!(input, buffer)
                 bytes_read == 0 && break
                 write(output, view(buffer, 1:bytes_read))
             end
-            flush(output)
         end
+        _fsync_metamdbg_descriptor(
+            Base.fd(output),
+            normalized_destination,
+        )
+        fchmod_result = ccall(
+            :fchmod,
+            Cint,
+            (Cint, Base.Cmode_t),
+            _metamdbg_file_descriptor_number(output),
+            Base.Cmode_t(0o400),
+        )
+        if fchmod_result != 0
+            saved_errno = Base.Libc.errno()
+            throw(SystemError(
+                "fchmod metaMDBG staged input $(normalized_destination)",
+                saved_errno,
+            ))
+        end
+        final_status = stat(output)
+        (final_status.mode & 0o777) == 0o400 || error(
+            "metaMDBG staged input child mode changed while copying: " *
+            "$(normalized_destination).",
+        )
+        (;
+            path = normalized_destination,
+            device = final_status.device,
+            inode = final_status.inode,
+        )
+    finally
+        close(output)
     end
-    chmod(destination, 0o400)
-    return String(destination)
+    _require_unchanged_metamdbg_directory_descriptor(
+        staging_directory,
+        staging_root_identity,
+        staging_root_identity.path,
+    )
+    _metamdbg_directory_path_identity(staging_root_identity.path) ==
+        staging_root_identity || error(
+        "metaMDBG staged-input root changed while copying a child: " *
+        "$(staging_root_identity.path).",
+    )
+    observed_identity = _metamdbg_openat_entry_identity(
+        staging_directory,
+        destination_name,
+        normalized_destination,
+        false,
+    )
+    _metamdbg_path_identity_matches(observed_identity, output_identity) || error(
+        "metaMDBG staged input child was replaced while copying: " *
+        "$(normalized_destination).",
+    )
+    return normalized_destination
+end
+
+function _cleanup_staged_metamdbg_inputs!(
+        staged::NamedTuple;
+        pre_remove_hook::Function =
+            (_root::AbstractString, _identity::NamedTuple) -> nothing,
+)::Nothing
+    root_descriptor = staged.root_descriptor
+    try
+        if root_descriptor !== nothing
+            isopen(root_descriptor) || error(
+                "metaMDBG staged-input root descriptor closed before cleanup: " *
+                "$(staged.root).",
+            )
+            _require_unchanged_metamdbg_directory_descriptor(
+                root_descriptor,
+                staged.root_identity,
+                staged.root,
+            )
+        end
+        pre_remove_hook(staged.root, staged.root_identity)
+        _remove_exact_metamdbg_durable_directory!(
+            staged.root,
+            staged.root_identity;
+            recursive = true,
+        )
+    finally
+        root_descriptor !== nothing && isopen(root_descriptor) &&
+            close(root_descriptor)
+    end
+    return nothing
+end
+
+function _require_unchanged_staged_metamdbg_root!(
+        staged::NamedTuple,
+)::Nothing
+    isopen(staged.root_descriptor) || error(
+        "metaMDBG staged-input root descriptor closed before validation: " *
+        "$(staged.root).",
+    )
+    _require_unchanged_metamdbg_directory_descriptor(
+        staged.root_descriptor,
+        staged.root_identity,
+        staged.root,
+    )
+    observed_identity = _metamdbg_directory_path_identity(staged.root)
+    observed_identity == staged.root_identity || error(
+        "metaMDBG staged-input root changed physical identity: " *
+        "$(staged.root).",
+    )
+    return nothing
 end
 
 function _metamdbg_staged_input_name(
@@ -7089,16 +7547,50 @@ end
 function _stage_metamdbg_inputs!(
         selected_input::NamedTuple,
         input_contract::NamedTuple,
-        staging_parent::AbstractString,
+        staging_parent::AbstractString;
+        pre_child_open_hook::Function = (
+            _root::NamedTuple,
+            _destination::AbstractString,
+            _input_index::Int,
+        ) -> nothing,
 )::NamedTuple
     staging_root = mktempdir(
         staging_parent;
         prefix = ".mycelia-metamdbg-inputs.",
+        cleanup = false,
     )
-    chmod(staging_root, 0o700)
+    staging_root_identity = _metamdbg_directory_path_identity(staging_root)
     staged_paths = String[]
+    staging_directory = nothing
     try
-        for (input_index, input) in enumerate(input_contract.contract.inputs)
+        staging_directory = Base.Filesystem.open(
+            staging_root,
+            Base.JL_O_RDONLY |
+            Base.JL_O_DIRECTORY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        )
+        _require_unchanged_metamdbg_directory_descriptor(
+            staging_directory,
+            staging_root_identity,
+            staging_root,
+        )
+        chmod_result = ccall(
+            :fchmod,
+            Cint,
+            (Cint, Base.Cmode_t),
+            _metamdbg_file_descriptor_number(staging_directory),
+            Base.Cmode_t(0o700),
+        )
+        if chmod_result != 0
+            saved_errno = Base.Libc.errno()
+            throw(SystemError(
+                "fchmod metaMDBG staged-input root $(staging_root)",
+                saved_errno,
+            ))
+        end
+        for (input_index, input) in
+            enumerate(input_contract.contract.inputs)
             input.path == selected_input.paths[input_index] || error(
                 "metaMDBG staged-input contract path mismatch.",
             )
@@ -7106,7 +7598,18 @@ function _stage_metamdbg_inputs!(
                 staging_root,
                 _metamdbg_staged_input_name(input_index, input.path),
             )
-            _copy_metamdbg_input!(input.path, staged_path)
+            _copy_metamdbg_input!(
+                input.path,
+                staged_path,
+                staging_directory,
+                staging_root_identity;
+                pre_destination_open_hook = (root, destination) ->
+                    pre_child_open_hook(
+                        root,
+                        destination,
+                        input_index,
+                    ),
+            )
             if !isfile(staged_path) || islink(staged_path) ||
                filesize(staged_path) != input.size_bytes ||
                _metamdbg_sha256(staged_path) != input.sha256
@@ -7115,14 +7618,33 @@ function _stage_metamdbg_inputs!(
                     "and SHA-256 contract: $(input.path).",
                 )
             end
+            _metamdbg_directory_path_identity(staging_root) ==
+                staging_root_identity || error(
+                "metaMDBG staged-input root changed while validating a " *
+                "copied child: $(staging_root).",
+            )
             push!(staged_paths, staged_path)
         end
-    catch
-        rm(staging_root; recursive = true, force = true)
-        rethrow()
+    catch primary_error
+        try
+            _cleanup_staged_metamdbg_inputs!((;
+                root = staging_root,
+                root_identity = staging_root_identity,
+                root_descriptor = staging_directory,
+            ))
+        catch cleanup_error
+            cleanup_error isa InterruptException && rethrow()
+            cleanup_message =
+                "metaMDBG retained staged-input cleanup evidence while " *
+                "preserving the primary staging failure"
+            @warn cleanup_message staging_root primary_error cleanup_error
+        end
+        Base.rethrow()
     end
     return (;
         root = staging_root,
+        root_identity = staging_root_identity,
+        root_descriptor = staging_directory,
         selected_input = (;
             flag = selected_input.flag,
             paths = staged_paths,
@@ -7134,6 +7656,7 @@ function _require_unchanged_staged_metamdbg_inputs!(
         staged::NamedTuple,
         input_contract::NamedTuple,
 )::Nothing
+    _require_unchanged_staged_metamdbg_root!(staged)
     for (staged_path, input) in
         zip(staged.selected_input.paths, input_contract.contract.inputs)
         if !isfile(staged_path) || islink(staged_path) ||
@@ -7144,6 +7667,7 @@ function _require_unchanged_staged_metamdbg_inputs!(
                 "running: $(staged_path).",
             )
         end
+        _require_unchanged_staged_metamdbg_root!(staged)
     end
     return nothing
 end
@@ -9893,7 +10417,7 @@ function _publish_metamdbg_output_root_reservation_marker!(
             "reservation: $(marker).",
         )
     end
-    temporary_path, temporary_io = mktemp(dirname(marker))
+    temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
     published = false
     try
@@ -10469,6 +10993,7 @@ function _create_metamdbg_submission_reservation!(
     temporary_path = mktempdir(
         reservation_parent;
         prefix = _metamdbg_submission_reservation_prefix(outdir) * "tmp.",
+        cleanup = false,
     )
     chmod(temporary_path, 0o700)
     temporary_identity = _metamdbg_directory_path_identity(temporary_path)
@@ -11209,7 +11734,7 @@ function _write_metamdbg_contract!(
             "marker: $(marker).",
         )
     end
-    temporary_path, temporary_io = mktemp(dirname(marker))
+    temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
     published = false
     try
@@ -11832,7 +12357,10 @@ function _gzip_metamdbg_contigs!(
         plain_path::AbstractString,
         gzip_path::AbstractString,
 )::String
-    temporary_path, temporary_io = mktemp(dirname(gzip_path))
+    temporary_path, temporary_io = mktemp(
+        dirname(gzip_path);
+        cleanup = false,
+    )
     close(temporary_io)
     try
         open(plain_path, "r") do input
@@ -12088,7 +12616,7 @@ function _write_metamdbg_completion_manifest!(
             "$(marker).",
         )
     end
-    temporary_path, temporary_io = mktemp(dirname(marker))
+    temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
     published = false
     try
@@ -13964,6 +14492,10 @@ function _run_metamdbg(;
                     selected_input,
                     input_contract.input_snapshot,
                 )
+                _require_unchanged_staged_metamdbg_inputs!(
+                    staged,
+                    input_contract,
+                )
                 _with_metamdbg_output_root_guard(
                     output_root_identity,
                     "running metaMDBG assembly",
@@ -14008,7 +14540,7 @@ function _run_metamdbg(;
                 )
                 completed_artifacts, toolchain_after
             finally
-                rm(staged.root; recursive = true, force = true)
+                _cleanup_staged_metamdbg_inputs!(staged)
             end
             completion = _metamdbg_completion_manifest(
                 outputs,

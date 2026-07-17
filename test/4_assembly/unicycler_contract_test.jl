@@ -51,6 +51,23 @@ function _test_unicycler_input_fingerprint(
     )
 end
 
+function _test_unicycler_prebound_descriptor(
+        path::AbstractString,
+)::NamedTuple
+    normalized_path = abspath(String(path))
+    status = stat(normalized_path)
+    return (;
+        path = normalized_path,
+        canonical_path = realpath(normalized_path),
+        size_bytes = filesize(normalized_path),
+        sha256 = Mycelia.SHA.bytes2hex(
+            Mycelia.SHA.sha256(read(normalized_path)),
+        ),
+        device = UInt64(status.device),
+        inode = UInt64(status.inode),
+    )
+end
+
 function _test_unicycler_error(
         thunk::Function,
         expected_message::AbstractString,
@@ -134,6 +151,27 @@ Test.@testset "common Unicycler wrapper contract" begin
                         outdir,
                     ),
                     invalid.message,
+                    ArgumentError,
+                )
+                Test.@test !ispath(outdir)
+                Test.@test !ispath(Mycelia._unicycler_output_lock_path(outdir))
+            end
+
+            for (option, blank_value) in (
+                    (:conda_runner, ""),
+                    (:environment_prefix, "   "),
+            )
+                outdir = joinpath(temp_dir, "blank-$(option)")
+                keyword_arguments = NamedTuple{(option,)}((blank_value,))
+                _test_unicycler_error(
+                    () -> Mycelia.run_unicycler(;
+                        short_1 = r1,
+                        short_2 = r2,
+                        long_reads,
+                        outdir,
+                        keyword_arguments...,
+                    ),
+                    "must be a non-empty",
                     ArgumentError,
                 )
                 Test.@test !ispath(outdir)
@@ -548,6 +586,135 @@ Test.@testset "common Unicycler wrapper contract" begin
             )
             Test.@test !ispath(mutated_spool_root[])
             Test.@test Set(readdir(scratch_root)) == before_entries
+        end
+    end
+
+    Test.@testset "internal prebound inputs avoid a second copy" begin
+        mktempdir() do temp_dir
+            r1 = joinpath(temp_dir, "R1.fastq")
+            r2 = joinpath(temp_dir, "R2.fastq")
+            long_reads = joinpath(temp_dir, "long.fastq")
+            write(r1, "@pair/1\nACGT\n+\nIIII\n")
+            write(r2, "@pair/2\nTGCA\n+\nIIII\n")
+            write(long_reads, "@long\nACGTTGCA\n+\nIIIIIIII\n")
+            prebound_contract = (;
+                short_1 = _test_unicycler_prebound_descriptor(r1),
+                short_2 = _test_unicycler_prebound_descriptor(r2),
+                long_reads = _test_unicycler_prebound_descriptor(long_reads),
+            )
+            output_events = String[]
+            environment_events = String[]
+            copy_calls = Ref(0)
+            materialization_calls = Ref(0)
+            environment_preparations = Ref(0)
+            function output_lock_runner(
+                    action::Function,
+                    outdir::AbstractString,
+            )::Any
+                push!(output_events, "acquired")
+                try
+                    return action(abspath(outdir))
+                finally
+                    push!(output_events, "released")
+                end
+            end
+            function environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                push!(environment_events, "acquired")
+                return action()
+            end
+            outdir = joinpath(temp_dir, "prebound-success")
+            result = Mycelia._run_unicycler(;
+                short_1 = r1,
+                short_2 = r2,
+                long_reads,
+                outdir,
+                prebound_input_contract = prebound_contract,
+                after_input_spool_copy_hook = binding ->
+                    (copy_calls[] += 1),
+                after_input_spool_materialization_hook = snapshots ->
+                    (materialization_calls[] += 1),
+                environment_preparer = (runner, prefix) ->
+                    (environment_preparations[] += 1),
+                toolchain_inspector = (runner, prefix) ->
+                    _test_unicycler_toolchain(),
+                output_lock_runner,
+                environment_lock_runner,
+                command_runner = command -> begin
+                    r1_index = something(findfirst(==("-1"), command.exec))
+                    r2_index = something(findfirst(==("-2"), command.exec))
+                    long_index = something(findfirst(==("-l"), command.exec))
+                    Test.@test command.exec[r1_index + 1] == abspath(r1)
+                    Test.@test command.exec[r2_index + 1] == abspath(r2)
+                    Test.@test command.exec[long_index + 1] ==
+                               abspath(long_reads)
+                    mkpath(outdir)
+                    write(
+                        joinpath(outdir, "assembly.fasta"),
+                        ">contig\nACGT\n",
+                    )
+                    write(
+                        joinpath(outdir, "assembly.gfa"),
+                        "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                    )
+                end,
+            )
+            Test.@test result.status == :completed
+            Test.@test copy_calls[] == 0
+            Test.@test materialization_calls[] == 0
+            Test.@test environment_preparations[] == 1
+            Test.@test output_events == ["acquired", "released"]
+            Test.@test environment_events == ["acquired"]
+
+            mutation_r1 = joinpath(temp_dir, "mutation-R1.fastq")
+            mutation_r2 = joinpath(temp_dir, "mutation-R2.fastq")
+            mutation_long = joinpath(temp_dir, "mutation-long.fastq")
+            write(mutation_r1, "@pair/1\nACGT\n+\nIIII\n")
+            write(mutation_r2, "@pair/2\nTGCA\n+\nIIII\n")
+            write(mutation_long, "@long\nACGTTGCA\n+\nIIIIIIII\n")
+            mutation_contract = (;
+                short_1 = _test_unicycler_prebound_descriptor(mutation_r1),
+                short_2 = _test_unicycler_prebound_descriptor(mutation_r2),
+                long_reads =
+                    _test_unicycler_prebound_descriptor(mutation_long),
+            )
+            mutation_environment_preparations = Ref(0)
+            mutation_commands = Ref(0)
+            mutation_copies = Ref(0)
+            function mutating_environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                write(mutation_r1, "@pair/1\nNNNN\n+\n!!!!\n")
+                return action()
+            end
+            mutation_outdir = joinpath(temp_dir, "prebound-mutation")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = mutation_r1,
+                    short_2 = mutation_r2,
+                    long_reads = mutation_long,
+                    outdir = mutation_outdir,
+                    prebound_input_contract = mutation_contract,
+                    after_input_spool_copy_hook = binding ->
+                        (mutation_copies[] += 1),
+                    environment_preparer = (runner, prefix) ->
+                        (mutation_environment_preparations[] += 1),
+                    toolchain_inspector = (runner, prefix) ->
+                        _test_unicycler_toolchain(),
+                    output_lock_runner,
+                    environment_lock_runner =
+                        mutating_environment_lock_runner,
+                    command_runner = command -> (mutation_commands[] += 1),
+                ),
+                "content changed before any child tool side effect",
+            )
+            Test.@test mutation_copies[] == 0
+            Test.@test mutation_environment_preparations[] == 0
+            Test.@test mutation_commands[] == 0
+            Test.@test !ispath(mutation_outdir)
         end
     end
 

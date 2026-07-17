@@ -221,6 +221,21 @@ function _autocycler_test_toolchain(;
     )
 end
 
+function _autocycler_test_prebound_descriptor(
+        path::AbstractString,
+)::NamedTuple
+    normalized_path = abspath(String(path))
+    status = stat(normalized_path)
+    return (;
+        path = normalized_path,
+        canonical_path = realpath(normalized_path),
+        size_bytes = filesize(normalized_path),
+        sha256 = Mycelia._autocycler_sha256(normalized_path),
+        device = UInt64(status.device),
+        inode = UInt64(status.inode),
+    )
+end
+
 autocycler_smoke_prerequisites = _autocycler_smoke_prerequisites(ENV)
 run_autocycler_smoke = autocycler_smoke_prerequisites.run_smoke
 autocycler_smoke_inputs = run_autocycler_smoke ?
@@ -3762,6 +3777,50 @@ else
     )
 end
 
+Test.@testset "Autocycler blank environment paths fail before output" begin
+    mktempdir() do temp_dir
+        long_reads = joinpath(temp_dir, "long.fastq")
+        short_reads_1 = joinpath(temp_dir, "R1.fastq")
+        short_reads_2 = joinpath(temp_dir, "R2.fastq")
+        write(long_reads, "@long\nACGTTGCA\n+\nIIIIIIII\n")
+        write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+        write(short_reads_2, "@pair/2\nTGCA\n+\nIIII\n")
+        for (wrapper, option, blank_value) in (
+                (:long_only, :conda_runner, ""),
+                (:long_only, :environment_prefix, "   "),
+                (:polished, :conda_runner, ""),
+                (:polished, :environment_prefix, "   "),
+        )
+            out_dir = joinpath(temp_dir, "$(wrapper)-$(option)")
+            keyword_arguments = NamedTuple{(option,)}((blank_value,))
+            error = _autocycler_test_error() do
+                if wrapper == :long_only
+                    Mycelia.run_autocycler(;
+                        long_reads,
+                        out_dir,
+                        keyword_arguments...,
+                    )
+                else
+                    Mycelia.run_autocycler_polished(;
+                        long_reads,
+                        short_reads_1,
+                        short_reads_2,
+                        out_dir,
+                        keyword_arguments...,
+                    )
+                end
+            end
+            Test.@test error isa ArgumentError
+            Test.@test occursin(
+                "must be a non-empty",
+                sprint(showerror, error),
+            )
+            Test.@test !ispath(out_dir)
+            Test.@test !ispath(Mycelia._autocycler_output_lock_path(out_dir))
+        end
+    end
+end
+
 Test.@testset "Autocycler bounded reserved input spooling" begin
     mktempdir() do temp_dir
         long_reads = joinpath(temp_dir, "long.fastq")
@@ -3963,6 +4022,154 @@ Test.@testset "Autocycler bounded reserved input spooling" begin
         Test.@test !ispath(dirname(captured_spool[]))
         Test.@test !output_reserved[]
         Test.@test !environment_reserved[]
+    end
+end
+
+Test.@testset "Autocycler internal prebound inputs avoid a second copy" begin
+    mktempdir() do temp_dir
+        long_reads = joinpath(temp_dir, "long.fastq")
+        short_reads_1 = joinpath(temp_dir, "R1.fastq")
+        short_reads_2 = joinpath(temp_dir, "R2.fastq")
+        write(long_reads, "@long\nACGTTGCA\n+\nIIIIIIII\n")
+        write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+        write(short_reads_2, "@pair/2\nTGCA\n+\nIIII\n")
+        prebound_contract = (;
+            long_reads = _autocycler_test_prebound_descriptor(long_reads),
+            short_reads_1 =
+                _autocycler_test_prebound_descriptor(short_reads_1),
+            short_reads_2 =
+                _autocycler_test_prebound_descriptor(short_reads_2),
+        )
+        copy_calls = Ref(0)
+        dependency_calls = Ref(0)
+        output_lock_active = Ref(false)
+        environment_lock_active = Ref(false)
+        function output_lock_runner(
+                action::Function,
+                outdir::AbstractString,
+        )::Any
+            Test.@test !output_lock_active[]
+            output_lock_active[] = true
+            try
+                return action(abspath(outdir))
+            finally
+                output_lock_active[] = false
+            end
+        end
+        function environment_lock_runner(
+                action::Function,
+                lock_path::AbstractString,
+        )::Any
+            Test.@test output_lock_active[]
+            Test.@test !environment_lock_active[]
+            environment_lock_active[] = true
+            try
+                return action()
+            finally
+                environment_lock_active[] = false
+            end
+        end
+        outdir = joinpath(temp_dir, "prebound-success")
+        result = Mycelia._run_autocycler_polished(
+            long_reads,
+            short_reads_1,
+            short_reads_2,
+            outdir;
+            prebound_input_contract = prebound_contract,
+            after_input_spool_copy_hook = binding -> (copy_calls[] += 1),
+            dependency_checker = () -> begin
+                Test.@test output_lock_active[]
+                Test.@test environment_lock_active[]
+                dependency_calls[] += 1
+                return _autocycler_test_toolchain()
+            end,
+            output_lock_runner,
+            environment_lock_runner,
+            runner = step -> begin
+                Test.@test output_lock_active[]
+                Test.@test environment_lock_active[]
+                if step.name == :autocycler
+                    Test.@test abspath(long_reads) in step.command.exec
+                elseif step.name == :bwa_mem_1
+                    Test.@test abspath(short_reads_1) in step.command.exec
+                elseif step.name == :bwa_mem_2
+                    Test.@test abspath(short_reads_2) in step.command.exec
+                end
+                return _autocycler_test_runner!(step)
+            end,
+        )
+        Test.@test isfile(result.assembly)
+        Test.@test copy_calls[] == 0
+        Test.@test dependency_calls[] == 3
+        Test.@test result.input_snapshots.long_reads.consumed_path ==
+                   abspath(long_reads)
+        Test.@test result.input_snapshots.short_reads_1.consumed_path ==
+                   abspath(short_reads_1)
+        Test.@test result.input_snapshots.short_reads_2.consumed_path ==
+                   abspath(short_reads_2)
+        Test.@test !output_lock_active[]
+        Test.@test !environment_lock_active[]
+
+        mutation_long_reads = joinpath(temp_dir, "mutation-long.fastq")
+        mutation_short_reads_1 = joinpath(temp_dir, "mutation-R1.fastq")
+        mutation_short_reads_2 = joinpath(temp_dir, "mutation-R2.fastq")
+        write(mutation_long_reads, "@long\nACGTTGCA\n+\nIIIIIIII\n")
+        write(mutation_short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+        write(mutation_short_reads_2, "@pair/2\nTGCA\n+\nIIII\n")
+        mutation_contract = (;
+            long_reads =
+                _autocycler_test_prebound_descriptor(mutation_long_reads),
+            short_reads_1 = _autocycler_test_prebound_descriptor(
+                mutation_short_reads_1,
+            ),
+            short_reads_2 = _autocycler_test_prebound_descriptor(
+                mutation_short_reads_2,
+            ),
+        )
+        mutation_copy_calls = Ref(0)
+        mutation_dependency_calls = Ref(0)
+        mutation_runner_calls = Ref(0)
+        function mutating_environment_lock_runner(
+                action::Function,
+                lock_path::AbstractString,
+        )::Any
+            write(
+                mutation_long_reads,
+                "@long\nNNNNNNNN\n+\n!!!!!!!!\n",
+            )
+            return action()
+        end
+        mutation_outdir = joinpath(temp_dir, "prebound-mutation")
+        mutation_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                mutation_long_reads,
+                mutation_short_reads_1,
+                mutation_short_reads_2,
+                mutation_outdir;
+                prebound_input_contract = mutation_contract,
+                after_input_spool_copy_hook = binding ->
+                    (mutation_copy_calls[] += 1),
+                dependency_checker = () -> begin
+                    mutation_dependency_calls[] += 1
+                    return _autocycler_test_toolchain()
+                end,
+                output_lock_runner,
+                environment_lock_runner = mutating_environment_lock_runner,
+                runner = step -> begin
+                    mutation_runner_calls[] += 1
+                    return _autocycler_test_runner!(step)
+                end,
+            )
+        end
+        Test.@test mutation_error isa ErrorException
+        Test.@test occursin(
+            "content changed before any child tool side effect",
+            sprint(showerror, mutation_error),
+        )
+        Test.@test mutation_copy_calls[] == 0
+        Test.@test mutation_dependency_calls[] == 0
+        Test.@test mutation_runner_calls[] == 0
+        Test.@test !ispath(mutation_outdir)
     end
 end
 

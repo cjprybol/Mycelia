@@ -73,16 +73,24 @@ end
 function _canonical_autocycler_conda_runner(
         conda_runner::AbstractString = _conda_runner(),
 )::String
-    executable = Sys.which(String(conda_runner))
+    reported_runner = String(conda_runner)
+    isempty(strip(reported_runner)) && throw(ArgumentError(
+        "Autocycler conda_runner must be a non-empty executable name or path.",
+    ))
+    executable = Sys.which(reported_runner)
     candidate = executable === nothing ?
-                abspath(String(conda_runner)) : String(executable)
+                abspath(reported_runner) : String(executable)
     return ispath(candidate) ? realpath(candidate) : normpath(candidate)
 end
 
 function _canonical_autocycler_environment_prefix(
         environment_prefix::AbstractString,
 )::String
-    normalized_prefix = normpath(abspath(String(environment_prefix)))
+    reported_prefix = String(environment_prefix)
+    isempty(strip(reported_prefix)) && throw(ArgumentError(
+        "Autocycler environment_prefix must be a non-empty path.",
+    ))
+    normalized_prefix = normpath(abspath(reported_prefix))
     existing_ancestor = normalized_prefix
     missing_components = String[]
     while !ispath(existing_ancestor) && !islink(existing_ancestor)
@@ -174,6 +182,217 @@ function _autocycler_input_source_snapshot(
         device = UInt64(status.device),
         inode = UInt64(status.inode),
     )
+end
+
+function _normalize_autocycler_prebound_input(
+        descriptor::NamedTuple,
+        path::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    required_fields = (
+        :path,
+        :canonical_path,
+        :size_bytes,
+        :sha256,
+        :device,
+        :inode,
+    )
+    keys(descriptor) == required_fields || throw(ArgumentError(
+        "Autocycler prebound $(label) contract must have fields " *
+        "$(required_fields), got $(keys(descriptor)).",
+    ))
+    normalized_path = normpath(abspath(String(path)))
+    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
+        ArgumentError(
+            "Autocycler prebound $(label) path does not match its contract.",
+        ),
+    )
+    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
+        "Autocycler prebound $(label) must be a regular non-symlink file.",
+    ))
+    canonical_path = realpath(normalized_path)
+    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
+        "Autocycler prebound $(label) canonical path does not match its contract.",
+    ))
+    status = stat(normalized_path)
+    normalized = (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = Int(descriptor.size_bytes),
+        sha256 = String(descriptor.sha256),
+        device = UInt64(descriptor.device),
+        inode = UInt64(descriptor.inode),
+    )
+    normalized.size_bytes > 0 || throw(ArgumentError(
+        "Autocycler prebound $(label) must be non-empty.",
+    ))
+    UInt64(status.device) == normalized.device &&
+        UInt64(status.inode) == normalized.inode &&
+        filesize(normalized_path) == normalized.size_bytes || throw(
+        ArgumentError(
+            "Autocycler prebound $(label) physical identity or size changed " *
+            "before child-lock acquisition.",
+        ),
+    )
+    return normalized
+end
+
+function _require_unchanged_autocycler_prebound_input(
+        expected::NamedTuple,
+        label::AbstractString,
+)::NamedTuple
+    isfile(expected.path) && !islink(expected.path) || error(
+        "Autocycler prebound $(label) is missing or no longer a regular file.",
+    )
+    realpath(expected.path) == expected.canonical_path || error(
+        "Autocycler prebound $(label) canonical path changed under child locks.",
+    )
+    input = Base.Filesystem.open(
+        expected.canonical_path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    try
+        before = stat(input)
+        UInt64(before.device) == expected.device &&
+            UInt64(before.inode) == expected.inode &&
+            filesize(input) == expected.size_bytes || error(
+            "Autocycler prebound $(label) physical identity or size changed " *
+            "under child locks.",
+        )
+        observed_sha256 = SHA.bytes2hex(SHA.sha256(input))
+        after = stat(input)
+        UInt64(after.device) == expected.device &&
+            UInt64(after.inode) == expected.inode &&
+            filesize(input) == expected.size_bytes || error(
+            "Autocycler prebound $(label) changed while it was revalidated " *
+            "under child locks.",
+        )
+        observed_sha256 == expected.sha256 || error(
+            "Autocycler prebound $(label) content changed before any child " *
+            "tool side effect.",
+        )
+        return (;
+            path = expected.path,
+            canonical_path = expected.canonical_path,
+            size_bytes = expected.size_bytes,
+            sha256 = expected.sha256,
+        )
+    finally
+        close(input)
+    end
+end
+
+function _autocycler_prebound_input_binding(
+        bound::NamedTuple,
+)::NamedTuple
+    consumed_snapshot = (;
+        path = bound.path,
+        size_bytes = bound.size_bytes,
+        sha256 = bound.sha256,
+    )
+    snapshot = (;
+        path = bound.path,
+        canonical_path = bound.canonical_path,
+        size_bytes = bound.size_bytes,
+        sha256 = bound.sha256,
+        consumed_path = bound.path,
+        consumed_size_bytes = bound.size_bytes,
+        consumed_sha256 = bound.sha256,
+        prebound_contract = bound,
+    )
+    return (;
+        snapshot,
+        consumed_snapshot,
+        semantic_path = bound.path,
+    )
+end
+
+function _normalize_autocycler_prebound_input_contract(
+        contract::NamedTuple,
+        long_reads::AbstractString,
+        short_reads_1::AbstractString,
+        short_reads_2::AbstractString,
+)::NamedTuple
+    keys(contract) == (:long_reads, :short_reads_1, :short_reads_2) || throw(
+        ArgumentError(
+            "Autocycler prebound input contract must bind long_reads, " *
+            "short_reads_1, and short_reads_2.",
+        ),
+    )
+    for key in keys(contract)
+        getproperty(contract, key) isa NamedTuple || throw(ArgumentError(
+            "Autocycler prebound $(key) contract has an invalid shape.",
+        ))
+    end
+    normalized = (;
+        long_reads = _normalize_autocycler_prebound_input(
+            contract.long_reads,
+            long_reads,
+            "Long-read FASTQ",
+        ),
+        short_reads_1 = _normalize_autocycler_prebound_input(
+            contract.short_reads_1,
+            short_reads_1,
+            "Paired short-read R1 FASTQ",
+        ),
+        short_reads_2 = _normalize_autocycler_prebound_input(
+            contract.short_reads_2,
+            short_reads_2,
+            "Paired short-read R2 FASTQ",
+        ),
+    )
+    bound_inputs = (
+        normalized.long_reads,
+        normalized.short_reads_1,
+        normalized.short_reads_2,
+    )
+    for first_index in eachindex(bound_inputs)
+        for second_index in (first_index + 1):lastindex(bound_inputs)
+            Base.Filesystem.samefile(
+                bound_inputs[first_index].path,
+                bound_inputs[second_index].path,
+            ) && throw(ArgumentError(
+                "Autocycler prebound inputs must be physically distinct.",
+            ))
+        end
+    end
+    return normalized
+end
+
+function _with_autocycler_input_snapshots(
+        action::Function,
+        paths::Tuple,
+        labels::Tuple;
+        prebound_inputs::Union{Nothing, Tuple} = nothing,
+        spool_parent::Union{Nothing, AbstractString} = nothing,
+        byte_ceiling::Integer = AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
+        available_bytes_reader::Function = parent -> diskstat(parent).available,
+        after_copy_hook::Function = binding -> nothing,
+)::Any
+    if prebound_inputs === nothing
+        return _with_autocycler_spooled_input_snapshots(
+            action,
+            paths,
+            labels;
+            spool_parent,
+            byte_ceiling,
+            available_bytes_reader,
+            after_copy_hook,
+        )
+    end
+    length(prebound_inputs) == length(paths) == length(labels) || throw(
+        ArgumentError(
+            "Autocycler prebound inputs, paths, and labels must have equal " *
+            "length.",
+        ),
+    )
+    bindings = Tuple(
+        _autocycler_prebound_input_binding(bound) for
+        bound in prebound_inputs
+    )
+    return action(bindings)
 end
 
 function _autocycler_spool_root_identity(
@@ -343,6 +562,7 @@ function _autocycler_spooled_input_snapshots(
     spool_root = mktempdir(
         resolved_parent;
         prefix = "mycelia-autocycler-input-",
+        cleanup = false,
     )
     chmod(spool_root, 0o700)
     spool_root_identity = _autocycler_spool_root_identity(spool_root)
@@ -484,6 +704,43 @@ function _require_unchanged_autocycler_consumed_input(
     return observed
 end
 
+function _require_unchanged_autocycler_input_binding(
+        snapshot::NamedTuple,
+        consumed_snapshot::NamedTuple,
+        label::AbstractString;
+        consumed_first::Bool = false,
+)::Nothing
+    if hasproperty(snapshot, :prebound_contract)
+        observed = _require_unchanged_autocycler_prebound_input(
+            snapshot.prebound_contract,
+            label,
+        )
+        expected_consumed = (;
+            path = observed.path,
+            size_bytes = observed.size_bytes,
+            sha256 = observed.sha256,
+        )
+        consumed_snapshot == expected_consumed || error(
+            "Autocycler prebound $(label) consumed contract changed.",
+        )
+        return nothing
+    end
+    if consumed_first
+        _require_unchanged_autocycler_consumed_input(
+            consumed_snapshot,
+            label,
+        )
+        _require_unchanged_autocycler_input(snapshot, label)
+    else
+        _require_unchanged_autocycler_input(snapshot, label)
+        _require_unchanged_autocycler_consumed_input(
+            consumed_snapshot,
+            label,
+        )
+    end
+    return nothing
+end
+
 function _require_verified_autocycler_environment_spec(
         path::AbstractString,
 )::String
@@ -521,7 +778,10 @@ function _install_verified_autocycler_script!(
 )::String
     normalized_script_path = abspath(script_path)
     mkpath(dirname(normalized_script_path))
-    temporary_path, temporary_io = mktemp(dirname(normalized_script_path))
+    temporary_path, temporary_io = mktemp(
+        dirname(normalized_script_path);
+        cleanup = false,
+    )
     close(temporary_io)
     try
         downloader(AUTOCYCLER_SCRIPT_URL, temporary_path)
@@ -2753,13 +3013,11 @@ function _run_autocycler_with_reserved_output(
     )
     function verify_long_read_before_step(step::NamedTuple)::Nothing
         if step.name == :autocycler
-            _require_unchanged_autocycler_consumed_input(
+            _require_unchanged_autocycler_input_binding(
+                long_read_snapshot,
                 long_read_consumed_snapshot,
                 "Long-read FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                long_read_snapshot,
-                "Long-read FASTQ",
+                consumed_first = true,
             )
         end
         return nothing
@@ -2767,13 +3025,11 @@ function _run_autocycler_with_reserved_output(
     output_snapshots = Ref{Any}(nothing)
     function verify_long_read_after_step(step::NamedTuple)::Nothing
         if step.name == :autocycler
-            _require_unchanged_autocycler_consumed_input(
+            _require_unchanged_autocycler_input_binding(
+                long_read_snapshot,
                 long_read_consumed_snapshot,
                 "Long-read FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                long_read_snapshot,
-                "Long-read FASTQ",
+                consumed_first = true,
             )
             output_snapshots[] = (
                 assembly = _autocycler_artifact_snapshot(
@@ -3342,23 +3598,19 @@ function _run_autocycler_polished_with_reserved_output(
             verify_produced_artifacts(:polypolish, step.name)
         end
         if step.name in (:bwa_mem_1, :pypolca)
-            _require_unchanged_autocycler_consumed_input(
+            _require_unchanged_autocycler_input_binding(
+                input_snapshots.short_reads_1,
                 input_consumed_snapshots.short_reads_1,
                 "Paired short-read R1 FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_1,
-                "Paired short-read R1 FASTQ",
+                consumed_first = true,
             )
         end
         if step.name in (:bwa_mem_2, :pypolca)
-            _require_unchanged_autocycler_consumed_input(
+            _require_unchanged_autocycler_input_binding(
+                input_snapshots.short_reads_2,
                 input_consumed_snapshots.short_reads_2,
                 "Paired short-read R2 FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_2,
-                "Paired short-read R2 FASTQ",
+                consumed_first = true,
             )
         end
         return nothing
@@ -3685,6 +3937,7 @@ function _run_autocycler_polished(
         input_spool_available_bytes_reader::Function =
             parent -> diskstat(parent).available,
         after_input_spool_copy_hook::Function = binding -> nothing,
+        prebound_input_contract::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
     resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
     resolved_prefix = environment_prefix === nothing ?
@@ -3719,14 +3972,31 @@ function _run_autocycler_polished(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
+    normalized_prebound_contract = prebound_input_contract === nothing ?
+                                   nothing :
+                                   _normalize_autocycler_prebound_input_contract(
+        prebound_input_contract,
+        normalized_long_reads,
+        normalized_short_reads_1,
+        normalized_short_reads_2,
+    )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do
-            resolved_spool_parent = input_spool_parent === nothing ?
-                                    _autocycler_output_adjacent_spool_parent(
-                reserved_out_dir,
-            ) :
-                                    input_spool_parent
-            return _with_autocycler_spooled_input_snapshots(
+            resolved_spool_parent = if normalized_prebound_contract === nothing
+                input_spool_parent === nothing ?
+                _autocycler_output_adjacent_spool_parent(reserved_out_dir) :
+                input_spool_parent
+            else
+                nothing
+            end
+            prebound_inputs = normalized_prebound_contract === nothing ?
+                              nothing :
+                              (
+                normalized_prebound_contract.long_reads,
+                normalized_prebound_contract.short_reads_1,
+                normalized_prebound_contract.short_reads_2,
+            )
+            return _with_autocycler_input_snapshots(
                 (
                     normalized_long_reads,
                     normalized_short_reads_1,
@@ -3737,6 +4007,7 @@ function _run_autocycler_polished(
                     "Paired short-read R1 FASTQ",
                     "Paired short-read R2 FASTQ",
                 );
+                prebound_inputs,
                 spool_parent = resolved_spool_parent,
                 byte_ceiling = input_spool_byte_ceiling,
                 available_bytes_reader = input_spool_available_bytes_reader,
@@ -3744,14 +4015,16 @@ function _run_autocycler_polished(
             ) do input_bindings
                 long_read_binding, short_read_1_binding,
                     short_read_2_binding = input_bindings
-                _validate_autocycler_fastq(
-                    long_read_binding.semantic_path,
-                    "Long-read input",
-                )
-                _validate_autocycler_paired_fastqs(
-                    short_read_1_binding.semantic_path,
-                    short_read_2_binding.semantic_path,
-                )
+                if normalized_prebound_contract === nothing
+                    _validate_autocycler_fastq(
+                        long_read_binding.semantic_path,
+                        "Long-read input",
+                    )
+                    _validate_autocycler_paired_fastqs(
+                        short_read_1_binding.semantic_path,
+                        short_read_2_binding.semantic_path,
+                    )
+                end
                 input_snapshots = (
                     long_reads = long_read_binding.snapshot,
                     short_reads_1 = short_read_1_binding.snapshot,
@@ -3780,8 +4053,8 @@ function _run_autocycler_polished(
                             "Paired short-read R2 FASTQ",
                         ),
                 )
-                    _require_unchanged_autocycler_input(snapshot, label)
-                    _require_unchanged_autocycler_consumed_input(
+                    _require_unchanged_autocycler_input_binding(
+                        snapshot,
                         consumed,
                         label,
                     )
@@ -3830,33 +4103,25 @@ function _run_autocycler_polished(
                 result.output_root_identity,
                 result.outdir,
             )
-            _require_unchanged_autocycler_input(
-                input_snapshots.long_reads,
-                "Long-read FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_1,
-                "Paired short-read R1 FASTQ",
-            )
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_2,
-                "Paired short-read R2 FASTQ",
-            )
-            for (consumed, label) in (
+            for (snapshot, consumed, label) in (
                     (
+                        input_snapshots.long_reads,
                         input_consumed_snapshots.long_reads,
                         "Long-read FASTQ",
                     ),
                     (
+                        input_snapshots.short_reads_1,
                         input_consumed_snapshots.short_reads_1,
                         "Paired short-read R1 FASTQ",
                     ),
                     (
+                        input_snapshots.short_reads_2,
                         input_consumed_snapshots.short_reads_2,
                         "Paired short-read R2 FASTQ",
                     ),
             )
-                _require_unchanged_autocycler_consumed_input(
+                _require_unchanged_autocycler_input_binding(
+                    snapshot,
                     consumed,
                     label,
                 )

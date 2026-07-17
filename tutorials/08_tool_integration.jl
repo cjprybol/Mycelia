@@ -73,8 +73,6 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # )
 #
 # # High-level corrected multi-input workflows use typed sibling adapters.
-# Base.Filesystem.mkpath("scratch/unicycler-inputs")
-# Base.Filesystem.mkpath("scratch/autocycler-inputs")
 # unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
 #     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
 #     "reads_ont.fastq.gz";
@@ -82,11 +80,6 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #         output_dir = "hybrid_unicycler_out",
 #         # Cumulative stable source + correction-output copy budget.
 #         input_snapshot_byte_ceiling = 500_000_000_000,
-#         assembler_options = (;
-#             # Separate reservation-scoped direct-assembler scratch controls.
-#             input_spool_parent = "scratch/unicycler-inputs",
-#             input_spool_byte_ceiling = 250_000_000_000,
-#         ),
 #     ),
 # )
 # # Unicycler's mutable Conda environment is bound to the realized package
@@ -102,10 +95,6 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #         autocycler_read_type = :pacbio_hifi,
 #         output_dir = "hybrid_autocycler_out",
 #         input_snapshot_byte_ceiling = 500_000_000_000,
-#         assembler_options = (;
-#             input_spool_parent = "scratch/autocycler-inputs",
-#             input_spool_byte_ceiling = 250_000_000_000,
-#         ),
 #     ),
 # )
 # autocycler_result.assembly_stats["toolchain"]
@@ -116,7 +105,10 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # read_content["source_inputs"]
 # read_content["corrected_fastqs"]
 # # Exact partial snapshots are cleaned on ceiling, free-space, write, or hash
-# # failure. Persistent high-level snapshots remain; direct spools never do.
+# # failure. High-level children consume the already-bound corrected snapshots
+# # directly, without a second scratch copy. Standalone run_unicycler and
+# # run_autocycler_polished calls still expose input_spool_parent and
+# # input_spool_byte_ceiling when a direct wrapper needs bounded scratch.
 #
 # metaMDBG v1.4 accepts one or more HiFi FASTQs, or one or more ONT R10.4-or-
 # later FASTQs with an explicit attestation. It is never a HiFi-plus-ONT or

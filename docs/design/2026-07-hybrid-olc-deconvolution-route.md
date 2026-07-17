@@ -123,18 +123,10 @@ checks before dependency provisioning or long-read assembly.
 ## Public entry points
 
 ```julia
-Base.Filesystem.mkpath("scratch/unicycler-inputs")
-Base.Filesystem.mkpath("scratch/autocycler-inputs")
-
 unicycler_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
     output_dir = "results/unicycler",
     # Cumulative stable source plus corrected-copy budget for this workflow.
     input_snapshot_byte_ceiling = 500_000_000_000,
-    assembler_options = (;
-        # Independent, shorter-lived direct-Unicycler scratch controls.
-        input_spool_parent = "scratch/unicycler-inputs",
-        input_spool_byte_ceiling = 250_000_000_000,
-    ),
 )
 unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
     "reads_R1.fastq.gz",
@@ -148,10 +140,6 @@ autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
     autocycler_read_type = :pacbio_hifi,
     output_dir = "results/autocycler-polished",
     input_snapshot_byte_ceiling = 500_000_000_000,
-    assembler_options = (;
-        input_spool_parent = "scratch/autocycler-inputs",
-        input_spool_byte_ceiling = 250_000_000_000,
-    ),
 )
 autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
     "reads_R1.fastq.gz",
@@ -184,14 +172,16 @@ correction outputs. Before each copy, the route checks both the remaining
 configured budget and currently available bytes under the reserved workflow
 root. A ceiling, free-space, write, or content-integrity failure removes only
 the exact inode created for the partial snapshot and fails before the next
-correction or combined assembler call. Path-backed copies bind a source
-descriptor hash, streamed-copy hash, source rehash, and consumed-descriptor
-hash; all four must agree. In-memory FASTQ identity is streamed rather than
-duplicating the full record set. `assembler_options.input_spool_parent` and
-`assembler_options.input_spool_byte_ceiling` are separate controls for the
-direct assembler wrapper's private, reservation-scoped scratch spool. That
-spool is removed after the assembler lifecycle, while persistent high-level
-stable snapshots remain available for provenance.
+correction or combined assembler call. Path-backed copies bind the streamed
+source/copy digest, a source rehash, and a consumed-snapshot rehash; all three
+must agree. In-memory FASTQ identity is streamed rather than
+duplicating the full record set. The reserved high-level `output_dir` (or its
+ephemeral equivalent) owns these snapshots, and the combined-input child
+revalidates and consumes the already-bound corrected snapshots without making
+a second scratch copy. Standalone `run_unicycler` and
+`run_autocycler_polished` calls retain their public `input_spool_parent` and
+`input_spool_byte_ceiling` controls for direct-wrapper scratch; those keys are
+intentionally rejected from the high-level configs' `assembler_options`.
 
 Missing, empty, malformed, reordered, or count-changing inputs and corrected
 read sets fail before the combined assembler. Missing/empty corrected FASTQs,

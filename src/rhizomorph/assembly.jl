@@ -543,6 +543,26 @@ const _HYBRID_CORRECTION_RESERVED_KEYS = (
     :olc_options,
 )
 
+const _HYBRID_CORRECTION_ALLOWED_KEYS = (
+    :k,
+    :graph_mode,
+    :verbose,
+    :qualmer_prefilter_min_count,
+    :strategy,
+)
+
+const _UNICYCLER_HYBRID_ASSEMBLER_ALLOWED_KEYS = (
+    :spades_options,
+    :kmers,
+    :conda_runner,
+    :environment_prefix,
+)
+
+const _AUTOCYCLER_POLISH_ASSEMBLER_ALLOWED_KEYS = (
+    :conda_runner,
+    :environment_prefix,
+)
+
 function _reject_route_managed_options(
         options::NamedTuple,
         reserved::Tuple,
@@ -556,6 +576,118 @@ function _reject_route_managed_options(
             ))
         end
     end
+    return nothing
+end
+
+function _reject_unsupported_hybrid_options(
+        options::NamedTuple,
+        allowed::Tuple,
+        label::AbstractString,
+)::Nothing
+    for key in keys(options)
+        if !(key in allowed)
+            throw(ArgumentError(
+                "$(label) option :$(key) is unsupported. Supported options " *
+                "are $(allowed).",
+            ))
+        end
+    end
+    return nothing
+end
+
+function _validate_hybrid_option_value(
+        options::NamedTuple,
+        key::Symbol,
+        predicate::Function,
+        expected::AbstractString,
+        label::AbstractString,
+)::Nothing
+    key in keys(options) || return nothing
+    value = getproperty(options, key)
+    predicate(value) || throw(ArgumentError(
+        "$(label) option :$(key) must be $(expected), got " *
+        "$(typeof(value)).",
+    ))
+    return nothing
+end
+
+function _validate_hybrid_correction_option_shapes(
+        correction_options::NamedTuple,
+        short_read_tech::Symbol,
+        long_read_tech::Symbol,
+)::Nothing
+    for (label, technology) in (
+            (:short_r1, short_read_tech),
+            (:short_r2, short_read_tech),
+            (:long_reads, long_read_tech),
+    )
+        try
+            AssemblyConfig(;
+                correction_options...,
+                corrector = :iterative,
+                sequencing_tech = technology,
+                layout = :native,
+                output_dir = nothing,
+            )
+        catch caught
+            caught isa InterruptException && rethrow()
+            throw(ArgumentError(
+                "correction_options are invalid for $(label) " *
+                "technology=:$(technology): $(sprint(showerror, caught))",
+            ))
+        end
+    end
+    return nothing
+end
+
+function _validate_unicycler_hybrid_assembler_option_shapes(
+        assembler_options::NamedTuple,
+)::Nothing
+    for key in (:spades_options, :kmers)
+        _validate_hybrid_option_value(
+            assembler_options,
+            key,
+            value -> value === nothing || value isa String,
+            "nothing or String",
+            "Unicycler",
+        )
+    end
+    _validate_hybrid_option_value(
+        assembler_options,
+        :conda_runner,
+        value -> value isa AbstractString && !isempty(strip(value)),
+        "a non-empty AbstractString",
+        "Unicycler",
+    )
+    _validate_hybrid_option_value(
+        assembler_options,
+        :environment_prefix,
+        value -> value === nothing ||
+                 (value isa AbstractString && !isempty(strip(value))),
+        "nothing or a non-empty AbstractString",
+        "Unicycler",
+    )
+    return nothing
+end
+
+function _validate_autocycler_polish_assembler_option_shapes(
+        assembler_options::NamedTuple,
+)::Nothing
+    _validate_hybrid_option_value(
+        assembler_options,
+        :conda_runner,
+        value -> value isa AbstractString && !isempty(strip(value)),
+        "a non-empty AbstractString",
+        "Autocycler-polished",
+    )
+    _validate_hybrid_option_value(
+        assembler_options,
+        :environment_prefix,
+        value -> value === nothing ||
+                 (value isa AbstractString && !isempty(strip(value))),
+        "nothing or a non-empty AbstractString",
+        "Autocycler-polished",
+    )
     return nothing
 end
 
@@ -589,18 +721,19 @@ Configuration for independently corrected paired short reads plus long reads,
 assembled with Unicycler. `input_snapshot_byte_ceiling` bounds cumulative
 workflow-owned source and correction-output copies across the complete
 high-level lifecycle; exhaustion fails before the next correction or assembler
-side effect and exact partial snapshots are removed. `assembler_options` may
-independently set the direct Unicycler wrapper's `input_spool_parent` and
-`input_spool_byte_ceiling`; those controls bound the assembler's shorter-lived
-scratch spool (the selected parent must already exist) and do not replace this
-workflow-wide ceiling. Route-owned
-input/output/thread keywords are rejected.
+side effect and exact partial snapshots are removed. The child consumes those
+already-bound corrected snapshots directly, so child-spool and scheduler-only
+keywords are unsupported here. Route-owned input/output/thread keywords are
+rejected.
 """
-struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
+struct UnicyclerHybridConfig{
+        CorrectionOptions<:NamedTuple,
+        AssemblerOptions<:NamedTuple,
+} <: AbstractPairedShortLongAssemblyConfig
     short_read_tech::Symbol
     long_read_tech::Symbol
-    correction_options::NamedTuple
-    assembler_options::NamedTuple
+    correction_options::CorrectionOptions
+    assembler_options::AssemblerOptions
     output_dir::Union{Nothing, String}
     threads::Int
     input_snapshot_byte_ceiling::Int
@@ -635,6 +768,24 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
             (:short_1, :short_2, :long_reads, :outdir, :threads, :executor),
             "Unicycler",
         )
+        _reject_unsupported_hybrid_options(
+            correction_options,
+            _HYBRID_CORRECTION_ALLOWED_KEYS,
+            "correction",
+        )
+        _reject_unsupported_hybrid_options(
+            assembler_options,
+            _UNICYCLER_HYBRID_ASSEMBLER_ALLOWED_KEYS,
+            "Unicycler",
+        )
+        normalized_long_read_tech = long_read_tech == :pacbio ?
+                                    :pacbio_clr : long_read_tech
+        _validate_hybrid_correction_option_shapes(
+            correction_options,
+            short_read_tech,
+            normalized_long_read_tech,
+        )
+        _validate_unicycler_hybrid_assembler_option_shapes(assembler_options)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
         input_snapshot_byte_ceiling > 0 || throw(ArgumentError(
             "input_snapshot_byte_ceiling must be positive, got " *
@@ -643,7 +794,10 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
         input_snapshot_byte_ceiling <= typemax(Int) || throw(ArgumentError(
             "input_snapshot_byte_ceiling exceeds the platform Int range.",
         ))
-        return new(
+        return new{
+            typeof(correction_options),
+            typeof(assembler_options),
+        }(
             short_read_tech,
             long_read_tech,
             correction_options,
@@ -664,17 +818,19 @@ long-read correction chemistry route. In particular, PacBio CLR and HiFi never
 share a correction model. Correction emissions remain FASTQ-quality driven;
 the technology profile selects whether indel moves are enabled and their rates.
 `input_snapshot_byte_ceiling` bounds cumulative workflow-owned snapshots.
-`assembler_options` may forward `input_spool_parent` and
-`input_spool_byte_ceiling` to the direct Autocycler-polishing wrapper while
-route-owned input, chemistry, concurrency, and output keywords remain rejected;
-an explicit spool parent must already exist.
+The child consumes the workflow-owned corrected snapshots directly;
+child-spool keywords are therefore unsupported here. Route-owned input,
+chemistry, concurrency, and output keywords remain rejected.
 """
-struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
+struct AutocyclerPolishConfig{
+        CorrectionOptions<:NamedTuple,
+        AssemblerOptions<:NamedTuple,
+} <: AbstractPairedShortLongAssemblyConfig
     short_read_tech::Symbol
     long_read_tech::Symbol
     autocycler_read_type::Symbol
-    correction_options::NamedTuple
-    assembler_options::NamedTuple
+    correction_options::CorrectionOptions
+    assembler_options::AssemblerOptions
     output_dir::Union{Nothing, String}
     threads::Int
     jobs::Int
@@ -753,6 +909,29 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             ),
             "Autocycler-polished",
         )
+        _reject_unsupported_hybrid_options(
+            correction_options,
+            _HYBRID_CORRECTION_ALLOWED_KEYS,
+            "correction",
+        )
+        _reject_unsupported_hybrid_options(
+            assembler_options,
+            _AUTOCYCLER_POLISH_ASSEMBLER_ALLOWED_KEYS,
+            "Autocycler-polished",
+        )
+        long_read_correction_tech = if resolved_read_type in (:ont_r9, :ont_r10)
+            :nanopore
+        elseif resolved_read_type == :pacbio_clr
+            :pacbio_clr
+        else
+            :pacbio_hifi
+        end
+        _validate_hybrid_correction_option_shapes(
+            correction_options,
+            short_read_tech,
+            long_read_correction_tech,
+        )
+        _validate_autocycler_polish_assembler_option_shapes(assembler_options)
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
         jobs > 0 || throw(ArgumentError("jobs must be positive, got $(jobs)."))
         input_snapshot_byte_ceiling > 0 || throw(ArgumentError(
@@ -768,7 +947,10 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
                 "keep_intermediates=true requires a persistent output_dir.",
             ))
         end
-        return new(
+        return new{
+            typeof(correction_options),
+            typeof(assembler_options),
+        }(
             short_read_tech,
             long_read_tech,
             resolved_read_type,
@@ -1483,12 +1665,12 @@ function _run_stage1_correction(
         error("persistent_output_dir must be nonempty")
     ephemeral = effective_output_dir === nothing
     persistent_fastq = ephemeral ?
-                       tempname() * ".fastq" :
+                       tempname(; cleanup = false) * ".fastq" :
                        joinpath(mkpath(effective_output_dir), "corrected.fastq")
     destination_existed = isfile(persistent_fastq)
 
-    input_dir = mktempdir()
-    corrector_output_dir = mktempdir()
+    input_dir = mktempdir(; cleanup = false)
+    corrector_output_dir = mktempdir(; cleanup = false)
     promoted_here = false
     try
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
@@ -2424,7 +2606,8 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
     # persisted corrected FASTQ when the caller owns output_dir; otherwise a temp
     # dir cleaned alongside the ephemeral corrected FASTQ.
     olc_outdir = config.output_dir === nothing ?
-                 mktempdir() : mkpath(joinpath(config.output_dir, "olc_$(tool)"))
+                 mktempdir(; cleanup = false) :
+                 mkpath(joinpath(config.output_dir, "olc_$(tool)"))
     # Stale-output guard: the external wrappers skip re-running when their contigs
     # file already exists, so a reused (non-empty) output_dir would silently return
     # a PRIOR run's assembly, ignoring THESE corrected reads. Warn loudly.
@@ -2655,6 +2838,66 @@ struct _CorrectedPairedShortLong
     short_r1::_CorrectedReadSet
     short_r2::_CorrectedReadSet
     long_reads::_CorrectedReadSet
+end
+
+function _multi_input_prebound_snapshot_contract(
+        corrected::_CorrectedReadSet,
+        label::AbstractString,
+)::NamedTuple
+    haskey(corrected.provenance, "consumed_snapshot_content") || error(
+        "corrected $(label) is missing its workflow-owned snapshot contract.",
+    )
+    bound = corrected.provenance["consumed_snapshot_content"]
+    bound isa AbstractDict || error(
+        "corrected $(label) snapshot contract has an invalid shape.",
+    )
+    for key in ("path", "size_bytes", "sha256")
+        haskey(bound, key) || error(
+            "corrected $(label) snapshot contract is missing $(key).",
+        )
+    end
+    normalized_path = normpath(abspath(corrected.path))
+    normalized_path == normpath(abspath(String(bound["path"]))) || error(
+        "corrected $(label) path diverged from its bound snapshot contract.",
+    )
+    isfile(normalized_path) && !islink(normalized_path) || error(
+        "corrected $(label) snapshot must be a regular non-symlink file.",
+    )
+    canonical_path = realpath(normalized_path)
+    canonical_path == normalized_path || error(
+        "corrected $(label) snapshot resolves through a symlink component.",
+    )
+    status = stat(normalized_path)
+    filesize(normalized_path) == bound["size_bytes"] || error(
+        "corrected $(label) snapshot size diverged from its bound contract.",
+    )
+    return (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = Int(bound["size_bytes"]),
+        sha256 = String(bound["sha256"]),
+        device = UInt64(status.device),
+        inode = UInt64(status.inode),
+    )
+end
+
+function _multi_input_prebound_snapshot_contract(
+        inputs::_CorrectedPairedShortLong,
+)::NamedTuple
+    return (;
+        short_r1 = _multi_input_prebound_snapshot_contract(
+            inputs.short_r1,
+            "short_r1",
+        ),
+        short_r2 = _multi_input_prebound_snapshot_contract(
+            inputs.short_r2,
+            "short_r2",
+        ),
+        long_reads = _multi_input_prebound_snapshot_contract(
+            inputs.long_reads,
+            "long_reads",
+        ),
+    )
 end
 
 struct _WorkflowPathIdentity
@@ -3242,21 +3485,47 @@ function _multi_input_source_content_contract(
         short_r1::Any,
         short_r2::Any,
         long_reads::Any,
+        ;
+        identity_reader::Function = _multi_input_source_content_identity,
 )::Dict{String, Any}
     return Dict{String, Any}(
         "schema" => "mycelia-paired-short-long-input-content-v1",
-        "short_r1" => _multi_input_source_content_identity(
+        "short_r1" => identity_reader(
             short_r1,
             "short_r1",
         ),
-        "short_r2" => _multi_input_source_content_identity(
+        "short_r2" => identity_reader(
             short_r2,
             "short_r2",
         ),
-        "long_reads" => _multi_input_source_content_identity(
+        "long_reads" => identity_reader(
             long_reads,
             "long_reads",
         ),
+    )
+end
+
+function _multi_input_snapshot_source_content_identity(
+        snapshot::AbstractDict,
+)::Dict{String, Any}
+    snapshot["kind"] == "workflow_owned_stable_snapshot_set" || error(
+        "multi-input source snapshot has an unsupported contract kind.",
+    )
+    sources = Dict{String, Any}[
+        Dict{String, Any}(
+            "kind" => "path",
+            "source_index" => source_index,
+            "path" => String(source["path"]),
+            "canonical_path" => String(source["path"]),
+            "size_bytes" => source["size_bytes"],
+            "sha256" => String(source["sha256"]),
+        ) for (source_index, source) in enumerate(snapshot["sources"])
+    ]
+    return Dict{String, Any}(
+        "kind" => "path_set",
+        "source_count" => length(sources),
+        "sources" => sources,
+        "sha256" => _multi_input_path_set_sha256(sources),
     )
 end
 
@@ -3337,8 +3606,6 @@ function _multi_input_stable_path_snapshot!(
                 filesize(input) == initial_size || error(
                     "$(label) changed before its stable snapshot was copied.",
                 )
-            source_sha256 = bytes2hex(Mycelia.SHA.sha256(input))
-            seekstart(input)
             output = Base.Filesystem.open(
                 normalized_destination,
                 Base.JL_O_RDWR |
@@ -3381,6 +3648,7 @@ function _multi_input_stable_path_snapshot!(
             streamed_sha256 = bytes2hex(
                 Mycelia.SHA.digest!(streamed_context),
             )
+            source_sha256 = streamed_sha256
             after_stream_copy_hook(
                 label,
                 canonical_source,
@@ -3413,8 +3681,7 @@ function _multi_input_stable_path_snapshot!(
                     "$(label) stable snapshot destination changed while " *
                     "being hashed.",
                 )
-            source_sha256 == streamed_sha256 == rebound_source_sha256 ==
-                consumed_sha256 || error(
+            source_sha256 == rebound_source_sha256 == consumed_sha256 || error(
                     "$(label) source bytes changed while its stable snapshot " *
                     "was copied; refusing mixed consumed bytes.",
                 )
@@ -3808,19 +4075,36 @@ function _verify_multi_input_source_content_contract(
         long_reads::Any,
         ;
         change_context::AbstractString = "during independent correction",
+        identity_reader::Function = _multi_input_source_content_identity,
 )::Nothing
-    observed = _multi_input_source_content_contract(
-        short_r1,
-        short_r2,
-        long_reads,
+    for (label, reads) in (
+            ("short_r1", short_r1),
+            ("short_r2", short_r2),
+            ("long_reads", long_reads),
     )
-    for label in ("short_r1", "short_r2", "long_reads")
-        expected[label] == observed[label] && continue
-        error(
-            "input $(label) content changed $(change_context); " *
-            "refusing to run the combined-input assembler.",
+        _verify_multi_input_source_read_set_content_identity(
+            expected[label],
+            reads,
+            label;
+            change_context,
+            identity_reader,
         )
     end
+    return nothing
+end
+
+function _verify_multi_input_source_read_set_content_identity(
+        expected::AbstractDict,
+        reads::Any,
+        label::AbstractString;
+        change_context::AbstractString,
+        identity_reader::Function = _multi_input_source_content_identity,
+)::Nothing
+    observed = identity_reader(reads, label)
+    expected == observed || error(
+        "input $(label) content changed $(change_context); " *
+        "refusing to run the combined-input assembler.",
+    )
     return nothing
 end
 
@@ -3872,8 +4156,10 @@ function _verify_multi_input_corrected_read_set_content_identity(
         corrected::_CorrectedReadSet,
         label::AbstractString;
         change_context::AbstractString,
+        identity_reader::Function =
+            _multi_input_corrected_read_set_content_identity,
 )::Nothing
-    observed = _multi_input_corrected_read_set_content_identity(
+    observed = identity_reader(
         corrected,
         label,
     )
@@ -3889,13 +4175,20 @@ function _verify_multi_input_corrected_content_contract(
         inputs::_CorrectedPairedShortLong,
         ;
         change_context::AbstractString = "during combined-input assembly",
+        identity_reader::Function =
+            _multi_input_corrected_read_set_content_identity,
 )::Nothing
-    observed = _multi_input_corrected_content_contract(inputs)
-    for label in ("short_r1", "short_r2", "long_reads")
-        expected[label] == observed[label] && continue
-        error(
-            "corrected $(label) FASTQ content changed $(change_context); " *
-            "refusing stale corrected-read provenance.",
+    for (label, corrected) in (
+            ("short_r1", inputs.short_r1),
+            ("short_r2", inputs.short_r2),
+            ("long_reads", inputs.long_reads),
+    )
+        _verify_multi_input_corrected_read_set_content_identity(
+            expected[label],
+            corrected,
+            label;
+            change_context,
+            identity_reader,
         )
     end
     return nothing
@@ -4447,7 +4740,7 @@ end
 
 function _prepare_workflow_root(root_plan::NamedTuple)::NamedTuple
     if root_plan.ephemeral
-        path = mktempdir()
+        path = mktempdir(; cleanup = false)
         identity = _workflow_path_identity(path, "ephemeral workflow root")
         return (; path, ephemeral = true, identity)
     end
@@ -4801,9 +5094,9 @@ function _run_multi_input_assembler(
         inputs::_CorrectedPairedShortLong,
         outdir::AbstractString,
         config::UnicyclerHybridConfig;
-        runner::Function = Mycelia.run_unicycler,
+        runner::Function = Mycelia._run_unicycler,
 )::NamedTuple
-    result = runner(;
+    route_options = (;
         config.assembler_options...,
         short_1 = inputs.short_r1.path,
         short_2 = inputs.short_r2.path,
@@ -4811,6 +5104,19 @@ function _run_multi_input_assembler(
         outdir = String(outdir),
         threads = config.threads,
     )
+    result = if runner === Mycelia._run_unicycler
+        snapshots = _multi_input_prebound_snapshot_contract(inputs)
+        runner(;
+            route_options...,
+            prebound_input_contract = (;
+                short_1 = snapshots.short_r1,
+                short_2 = snapshots.short_r2,
+                long_reads = snapshots.long_reads,
+            ),
+        )
+    else
+        runner(; route_options...)
+    end
     hasproperty(result, :toolchain) || error(
         "Unicycler workflow did not report realized toolchain provenance.",
     )
@@ -4835,9 +5141,9 @@ function _run_multi_input_assembler(
         inputs::_CorrectedPairedShortLong,
         outdir::AbstractString,
         config::AutocyclerPolishConfig;
-        runner::Function = Mycelia.run_autocycler_polished,
+        runner::Function = Mycelia._run_autocycler_polished,
 )::NamedTuple
-    result = runner(;
+    route_options = (;
         config.assembler_options...,
         long_reads = inputs.long_reads.path,
         short_reads_1 = inputs.short_r1.path,
@@ -4849,6 +5155,28 @@ function _run_multi_input_assembler(
         polypolish_careful = config.polypolish_careful,
         keep_intermediates = config.keep_intermediates,
     )
+    result = if runner === Mycelia._run_autocycler_polished
+        snapshots = _multi_input_prebound_snapshot_contract(inputs)
+        runner(
+            inputs.long_reads.path,
+            inputs.short_r1.path,
+            inputs.short_r2.path,
+            String(outdir);
+            config.assembler_options...,
+            threads = config.threads,
+            jobs = config.jobs,
+            read_type = String(config.autocycler_read_type),
+            polypolish_careful = config.polypolish_careful,
+            keep_intermediates = config.keep_intermediates,
+            prebound_input_contract = (;
+                long_reads = snapshots.long_reads,
+                short_reads_1 = snapshots.short_r1,
+                short_reads_2 = snapshots.short_r2,
+            ),
+        )
+    else
+        runner(; route_options...)
+    end
     if hasproperty(result, :lifecycle_artifact_snapshots)
         child_integrity = _multi_input_autocycler_child_integrity(
             result,
@@ -6209,6 +6537,10 @@ function _assemble_paired_short_long(
         after_assembler_return_hook::Function = result -> nothing,
         snapshot_available_bytes_reader::Function =
             root -> diskstat(root).available,
+        source_content_identity_reader::Function =
+            _multi_input_source_content_identity,
+        corrected_content_identity_reader::Function =
+            _multi_input_corrected_read_set_content_identity,
         corrected_fastq_cleanup_hook::Function = path -> nothing,
         workflow_root_cleanup_hook::Function = path -> nothing,
 )::AssemblyResult
@@ -6237,6 +6569,7 @@ function _assemble_paired_short_long(
         short_r1,
         short_r2,
         prepared_long_reads,
+        identity_reader = source_content_identity_reader,
     )
     _validate_distinct_in_memory_read_records(
         short_r1,
@@ -6261,13 +6594,6 @@ function _assemble_paired_short_long(
     _require_path_backed_fastq_sources(prepared_long_reads, "long_reads")
     paired_count = _validate_paired_reads(short_r1, short_r2, "input")
     long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
-    _verify_multi_input_source_content_contract(
-        source_content_contract,
-        short_r1,
-        short_r2,
-        prepared_long_reads;
-        change_context = "during source semantic preflight",
-    )
     after_source_semantic_validation_hook(
         short_r1,
         short_r2,
@@ -6279,6 +6605,7 @@ function _assemble_paired_short_long(
         short_r2,
         prepared_long_reads;
         change_context = "after source semantic preflight",
+        identity_reader = source_content_identity_reader,
     )
     long_read_correction_technology = _long_read_correction_technology(config)
     function run_reserved_workflow(
@@ -6289,13 +6616,6 @@ function _assemble_paired_short_long(
             short_reads[1],
             short_reads[2],
             long_reads,
-        )
-        _verify_multi_input_source_content_contract(
-            source_content_contract,
-            short_r1,
-            short_r2,
-            prepared_long_reads,
-            change_context = "before stable source materialization",
         )
         root = _prepare_workflow_root(reserved_root_plan)
         snapshot_budget = _MultiInputSnapshotBudget(
@@ -6368,12 +6688,18 @@ function _assemble_paired_short_long(
                     "short_r2" => short_r2_snapshot.contract,
                     "long_reads" => long_reads_snapshot.contract,
                 )
-            consumed_source_content_contract =
-                _multi_input_source_content_contract(
-                    consumed_short_r1,
-                    consumed_short_r2,
-                    consumed_long_reads,
-                )
+            consumed_source_content_contract = Dict{String, Any}(
+                "schema" => "mycelia-paired-short-long-input-content-v1",
+                "short_r1" => _multi_input_snapshot_source_content_identity(
+                    short_r1_snapshot.contract,
+                ),
+                "short_r2" => _multi_input_snapshot_source_content_identity(
+                    short_r2_snapshot.contract,
+                ),
+                "long_reads" => _multi_input_snapshot_source_content_identity(
+                    long_reads_snapshot.contract,
+                ),
+            )
             _validate_paired_reads(
                 consumed_short_r1,
                 consumed_short_r2,
@@ -6389,13 +6715,6 @@ function _assemble_paired_short_long(
                 "Stable long-read input snapshots changed the validated " *
                 "input record count.",
             )
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
-                consumed_short_r1,
-                consumed_short_r2,
-                consumed_long_reads;
-                change_context = "during stable source semantic validation",
-            )
             protected_source_paths = String[]
             for read_set in (
                     short_r1,
@@ -6408,12 +6727,12 @@ function _assemble_paired_short_long(
                 paths = _read_source_paths(read_set)
                 paths === nothing || append!(protected_source_paths, paths)
             end
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["short_r1"],
                 consumed_short_r1,
-                consumed_short_r2,
-                consumed_long_reads;
+                "short_r1";
                 change_context = "before short_r1 correction",
+                identity_reader = source_content_identity_reader,
             )
             corrected_r1 = _correct_read_set!(
                 cleanup_tokens,
@@ -6436,19 +6755,19 @@ function _assemble_paired_short_long(
                     after_snapshot_destination_open_hook,
                 after_stream_copy_hook = after_snapshot_stream_copy_hook,
             )
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["short_r1"],
                 consumed_short_r1,
-                consumed_short_r2,
-                consumed_long_reads;
+                "short_r1";
                 change_context = "during short_r1 correction",
+                identity_reader = source_content_identity_reader,
             )
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
-                consumed_short_r1,
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["short_r2"],
                 consumed_short_r2,
-                consumed_long_reads;
+                "short_r2";
                 change_context = "before short_r2 correction",
+                identity_reader = source_content_identity_reader,
             )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
@@ -6471,19 +6790,19 @@ function _assemble_paired_short_long(
                     after_snapshot_destination_open_hook,
                 after_stream_copy_hook = after_snapshot_stream_copy_hook,
             )
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
-                consumed_short_r1,
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["short_r2"],
                 consumed_short_r2,
-                consumed_long_reads;
+                "short_r2";
                 change_context = "during short_r2 correction",
+                identity_reader = source_content_identity_reader,
             )
-            _verify_multi_input_source_content_contract(
-                consumed_source_content_contract,
-                consumed_short_r1,
-                consumed_short_r2,
-                consumed_long_reads;
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["long_reads"],
+                consumed_long_reads,
+                "long_reads";
                 change_context = "before long_reads correction",
+                identity_reader = source_content_identity_reader,
             )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
@@ -6506,12 +6825,20 @@ function _assemble_paired_short_long(
                     after_snapshot_destination_open_hook,
                 after_stream_copy_hook = after_snapshot_stream_copy_hook,
             )
+            _verify_multi_input_source_read_set_content_identity(
+                consumed_source_content_contract["long_reads"],
+                consumed_long_reads,
+                "long_reads";
+                change_context = "during long_reads correction",
+                identity_reader = source_content_identity_reader,
+            )
             _verify_multi_input_source_content_contract(
                 consumed_source_content_contract,
                 consumed_short_r1,
                 consumed_short_r2,
                 consumed_long_reads;
-                change_context = "during long_reads correction",
+                change_context = "after independent correction",
+                identity_reader = source_content_identity_reader,
             )
             inputs = _CorrectedPairedShortLong(
                 corrected_r1_binding.consumed,
@@ -6532,11 +6859,18 @@ function _assemble_paired_short_long(
                     "long_reads" =>
                         corrected_long_binding.correction_output_identity,
                 )
-            _verify_multi_input_corrected_content_contract(
-                corrected_content_contract,
-                inputs;
-                change_context = "before corrected-read semantic validation",
+            for (label, corrected) in (
+                    ("short_r1", inputs.short_r1),
+                    ("short_r2", inputs.short_r2),
             )
+                _verify_multi_input_corrected_read_set_content_identity(
+                    corrected_content_contract[label],
+                    corrected,
+                    label;
+                    change_context = "before corrected paired-read validation",
+                    identity_reader = corrected_content_identity_reader,
+                )
+            end
             corrected_pair_count = _validate_corrected_pair_preserved(
                 consumed_short_r1,
                 consumed_short_r2,
@@ -6544,22 +6878,37 @@ function _assemble_paired_short_long(
                 inputs.short_r2,
                 paired_count,
             )
-            _verify_multi_input_corrected_content_contract(
-                corrected_content_contract,
-                inputs;
-                change_context =
-                    "during corrected paired-read semantic validation",
+            for (label, corrected) in (
+                    ("short_r1", inputs.short_r1),
+                    ("short_r2", inputs.short_r2),
+            )
+                _verify_multi_input_corrected_read_set_content_identity(
+                    corrected_content_contract[label],
+                    corrected,
+                    label;
+                    change_context =
+                        "during corrected paired-read semantic validation",
+                    identity_reader = corrected_content_identity_reader,
+                )
+            end
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_content_contract["long_reads"],
+                inputs.long_reads,
+                "long_reads";
+                change_context = "before corrected long-read validation",
+                identity_reader = corrected_content_identity_reader,
             )
             corrected_long_count = _validate_corrected_identifiers_preserved(
                 consumed_long_reads,
                 inputs.long_reads,
                 "long_reads",
             )
-            _verify_multi_input_corrected_content_contract(
-                corrected_content_contract,
-                inputs;
-                change_context =
-                    "during corrected long-read semantic validation",
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_content_contract["long_reads"],
+                inputs.long_reads,
+                "long_reads";
+                change_context = "during corrected long-read semantic validation",
+                identity_reader = corrected_content_identity_reader,
             )
             corrected_long_count == long_count || error(
                 "Corrected long-read count diverged from the validated input count.",
@@ -6569,6 +6918,7 @@ function _assemble_paired_short_long(
                 corrected_content_contract,
                 inputs;
                 change_context = "after corrected-read semantic validation",
+                identity_reader = corrected_content_identity_reader,
             )
             _require_unchanged_workflow_path_identity(
                 root.path,
@@ -6580,11 +6930,6 @@ function _assemble_paired_short_long(
                 joinpath(root.path, "assembler_$(workflow)"),
                 root.path,
                 assembler_label,
-            )
-            _verify_multi_input_corrected_content_contract(
-                corrected_content_contract,
-                inputs;
-                change_context = "before combined-input assembly",
             )
             tool_result =
                 Mycelia._with_allowed_output_root_ancestor_locks(
@@ -6617,10 +6962,6 @@ function _assemble_paired_short_long(
             assembler_output_identity = _workflow_path_identity(
                 assembler_output_dir,
                 assembler_label,
-            )
-            _verify_multi_input_corrected_content_contract(
-                corrected_content_contract,
-                inputs,
             )
             corrected_paths = if root.ephemeral
                 nothing
@@ -6703,7 +7044,8 @@ function _assemble_paired_short_long(
             _verify_multi_input_corrected_content_contract(
                 corrected_content_contract,
                 inputs;
-                change_context = "immediately before returning persistent paths",
+                change_context = "during combined-input assembly and finalization",
+                identity_reader = corrected_content_identity_reader,
             )
             return wrapped_result
         finally
@@ -6843,8 +7185,9 @@ This convenience entry point is equivalent to `assemble_hybrid` with an
 or in-memory FASTQ records. Mate identifiers and counts are validated before
 Unicycler runs. Corrections and Unicycler consume stable workflow-owned FASTQ
 snapshots, while result provenance retains the original and consumed hashes.
-`config.input_snapshot_byte_ceiling` bounds cumulative workflow copies;
-`config.assembler_options` controls the direct Unicycler scratch spool.
+`config.input_snapshot_byte_ceiling` bounds cumulative workflow copies. The
+private child adapter revalidates and consumes the already-bound corrected
+snapshots without making a second scratch copy.
 Use `config.output_dir = nothing` for ephemeral artifacts or a
 new, empty persistent directory to retain corrected FASTQs and tool outputs.
 """
@@ -6868,8 +7211,9 @@ This convenience entry point is equivalent to `assemble_hybrid` with an
 assembly and correction chemistry. Corrections, Autocycler, and both polishing
 stages consume stable workflow-owned FASTQ snapshots with original and consumed
 hashes retained in provenance. `config.input_snapshot_byte_ceiling` bounds the
-workflow copies; `config.assembler_options` can select and bound the direct
-Autocycler scratch spool. Use a new, empty persistent `output_dir`
+workflow copies. The private child adapter revalidates and consumes the
+already-bound corrected snapshots without making a second scratch copy. Use a
+new, empty persistent `output_dir`
 when retaining corrected FASTQs or polishing intermediates.
 """
 function assemble_autocycler_polished(

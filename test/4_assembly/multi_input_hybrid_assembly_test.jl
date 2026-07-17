@@ -408,6 +408,11 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         Test.@test Mycelia.Rhizomorph._long_read_correction_technology(unicycler) ==
                    :pacbio_clr
         Test.@test unicycler.threads == 3
+        Test.@test isconcretetype(typeof(unicycler))
+        Test.@test fieldtype(typeof(unicycler), :correction_options) ===
+                   typeof(unicycler.correction_options)
+        Test.@test fieldtype(typeof(unicycler), :assembler_options) ===
+                   typeof(unicycler.assembler_options)
 
         autocycler = Mycelia.Rhizomorph.AutocyclerPolishConfig(
             long_read_tech = :nanopore,
@@ -503,6 +508,26 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 assembler_options = (; executor = :async),
             )
         end
+        test_throws_message(ArgumentError, "correction option :min_coverage") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                correction_options = (; min_coverage = 2),
+            )
+        end
+        test_throws_message(ArgumentError, "Unicycler option :site") do
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                assembler_options = (; site = :scg),
+            )
+        end
+        for constructor in (
+                Mycelia.Rhizomorph.UnicyclerHybridConfig,
+                Mycelia.Rhizomorph.AutocyclerPolishConfig,
+        )
+            test_throws_message(ArgumentError, "option :input_spool_parent") do
+                constructor(
+                    assembler_options = (; input_spool_parent = "/scratch"),
+                )
+            end
+        end
         for option in (
                 :long_reads,
                 :short_reads_1,
@@ -521,6 +546,144 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 Mycelia.Rhizomorph.AutocyclerPolishConfig(
                     assembler_options = NamedTuple{(option,)}((nothing,)),
                 )
+            end
+        end
+        Test.@testset "unsupported public options fail without side effects" begin
+            mktempdir() do temp_dir
+                constructors = (
+                    (
+                        name = "unicycler",
+                        constructor = Mycelia.Rhizomorph.UnicyclerHybridConfig,
+                    ),
+                    (
+                        name = "autocycler",
+                        constructor = Mycelia.Rhizomorph.AutocyclerPolishConfig,
+                    ),
+                )
+                for contract in constructors
+                    correction_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-unknown-correction",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "correction option :correction_typo is unsupported",
+                    ) do
+                        contract.constructor(
+                            correction_options = (; correction_typo = true),
+                            output_dir = correction_output,
+                        )
+                    end
+                    Test.@test !ispath(correction_output)
+
+                    assembler_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-unknown-assembler",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "option :assembler_typo is unsupported",
+                    ) do
+                        contract.constructor(
+                            assembler_options = (; assembler_typo = true),
+                            output_dir = assembler_output,
+                        )
+                    end
+                    Test.@test !ispath(assembler_output)
+
+                    inert_correction_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-inert-correction",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "correction option :min_coverage is unsupported",
+                    ) do
+                        contract.constructor(
+                            correction_options = (; min_coverage = 2),
+                            output_dir = inert_correction_output,
+                        )
+                    end
+                    Test.@test !ispath(inert_correction_output)
+
+                    inert_spool_output = joinpath(
+                        temp_dir,
+                        "$(contract.name)-inert-child-spool",
+                    )
+                    test_throws_message(
+                        ArgumentError,
+                        "option :input_spool_parent is unsupported",
+                    ) do
+                        contract.constructor(
+                            assembler_options = (;
+                                input_spool_parent = temp_dir,
+                            ),
+                            output_dir = inert_spool_output,
+                        )
+                    end
+                    Test.@test !ispath(inert_spool_output)
+
+                    for (option, blank_value) in (
+                            (:conda_runner, ""),
+                            (:environment_prefix, "   "),
+                    )
+                        blank_output = joinpath(
+                            temp_dir,
+                            "$(contract.name)-blank-$(option)",
+                        )
+                        test_throws_message(
+                            ArgumentError,
+                            "option :$(option) must be",
+                        ) do
+                            contract.constructor(
+                                assembler_options =
+                                    NamedTuple{(option,)}((blank_value,)),
+                                output_dir = blank_output,
+                            )
+                        end
+                        Test.@test !ispath(blank_output)
+                    end
+                end
+
+                inert_scheduler_output =
+                    joinpath(temp_dir, "unicycler-inert-scheduler")
+                test_throws_message(
+                    ArgumentError,
+                    "Unicycler option :site is unsupported",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        assembler_options = (; site = :scg),
+                        output_dir = inert_scheduler_output,
+                    )
+                end
+                Test.@test !ispath(inert_scheduler_output)
+
+                invalid_correction_output =
+                    joinpath(temp_dir, "invalid-correction-value")
+                test_throws_message(
+                    ArgumentError,
+                    "correction_options are invalid for short_r1",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        correction_options = (; k = 0, strategy = :scalable),
+                        output_dir = invalid_correction_output,
+                    )
+                end
+                Test.@test !ispath(invalid_correction_output)
+
+                invalid_assembler_output =
+                    joinpath(temp_dir, "invalid-assembler-value")
+                test_throws_message(
+                    ArgumentError,
+                    "Unicycler option :kmers must be nothing or String",
+                ) do
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        assembler_options = (; kmers = 21),
+                        output_dir = invalid_assembler_output,
+                    )
+                end
+                Test.@test !ispath(invalid_assembler_output)
+                Test.@test isempty(readdir(temp_dir))
             end
         end
         test_throws_message(ArgumentError, "output_dir must be a non-empty path") do
@@ -1729,6 +1892,80 @@ Test.@testset "multi-input hybrid assembly contracts" begin
     end
 
     Test.@testset "lightweight Stage-1 cleanup ownership" begin
+        Test.@testset "retired ephemeral roots survive Base temp cleanup" begin
+            active_project = Base.active_project()
+            active_project isa AbstractString || error(
+                "A project is required for the temp-cleanup child fixture.",
+            )
+            mktempdir() do fixture_root
+                script_path = joinpath(fixture_root, "temp-cleanup-fixture.jl")
+                script = """
+                ENV["LD_LIBRARY_PATH"] = ""
+                Base.eval(Main, :(import Mycelia))
+
+                mode = ARGS[1]
+                report_path = ARGS[2]
+                root_plan = Mycelia.Rhizomorph._plan_workflow_root(nothing)
+                root = Mycelia.Rhizomorph._prepare_workflow_root(root_plan)
+                retained = Mycelia.Rhizomorph._cleanup_multi_input_root!(
+                    root.path;
+                    expected_identity = root.identity,
+                )
+                retained && error("exact fixture cleanup retained its root")
+                mkpath(root.path)
+                write(joinpath(root.path, "sentinel.txt"), "replacement\n")
+                if mode == "forced-purge"
+                    Base.Filesystem.temp_cleanup_purge(force = true)
+                elseif mode != "normal-exit"
+                    error("unknown temp-cleanup fixture mode: \$(mode)")
+                end
+                write(report_path, root.path)
+                """
+                write(script_path, script)
+                project_directory = dirname(String(active_project))
+                project_command = `$(Base.julia_cmd()) --project=$(project_directory)`
+                for mode in ("normal-exit", "forced-purge")
+                    report_path = joinpath(fixture_root, "$(mode).report")
+                    child_command =
+                        `$project_command --startup-file=no --compiled-modules=yes`
+                    child_command =
+                        `$child_command $script_path $mode $report_path`
+                    run(child_command)
+                    retired_root = read(report_path, String)
+                    sentinel = joinpath(retired_root, "sentinel.txt")
+                    Test.@test read(sentinel, String) == "replacement\n"
+                    rm(retired_root; recursive = true, force = true)
+                end
+
+                repository_root = dirname(dirname(@__DIR__))
+                rhizomorph_source = read(
+                    joinpath(
+                        repository_root,
+                        "src",
+                        "rhizomorph",
+                        "assembly.jl",
+                    ),
+                    String,
+                )
+                for protected_call in (
+                        r"persistent_fastq[\s\S]*?tempname\(;\s*cleanup\s*=\s*false\s*\)",
+                        r"input_dir\s*=\s*mktempdir\(;\s*cleanup\s*=\s*false\s*\)",
+                        r"corrector_output_dir\s*=\s*mktempdir\(;\s*cleanup\s*=\s*false\)",
+                        r"olc_outdir[\s\S]*?mktempdir\(;\s*cleanup\s*=\s*false\s*\)",
+                )
+                    Test.@test occursin(protected_call, rhizomorph_source)
+                end
+                assembly_source = read(
+                    joinpath(repository_root, "src", "assembly.jl"),
+                    String,
+                )
+                Test.@test occursin(
+                    r"tmp_dir\s*=\s*mktempdir\(dirname\(db_dir\);\s*cleanup\s*=\s*false\)",
+                    assembly_source,
+                )
+            end
+        end
+
         Test.@test fieldnames(Mycelia.Rhizomorph._Stage1CleanupToken) ==
                    (:corrected_fastq, :ephemeral, :identity)
         cleanup_tokens = Mycelia.Rhizomorph._Stage1CleanupToken[]
@@ -3327,8 +3564,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
             autocycler_read_type = :ont_r9,
             assembler_options = (;
-                input_spool_parent = "/scratch/autocycler-spool",
-                input_spool_byte_ceiling = 123_456,
+                environment_prefix = "/scratch/autocycler-environment",
             ),
             threads = 8,
             jobs = 2,
@@ -3342,8 +3578,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             runner = autocycler_runner,
         )
         Test.@test autocycler_kwargs[] == (
-            input_spool_parent = "/scratch/autocycler-spool",
-            input_spool_byte_ceiling = 123_456,
+            environment_prefix = "/scratch/autocycler-environment",
             long_reads = "/corrected/long.fastq",
             short_reads_1 = "/corrected/r1.fastq",
             short_reads_2 = "/corrected/r2.fastq",
@@ -5074,6 +5309,113 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 Test.@test !ispath(empty_outdir)
             end
         end
+    end
+
+    Test.@testset "bounded content passes and per-set mutation gates" begin
+        source_passes = Dict(
+            "short_r1" => 0,
+            "short_r2" => 0,
+            "long_reads" => 0,
+        )
+        corrected_passes = Dict(
+            "short_r1" => 0,
+            "short_r2" => 0,
+            "long_reads" => 0,
+        )
+        function counted_source_identity(
+                reads::Any,
+                label::AbstractString,
+        )::Dict{String, Any}
+            source_passes[String(label)] += 1
+            return Mycelia.Rhizomorph._multi_input_source_content_identity(
+                reads,
+                label,
+            )
+        end
+        function counted_corrected_identity(
+                corrected::Mycelia.Rhizomorph._CorrectedReadSet,
+                label::AbstractString,
+        )::Dict{String, Any}
+            corrected_passes[String(label)] += 1
+            return Mycelia.Rhizomorph._multi_input_corrected_read_set_content_identity(
+                corrected,
+                label,
+            )
+        end
+        correction_calls = NamedTuple[]
+        result = Mycelia.Rhizomorph._assemble_paired_short_long(
+            (MULTI_INPUT_R1, MULTI_INPUT_R2),
+            MULTI_INPUT_LONG,
+            Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+            :unicycler;
+            correction_runner = multi_input_fake_correction_runner(
+                correction_calls,
+            ),
+            assembler_runner = (inputs, outdir) ->
+                multi_input_fake_assembler_result(outdir),
+            source_content_identity_reader = counted_source_identity,
+            corrected_content_identity_reader = counted_corrected_identity,
+        )
+        Test.@test length(correction_calls) == 3
+        Test.@test result.assembly_stats["input_read_counts"] == Dict(
+            "short_r1" => 2,
+            "short_r2" => 2,
+            "long_reads" => 1,
+        )
+        Test.@test source_passes == Dict(
+            "short_r1" => 5,
+            "short_r2" => 5,
+            "long_reads" => 5,
+        )
+        Test.@test corrected_passes == Dict(
+            "short_r1" => 4,
+            "short_r2" => 4,
+            "long_reads" => 4,
+        )
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls,
+        )
+
+        mutation_calls = NamedTuple[]
+        mutation_base_runner = multi_input_fake_correction_runner(
+            mutation_calls,
+        )
+        assembler_calls = Ref(0)
+        function mutate_consumed_source_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = mutation_base_runner(reads, config)
+            if length(mutation_calls) == 1
+                consumed_path = String(only(reads))
+                chmod(consumed_path, 0o600)
+                multi_input_mutate_first_sequence!(consumed_path)
+            end
+            return stage
+        end
+        test_throws_message(
+            ErrorException,
+            "input short_r1 content changed during short_r1 correction",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = mutate_consumed_source_runner,
+                assembler_runner = (inputs, outdir) -> begin
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+            )
+        end
+        Test.@test length(mutation_calls) == 1
+        Test.@test assembler_calls[] == 0
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            mutation_calls,
+        )
     end
 end
 

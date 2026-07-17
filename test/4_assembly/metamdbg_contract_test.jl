@@ -3,6 +3,7 @@
 import CodecZlib
 import FileWatching
 import JSON
+import Logging
 import Test
 import Mycelia
 
@@ -2021,6 +2022,168 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             ordered_contract.contract.inputs,
             :sha256,
         ) == Mycelia._metamdbg_sha256.(ordered_paths)
+
+        Test.@testset "local staged-input capabilities are identity-bound" begin
+            staged = Mycelia._stage_metamdbg_inputs!(
+                ordered_input,
+                ordered_contract,
+                temporary_root,
+            )
+            Test.@test staged.root_identity ==
+                       Mycelia._metamdbg_directory_path_identity(staged.root)
+            Test.@test (stat(staged.root).mode & 0o777) == 0o700
+            Test.@test isopen(staged.root_descriptor)
+            Test.@test read.(staged.selected_input.paths, String) ==
+                       read.(ordered_paths, String)
+            Test.@test all(
+                staged_path ->
+                    (stat(staged_path).mode & 0o777) == 0o400,
+                staged.selected_input.paths,
+            )
+            staged_root = staged.root
+            Mycelia._cleanup_staged_metamdbg_inputs!(staged)
+            Test.@test !ispath(staged_root)
+            Test.@test !isopen(staged.root_descriptor)
+
+            symlink_target = joinpath(
+                temporary_root,
+                "staged-input-symlink-target.fastq",
+            )
+            write(symlink_target, "preserve symlink target\n")
+            symlink_root = Ref("")
+            symlink_error = try
+                Mycelia._stage_metamdbg_inputs!(
+                    ordered_input,
+                    ordered_contract,
+                    temporary_root;
+                    pre_child_open_hook = function (
+                            root::NamedTuple,
+                            destination::AbstractString,
+                            input_index::Int,
+                    )
+                        if input_index == 1
+                            symlink_root[] = root.path
+                            symlink(symlink_target, destination)
+                        end
+                        return nothing
+                    end,
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test symlink_error isa SystemError
+            Test.@test occursin(
+                "openat",
+                sprint(showerror, symlink_error),
+            )
+            Test.@test read(symlink_target, String) ==
+                       "preserve symlink target\n"
+            Test.@test !ispath(symlink_root[])
+
+            swapped_root = Ref("")
+            held_copy_root = joinpath(
+                temporary_root,
+                "held-staged-input-copy-root",
+            )
+            replacement_copy_marker = Ref("")
+            root_swap_error = Test.@test_logs (
+                :warn,
+                r"retained staged-input cleanup evidence",
+            ) min_level=Logging.Warn begin
+                try
+                    Mycelia._stage_metamdbg_inputs!(
+                        ordered_input,
+                        ordered_contract,
+                        temporary_root;
+                        pre_child_open_hook = function (
+                                root::NamedTuple,
+                                _destination::AbstractString,
+                                input_index::Int,
+                        )
+                            input_index == 1 || return nothing
+                            swapped_root[] = root.path
+                            mv(root.path, held_copy_root)
+                            mkpath(root.path)
+                            replacement_copy_marker[] = joinpath(
+                                root.path,
+                                "replacement-marker.txt",
+                            )
+                            write(
+                                replacement_copy_marker[],
+                                "preserve copy replacement\n",
+                            )
+                            return nothing
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test root_swap_error isa ErrorException
+            Test.@test occursin(
+                "staged-input root changed before child creation",
+                sprint(showerror, root_swap_error),
+            )
+            Test.@test read(replacement_copy_marker[], String) ==
+                       "preserve copy replacement\n"
+            Test.@test isdir(held_copy_root)
+            rm(swapped_root[]; recursive = true, force = true)
+            rm(held_copy_root; recursive = true, force = true)
+
+            cleanup_swap_stage = Mycelia._stage_metamdbg_inputs!(
+                ordered_input,
+                ordered_contract,
+                temporary_root,
+            )
+            held_cleanup_root = joinpath(
+                temporary_root,
+                "held-staged-input-cleanup-root",
+            )
+            replacement_cleanup_marker = joinpath(
+                cleanup_swap_stage.root,
+                "replacement-marker.txt",
+            )
+            cleanup_swap_error = try
+                Mycelia._cleanup_staged_metamdbg_inputs!(
+                    cleanup_swap_stage;
+                    pre_remove_hook = function (
+                            root::AbstractString,
+                            _identity::NamedTuple,
+                    )
+                        mv(root, held_cleanup_root)
+                        mkpath(root)
+                        write(
+                            replacement_cleanup_marker,
+                            "preserve cleanup replacement\n",
+                        )
+                        return nothing
+                    end,
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test cleanup_swap_error isa ErrorException
+            Test.@test occursin(
+                "refuses to remove a replacement durable directory",
+                sprint(showerror, cleanup_swap_error),
+            )
+            Test.@test read(replacement_cleanup_marker, String) ==
+                       "preserve cleanup replacement\n"
+            Test.@test !isopen(cleanup_swap_stage.root_descriptor)
+            Test.@test read.(
+                joinpath.(
+                    held_cleanup_root,
+                    basename.(cleanup_swap_stage.selected_input.paths),
+                ),
+                String,
+            ) == read.(ordered_paths, String)
+            rm(cleanup_swap_stage.root; recursive = true, force = true)
+            rm(held_cleanup_root; recursive = true, force = true)
+        end
+
         reversed_contract = Mycelia._metamdbg_input_contract(
             Mycelia._metamdbg_selected_input(reverse(ordered_paths), nothing),
             3,
