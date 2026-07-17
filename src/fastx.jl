@@ -1432,7 +1432,7 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Concatenate FASTQ/FASTA files (gz or plain) into a single output file.
 Maintains input order and works for both single-end and paired-end files (one stream).
-Uses system `cat`/`zcat` (or `gzip -cd`) and optional `pigz`/`gzip` compression when
+Uses system `cat`/`gzip -cd` (with a `zcat` fallback) and optional `pigz`/`gzip` compression when
 the output path ends with `.gz`.
 """
 function concatenate_fastx(
