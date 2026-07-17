@@ -39,9 +39,23 @@ export JULIA_NUM_THREADS=${SLURM_CPUS_PER_TASK:-16}
 
 cd "${HOME}/workspace/Mycelia/.worktrees/td-n8ax-gate/benchmarking" || exit 1
 
-echo ">>> instantiate (branch may recompile Mycelia from source) $(date)"
-if ! LD_LIBRARY_PATH="" "${JULIA}" --project=.. -e 'import Pkg; Pkg.instantiate()'; then
-  echo ">>> instantiate FAILED" >&2
+# Mycelia gitignores Manifest.toml, so a fresh worktree has none and a from-scratch
+# Pkg.instantiate() resolves against the registry and hits a Pkg extension bug
+# (KeyError "Graphs"). This branch changed ONLY source (no new deps), so the main
+# checkout's already-resolved manifest is valid here — copy it in and let
+# `import Mycelia` recompile from the worktree source against the group depot.
+MAIN_MANIFEST="${HOME}/workspace/Mycelia/Manifest.toml"
+if [[ -f "${MAIN_MANIFEST}" ]]; then
+  cp -f "${MAIN_MANIFEST}" ../Manifest.toml
+  echo ">>> copied known-good Manifest.toml from main checkout"
+else
+  echo "ERROR: main-checkout Manifest.toml not found at ${MAIN_MANIFEST}" >&2
+  exit 1
+fi
+
+echo ">>> precompile warmup (import Mycelia recompiles branch source) $(date)"
+if ! LD_LIBRARY_PATH="" "${JULIA}" --project=.. -e 'import Mycelia; println("Mycelia loaded")'; then
+  echo ">>> precompile/load FAILED" >&2
   exit 1
 fi
 
