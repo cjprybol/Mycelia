@@ -88,8 +88,18 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         temporary_root = realpath(temporary_root)
         valid_reads = joinpath(temporary_root, "reads.fastq")
         empty_reads = joinpath(temporary_root, "empty.fastq")
+        near_name_max_reads = joinpath(
+            temporary_root,
+            repeat("n", 244) * ".fastq",
+        )
+        backslash_reads = joinpath(
+            temporary_root,
+            "reads\\backslash.fastq",
+        )
         write(valid_reads, "@read-1\nACGT\n+\nIIII\n")
         touch(empty_reads)
+        write(near_name_max_reads, "@long-name\nACGT\n+\nIIII\n")
+        write(backslash_reads, "@backslash\nACGT\n+\nIIII\n")
         symlink_reads = joinpath(temporary_root, "reads-symlink.fastq")
         hardlink_reads = joinpath(temporary_root, "reads-hardlink.fastq")
         symlink(valid_reads, symlink_reads)
@@ -272,6 +282,62 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             executed_contract["contract"]["inputs"],
             "sha256",
         ) == Mycelia._metamdbg_sha256.(ordered_paths)
+
+        Test.@test ncodeunits(basename(near_name_max_reads)) == 250
+        expected_long_staged_name =
+            Mycelia._metamdbg_staged_input_name(1, near_name_max_reads)
+        Test.@test ncodeunits(expected_long_staged_name) <= 255
+        Test.@test !occursin(repeat("n", 244), expected_long_staged_name)
+        Test.@test endswith(
+            Mycelia._metamdbg_staged_input_name(
+                2,
+                near_name_max_reads * ".gz",
+            ),
+            ".gz",
+        )
+        long_input_outdir = joinpath(temporary_root, "long-input-local")
+        long_input_command_count = Ref(0)
+        long_input_runner = function (command::Cmd)
+            long_input_command_count[] += 1
+            if long_input_command_count[] == 1
+                input_flag_index = only(findall(
+                    ==("--in-hifi"),
+                    command.exec,
+                ))
+                abundance_index = only(findall(
+                    ==("--min-abundance"),
+                    command.exec,
+                ))
+                staged_paths = command.exec[
+                    (input_flag_index + 1):(abundance_index - 1)
+                ]
+                Test.@test length(staged_paths) == 1
+                staged_path = only(staged_paths)
+                Test.@test basename(staged_path) == expected_long_staged_name
+                Test.@test read(staged_path, String) ==
+                           read(near_name_max_reads, String)
+                write(
+                    joinpath(long_input_outdir, "contigs.fasta"),
+                    ">long-input-contig\nACGT\n",
+                )
+            elseif long_input_command_count[] == 2
+                _write_test_metamdbg_gfa!(joinpath(
+                    long_input_outdir,
+                    "assemblyGraph_k21_4bps.gfa",
+                ))
+            else
+                error("unexpected long-input metaMDBG command")
+            end
+            return nothing
+        end
+        long_input_result = Mycelia._run_metamdbg(;
+            hifi_reads = near_name_max_reads,
+            outdir = long_input_outdir,
+            dependency_checker = _test_metamdbg_toolchain,
+            local_runner = long_input_runner,
+        )
+        Test.@test long_input_result.status == :complete
+        Test.@test long_input_command_count[] == 2
         Test.@test provisioning_calls[] == 0
         Test.@test !ispath(joinpath(temporary_root, "missing-file"))
 
@@ -1938,6 +2004,55 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test !ispath(missing_parent_root)
 
+            post_rename_outdir =
+                joinpath(temporary_root, "post-rename-interruption")
+            post_rename_outputs =
+                Mycelia._metamdbg_output_paths(post_rename_outdir, 21)
+            post_rename_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            post_rename_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    post_rename_outputs,
+                    post_rename_contract,
+                    21;
+                    owner_token = "post-rename-interruption-fixture",
+                )
+            post_rename_interrupt = InterruptException()
+            post_rename_hook = (_reservation::NamedTuple) ->
+                throw(post_rename_interrupt)
+            observed_post_rename_interrupt = try
+                Mycelia._with_metamdbg_output_lock(post_rename_outdir) do
+                    Mycelia._create_metamdbg_submission_reservation!(
+                        post_rename_reservation,
+                        post_rename_outdir;
+                        post_rename_hook,
+                    )
+                end
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_post_rename_interrupt === post_rename_interrupt
+            Test.@test !ispath(post_rename_reservation.path)
+            Test.@test !ispath(
+                post_rename_reservation.output_root_reservation_marker,
+            )
+            Test.@test isempty(
+                Mycelia._metamdbg_submission_reservation_paths(
+                    post_rename_outdir,
+                ),
+            )
+            post_rename_prefix =
+                Mycelia._metamdbg_submission_reservation_prefix(
+                    post_rename_outdir,
+                )
+            Test.@test isempty(filter(
+                entry -> startswith(entry, post_rename_prefix),
+                readdir(dirname(post_rename_outdir)),
+            ))
+
             symlink_target = joinpath(temporary_root, "symlink-target")
             symlink_outdir = joinpath(temporary_root, "symlink-outdir")
             mkpath(symlink_target)
@@ -2096,6 +2211,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
         end
 
         Test.@testset "shared hierarchical output-root reservations" begin
+            filesystem_root = dirname(abspath("/"))
+            filesystem_root_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    filesystem_root,
+                )
+            root_probe_ancestor_locks =
+                Mycelia._ancestor_output_root_reservation_lock_paths(
+                    joinpath(temporary_root, "root-ancestor-probe"),
+                )
+            Test.@test filesystem_root_lock in root_probe_ancestor_locks
+
             same_root = joinpath(temporary_root, "shared-domain-same")
             Mycelia._with_metamdbg_output_domain_lock(same_root) do
                 conflict = fetch(@async try
@@ -2292,6 +2418,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test Mycelia._with_metamdbg_output_domain_lock(
                 normal_cleanup_root,
             ) do
+                Test.@test isdir(normal_cleanup_sentinel)
                 :normal_cleanup
             end == :normal_cleanup
             Test.@test !ispath(normal_cleanup_lock)
@@ -2338,6 +2465,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             cleanup_failure = try
                 Mycelia._with_metamdbg_output_domain_lock(cleanup_root) do
+                    Test.@test isdir(cleanup_sentinel)
                     write(joinpath(cleanup_lock, "blocker"), "block cleanup\n")
                     return :cleanup_should_fail
                 end
@@ -2350,6 +2478,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test isdir(cleanup_sentinel)
             Test.@test (stat(cleanup_sentinel).mode & 0o777) == 0o700
             Test.@test !ispath(cleanup_generic_lock)
+            GC.gc(true)
+            Test.@test isdir(cleanup_sentinel)
             _test_metamdbg_error(
                 () -> Mycelia._with_unicycler_output_lock(cleanup_root) do _
                     :unexpected
@@ -2564,6 +2694,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test occursin("mv -n -- \"\$contract_new\"", script)
             Test.@test occursin(input_contract.signature, script)
             Test.@test occursin("sha256_file", script)
+            Test.@test occursin("sha256_stream < \"\$path\"", script)
+            Test.@test !occursin("sha256sum -- \"\$path\"", script)
             Test.@test occursin(
                 only(input_contract.contract.inputs).sha256,
                 script,
@@ -2590,6 +2722,11 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !occursin("< <(find", script)
             Test.@test occursin("if ! find -P", script)
             Test.@test occursin("metamdbg_output_root_identity", script)
+            Test.@test occursin(
+                Mycelia._output_root_reservation_identity(dirname(abspath("/"))),
+                script,
+            )
+            Test.@test occursin("  while :; do", script)
             Test.@test occursin(
                 "require_owned_runtime_output_root_reservation",
                 script,
@@ -2662,14 +2799,15 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             function create_bound_runtime_fixture(
                     runtime_outdir::String,
                     owner_token::String,
-                    job_id::String,
+                    job_id::String;
+                    fixture_input_contract::NamedTuple = input_contract,
             )::Tuple{NamedTuple, NamedTuple}
                 runtime_outputs =
                     Mycelia._metamdbg_output_paths(runtime_outdir, 21)
                 runtime_reservation =
                     Mycelia._metamdbg_submission_reservation(
                         runtime_outputs,
-                        input_contract,
+                        fixture_input_contract,
                         21;
                         owner_token,
                     )
@@ -3093,6 +3231,225 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !ispath(
                 long_runtime_reservation.runtime_output_root_reservation_marker,
             )
+
+            near_runtime_outdir =
+                joinpath(temporary_root, "executor-near-name-max-input")
+            near_runtime_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(near_name_max_reads, nothing),
+                3,
+            )
+            near_runtime_outputs, near_runtime_reservation =
+                create_bound_runtime_fixture(
+                    near_runtime_outdir,
+                    "runtime-near-name-max-owner",
+                    "910";
+                    fixture_input_contract = near_runtime_contract,
+                )
+            near_runtime_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                near_runtime_outputs,
+                21,
+                near_runtime_contract;
+                conda_runner = fake_conda,
+                submission_reservation = near_runtime_reservation,
+            )
+            Test.@test occursin(
+                Mycelia._metamdbg_staged_input_name(
+                    1,
+                    near_name_max_reads,
+                ),
+                near_runtime_script,
+            )
+            near_runtime_script_path =
+                joinpath(temporary_root, "executor-near-name-max-input.sh")
+            write(near_runtime_script_path, near_runtime_script)
+            Test.@test Base.withenv(
+                "SLURM_JOB_ID" => near_runtime_reservation.job_id,
+            ) do
+                success(`bash $(near_runtime_script_path)`)
+            end
+            Test.@test isfile(near_runtime_outputs.completion_marker)
+            Test.@test !ispath(near_runtime_reservation.path)
+            Test.@test !ispath(
+                near_runtime_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                near_runtime_reservation.runtime_output_root_reservation_marker,
+            )
+
+            backslash_runtime_outdir =
+                joinpath(temporary_root, "executor-backslash-input")
+            backslash_runtime_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(backslash_reads, nothing),
+                3,
+            )
+            backslash_runtime_outputs, backslash_runtime_reservation =
+                create_bound_runtime_fixture(
+                    backslash_runtime_outdir,
+                    "runtime-backslash-owner",
+                    "911";
+                    fixture_input_contract = backslash_runtime_contract,
+                )
+            backslash_runtime_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                backslash_runtime_outputs,
+                21,
+                backslash_runtime_contract;
+                conda_runner = fake_conda,
+                submission_reservation = backslash_runtime_reservation,
+            )
+            backslash_runtime_script_path =
+                joinpath(temporary_root, "executor-backslash-input.sh")
+            write(backslash_runtime_script_path, backslash_runtime_script)
+            fake_sha256_directory =
+                joinpath(temporary_root, "backslash-sha256-bin")
+            mkpath(fake_sha256_directory)
+            fake_sha256_path =
+                joinpath(fake_sha256_directory, "sha256sum")
+            real_sha256_path = Sys.which("sha256sum")
+            real_sha256_path === nothing &&
+                error("sha256sum is required for this executor fixture")
+            write(
+                fake_sha256_path,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "if [ \"\$#\" -gt 0 ] && " *
+                "printf '%s' \"\${!#}\" | grep -Fq '\\'; then\n" *
+                "  printf '\\\\'\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(real_sha256_path) * " \"\$@\"\n",
+            )
+            chmod(fake_sha256_path, 0o700)
+            Test.@test success(`bash -n $(fake_sha256_path)`)
+            Test.@test Base.withenv(
+                "SLURM_JOB_ID" => backslash_runtime_reservation.job_id,
+                "PATH" =>
+                    "$(fake_sha256_directory):$(get(ENV, "PATH", ""))",
+            ) do
+                success(`bash $(backslash_runtime_script_path)`)
+            end
+            Test.@test isfile(backslash_runtime_outputs.completion_marker)
+            Test.@test !ispath(backslash_runtime_reservation.path)
+            Test.@test !ispath(
+                backslash_runtime_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                backslash_runtime_reservation.runtime_output_root_reservation_marker,
+            )
+
+            delete_fail_parent =
+                joinpath(temporary_root, "executor-queued-delete-failure")
+            delete_fail_outdir = joinpath(delete_fail_parent, "target")
+            delete_fail_outputs, delete_fail_reservation =
+                create_bound_runtime_fixture(
+                    delete_fail_outdir,
+                    "runtime-queued-delete-failure-owner",
+                    "912",
+                )
+            delete_fail_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-queued-delete-failure-assembly-ran",
+            )
+            delete_fail_script = Mycelia._metamdbg_executor_script(
+                "touch $(Base.shell_escape(delete_fail_assembly_marker)); " *
+                fake_asm,
+                fake_gfa,
+                delete_fail_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = delete_fail_reservation,
+            )
+            delete_fail_script_path = joinpath(
+                temporary_root,
+                "executor-queued-delete-failure.sh",
+            )
+            write(delete_fail_script_path, delete_fail_script)
+            fake_rm_directory =
+                joinpath(temporary_root, "queued-delete-failure-bin")
+            mkpath(fake_rm_directory)
+            fake_rm_path = joinpath(fake_rm_directory, "rm")
+            real_rm_path = something(Sys.which("rm"), "/bin/rm")
+            write(
+                fake_rm_path,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "if [ \"\$#\" -gt 0 ] && [ \"\${!#}\" = " *
+                Base.shell_escape(
+                    delete_fail_reservation.output_root_reservation_marker,
+                ) * " ]; then\n" *
+                "  " * Base.shell_escape(real_rm_path) * " -- " *
+                Base.shell_escape(
+                    delete_fail_reservation.output_root_reservation_marker,
+                ) * "\n" *
+                "  exit 97\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(real_rm_path) * " \"\$@\"\n",
+            )
+            chmod(fake_rm_path, 0o700)
+            Test.@test success(`bash -n $(fake_rm_path)`)
+            delete_fail_log = IOBuffer()
+            delete_fail_process = Base.withenv(
+                "SLURM_JOB_ID" => delete_fail_reservation.job_id,
+                "PATH" => "$(fake_rm_directory):$(get(ENV, "PATH", ""))",
+            ) do
+                run(pipeline(
+                    ignorestatus(`bash $(delete_fail_script_path)`);
+                    stdout = delete_fail_log,
+                    stderr = delete_fail_log,
+                ))
+            end
+            delete_fail_output = String(take!(delete_fail_log))
+            Test.@test !success(delete_fail_process)
+            Test.@test occursin(
+                "failed to consume its queued shared output-root reservation",
+                delete_fail_output,
+            )
+            Test.@test !ispath(delete_fail_assembly_marker)
+            Test.@test isdir(delete_fail_reservation.path)
+            Test.@test !ispath(
+                delete_fail_reservation.output_root_reservation_marker,
+            )
+            Test.@test isdir(
+                delete_fail_reservation.runtime_output_root_reservation_marker,
+            )
+            delete_fail_lock =
+                Mycelia._metamdbg_output_lock_path(delete_fail_outdir)
+            Test.@test isdir(delete_fail_lock)
+            _test_metamdbg_error(
+                () -> Mycelia._with_unicycler_output_lock(
+                    delete_fail_outdir,
+                ) do _
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active same-root output-root reservation",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_autocycler_output_lock(
+                    joinpath(delete_fail_outdir, "child"),
+                ) do _
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active ancestor output-root reservation",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_unicycler_output_lock(
+                    delete_fail_parent,
+                ) do _
+                    :unexpected
+                end,
+                ArgumentError,
+                r"active descendant output-root reservation",
+            )
+            rm(delete_fail_lock)
+            rm(
+                delete_fail_reservation.runtime_output_root_reservation_marker,
+            )
+            rm(delete_fail_reservation.path; recursive = true)
 
             runtime_cleanup_parent =
                 joinpath(temporary_root, "executor-runtime-cleanup-domain")

@@ -1969,6 +1969,7 @@ function _execute_autocycler_steps(
         workflow_root::Union{Nothing, AbstractString} = nothing,
         directory_identities::Tuple = (),
         before_step::Function = step -> nothing,
+        after_step::Function = step -> nothing,
 )::Nothing
     for step in steps
         if workflow_root !== nothing
@@ -2061,6 +2062,14 @@ function _execute_autocycler_steps(
                     ),
                 )
             end
+        end
+        after_step(step)
+        if workflow_root !== nothing
+            _require_safe_autocycler_step_paths(
+                step,
+                workflow_root,
+                directory_identities,
+            )
         end
     end
     return nothing
@@ -2278,6 +2287,28 @@ function _run_autocycler_with_reserved_output(
         end
         return nothing
     end
+    output_snapshots = Ref{Any}(nothing)
+    function verify_long_read_after_step(step::NamedTuple)::Nothing
+        if step.name == :autocycler
+            _require_unchanged_autocycler_input(
+                long_read_snapshot,
+                "Long-read FASTQ",
+            )
+            output_snapshots[] = (
+                assembly = _autocycler_artifact_snapshot(
+                    plan.assembly,
+                    prepared_out_dir,
+                    "Autocycler consensus FASTA",
+                ),
+                graph = _autocycler_artifact_snapshot(
+                    plan.graph,
+                    prepared_out_dir,
+                    "Autocycler consensus GFA",
+                ),
+            )
+        end
+        return nothing
+    end
 
     @info "Starting long-read-only Autocycler pipeline..."
     _execute_autocycler_steps(
@@ -2286,7 +2317,9 @@ function _run_autocycler_with_reserved_output(
         workflow_root = prepared_out_dir,
         directory_identities = (output_root_identity,),
         before_step = verify_long_read_before_step,
+        after_step = verify_long_read_after_step,
     )
+    autocycler_output_snapshots = something(output_snapshots[])
     contained_assembly = _require_contained_regular_autocycler_artifact(
         plan.assembly,
         prepared_out_dir,
@@ -2306,6 +2339,18 @@ function _run_autocycler_with_reserved_output(
         "Autocycler consensus GFA",
     )
     _require_matching_autocycler_companion_artifacts(assembly, graph)
+    _require_unchanged_autocycler_artifact(
+        autocycler_output_snapshots.assembly,
+        assembly,
+        prepared_out_dir,
+        "Autocycler consensus FASTA",
+    )
+    _require_unchanged_autocycler_artifact(
+        autocycler_output_snapshots.graph,
+        graph,
+        prepared_out_dir,
+        "Autocycler consensus GFA",
+    )
     @info "Autocycler pipeline complete" out_dir = prepared_out_dir
 
     return (
@@ -2314,6 +2359,8 @@ function _run_autocycler_with_reserved_output(
         graph = graph,
         toolchain = normalized_toolchain,
         output_root_identity,
+        assembly_snapshot = autocycler_output_snapshots.assembly,
+        graph_snapshot = autocycler_output_snapshots.graph,
         requested_threads = plan.requested_threads,
         autocycler_assembly_threads = plan.autocycler_assembly_threads,
     )
@@ -2413,13 +2460,32 @@ function _run_autocycler(
                     "Autocycler consensus GFA",
                 ),
             )
+            _require_unchanged_autocycler_artifact(
+                result.assembly_snapshot,
+                result.assembly,
+                result.outdir,
+                "Autocycler consensus FASTA",
+            )
+            _require_unchanged_autocycler_artifact(
+                result.graph_snapshot,
+                result.graph,
+                result.outdir,
+                "Autocycler consensus GFA",
+            )
             _require_unchanged_autocycler_input(
                 long_read_snapshot,
                 "Long-read FASTQ",
             )
-            return merge(
-                result,
-                (; input_snapshots),
+            return (
+                outdir = result.outdir,
+                assembly = result.assembly,
+                graph = result.graph,
+                toolchain = result.toolchain,
+                output_root_identity = result.output_root_identity,
+                requested_threads = result.requested_threads,
+                autocycler_assembly_threads =
+                    result.autocycler_assembly_threads,
+                input_snapshots,
             )
         end
     end
@@ -2530,20 +2596,24 @@ function _run_autocycler_polished_with_reserved_output(
         dependency_checker(),
         "long-read assembly within the polished workflow",
     )
+    _require_unchanged_autocycler_artifact(
+        autocycler_result.assembly_snapshot,
+        autocycler_result.assembly,
+        autocycler_result.outdir,
+        "Autocycler consensus FASTA",
+    )
+    _require_unchanged_autocycler_artifact(
+        autocycler_result.graph_snapshot,
+        autocycler_result.graph,
+        autocycler_result.outdir,
+        "Autocycler consensus GFA",
+    )
     autocycler_identifiers = _autocycler_fasta_identifier_set(
         autocycler_result.assembly,
         "Autocycler consensus FASTA",
     )
-    autocycler_assembly_snapshot = _autocycler_artifact_snapshot(
-        autocycler_result.assembly,
-        normalized_out_dir,
-        "Autocycler consensus FASTA",
-    )
-    autocycler_graph_snapshot = _autocycler_artifact_snapshot(
-        autocycler_result.graph,
-        normalized_out_dir,
-        "Autocycler consensus GFA",
-    )
+    autocycler_assembly_snapshot = autocycler_result.assembly_snapshot
+    autocycler_graph_snapshot = autocycler_result.graph_snapshot
 
     polishing_plan = _autocycler_polishing_command_plan(
         autocycler_result.assembly,
@@ -2594,27 +2664,123 @@ function _run_autocycler_polished_with_reserved_output(
         output_root_identity,
         polishing_directory_identity,
     )
-    function verify_polishing_inputs_before_step(step::NamedTuple)::Nothing
-        if step.name == :bwa_mem_1
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_1,
-                "Paired short-read R1 FASTQ",
+    produced_artifact_paths = Dict{Symbol, Vector{String}}(
+        step.name => String[step.expected_outputs...] for
+        step in polishing_plan.steps
+    )
+    produced_artifact_snapshots = Dict{Symbol, Vector{NamedTuple}}()
+    function polishing_artifact_label(
+            producer::Symbol,
+            path::AbstractString,
+    )::String
+        if producer == :bwa_index
+            return "BWA index artifact $(basename(path))"
+        elseif producer == :bwa_mem_1
+            return "BWA R1 alignment"
+        elseif producer == :bwa_mem_2
+            return "BWA R2 alignment"
+        elseif producer == :polypolish_filter
+            read_role = endswith(path, "filtered_1.sam") ? "R1" : "R2"
+            return "Polypolish filtered $(read_role) alignment"
+        elseif producer == :polypolish
+            return "Polypolish Autocycler assembly"
+        elseif producer == :pypolca && endswith(path, ".report")
+            return "Pypolca report"
+        elseif producer == :pypolca
+            return "Pypolca-polished Autocycler assembly"
+        end
+        return "Autocycler $(producer) artifact $(basename(path))"
+    end
+    function captured_polishing_artifact_snapshot(
+            producer::Symbol,
+            path::AbstractString,
+    )::NamedTuple
+        snapshots = get(produced_artifact_snapshots, producer, nothing)
+        snapshots === nothing && error(
+            "Autocycler polishing step $(producer) has no bound output " *
+            "snapshots.",
+        )
+        paths = produced_artifact_paths[producer]
+        path_index = findfirst(==(String(path)), paths)
+        path_index === nothing && error(
+            "Autocycler polishing step $(producer) did not plan output " *
+            "$(path).",
+        )
+        return snapshots[path_index]
+    end
+    function verify_produced_artifacts(
+            producer::Symbol,
+            consumer::Symbol,
+    )::Nothing
+        paths = produced_artifact_paths[producer]
+        snapshots = get(produced_artifact_snapshots, producer, nothing)
+        snapshots === nothing && error(
+            "Autocycler polishing step $(consumer) cannot consume $(producer) " *
+            "outputs before they are bound.",
+        )
+        length(paths) == length(snapshots) || error(
+            "Autocycler polishing step $(producer) output snapshot count " *
+            "changed before $(consumer).",
+        )
+        for (path, snapshot) in zip(paths, snapshots)
+            _require_unchanged_autocycler_artifact(
+                snapshot,
+                path,
+                normalized_out_dir,
+                polishing_artifact_label(producer, path),
             )
-        elseif step.name == :bwa_mem_2
-            _require_unchanged_autocycler_input(
-                input_snapshots.short_reads_2,
-                "Paired short-read R2 FASTQ",
+        end
+        return nothing
+    end
+    function verify_polishing_step_inputs(step::NamedTuple)::Nothing
+        if step.name in (
+            :bwa_index,
+            :bwa_mem_1,
+            :bwa_mem_2,
+            :polypolish,
+        )
+            _require_unchanged_autocycler_artifact(
+                autocycler_assembly_snapshot,
+                autocycler_result.assembly,
+                normalized_out_dir,
+                "Autocycler consensus FASTA",
             )
+        end
+        if step.name in (:bwa_mem_1, :bwa_mem_2)
+            verify_produced_artifacts(:bwa_index, step.name)
+        elseif step.name == :polypolish_filter
+            verify_produced_artifacts(:bwa_mem_1, step.name)
+            verify_produced_artifacts(:bwa_mem_2, step.name)
+        elseif step.name == :polypolish
+            verify_produced_artifacts(:polypolish_filter, step.name)
         elseif step.name == :pypolca
+            verify_produced_artifacts(:polypolish, step.name)
+        end
+        if step.name in (:bwa_mem_1, :pypolca)
             _require_unchanged_autocycler_input(
                 input_snapshots.short_reads_1,
                 "Paired short-read R1 FASTQ",
             )
+        end
+        if step.name in (:bwa_mem_2, :pypolca)
             _require_unchanged_autocycler_input(
                 input_snapshots.short_reads_2,
                 "Paired short-read R2 FASTQ",
             )
         end
+        return nothing
+    end
+    function verify_and_bind_polishing_step_outputs(
+            step::NamedTuple,
+    )::Nothing
+        verify_polishing_step_inputs(step)
+        produced_artifact_snapshots[step.name] = NamedTuple[
+            _autocycler_artifact_snapshot(
+                path,
+                normalized_out_dir,
+                polishing_artifact_label(step.name, path),
+            ) for path in produced_artifact_paths[step.name]
+        ]
         return nothing
     end
 
@@ -2627,7 +2793,18 @@ function _run_autocycler_polished_with_reserved_output(
             runner,
             workflow_root = normalized_out_dir,
             directory_identities,
-            before_step = verify_polishing_inputs_before_step,
+            before_step = verify_polishing_step_inputs,
+            after_step = verify_and_bind_polishing_step_outputs,
+        )
+        polypolish_snapshot = captured_polishing_artifact_snapshot(
+            :polypolish,
+            polishing_plan.polypolish_assembly,
+        )
+        _require_unchanged_autocycler_artifact(
+            polypolish_snapshot,
+            polishing_plan.polypolish_assembly,
+            normalized_out_dir,
+            "Polypolish Autocycler assembly",
         )
         contained_polypolish_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2661,7 +2838,8 @@ function _run_autocycler_polished_with_reserved_output(
             "Autocycler consensus",
             "Polypolish",
         )
-        polypolish_snapshot = _autocycler_artifact_snapshot(
+        _require_unchanged_autocycler_artifact(
+            polypolish_snapshot,
             validated_polypolish_assembly,
             normalized_out_dir,
             "Polypolish Autocycler assembly",
@@ -2671,7 +2849,16 @@ function _run_autocycler_polished_with_reserved_output(
             runner,
             workflow_root = normalized_out_dir,
             directory_identities,
-            before_step = verify_polishing_inputs_before_step,
+            before_step = verify_polishing_step_inputs,
+            after_step = verify_and_bind_polishing_step_outputs,
+        )
+        final_assembly_snapshot = captured_polishing_artifact_snapshot(
+            :pypolca,
+            polishing_plan.assembly,
+        )
+        pypolca_report_snapshot = captured_polishing_artifact_snapshot(
+            :pypolca,
+            polishing_plan.pypolca_report,
         )
         contained_final_assembly =
             _require_contained_regular_autocycler_artifact(
@@ -2720,12 +2907,14 @@ function _run_autocycler_polished_with_reserved_output(
                 normalized_out_dir,
                 "Pypolca report",
             )
-        final_assembly_snapshot = _autocycler_artifact_snapshot(
+        _require_unchanged_autocycler_artifact(
+            final_assembly_snapshot,
             validated_final_assembly,
             normalized_out_dir,
             "Pypolca-polished Autocycler assembly",
         )
-        pypolca_report_snapshot = _autocycler_artifact_snapshot(
+        _require_unchanged_autocycler_artifact(
+            pypolca_report_snapshot,
             validated_pypolca_report,
             normalized_out_dir,
             "Pypolca report",

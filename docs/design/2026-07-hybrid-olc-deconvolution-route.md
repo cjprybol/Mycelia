@@ -221,7 +221,7 @@ prefixes are canonicalized through their nearest existing physical ancestor,
 so an install performed through one stable alias can be consumed through
 another alias without selecting a different environment or lock domain.
 
-The single-input metaMDBG wrapper applies the same fail-closed principles with
+The single-technology metaMDBG wrapper applies the same fail-closed principles with
 the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification. Local
 execution returns
 `status = :complete` only after semantic FASTA/GFA validation and durable

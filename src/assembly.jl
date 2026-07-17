@@ -4779,23 +4779,74 @@ function _publish_metamdbg_lifecycle_cleanup_reservation!(
 )::String
     reservation_path =
         _metamdbg_lifecycle_cleanup_reservation_path(outdir)
-    if !_output_root_path_entry_exists(reservation_path)
-        reservation_created = false
-        try
-            Base.Filesystem.mkdir(reservation_path; mode = 0o700)
-            reservation_created = true
-        catch
-            _output_root_path_entry_exists(reservation_path) || rethrow()
-        end
-        if reservation_created
-            _fsync_metamdbg_directory(dirname(reservation_path))
-        end
-    end
-    _output_root_path_entry_exists(reservation_path) || error(
-        "metaMDBG failed to publish its lifecycle cleanup reservation: " *
+    !_output_root_path_entry_exists(reservation_path) || error(
+        "metaMDBG refuses to replace an existing lifecycle cleanup " *
+        "reservation: $(reservation_path).",
+    )
+    Base.Filesystem.mkdir(reservation_path; mode = 0o700)
+    chmod(reservation_path, 0o700)
+    reservation_status = stat(reservation_path)
+    reservation_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG lifecycle cleanup reservation is not owned by the current " *
+        "user: $(reservation_path).",
+    )
+    (reservation_status.mode & 0o777) == 0o700 || error(
+        "metaMDBG lifecycle cleanup reservation must have mode 0700: " *
         "$(reservation_path).",
     )
+    _fsync_metamdbg_directory(dirname(reservation_path))
     return reservation_path
+end
+
+function _require_unchanged_metamdbg_lifecycle_cleanup_reservation(
+        reservation_path::AbstractString,
+        expected_identity::NamedTuple,
+)::String
+    normalized_path = normpath(abspath(String(reservation_path)))
+    isdir(normalized_path) && !islink(normalized_path) || error(
+        "metaMDBG lifecycle cleanup reservation is missing, replaced, or not " *
+        "a regular directory: $(normalized_path).",
+    )
+    reservation_status = stat(normalized_path)
+    observed_identity = (;
+        device = reservation_status.device,
+        inode = reservation_status.inode,
+    )
+    observed_identity == expected_identity || error(
+        "metaMDBG lifecycle cleanup reservation was replaced: " *
+        "$(normalized_path).",
+    )
+    reservation_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG lifecycle cleanup reservation changed owner: " *
+        "$(normalized_path).",
+    )
+    (reservation_status.mode & 0o777) == 0o700 || error(
+        "metaMDBG lifecycle cleanup reservation changed mode: " *
+        "$(normalized_path).",
+    )
+    return normalized_path
+end
+
+function _remove_metamdbg_lifecycle_cleanup_reservation!(
+        reservation_path::AbstractString,
+        expected_identity::NamedTuple,
+)::Nothing
+    normalized_path =
+        _require_unchanged_metamdbg_lifecycle_cleanup_reservation(
+            reservation_path,
+            expected_identity,
+        )
+    isempty(readdir(normalized_path)) || error(
+        "metaMDBG lifecycle cleanup reservation contains unexpected entries: " *
+        "$(normalized_path).",
+    )
+    rm(normalized_path)
+    !_output_root_path_entry_exists(normalized_path) || error(
+        "metaMDBG lifecycle cleanup reservation reappeared after removal: " *
+        "$(normalized_path).",
+    )
+    _fsync_metamdbg_directory(dirname(normalized_path))
+    return nothing
 end
 
 function _with_metamdbg_output_domain_lock(
@@ -4816,17 +4867,15 @@ function _with_metamdbg_output_domain_lock(
         "metaMDBG output is already reserved by another output-root " *
         "workflow: $(reservation_lock_path)",
     ))
-    preserve_generic_reservation = Ref(false)
-    cleanup_reservation_confirmed = Ref(false)
     cleanup_reservation_path =
         _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    cleanup_reservation_identity = nothing
+    private_cleanup_failed = Ref(false)
     cleanup_failure_handler = function (
             _lock_path::AbstractString,
             _cleanup_error::Any,
     )
-        preserve_generic_reservation[] = true
-        _publish_metamdbg_lifecycle_cleanup_reservation!(canonical_outdir)
-        cleanup_reservation_confirmed[] = true
+        private_cleanup_failed[] = true
         return nothing
     end
     try
@@ -4836,19 +4885,30 @@ function _with_metamdbg_output_domain_lock(
             subject = "metaMDBG outdir",
             stale_age,
         )
+        _publish_metamdbg_lifecycle_cleanup_reservation!(canonical_outdir)
+        cleanup_reservation_identity =
+            _metamdbg_output_lock_identity(cleanup_reservation_path)
         return _with_metamdbg_output_lock(
             action,
             canonical_outdir;
             lock_cleanup_failure_handler = cleanup_failure_handler,
         )
     finally
-        if preserve_generic_reservation[] &&
-           (!cleanup_reservation_confirmed[] ||
-            !_output_root_path_entry_exists(cleanup_reservation_path))
-            @error "metaMDBG retained its live generic PID reservation " *
-                   "because private lifecycle cleanup failed and its durable " *
-                   "cleanup sentinel was not confirmed" canonical_outdir reservation_lock_path cleanup_reservation_path cleanup_reservation_confirmed
-        else
+        try
+            if cleanup_reservation_identity !== nothing
+                if private_cleanup_failed[]
+                    _require_unchanged_metamdbg_lifecycle_cleanup_reservation(
+                        cleanup_reservation_path,
+                        cleanup_reservation_identity,
+                    )
+                else
+                    _remove_metamdbg_lifecycle_cleanup_reservation!(
+                        cleanup_reservation_path,
+                        cleanup_reservation_identity,
+                    )
+                end
+            end
+        finally
             Base.close(lock_handle)
         end
     end
@@ -4991,6 +5051,27 @@ function _copy_metamdbg_input!(
     return String(destination)
 end
 
+function _metamdbg_staged_input_name(
+        input_index::Int,
+        input_path::AbstractString,
+)::String
+    input_index > 0 || throw(ArgumentError(
+        "metaMDBG staged input indexes must be positive.",
+    ))
+    filename = basename(String(input_path))
+    normalized_filename = lowercase(filename)
+    compression_suffix = ""
+    for suffix in (".gz", ".bgz", ".bz2", ".xz", ".zst")
+        if endswith(normalized_filename, suffix)
+            compression_suffix = last(filename, length(suffix))
+            break
+        end
+    end
+    path_identity = first(_metamdbg_string_sha256(String(input_path)), 20)
+    return "input-$(lpad(input_index, 6, '0'))-$(path_identity)" *
+           compression_suffix
+end
+
 function _stage_metamdbg_inputs!(
         selected_input::NamedTuple,
         input_contract::NamedTuple,
@@ -5009,7 +5090,7 @@ function _stage_metamdbg_inputs!(
             )
             staged_path = joinpath(
                 staging_root,
-                "$(lpad(input_index, 6, '0'))--$(basename(input.path))",
+                _metamdbg_staged_input_name(input_index, input.path),
             )
             _copy_metamdbg_input!(input.path, staged_path)
             if !isfile(staged_path) || islink(staged_path) ||
@@ -5686,7 +5767,9 @@ end
 
 function _create_metamdbg_submission_reservation!(
         reservation::NamedTuple,
-        outdir::AbstractString,
+        outdir::AbstractString;
+        post_rename_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
 )::NamedTuple
     existing_reservations =
         _metamdbg_submission_reservation_paths(outdir)
@@ -5733,7 +5816,6 @@ function _create_metamdbg_submission_reservation!(
             _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
         ),
     ))
-    published = false
     output_root_marker_published = false
     try
         open(temporary_reservation.contract_marker, "w") do output
@@ -5749,15 +5831,15 @@ function _create_metamdbg_submission_reservation!(
         output_root_marker_published = true
         _require_metamdbg_submission_reservation!(temporary_reservation)
         mv(temporary_path, reservation.path)
-        published = true
+        post_rename_hook(reservation)
         _fsync_metamdbg_directory(reservation_parent)
         _require_metamdbg_submission_reservation!(reservation)
     catch primary_error
         try
-            if published && ispath(reservation.path)
+            if _output_root_path_entry_exists(reservation.path)
                 _remove_metamdbg_submission_reservation!(reservation)
             else
-                if ispath(temporary_path)
+                if _output_root_path_entry_exists(temporary_path)
                     rm(temporary_path; recursive = true)
                 end
                 if output_root_marker_published &&
@@ -7103,8 +7185,7 @@ function _metamdbg_executor_script(
         expected_digest_variable = "expected_input_sha256_$(input_index)"
         staged_path_variable = "staged_input_path_$(input_index)"
         staged_digest_variable = "staged_input_sha256_$(input_index)"
-        staged_name =
-            "$(lpad(input_index, 6, '0'))--$(basename(input.path))"
+        staged_name = _metamdbg_staged_input_name(input_index, input.path)
         push!(staged_input_declaration_lines,
             "$(staged_path_variable)=\"\$staged_inputs_dir/\"$(_metamdbg_shell_literal(staged_name))",
         )
@@ -7246,7 +7327,7 @@ function _metamdbg_executor_script(
         "  local requested_root=\"\$1\"",
     ]
     reservation_identity_root = outputs.outdir
-    while dirname(reservation_identity_root) != reservation_identity_root
+    while true
         push!(output_root_identity_function_lines,
             "  if [ \"\$requested_root\" = " *
             "$(_metamdbg_shell_literal(reservation_identity_root)) ]; then",
@@ -7257,7 +7338,9 @@ function _metamdbg_executor_script(
             "    return 0",
             "  fi",
         )
-        reservation_identity_root = dirname(reservation_identity_root)
+        reservation_identity_parent = dirname(reservation_identity_root)
+        reservation_identity_parent == reservation_identity_root && break
+        reservation_identity_root = reservation_identity_parent
     end
     append!(output_root_identity_function_lines, String[
         "  echo \"metaMDBG cannot identify an unexpected output-root domain: \$requested_root\" >&2",
@@ -7313,7 +7396,7 @@ function _metamdbg_executor_script(
         "  local durable_prefix",
         "  local candidate",
         "  local inventory_path",
-        "  while [ \"\$(dirname -- \"\$reservation_root\")\" != \"\$reservation_root\" ]; do",
+        "  while :; do",
         "    reservation_parent=\$(dirname -- \"\$reservation_root\")",
         "    root_identity=\$(metamdbg_output_root_identity \"\$reservation_root\")",
         "    if [ \"\$reservation_parent\" = / ]; then",
@@ -7343,6 +7426,9 @@ function _metamdbg_executor_script(
         "        return 1",
         "      fi",
         "    done < \"\$inventory_path\"",
+        "    if [ \"\$reservation_parent\" = \"\$reservation_root\" ]; then",
+        "      break",
+        "    fi",
         "    reservation_root=\"\$reservation_parent\"",
         "  done",
         "  if [ -L \"\$outdir\" ] || { [ -e \"\$outdir\" ] && [ ! -d \"\$outdir\" ]; }; then",
@@ -7377,9 +7463,9 @@ function _metamdbg_executor_script(
         "mv -- \"\$submission_reservation_dir\" \"\$reservation_tombstone\"",
         "if ! rm -- \"\$submission_output_root_reservation\"; then",
         "  echo \"metaMDBG failed to consume its queued shared output-root reservation\" >&2",
+        "  cleanup_safe_to_release_domain=0",
         "  if ! mv -- \"\$reservation_tombstone\" \"\$submission_reservation_dir\"; then",
         "    preserve_secure_tmpdir=1",
-        "    cleanup_safe_to_release_domain=0",
         "    echo \"metaMDBG could not restore its private owner reservation; retaining all locks and recovery state at \$reservation_tombstone\" >&2",
         "  fi",
         "  exit 1",
@@ -7426,17 +7512,6 @@ function _metamdbg_executor_script(
         "cleanup_safe_to_release_domain=1",
         "lock_retry_attempts=$(lock_retry_attempts)",
         "lock_retry_delay_seconds=$(Float64(lock_retry_delay_seconds))",
-        "sha256_file() {",
-        "  local path=\"\$1\"",
-        "  if command -v sha256sum >/dev/null 2>&1; then",
-        "    sha256sum -- \"\$path\" | awk '{print \$1}'",
-        "  elif command -v shasum >/dev/null 2>&1; then",
-        "    shasum -a 256 -- \"\$path\" | awk '{print \$1}'",
-        "  else",
-        "    echo \"metaMDBG requires sha256sum or shasum to validate content\" >&2",
-        "    return 1",
-        "  fi",
-        "}",
         "sha256_stream() {",
         "  if command -v sha256sum >/dev/null 2>&1; then",
         "    sha256sum | awk '{print \$1}'",
@@ -7446,6 +7521,10 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG requires sha256sum or shasum to validate content\" >&2",
         "    return 1",
         "  fi",
+        "}",
+        "sha256_file() {",
+        "  local path=\"\$1\"",
+        "  sha256_stream < \"\$path\"",
         "}",
         "sha256_text() {",
         "  printf '%s' \"\$1\" | sha256_stream",

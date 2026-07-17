@@ -163,11 +163,14 @@ function _ancestor_output_root_reservation_lock_paths(
         workflow_root::AbstractString,
 )::Vector{String}
     normalized_root = normpath(abspath(String(workflow_root)))
+    dirname(normalized_root) == normalized_root && return String[]
     lock_paths = String[]
     ancestor = dirname(normalized_root)
-    while dirname(ancestor) != ancestor
+    while true
         append!(lock_paths, _same_output_root_reservation_paths(ancestor))
-        ancestor = dirname(ancestor)
+        parent = dirname(ancestor)
+        parent == ancestor && break
+        ancestor = parent
     end
     return sort!(unique!(lock_paths))
 end

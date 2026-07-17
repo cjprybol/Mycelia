@@ -258,7 +258,59 @@ function _autocycler_real_smoke_inputs(
             "MYCELIA_AUTOCYCLER_SHORT_READS_2, or leave both unset.",
         ),
     )
-    return (; long_reads, short_reads_1, short_reads_2, read_type)
+    validated_read_type = Mycelia._validate_autocycler_parameters(
+        1,
+        1,
+        read_type,
+    )
+    long_read_snapshot = Mycelia._autocycler_input_snapshot(
+        long_reads,
+        "Autocycler smoke long-read FASTQ",
+    )
+    try
+        Mycelia._validate_autocycler_fastq(
+            long_read_snapshot.path,
+            "Autocycler smoke long-read input",
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        caught isa ArgumentError && rethrow()
+        throw(ArgumentError(
+            "Autocycler smoke long-read input must be a valid FASTQ file. " *
+            "Cause: $(sprint(showerror, caught))",
+        ))
+    end
+    if !isempty(short_reads_1)
+        short_read_1_snapshot = Mycelia._autocycler_input_snapshot(
+            short_reads_1,
+            "Autocycler smoke paired short-read R1 FASTQ",
+        )
+        short_read_2_snapshot = Mycelia._autocycler_input_snapshot(
+            short_reads_2,
+            "Autocycler smoke paired short-read R2 FASTQ",
+        )
+        try
+            Mycelia._validate_autocycler_paired_fastqs(
+                short_read_1_snapshot.path,
+                short_read_2_snapshot.path,
+            )
+        catch caught
+            caught isa InterruptException && rethrow()
+            caught isa ArgumentError && rethrow()
+            throw(ArgumentError(
+                "Autocycler smoke paired short-read inputs must be valid " *
+                "FASTQ files. Cause: $(sprint(showerror, caught))",
+            ))
+        end
+        short_reads_1 = short_read_1_snapshot.path
+        short_reads_2 = short_read_2_snapshot.path
+    end
+    return (
+        long_reads = long_read_snapshot.path,
+        short_reads_1,
+        short_reads_2,
+        read_type = validated_read_type,
+    )
 end
 
 run_autocycler_smoke = _autocycler_real_smoke_enabled(ENV)
@@ -1202,6 +1254,56 @@ Test.@testset "Autocycler wrapper" begin
                 return nothing
             end
 
+            empty_long_reads = joinpath(temp_dir, "empty.fastq")
+            write(empty_long_reads, "")
+            invalid_preflight_cases = (
+                (
+                    name = "missing",
+                    path = joinpath(temp_dir, "missing.fastq"),
+                    read_type = "ont_r10",
+                    message = "Long-read FASTQ not found",
+                ),
+                (
+                    name = "empty",
+                    path = empty_long_reads,
+                    read_type = "ont_r10",
+                    message = "Long-read FASTQ is empty",
+                ),
+                (
+                    name = "malformed",
+                    path = malformed_long_reads,
+                    read_type = "ont_r10",
+                    message = "must be a FASTQ file",
+                ),
+                (
+                    name = "invalid-read-type",
+                    path = long_reads,
+                    read_type = "illumina",
+                    message = "read_type must be one of",
+                ),
+            )
+            for invalid_case in invalid_preflight_cases
+                preflight_error = _autocycler_test_error() do
+                    Mycelia._run_autocycler(
+                        invalid_case.path,
+                        joinpath(temp_dir, "$(invalid_case.name)-preflight");
+                        read_type = invalid_case.read_type,
+                        dependency_checker = () -> begin
+                            cheap_dependency_checks[] += 1
+                            return nothing
+                        end,
+                        runner = cheap_runner,
+                    )
+                end
+                Test.@test preflight_error isa ArgumentError
+                Test.@test occursin(
+                    invalid_case.message,
+                    sprint(showerror, preflight_error),
+                )
+            end
+            Test.@test cheap_dependency_checks[] == 0
+            Test.@test cheap_runner_calls[] == 0
+
             blank_output_error = _autocycler_test_error() do
                 Mycelia._run_autocycler(
                     malformed_long_reads,
@@ -1472,6 +1574,27 @@ Test.@testset "Autocycler wrapper" begin
             "install_autocycler(force=true)",
             sprint(showerror, process_error),
         )
+
+        mktempdir() do temp_dir
+            expected_output = joinpath(temp_dir, "after-step.txt")
+            callback_step = merge(
+                step,
+                (; expected_outputs = String[expected_output]),
+            )
+            callback_order = Symbol[]
+            Mycelia._execute_autocycler_steps(
+                (callback_step,);
+                runner = _ -> begin
+                    push!(callback_order, :runner)
+                    write(expected_output, "bound\n")
+                end,
+                after_step = _ -> begin
+                    Test.@test read(expected_output, String) == "bound\n"
+                    push!(callback_order, :after_step)
+                end,
+            )
+            Test.@test callback_order == [:runner, :after_step]
+        end
 
         mktempdir() do temp_dir
             workflow_root = joinpath(temp_dir, "workflow-root")
@@ -3335,13 +3458,82 @@ Test.@testset "Autocycler wrapper" begin
             sprint(showerror, incomplete_pair_error),
         )
 
-        long_only = _autocycler_real_smoke_inputs(Dict(
-            "MYCELIA_AUTOCYCLER_LONG_READS" => "long.fastq",
-        ))
-        Test.@test long_only.long_reads == "long.fastq"
-        Test.@test isempty(long_only.short_reads_1)
-        Test.@test isempty(long_only.short_reads_2)
-        Test.@test long_only.read_type == "ont_r10"
+        mktempdir() do temp_dir
+            missing_path = joinpath(temp_dir, "missing.fastq")
+            missing_fixture_error = _autocycler_test_error() do
+                _autocycler_real_smoke_inputs(Dict(
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => missing_path,
+                ))
+            end
+            Test.@test missing_fixture_error isa ArgumentError
+            Test.@test occursin(
+                "Autocycler smoke long-read FASTQ not found",
+                sprint(showerror, missing_fixture_error),
+            )
+
+            empty_path = joinpath(temp_dir, "empty.fastq")
+            write(empty_path, "")
+            empty_fixture_error = _autocycler_test_error() do
+                _autocycler_real_smoke_inputs(Dict(
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => empty_path,
+                ))
+            end
+            Test.@test empty_fixture_error isa ArgumentError
+            Test.@test occursin(
+                "Autocycler smoke long-read FASTQ is empty",
+                sprint(showerror, empty_fixture_error),
+            )
+
+            malformed_path = joinpath(temp_dir, "malformed.fastq")
+            write(malformed_path, ">not_fastq\nACGT\n")
+            malformed_fixture_error = _autocycler_test_error() do
+                _autocycler_real_smoke_inputs(Dict(
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => malformed_path,
+                ))
+            end
+            Test.@test malformed_fixture_error isa ArgumentError
+            Test.@test occursin(
+                "must be a valid FASTQ file",
+                sprint(showerror, malformed_fixture_error),
+            )
+
+            long_reads = joinpath(temp_dir, "long.fastq")
+            short_reads_1 = joinpath(temp_dir, "R1.fastq")
+            short_reads_2 = joinpath(temp_dir, "R2.fastq")
+            write(long_reads, "@long\nACGT\n+\nIIII\n")
+            write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
+
+            invalid_type_error = _autocycler_test_error() do
+                _autocycler_real_smoke_inputs(Dict(
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "illumina",
+                ))
+            end
+            Test.@test invalid_type_error isa ArgumentError
+            Test.@test occursin(
+                "read_type must be one of",
+                sprint(showerror, invalid_type_error),
+            )
+
+            long_only = _autocycler_real_smoke_inputs(Dict(
+                "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+            ))
+            Test.@test long_only.long_reads == abspath(long_reads)
+            Test.@test isempty(long_only.short_reads_1)
+            Test.@test isempty(long_only.short_reads_2)
+            Test.@test long_only.read_type == "ont_r10"
+
+            paired = _autocycler_real_smoke_inputs(Dict(
+                "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+                "MYCELIA_AUTOCYCLER_SHORT_READS_1" => short_reads_1,
+                "MYCELIA_AUTOCYCLER_SHORT_READS_2" => short_reads_2,
+                "MYCELIA_AUTOCYCLER_READ_TYPE" => "pacbio_hifi",
+            ))
+            Test.@test paired.short_reads_1 == abspath(short_reads_1)
+            Test.@test paired.short_reads_2 == abspath(short_reads_2)
+            Test.@test paired.read_type == "pacbio_hifi"
+        end
     end
 end
 
@@ -3349,7 +3541,6 @@ if run_autocycler_smoke
     Test.@testset "Autocycler gated real smoke" begin
         smoke_inputs = something(autocycler_smoke_inputs)
 
-        Mycelia.install_autocycler()
         mktempdir() do temp_dir
             if isempty(smoke_inputs.short_reads_1)
                 result = Mycelia.run_autocycler(
@@ -3542,6 +3733,249 @@ Test.@testset "Autocycler input content lifecycle binding" begin
             sprint(showerror, during_error),
         )
         Test.@test during_runner_calls[] == 1
+
+        restored_long_inputs = write_inputs("restored-long-consumption")
+        original_long_reads = read(restored_long_inputs.long_reads, String)
+        restored_long_steps = Symbol[]
+        restored_long_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                restored_long_inputs.long_reads,
+                restored_long_inputs.short_reads_1,
+                restored_long_inputs.short_reads_2,
+                joinpath(temp_dir, "restored-long-consumption-output");
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    push!(restored_long_steps, step.name)
+                    _autocycler_test_runner!(step)
+                    if step.name == :autocycler
+                        write(
+                            restored_long_inputs.long_reads,
+                            "@long\nTGCA\n+\nIIII\n",
+                        )
+                    elseif step.name == :bwa_index
+                        write(
+                            restored_long_inputs.long_reads,
+                            original_long_reads,
+                        )
+                    end
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "restored-long-consumption-environment.pid",
+                ),
+            )
+        end
+        Test.@test restored_long_error isa ErrorException
+        Test.@test occursin(
+            "Long-read FASTQ changed after its initial path/size/SHA-256 snapshot",
+            sprint(showerror, restored_long_error),
+        )
+        Test.@test restored_long_steps == [:autocycler]
+
+        restored_raw_inputs = write_inputs("restored-raw-assembly")
+        restored_raw_out_dir = joinpath(
+            temp_dir,
+            "restored-raw-assembly-output",
+        )
+        restored_raw_steps = Symbol[]
+        original_raw_assembly = Ref("")
+        restored_raw_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                restored_raw_inputs.long_reads,
+                restored_raw_inputs.short_reads_1,
+                restored_raw_inputs.short_reads_2,
+                restored_raw_out_dir;
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    push!(restored_raw_steps, step.name)
+                    _autocycler_test_runner!(step)
+                    raw_assembly = joinpath(
+                        restored_raw_out_dir,
+                        "autocycler_out",
+                        "consensus_assembly.fasta",
+                    )
+                    if step.name == :autocycler
+                        original_raw_assembly[] = read(raw_assembly, String)
+                    elseif step.name == :bwa_index
+                        write(raw_assembly, ">contig_1\nTGCATGCA\n")
+                    elseif step.name == :bwa_mem_1
+                        write(raw_assembly, original_raw_assembly[])
+                    end
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "restored-raw-assembly-environment.pid",
+                ),
+            )
+        end
+        Test.@test restored_raw_error isa ErrorException
+        Test.@test occursin(
+            "Autocycler consensus FASTA changed after its validated " *
+            "Autocycler snapshot",
+            sprint(showerror, restored_raw_error),
+        )
+        Test.@test restored_raw_steps == [:autocycler, :bwa_index]
+
+        restored_short_cases = (
+            (
+                role = :short_reads_1,
+                mutation_step = :bwa_mem_1,
+                restore_step = :bwa_mem_2,
+                expected_steps = [:autocycler, :bwa_index, :bwa_mem_1],
+                label = "Paired short-read R1 FASTQ",
+                mate = 1,
+            ),
+            (
+                role = :short_reads_2,
+                mutation_step = :bwa_mem_2,
+                restore_step = :polypolish_filter,
+                expected_steps = [
+                    :autocycler,
+                    :bwa_index,
+                    :bwa_mem_1,
+                    :bwa_mem_2,
+                ],
+                label = "Paired short-read R2 FASTQ",
+                mate = 2,
+            ),
+        )
+        for restored_case in restored_short_cases
+            restored_inputs = write_inputs(
+                "restored-$(restored_case.role)-consumption",
+            )
+            restored_path = getproperty(restored_inputs, restored_case.role)
+            original_short_reads = read(restored_path, String)
+            restored_steps = Symbol[]
+            restored_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    restored_inputs.long_reads,
+                    restored_inputs.short_reads_1,
+                    restored_inputs.short_reads_2,
+                    joinpath(
+                        temp_dir,
+                        "restored-$(restored_case.role)-consumption-output",
+                    );
+                    dependency_checker = () -> toolchain,
+                    runner = step -> begin
+                        push!(restored_steps, step.name)
+                        _autocycler_test_runner!(step)
+                        if step.name == restored_case.mutation_step
+                            write(
+                                restored_path,
+                                "@pair/$(restored_case.mate)\nTGCA\n+\nIIII\n",
+                            )
+                        elseif step.name == restored_case.restore_step
+                            write(restored_path, original_short_reads)
+                        end
+                    end,
+                    environment_lock_path = joinpath(
+                        temp_dir,
+                        "restored-$(restored_case.role)-environment.pid",
+                    ),
+                )
+            end
+            Test.@test restored_error isa ErrorException
+            Test.@test occursin(
+                "$(restored_case.label) changed after its initial " *
+                "path/size/SHA-256 snapshot",
+                sprint(showerror, restored_error),
+            )
+            Test.@test restored_steps == restored_case.expected_steps
+        end
+
+        restored_artifact_cases = (
+            (
+                relative_path = joinpath(
+                    "autocycler_out",
+                    "consensus_assembly.fasta.amb",
+                ),
+                mutation_step = :bwa_mem_1,
+                restore_step = :bwa_mem_2,
+                expected_steps = [:autocycler, :bwa_index, :bwa_mem_1],
+                label = "BWA index artifact",
+            ),
+            (
+                relative_path = joinpath(
+                    "short_read_polishing",
+                    "alignments_1.sam",
+                ),
+                mutation_step = :polypolish_filter,
+                restore_step = :polypolish,
+                expected_steps = [
+                    :autocycler,
+                    :bwa_index,
+                    :bwa_mem_1,
+                    :bwa_mem_2,
+                    :polypolish_filter,
+                ],
+                label = "BWA R1 alignment",
+            ),
+            (
+                relative_path = joinpath(
+                    "short_read_polishing",
+                    "filtered_1.sam",
+                ),
+                mutation_step = :polypolish,
+                restore_step = :pypolca,
+                expected_steps = [
+                    :autocycler,
+                    :bwa_index,
+                    :bwa_mem_1,
+                    :bwa_mem_2,
+                    :polypolish_filter,
+                    :polypolish,
+                ],
+                label = "Polypolish filtered R1 alignment",
+            ),
+        )
+        for (case_index, restored_case) in enumerate(restored_artifact_cases)
+            restored_inputs = write_inputs(
+                "restored-artifact-$(case_index)-consumption",
+            )
+            restored_out_dir = joinpath(
+                temp_dir,
+                "restored-artifact-$(case_index)-output",
+            )
+            restored_path = joinpath(
+                restored_out_dir,
+                restored_case.relative_path,
+            )
+            original_artifact = Ref("")
+            restored_steps = Symbol[]
+            restored_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    restored_inputs.long_reads,
+                    restored_inputs.short_reads_1,
+                    restored_inputs.short_reads_2,
+                    restored_out_dir;
+                    dependency_checker = () -> toolchain,
+                    runner = step -> begin
+                        push!(restored_steps, step.name)
+                        _autocycler_test_runner!(step)
+                        if step.name == restored_case.mutation_step
+                            original_artifact[] = read(restored_path, String)
+                            write(restored_path, "mutated artifact\n")
+                        elseif step.name == restored_case.restore_step
+                            write(restored_path, original_artifact[])
+                        end
+                    end,
+                    environment_lock_path = joinpath(
+                        temp_dir,
+                        "restored-artifact-$(case_index)-environment.pid",
+                    ),
+                )
+            end
+            Test.@test restored_error isa ErrorException
+            Test.@test occursin(
+                "$(restored_case.label)",
+                sprint(showerror, restored_error),
+            )
+            Test.@test occursin(
+                "changed after its validated Autocycler snapshot",
+                sprint(showerror, restored_error),
+            )
+            Test.@test restored_steps == restored_case.expected_steps
+        end
 
         pre_polish_inputs = write_inputs("pre-polish-consumption")
         pre_polish_steps = Symbol[]

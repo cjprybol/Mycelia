@@ -13,6 +13,18 @@ function _multi_input_hybrid_smoke_env_enabled(
     return lowercase(strip(String(get(environment, name, "false")))) == "true"
 end
 
+function _multi_input_hybrid_external_suite_enabled(
+        environment::AbstractDict,
+)::Bool
+    return _multi_input_hybrid_smoke_env_enabled(
+        environment,
+        "MYCELIA_RUN_ALL",
+    ) || _multi_input_hybrid_smoke_env_enabled(
+        environment,
+        "MYCELIA_RUN_EXTERNAL",
+    )
+end
+
 function _multi_input_hybrid_smoke_symbol(
         environment::AbstractDict,
         name::AbstractString,
@@ -48,12 +60,7 @@ end
 function _multi_input_hybrid_smoke_prerequisites(
         environment::AbstractDict,
 )::NamedTuple
-    external_enabled =
-        _multi_input_hybrid_smoke_env_enabled(environment, "MYCELIA_RUN_ALL") ||
-        _multi_input_hybrid_smoke_env_enabled(
-            environment,
-            "MYCELIA_RUN_EXTERNAL",
-        )
+    external_enabled = _multi_input_hybrid_external_suite_enabled(environment)
     run_smoke = _multi_input_hybrid_smoke_env_enabled(
         environment,
         "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE",

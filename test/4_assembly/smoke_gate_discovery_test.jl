@@ -55,9 +55,11 @@ end
 
 Test.@testset "canonical smoke discovery preflight" begin
     for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
-        broad_only = _run_smoke_discovery(broad_gate => "true")
-        Test.@test broad_only.ok
-        Test.@test isempty(strip(broad_only.output))
+        for broad_value in ("true", " true ")
+            broad_only = _run_smoke_discovery(broad_gate => broad_value)
+            Test.@test broad_only.ok
+            Test.@test isempty(strip(broad_only.output))
+        end
     end
 
     for dedicated_gate in (
@@ -106,14 +108,16 @@ Test.@testset "canonical smoke discovery preflight" begin
         for path in values(input_paths)
             Base.write(path, "@read\nACGT\n+\nIIII\n")
         end
-        valid_opt_in = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-            "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
-            "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
-            "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
-        )
-        Test.@test valid_opt_in.ok
-        Test.@test isempty(strip(valid_opt_in.output))
+        for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
+            valid_opt_in = _run_smoke_discovery(
+                broad_gate => " true ",
+                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+                "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
+                "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
+                "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
+            )
+            Test.@test valid_opt_in.ok
+            Test.@test isempty(strip(valid_opt_in.output))
+        end
     end
 end

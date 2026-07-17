@@ -3207,24 +3207,61 @@ end
 function _multi_input_corrected_content_contract(
         inputs::_CorrectedPairedShortLong,
 )::Dict{String, Any}
-    return Dict{String, Any}(
-        "schema" => "mycelia-corrected-fastq-content-v1",
-        "short_r1" => _multi_input_path_content_identity(
-            inputs.short_r1.path,
-            "corrected short_r1",
-            1,
+    return _multi_input_corrected_content_contract(
+        _multi_input_corrected_read_set_content_identity(
+            inputs.short_r1,
+            "short_r1",
         ),
-        "short_r2" => _multi_input_path_content_identity(
-            inputs.short_r2.path,
-            "corrected short_r2",
-            1,
+        _multi_input_corrected_read_set_content_identity(
+            inputs.short_r2,
+            "short_r2",
         ),
-        "long_reads" => _multi_input_path_content_identity(
-            inputs.long_reads.path,
-            "corrected long_reads",
-            1,
+        _multi_input_corrected_read_set_content_identity(
+            inputs.long_reads,
+            "long_reads",
         ),
     )
+end
+
+function _multi_input_corrected_read_set_content_identity(
+        corrected::_CorrectedReadSet,
+        label::AbstractString,
+)::Dict{String, Any}
+    return _multi_input_path_content_identity(
+        corrected.path,
+        "corrected $(label)",
+        1,
+    )
+end
+
+function _multi_input_corrected_content_contract(
+        short_r1::Dict{String, Any},
+        short_r2::Dict{String, Any},
+        long_reads::Dict{String, Any},
+)::Dict{String, Any}
+    return Dict{String, Any}(
+        "schema" => "mycelia-corrected-fastq-content-v1",
+        "short_r1" => short_r1,
+        "short_r2" => short_r2,
+        "long_reads" => long_reads,
+    )
+end
+
+function _verify_multi_input_corrected_read_set_content_identity(
+        expected::Dict{String, Any},
+        corrected::_CorrectedReadSet,
+        label::AbstractString;
+        change_context::AbstractString,
+)::Nothing
+    observed = _multi_input_corrected_read_set_content_identity(
+        corrected,
+        label,
+    )
+    expected == observed || error(
+        "corrected $(label) FASTQ content changed $(change_context); " *
+        "refusing stale corrected-read provenance.",
+    )
+    return nothing
 end
 
 function _verify_multi_input_corrected_content_contract(
@@ -4898,6 +4935,11 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
+            corrected_r1_content_identity =
+                _multi_input_corrected_read_set_content_identity(
+                    corrected_r1,
+                    "short_r1",
+                )
             _verify_multi_input_source_content_contract(
                 source_content_contract,
                 short_r1,
@@ -4912,6 +4954,12 @@ function _assemble_paired_short_long(
                 prepared_long_reads;
                 change_context = "before short_r2 correction",
             )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r1_content_identity,
+                corrected_r1,
+                "short_r1";
+                change_context = "before short_r2 correction",
+            )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
                 short_r2,
@@ -4923,6 +4971,17 @@ function _assemble_paired_short_long(
                 correction_runner,
                 protected_source_paths,
                 root.identity,
+            )
+            corrected_r2_content_identity =
+                _multi_input_corrected_read_set_content_identity(
+                    corrected_r2,
+                    "short_r2",
+                )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r1_content_identity,
+                corrected_r1,
+                "short_r1";
+                change_context = "during short_r2 correction",
             )
             _verify_multi_input_source_content_contract(
                 source_content_contract,
@@ -4938,6 +4997,18 @@ function _assemble_paired_short_long(
                 prepared_long_reads;
                 change_context = "before long_reads correction",
             )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r1_content_identity,
+                corrected_r1,
+                "short_r1";
+                change_context = "before long_reads correction",
+            )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r2_content_identity,
+                corrected_r2,
+                "short_r2";
+                change_context = "before long_reads correction",
+            )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
                 prepared_long_reads,
@@ -4949,6 +5020,23 @@ function _assemble_paired_short_long(
                 correction_runner,
                 protected_source_paths,
                 root.identity,
+            )
+            corrected_long_content_identity =
+                _multi_input_corrected_read_set_content_identity(
+                    corrected_long,
+                    "long_reads",
+                )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r1_content_identity,
+                corrected_r1,
+                "short_r1";
+                change_context = "during long_reads correction",
+            )
+            _verify_multi_input_corrected_read_set_content_identity(
+                corrected_r2_content_identity,
+                corrected_r2,
+                "short_r2";
+                change_context = "during long_reads correction",
             )
             _verify_multi_input_source_content_contract(
                 source_content_contract,
@@ -4962,8 +5050,16 @@ function _assemble_paired_short_long(
                 corrected_r2,
                 corrected_long,
             )
-            corrected_content_contract =
-                _multi_input_corrected_content_contract(inputs)
+            corrected_content_contract = _multi_input_corrected_content_contract(
+                corrected_r1_content_identity,
+                corrected_r2_content_identity,
+                corrected_long_content_identity,
+            )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context = "before corrected-read semantic validation",
+            )
             corrected_pair_count = _validate_corrected_pair_preserved(
                 short_r1,
                 short_r2,
@@ -4971,10 +5067,22 @@ function _assemble_paired_short_long(
                 corrected_r2,
                 paired_count,
             )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context =
+                    "during corrected paired-read semantic validation",
+            )
             corrected_long_count = _validate_corrected_identifiers_preserved(
                 prepared_long_reads,
                 corrected_long,
                 "long_reads",
+            )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context =
+                    "during corrected long-read semantic validation",
             )
             corrected_long_count == long_count || error(
                 "Corrected long-read count diverged from the validated input count.",
@@ -5001,6 +5109,11 @@ function _assemble_paired_short_long(
                 joinpath(root.path, "assembler_$(workflow)"),
                 root.path,
                 assembler_label,
+            )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context = "before combined-input assembly",
             )
             tool_result =
                 Mycelia._with_allowed_output_root_ancestor_locks(

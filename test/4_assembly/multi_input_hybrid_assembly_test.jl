@@ -2391,6 +2391,93 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         )
     end
 
+    Test.@testset "corrected sets are bound at each correction boundary" begin
+        correction_calls = NamedTuple[]
+        assembler_calls = Ref(0)
+        original_corrected_r1 = Ref("")
+        base_runner = multi_input_fake_correction_runner(correction_calls)
+        function restore_evasion_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = base_runner(reads, config)
+            if length(correction_calls) == 1
+                original_corrected_r1[] = read(stage.corrected_fastq, String)
+            elseif length(correction_calls) == 2
+                multi_input_mutate_first_sequence!(
+                    correction_calls[1].corrected_fastq,
+                )
+            elseif length(correction_calls) == 3
+                write(
+                    correction_calls[1].corrected_fastq,
+                    original_corrected_r1[],
+                )
+            end
+            return stage
+        end
+        test_throws_message(
+            ErrorException,
+            "corrected short_r1 FASTQ content changed during short_r2 correction",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = restore_evasion_runner,
+                assembler_runner = (inputs, outdir) -> begin
+                    assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+            )
+        end
+        Test.@test length(correction_calls) == 2
+        Test.@test assembler_calls[] == 0
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            correction_calls,
+        )
+
+        later_stage_calls = NamedTuple[]
+        later_stage_assembler_calls = Ref(0)
+        later_stage_base_runner =
+            multi_input_fake_correction_runner(later_stage_calls)
+        function later_stage_mutation_runner(
+                reads::Any,
+                config::Mycelia.Rhizomorph.AssemblyConfig,
+        )::NamedTuple
+            stage = later_stage_base_runner(reads, config)
+            if length(later_stage_calls) == 3
+                multi_input_mutate_first_sequence!(
+                    later_stage_calls[2].corrected_fastq,
+                )
+            end
+            return stage
+        end
+        test_throws_message(
+            ErrorException,
+            "corrected short_r2 FASTQ content changed during long_reads correction",
+        ) do
+            Mycelia.Rhizomorph._assemble_paired_short_long(
+                (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                MULTI_INPUT_LONG,
+                Mycelia.Rhizomorph.UnicyclerHybridConfig(),
+                :unicycler;
+                correction_runner = later_stage_mutation_runner,
+                assembler_runner = (inputs, outdir) -> begin
+                    later_stage_assembler_calls[] += 1
+                    return multi_input_fake_assembler_result(outdir)
+                end,
+            )
+        end
+        Test.@test length(later_stage_calls) == 3
+        Test.@test later_stage_assembler_calls[] == 0
+        Test.@test all(
+            call -> !isfile(call.corrected_fastq),
+            later_stage_calls,
+        )
+    end
+
     Test.@testset "semantic validation binds exact source and corrected bytes" begin
         for role in (:short_r1, :short_r2, :long_reads)
             mktempdir() do temp_dir
