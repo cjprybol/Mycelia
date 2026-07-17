@@ -532,6 +532,8 @@ adapter.
 """
 abstract type AbstractPairedShortLongAssemblyConfig end
 
+const _DEFAULT_MULTI_INPUT_SNAPSHOT_BYTE_CEILING = 1_000_000_000_000
+
 const _HYBRID_CORRECTION_RESERVED_KEYS = (
     :corrector,
     :layout,
@@ -584,7 +586,15 @@ end
 
 """
 Configuration for independently corrected paired short reads plus long reads,
-assembled with Unicycler.
+assembled with Unicycler. `input_snapshot_byte_ceiling` bounds cumulative
+workflow-owned source and correction-output copies across the complete
+high-level lifecycle; exhaustion fails before the next correction or assembler
+side effect and exact partial snapshots are removed. `assembler_options` may
+independently set the direct Unicycler wrapper's `input_spool_parent` and
+`input_spool_byte_ceiling`; those controls bound the assembler's shorter-lived
+scratch spool (the selected parent must already exist) and do not replace this
+workflow-wide ceiling. Route-owned
+input/output/thread keywords are rejected.
 """
 struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
     short_read_tech::Symbol
@@ -593,6 +603,7 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
     assembler_options::NamedTuple
     output_dir::Union{Nothing, String}
     threads::Int
+    input_snapshot_byte_ceiling::Int
 
     function UnicyclerHybridConfig(;
             short_read_tech::Symbol = :illumina,
@@ -601,6 +612,8 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
             assembler_options::NamedTuple = (;),
             output_dir::Union{Nothing, AbstractString} = nothing,
             threads::Int = Mycelia.get_default_threads(),
+            input_snapshot_byte_ceiling::Integer =
+                _DEFAULT_MULTI_INPUT_SNAPSHOT_BYTE_CEILING,
     )
         _validate_hybrid_technology(
             short_read_tech,
@@ -623,6 +636,13 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
             "Unicycler",
         )
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
+        input_snapshot_byte_ceiling > 0 || throw(ArgumentError(
+            "input_snapshot_byte_ceiling must be positive, got " *
+            "$(input_snapshot_byte_ceiling).",
+        ))
+        input_snapshot_byte_ceiling <= typemax(Int) || throw(ArgumentError(
+            "input_snapshot_byte_ceiling exceeds the platform Int range.",
+        ))
         return new(
             short_read_tech,
             long_read_tech,
@@ -630,6 +650,7 @@ struct UnicyclerHybridConfig <: AbstractPairedShortLongAssemblyConfig
             assembler_options,
             _validate_hybrid_output_dir(output_dir),
             threads,
+            Int(input_snapshot_byte_ceiling),
         )
     end
 end
@@ -642,28 +663,38 @@ paired-short Polypolish and careful Pypolca polishing.
 long-read correction chemistry route. In particular, PacBio CLR and HiFi never
 share a correction model. Correction emissions remain FASTQ-quality driven;
 the technology profile selects whether indel moves are enabled and their rates.
+`input_snapshot_byte_ceiling` bounds cumulative workflow-owned snapshots.
+`assembler_options` may forward `input_spool_parent` and
+`input_spool_byte_ceiling` to the direct Autocycler-polishing wrapper while
+route-owned input, chemistry, concurrency, and output keywords remain rejected;
+an explicit spool parent must already exist.
 """
 struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
     short_read_tech::Symbol
     long_read_tech::Symbol
     autocycler_read_type::Symbol
     correction_options::NamedTuple
+    assembler_options::NamedTuple
     output_dir::Union{Nothing, String}
     threads::Int
     jobs::Int
     polypolish_careful::Bool
     keep_intermediates::Bool
+    input_snapshot_byte_ceiling::Int
 
     function AutocyclerPolishConfig(;
             short_read_tech::Symbol = :illumina,
             long_read_tech::Symbol = :nanopore,
             autocycler_read_type::Union{Nothing, Symbol} = nothing,
             correction_options::NamedTuple = (; k = 13, strategy = :scalable),
+            assembler_options::NamedTuple = (;),
             output_dir::Union{Nothing, AbstractString} = nothing,
             threads::Int = Mycelia.get_default_threads(),
             jobs::Int = 1,
             polypolish_careful::Bool = true,
             keep_intermediates::Bool = false,
+            input_snapshot_byte_ceiling::Integer =
+                _DEFAULT_MULTI_INPUT_SNAPSHOT_BYTE_CEILING,
     )
         _validate_hybrid_technology(
             short_read_tech,
@@ -707,8 +738,30 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             _HYBRID_CORRECTION_RESERVED_KEYS,
             "correction",
         )
+        _reject_route_managed_options(
+            assembler_options,
+            (
+                :long_reads,
+                :short_reads_1,
+                :short_reads_2,
+                :out_dir,
+                :threads,
+                :jobs,
+                :read_type,
+                :polypolish_careful,
+                :keep_intermediates,
+            ),
+            "Autocycler-polished",
+        )
         threads > 0 || throw(ArgumentError("threads must be positive, got $(threads)."))
         jobs > 0 || throw(ArgumentError("jobs must be positive, got $(jobs)."))
+        input_snapshot_byte_ceiling > 0 || throw(ArgumentError(
+            "input_snapshot_byte_ceiling must be positive, got " *
+            "$(input_snapshot_byte_ceiling).",
+        ))
+        input_snapshot_byte_ceiling <= typemax(Int) || throw(ArgumentError(
+            "input_snapshot_byte_ceiling exceeds the platform Int range.",
+        ))
         normalized_output_dir = _validate_hybrid_output_dir(output_dir)
         if keep_intermediates && normalized_output_dir === nothing
             throw(ArgumentError(
@@ -720,11 +773,13 @@ struct AutocyclerPolishConfig <: AbstractPairedShortLongAssemblyConfig
             long_read_tech,
             resolved_read_type,
             correction_options,
+            assembler_options,
             normalized_output_dir,
             threads,
             jobs,
             polypolish_careful,
             keep_intermediates,
+            Int(input_snapshot_byte_ceiling),
         )
     end
 end
@@ -3105,20 +3160,29 @@ function _multi_input_path_set_sha256(
     return bytes2hex(Mycelia.SHA.digest!(context))
 end
 
-function _multi_input_record_set_content_identity(
+function _multi_input_record_stream_content_identity(
         reads::Any,
         label::AbstractString,
+        expected_count::Int,
 )::Dict{String, Any}
+    expected_count >= 0 || throw(ArgumentError(
+        "$(label) expected FASTQ record count must be nonnegative.",
+    ))
     content_context = Mycelia.SHA.SHA2_256_CTX()
     identifier_context = Mycelia.SHA.SHA2_256_CTX()
     _update_multi_input_digest_field!(content_context, "mycelia-fastq-set-v1")
     _update_multi_input_digest_field!(identifier_context, "mycelia-fastq-ids-v1")
-    _update_multi_input_digest_uint64!(content_context, UInt64(length(reads)))
-    _update_multi_input_digest_uint64!(identifier_context, UInt64(length(reads)))
+    _update_multi_input_digest_uint64!(content_context, UInt64(expected_count))
+    _update_multi_input_digest_uint64!(
+        identifier_context,
+        UInt64(expected_count),
+    )
+    observed_count = 0
     for (record_index, record) in enumerate(reads)
         record isa FASTX.FASTQ.Record || throw(ArgumentError(
             "$(label) in-memory source record $(record_index) is not FASTQ.",
         ))
+        observed_count += 1
         identifier = String(FASTX.identifier(record))
         description = String(FASTX.description(record))
         sequence = FASTX.sequence(String, record)
@@ -3128,14 +3192,29 @@ function _multi_input_record_set_content_identity(
             _update_multi_input_digest_field!(content_context, field)
         end
     end
+    observed_count == expected_count || error(
+        "$(label) stable FASTQ snapshot contains $(observed_count) records, " *
+        "but $(expected_count) records were expected.",
+    )
     return Dict{String, Any}(
         "kind" => "in_memory_fastq",
         "source_identity" => "in_memory:$(label)",
-        "record_count" => length(reads),
+        "record_count" => observed_count,
         "identifier_sha256" => bytes2hex(
             Mycelia.SHA.digest!(identifier_context),
         ),
         "sha256" => bytes2hex(Mycelia.SHA.digest!(content_context)),
+    )
+end
+
+function _multi_input_record_set_content_identity(
+        reads::Any,
+        label::AbstractString,
+)::Dict{String, Any}
+    return _multi_input_record_stream_content_identity(
+        reads,
+        label,
+        length(reads),
     )
 end
 
@@ -3178,6 +3257,547 @@ function _multi_input_source_content_contract(
             long_reads,
             "long_reads",
         ),
+    )
+end
+
+mutable struct _MultiInputSnapshotBudget
+    root::String
+    ceiling::BigInt
+    used::BigInt
+    available_bytes_reader::Function
+end
+
+function _reserve_multi_input_snapshot_bytes!(
+        budget::_MultiInputSnapshotBudget,
+        byte_count::Integer,
+        label::AbstractString,
+)::Nothing
+    bytes = BigInt(byte_count)
+    bytes >= 0 || throw(ArgumentError(
+        "$(label) snapshot byte reservation must be nonnegative.",
+    ))
+    next_used = budget.used + bytes
+    next_used <= budget.ceiling || throw(ArgumentError(
+        "$(label) would raise cumulative stable snapshot usage to " *
+        "$(next_used) bytes, exceeding the configured ceiling of " *
+        "$(budget.ceiling) bytes.",
+    ))
+    available_bytes = BigInt(budget.available_bytes_reader(budget.root))
+    available_bytes >= bytes || throw(ArgumentError(
+        "$(label) requires $(bytes) stable snapshot bytes but only " *
+        "$(available_bytes) bytes are available under $(budget.root).",
+    ))
+    budget.used = next_used
+    return nothing
+end
+
+function _multi_input_stable_path_snapshot!(
+        source_path::AbstractString,
+        destination_path::AbstractString,
+        label::AbstractString,
+        budget::_MultiInputSnapshotBudget;
+        after_destination_open_hook::Function =
+            (label, source, destination) -> nothing,
+        after_stream_copy_hook::Function =
+            (label, source, destination) -> nothing,
+)::Dict{String, Any}
+    normalized_source = normpath(abspath(String(source_path)))
+    isfile(normalized_source) || throw(ArgumentError(
+        "$(label) snapshot source is not a file: $(normalized_source).",
+    ))
+    canonical_source = realpath(normalized_source)
+    initial_status = stat(canonical_source)
+    initial_size = filesize(canonical_source)
+    initial_size > 0 || throw(ArgumentError(
+        "$(label) snapshot source must be non-empty: $(normalized_source).",
+    ))
+    _reserve_multi_input_snapshot_bytes!(budget, initial_size, label)
+    normalized_destination = normpath(abspath(String(destination_path)))
+    mkpath(dirname(normalized_destination))
+    destination_parent = dirname(normalized_destination)
+    destination_parent_identity = _workflow_path_identity(
+        destination_parent,
+        "$(label) stable snapshot parent",
+    )
+    destination_identity = nothing
+    source_sha256 = nothing
+    consumed_sha256 = nothing
+    try
+        input = Base.Filesystem.open(
+            canonical_source,
+            Base.JL_O_RDONLY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        )
+        output = nothing
+        try
+            input_status = stat(input)
+            input_status.device == initial_status.device &&
+                input_status.inode == initial_status.inode &&
+                filesize(input) == initial_size || error(
+                    "$(label) changed before its stable snapshot was copied.",
+                )
+            source_sha256 = bytes2hex(Mycelia.SHA.sha256(input))
+            seekstart(input)
+            output = Base.Filesystem.open(
+                normalized_destination,
+                Base.JL_O_RDWR |
+                Base.JL_O_CREAT |
+                Base.JL_O_EXCL |
+                Base.JL_O_NOFOLLOW |
+                Base.JL_O_CLOEXEC,
+                0o600,
+            )
+            output_status = stat(output)
+            destination_identity = (;
+                path = normalized_destination,
+                device = output_status.device,
+                inode = output_status.inode,
+            )
+            after_destination_open_hook(
+                label,
+                canonical_source,
+                normalized_destination,
+            )
+            streamed_context = Mycelia.SHA.SHA2_256_CTX()
+            remaining = initial_size
+            buffer = Vector{UInt8}(undef, 1024 * 1024)
+            while remaining > 0
+                requested = min(length(buffer), remaining)
+                count = readbytes!(input, buffer, requested)
+                count > 0 || error(
+                    "$(label) shrank while its stable snapshot was copied.",
+                )
+                bytes = @view buffer[1:count]
+                Mycelia.SHA.update!(streamed_context, bytes)
+                write(output, bytes) == count || error(
+                    "$(label) stable snapshot write was incomplete.",
+                )
+                remaining -= count
+            end
+            eof(input) || error(
+                "$(label) grew while its stable snapshot was copied.",
+            )
+            streamed_sha256 = bytes2hex(
+                Mycelia.SHA.digest!(streamed_context),
+            )
+            after_stream_copy_hook(
+                label,
+                canonical_source,
+                normalized_destination,
+            )
+            seekstart(input)
+            rebound_source_sha256 = bytes2hex(Mycelia.SHA.sha256(input))
+            rebound_input_status = stat(input)
+            rebound_input_status.device == initial_status.device &&
+                rebound_input_status.inode == initial_status.inode &&
+                filesize(input) == initial_size || error(
+                    "$(label) changed physical identity or size during its " *
+                    "stable snapshot copy.",
+                )
+            ccall(
+                :fsync,
+                Cint,
+                (Cint,),
+                reinterpret(Cint, Base.fd(output)),
+            ) == 0 || throw(SystemError(
+                "fsync $(label) stable snapshot",
+                Base.Libc.errno(),
+            ))
+            seekstart(output)
+            consumed_sha256 = bytes2hex(Mycelia.SHA.sha256(output))
+            rebound_output_status = stat(output)
+            rebound_output_status.device == destination_identity.device &&
+                rebound_output_status.inode == destination_identity.inode &&
+                filesize(output) == initial_size || error(
+                    "$(label) stable snapshot destination changed while " *
+                    "being hashed.",
+                )
+            source_sha256 == streamed_sha256 == rebound_source_sha256 ==
+                consumed_sha256 || error(
+                    "$(label) source bytes changed while its stable snapshot " *
+                    "was copied; refusing mixed consumed bytes.",
+                )
+            ccall(
+                :fchmod,
+                Cint,
+                (Cint, Base.Cmode_t),
+                reinterpret(Cint, Base.fd(output)),
+                Base.Cmode_t(0o400),
+            ) == 0 || throw(SystemError(
+                "fchmod $(label) stable snapshot",
+                Base.Libc.errno(),
+            ))
+        finally
+            output === nothing || close(output)
+            close(input)
+        end
+        final_status = stat(normalized_source)
+        final_canonical = realpath(normalized_source)
+        stable_source = initial_status.device == final_status.device &&
+                        initial_status.inode == final_status.inode &&
+                        initial_size == filesize(normalized_source) &&
+                        canonical_source == final_canonical
+        stable_source || error(
+            "$(label) changed physical identity or size while its stable " *
+            "snapshot was copied.",
+        )
+        _require_unchanged_workflow_path_identity(
+            destination_parent,
+            destination_parent_identity,
+            "$(label) stable snapshot parent",
+        )
+        isfile(normalized_destination) && !islink(normalized_destination) ||
+            error(
+                "$(label) stable snapshot destination was replaced while " *
+                "copied.",
+            )
+        destination_status = stat(normalized_destination)
+        destination_identity == (;
+            path = normalized_destination,
+            device = destination_status.device,
+            inode = destination_status.inode,
+        ) || error(
+            "$(label) stable snapshot destination was replaced while copied.",
+        )
+        return Dict{String, Any}(
+            "kind" => "stable_path_snapshot",
+            "source_path" => normalized_source,
+            "source_canonical_path" => canonical_source,
+            "path" => normalized_destination,
+            "size_bytes" => initial_size,
+            "source_sha256" => source_sha256,
+            "consumed_sha256" => consumed_sha256,
+            "sha256" => consumed_sha256,
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        if destination_identity !== nothing &&
+           isfile(normalized_destination) &&
+           !islink(normalized_destination)
+            observed_status = stat(normalized_destination)
+            observed_identity = (;
+                device = observed_status.device,
+                inode = observed_status.inode,
+            )
+            if observed_identity.device == destination_identity.device &&
+               observed_identity.inode == destination_identity.inode
+                try
+                    Mycelia._remove_exact_metamdbg_durable_file!(
+                        normalized_destination,
+                        destination_identity,
+                    )
+                catch cleanup_error
+                    cleanup_error isa InterruptException && rethrow()
+                    error(
+                        "$(label) stable snapshot failed and exact cleanup " *
+                        "also failed. Snapshot cause: " *
+                        "$(sprint(showerror, caught)). Cleanup cause: " *
+                        "$(sprint(showerror, cleanup_error))",
+                    )
+                end
+            end
+        end
+        throw(caught)
+    end
+end
+
+function _multi_input_snapshot_extension(path::AbstractString)::String
+    return endswith(lowercase(String(path)), ".gz") ? ".fastq.gz" : ".fastq"
+end
+
+function _multi_input_snapshot_semantic_identity(
+        path::AbstractString,
+        label::AbstractString,
+        expected_count::Int,
+)::Dict{String, Any}
+    reader = Mycelia.open_fastx(path)
+    try
+        return _multi_input_record_stream_content_identity(
+            reader,
+            label,
+            expected_count,
+        )
+    finally
+        close(reader)
+    end
+end
+
+function _materialize_multi_input_source_snapshot(
+        reads::Any,
+        label::AbstractString,
+        workflow_root::AbstractString,
+        budget::_MultiInputSnapshotBudget;
+        after_in_memory_preflight_hook::Function =
+            (label, records) -> nothing,
+        after_destination_open_hook::Function =
+            (label, source, destination) -> nothing,
+        after_stream_copy_hook::Function =
+            (label, source, destination) -> nothing,
+)::NamedTuple
+    snapshot_root = _require_workflow_child_directory(
+        joinpath(workflow_root, "stable_inputs", String(label)),
+        workflow_root,
+        "$(label) stable input snapshot";
+        create = true,
+        require_existing = true,
+    )
+    paths = _read_source_paths(reads)
+    snapshot_paths = String[]
+    snapshot_records = Dict{String, Any}[]
+    if paths === nothing
+        snapshot_path = joinpath(snapshot_root, "input.fastq")
+        serialized_bytes = 0
+        record_count = 0
+        for (record_index, record) in enumerate(reads)
+            record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                "$(label) in-memory source record $(record_index) is not " *
+                "FASTQ.",
+            ))
+            record_count += 1
+            serialized_bytes += ncodeunits(string(record)) + 1
+        end
+        after_in_memory_preflight_hook(label, reads)
+        _reserve_multi_input_snapshot_bytes!(
+            budget,
+            serialized_bytes,
+            "$(label) in-memory source",
+        )
+        snapshot_root_identity = _workflow_path_identity(
+            snapshot_root,
+            "$(label) stable input snapshot root",
+        )
+        output = Base.Filesystem.open(
+            snapshot_path,
+            Base.JL_O_WRONLY |
+            Base.JL_O_CREAT |
+            Base.JL_O_EXCL |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+            0o600,
+        )
+        output_status = stat(output)
+        output_identity = (;
+            path = snapshot_path,
+            device = output_status.device,
+            inode = output_status.inode,
+        )
+        try
+            after_destination_open_hook(label, nothing, snapshot_path)
+            writer = FASTX.FASTQ.Writer(output)
+            try
+                for (record_index, record) in enumerate(reads)
+                    record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                        "$(label) in-memory source record $(record_index) " *
+                        "is not FASTQ.",
+                    ))
+                    FASTX.write(writer, record)
+                end
+                ccall(
+                    :fchmod,
+                    Cint,
+                    (Cint, Base.Cmode_t),
+                    reinterpret(Cint, Base.fd(output)),
+                    Base.Cmode_t(0o400),
+                ) == 0 || throw(SystemError(
+                    "fchmod $(label) stable in-memory snapshot",
+                    Base.Libc.errno(),
+                ))
+            finally
+                close(writer)
+            end
+        catch caught
+            caught isa InterruptException && rethrow()
+            isopen(output) && close(output)
+            if isfile(snapshot_path) && !islink(snapshot_path)
+                observed_status = stat(snapshot_path)
+                observed_identity = (;
+                    device = observed_status.device,
+                    inode = observed_status.inode,
+                )
+                if observed_identity.device == output_identity.device &&
+                   observed_identity.inode == output_identity.inode
+                    try
+                        Mycelia._remove_exact_metamdbg_durable_file!(
+                            snapshot_path,
+                            output_identity,
+                        )
+                    catch cleanup_error
+                        cleanup_error isa InterruptException && rethrow()
+                        error(
+                            "$(label) stable in-memory snapshot failed and " *
+                            "exact cleanup also failed. Snapshot cause: " *
+                            "$(sprint(showerror, caught)). Cleanup cause: " *
+                            "$(sprint(showerror, cleanup_error))",
+                        )
+                    end
+                end
+            end
+            throw(caught)
+        end
+        _require_unchanged_workflow_path_identity(
+            snapshot_root,
+            snapshot_root_identity,
+            "$(label) stable input snapshot root",
+        )
+        isfile(snapshot_path) && !islink(snapshot_path) || error(
+            "$(label) stable in-memory snapshot was replaced while written.",
+        )
+        final_status = stat(snapshot_path)
+        output_identity == (;
+            path = snapshot_path,
+            device = final_status.device,
+            inode = final_status.inode,
+        ) || error(
+            "$(label) stable in-memory snapshot changed physical identity.",
+        )
+        filesize(snapshot_path) > 0 || error(
+            "$(label) stable input snapshot is empty.",
+        )
+        filesize(snapshot_path) == serialized_bytes || error(
+            "$(label) in-memory FASTQ serialization changed its exact " *
+            "preflight byte count.",
+        )
+        push!(snapshot_paths, snapshot_path)
+        push!(snapshot_records, Dict{String, Any}(
+            "kind" => "stable_in_memory_snapshot",
+            "path" => snapshot_path,
+            "size_bytes" => filesize(snapshot_path),
+            "sha256" => _multi_input_file_sha256(snapshot_path),
+        ))
+    else
+        for (source_index, path) in enumerate(paths)
+            snapshot_path = joinpath(
+                snapshot_root,
+                "source_$(source_index)$(_multi_input_snapshot_extension(path))",
+            )
+            push!(snapshot_records, _multi_input_stable_path_snapshot!(
+                path,
+                snapshot_path,
+                "$(label) source $(source_index)",
+                budget;
+                after_destination_open_hook,
+                after_stream_copy_hook,
+            ))
+            push!(snapshot_paths, snapshot_path)
+        end
+    end
+    contract = Dict{String, Any}(
+        "kind" => "workflow_owned_stable_snapshot_set",
+        "source_count" => length(snapshot_records),
+        "sources" => snapshot_records,
+        "semantic_identity" => paths === nothing ?
+                               _multi_input_snapshot_semantic_identity(
+            only(snapshot_paths),
+            label,
+            record_count,
+        ) : nothing,
+        "sha256" => _multi_input_path_set_sha256(
+            Dict{String, Any}[
+                Dict{String, Any}(
+                    "canonical_path" => record["path"],
+                    "size_bytes" => record["size_bytes"],
+                    "sha256" => record["sha256"],
+                ) for record in snapshot_records
+            ],
+        ),
+    )
+    return (; reads = snapshot_paths, contract)
+end
+
+function _require_multi_input_snapshot_matches_original_contract(
+        original::AbstractDict,
+        snapshot::AbstractDict,
+        label::AbstractString,
+)::Nothing
+    if original["kind"] == "in_memory_fastq"
+        original == snapshot["semantic_identity"] || error(
+            "$(label) in-memory source content changed while its stable " *
+            "consumed snapshot was materialized.",
+        )
+        return nothing
+    end
+    original["kind"] == "path_set" || error(
+        "$(label) has an unsupported original source-content contract.",
+    )
+    original_sources = original["sources"]
+    snapshot_sources = snapshot["sources"]
+    length(original_sources) == length(snapshot_sources) || error(
+        "$(label) source count changed while stable snapshots were " *
+        "materialized.",
+    )
+    for (source_index, (original_source, snapshot_source)) in enumerate(
+            zip(original_sources, snapshot_sources),
+    )
+        original_source["size_bytes"] == snapshot_source["size_bytes"] &&
+            original_source["sha256"] == snapshot_source["sha256"] || error(
+                "$(label) source $(source_index) changed after original " *
+                "provenance was bound and before its stable consumed " *
+                "snapshot was materialized.",
+            )
+    end
+    return nothing
+end
+
+function _materialize_multi_input_corrected_snapshot(
+        corrected::_CorrectedReadSet,
+        label::AbstractString,
+        workflow_root::AbstractString,
+        budget::_MultiInputSnapshotBudget;
+        after_destination_open_hook::Function =
+            (label, source, destination) -> nothing,
+        after_stream_copy_hook::Function =
+            (label, source, destination) -> nothing,
+)::NamedTuple
+    snapshot_root = _require_workflow_child_directory(
+        joinpath(workflow_root, "stable_corrected"),
+        workflow_root,
+        "stable corrected-read snapshots";
+        create = true,
+        require_existing = true,
+    )
+    snapshot_path = joinpath(
+        snapshot_root,
+        "$(label)$(_multi_input_snapshot_extension(corrected.path))",
+    )
+    consumed_identity = _multi_input_stable_path_snapshot!(
+        corrected.path,
+        snapshot_path,
+        "corrected $(label) FASTQ",
+        budget;
+        after_destination_open_hook,
+        after_stream_copy_hook,
+    )
+    consumed_contract_identity = Dict{String, Any}(
+        "kind" => "path",
+        "source_index" => 1,
+        "path" => snapshot_path,
+        "canonical_path" => realpath(snapshot_path),
+        "size_bytes" => consumed_identity["size_bytes"],
+        "sha256" => consumed_identity["consumed_sha256"],
+    )
+    correction_output_identity = Dict{String, Any}(
+        "kind" => "path",
+        "source_index" => 1,
+        "path" => consumed_identity["source_path"],
+        "canonical_path" => consumed_identity["source_canonical_path"],
+        "size_bytes" => consumed_identity["size_bytes"],
+        "sha256" => consumed_identity["source_sha256"],
+    )
+    provenance = deepcopy(corrected.provenance)
+    provenance["correction_output_content"] = correction_output_identity
+    provenance["consumed_snapshot_content"] = consumed_identity
+    consumed = _CorrectedReadSet(
+        snapshot_path,
+        corrected.count,
+        corrected.technology,
+        provenance,
+    )
+    return (;
+        consumed,
+        correction_output_identity,
+        consumed_identity,
+        consumed_contract_identity,
     )
 end
 
@@ -3623,6 +4243,26 @@ function _require_exclusive_multi_input_workflow_domain(
     )
 end
 
+function _require_available_multi_input_workflow_domain(
+        workflow_root::AbstractString,
+        lock_path::AbstractString,
+)::Nothing
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    if Mycelia._output_root_reservation_is_active(
+            normalized_lock_path;
+            stale_age = _MULTI_INPUT_WORKFLOW_LOCK_STALE_AGE_SECONDS,
+    )
+        throw(ArgumentError(
+            "Persistent multi-input output_dir is already reserved by " *
+            "another workflow: $(normalized_lock_path)",
+        ))
+    end
+    return _require_exclusive_multi_input_workflow_domain(
+        workflow_root,
+        normalized_lock_path,
+    )
+end
+
 function _with_multi_input_workflow_lock(
         action::Function,
         lock_path::AbstractString,
@@ -3995,7 +4635,7 @@ end
 
 function _cleanup_multi_input_stages!(
         cleanup_tokens::Vector{_Stage1CleanupToken};
-        remover::Function = path -> rm(path; force = true),
+        pre_remove_hook::Function = path -> nothing,
 )::Vector{String}
     retained_files = String[]
     for token in cleanup_tokens
@@ -4027,7 +4667,16 @@ function _cleanup_multi_input_stages!(
             end
             cleanup_failed = false
             try
-                remover(cleanup_path)
+                expected_identity = (;
+                    path = cleanup_path,
+                    device = token.identity.device,
+                    inode = token.identity.inode,
+                )
+                pre_remove_hook(cleanup_path)
+                Mycelia._remove_exact_metamdbg_durable_file!(
+                    cleanup_path,
+                    expected_identity,
+                )
             catch cleanup_error
                 cleanup_error isa InterruptException && rethrow()
                 cleanup_failed = true
@@ -4048,7 +4697,7 @@ end
 function _cleanup_multi_input_root!(
         workflow_root::AbstractString;
         expected_identity::Union{Nothing, _WorkflowPathIdentity} = nothing,
-        remover::Function = path -> rm(path; recursive = true, force = true),
+        pre_remove_hook::Function = path -> nothing,
 )::Bool
     normalized_root = normpath(abspath(String(workflow_root)))
     if !_workflow_path_entry_exists(normalized_root)
@@ -4079,7 +4728,17 @@ function _cleanup_multi_input_root!(
     end
     cleanup_failed = false
     try
-        remover(normalized_root)
+        exact_identity = (;
+            path = normalized_root,
+            device = observed_identity.device,
+            inode = observed_identity.inode,
+        )
+        pre_remove_hook(normalized_root)
+        Mycelia._remove_exact_metamdbg_durable_directory!(
+            normalized_root,
+            exact_identity;
+            recursive = true,
+        )
     catch cleanup_error
         cleanup_error isa InterruptException && rethrow()
         cleanup_failed = true
@@ -4179,6 +4838,7 @@ function _run_multi_input_assembler(
         runner::Function = Mycelia.run_autocycler_polished,
 )::NamedTuple
     result = runner(;
+        config.assembler_options...,
         long_reads = inputs.long_reads.path,
         short_reads_1 = inputs.short_r1.path,
         short_reads_2 = inputs.short_r2.path,
@@ -4314,6 +4974,8 @@ function _normalized_workflow_settings(
         "assembler_options" => _normalize_provenance_value(
             config.assembler_options,
         ),
+        "input_snapshot_byte_ceiling" =>
+            config.input_snapshot_byte_ceiling,
     )
 end
 
@@ -4334,6 +4996,11 @@ function _normalized_workflow_settings(
         "polypolish_careful" => config.polypolish_careful,
         "pypolca_careful" => true,
         "keep_intermediates" => config.keep_intermediates,
+        "assembler_options" => _normalize_provenance_value(
+            config.assembler_options,
+        ),
+        "input_snapshot_byte_ceiling" =>
+            config.input_snapshot_byte_ceiling,
         "correction_options" => _normalize_provenance_value(
             config.correction_options,
         ),
@@ -5532,82 +6199,111 @@ function _assemble_paired_short_long(
         workflow_lock_runner::Function = _with_multi_input_workflow_lock,
         after_source_semantic_validation_hook::Function =
             (short_r1, short_r2, long_reads) -> nothing,
+        after_in_memory_snapshot_preflight_hook::Function =
+            (label, records) -> nothing,
+        after_snapshot_destination_open_hook::Function =
+            (label, source, destination) -> nothing,
+        after_snapshot_stream_copy_hook::Function =
+            (label, source, destination) -> nothing,
         after_corrected_semantic_validation_hook::Function = inputs -> nothing,
         after_assembler_return_hook::Function = result -> nothing,
-        corrected_fastq_remover::Function = path -> rm(path; force = true),
-        workflow_root_remover::Function = path -> rm(
-            path;
-            recursive = true,
-            force = true,
-        ),
+        snapshot_available_bytes_reader::Function =
+            root -> diskstat(root).available,
+        corrected_fastq_cleanup_hook::Function = path -> nothing,
+        workflow_root_cleanup_hook::Function = path -> nothing,
 )::AssemblyResult
     _validate_distinct_read_source_objects(
         short_reads[1],
         short_reads[2],
         long_reads,
     )
+    reserved_root_plan = if config.output_dir === nothing
+        nothing
+    else
+        planned_root = _plan_workflow_root(String(config.output_dir))
+        preflight_lock_path = _multi_input_workflow_lock_path(
+            String(planned_root.path),
+        )
+        _require_available_multi_input_workflow_domain(
+            String(planned_root.path),
+            preflight_lock_path,
+        )
+        _validate_workflow_root(String(planned_root.path))
+    end
+    short_r1 = _prepare_read_source(short_reads[1])
+    short_r2 = _prepare_read_source(short_reads[2])
+    prepared_long_reads = _prepare_read_source(long_reads)
+    source_content_contract = _multi_input_source_content_contract(
+        short_r1,
+        short_r2,
+        prepared_long_reads,
+    )
+    _validate_distinct_in_memory_read_records(
+        short_r1,
+        short_r2,
+        prepared_long_reads,
+    )
+    _validate_unique_read_source_paths(short_r1, "short_r1")
+    _validate_unique_read_source_paths(short_r2, "short_r2")
+    _validate_unique_read_source_paths(prepared_long_reads, "long_reads")
+    _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
+        "input paired short-read R1 and R2 sources must be distinct.",
+    ))
+    if _read_sources_overlap(short_r1, prepared_long_reads) ||
+       _read_sources_overlap(short_r2, prepared_long_reads)
+        throw(ArgumentError(
+            "Long-read input must be distinct from paired short-read R1 " *
+            "and R2 sources.",
+        ))
+    end
+    _require_path_backed_fastq_sources(short_r1, "short_r1")
+    _require_path_backed_fastq_sources(short_r2, "short_r2")
+    _require_path_backed_fastq_sources(prepared_long_reads, "long_reads")
+    paired_count = _validate_paired_reads(short_r1, short_r2, "input")
+    long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
+    _verify_multi_input_source_content_contract(
+        source_content_contract,
+        short_r1,
+        short_r2,
+        prepared_long_reads;
+        change_context = "during source semantic preflight",
+    )
+    after_source_semantic_validation_hook(
+        short_r1,
+        short_r2,
+        prepared_long_reads,
+    )
+    _verify_multi_input_source_content_contract(
+        source_content_contract,
+        short_r1,
+        short_r2,
+        prepared_long_reads;
+        change_context = "after source semantic preflight",
+    )
+    long_read_correction_technology = _long_read_correction_technology(config)
     function run_reserved_workflow(
             reserved_root_plan::NamedTuple,
             assembler_ancestor_locks::Tuple = (),
     )::AssemblyResult
-        short_r1 = _prepare_read_source(short_reads[1])
-        short_r2 = _prepare_read_source(short_reads[2])
-        prepared_long_reads = _prepare_read_source(long_reads)
-        source_content_contract = _multi_input_source_content_contract(
-            short_r1,
-            short_r2,
-            prepared_long_reads,
-        )
         _validate_distinct_read_source_objects(
             short_reads[1],
             short_reads[2],
             long_reads,
         )
-        _validate_distinct_in_memory_read_records(
-            short_r1,
-            short_r2,
-            prepared_long_reads,
-        )
-        _validate_unique_read_source_paths(short_r1, "short_r1")
-        _validate_unique_read_source_paths(short_r2, "short_r2")
-        _validate_unique_read_source_paths(prepared_long_reads, "long_reads")
-        _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
-            "input paired short-read R1 and R2 sources must be distinct.",
-        ))
-        if _read_sources_overlap(short_r1, prepared_long_reads) ||
-           _read_sources_overlap(short_r2, prepared_long_reads)
-            throw(ArgumentError(
-                "Long-read input must be distinct from paired short-read " *
-                "R1 and R2 sources.",
-            ))
-        end
-        _require_path_backed_fastq_sources(short_r1, "short_r1")
-        _require_path_backed_fastq_sources(short_r2, "short_r2")
-        _require_path_backed_fastq_sources(
-            prepared_long_reads,
-            "long_reads",
-        )
-        paired_count = _validate_paired_reads(short_r1, short_r2, "input")
-        long_count = _count_nonempty_reads(prepared_long_reads, "long_reads")
-        after_source_semantic_validation_hook(
-            short_r1,
-            short_r2,
-            prepared_long_reads,
-        )
         _verify_multi_input_source_content_contract(
             source_content_contract,
             short_r1,
             short_r2,
-            prepared_long_reads;
-            change_context = "after input semantic validation",
+            prepared_long_reads,
+            change_context = "before stable source materialization",
         )
-        protected_source_paths = String[]
-        for read_set in (short_r1, short_r2, prepared_long_reads)
-            paths = _read_source_paths(read_set)
-            paths === nothing || append!(protected_source_paths, paths)
-        end
-        long_read_correction_technology = _long_read_correction_technology(config)
         root = _prepare_workflow_root(reserved_root_plan)
+        snapshot_budget = _MultiInputSnapshotBudget(
+            root.path,
+            BigInt(config.input_snapshot_byte_ceiling),
+            BigInt(0),
+            snapshot_available_bytes_reader,
+        )
         cleanup_tokens = _Stage1CleanupToken[]
         # AssemblyResult retains these vectors by reference. The finally block
         # fills them only after all best-effort cleanup attempts have completed.
@@ -5615,16 +6311,113 @@ function _assemble_paired_short_long(
         retained_cleanup_roots = String[]
         retained_intermediates = String[]
         try
-            _verify_multi_input_source_content_contract(
-                source_content_contract,
+            short_r1_snapshot = _materialize_multi_input_source_snapshot(
                 short_r1,
+                "short_r1",
+                root.path,
+                snapshot_budget;
+                after_in_memory_preflight_hook =
+                    after_in_memory_snapshot_preflight_hook,
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
+            )
+            short_r2_snapshot = _materialize_multi_input_source_snapshot(
                 short_r2,
-                prepared_long_reads;
+                "short_r2",
+                root.path,
+                snapshot_budget;
+                after_in_memory_preflight_hook =
+                    after_in_memory_snapshot_preflight_hook,
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
+            )
+            long_reads_snapshot = _materialize_multi_input_source_snapshot(
+                prepared_long_reads,
+                "long_reads",
+                root.path,
+                snapshot_budget;
+                after_in_memory_preflight_hook =
+                    after_in_memory_snapshot_preflight_hook,
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
+            )
+            _require_multi_input_snapshot_matches_original_contract(
+                source_content_contract["short_r1"],
+                short_r1_snapshot.contract,
+                "short_r1",
+            )
+            _require_multi_input_snapshot_matches_original_contract(
+                source_content_contract["short_r2"],
+                short_r2_snapshot.contract,
+                "short_r2",
+            )
+            _require_multi_input_snapshot_matches_original_contract(
+                source_content_contract["long_reads"],
+                long_reads_snapshot.contract,
+                "long_reads",
+            )
+            consumed_short_r1 = short_r1_snapshot.reads
+            consumed_short_r2 = short_r2_snapshot.reads
+            consumed_long_reads = long_reads_snapshot.reads
+            source_content_contract["consumed_snapshots"] =
+                Dict{String, Any}(
+                    "short_r1" => short_r1_snapshot.contract,
+                    "short_r2" => short_r2_snapshot.contract,
+                    "long_reads" => long_reads_snapshot.contract,
+                )
+            consumed_source_content_contract =
+                _multi_input_source_content_contract(
+                    consumed_short_r1,
+                    consumed_short_r2,
+                    consumed_long_reads,
+                )
+            _validate_paired_reads(
+                consumed_short_r1,
+                consumed_short_r2,
+                "stable input snapshot",
+            ) == paired_count || error(
+                "Stable paired-short input snapshots changed the validated " *
+                "input record count.",
+            )
+            _count_nonempty_reads(
+                consumed_long_reads,
+                "stable long_reads input snapshot",
+            ) == long_count || error(
+                "Stable long-read input snapshots changed the validated " *
+                "input record count.",
+            )
+            _verify_multi_input_source_content_contract(
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
+                change_context = "during stable source semantic validation",
+            )
+            protected_source_paths = String[]
+            for read_set in (
+                    short_r1,
+                    short_r2,
+                    prepared_long_reads,
+                    consumed_short_r1,
+                    consumed_short_r2,
+                    consumed_long_reads,
+            )
+                paths = _read_source_paths(read_set)
+                paths === nothing || append!(protected_source_paths, paths)
+            end
+            _verify_multi_input_source_content_contract(
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
                 change_context = "before short_r1 correction",
             )
             corrected_r1 = _correct_read_set!(
                 cleanup_tokens,
-                short_r1,
+                consumed_short_r1,
                 config.short_read_tech,
                 :short_r1,
                 config.correction_options,
@@ -5634,28 +6427,32 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
-            corrected_r1_content_identity =
-                _multi_input_corrected_read_set_content_identity(
-                    corrected_r1,
-                    "short_r1",
-                )
-            _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads;
-                change_context =
-                    "during short_r1 correction and before short_r2 correction",
-            )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r1_content_identity,
+            corrected_r1_binding = _materialize_multi_input_corrected_snapshot(
                 corrected_r1,
-                "short_r1";
+                "short_r1",
+                root.path,
+                snapshot_budget;
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
+            )
+            _verify_multi_input_source_content_contract(
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
+                change_context = "during short_r1 correction",
+            )
+            _verify_multi_input_source_content_contract(
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
                 change_context = "before short_r2 correction",
             )
             corrected_r2 = _correct_read_set!(
                 cleanup_tokens,
-                short_r2,
+                consumed_short_r2,
                 config.short_read_tech,
                 :short_r2,
                 config.correction_options,
@@ -5665,40 +6462,32 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
-            corrected_r2_content_identity =
-                _multi_input_corrected_read_set_content_identity(
-                    corrected_r2,
-                    "short_r2",
-                )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r1_content_identity,
-                corrected_r1,
-                "short_r1";
+            corrected_r2_binding = _materialize_multi_input_corrected_snapshot(
+                corrected_r2,
+                "short_r2",
+                root.path,
+                snapshot_budget;
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
+            )
+            _verify_multi_input_source_content_contract(
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
                 change_context = "during short_r2 correction",
             )
             _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads;
-                change_context =
-                    "during short_r2 correction and before long_reads correction",
-            )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r1_content_identity,
-                corrected_r1,
-                "short_r1";
-                change_context = "before long_reads correction",
-            )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r2_content_identity,
-                corrected_r2,
-                "short_r2";
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
                 change_context = "before long_reads correction",
             )
             corrected_long = _correct_read_set!(
                 cleanup_tokens,
-                prepared_long_reads,
+                consumed_long_reads,
                 long_read_correction_technology,
                 :long_reads,
                 config.correction_options,
@@ -5708,50 +6497,51 @@ function _assemble_paired_short_long(
                 protected_source_paths,
                 root.identity,
             )
-            corrected_long_content_identity =
-                _multi_input_corrected_read_set_content_identity(
-                    corrected_long,
-                    "long_reads",
-                )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r1_content_identity,
-                corrected_r1,
-                "short_r1";
-                change_context = "during long_reads correction",
-            )
-            _verify_multi_input_corrected_read_set_content_identity(
-                corrected_r2_content_identity,
-                corrected_r2,
-                "short_r2";
-                change_context = "during long_reads correction",
+            corrected_long_binding = _materialize_multi_input_corrected_snapshot(
+                corrected_long,
+                "long_reads",
+                root.path,
+                snapshot_budget;
+                after_destination_open_hook =
+                    after_snapshot_destination_open_hook,
+                after_stream_copy_hook = after_snapshot_stream_copy_hook,
             )
             _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads;
+                consumed_source_content_contract,
+                consumed_short_r1,
+                consumed_short_r2,
+                consumed_long_reads;
                 change_context = "during long_reads correction",
             )
             inputs = _CorrectedPairedShortLong(
-                corrected_r1,
-                corrected_r2,
-                corrected_long,
+                corrected_r1_binding.consumed,
+                corrected_r2_binding.consumed,
+                corrected_long_binding.consumed,
             )
             corrected_content_contract = _multi_input_corrected_content_contract(
-                corrected_r1_content_identity,
-                corrected_r2_content_identity,
-                corrected_long_content_identity,
+                corrected_r1_binding.consumed_contract_identity,
+                corrected_r2_binding.consumed_contract_identity,
+                corrected_long_binding.consumed_contract_identity,
             )
+            corrected_content_contract["correction_outputs"] =
+                Dict{String, Any}(
+                    "short_r1" =>
+                        corrected_r1_binding.correction_output_identity,
+                    "short_r2" =>
+                        corrected_r2_binding.correction_output_identity,
+                    "long_reads" =>
+                        corrected_long_binding.correction_output_identity,
+                )
             _verify_multi_input_corrected_content_contract(
                 corrected_content_contract,
                 inputs;
                 change_context = "before corrected-read semantic validation",
             )
             corrected_pair_count = _validate_corrected_pair_preserved(
-                short_r1,
-                short_r2,
-                corrected_r1,
-                corrected_r2,
+                consumed_short_r1,
+                consumed_short_r2,
+                inputs.short_r1,
+                inputs.short_r2,
                 paired_count,
             )
             _verify_multi_input_corrected_content_contract(
@@ -5761,8 +6551,8 @@ function _assemble_paired_short_long(
                     "during corrected paired-read semantic validation",
             )
             corrected_long_count = _validate_corrected_identifiers_preserved(
-                prepared_long_reads,
-                corrected_long,
+                consumed_long_reads,
+                inputs.long_reads,
                 "long_reads",
             )
             _verify_multi_input_corrected_content_contract(
@@ -5779,12 +6569,6 @@ function _assemble_paired_short_long(
                 corrected_content_contract,
                 inputs;
                 change_context = "after corrected-read semantic validation",
-            )
-            _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads,
             )
             _require_unchanged_workflow_path_identity(
                 root.path,
@@ -5842,9 +6626,9 @@ function _assemble_paired_short_long(
                 nothing
             else
                 Dict(
-                    "short_r1" => corrected_r1.path,
-                    "short_r2" => corrected_r2.path,
-                    "long_reads" => corrected_long.path,
+                    "short_r1" => inputs.short_r1.path,
+                    "short_r2" => inputs.short_r2.path,
+                    "long_reads" => inputs.long_reads.path,
                 )
             end
             polishers = if workflow == :autocycler_polished
@@ -5856,9 +6640,9 @@ function _assemble_paired_short_long(
             end
             persistent_output_dir = root.ephemeral ? nothing : root.path
             correction_provenance = Dict{String, Any}(
-                "short_r1" => corrected_r1.provenance,
-                "short_r2" => corrected_r2.provenance,
-                "long_reads" => corrected_long.provenance,
+                "short_r1" => inputs.short_r1.provenance,
+                "short_r2" => inputs.short_r2.provenance,
+                "long_reads" => inputs.long_reads.provenance,
             )
             wrapped_result = _wrap_multi_input_assembly(
                 tool_result,
@@ -5916,19 +6700,24 @@ function _assemble_paired_short_long(
                 tool_artifact_content,
                 assembler_output_dir,
             )
+            _verify_multi_input_corrected_content_contract(
+                corrected_content_contract,
+                inputs;
+                change_context = "immediately before returning persistent paths",
+            )
             return wrapped_result
         finally
             append!(
                 retained_cleanup_files,
                 _cleanup_multi_input_stages!(
                     cleanup_tokens;
-                    remover = corrected_fastq_remover,
+                    pre_remove_hook = corrected_fastq_cleanup_hook,
                 ),
             )
             if root.ephemeral && _cleanup_multi_input_root!(
                     root.path;
                     expected_identity = root.identity,
-                    remover = workflow_root_remover,
+                    pre_remove_hook = workflow_root_cleanup_hook,
             )
                 push!(retained_cleanup_roots, root.path)
             end
@@ -5948,11 +6737,13 @@ function _assemble_paired_short_long(
     if config.output_dir === nothing
         return run_reserved_workflow((; path = nothing, ephemeral = true))
     end
-    reserved_root_plan = _plan_workflow_root(String(config.output_dir))
+    reserved_root_plan === nothing && error(
+        "Persistent output_dir preflight did not produce a root plan.",
+    )
     lock_path = _multi_input_workflow_lock_path(
         String(reserved_root_plan.path),
     )
-    _require_exclusive_multi_input_workflow_domain(
+    _require_available_multi_input_workflow_domain(
         String(reserved_root_plan.path),
         lock_path,
     )
@@ -5978,7 +6769,10 @@ end
 
 Correct paired-short R1/R2 and long reads independently with their own
 sequencing-technology error profiles, validate mate preservation, and run the
-combined-input workflow selected by the typed config.
+combined-input workflow selected by the typed config. Each validated source and
+each correction output is materialized once as a workflow-owned stable FASTQ;
+correction and assembly consume only those lifecycle-retained snapshots while
+provenance preserves both original-source and consumed-snapshot hashes.
 """
 function assemble_hybrid(
         short_reads::Tuple{Any, Any},
@@ -6047,7 +6841,11 @@ three corrected FASTQs with Unicycler.
 This convenience entry point is equivalent to `assemble_hybrid` with an
 `UnicyclerHybridConfig`. Inputs may be FASTQ paths, collections of FASTQ paths,
 or in-memory FASTQ records. Mate identifiers and counts are validated before
-Unicycler runs. Use `config.output_dir = nothing` for ephemeral artifacts or a
+Unicycler runs. Corrections and Unicycler consume stable workflow-owned FASTQ
+snapshots, while result provenance retains the original and consumed hashes.
+`config.input_snapshot_byte_ceiling` bounds cumulative workflow copies;
+`config.assembler_options` controls the direct Unicycler scratch spool.
+Use `config.output_dir = nothing` for ephemeral artifacts or a
 new, empty persistent directory to retain corrected FASTQs and tool outputs.
 """
 function assemble_unicycler_hybrid(
@@ -6067,7 +6865,11 @@ long-read consensus, and polish it with Polypolish followed by careful Pypolca.
 
 This convenience entry point is equivalent to `assemble_hybrid` with an
 `AutocyclerPolishConfig`. `config.autocycler_read_type` selects the long-read
-assembly and correction chemistry. Use a new, empty persistent `output_dir`
+assembly and correction chemistry. Corrections, Autocycler, and both polishing
+stages consume stable workflow-owned FASTQ snapshots with original and consumed
+hashes retained in provenance. `config.input_snapshot_byte_ceiling` bounds the
+workflow copies; `config.assembler_options` can select and bound the direct
+Autocycler scratch spool. Use a new, empty persistent `output_dir`
 when retaining corrected FASTQs or polishing intermediates.
 """
 function assemble_autocycler_polished(

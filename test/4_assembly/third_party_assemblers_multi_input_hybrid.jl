@@ -10,6 +10,7 @@
 #   MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz
 #   MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz
 #   MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz
+#   MYCELIA_ASSEMBLER_TEST_THREADS=2
 #
 # Optional technology selectors are `MYCELIA_HYBRID_SHORT_TECH` (`illumina` or
 # `ultima`) and `MYCELIA_HYBRID_LONG_TECH` (`nanopore`, `pacbio_clr`, or
@@ -91,21 +92,18 @@ function _assert_persistent_hybrid_result(
     expected_paths = Dict(
         "short_r1" => joinpath(
             output_dir,
-            "corrected",
-            "short_r1",
-            "corrected.fastq",
+            "stable_corrected",
+            "short_r1.fastq",
         ),
         "short_r2" => joinpath(
             output_dir,
-            "corrected",
-            "short_r2",
-            "corrected.fastq",
+            "stable_corrected",
+            "short_r2.fastq",
         ),
         "long_reads" => joinpath(
             output_dir,
-            "corrected",
-            "long_reads",
-            "corrected.fastq",
+            "stable_corrected",
+            "long_reads.fastq",
         ),
     )
     Test.@test corrected_paths == expected_paths
@@ -130,6 +128,14 @@ function _assert_persistent_hybrid_result(
                "mycelia-paired-short-long-input-content-v1"
     Test.@test corrected_contract["schema"] ==
                "mycelia-corrected-fastq-content-v1"
+    consumed_sources = source_contract["consumed_snapshots"]
+    correction_outputs = corrected_contract["correction_outputs"]
+    consumed_sources isa AbstractDict || error(
+        "Hybrid smoke result has malformed consumed-source provenance.",
+    )
+    correction_outputs isa AbstractDict || error(
+        "Hybrid smoke result has malformed correction-output provenance.",
+    )
 
     expected_input_paths = Dict(
         "short_r1" => input_paths.short_r1,
@@ -164,6 +170,30 @@ function _assert_persistent_hybrid_result(
             "$(label) source",
         ) == Mycelia.Rhizomorph._multi_input_file_sha256(expected_input_path)
 
+        consumed_source_set = consumed_sources[label]
+        consumed_source_set isa AbstractDict || error(
+            "Hybrid smoke $(label) consumed-source set is malformed.",
+        )
+        Test.@test consumed_source_set["kind"] ==
+                   "workflow_owned_stable_snapshot_set"
+        Test.@test consumed_source_set["source_count"] == 1
+        consumed_source = only(consumed_source_set["sources"])
+        consumed_source isa AbstractDict || error(
+            "Hybrid smoke $(label) consumed-source identity is malformed.",
+        )
+        consumed_source_path = String(consumed_source["path"])
+        Test.@test consumed_source["source_path"] == expected_input_path
+        Test.@test consumed_source["source_canonical_path"] ==
+                   realpath(expected_input_path)
+        Test.@test isfile(consumed_source_path)
+        Test.@test startswith(
+            consumed_source_path,
+            joinpath(output_dir, "stable_inputs", label),
+        )
+        Test.@test consumed_source["size_bytes"] == filesize(expected_input_path)
+        Test.@test consumed_source["sha256"] == source["sha256"]
+        Test.@test read(consumed_source_path) == read(expected_input_path)
+
         corrected_path = corrected_paths[label]
         corrected_identity = corrected_contract[label]
         corrected_identity isa AbstractDict || error(
@@ -178,6 +208,36 @@ function _assert_persistent_hybrid_result(
             corrected_identity["sha256"],
             "$(label) corrected FASTQ",
         ) == Mycelia.Rhizomorph._multi_input_file_sha256(corrected_path)
+
+        correction_output = correction_outputs[label]
+        correction_output isa AbstractDict || error(
+            "Hybrid smoke $(label) correction-output identity is malformed.",
+        )
+        expected_correction_output = joinpath(
+            output_dir,
+            "corrected",
+            label,
+            "corrected.fastq",
+        )
+        Test.@test correction_output["path"] == expected_correction_output
+        Test.@test correction_output["canonical_path"] ==
+                   realpath(expected_correction_output)
+        Test.@test isfile(expected_correction_output)
+        Test.@test correction_output["size_bytes"] ==
+                   corrected_identity["size_bytes"]
+        Test.@test correction_output["sha256"] ==
+                   corrected_identity["sha256"]
+        Test.@test read(expected_correction_output) == read(corrected_path)
+
+        correction_stage = stats["correction_provenance"][label]
+        Test.@test correction_stage["correction_output_content"] ==
+                   correction_output
+        consumed_corrected = correction_stage["consumed_snapshot_content"]
+        Test.@test consumed_corrected["path"] == corrected_path
+        Test.@test consumed_corrected["size_bytes"] ==
+                   corrected_identity["size_bytes"]
+        Test.@test consumed_corrected["sha256"] ==
+                   corrected_identity["sha256"]
     end
     return nothing
 end
@@ -310,17 +370,7 @@ Test.@testset "multi-input hybrid external smoke" begin
         inputs = prerequisites.input_paths
         short_read_tech = prerequisites.short_read_tech
         long_read_tech = prerequisites.long_read_tech
-        threads = clamp(
-            something(
-                tryparse(
-                    Int,
-                    get(ENV, "MYCELIA_ASSEMBLER_TEST_THREADS", "2"),
-                ),
-                2,
-            ),
-            1,
-            4,
-        )
+        threads = prerequisites.threads
 
         mktempdir() do temporary_root
             Test.@testset "corrected paired-short plus long to Unicycler" begin
@@ -391,6 +441,16 @@ Test.@testset "multi-input hybrid external smoke" begin
                         resolved_long_read_tech,
                         ["polypolish-careful", "pypolca-careful"],
                     )
+                    workflow_settings = result.assembly_stats[
+                        "workflow_settings"
+                    ]
+                    Test.@test workflow_settings["autocycler_read_type"] ==
+                               String(something(
+                        prerequisites.autocycler_read_type,
+                    ))
+                    Test.@test workflow_settings["jobs"] ==
+                               something(prerequisites.autocycler_jobs)
+                    Test.@test workflow_settings["threads"] == threads
                     _assert_autocycler_toolchain(result.assembly_stats)
                 end
             end

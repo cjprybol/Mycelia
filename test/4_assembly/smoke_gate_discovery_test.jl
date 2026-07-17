@@ -135,6 +135,7 @@ Test.@testset "canonical smoke discovery preflight" begin
             "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
             "MYCELIA_AUTOCYCLER_SHORT_READS_1" => input_paths.short_r1,
             "MYCELIA_AUTOCYCLER_SHORT_READS_2" => input_paths.short_r2,
+            "MYCELIA_ASSEMBLER_TEST_THREADS" => " 4 ",
         )
         Test.@test combined_wiring.ok
         Test.@test isempty(strip(combined_wiring.output))
@@ -183,11 +184,54 @@ Test.@testset "direct smoke prerequisite parser coverage" begin
         prerequisites = _multi_input_hybrid_smoke_prerequisites(environment)
         Test.@test prerequisites.run_smoke
         Test.@test !prerequisites.run_autocycler
+        Test.@test prerequisites.threads == 2
         Test.@test prerequisites.input_paths == (
             short_r1 = Base.abspath(input_paths.short_r1),
             short_r2 = Base.abspath(input_paths.short_r2),
             long_reads = Base.abspath(input_paths.long_reads),
         )
+
+        threaded_prerequisites = _multi_input_hybrid_smoke_prerequisites(
+            _hybrid_smoke_environment(
+                input_paths,
+                "MYCELIA_ASSEMBLER_TEST_THREADS" => " 4 ",
+            ),
+        )
+        Test.@test threaded_prerequisites.threads == 4
+
+        for (configured_threads, expected_message) in (
+                "many" => "must be an integer",
+                "0" => "must be between 1 and 4",
+                "5" => "must be between 1 and 4",
+        )
+            hybrid_threads_error = _smoke_prerequisite_error() do
+                _multi_input_hybrid_smoke_prerequisites(
+                    _hybrid_smoke_environment(
+                        input_paths,
+                        "MYCELIA_ASSEMBLER_TEST_THREADS" => configured_threads,
+                    ),
+                )
+            end
+            Test.@test hybrid_threads_error isa ArgumentError
+            Test.@test occursin(
+                expected_message,
+                sprint(showerror, hybrid_threads_error),
+            )
+
+            autocycler_threads_error = _smoke_prerequisite_error() do
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+                    "MYCELIA_ASSEMBLER_TEST_THREADS" => configured_threads,
+                ))
+            end
+            Test.@test autocycler_threads_error isa ArgumentError
+            Test.@test occursin(
+                expected_message,
+                sprint(showerror, autocycler_threads_error),
+            )
+        end
 
         malformed = Base.joinpath(temporary_root, "malformed.fastq")
         Base.write(malformed, ">not_fastq\nACGT\n")
@@ -305,6 +349,7 @@ Test.@testset "direct smoke prerequisite parser coverage" begin
                 "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
                 "MYCELIA_AUTOCYCLER_SHORT_READS_1" => input_paths.short_r1,
+                "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
             ))
         end
         Test.@test half_pair_error isa ArgumentError
@@ -312,6 +357,25 @@ Test.@testset "direct smoke prerequisite parser coverage" begin
             "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1",
             sprint(showerror, half_pair_error),
         )
+
+        for configured_read_type in (nothing, "   ")
+            environment = Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+            )
+            configured_read_type === nothing ||
+                (environment["MYCELIA_AUTOCYCLER_READ_TYPE"] =
+                    configured_read_type)
+            missing_read_type = _smoke_prerequisite_error() do
+                _autocycler_smoke_prerequisites(environment)
+            end
+            Test.@test missing_read_type isa ArgumentError
+            Test.@test occursin(
+                "MYCELIA_AUTOCYCLER_READ_TYPE is required",
+                sprint(showerror, missing_read_type),
+            )
+        end
 
         invalid_read_type = _smoke_prerequisite_error() do
             _autocycler_smoke_prerequisites(Dict(
@@ -337,5 +401,6 @@ Test.@testset "direct smoke prerequisite parser coverage" begin
         ))
         Test.@test standalone.run_smoke
         Test.@test standalone.read_type == "pacbio_hifi"
+        Test.@test standalone.threads == 2
     end
 end

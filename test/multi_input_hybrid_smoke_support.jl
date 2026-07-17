@@ -265,6 +265,29 @@ function _autocycler_smoke_prerequisites(
     end
     run_smoke || return (; run_smoke = false)
 
+    threads = _multi_input_hybrid_smoke_integer(
+        environment,
+        "MYCELIA_ASSEMBLER_TEST_THREADS",
+        2,
+        1,
+        4,
+    )
+    read_type_text = strip(String(get(
+        environment,
+        "MYCELIA_AUTOCYCLER_READ_TYPE",
+        "",
+    )))
+    isempty(read_type_text) && throw(ArgumentError(
+        "MYCELIA_AUTOCYCLER_READ_TYPE is required when " *
+        "MYCELIA_RUN_AUTOCYCLER_SMOKE=true.",
+    ))
+    read_type = _multi_input_hybrid_smoke_symbol(
+        environment,
+        "MYCELIA_AUTOCYCLER_READ_TYPE",
+        :ont_r10,
+        _AUTOCYCLER_SMOKE_READ_TYPES,
+    )
+
     long_reads_text = strip(String(get(
         environment,
         "MYCELIA_AUTOCYCLER_LONG_READS",
@@ -290,13 +313,6 @@ function _autocycler_smoke_prerequisites(
             "MYCELIA_AUTOCYCLER_SHORT_READS_2, or leave both unset.",
         ),
     )
-    read_type = _multi_input_hybrid_smoke_symbol(
-        environment,
-        "MYCELIA_AUTOCYCLER_READ_TYPE",
-        :ont_r10,
-        _AUTOCYCLER_SMOKE_READ_TYPES,
-    )
-
     long_reads = abspath(long_reads_text)
     isfile(long_reads) || throw(ArgumentError(
         "Autocycler smoke long-read FASTQ not found: $(long_reads)",
@@ -337,6 +353,7 @@ function _autocycler_smoke_prerequisites(
         short_reads_1,
         short_reads_2,
         read_type = String(read_type),
+        threads,
     )
 end
 
@@ -367,6 +384,14 @@ function _multi_input_hybrid_smoke_prerequisites(
     run_smoke || return (;
         run_smoke = false,
         run_autocycler = false,
+    )
+
+    threads = _multi_input_hybrid_smoke_integer(
+        environment,
+        "MYCELIA_ASSEMBLER_TEST_THREADS",
+        2,
+        1,
+        4,
     )
 
     missing_inputs = String[
@@ -484,5 +509,6 @@ function _multi_input_hybrid_smoke_prerequisites(
         long_read_tech,
         autocycler_read_type,
         autocycler_jobs,
+        threads,
     )
 end

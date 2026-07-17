@@ -123,8 +123,18 @@ checks before dependency provisioning or long-read assembly.
 ## Public entry points
 
 ```julia
+Base.Filesystem.mkpath("scratch/unicycler-inputs")
+Base.Filesystem.mkpath("scratch/autocycler-inputs")
+
 unicycler_config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
     output_dir = "results/unicycler",
+    # Cumulative stable source plus corrected-copy budget for this workflow.
+    input_snapshot_byte_ceiling = 500_000_000_000,
+    assembler_options = (;
+        # Independent, shorter-lived direct-Unicycler scratch controls.
+        input_spool_parent = "scratch/unicycler-inputs",
+        input_spool_byte_ceiling = 250_000_000_000,
+    ),
 )
 unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
     "reads_R1.fastq.gz",
@@ -137,6 +147,11 @@ autocycler_config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
     long_read_tech = :pacbio_hifi,
     autocycler_read_type = :pacbio_hifi,
     output_dir = "results/autocycler-polished",
+    input_snapshot_byte_ceiling = 500_000_000_000,
+    assembler_options = (;
+        input_spool_parent = "scratch/autocycler-inputs",
+        input_spool_byte_ceiling = 250_000_000_000,
+    ),
 )
 autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
     "reads_R1.fastq.gz",
@@ -162,6 +177,21 @@ stale assemblies cannot be mistaken for current results. Large alignment SAMs,
 filtered SAMs, and BWA index files are removed after successful polishing by
 default and after polishing failures. `keep_intermediates = true` retains and
 records them explicitly and therefore requires a persistent `output_dir`.
+
+Both high-level configs apply `input_snapshot_byte_ceiling` cumulatively to
+workflow-owned stable copies of the three original inputs and all three
+correction outputs. Before each copy, the route checks both the remaining
+configured budget and currently available bytes under the reserved workflow
+root. A ceiling, free-space, write, or content-integrity failure removes only
+the exact inode created for the partial snapshot and fails before the next
+correction or combined assembler call. Path-backed copies bind a source
+descriptor hash, streamed-copy hash, source rehash, and consumed-descriptor
+hash; all four must agree. In-memory FASTQ identity is streamed rather than
+duplicating the full record set. `assembler_options.input_spool_parent` and
+`assembler_options.input_spool_byte_ceiling` are separate controls for the
+direct assembler wrapper's private, reservation-scoped scratch spool. That
+spool is removed after the assembler lifecycle, while persistent high-level
+stable snapshots remain available for provenance.
 
 Missing, empty, malformed, reordered, or count-changing inputs and corrected
 read sets fail before the combined assembler. Missing/empty corrected FASTQs,
@@ -233,32 +263,44 @@ execution returns
 contract finalization. Local and generated-runtime contract and completion
 publication fsync both the complete mode-0600 file and its containing directory
 before reporting success. A nonlocal executor returns `status = :planned` for a
-collected or dry-run job and `status = :submitted` for a real submission,
-together with the executor result and `expected_artifacts`; it does not present
+collected or dry-run job. It returns `status = :submitted` only after a real
+held Slurm job's exact normalized `(job_id, job_cluster)` reference is durably
+bound, its pending publication name is durably removed, and that exact job is
+released. Unscoped submissions record `job_cluster = nothing`; federation
+submissions retain the cluster returned by `sbatch --parsable`. The result
+includes the executor result and `expected_artifacts`; it does not present
 planned paths as completed artifacts. The submitted script independently locks
 the output root and performs the same validation before atomically committing
 completion provenance. Real nonlocal execution is limited to the verifiable
-Slurm backend. Durable pre-submit reservations never expire automatically. A
-new reservation contains only a mode-0600 `contract.json` owner record and is
-reported as `submission_state = :reserved`. The wrapper submits the job held,
+Slurm backend.
+Durable pre-submit reservations never expire automatically. A new reservation
+contains only a mode-0600 `contract.json` owner record and is reported as
+`submission_state = :reserved`. The wrapper submits the job held,
 exclusively creates an adjacent empty mode-0600 pending record whose name binds
-the output identity, owner capability, and normalized scheduler job ID, fsyncs
-that descriptor and then its parent directory, and only then writes and fsyncs
-its canonical contents. It hardlinks that record to
+the output identity, owner capability, normalized scheduler job ID, and optional
+federation cluster, fsyncs that descriptor and then its parent directory, and
+only then writes and fsyncs its canonical contents. It hardlinks that record to
 `job.json`, fsyncs the owner directory, and only then releases the job. The
 `job.json` directory fsync is the irreversible binding commit point; later
 ordinary errors retain the exact committed binding and clean only the pending
 name. Ordinary errors before that point also retain the accepted-ID pending
-record; exact public binding recovery resumes only the inspected pending job ID
-instead of treating it as an unsubmitted reservation. Inspection then reports
-`submission_state = :submitted`. Operators must complete confirmed-dead pending
-promotion or committed-pending cleanup before manually releasing the held Slurm
-job; the generated runtime rejects its exact output-, capability-, and job-ID-
-bound pending sidecar before it can publish a runtime marker, and rejects any
-other same-output pending evidence before it can consume the queued owner. A
-runtime job
-that starts after release must match the sidecar against `SLURM_JOB_ID` before
-moving through a durable, capability-keyed state machine. It first creates and
+record; exact public binding recovery resumes only the inspected pending job
+reference instead of treating it as an unsubmitted reservation. Inspection
+also accepts canonical pre-upgrade schema-1 records as unscoped jobs, while all
+new records use schema 2 with an explicit nullable `job_cluster`. Inspection reports
+`submission_state = :submission_pending` while the accepted-ID record exists
+without `job.json`, and `:submission_commit_cleanup_pending` when `job.json` has
+committed but the exact pending name still needs durable removal. Only a
+successfully bound owner with no pending name is `:submitted`. Operators must
+resume exact pending promotion or committed-pending cleanup before manually
+releasing the held Slurm job; if a hard-killed binder left lifecycle ownership,
+confirmed-dead inspection must recover that ownership first. The generated
+runtime rejects its exact output-, capability-, job-ID-, and cluster-bound
+pending sidecar before it can publish a runtime marker, and rejects any other
+same-output pending evidence before it can consume the queued owner. A runtime
+job that starts after release must match the sidecar against `SLURM_JOB_ID` and,
+for a federation record, `SLURM_CLUSTER_NAME` before moving through a durable,
+capability-keyed state machine. It first creates and
 fsyncs its shared runtime marker, atomically renames the same-parent queued
 owner directory to `runtime.<capability>`, fsyncs the parent, removes the queued
 shared marker, and fsyncs the parent again. At final cleanup it releases the
@@ -377,28 +419,36 @@ window after scheduler acceptance but before normal sidecar publication, an
 operator must independently prove which exact scheduler job belongs to the
 reservation, then call
 `Mycelia.bind_metamdbg_submission_reservation_job!` with the inspected record,
-exact owner token and job ID, and
+exact owner token, job ID, and optional federation cluster, and
 `confirm_submitted = true`. Binding and pre-submit reclaim require both exact
 filesystem identities returned by inspection and refuse same-content
 replacements. Runtime and consumed states can be reclaimed only from freshly
-inspected identity-bound metadata with the exact recorded scheduler job ID after
-explicit cancellation or terminal-failed/terminal-completed confirmation.
+inspected identity-bound metadata with the exact recorded scheduler job
+reference after explicit cancellation or terminal-failed/terminal-completed
+confirmation.
 Reservation directories, owner records, and job sidecars must remain
 current-user-owned with modes 0700, 0600, and 0600, respectively; noncanonical,
 modified, or replacement records fail closed.
 
-The Slurm executor now submits this lifecycle with `sbatch --hold --parsable`,
+The Slurm executor submits this lifecycle with `sbatch --hold --parsable`,
 accepts exactly one numeric job ID with an optional federation-cluster suffix,
-durably binds that numeric ID in `job.json` under the output lock, and only then
-releases that exact job with `scontrol release`. Runtime execution requires the
-bound sidecar and an exact `SLURM_JOB_ID` match before consuming the reservation.
-A crash before binding therefore leaves a non-runnable held job, while a crash
-after binding leaves an inspectable job ID that can be released or cancelled.
-Scheduler acceptance is recorded as not attempted, accepted, or unknown. Only
-the not-attempted state permits automatic reservation cleanup; malformed output,
+and durably records the exact normalized pair in the pending name and contents.
+It binds the same inode as `job.json` under the output lock, durably removes the
+pending name, and only then releases an unscoped job with `scontrol release
+<job_id>` or a federation job with `scontrol -M <job_cluster> release <job_id>`.
+Runtime execution requires the bound sidecar and an exact `SLURM_JOB_ID` match;
+federation records additionally require an exact `SLURM_CLUSTER_NAME` match
+before consuming the reservation. A crash after scheduler acceptance but before any pending record
+leaves an unbound reservation and requires independent scheduler inspection. A
+crash after pending publication is inspectable as `:submission_pending`; a crash
+after `job.json` commits but before pending cleanup is
+`:submission_commit_cleanup_pending`. Neither state is reported as
+`:submitted`, released, or eligible for confirmed-not-submitted reclamation.
+Scheduler acceptance is classified as not attempted, accepted, or unknown. Only
+the not-attempted case permits automatic reservation cleanup; malformed output,
 transport interruption, a thrown post-attempt runner, or any other unknown
 outcome preserves the unbound reservation for inspection, explicit recovery
-binding, or confirmed-not-submitted reclamation.
+binding, or independently confirmed-not-submitted reclamation.
 
 Updating the 0.5.2 compatibility pin is a deliberate maintenance change, not an
 automatic environment refresh. An upgrade must re-pin and verify the upstream
@@ -427,6 +477,7 @@ MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz \
 MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz \
 MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz \
 MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10 \
+MYCELIA_ASSEMBLER_TEST_THREADS=2 \
 julia --project=. -e \
   'include("test/4_assembly/third_party_assemblers_multi_input_hybrid.jl")'
 ```
@@ -436,11 +487,15 @@ The broad external-suite gates alone leave private-fixture smokes disabled.
 hybrid smoke, and `MYCELIA_RUN_AUTOCYCLER_POLISHED=true` additionally opts into
 the Autocycler-polished arm. A dedicated gate without the broad external gate,
 or a dedicated-plus-external run with missing prerequisites, fails loudly.
+`MYCELIA_ASSEMBLER_TEST_THREADS` defaults to `2` for these private-fixture smoke
+paths and must parse as an integer from `1` through `4`; malformed and
+out-of-range values fail before either assembler runs.
 
 The lower-level direct-wrapper smoke in
 `test/8_tool_integration/autocycler.jl` is a separate gate: it uses
 `MYCELIA_RUN_EXTERNAL=true` plus `MYCELIA_RUN_AUTOCYCLER_SMOKE=true`, with
-`MYCELIA_AUTOCYCLER_LONG_READS` and optional paired
+nonblank `MYCELIA_AUTOCYCLER_LONG_READS` and
+`MYCELIA_AUTOCYCLER_READ_TYPE`, plus optional paired
 `MYCELIA_AUTOCYCLER_SHORT_READS_1` / `_2` fixtures.
 
 ## Downstream benchmark and ensemble boundary

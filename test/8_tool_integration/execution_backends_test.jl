@@ -42,6 +42,23 @@ Test.@testset "Execution backend helpers" begin
     Test.@test legacy_submit_result.ok
     Test.@test !legacy_submit_result.held
     Test.@test legacy_submit_result.scheduler_acceptance == :accepted
+    Test.@test legacy_submit_result.job_cluster === nothing
+    legacy_federated_submit_result = Mycelia.SubmitResult(
+        true,
+        false,
+        :scg,
+        :sbatch,
+        nothing,
+        nothing,
+        nothing,
+        "12345",
+        "12345;cluster-a\n",
+        String[],
+        String[],
+    )
+    Test.@test legacy_federated_submit_result.scheduler_acceptance == :accepted
+    Test.@test legacy_federated_submit_result.job_id == "12345"
+    Test.@test legacy_federated_submit_result.job_cluster == "cluster-a"
     legacy_failed_sbatch = Mycelia.SubmitResult(
         false,
         false,
@@ -106,6 +123,7 @@ Test.@testset "Execution backend helpers" begin
         result.scheduler_acceptance in (:not_attempted, :accepted, :unknown)
         for result in (
             legacy_submit_result,
+            legacy_federated_submit_result,
             legacy_failed_sbatch,
             legacy_dry_run,
             legacy_validation_failure,
@@ -516,10 +534,18 @@ Test.@testset "Scheduler utility helpers" begin
     Test.@test Mycelia._extract_sbatch_job_id(
         "site notice\n12345;federated_cluster\n",
     ) == "12345"
+    Test.@test Mycelia._extract_sbatch_job_reference(
+        "site notice\n12345;federated_cluster\n",
+    ) == (; job_id = "12345", job_cluster = "federated_cluster")
+    Test.@test Mycelia._extract_sbatch_job_reference("12345\n") ==
+               (; job_id = "12345", job_cluster = nothing)
     Test.@test Mycelia._extract_sbatch_job_id("12345\r\n") == "12345"
     Test.@test Mycelia._extract_sbatch_job_id("12\r345\n") === nothing
     Test.@test Mycelia._extract_sbatch_job_id(
         "12345;cluster-a\n67890;cluster-b\n",
+    ) === nothing
+    Test.@test Mycelia._extract_sbatch_job_reference(
+        "12345;cluster-a\n12345;cluster-b\n",
     ) === nothing
     Test.@test Mycelia._extract_sbatch_job_id(
         "Submitted batch job 12345\n",
@@ -558,6 +584,7 @@ Test.@testset "Scheduler utility helpers" begin
         Test.@test accepted.held
         Test.@test accepted.scheduler_acceptance == :accepted
         Test.@test accepted.job_id == "12345"
+        Test.@test accepted.job_cluster == "cluster-a"
         Test.@test length(captured_commands) == 1
         Test.@test occursin(
             "sbatch --hold --parsable",
@@ -579,6 +606,36 @@ Test.@testset "Scheduler utility helpers" begin
         Test.@test accepted_with_nonzero_exit.ok
         Test.@test accepted_with_nonzero_exit.scheduler_acceptance == :accepted
         Test.@test accepted_with_nonzero_exit.job_id == "12346"
+        Test.@test accepted_with_nonzero_exit.job_cluster == "cluster-a"
+
+        colliding_cluster_a = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "collision-a.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = 0,
+                term_signal = 0,
+                stdout = "55001;cluster-a\n",
+                stderr = "",
+            ),
+        )
+        colliding_cluster_b = Mycelia.submit(
+            job;
+            dry_run = false,
+            hold = true,
+            path = joinpath(temporary_root, "collision-b.sbatch"),
+            sbatch_runner = _command -> (;
+                exit_code = 0,
+                term_signal = 0,
+                stdout = "55001;cluster-b\n",
+                stderr = "",
+            ),
+        )
+        Test.@test colliding_cluster_a.job_id == colliding_cluster_b.job_id
+        Test.@test colliding_cluster_a.job_cluster == "cluster-a"
+        Test.@test colliding_cluster_b.job_cluster == "cluster-b"
+        Test.@test colliding_cluster_a != colliding_cluster_b
 
         ambiguous = Mycelia.submit(
             job;
@@ -651,6 +708,24 @@ Test.@testset "Scheduler utility helpers" begin
     Test.@test length(release_commands) == 1
     Test.@test Mycelia.command_string(only(release_commands)) ==
                "/fixture/scontrol release 12345"
+    federated_release_commands = Cmd[]
+    federated_released_job_id = Mycelia.release_slurm_job(
+        "12345";
+        job_cluster = "cluster-a",
+        scontrol_path = "/fixture/scontrol",
+        command_runner = command -> push!(federated_release_commands, command),
+    )
+    Test.@test federated_released_job_id == "12345"
+    Test.@test Mycelia.command_string(only(federated_release_commands)) ==
+               "/fixture/scontrol -M cluster-a release 12345"
+    test_throws_message(ArgumentError, ["SLURM cluster"]) do
+        Mycelia.release_slurm_job(
+            "12345";
+            job_cluster = "cluster/a",
+            scontrol_path = "/fixture/scontrol",
+            command_runner = _command -> nothing,
+        )
+    end
     test_throws_message(ArgumentError, ["decimal digits"]) do
         Mycelia.release_slurm_job(
             "12345;67890";

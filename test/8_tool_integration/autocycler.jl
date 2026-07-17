@@ -13,6 +13,8 @@
 # MYCELIA_AUTOCYCLER_LONG_READS=/path/to/long.fastq \
 # MYCELIA_AUTOCYCLER_SHORT_READS_1=/path/to/R1.fastq \
 # MYCELIA_AUTOCYCLER_SHORT_READS_2=/path/to/R2.fastq \
+# MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10 \
+# MYCELIA_ASSEMBLER_TEST_THREADS=2 \
 # julia --project=. --compiled-modules=no -e \
 #   'include("test/8_tool_integration/autocycler.jl")'
 # ```
@@ -148,6 +150,22 @@ function _autocycler_test_error(function_to_run::Function)::Exception
         return error
     end
     Base.error("Expected function to throw")
+end
+
+function _assert_autocycler_smoke_input_snapshot(
+        snapshot::NamedTuple,
+        source_path::AbstractString,
+)::Nothing
+    normalized_source = abspath(String(source_path))
+    Test.@test snapshot.path == normalized_source
+    Test.@test snapshot.canonical_path == realpath(normalized_source)
+    Test.@test snapshot.size_bytes == filesize(normalized_source)
+    Test.@test snapshot.sha256 == Mycelia._autocycler_sha256(normalized_source)
+    Test.@test snapshot.consumed_size_bytes == snapshot.size_bytes
+    Test.@test snapshot.consumed_sha256 == snapshot.sha256
+    Test.@test snapshot.consumed_path != normalized_source
+    Test.@test !ispath(snapshot.consumed_path)
+    return nothing
 end
 
 function _autocycler_test_compatible_packages(;
@@ -3501,6 +3519,7 @@ Test.@testset "Autocycler wrapper" begin
         enabled_without_fixtures = Dict(
             "MYCELIA_RUN_EXTERNAL" => "true",
             "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+            "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
         )
         missing_long_reads_error = _autocycler_test_error() do
             _autocycler_smoke_prerequisites(enabled_without_fixtures)
@@ -3517,6 +3536,7 @@ Test.@testset "Autocycler wrapper" begin
                 "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => "long.fastq",
                 "MYCELIA_AUTOCYCLER_SHORT_READS_1" => "R1.fastq",
+                "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
             ))
         end
         Test.@test incomplete_pair_error isa ArgumentError
@@ -3532,6 +3552,7 @@ Test.@testset "Autocycler wrapper" begin
                     "MYCELIA_RUN_EXTERNAL" => "true",
                     "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => missing_path,
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
                 ))
             end
             Test.@test missing_fixture_error isa ArgumentError
@@ -3547,6 +3568,7 @@ Test.@testset "Autocycler wrapper" begin
                     "MYCELIA_RUN_EXTERNAL" => "true",
                     "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => empty_path,
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
                 ))
             end
             Test.@test empty_fixture_error isa ArgumentError
@@ -3562,6 +3584,7 @@ Test.@testset "Autocycler wrapper" begin
                     "MYCELIA_RUN_EXTERNAL" => "true",
                     "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => malformed_path,
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
                 ))
             end
             Test.@test malformed_fixture_error isa ArgumentError
@@ -3576,6 +3599,24 @@ Test.@testset "Autocycler wrapper" begin
             write(long_reads, "@long\nACGT\n+\nIIII\n")
             write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
             write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
+
+            for missing_value in (nothing, "   ")
+                environment = Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+                )
+                missing_value === nothing ||
+                    (environment["MYCELIA_AUTOCYCLER_READ_TYPE"] = missing_value)
+                missing_type_error = _autocycler_test_error() do
+                    _autocycler_smoke_prerequisites(environment)
+                end
+                Test.@test missing_type_error isa ArgumentError
+                Test.@test occursin(
+                    "MYCELIA_AUTOCYCLER_READ_TYPE is required",
+                    sprint(showerror, missing_type_error),
+                )
+            end
 
             invalid_type_error = _autocycler_test_error() do
                 _autocycler_smoke_prerequisites(Dict(
@@ -3595,6 +3636,7 @@ Test.@testset "Autocycler wrapper" begin
                 "MYCELIA_RUN_EXTERNAL" => "true",
                 "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+                "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
             ))
             Test.@test long_only.run_smoke
             Test.@test long_only.long_reads == abspath(long_reads)
@@ -3622,6 +3664,7 @@ Test.@testset "Autocycler wrapper" begin
                     "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
                     "MYCELIA_AUTOCYCLER_SHORT_READS_1" => short_reads_1,
                     "MYCELIA_AUTOCYCLER_SHORT_READS_2" => short_reads_2,
+                    "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
                 ))
             end
             Test.@test invalid_pair_error isa ArgumentError
@@ -3643,6 +3686,7 @@ if run_autocycler_smoke
                     long_reads = smoke_inputs.long_reads,
                     out_dir = joinpath(temp_dir, "autocycler"),
                     read_type = smoke_inputs.read_type,
+                    threads = smoke_inputs.threads,
                 )
                 Test.@test isfile(result.graph)
                 Test.@test filesize(result.graph) > 0
@@ -3651,6 +3695,17 @@ if run_autocycler_smoke
                 Test.@test Mycelia._require_autocycler_toolchain_provenance(
                     result.toolchain,
                 ) == result.toolchain
+                Test.@test result.requested_threads == smoke_inputs.threads
+                Test.@test result.autocycler_assembly_threads ==
+                           Mycelia._effective_autocycler_assembly_threads(
+                    smoke_inputs.threads,
+                )
+                Test.@test result.jobs == 1
+                Test.@test result.read_type == smoke_inputs.read_type
+                _assert_autocycler_smoke_input_snapshot(
+                    result.input_snapshots.long_reads,
+                    smoke_inputs.long_reads,
+                )
             else
                 result = Mycelia.run_autocycler_polished(
                     long_reads = smoke_inputs.long_reads,
@@ -3658,6 +3713,7 @@ if run_autocycler_smoke
                     short_reads_2 = smoke_inputs.short_reads_2,
                     out_dir = joinpath(temp_dir, "autocycler-polished"),
                     read_type = smoke_inputs.read_type,
+                    threads = smoke_inputs.threads,
                 )
                 Test.@test isfile(result.graph)
                 Test.@test filesize(result.graph) > 0
@@ -3666,14 +3722,248 @@ if run_autocycler_smoke
                 Test.@test Mycelia._require_autocycler_toolchain_provenance(
                     result.toolchain,
                 ) == result.toolchain
+                Test.@test result.requested_threads == smoke_inputs.threads
+                Test.@test result.polishing_threads == smoke_inputs.threads
+                Test.@test result.autocycler_assembly_threads ==
+                           Mycelia._effective_autocycler_assembly_threads(
+                    smoke_inputs.threads,
+                )
+                Test.@test result.jobs == 1
+                Test.@test result.read_type == smoke_inputs.read_type
+                for (snapshot, source_path) in (
+                        (
+                            result.input_snapshots.long_reads,
+                            smoke_inputs.long_reads,
+                        ),
+                        (
+                            result.input_snapshots.short_reads_1,
+                            smoke_inputs.short_reads_1,
+                        ),
+                        (
+                            result.input_snapshots.short_reads_2,
+                            smoke_inputs.short_reads_2,
+                        ),
+                )
+                    _assert_autocycler_smoke_input_snapshot(
+                        snapshot,
+                        source_path,
+                    )
+                end
             end
         end
     end
 else
+    Test.@testset "Autocycler gated real smoke (disabled)" begin
+        Test.@test_skip false
+    end
     @info (
         "Skipping Autocycler real smoke; set MYCELIA_RUN_EXTERNAL=true and " *
         "MYCELIA_RUN_AUTOCYCLER_SMOKE=true to opt in."
     )
+end
+
+Test.@testset "Autocycler bounded reserved input spooling" begin
+    mktempdir() do temp_dir
+        long_reads = joinpath(temp_dir, "long.fastq")
+        original_long = "@long\nACGTTGCA\n+\nIIIIIIII\n"
+        write(long_reads, original_long)
+        scratch_root = joinpath(temp_dir, "scratch")
+        mkpath(scratch_root)
+
+        before_entries = Set(readdir(scratch_root))
+        ceiling_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                byte_ceiling = filesize(long_reads) - 1,
+            )
+        end
+        Test.@test ceiling_error isa ArgumentError
+        Test.@test occursin(
+            "cumulative ceiling",
+            sprint(showerror, ceiling_error),
+        )
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        free_space_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                available_bytes_reader = parent -> 0,
+            )
+        end
+        Test.@test free_space_error isa ArgumentError
+        Test.@test occursin(
+            "only 0 bytes are available",
+            sprint(showerror, free_space_error),
+        )
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        enospc_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                after_copy_hook = binding ->
+                    throw(SystemError("synthetic ENOSPC", 28)),
+            )
+        end
+        Test.@test enospc_error isa ErrorException
+        Test.@test occursin("scratch space", sprint(showerror, enospc_error))
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        growth_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                after_copy_hook = binding ->
+                    open(binding.source.path, "a") do output
+                        write(output, "@extra\nACGT\n+\nIIII\n")
+                    end,
+            )
+        end
+        Test.@test growth_error isa ErrorException
+        Test.@test occursin(
+            "changed physical identity or size",
+            sprint(showerror, growth_error),
+        )
+        write(long_reads, original_long)
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        replacement_backup = joinpath(temp_dir, "long-backup.fastq")
+        replacement_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                after_copy_hook = binding -> begin
+                    mv(binding.source.path, replacement_backup)
+                    write(binding.source.path, original_long)
+                end,
+            )
+        end
+        Test.@test replacement_error isa ErrorException
+        Test.@test occursin(
+            "changed physical identity or size",
+            sprint(showerror, replacement_error),
+        )
+        rm(long_reads; force = true)
+        mv(replacement_backup, long_reads)
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        second_reads = joinpath(temp_dir, "second.fastq")
+        write(second_reads, "@second\nTGCA\n+\nIIII\n")
+        external_target = joinpath(temp_dir, "external.fastq")
+        external_contents = "@external\nACGT\n+\nIIII\n"
+        write(external_target, external_contents)
+        planted_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads, second_reads),
+                ("Long-read FASTQ", "Second FASTQ");
+                spool_parent = scratch_root,
+                after_copy_hook = binding -> begin
+                    if binding.label == "Long-read FASTQ"
+                        symlink(
+                            external_target,
+                            joinpath(dirname(binding.spool_path), "input_2.fastq"),
+                        )
+                    end
+                end,
+            )
+        end
+        Test.@test planted_error isa ErrorException
+        Test.@test occursin("scratch space", sprint(showerror, planted_error))
+        Test.@test read(external_target, String) == external_contents
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        displaced_root = joinpath(temp_dir, "displaced-autocycler-spool")
+        replacement_root = Ref("")
+        root_replacement_error = _autocycler_test_error() do
+            Mycelia._autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = scratch_root,
+                after_copy_hook = binding -> begin
+                    replacement_root[] = dirname(binding.spool_path)
+                    mv(replacement_root[], displaced_root)
+                    mkpath(replacement_root[])
+                    write(
+                        joinpath(replacement_root[], "replacement-marker"),
+                        "retain",
+                    )
+                end,
+            )
+        end
+        Test.@test root_replacement_error isa ErrorException
+        Test.@test occursin(
+            "spool root changed",
+            sprint(showerror, root_replacement_error),
+        )
+        Test.@test read(
+            joinpath(replacement_root[], "replacement-marker"),
+            String,
+        ) == "retain"
+        rm(replacement_root[]; recursive = true, force = true)
+        rm(displaced_root; recursive = true, force = true)
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        output_reserved = Ref(false)
+        environment_reserved = Ref(false)
+        captured_spool = Ref("")
+        output_lock_runner = function (
+                action::Function,
+                outdir::AbstractString,
+        )
+            output_reserved[] = true
+            try
+                return action(abspath(outdir))
+            finally
+                output_reserved[] = false
+            end
+        end
+        environment_lock_runner = function (
+                action::Function,
+                lock_path::AbstractString,
+        )
+            environment_reserved[] = true
+            try
+                return action()
+            finally
+                environment_reserved[] = false
+            end
+        end
+        result = Mycelia._run_autocycler(
+            long_reads,
+            joinpath(temp_dir, "reserved-output");
+            dependency_checker = () -> _autocycler_test_toolchain(),
+            output_lock_runner,
+            environment_lock_runner,
+            input_spool_parent = scratch_root,
+            after_input_spool_copy_hook = binding -> begin
+                Test.@test output_reserved[]
+                Test.@test environment_reserved[]
+                captured_spool[] = binding.spool_path
+                Test.@test startswith(binding.spool_path, scratch_root)
+            end,
+            runner = step -> begin
+                if step.name == :autocycler
+                    write(long_reads, "@long\nNNNNNNNN\n+\n!!!!!!!!\n")
+                    Test.@test captured_spool[] in step.command.exec
+                    Test.@test read(captured_spool[], String) == original_long
+                    write(long_reads, original_long)
+                end
+                _autocycler_test_runner!(step)
+            end,
+        )
+        Test.@test result.input_snapshots.long_reads.consumed_sha256 ==
+                   result.input_snapshots.long_reads.sha256
+        Test.@test !ispath(dirname(captured_spool[]))
+        Test.@test !output_reserved[]
+        Test.@test !environment_reserved[]
+    end
 end
 
 Test.@testset "Autocycler input content lifecycle binding" begin
@@ -3706,8 +3996,7 @@ Test.@testset "Autocycler input content lifecycle binding" begin
         )
         gzip_spool_root = gzip_binding.spool_root
         try
-            Test.@test basename(gzip_binding.semantic_path) ==
-                       basename(gzip_input)
+            Test.@test endswith(gzip_binding.semantic_path, ".fastq.gz")
             Test.@test Mycelia._validate_autocycler_fastq(
                 gzip_binding.semantic_path,
                 "Gzip long-read input",

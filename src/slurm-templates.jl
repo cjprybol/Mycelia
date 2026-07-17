@@ -48,12 +48,14 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Record a backend submission result.
 
-For `sbatch`, `scheduler_acceptance` is `:accepted` only when an exact parsable
-job id was returned. Once `sbatch` has been invoked, every result without that
-proof is `:unknown`; a client exit code or diagnostic text cannot prove that
-the controller rejected the request. The supported states are `:not_attempted`,
-`:accepted`, and `:unknown`; failures established before invoking the scheduler
-use `:not_attempted`.
+For `sbatch`, `scheduler_acceptance` is `:accepted` only when one exact parsable
+job reference was returned. Federated references retain both `job_id` and
+`job_cluster`; unscoped references retain `job_id` with `job_cluster = nothing`.
+Once `sbatch` has been invoked, every result without that proof is `:unknown`; a
+client exit code or diagnostic text cannot prove that the controller rejected
+the request. The supported states are `:not_attempted`, `:accepted`, and
+`:unknown`; failures established before invoking the scheduler use
+`:not_attempted`.
 """
 Base.@kwdef struct SubmitResult
     ok::Bool = false
@@ -66,6 +68,7 @@ Base.@kwdef struct SubmitResult
     artifact_text::Union{Nothing, String} = nothing
     submit_command::Union{Nothing, String} = nothing
     job_id::Union{Nothing, String} = nothing
+    job_cluster::Union{Nothing, String} = nothing
     stdout::Union{Nothing, String} = nothing
     warnings::Vector{String} = String[]
     errors::Vector{String} = String[]
@@ -84,15 +87,26 @@ function SubmitResult(
         warnings::Vector{String},
         errors::Vector{String},
 )::SubmitResult
+    stdout_reference = if backend == :sbatch && stdout isa AbstractString
+        _extract_sbatch_job_reference(stdout)
+    else
+        nothing
+    end
     scheduler_acceptance = if dry_run || backend != :sbatch
         :not_attempted
     elseif ok &&
            job_id isa AbstractString &&
-           occursin(r"^[0-9]+$", job_id)
+           occursin(r"^[0-9]+$", job_id) &&
+           (stdout === nothing ||
+            (stdout_reference !== nothing &&
+             stdout_reference.job_id == job_id))
         :accepted
     else
         :unknown
     end
+    job_cluster = scheduler_acceptance == :accepted &&
+                  stdout_reference !== nothing ?
+                  stdout_reference.job_cluster : nothing
     return SubmitResult(;
         ok,
         dry_run,
@@ -104,6 +118,7 @@ function SubmitResult(
         artifact_text,
         submit_command,
         job_id,
+        job_cluster,
         stdout,
         warnings,
         errors,
@@ -1697,18 +1712,30 @@ function _is_interactive_job(job::JobSpec)::Bool
     return job.site == :scg && partition == "interactive"
 end
 
+function _extract_sbatch_job_reference(
+        stdout_text::AbstractString,
+)::Union{Nothing, NamedTuple}
+    job_references = NamedTuple[]
+    for line in split(String(stdout_text), '\n'; keepempty = false)
+        match_entry = match(
+            r"^([0-9]+)(?:;([A-Za-z0-9_.-]+))?$",
+            strip(line),
+        )
+        match_entry === nothing && continue
+        job_cluster = match_entry.captures[2]
+        push!(job_references, (;
+            job_id = String(match_entry.captures[1]),
+            job_cluster = job_cluster === nothing ? nothing : String(job_cluster),
+        ))
+    end
+    return length(job_references) == 1 ? only(job_references) : nothing
+end
+
 function _extract_sbatch_job_id(
         stdout_text::AbstractString,
 )::Union{Nothing, String}
-    job_ids = String[]
-    for line in split(String(stdout_text), '\n'; keepempty = false)
-        match_entry = match(
-            r"^([0-9]+)(?:;[A-Za-z0-9_.-]+)?$",
-            strip(line),
-        )
-        match_entry === nothing || push!(job_ids, match_entry.captures[1])
-    end
-    return length(job_ids) == 1 ? only(job_ids) : nothing
+    reference = _extract_sbatch_job_reference(stdout_text)
+    return reference === nothing ? nothing : reference.job_id
 end
 
 function _run_sbatch_command(command::Cmd)::NamedTuple
@@ -1763,25 +1790,51 @@ function _normalize_slurm_job_id(job_id::AbstractString)::String
     return normalized_job_id
 end
 
+function _normalize_slurm_job_cluster(
+        job_cluster::AbstractString,
+)::String
+    normalized_job_cluster = strip(String(job_cluster))
+    occursin(r"^[A-Za-z0-9_.-]+$", normalized_job_cluster) || throw(
+        ArgumentError(
+            "SLURM cluster must contain only letters, decimal digits, " *
+            "underscore, dot, or hyphen.",
+        ),
+    )
+    return normalized_job_cluster
+end
+
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
-Release one exact held SLURM job and return its normalized job id.
+Release one exact held SLURM job and return its normalized job id. Pass the
+exact nonempty `job_cluster` for a federated job; it is released with
+`scontrol -M <cluster> release <job_id>`. Leave `job_cluster = nothing` only for
+an unscoped job.
 """
 function release_slurm_job(
         job_id::AbstractString;
+        job_cluster::Union{Nothing, AbstractString} = nothing,
         command_runner::Function = Base.run,
         scontrol_path::Union{Nothing, AbstractString} = Sys.which("scontrol"),
 )::String
     normalized_job_id = _normalize_slurm_job_id(job_id)
+    normalized_job_cluster = job_cluster === nothing ?
+                             nothing :
+                             _normalize_slurm_job_cluster(job_cluster)
+    display_reference = normalized_job_cluster === nothing ?
+                        normalized_job_id :
+                        "$(normalized_job_id);$(normalized_job_cluster)"
     scontrol_path === nothing && error(
-        "scontrol is unavailable; SLURM job $(normalized_job_id) remains held.",
+        "scontrol is unavailable; SLURM job $(display_reference) remains held.",
     )
     normalized_scontrol_path = String(scontrol_path)
     isempty(strip(normalized_scontrol_path)) && throw(ArgumentError(
         "scontrol_path must be nonempty when provided.",
     ))
-    command_runner(`$(normalized_scontrol_path) release $(normalized_job_id)`)
+    command = normalized_job_cluster === nothing ?
+              `$(normalized_scontrol_path) release $(normalized_job_id)` :
+              `$(normalized_scontrol_path) -M $(normalized_job_cluster) release $(normalized_job_id)`
+    command_runner(command)
     return normalized_job_id
 end
 
@@ -2055,8 +2108,9 @@ function submit(
                      `sbatch --parsable $artifact_path`
         execution = _normalize_sbatch_execution(sbatch_runner(submit_cmd))
         output = execution.stdout
-        job_id = _extract_sbatch_job_id(output)
-        scheduler_acceptance = job_id === nothing ? :unknown : :accepted
+        job_reference = _extract_sbatch_job_reference(output)
+        scheduler_acceptance =
+            job_reference === nothing ? :unknown : :accepted
         if scheduler_acceptance != :accepted
             diagnostic = if execution.term_signal != 0
                 "sbatch terminated by signal $(execution.term_signal); " *
@@ -2094,7 +2148,8 @@ function submit(
             artifact_path = artifact_path,
             artifact_text = artifact_text,
             submit_command = submit_command,
-            job_id = job_id,
+            job_id = job_reference.job_id,
+            job_cluster = job_reference.job_cluster,
             stdout = output,
             warnings = report.warnings,
             errors = report.errors

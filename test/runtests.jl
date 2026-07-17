@@ -18,6 +18,8 @@
 #   - MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true
 #   - MYCELIA_RUN_AUTOCYCLER_POLISHED=true (hybrid-smoke subgate)
 #   - MYCELIA_RUN_AUTOCYCLER_SMOKE=true
+#   - MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10|ont_r9|pacbio_hifi (required by
+#     the standalone Autocycler smoke; never inferred from a fixture path)
 #
 # External dependencies (skipped by default):
 #   - NCBI datasets CLI, SRA tools (prefetch, fasterq_dump)

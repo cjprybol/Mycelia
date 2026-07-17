@@ -73,11 +73,20 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # )
 #
 # # High-level corrected multi-input workflows use typed sibling adapters.
+# Base.Filesystem.mkpath("scratch/unicycler-inputs")
+# Base.Filesystem.mkpath("scratch/autocycler-inputs")
 # unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
 #     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
 #     "reads_ont.fastq.gz";
 #     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
 #         output_dir = "hybrid_unicycler_out",
+#         # Cumulative stable source + correction-output copy budget.
+#         input_snapshot_byte_ceiling = 500_000_000_000,
+#         assembler_options = (;
+#             # Separate reservation-scoped direct-assembler scratch controls.
+#             input_spool_parent = "scratch/unicycler-inputs",
+#             input_spool_byte_ceiling = 250_000_000_000,
+#         ),
 #     ),
 # )
 # # Unicycler's mutable Conda environment is bound to the realized package
@@ -92,6 +101,11 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 #         long_read_tech = :pacbio_hifi,
 #         autocycler_read_type = :pacbio_hifi,
 #         output_dir = "hybrid_autocycler_out",
+#         input_snapshot_byte_ceiling = 500_000_000_000,
+#         assembler_options = (;
+#             input_spool_parent = "scratch/autocycler-inputs",
+#             input_spool_byte_ceiling = 250_000_000_000,
+#         ),
 #     ),
 # )
 # autocycler_result.assembly_stats["toolchain"]
@@ -101,12 +115,22 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # read_content = unicycler_result.assembly_stats["read_content_provenance"]
 # read_content["source_inputs"]
 # read_content["corrected_fastqs"]
+# # Exact partial snapshots are cleaned on ceiling, free-space, write, or hash
+# # failure. Persistent high-level snapshots remain; direct spools never do.
 #
-# metaMDBG v1.4 accepts exactly one of hifi_reads or ont_reads; it is not a
-# combined HiFi-plus-ONT adapter. Synchronous execution returns :complete only
-# after semantic FASTA/GFA validation; collected or dry-run jobs return :planned.
-# metamdbg_result = Mycelia.run_metamdbg(hifi_reads = "reads_hifi.fastq.gz")
-# @assert metamdbg_result.status == :complete
+# metaMDBG v1.4 accepts one or more HiFi FASTQs, or one or more ONT R10.4-or-
+# later FASTQs with an explicit attestation. It is never a HiFi-plus-ONT or
+# Illumina-plus-long adapter. Synchronous execution returns :complete only after
+# semantic FASTA/GFA validation; collected or dry-run jobs return :planned.
+# metamdbg_hifi_result = Mycelia.run_metamdbg(
+#     hifi_reads = ["reads_hifi_1.fastq.gz", "reads_hifi_2.fastq.gz"],
+# )
+# @assert metamdbg_hifi_result.status == :complete
+# metamdbg_ont_result = Mycelia.run_metamdbg(
+#     ont_reads = ["reads_ont_1.fastq.gz", "reads_ont_2.fastq.gz"],
+#     ont_r10_4_plus = true,
+# )
+# @assert metamdbg_ont_result.status == :complete
 #
 # Mycelia.run_bcalm(["reads_R1.fastq", "reads_R2.fastq"], "bcalm_out"; kmer_size = 31)
 # Mycelia.ggcat_build("reads.fastq", "graph.lz4", 31)

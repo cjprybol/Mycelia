@@ -61,6 +61,7 @@ const AUTOCYCLER_READ_TYPES = (
     "pacbio_clr",
     "pacbio_hifi",
 )
+const AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING = 1_000_000_000_000
 
 function _autocycler_paths()::Tuple{String, String, String}
     install_dir = joinpath(dirname(dirname(pathof(Mycelia))), "deps", "autocycler")
@@ -142,55 +143,251 @@ end
 function _autocycler_spooled_input_snapshot(
         path::AbstractString,
         label::AbstractString,
+        ;
+        spool_parent::Union{Nothing, AbstractString} = nothing,
+        byte_ceiling::Integer = AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
+        available_bytes_reader::Function = parent -> diskstat(parent).available,
+        after_copy_hook::Function = binding -> nothing,
+)::NamedTuple
+    bindings = _autocycler_spooled_input_snapshots(
+        (path,),
+        (label,);
+        spool_parent,
+        byte_ceiling,
+        available_bytes_reader,
+        after_copy_hook,
+    )
+    return only(bindings.inputs)
+end
+
+function _autocycler_input_source_snapshot(
+        path::AbstractString,
+        label::AbstractString,
 )::NamedTuple
     normalized_path = _require_nonempty_autocycler_file(path, label)
     canonical_path = realpath(normalized_path)
-    spool_root = mktempdir(; prefix = "mycelia-autocycler-input-")
-    spool_path = joinpath(spool_root, basename(normalized_path))
+    status = stat(normalized_path)
+    return (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = filesize(normalized_path),
+        device = UInt64(status.device),
+        inode = UInt64(status.inode),
+    )
+end
+
+function _autocycler_spool_root_identity(
+        spool_root::AbstractString,
+)::NamedTuple
+    normalized_root = normpath(abspath(String(spool_root)))
+    isdir(normalized_root) && !islink(normalized_root) || error(
+        "Autocycler private input spool root is missing, replaced, or not " *
+        "a directory: $(normalized_root).",
+    )
+    status = stat(normalized_root)
+    return (;
+        path = normalized_root,
+        device = UInt64(status.device),
+        inode = UInt64(status.inode),
+    )
+end
+
+function _require_unchanged_autocycler_spool_root(
+        expected::NamedTuple,
+)::Nothing
+    _autocycler_spool_root_identity(expected.path) == expected || error(
+        "Autocycler private input spool root changed physical identity.",
+    )
+    return nothing
+end
+
+function _autocycler_copy_input_snapshot!(
+        source::NamedTuple,
+        spool_path::AbstractString,
+        label::AbstractString;
+        after_copy_hook::Function = binding -> nothing,
+)::NamedTuple
+    input = Base.Filesystem.open(
+        source.canonical_path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    output = nothing
+    destination_identity = nothing
     try
-        open(normalized_path, "r") do input
-            open(spool_path, "w") do output
-                buffer = Vector{UInt8}(undef, 1024 * 1024)
-                while !eof(input)
-                    count = readbytes!(input, buffer)
-                    count == 0 && break
-                    write(output, @view buffer[1:count])
-                end
-            end
+        input_status = stat(input)
+        UInt64(input_status.device) == source.device &&
+            UInt64(input_status.inode) == source.inode &&
+            filesize(input) == source.size_bytes || throw(ErrorException(
+                "$(label) changed before its private stable input snapshot " *
+                "was copied.",
+            ))
+        output = Base.Filesystem.open(
+            spool_path,
+            Base.JL_O_WRONLY |
+            Base.JL_O_CREAT |
+            Base.JL_O_EXCL |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+            0o600,
+        )
+        output_status = stat(output)
+        destination_identity = (;
+            device = UInt64(output_status.device),
+            inode = UInt64(output_status.inode),
+        )
+        buffer = Vector{UInt8}(undef, 1024 * 1024)
+        remaining = source.size_bytes
+        while remaining > 0
+            requested = min(length(buffer), remaining)
+            count = readbytes!(input, buffer, requested)
+            count > 0 || throw(ErrorException(
+                "$(label) shrank while its private stable input snapshot " *
+                "was materialized.",
+            ))
+            write(output, @view buffer[1:count])
+            remaining -= count
         end
-        chmod(spool_path, 0o400)
-    catch
-        rm(spool_root; recursive = true, force = true)
-        rethrow()
+        eof(input) || throw(ErrorException(
+            "$(label) grew while its private stable input snapshot was " *
+            "materialized.",
+        ))
+    finally
+        output === nothing || close(output)
+        close(input)
     end
     try
+        after_copy_hook((; source, spool_path = String(spool_path), label))
+        observed = _autocycler_input_source_snapshot(source.path, label)
+        observed == source || throw(ErrorException(
+            "$(label) changed physical identity or size while its private " *
+            "stable input snapshot was materialized.",
+        ))
+        isfile(spool_path) && !islink(spool_path) || throw(ErrorException(
+            "$(label) private stable input snapshot was replaced after " *
+            "copying.",
+        ))
+        spool_status = stat(spool_path)
+        destination_identity == (;
+            device = UInt64(spool_status.device),
+            inode = UInt64(spool_status.inode),
+        ) || throw(ErrorException(
+            "$(label) private stable input snapshot changed physical identity.",
+        ))
+        chmod(spool_path, 0o400)
         filesize(spool_path) > 0 || throw(ArgumentError(
             "$(label) became empty while its private semantic snapshot was " *
-            "materialized: $(normalized_path)",
+            "materialized: $(source.path)",
         ))
-        snapshot = (
-            path = normalized_path,
-            canonical_path,
+        consumed_snapshot = (;
+            path = String(spool_path),
             size_bytes = filesize(spool_path),
             sha256 = _autocycler_sha256(spool_path),
         )
-        return (; snapshot, semantic_path = spool_path, spool_root)
-    catch
-        _cleanup_autocycler_input_spool!(
-            (; semantic_path = spool_path, spool_root),
+        snapshot = (
+            path = source.path,
+            canonical_path = source.canonical_path,
+            size_bytes = source.size_bytes,
+            sha256 = consumed_snapshot.sha256,
+            consumed_path = consumed_snapshot.path,
+            consumed_size_bytes = consumed_snapshot.size_bytes,
+            consumed_sha256 = consumed_snapshot.sha256,
         )
+        return (; snapshot, consumed_snapshot, semantic_path = String(spool_path))
+    catch
+        rethrow()
+    end
+end
+
+function _autocycler_spooled_input_snapshots(
+        paths::Tuple,
+        labels::Tuple;
+        spool_parent::Union{Nothing, AbstractString} = nothing,
+        byte_ceiling::Integer = AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
+        available_bytes_reader::Function = parent -> diskstat(parent).available,
+        after_copy_hook::Function = binding -> nothing,
+)::NamedTuple
+    length(paths) == length(labels) || throw(ArgumentError(
+        "Autocycler input snapshot paths and labels must have equal length.",
+    ))
+    byte_ceiling > 0 || throw(ArgumentError(
+        "Autocycler input spool byte ceiling must be positive, got " *
+        "$(byte_ceiling).",
+    ))
+    sources = NamedTuple[
+        _autocycler_input_source_snapshot(path, label) for
+        (path, label) in zip(paths, labels)
+    ]
+    total_bytes_exact = sum(
+        BigInt(source.size_bytes) for source in sources;
+        init = BigInt(0),
+    )
+    total_bytes_exact <= BigInt(byte_ceiling) || throw(ArgumentError(
+        "Autocycler inputs require $(total_bytes_exact) spool bytes, exceeding the " *
+        "configured cumulative ceiling of $(byte_ceiling) bytes.",
+    ))
+    total_bytes = Int(total_bytes_exact)
+    resolved_parent = spool_parent === nothing ? tempdir() :
+                      normpath(abspath(String(spool_parent)))
+    isdir(resolved_parent) && !islink(resolved_parent) || throw(ArgumentError(
+        "Autocycler input spool parent must be an existing non-symlink " *
+        "directory: $(resolved_parent).",
+    ))
+    available_bytes = Int(available_bytes_reader(resolved_parent))
+    available_bytes >= total_bytes || throw(ArgumentError(
+        "Autocycler input spool preflight requires $(total_bytes) bytes but " *
+        "only $(available_bytes) bytes are available under " *
+        "$(resolved_parent).",
+    ))
+    spool_root = mktempdir(
+        resolved_parent;
+        prefix = "mycelia-autocycler-input-",
+    )
+    chmod(spool_root, 0o700)
+    spool_root_identity = _autocycler_spool_root_identity(spool_root)
+    inputs = NamedTuple[]
+    try
+        for (index, (source, label)) in enumerate(zip(sources, labels))
+            _require_unchanged_autocycler_spool_root(spool_root_identity)
+            extension = endswith(lowercase(source.path), ".gz") ?
+                        ".fastq.gz" : ".fastq"
+            spool_path = joinpath(spool_root, "input_$(index)$(extension)")
+            copied = _autocycler_copy_input_snapshot!(
+                source,
+                spool_path,
+                label;
+                after_copy_hook,
+            )
+            _require_unchanged_autocycler_spool_root(spool_root_identity)
+            push!(
+                inputs,
+                merge(copied, (; spool_root, spool_root_identity)),
+            )
+        end
+        return (; inputs = Tuple(inputs), spool_root, total_bytes)
+    catch caught
+        _remove_exact_private_input_spool_root!(
+            spool_root_identity,
+            "Autocycler",
+        )
+        caught isa InterruptException && rethrow()
+        if caught isa Base.IOError || caught isa SystemError
+            throw(ErrorException(
+                "Autocycler input spooling failed after cleanup, possibly " *
+                "because scratch space was exhausted: " *
+                sprint(showerror, caught),
+            ))
+        end
         rethrow()
     end
 end
 
 function _cleanup_autocycler_input_spool!(binding::NamedTuple)::Nothing
-    try
-        if ispath(binding.semantic_path)
-            chmod(binding.semantic_path, 0o600)
-        end
-    finally
-        rm(binding.spool_root; recursive = true, force = true)
-    end
+    _remove_exact_private_input_spool_root!(
+        binding.spool_root_identity,
+        "Autocycler",
+    )
     return nothing
 end
 
@@ -204,6 +401,20 @@ function _with_autocycler_spooled_input_snapshot(
         return function_to_run(binding)
     finally
         _cleanup_autocycler_input_spool!(binding)
+    end
+end
+
+function _with_autocycler_spooled_input_snapshots(
+        action::Function,
+        paths::Tuple,
+        labels::Tuple;
+        kwargs...,
+)::Any
+    bindings = _autocycler_spooled_input_snapshots(paths, labels; kwargs...)
+    try
+        return action(bindings.inputs)
+    finally
+        _cleanup_autocycler_input_spool!(first(bindings.inputs))
     end
 end
 
@@ -233,7 +444,13 @@ function _require_unchanged_autocycler_input(
             "Cause: $(sprint(showerror, caught))",
         ))
     end
-    observed_snapshot == expected_snapshot || throw(ErrorException(
+    expected_original = (;
+        path = expected_snapshot.path,
+        canonical_path = expected_snapshot.canonical_path,
+        size_bytes = expected_snapshot.size_bytes,
+        sha256 = expected_snapshot.sha256,
+    )
+    observed_snapshot == expected_original || throw(ErrorException(
         "$(label) changed after its initial path/size/SHA-256 snapshot: " *
         "expected canonical_path=$(expected_snapshot.canonical_path), " *
         "size=$(expected_snapshot.size_bytes), " *
@@ -243,6 +460,28 @@ function _require_unchanged_autocycler_input(
         "sha256=$(observed_snapshot.sha256).",
     ))
     return observed_snapshot
+end
+
+
+function _require_unchanged_autocycler_consumed_input(
+        expected_snapshot::NamedTuple,
+        label::AbstractString,
+)::NamedTuple
+    path = expected_snapshot.path
+    isfile(path) && !islink(path) || throw(ErrorException(
+        "$(label) stable consumed snapshot is missing or not a regular " *
+        "non-symlink file: $(path).",
+    ))
+    observed = (;
+        path = String(path),
+        size_bytes = filesize(path),
+        sha256 = _autocycler_sha256(path),
+    )
+    observed == expected_snapshot || throw(ErrorException(
+        "$(label) stable consumed snapshot changed before or during tool " *
+        "consumption.",
+    ))
+    return observed
 end
 
 function _require_verified_autocycler_environment_spec(
@@ -1400,6 +1639,13 @@ function _validate_autocycler_fastq_reader(
             ))
             record_count += 1
         end
+    catch caught
+        caught isa InterruptException && rethrow()
+        caught isa ArgumentError && rethrow()
+        throw(ArgumentError(
+            "$(label) must be a FASTQ file: $(abspath(path)). Cause: " *
+            sprint(showerror, caught),
+        ))
     finally
         close(reader)
     end
@@ -1497,6 +1743,13 @@ function _validate_autocycler_paired_fastq_readers(
             next_1 = iterate(reader_1, state_1)
             next_2 = iterate(reader_2, state_2)
         end
+    catch caught
+        caught isa InterruptException && rethrow()
+        caught isa ArgumentError && rethrow()
+        throw(ArgumentError(
+            "Autocycler paired short-read inputs must be FASTQ files. " *
+            "Cause: $(sprint(showerror, caught))",
+        ))
     finally
         try
             close(reader_1)
@@ -1562,6 +1815,22 @@ function _canonical_autocycler_output_path(out_dir::AbstractString)::String
         return canonical_ancestor
     end
     return joinpath(canonical_ancestor, missing_components...)
+end
+
+function _autocycler_output_adjacent_spool_parent(
+        out_dir::AbstractString,
+)::String
+    parent = dirname(normpath(abspath(String(out_dir))))
+    while !ispath(parent) && !islink(parent)
+        next_parent = dirname(parent)
+        next_parent == parent && break
+        parent = next_parent
+    end
+    isdir(parent) && !islink(parent) || throw(ArgumentError(
+        "Autocycler output-adjacent spool parent must resolve to an existing " *
+        "non-symlink directory: $(parent).",
+    ))
+    return realpath(parent)
 end
 
 function _autocycler_output_lock_path(out_dir::AbstractString)::String
@@ -1779,6 +2048,8 @@ function _autocycler_command_plan(
         graph = graph,
         requested_threads = requested_threads,
         autocycler_assembly_threads = autocycler_assembly_threads,
+        jobs = Int(jobs),
+        read_type = normalized_read_type,
     )
 end
 
@@ -2457,6 +2728,7 @@ function _run_autocycler_with_reserved_output(
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
         long_read_snapshot::NamedTuple,
+        long_read_consumed_snapshot::NamedTuple,
         after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
 )::NamedTuple
     validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
@@ -2481,6 +2753,10 @@ function _run_autocycler_with_reserved_output(
     )
     function verify_long_read_before_step(step::NamedTuple)::Nothing
         if step.name == :autocycler
+            _require_unchanged_autocycler_consumed_input(
+                long_read_consumed_snapshot,
+                "Long-read FASTQ",
+            )
             _require_unchanged_autocycler_input(
                 long_read_snapshot,
                 "Long-read FASTQ",
@@ -2491,6 +2767,10 @@ function _run_autocycler_with_reserved_output(
     output_snapshots = Ref{Any}(nothing)
     function verify_long_read_after_step(step::NamedTuple)::Nothing
         if step.name == :autocycler
+            _require_unchanged_autocycler_consumed_input(
+                long_read_consumed_snapshot,
+                "Long-read FASTQ",
+            )
             _require_unchanged_autocycler_input(
                 long_read_snapshot,
                 "Long-read FASTQ",
@@ -2574,6 +2854,8 @@ function _run_autocycler_with_reserved_output(
         graph_snapshot = autocycler_output_snapshots.graph,
         requested_threads = plan.requested_threads,
         autocycler_assembly_threads = plan.autocycler_assembly_threads,
+        jobs = plan.jobs,
+        read_type = plan.read_type,
     )
 end
 
@@ -2593,6 +2875,12 @@ function _run_autocycler(
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
+        input_spool_parent::Union{Nothing, AbstractString} = nothing,
+        input_spool_byte_ceiling::Integer =
+            AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
+        input_spool_available_bytes_reader::Function =
+            parent -> diskstat(parent).available,
+        after_input_spool_copy_hook::Function = binding -> nothing,
 )::NamedTuple
     resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
     resolved_prefix = environment_prefix === nothing ?
@@ -2610,25 +2898,37 @@ function _run_autocycler(
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    long_read_snapshot = _with_autocycler_spooled_input_snapshot(
-        long_reads,
-        "Long-read FASTQ",
-    ) do long_read_binding
-        _validate_autocycler_fastq(
-            long_read_binding.semantic_path,
-            "Long-read input",
-        )
-        return long_read_binding.snapshot
-    end
-    normalized_long_reads = long_read_snapshot.path
-    input_snapshots = (; long_reads = long_read_snapshot)
-    after_input_semantic_validation_hook(input_snapshots)
-    _require_unchanged_autocycler_input(
-        long_read_snapshot,
-        "Long-read FASTQ",
-    )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do
+            resolved_spool_parent = input_spool_parent === nothing ?
+                                    _autocycler_output_adjacent_spool_parent(
+                reserved_out_dir,
+            ) :
+                                    input_spool_parent
+            return _with_autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",);
+                spool_parent = resolved_spool_parent,
+                byte_ceiling = input_spool_byte_ceiling,
+                available_bytes_reader = input_spool_available_bytes_reader,
+                after_copy_hook = after_input_spool_copy_hook,
+            ) do input_bindings
+                long_read_binding = only(input_bindings)
+                _validate_autocycler_fastq(
+                    long_read_binding.semantic_path,
+                    "Long-read input",
+                )
+                long_read_snapshot = long_read_binding.snapshot
+                input_snapshots = (; long_reads = long_read_snapshot)
+                after_input_semantic_validation_hook(input_snapshots)
+                _require_unchanged_autocycler_input(
+                    long_read_snapshot,
+                    "Long-read FASTQ",
+                )
+                _require_unchanged_autocycler_consumed_input(
+                    long_read_binding.consumed_snapshot,
+                    "Long-read FASTQ",
+                )
             toolchain_snapshotter = _autocycler_toolchain_snapshotter(
                 dependency_checker,
                 resolved_runner;
@@ -2645,7 +2945,7 @@ function _run_autocycler(
                 dependency_result,
             )
             result = _run_autocycler_with_reserved_output(
-                normalized_long_reads,
+                long_read_binding.semantic_path,
                 reserved_out_dir;
                 threads,
                 jobs,
@@ -2655,6 +2955,8 @@ function _run_autocycler(
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
                 long_read_snapshot,
+                long_read_consumed_snapshot =
+                    long_read_binding.consumed_snapshot,
                 after_artifact_semantic_validation_hook,
             )
             _require_unchanged_autocycler_toolchain(
@@ -2698,6 +3000,10 @@ function _run_autocycler(
                 long_read_snapshot,
                 "Long-read FASTQ",
             )
+            _require_unchanged_autocycler_consumed_input(
+                long_read_binding.consumed_snapshot,
+                "Long-read FASTQ",
+            )
             return (
                 outdir = result.outdir,
                 assembly = result.assembly,
@@ -2707,12 +3013,15 @@ function _run_autocycler(
                 requested_threads = result.requested_threads,
                 autocycler_assembly_threads =
                     result.autocycler_assembly_threads,
+                jobs = result.jobs,
+                read_type = result.read_type,
                 artifact_snapshots = (;
                     assembly = result.assembly_snapshot,
                     graph = result.graph_snapshot,
                 ),
                 input_snapshots,
             )
+            end
         end
     end
 end
@@ -2735,6 +3044,10 @@ The shared Autocycler environment/install lock is also held from the initial
 dependency snapshot through artifact validation. The normalized full Conda
 inventory (name, version, build, and channel for every package) is checked before
 and after execution; any drift fails rather than returning ambiguous provenance.
+The reserved lifecycle first copies exactly the initially sized input into a
+read-only stable snapshot. Spooling rejects source growth, shrinkage, or physical
+replacement, enforces a cumulative byte ceiling, checks available space before
+copying, and removes partial snapshots on failure.
 
 The verified script and environment are compatibility-pinned to Autocycler 0.5.2.
 The upstream consensus model is intended for bacterial isolates whose alternative
@@ -2753,6 +3066,9 @@ to metagenomes, eukaryotic genomes, or highly fragmentary alternative assemblies
 - `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
   created by `install_autocycler`; `nothing` derives the spec-hash-addressed
   prefix from `conda_runner`.
+- `input_spool_parent::Union{Nothing,AbstractString}`: Existing scratch
+  directory for stable inputs; `nothing` uses the output-adjacent directory.
+- `input_spool_byte_ceiling::Integer`: Maximum cumulative stable-input bytes.
 
 # Returns
 A named tuple with `outdir`, `assembly`, `graph`, and exact realized `toolchain`
@@ -2776,6 +3092,9 @@ function run_autocycler(;
         read_type::AbstractString = "ont_r10",
         conda_runner::AbstractString = _conda_runner(),
         environment_prefix::Union{Nothing, AbstractString} = nothing,
+        input_spool_parent::Union{Nothing, AbstractString} = nothing,
+        input_spool_byte_ceiling::Integer =
+            AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
 )::NamedTuple
     return _run_autocycler(
         long_reads,
@@ -2785,6 +3104,8 @@ function run_autocycler(;
         read_type = read_type,
         conda_runner = conda_runner,
         environment_prefix = environment_prefix,
+        input_spool_parent = input_spool_parent,
+        input_spool_byte_ceiling = input_spool_byte_ceiling,
     )
 end
 
@@ -2805,6 +3126,7 @@ function _run_autocycler_polished_with_reserved_output(
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
         input_snapshots::NamedTuple,
+        input_consumed_snapshots::NamedTuple,
         after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
 )::NamedTuple
     autocycler_result = _run_autocycler_with_reserved_output(
@@ -2818,6 +3140,7 @@ function _run_autocycler_polished_with_reserved_output(
         conda_runner,
         environment_prefix,
         long_read_snapshot = input_snapshots.long_reads,
+        long_read_consumed_snapshot = input_consumed_snapshots.long_reads,
         after_artifact_semantic_validation_hook,
     )
     normalized_out_dir = autocycler_result.outdir
@@ -3019,12 +3342,20 @@ function _run_autocycler_polished_with_reserved_output(
             verify_produced_artifacts(:polypolish, step.name)
         end
         if step.name in (:bwa_mem_1, :pypolca)
+            _require_unchanged_autocycler_consumed_input(
+                input_consumed_snapshots.short_reads_1,
+                "Paired short-read R1 FASTQ",
+            )
             _require_unchanged_autocycler_input(
                 input_snapshots.short_reads_1,
                 "Paired short-read R1 FASTQ",
             )
         end
         if step.name in (:bwa_mem_2, :pypolca)
+            _require_unchanged_autocycler_consumed_input(
+                input_consumed_snapshots.short_reads_2,
+                "Paired short-read R2 FASTQ",
+            )
             _require_unchanged_autocycler_input(
                 input_snapshots.short_reads_2,
                 "Paired short-read R2 FASTQ",
@@ -3320,6 +3651,8 @@ function _run_autocycler_polished_with_reserved_output(
         requested_threads = autocycler_result.requested_threads,
         autocycler_assembly_threads =
             autocycler_result.autocycler_assembly_threads,
+        jobs = autocycler_result.jobs,
+        read_type = autocycler_result.read_type,
         polishing_threads = Int(threads),
         lifecycle_artifact_snapshots,
     )
@@ -3346,6 +3679,12 @@ function _run_autocycler_polished(
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
+        input_spool_parent::Union{Nothing, AbstractString} = nothing,
+        input_spool_byte_ceiling::Integer =
+            AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
+        input_spool_available_bytes_reader::Function =
+            parent -> diskstat(parent).available,
+        after_input_spool_copy_hook::Function = binding -> nothing,
 )::NamedTuple
     resolved_runner = _canonical_autocycler_conda_runner(conda_runner)
     resolved_prefix = environment_prefix === nothing ?
@@ -3380,55 +3719,73 @@ function _run_autocycler_polished(
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
-    long_read_snapshot = _with_autocycler_spooled_input_snapshot(
-        normalized_long_reads,
-        "Long-read FASTQ",
-    ) do long_read_binding
-        _validate_autocycler_fastq(
-            long_read_binding.semantic_path,
-            "Long-read input",
-        )
-        return long_read_binding.snapshot
-    end
-    short_read_1_snapshot, short_read_2_snapshot =
-        _with_autocycler_spooled_input_snapshot(
-            normalized_short_reads_1,
-            "Paired short-read R1 FASTQ",
-        ) do short_read_1_binding
-        return _with_autocycler_spooled_input_snapshot(
-            normalized_short_reads_2,
-            "Paired short-read R2 FASTQ",
-        ) do short_read_2_binding
-            _validate_autocycler_paired_fastqs(
-                short_read_1_binding.semantic_path,
-                short_read_2_binding.semantic_path,
-            )
-            return (
-                short_read_1_binding.snapshot,
-                short_read_2_binding.snapshot,
-            )
-        end
-    end
-    input_snapshots = (
-        long_reads = long_read_snapshot,
-        short_reads_1 = short_read_1_snapshot,
-        short_reads_2 = short_read_2_snapshot,
-    )
-    after_input_semantic_validation_hook(input_snapshots)
-    _require_unchanged_autocycler_input(
-        input_snapshots.long_reads,
-        "Long-read FASTQ",
-    )
-    _require_unchanged_autocycler_input(
-        input_snapshots.short_reads_1,
-        "Paired short-read R1 FASTQ",
-    )
-    _require_unchanged_autocycler_input(
-        input_snapshots.short_reads_2,
-        "Paired short-read R2 FASTQ",
-    )
     return output_lock_runner(normalized_out_dir) do reserved_out_dir
         environment_lock_runner(resolved_environment_lock_path) do
+            resolved_spool_parent = input_spool_parent === nothing ?
+                                    _autocycler_output_adjacent_spool_parent(
+                reserved_out_dir,
+            ) :
+                                    input_spool_parent
+            return _with_autocycler_spooled_input_snapshots(
+                (
+                    normalized_long_reads,
+                    normalized_short_reads_1,
+                    normalized_short_reads_2,
+                ),
+                (
+                    "Long-read FASTQ",
+                    "Paired short-read R1 FASTQ",
+                    "Paired short-read R2 FASTQ",
+                );
+                spool_parent = resolved_spool_parent,
+                byte_ceiling = input_spool_byte_ceiling,
+                available_bytes_reader = input_spool_available_bytes_reader,
+                after_copy_hook = after_input_spool_copy_hook,
+            ) do input_bindings
+                long_read_binding, short_read_1_binding,
+                    short_read_2_binding = input_bindings
+                _validate_autocycler_fastq(
+                    long_read_binding.semantic_path,
+                    "Long-read input",
+                )
+                _validate_autocycler_paired_fastqs(
+                    short_read_1_binding.semantic_path,
+                    short_read_2_binding.semantic_path,
+                )
+                input_snapshots = (
+                    long_reads = long_read_binding.snapshot,
+                    short_reads_1 = short_read_1_binding.snapshot,
+                    short_reads_2 = short_read_2_binding.snapshot,
+                )
+                input_consumed_snapshots = (
+                    long_reads = long_read_binding.consumed_snapshot,
+                    short_reads_1 = short_read_1_binding.consumed_snapshot,
+                    short_reads_2 = short_read_2_binding.consumed_snapshot,
+                )
+                after_input_semantic_validation_hook(input_snapshots)
+                for (snapshot, consumed, label) in (
+                        (
+                            input_snapshots.long_reads,
+                            input_consumed_snapshots.long_reads,
+                            "Long-read FASTQ",
+                        ),
+                        (
+                            input_snapshots.short_reads_1,
+                            input_consumed_snapshots.short_reads_1,
+                            "Paired short-read R1 FASTQ",
+                        ),
+                        (
+                            input_snapshots.short_reads_2,
+                            input_consumed_snapshots.short_reads_2,
+                            "Paired short-read R2 FASTQ",
+                        ),
+                )
+                    _require_unchanged_autocycler_input(snapshot, label)
+                    _require_unchanged_autocycler_consumed_input(
+                        consumed,
+                        label,
+                    )
+                end
             toolchain_snapshotter = _autocycler_toolchain_snapshotter(
                 dependency_checker,
                 resolved_runner;
@@ -3445,9 +3802,9 @@ function _run_autocycler_polished(
                 dependency_result,
             )
             result = _run_autocycler_polished_with_reserved_output(
-                normalized_long_reads,
-                normalized_short_reads_1,
-                normalized_short_reads_2,
+                long_read_binding.semantic_path,
+                short_read_1_binding.semantic_path,
+                short_read_2_binding.semantic_path,
                 reserved_out_dir;
                 threads,
                 jobs,
@@ -3461,6 +3818,7 @@ function _run_autocycler_polished(
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
                 input_snapshots,
+                input_consumed_snapshots,
                 after_artifact_semantic_validation_hook,
             )
             _require_unchanged_autocycler_toolchain(
@@ -3484,6 +3842,25 @@ function _run_autocycler_polished(
                 input_snapshots.short_reads_2,
                 "Paired short-read R2 FASTQ",
             )
+            for (consumed, label) in (
+                    (
+                        input_consumed_snapshots.long_reads,
+                        "Long-read FASTQ",
+                    ),
+                    (
+                        input_consumed_snapshots.short_reads_1,
+                        "Paired short-read R1 FASTQ",
+                    ),
+                    (
+                        input_consumed_snapshots.short_reads_2,
+                        "Paired short-read R2 FASTQ",
+                    ),
+            )
+                _require_unchanged_autocycler_consumed_input(
+                    consumed,
+                    label,
+                )
+            end
             lifecycle_snapshots = result.lifecycle_artifact_snapshots
             for (snapshot_name, artifact_path, label) in (
                     (
@@ -3553,10 +3930,13 @@ function _run_autocycler_polished(
                 autocycler_assembly_threads =
                     result.autocycler_assembly_threads,
                 polishing_threads = result.polishing_threads,
+                jobs = result.jobs,
+                read_type = result.read_type,
                 lifecycle_artifact_snapshots =
                     result.lifecycle_artifact_snapshots,
                 input_snapshots,
             )
+            end
         end
     end
 end
@@ -3595,6 +3975,10 @@ validation.
 The workflow root and polishing directory are bound by canonical path, device,
 and inode. Every step output is checked before and after execution, and cleanup
 refuses any target whose ancestor or bound directory changed identity.
+All three inputs are copied once under the held output and environment
+reservations into read-only stable snapshots. Commands consume those snapshots;
+source growth, shrinkage, or replacement, insufficient free space, and a
+configured cumulative-byte-ceiling violation fail with partial-spool cleanup.
 
 This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
 same bacterial-isolate/mostly-complete-alternative-assemblies applicability
@@ -3617,6 +4001,9 @@ ensemble method.
 - `environment_prefix::Union{Nothing,AbstractString}`: Exact environment prefix
   created by `install_autocycler`; `nothing` derives the spec-hash-addressed
   prefix from `conda_runner`.
+- `input_spool_parent::Union{Nothing,AbstractString}`: Existing scratch
+  directory for stable inputs; `nothing` uses the output-adjacent directory.
+- `input_spool_byte_ceiling::Integer`: Maximum cumulative stable-input bytes.
 
 # Returns
 A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
@@ -3647,6 +4034,9 @@ function run_autocycler_polished(;
         keep_intermediates::Bool = false,
         conda_runner::AbstractString = _conda_runner(),
         environment_prefix::Union{Nothing, AbstractString} = nothing,
+        input_spool_parent::Union{Nothing, AbstractString} = nothing,
+        input_spool_byte_ceiling::Integer =
+            AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
 )::NamedTuple
     return _run_autocycler_polished(
         long_reads,
@@ -3660,5 +4050,7 @@ function run_autocycler_polished(;
         keep_intermediates = keep_intermediates,
         conda_runner = conda_runner,
         environment_prefix = environment_prefix,
+        input_spool_parent = input_spool_parent,
+        input_spool_byte_ceiling = input_spool_byte_ceiling,
     )
 end

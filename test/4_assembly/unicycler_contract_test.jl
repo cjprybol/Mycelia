@@ -70,6 +70,563 @@ function _test_unicycler_error(
 end
 
 Test.@testset "common Unicycler wrapper contract" begin
+    Test.@testset "public streaming FASTQ contract is side-effect free" begin
+        mktempdir() do temp_dir
+            r1 = joinpath(temp_dir, "R1.fastq")
+            r2 = joinpath(temp_dir, "R2.fastq")
+            long_reads = joinpath(temp_dir, "long.fastq")
+            write(r1, "@pair/1\nACGT\n+\nIIII\n")
+            write(r2, "@pair/2\nACGT\n+\nIIII\n")
+            write(long_reads, "@long\nACGT\n+\nIIII\n")
+
+            invalid_cases = NamedTuple[]
+            malformed = joinpath(temp_dir, "malformed.fastq")
+            write(malformed, "@broken\nACGT\n+\n")
+            push!(invalid_cases, (;
+                name = "malformed",
+                short_1 = malformed,
+                short_2 = nothing,
+                long_reads,
+                message = "valid FASTQ",
+            ))
+            push!(invalid_cases, (;
+                name = "inverted",
+                short_1 = r2,
+                short_2 = r1,
+                long_reads,
+                message = "invalid explicit mate roles",
+            ))
+            out_of_sync = joinpath(temp_dir, "out-of-sync.fastq")
+            write(out_of_sync, "@other/2\nACGT\n+\nIIII\n")
+            push!(invalid_cases, (;
+                name = "out-of-sync",
+                short_1 = r1,
+                short_2 = out_of_sync,
+                long_reads,
+                message = "out of sync",
+            ))
+            hardlinked_r2 = joinpath(temp_dir, "hardlinked-R2.fastq")
+            Base.hardlink(r1, hardlinked_r2)
+            push!(invalid_cases, (;
+                name = "paired-hardlink",
+                short_1 = r1,
+                short_2 = hardlinked_r2,
+                long_reads,
+                message = "physically distinct",
+            ))
+            hardlinked_long = joinpath(temp_dir, "hardlinked-long.fastq")
+            Base.hardlink(r1, hardlinked_long)
+            push!(invalid_cases, (;
+                name = "long-hardlink",
+                short_1 = r1,
+                short_2 = r2,
+                long_reads = hardlinked_long,
+                message = "physically distinct",
+            ))
+
+            for invalid in invalid_cases
+                outdir = joinpath(temp_dir, "invalid-$(invalid.name)")
+                _test_unicycler_error(
+                    () -> Mycelia.run_unicycler(;
+                        short_1 = invalid.short_1,
+                        short_2 = invalid.short_2,
+                        long_reads = invalid.long_reads,
+                        outdir,
+                    ),
+                    invalid.message,
+                    ArgumentError,
+                )
+                Test.@test !ispath(outdir)
+                Test.@test !ispath(Mycelia._unicycler_output_lock_path(outdir))
+            end
+        end
+    end
+
+    Test.@testset "reserved bounded stable-input orchestration" begin
+        mktempdir() do temp_dir
+            r1 = joinpath(temp_dir, "R1.fastq")
+            r2 = joinpath(temp_dir, "R2.fastq")
+            long_reads = joinpath(temp_dir, "long.fastq")
+            original_r1 = "@pair/1\nACGT\n+\nIIII\n"
+            original_r2 = "@pair/2\nTGCA\n+\nIIII\n"
+            original_long = "@long\nACGTTGCA\n+\nIIIIIIII\n"
+            write(r1, original_r1)
+            write(r2, original_r2)
+            write(long_reads, original_long)
+            scratch_root = joinpath(temp_dir, "scratch")
+            mkpath(scratch_root)
+            environment_prefix = joinpath(temp_dir, "unicycler-env")
+            environment_lock_path = joinpath(temp_dir, "environment.pid")
+
+            function output_lock_runner(
+                    action::Function,
+                    outdir::AbstractString,
+            )::Any
+                return action(abspath(outdir))
+            end
+            function no_environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                error("Unicycler environment lock must not be acquired.")
+            end
+
+            before_entries = Set(readdir(scratch_root))
+            public_ceiling_outdir = joinpath(temp_dir, "public-ceiling")
+            _test_unicycler_error(
+                () -> Mycelia.run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = public_ceiling_outdir,
+                    input_spool_parent = scratch_root,
+                    input_spool_byte_ceiling =
+                        filesize(r1) + filesize(r2) + filesize(long_reads) - 1,
+                ),
+                "cumulative ceiling",
+                ArgumentError,
+            )
+            Test.@test Set(readdir(scratch_root)) == before_entries
+            Test.@test !ispath(public_ceiling_outdir)
+
+            free_space_outdir = joinpath(temp_dir, "free-space")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = free_space_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    input_spool_available_bytes_reader = parent -> 0,
+                    environment_lock_runner =
+                        no_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "only 0 bytes are available",
+                ArgumentError,
+            )
+            Test.@test Set(readdir(scratch_root)) == before_entries
+            Test.@test !ispath(free_space_outdir)
+
+            enospc_outdir = joinpath(temp_dir, "enospc")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = enospc_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_copy_hook = binding ->
+                        throw(SystemError("synthetic ENOSPC", 28)),
+                    environment_lock_runner =
+                        no_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "scratch space",
+            )
+            Test.@test Set(readdir(scratch_root)) == before_entries
+            Test.@test !ispath(enospc_outdir)
+
+            growth_outdir = joinpath(temp_dir, "later-source-growth")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = growth_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_copy_hook = binding -> begin
+                        if binding.label == "short-read input R1"
+                            open(r2, "a") do output
+                                write(output, "@extra/2\nACGT\n+\nIIII\n")
+                            end
+                        end
+                    end,
+                    environment_lock_runner = no_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "changed physical identity or size after spool preflight",
+            )
+            write(r2, original_r2)
+            Test.@test Set(readdir(scratch_root)) == before_entries
+
+            external_target = joinpath(temp_dir, "external-target.fastq")
+            external_contents = "@external\nACGT\n+\nIIII\n"
+            write(external_target, external_contents)
+            planted_outdir = joinpath(temp_dir, "planted-destination")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = planted_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_copy_hook = binding -> begin
+                        if binding.label == "short-read input R1"
+                            symlink(
+                                external_target,
+                                joinpath(
+                                    dirname(binding.consumed_path),
+                                    "short_2.fastq",
+                                ),
+                            )
+                        end
+                    end,
+                    environment_lock_runner = no_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "scratch space",
+            )
+            Test.@test read(external_target, String) == external_contents
+            Test.@test Set(readdir(scratch_root)) == before_entries
+
+            mutation_outdir = joinpath(temp_dir, "pre-environment-mutation")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = mutation_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_materialization_hook = snapshots -> begin
+                        chmod(snapshots.short_1, 0o600)
+                        write(
+                            snapshots.short_1,
+                            "@pair/1\nNNNN\n+\n!!!!\n",
+                        )
+                    end,
+                    environment_lock_runner =
+                        no_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "changed after materialization and before environment preparation",
+            )
+            Test.@test Set(readdir(scratch_root)) == before_entries
+            Test.@test !ispath(mutation_outdir)
+
+            boundary_outdir = joinpath(temp_dir, "lock-boundary-mutation")
+            boundary_snapshots = Ref{Any}()
+            boundary_preparations = Ref(0)
+            function mutating_environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                chmod(boundary_snapshots[].short_1, 0o600)
+                write(
+                    boundary_snapshots[].short_1,
+                    "@pair/1\nNNNN\n+\n!!!!\n",
+                )
+                return action()
+            end
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = boundary_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_materialization_hook = snapshots ->
+                        (boundary_snapshots[] = snapshots),
+                    environment_preparer = (runner, prefix) ->
+                        (boundary_preparations[] += 1),
+                    environment_lock_runner =
+                        mutating_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "changed after materialization and before environment preparation",
+            )
+            Test.@test boundary_preparations[] == 0
+            Test.@test Set(readdir(scratch_root)) == before_entries
+
+            incomplete_outdir = joinpath(temp_dir, "incomplete-output")
+            mkpath(incomplete_outdir)
+            sentinel = joinpath(incomplete_outdir, "caller-owned.txt")
+            write(sentinel, "retain")
+            incomplete_preparations = Ref(0)
+            function direct_environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                return action()
+            end
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = incomplete_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    environment_preparer = (runner, prefix) ->
+                        (incomplete_preparations[] += 1),
+                    environment_lock_runner =
+                        direct_environment_lock_runner,
+                    output_lock_runner,
+                ),
+                "incomplete non-empty Unicycler outdir",
+                ArgumentError,
+            )
+            Test.@test incomplete_preparations[] == 0
+            Test.@test read(sentinel, String) == "retain"
+            Test.@test Set(readdir(scratch_root)) == before_entries
+
+            event_outdir = joinpath(temp_dir, "ordered-success")
+            events = String[]
+            consumed_paths = Ref{NamedTuple}()
+            function ordered_output_lock_runner(
+                    action::Function,
+                    outdir::AbstractString,
+            )::Any
+                push!(events, "output-acquired")
+                try
+                    return action(abspath(outdir))
+                finally
+                    push!(events, "output-released")
+                    Test.@test Set(readdir(scratch_root)) == before_entries
+                end
+            end
+            function ordered_environment_lock_runner(
+                    action::Function,
+                    lock_path::AbstractString,
+            )::Any
+                push!(events, "environment-lock-acquired")
+                return action()
+            end
+            result = Mycelia._run_unicycler(;
+                short_1 = r1,
+                short_2 = r2,
+                long_reads,
+                outdir = event_outdir,
+                environment_prefix,
+                environment_lock_path,
+                input_spool_parent = scratch_root,
+                after_input_spool_copy_hook = binding ->
+                    push!(events, "copied-$(binding.label)"),
+                after_input_spool_materialization_hook = snapshots -> begin
+                    consumed_paths[] = (;
+                        short_1 = snapshots.short_1,
+                        short_2 = snapshots.short_2,
+                        long_reads = snapshots.long_reads,
+                        spool_root = snapshots.spool_root,
+                    )
+                    push!(events, "materialized")
+                end,
+                environment_preparer = (runner, prefix) ->
+                    push!(events, "environment-prepared"),
+                toolchain_inspector = (runner, prefix) -> begin
+                    push!(events, "toolchain-inspected")
+                    return _test_unicycler_toolchain()
+                end,
+                environment_lock_runner = ordered_environment_lock_runner,
+                output_lock_runner = ordered_output_lock_runner,
+                command_runner = command -> begin
+                    push!(events, "command")
+                    r1_index = something(findfirst(==("-1"), command.exec))
+                    r2_index = something(findfirst(==("-2"), command.exec))
+                    long_index = something(findfirst(==("-l"), command.exec))
+                    command_paths = (;
+                        short_1 = command.exec[r1_index + 1],
+                        short_2 = command.exec[r2_index + 1],
+                        long_reads = command.exec[long_index + 1],
+                    )
+                    Test.@test command_paths.short_1 ==
+                               consumed_paths[].short_1
+                    Test.@test command_paths.short_2 ==
+                               consumed_paths[].short_2
+                    Test.@test command_paths.long_reads ==
+                               consumed_paths[].long_reads
+                    Test.@test all(
+                        startswith(path, scratch_root) for
+                        path in values(command_paths)
+                    )
+                    write(r1, "@pair/1\nNNNN\n+\n!!!!\n")
+                    write(r2, "@pair/2\nNNNN\n+\n!!!!\n")
+                    write(long_reads, "@long\nNNNNNNNN\n+\n!!!!!!!!\n")
+                    Test.@test read(command_paths.short_1, String) ==
+                               original_r1
+                    Test.@test read(command_paths.short_2, String) ==
+                               original_r2
+                    Test.@test read(command_paths.long_reads, String) ==
+                               original_long
+                    write(r1, original_r1)
+                    write(r2, original_r2)
+                    write(long_reads, original_long)
+                    mkpath(event_outdir)
+                    write(
+                        joinpath(event_outdir, "assembly.fasta"),
+                        ">contig\nACGT\n",
+                    )
+                    write(
+                        joinpath(event_outdir, "assembly.gfa"),
+                        "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                    )
+                end,
+            )
+            Test.@test result.status == :completed
+            Test.@test !ispath(consumed_paths[].spool_root)
+            Test.@test events[1:5] == [
+                "output-acquired",
+                "copied-short-read input R1",
+                "copied-short-read input R2",
+                "copied-long-read input",
+                "materialized",
+            ]
+            Test.@test findfirst(==("materialized"), events) <
+                       findfirst(==("environment-lock-acquired"), events)
+            Test.@test findfirst(==("environment-lock-acquired"), events) <
+                       findfirst(==("environment-prepared"), events)
+            Test.@test findfirst(==("environment-prepared"), events) <
+                       findfirst(==("command"), events)
+            Test.@test last(events) == "output-released"
+            contract = Mycelia.JSON.parsefile(result.contract)
+            for label in ("short_1", "short_2", "long_reads")
+                Test.@test contract["inputs"][label]["consumed_snapshot"][
+                    "record_count"
+                ] > 0
+            end
+
+            consumed_mutation_outdir = joinpath(
+                temp_dir,
+                "consumed-mutation",
+            )
+            mutated_spool_root = Ref("")
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = consumed_mutation_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    after_input_spool_materialization_hook = snapshots ->
+                        (mutated_spool_root[] = snapshots.spool_root),
+                    environment_preparer = (runner, prefix) -> nothing,
+                    toolchain_inspector = (runner, prefix) ->
+                        _test_unicycler_toolchain(),
+                    environment_lock_runner =
+                        ordered_environment_lock_runner,
+                    output_lock_runner,
+                    command_runner = command -> begin
+                        r1_index = something(
+                            findfirst(==("-1"), command.exec),
+                        )
+                        consumed_r1 = command.exec[r1_index + 1]
+                        chmod(consumed_r1, 0o600)
+                        write(consumed_r1, "@pair/1\nNNNN\n+\n!!!!\n")
+                        mkpath(consumed_mutation_outdir)
+                        write(
+                            joinpath(
+                                consumed_mutation_outdir,
+                                "assembly.fasta",
+                            ),
+                            ">contig\nACGT\n",
+                        )
+                        write(
+                            joinpath(
+                                consumed_mutation_outdir,
+                                "assembly.gfa",
+                            ),
+                            "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                        )
+                    end,
+                ),
+                "stable consumed short_1 snapshot changed",
+            )
+            Test.@test !ispath(mutated_spool_root[])
+            Test.@test Set(readdir(scratch_root)) == before_entries
+        end
+    end
+
+    Test.@testset "stable consumed bytes survive mutate-consume-restore" begin
+        mktempdir() do temp_dir
+            r1 = joinpath(temp_dir, "R1.fastq")
+            r2 = joinpath(temp_dir, "R2.fastq")
+            long_reads = joinpath(temp_dir, "long.fastq")
+            original_r1 = "@pair/1\nACGT\n+\nIIII\n"
+            original_r2 = "@pair/2\nTGCA\n+\nIIII\n"
+            original_long = "@long\nACGTTGCA\n+\nIIIIIIII\n"
+            write(r1, original_r1)
+            write(r2, original_r2)
+            write(long_reads, original_long)
+            outdir = joinpath(temp_dir, "stable-consumption")
+            lock_path = joinpath(temp_dir, "stable-consumption.pid")
+            observed_spool_root = Ref("")
+
+            result = Mycelia._with_unicycler_stable_input_snapshots(
+                r1,
+                r2,
+                long_reads,
+            ) do snapshots
+                observed_spool_root[] = snapshots.spool_root
+                Mycelia._run_unicycler_with_contract(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    consumed_short_1 = snapshots.short_1,
+                    consumed_short_2 = snapshots.short_2,
+                    consumed_long_reads = snapshots.long_reads,
+                    consumed_input_fingerprints =
+                        snapshots.input_fingerprints,
+                    outdir,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner ->
+                        _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command -> begin
+                        write(r1, "@pair/1\nNNNN\n+\n!!!!\n")
+                        write(r2, "@pair/2\nNNNN\n+\n!!!!\n")
+                        write(long_reads, "@long\nNNNN\n+\n!!!!\n")
+                        r1_index = something(findfirst(==("-1"), command.exec))
+                        r2_index = something(findfirst(==("-2"), command.exec))
+                        long_index = something(findfirst(==("-l"), command.exec))
+                        Test.@test read(command.exec[r1_index + 1], String) ==
+                                   original_r1
+                        Test.@test read(command.exec[r2_index + 1], String) ==
+                                   original_r2
+                        Test.@test read(command.exec[long_index + 1], String) ==
+                                   original_long
+                        write(r1, original_r1)
+                        write(r2, original_r2)
+                        write(long_reads, original_long)
+                        mkpath(outdir)
+                        write(
+                            joinpath(outdir, "assembly.fasta"),
+                            ">contig\nACGT\n",
+                        )
+                        write(
+                            joinpath(outdir, "assembly.gfa"),
+                            "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                        )
+                    end,
+                )
+            end
+            Test.@test result.status == :completed
+            Test.@test !ispath(observed_spool_root[])
+            contract = Mycelia.JSON.parsefile(result.contract)
+            for label in ("short_1", "short_2", "long_reads")
+                consumed = contract["inputs"][label]["consumed_snapshot"]
+                Test.@test consumed["sha256"] ==
+                           contract["inputs"][label]["sha256"]
+                Test.@test consumed["size_bytes"] ==
+                           contract["inputs"][label]["size_bytes"]
+            end
+        end
+    end
+
     Test.@testset "inventory normalization and detached provenance" begin
         inventory = _test_unicycler_inventory()
         digest = Mycelia._unicycler_package_inventory_sha256(inventory)
@@ -554,7 +1111,9 @@ Test.@testset "common Unicycler wrapper contract" begin
                     command_runner = command ->
                         error("reuse unexpectedly executed"),
                 ),
-                "Refusing unbound legacy Unicycler output reuse",
+                "Refusing incomplete non-empty Unicycler outdir before " *
+                "environment preparation",
+                ArgumentError,
             )
 
             contract_dir = joinpath(temp_dir, "contract-reuse")
@@ -624,7 +1183,9 @@ Test.@testset "common Unicycler wrapper contract" begin
                     toolchain_inspector = runner -> _test_unicycler_toolchain(),
                     environment_lock_path = lock_path,
                 ),
-                "non-empty assembly GFA",
+                "Refusing incomplete non-empty Unicycler outdir before " *
+                "environment preparation",
+                ArgumentError,
             )
             Test.@test read(incomplete_assembly, String) == ">old\nACGT\n"
 
@@ -645,7 +1206,9 @@ Test.@testset "common Unicycler wrapper contract" begin
                     toolchain_inspector = runner -> _test_unicycler_toolchain(),
                     environment_lock_path = lock_path,
                 ),
-                "non-empty assembly FASTA",
+                "Refusing incomplete non-empty Unicycler outdir before " *
+                "environment preparation",
+                ArgumentError,
             )
 
             symlink_dir = joinpath(temp_dir, "symlink-reuse")
@@ -667,7 +1230,9 @@ Test.@testset "common Unicycler wrapper contract" begin
                     toolchain_inspector = runner -> _test_unicycler_toolchain(),
                     environment_lock_path = lock_path,
                 ),
-                "regular non-symlink file",
+                "Refusing incomplete non-empty Unicycler outdir before " *
+                "environment preparation",
+                ArgumentError,
             )
 
             collector = Mycelia.CollectExecutor()
@@ -788,8 +1353,8 @@ exit 66
             cd(temp_dir) do
                 requested_outdir = "relative-unicycler-output"
                 mkpath("reads")
-                write("reads/r1.fastq", "@r1\nACGT\n+\nIIII\n")
-                write("reads/r2.fastq", "@r2\nACGT\n+\nIIII\n")
+                write("reads/r1.fastq", "@pair/1\nACGT\n+\nIIII\n")
+                write("reads/r2.fastq", "@pair/2\nACGT\n+\nIIII\n")
                 write("reads/long.fastq", "@long\nACGT\n+\nIIII\n")
                 result = withenv(
                     "MYCELIA_CONDA_RUNNER" => conda_runner,
@@ -852,7 +1417,8 @@ exit 66
                     environment_lock_path = joinpath(temp_dir, "environment.pid"),
                     command_runner = command -> error("unexpected execution"),
                 ),
-                "Refusing to remove non-empty Unicycler outdir",
+                "Refusing incomplete non-empty Unicycler outdir before " *
+                "environment preparation",
                 ArgumentError,
             )
             Test.@test read(marker, String) == "preserve me"
