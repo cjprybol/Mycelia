@@ -2732,6 +2732,35 @@ function _run_autocycler_polished_with_reserved_output(
         end
         return nothing
     end
+    function verify_polishing_intermediate_artifacts(
+            paths::AbstractVector{<:AbstractString},
+    )::Nothing
+        for path in paths
+            normalized_path = String(path)
+            producer = nothing
+            for (candidate_producer, candidate_paths) in produced_artifact_paths
+                if normalized_path in candidate_paths
+                    producer = candidate_producer
+                    break
+                end
+            end
+            producer isa Symbol || error(
+                "Autocycler polishing intermediate has no producing step: " *
+                "$(normalized_path).",
+            )
+            snapshot = captured_polishing_artifact_snapshot(
+                producer,
+                normalized_path,
+            )
+            _require_unchanged_autocycler_artifact(
+                snapshot,
+                normalized_path,
+                normalized_out_dir,
+                polishing_artifact_label(producer, normalized_path),
+            )
+        end
+        return nothing
+    end
     function verify_polishing_step_inputs(step::NamedTuple)::Nothing
         if step.name in (
             :bwa_index,
@@ -2967,6 +2996,9 @@ function _run_autocycler_polished_with_reserved_output(
             "Polypolish",
             "Pypolca",
         )
+        verify_polishing_intermediate_artifacts(
+            polishing_plan.intermediate_files,
+        )
         (
             validated_autocycler_assembly,
             validated_graph,
@@ -2998,6 +3030,7 @@ function _run_autocycler_polished_with_reserved_output(
             remover = intermediate_remover,
         )
     end
+    verify_polishing_intermediate_artifacts(retained_intermediates)
 
     autocycler_assembly = _require_valid_autocycler_fasta(
         _require_contained_regular_autocycler_artifact(

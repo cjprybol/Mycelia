@@ -4131,17 +4131,6 @@ function _require_unicycler_toolchain_provenance(
     return Mycelia._require_unicycler_toolchain_provenance(toolchain)
 end
 
-function _unicycler_environment_lock_path()::String
-    return Mycelia._unicycler_environment_lock_path()
-end
-
-function _with_unicycler_environment_lock(
-        action::Function,
-        lock_path::AbstractString,
-)::Any
-    return Mycelia._with_unicycler_environment_lock(action, lock_path)
-end
-
 """
     _run_multi_input_assembler(Val(:unicycler), inputs, outdir, config)
 

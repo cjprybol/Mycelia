@@ -244,17 +244,33 @@ the caller returns, the returned capability is reported as
 
 A caller that dies before submission can inspect the on-disk reserved
 capability and reclaim it only with the exact owner token plus explicit
-confirmation that submission never occurred. In the narrower process-death
+confirmation that submission never occurred. The complete temporary owner
+record and its parent entry are durable before the shared marker, and that shared
+marker is durable before the private atomic rename. A hard termination before
+that rename, or before its following parent-directory fsync, therefore leaves
+either the final reserved record or an exact shared-marker-paired temporary owner
+record. Inspection reports the latter as `publication_state = :provisional` and
+binds both private and shared filesystem identities so explicit recovery cannot
+remove replacements. A hard-killed production caller also leaves its private
+lifecycle lock, cleanup sentinel, and PID file. After independently proving the
+caller dead, inspection with `confirm_process_dead = true` removes only those
+exact same-user remnants; a live, remote, empty, malformed, noncanonical, or
+replaced PID file fails closed. An incomplete temporary remnant is nonblocking
+only when no durable same-root marker could pair with it; otherwise inspection
+fails loudly instead of hiding a possibly corrupted capability. In the narrower
+process-death
 window after scheduler acceptance but before normal sidecar publication, an
 operator must independently prove which exact scheduler job belongs to the
 reservation, then call
 `Mycelia.bind_metamdbg_submission_reservation_job!` with the inspected record,
 exact owner token and job ID, and
-`confirm_submitted = true`. Submitted jobs can be reclaimed only with the exact
-recorded scheduler job ID after explicit cancellation or terminal-failed
-confirmation. Reservation directories, owner records, and job sidecars must
-remain current-user-owned with modes 0700, 0600, and 0600, respectively;
-noncanonical, modified, or replacement records fail closed.
+`confirm_submitted = true`. Binding and pre-submit reclaim require both exact
+filesystem identities returned by inspection and refuse same-content
+replacements. Submitted jobs can be reclaimed only with the exact recorded
+scheduler job ID after explicit cancellation or terminal-failed confirmation.
+Reservation directories, owner records, and job sidecars must remain
+current-user-owned with modes 0700, 0600, and 0600, respectively; noncanonical,
+modified, or replacement records fail closed.
 
 The Slurm executor now submits this lifecycle with `sbatch --hold --parsable`,
 accepts exactly one numeric job ID with an optional federation-cluster suffix,

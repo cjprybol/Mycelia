@@ -11,3 +11,4 @@ if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
 end
 
 _multi_input_hybrid_smoke_prerequisites(ENV)
+_autocycler_smoke_prerequisites(ENV)

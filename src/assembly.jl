@@ -4849,6 +4849,148 @@ function _remove_metamdbg_lifecycle_cleanup_reservation!(
     return nothing
 end
 
+function _metamdbg_output_root_pid_lock_identity(
+        lock_path::AbstractString,
+)::NamedTuple
+    normalized_path = normpath(abspath(String(lock_path)))
+    isfile(normalized_path) && !islink(normalized_path) || error(
+        "metaMDBG output-root PID lock is missing, replaced, or not a " *
+        "regular file: $(normalized_path).",
+    )
+    lock_status = stat(normalized_path)
+    lock_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG output-root PID lock is not owned by the current user: " *
+        "$(normalized_path).",
+    )
+    return (; device = lock_status.device, inode = lock_status.inode)
+end
+
+function _remove_dead_metamdbg_output_root_pid_lock!(
+        lock_path::AbstractString,
+)::Nothing
+    normalized_path = normpath(abspath(String(lock_path)))
+    expected_identity = _metamdbg_output_root_pid_lock_identity(normalized_path)
+    lock_contents = read(normalized_path, String)
+    lock_match = match(r"^([1-9][0-9]*) ([^[:space:]]+)$", lock_contents)
+    lock_match === nothing && error(
+        "metaMDBG refuses dead-process recovery because its output-root PID " *
+        "lock is empty or malformed: $(normalized_path).",
+    )
+    parsed_pid = Base.tryparse(UInt64, lock_match.captures[1])
+    parsed_pid !== nothing && parsed_pid <= UInt64(Base.typemax(Cint)) || error(
+        "metaMDBG refuses dead-process recovery because its output-root PID " *
+        "lock does not contain a locally verifiable process ID: " *
+        "$(normalized_path).",
+    )
+    hostname = lock_match.captures[2]
+    hostname == Base.gethostname() || error(
+        "metaMDBG refuses dead-process recovery because its output-root PID " *
+        "lock names a remote or unverifiable host: $(normalized_path).",
+    )
+    pid = Cuint(parsed_pid)
+    expected_contents = "$(pid) $(hostname)"
+    lock_contents == expected_contents || error(
+        "metaMDBG refuses dead-process recovery because its output-root PID " *
+        "lock is not canonical: $(normalized_path).",
+    )
+    !FileWatching.Pidfile.isvalidpid(hostname, pid) || error(
+        "metaMDBG refuses dead-process recovery because its output-root PID " *
+        "lock still names a live or remotely unverifiable process: " *
+        "$(normalized_path).",
+    )
+    observed_identity = _metamdbg_output_root_pid_lock_identity(normalized_path)
+    observed_identity == expected_identity || error(
+        "metaMDBG output-root PID lock was replaced during dead-process " *
+        "recovery: $(normalized_path).",
+    )
+    read(normalized_path, String) == expected_contents || error(
+        "metaMDBG output-root PID lock contents changed during dead-process " *
+        "recovery: $(normalized_path).",
+    )
+    !FileWatching.Pidfile.isvalidpid(hostname, pid) || error(
+        "metaMDBG output-root PID became live again during dead-process " *
+        "recovery: $(normalized_path).",
+    )
+    rm(normalized_path)
+    !_output_root_path_entry_exists(normalized_path) || error(
+        "metaMDBG output-root PID lock reappeared during dead-process " *
+        "recovery: $(normalized_path).",
+    )
+    _fsync_metamdbg_directory(dirname(normalized_path))
+    return nothing
+end
+
+function _recover_dead_metamdbg_private_output_lock!(
+        lock_path::AbstractString,
+)::Nothing
+    normalized_path = normpath(abspath(String(lock_path)))
+    expected_identity = _metamdbg_output_lock_identity(normalized_path)
+    lock_status = stat(normalized_path)
+    lock_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG private lifecycle lock is not owned by the current user: " *
+        "$(normalized_path).",
+    )
+    (lock_status.mode & 0o777) == 0o700 || error(
+        "metaMDBG private lifecycle lock must have mode 0700 for explicit " *
+        "dead-process recovery: $(normalized_path).",
+    )
+    isempty(readdir(normalized_path)) || error(
+        "metaMDBG private lifecycle lock contains unexpected entries: " *
+        "$(normalized_path).",
+    )
+    _require_unchanged_metamdbg_output_lock(
+        normalized_path,
+        expected_identity,
+    )
+    rm(normalized_path)
+    !_output_root_path_entry_exists(normalized_path) || error(
+        "metaMDBG private lifecycle lock reappeared during dead-process " *
+        "recovery: $(normalized_path).",
+    )
+    _fsync_metamdbg_directory(dirname(normalized_path))
+    return nothing
+end
+
+function _recover_dead_metamdbg_lifecycle_locks!(
+        outdir::AbstractString,
+)::Nothing
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    reservation_lock_path =
+        _output_root_reservation_lock_path_from_canonical(canonical_outdir)
+    if _output_root_path_entry_exists(reservation_lock_path)
+        _remove_dead_metamdbg_output_root_pid_lock!(reservation_lock_path)
+    end
+    stale_age = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
+    lock_handle = FileWatching.Pidfile.trymkpidlock(
+        reservation_lock_path;
+        stale_age,
+        refresh = stale_age / 2,
+    )
+    lock_handle === false && error(
+        "metaMDBG could not acquire its output-root PID lock after explicit " *
+        "dead-process recovery: $(reservation_lock_path).",
+    )
+    try
+        private_lock_path = _metamdbg_output_lock_path(canonical_outdir)
+        if _output_root_path_entry_exists(private_lock_path)
+            _recover_dead_metamdbg_private_output_lock!(private_lock_path)
+        end
+        cleanup_reservation_path =
+            _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+        if _output_root_path_entry_exists(cleanup_reservation_path)
+            cleanup_identity =
+                _metamdbg_output_lock_identity(cleanup_reservation_path)
+            _remove_metamdbg_lifecycle_cleanup_reservation!(
+                cleanup_reservation_path,
+                cleanup_identity,
+            )
+        end
+    finally
+        Base.close(lock_handle)
+    end
+    return nothing
+end
+
 function _with_metamdbg_output_domain_lock(
         action::Function,
         outdir::AbstractString,
@@ -5376,6 +5518,55 @@ function _metamdbg_bound_submission_reservation(
     ))
 end
 
+function _metamdbg_submission_reservation_path_state(
+        path::AbstractString,
+        canonical_outdir::AbstractString,
+)::Symbol
+    normalized_path = normpath(abspath(String(path)))
+    normalized_outdir = _metamdbg_canonical_output_path(canonical_outdir)
+    dirname(normalized_path) == dirname(normalized_outdir) || error(
+        "metaMDBG submission reservation is outside its output-root parent: " *
+        "$(normalized_path).",
+    )
+    prefix = _metamdbg_submission_reservation_prefix(normalized_outdir)
+    filename = basename(normalized_path)
+    startswith(filename, prefix) || error(
+        "metaMDBG submission reservation path has an invalid prefix: " *
+        "$(normalized_path).",
+    )
+    suffix = filename[(ncodeunits(prefix) + 1):end]
+    if occursin(r"^[0-9a-f]{64}$", suffix)
+        return :published
+    elseif startswith(suffix, "tmp.") && ncodeunits(suffix) > 4
+        return :provisional
+    elseif startswith(suffix, "consumed.") && ncodeunits(suffix) > 9
+        return :consumed
+    end
+    error(
+        "metaMDBG found a malformed submission reservation entry: " *
+        "$(normalized_path). Remove it only after confirming no job owns it.",
+    )
+end
+
+function _metamdbg_has_potential_queued_output_root_reservation(
+        outdir::AbstractString,
+)::Bool
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    reservation_lock_path =
+        _output_root_reservation_lock_path_from_canonical(canonical_outdir)
+    cleanup_reservation_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    for path in _same_output_root_reservation_paths(canonical_outdir)
+        path == reservation_lock_path && continue
+        path == cleanup_reservation_path && continue
+        _is_output_root_durable_reservation_path(path) || continue
+        if _output_root_path_entry_exists(path)
+            return true
+        end
+    end
+    return false
+end
+
 function _metamdbg_submission_reservation_paths(
         outdir::AbstractString,
 )::Vector{String}
@@ -5387,22 +5578,55 @@ function _metamdbg_submission_reservation_paths(
         path -> startswith(basename(path), prefix),
         readdir(parent; join = true),
     ))
-    active_paths = String[]
+    published_paths = String[]
+    provisional_candidates = String[]
     for path in matching_paths
-        filename = basename(path)
-        suffix = filename[(ncodeunits(prefix) + 1):end]
-        if occursin(r"^[0-9a-f]{64}$", suffix)
-            push!(active_paths, path)
-        elseif startswith(suffix, "tmp.") || startswith(suffix, "consumed.")
+        path_state = _metamdbg_submission_reservation_path_state(
+            path,
+            normalized_outdir,
+        )
+        if path_state == :published
+            push!(published_paths, path)
+        elseif path_state == :provisional
+            push!(provisional_candidates, path)
+        elseif path_state == :consumed
             continue
-        else
-            error(
-                "metaMDBG found a malformed submission reservation entry: " *
-                "$(path). Remove it only after confirming no job owns it.",
-            )
         end
     end
-    return active_paths
+    active_provisional_paths = String[]
+    for path in provisional_candidates
+        provisional = try
+            _metamdbg_submission_reservation_from_path(
+                path,
+                normalized_outdir;
+                allow_provisional = true,
+                require_output_root_reservation = false,
+            )
+        catch caught
+            caught isa InterruptException && rethrow()
+            if _metamdbg_has_potential_queued_output_root_reservation(
+                    normalized_outdir,
+            )
+                error(
+                    "metaMDBG could not validate a provisional submission " *
+                    "reservation while a potentially paired shared " *
+                    "output-root reservation remains: $(path). Refusing " *
+                    "capability-blind recovery. Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            # A partially written temporary directory is nonblocking only
+            # when no queued shared marker could pair with it.
+            continue
+        end
+        if _output_root_path_entry_exists(
+                provisional.output_root_reservation_marker,
+        )
+            _require_metamdbg_submission_reservation!(provisional)
+            push!(active_provisional_paths, path)
+        end
+    end
+    return sort!(vcat(published_paths, active_provisional_paths))
 end
 
 function _fsync_metamdbg_descriptor(
@@ -5520,10 +5744,9 @@ function _require_no_active_metamdbg_submission_reservation!(
     return nothing
 end
 
-function _require_metamdbg_submission_reservation!(
+function _require_metamdbg_private_submission_reservation!(
         reservation::NamedTuple,
 )::NamedTuple
-    _require_metamdbg_output_root_reservation_marker!(reservation)
     reservation_path = reservation.path
     if !isdir(reservation_path) || islink(reservation_path)
         error(
@@ -5598,11 +5821,70 @@ function _require_metamdbg_submission_reservation!(
     return reservation
 end
 
+function _require_metamdbg_submission_reservation!(
+        reservation::NamedTuple,
+)::NamedTuple
+    _require_metamdbg_output_root_reservation_marker!(reservation)
+    return _require_metamdbg_private_submission_reservation!(reservation)
+end
+
+function _metamdbg_submission_reservation_identity(
+        reservation::NamedTuple,
+)::NamedTuple
+    _require_metamdbg_private_submission_reservation!(reservation)
+    metadata = stat(reservation.path)
+    return (; device = metadata.device, inode = metadata.inode)
+end
+
+function _metamdbg_shared_reservation_identity(
+        reservation::NamedTuple,
+)::NamedTuple
+    marker = _require_metamdbg_output_root_reservation_marker!(reservation)
+    metadata = stat(marker)
+    return (; device = metadata.device, inode = metadata.inode)
+end
+
+function _require_unchanged_metamdbg_recovery_identities(
+        reservation::NamedTuple,
+        reservation_identity::NamedTuple,
+        shared_reservation_identity::NamedTuple,
+)::Nothing
+    observed_reservation_identity =
+        _metamdbg_submission_reservation_identity(reservation)
+    observed_reservation_identity == reservation_identity || error(
+        "metaMDBG submission reservation was replaced after recovery " *
+        "inspection: $(reservation.path).",
+    )
+    observed_shared_identity = _metamdbg_shared_reservation_identity(reservation)
+    observed_shared_identity == shared_reservation_identity || error(
+        "metaMDBG shared output-root reservation was replaced after recovery " *
+        "inspection: $(reservation.output_root_reservation_marker).",
+    )
+    return nothing
+end
+
 function _metamdbg_submission_reservation_from_path(
         path::AbstractString,
         canonical_outdir::AbstractString,
+        ;
+        allow_provisional::Bool = false,
+        require_output_root_reservation::Bool = true,
 )::NamedTuple
     normalized_path = normpath(abspath(path))
+    path_state = _metamdbg_submission_reservation_path_state(
+        normalized_path,
+        canonical_outdir,
+    )
+    path_state == :consumed && error(
+        "metaMDBG consumed reservation tombstones are not recovery " *
+        "capabilities: $(normalized_path).",
+    )
+    if path_state == :provisional && !allow_provisional
+        error(
+            "metaMDBG provisional submission reservations require explicit " *
+            "recovery inspection: $(normalized_path).",
+        )
+    end
     marker = joinpath(
         normalized_path,
         _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
@@ -5712,10 +5994,27 @@ function _metamdbg_submission_reservation_from_path(
         owner_token = String(owner_token),
         job_name = requested_job_name,
     )
-    expected.path == normalized_path || error(
-        "metaMDBG submission reservation path does not match its workflow " *
-        "signature.",
-    )
+    if path_state == :published
+        expected.path == normalized_path || error(
+            "metaMDBG submission reservation path does not match its workflow " *
+            "signature.",
+        )
+        expected = merge(expected, (; publication_state = :published))
+    else
+        _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME in entries && error(
+            "metaMDBG provisional pre-submit reservation must not contain a " *
+            "scheduler job record: $(normalized_path).",
+        )
+        expected = merge(expected, (;
+            path = normalized_path,
+            contract_marker = marker,
+            job_marker = joinpath(
+                normalized_path,
+                _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+            ),
+            publication_state = :provisional,
+        ))
+    end
     expected.workflow_signature == workflow_signature || error(
         "metaMDBG submission reservation workflow signature is inconsistent.",
     )
@@ -5762,12 +6061,17 @@ function _metamdbg_submission_reservation_from_path(
             "match its workflow owner.",
         )
     end
-    return _require_metamdbg_submission_reservation!(expected)
+    if require_output_root_reservation
+        return _require_metamdbg_submission_reservation!(expected)
+    end
+    return _require_metamdbg_private_submission_reservation!(expected)
 end
 
 function _create_metamdbg_submission_reservation!(
         reservation::NamedTuple,
         outdir::AbstractString;
+        pre_rename_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
         post_rename_hook::Function =
             (_reservation::NamedTuple) -> nothing,
 )::NamedTuple
@@ -5827,9 +6131,11 @@ function _create_metamdbg_submission_reservation!(
             )
         end
         _fsync_metamdbg_directory(temporary_path)
+        _fsync_metamdbg_directory(reservation_parent)
         _publish_metamdbg_output_root_reservation_marker!(reservation)
         output_root_marker_published = true
         _require_metamdbg_submission_reservation!(temporary_reservation)
+        pre_rename_hook(temporary_reservation)
         mv(temporary_path, reservation.path)
         post_rename_hook(reservation)
         _fsync_metamdbg_directory(reservation_parent)
@@ -5918,9 +6224,11 @@ Bind a scheduler job ID to an inspected metaMDBG submission reservation.
 This recovery operation is intended for the narrow crash window after the
 scheduler accepted a job but before `run_metamdbg` durably recorded the returned
 job ID. Set `confirm_submitted = true` only after independently confirming that
-the exact scheduler job belongs to this reservation. The job record is published
-atomically under the output lock and becomes available through
-`inspect_metamdbg_submission_reservations`.
+the exact scheduler job belongs to this reservation. Binding requires the fully
+published record and both filesystem identities returned by inspection, so a
+same-content private or shared replacement fails before `job.json` publication.
+The job record is published atomically under the output lock and becomes
+available through `inspect_metamdbg_submission_reservations`.
 """
 function bind_metamdbg_submission_reservation_job!(
         metadata::NamedTuple;
@@ -5948,6 +6256,18 @@ function bind_metamdbg_submission_reservation_job!(
             "durable reservation before binding its scheduler job.",
         ),
     )
+    hasproperty(metadata, :publication_state) &&
+        metadata.publication_state == :published || throw(ArgumentError(
+        "metaMDBG scheduler job binding requires an inspected, fully " *
+        "published submission reservation.",
+    ))
+    all(
+        field -> hasproperty(metadata, field),
+        (:reservation_identity, :shared_reservation_identity),
+    ) || throw(ArgumentError(
+        "metaMDBG scheduler job binding requires the exact private and " *
+        "shared filesystem identities returned by inspection.",
+    ))
     metadata.job_id === nothing || error(
         "metaMDBG submission reservation already has a scheduler job id.",
     )
@@ -6000,6 +6320,11 @@ function bind_metamdbg_submission_reservation_job!(
         current.job_id === nothing || error(
             "metaMDBG submission reservation already has a scheduler job id.",
         )
+        _require_unchanged_metamdbg_recovery_identities(
+            current,
+            metadata.reservation_identity,
+            metadata.shared_reservation_identity,
+        )
         _bind_metamdbg_submission_job!(current, job_id)
     end
     return (;
@@ -6012,6 +6337,9 @@ function bind_metamdbg_submission_reservation_job!(
         owner_token = bound.owner_token,
         job_id = bound.job_id,
         submission_state = bound.submission_state,
+        publication_state = :published,
+        reservation_identity = metadata.reservation_identity,
+        shared_reservation_identity = metadata.shared_reservation_identity,
     )
 end
 
@@ -8894,20 +9222,36 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Inspect durable metaMDBG submission reservations for an output root.
 
 Each returned record is reconstructed from and verified against its mode-0600
-on-disk owner contract under the output lock. This is the recovery path when a
-caller dies after publishing the reservation but before receiving the returned
-capability. Inspection never expires or removes a reservation.
+on-disk owner contract under the output lock. A shared-marker-paired temporary
+record is reported with `publication_state = :provisional`; this makes the
+pre-rename and rename-before-parent-fsync crash windows explicitly recoverable.
+Inspection binds both private and shared filesystem identities, never expires a
+reservation, and never removes one. A hard-killed caller can also leave its
+private lifecycle directory, cleanup sentinel, and output-root PID file. After
+independently proving that caller is dead, set `confirm_process_dead = true` to
+remove only those exact same-user dead-process locks before inspection. A PID
+that is still live or remotely unverifiable fails closed.
 """
 function inspect_metamdbg_submission_reservations(
         outdir::AbstractString,
+        ;
+        confirm_process_dead::Bool = false,
 )::Vector{NamedTuple}
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    if confirm_process_dead
+        _recover_dead_metamdbg_lifecycle_locks!(canonical_outdir)
+    end
     return _with_metamdbg_output_lock(canonical_outdir) do
         map(_metamdbg_submission_reservation_paths(canonical_outdir)) do path
             reservation = _metamdbg_submission_reservation_from_path(
                 path,
-                canonical_outdir,
+                canonical_outdir;
+                allow_provisional = true,
             )
+            reservation_identity =
+                _metamdbg_submission_reservation_identity(reservation)
+            shared_reservation_identity =
+                _metamdbg_shared_reservation_identity(reservation)
             return (;
                 canonical_outdir = reservation.canonical_outdir,
                 path = reservation.path,
@@ -8919,6 +9263,9 @@ function inspect_metamdbg_submission_reservations(
                 owner_token = reservation.owner_token,
                 job_id = reservation.job_id,
                 submission_state = reservation.submission_state,
+                publication_state = reservation.publication_state,
+                reservation_identity,
+                shared_reservation_identity,
             )
         end
     end
@@ -8983,6 +9330,27 @@ function reclaim_metamdbg_submission_reservation!(
             "submission_reservation value returned by run_metamdbg.",
         ),
     )
+    publication_state = hasproperty(metadata, :publication_state) ?
+                        metadata.publication_state : :published
+    publication_state in (:published, :provisional) || throw(ArgumentError(
+        "metaMDBG reservation publication_state must be :published or " *
+        ":provisional.",
+    ))
+    if publication_state == :provisional
+        confirm_not_submitted || throw(ArgumentError(
+            "A provisional metaMDBG reservation can be reclaimed only after " *
+            "confirm_not_submitted=true.",
+        ))
+    end
+    if confirm_not_submitted
+        all(
+            field -> hasproperty(metadata, field),
+            (:reservation_identity, :shared_reservation_identity),
+        ) || throw(ArgumentError(
+            "Pre-submit metaMDBG recovery requires the exact private and " *
+            "shared filesystem identities returned by inspection.",
+        ))
+    end
     normalized_owner_token = String(owner_token)
     isempty(normalized_owner_token) && throw(ArgumentError(
         "metaMDBG reservation owner_token must be nonempty.",
@@ -9043,19 +9411,68 @@ function reclaim_metamdbg_submission_reservation!(
     end
     expected_reservation.workflow_signature == metadata.workflow_signature ||
         error("metaMDBG reservation workflow signature does not match metadata.")
-    expected_reservation.path == metadata.path || error(
-        "metaMDBG reservation path does not match its recomputed workflow path.",
-    )
-    ispath(expected_reservation.path) || error(
+    metadata_path = normpath(abspath(String(metadata.path)))
+    if publication_state == :published
+        expected_reservation.path == metadata_path || error(
+            "metaMDBG reservation path does not match its recomputed workflow " *
+            "path.",
+        )
+    else
+        _metamdbg_submission_reservation_path_state(
+            metadata_path,
+            outputs.outdir,
+        ) == :provisional || error(
+            "metaMDBG provisional recovery path is not a valid temporary owner " *
+            "record: $(metadata_path).",
+        )
+    end
+    ispath(metadata_path) || error(
         "metaMDBG submission reservation is missing or was already consumed: " *
-        "$(expected_reservation.path).",
+        "$(metadata_path).",
     )
     _with_metamdbg_output_lock(outputs.outdir) do
-        ispath(expected_reservation.path) || error(
+        ispath(metadata_path) || error(
             "metaMDBG submission reservation is missing or was already consumed: " *
-            "$(expected_reservation.path).",
+            "$(metadata_path).",
         )
-        _remove_metamdbg_submission_reservation!(expected_reservation)
+        current = _metamdbg_submission_reservation_from_path(
+            metadata_path,
+            outputs.outdir;
+            allow_provisional = publication_state == :provisional,
+        )
+        current.publication_state == publication_state || error(
+            "metaMDBG reservation publication state changed after inspection.",
+        )
+        for field in (
+                :canonical_outdir,
+                :workflow_signature,
+                :scheduler_job_name,
+                :input_contract_signature,
+                :graph_k,
+                :owner_token,
+                :job_id,
+        )
+            getproperty(current, field) == getproperty(expected_reservation, field) ||
+                error(
+                    "metaMDBG submission reservation $(field) changed before " *
+                    "explicit recovery.",
+                )
+        end
+        has_reservation_identity = hasproperty(metadata, :reservation_identity)
+        has_shared_identity =
+            hasproperty(metadata, :shared_reservation_identity)
+        has_reservation_identity == has_shared_identity || throw(ArgumentError(
+            "metaMDBG recovery metadata must provide both private and shared " *
+            "filesystem identities together.",
+        ))
+        if has_reservation_identity
+            _require_unchanged_metamdbg_recovery_identities(
+                current,
+                metadata.reservation_identity,
+                metadata.shared_reservation_identity,
+            )
+        end
+        _remove_metamdbg_submission_reservation!(current)
     end
     return (;
         status = :reclaimed,
@@ -9067,7 +9484,8 @@ function reclaim_metamdbg_submission_reservation!(
         else
             :not_submitted
         end,
-        path = expected_reservation.path,
+        path = metadata_path,
+        publication_state,
     )
 end
 
@@ -9133,14 +9551,25 @@ The graph alias resolves to metaMDBG's validated dynamic
   reservations block competing execution before input hashing. Runtime jobs
   validate their exact reservation before bounded output-lock retries and
   atomically rename it to a private tombstone only after acquiring the lock.
-  Reservation creation likewise publishes a complete marker by atomic rename;
-  incomplete temporary or consumed-tombstone remnants are nonblocking.
+  Reservation creation makes the complete temporary owner record and its parent
+  entry durable, then publishes the shared marker before its private atomic
+  rename. An incomplete temporary remnant is nonblocking only when no durable
+  same-root marker could pair with it; ambiguous corruption fails loudly. A
+  temporary owner record paired to its exact shared marker is an active,
+  inspectable `publication_state = :provisional` recovery capability. This
+  covers hard termination before rename and rename durability. Consumed
+  tombstone remnants are nonblocking.
   Reservations never auto-expire:
   after scheduler-confirmed cancellation, reclaim one explicitly with
   `reclaim_metamdbg_submission_reservation!`, the returned owner token and job
   id, and `confirm_cancelled = true`. If a caller dies before submission,
   recover the durable capability with
-  `inspect_metamdbg_submission_reservations` and reclaim it only after explicit
+  `inspect_metamdbg_submission_reservations`; after proving the caller process
+  dead, `confirm_process_dead = true` removes its exact identity-checked private
+  lock, cleanup sentinel, and canonical local PID file. Live, remote, malformed,
+  empty, and replacement PID files fail closed. Pre-submit reclaim and recovery
+  job binding require the exact private and shared identities returned by
+  inspection and refuse same-content replacements. Reclaim only after explicit
   independent confirmation that no job was submitted.
   A submitted job confirmed terminal-failed can be reclaimed with its exact job
   id and `confirm_terminal = :failed`.

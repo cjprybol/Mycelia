@@ -83,6 +83,84 @@ function _write_test_metamdbg_contract!(
     return Mycelia._write_metamdbg_contract!(outputs, input_contract)
 end
 
+function _kill_metamdbg_reservation_publication!(
+        outdir::AbstractString,
+        ready_path::AbstractString,
+        phase::Symbol,
+        ;
+        live_check::Function = (_process::Base.Process) -> nothing,
+)::Nothing
+    phase in (:pre_rename, :post_rename) || throw(ArgumentError(
+        "phase must be :pre_rename or :post_rename.",
+    ))
+    active_project = Base.active_project()
+    active_project isa AbstractString || error(
+        "A project is required for the metaMDBG SIGKILL fixture.",
+    )
+    script_path = joinpath(
+        dirname(String(outdir)),
+        "metamdbg-$(phase)-sigkill-fixture.jl",
+    )
+    hook_keyword = phase == :pre_rename ?
+                   "pre_rename_hook" : "post_rename_hook"
+    script = """
+    ENV["LD_LIBRARY_PATH"] = ""
+    const Mycelia = Base.require(Main, :Mycelia)
+
+    outdir = $(repr(String(outdir)))
+    ready_path = $(repr(String(ready_path)))
+    outputs = Mycelia._metamdbg_output_paths(outdir, 21)
+    reservation = Mycelia._metamdbg_submission_reservation(
+        outputs,
+        (; signature = repeat("a", 64)),
+        21;
+        owner_token = "$(phase)-sigkill-owner",
+    )
+    publication_hook = function (_reservation::NamedTuple)
+        write(ready_path, "ready\\n")
+        while true
+            sleep(60)
+        end
+    end
+    Mycelia._with_metamdbg_output_domain_lock(outdir) do
+        Mycelia._create_metamdbg_submission_reservation!(
+            reservation,
+            outdir;
+            $(hook_keyword) = publication_hook,
+        )
+    end
+    """
+    write(script_path, script)
+    project_directory = dirname(String(active_project))
+    project_command =
+        `$(Base.julia_cmd()) --project=$(project_directory)`
+    command =
+        `$project_command --startup-file=no --compiled-modules=yes $(script_path)`
+    process = run(ignorestatus(command); wait = false)
+    wait_status = Base.timedwait(
+        () -> isfile(ready_path) || !Base.process_running(process),
+        600.0;
+        pollint = 0.05,
+    )
+    if wait_status != :ok || !isfile(ready_path)
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+        error(
+            "metaMDBG $(phase) SIGKILL fixture did not reach its publication " *
+            "hook (exit=$(process.exitcode), signal=$(process.termsignal)).",
+        )
+    end
+    try
+        live_check(process)
+    finally
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+    end
+    Test.@test !success(process)
+    Test.@test process.termsignal == 9
+    return nothing
+end
+
 Test.@testset "metaMDBG input and artifact contracts" begin
     mktempdir() do temporary_root
         temporary_root = realpath(temporary_root)
@@ -1957,6 +2035,449 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(malformed_remnant)
             rm(temporary_remnant)
             rm(consumed_remnant)
+
+            pre_kill_outdir =
+                joinpath(temporary_root, "pre-rename-sigkill-output")
+            pre_kill_ready =
+                joinpath(temporary_root, "pre-rename-sigkill.ready")
+            pre_kill_live_check = function (process::Base.Process)
+                Test.@test Base.process_running(process)
+                private_lock =
+                    Mycelia._metamdbg_output_lock_path(pre_kill_outdir)
+                cleanup_reservation =
+                    Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                        pre_kill_outdir,
+                    )
+                pid_lock =
+                    Mycelia._output_root_reservation_lock_path_from_canonical(
+                        Mycelia._metamdbg_canonical_output_path(
+                            pre_kill_outdir,
+                        ),
+                    )
+                provisional_path = only(
+                    Mycelia._metamdbg_submission_reservation_paths(
+                        pre_kill_outdir,
+                    ),
+                )
+                provisional_record =
+                    Mycelia._metamdbg_submission_reservation_from_path(
+                        provisional_path,
+                        pre_kill_outdir;
+                        allow_provisional = true,
+                    )
+                tracked_paths = String[
+                    private_lock,
+                    cleanup_reservation,
+                    pid_lock,
+                    provisional_path,
+                    provisional_record.output_root_reservation_marker,
+                ]
+                tracked_identities = map(tracked_paths) do path
+                    path_status = stat(path)
+                    return (;
+                        device = path_status.device,
+                        inode = path_status.inode,
+                    )
+                end
+                _test_metamdbg_error(
+                    () -> Mycelia.inspect_metamdbg_submission_reservations(
+                        pre_kill_outdir;
+                        confirm_process_dead = true,
+                    ),
+                    ErrorException,
+                    r"PID lock still names a live or remotely unverifiable process",
+                )
+                Test.@test all(ispath, tracked_paths)
+                observed_identities = map(tracked_paths) do path
+                    path_status = stat(path)
+                    return (;
+                        device = path_status.device,
+                        inode = path_status.inode,
+                    )
+                end
+                Test.@test observed_identities == tracked_identities
+                return nothing
+            end
+            _kill_metamdbg_reservation_publication!(
+                pre_kill_outdir,
+                pre_kill_ready,
+                :pre_rename,
+                ;
+                live_check = pre_kill_live_check,
+            )
+            pre_kill_private_lock =
+                Mycelia._metamdbg_output_lock_path(pre_kill_outdir)
+            pre_kill_cleanup_reservation =
+                Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                    pre_kill_outdir,
+                )
+            pre_kill_pid_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    Mycelia._metamdbg_canonical_output_path(pre_kill_outdir),
+                )
+            Test.@test isdir(pre_kill_private_lock)
+            Test.@test isdir(pre_kill_cleanup_reservation)
+            Test.@test isfile(pre_kill_pid_lock)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir,
+                ),
+                ErrorException,
+                r"locked by another lifecycle",
+            )
+            canonical_pre_kill_pid_contents =
+                read(pre_kill_pid_lock, String)
+            pre_kill_pid_mode = stat(pre_kill_pid_lock).mode & 0o777
+            chmod(pre_kill_pid_lock, 0o600)
+            write(pre_kill_pid_lock, "")
+            chmod(pre_kill_pid_lock, pre_kill_pid_mode)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir;
+                    confirm_process_dead = true,
+                ),
+                ErrorException,
+                r"PID lock is empty or malformed",
+            )
+            Test.@test isdir(pre_kill_private_lock)
+            Test.@test isdir(pre_kill_cleanup_reservation)
+            Test.@test isfile(pre_kill_pid_lock)
+            chmod(pre_kill_pid_lock, 0o600)
+            write(pre_kill_pid_lock, "not-a-canonical-pidfile")
+            chmod(pre_kill_pid_lock, pre_kill_pid_mode)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir;
+                    confirm_process_dead = true,
+                ),
+                ErrorException,
+                r"PID lock is empty or malformed",
+            )
+            Test.@test isdir(pre_kill_private_lock)
+            Test.@test isdir(pre_kill_cleanup_reservation)
+            Test.@test isfile(pre_kill_pid_lock)
+            chmod(pre_kill_pid_lock, 0o600)
+            write(pre_kill_pid_lock, canonical_pre_kill_pid_contents)
+            chmod(pre_kill_pid_lock, pre_kill_pid_mode)
+            pre_kill_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir,
+                    ;
+                    confirm_process_dead = true,
+                ),
+            )
+            Test.@test !ispath(pre_kill_private_lock)
+            Test.@test !ispath(pre_kill_cleanup_reservation)
+            Test.@test !ispath(pre_kill_pid_lock)
+            Test.@test pre_kill_metadata.publication_state == :provisional
+            Test.@test pre_kill_metadata.submission_state == :reserved
+            Test.@test pre_kill_metadata.job_id === nothing
+            _test_metamdbg_error(
+                () -> Mycelia.bind_metamdbg_submission_reservation_job!(
+                    pre_kill_metadata;
+                    owner_token = pre_kill_metadata.owner_token,
+                    job_id = "101",
+                    confirm_submitted = true,
+                ),
+                ArgumentError,
+                r"fully published submission reservation",
+            )
+            Test.@test Mycelia._metamdbg_submission_reservation_path_state(
+                pre_kill_metadata.path,
+                pre_kill_outdir,
+            ) == :provisional
+            pre_kill_record =
+                Mycelia._metamdbg_submission_reservation_from_path(
+                    pre_kill_metadata.path,
+                    pre_kill_outdir;
+                    allow_provisional = true,
+                )
+            Test.@test isfile(
+                pre_kill_record.output_root_reservation_marker,
+            )
+            chmod(pre_kill_record.contract_marker, 0o640)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir,
+                ),
+                ErrorException,
+                r"could not validate a provisional.*potentially paired shared",
+            )
+            chmod(pre_kill_record.contract_marker, 0o600)
+            held_directory_marker =
+                joinpath(temporary_root, "queued-marker-directory-hold")
+            mv(
+                pre_kill_record.output_root_reservation_marker,
+                held_directory_marker,
+            )
+            mkdir(pre_kill_record.output_root_reservation_marker)
+            chmod(pre_kill_record.contract_marker, 0o640)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    pre_kill_outdir,
+                ),
+                ErrorException,
+                r"could not validate a provisional.*potentially paired shared",
+            )
+            chmod(pre_kill_record.contract_marker, 0o600)
+            rm(pre_kill_record.output_root_reservation_marker)
+            mv(
+                held_directory_marker,
+                pre_kill_record.output_root_reservation_marker,
+            )
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pre_kill_metadata;
+                    owner_token = pre_kill_metadata.owner_token,
+                    confirm_cancelled = true,
+                ),
+                ArgumentError,
+                r"provisional.*confirm_not_submitted",
+            )
+
+            replacement_hold =
+                joinpath(temporary_root, "provisional-replacement-hold")
+            mkpath(replacement_hold)
+            held_private = joinpath(replacement_hold, "private")
+            mv(pre_kill_metadata.path, held_private)
+            mkpath(pre_kill_metadata.path)
+            chmod(pre_kill_metadata.path, 0o700)
+            replacement_contract = joinpath(
+                pre_kill_metadata.path,
+                Mycelia._METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+            )
+            write(replacement_contract, pre_kill_record.contents)
+            chmod(replacement_contract, 0o600)
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pre_kill_metadata;
+                    owner_token = pre_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                ),
+                ErrorException,
+                r"reservation was replaced after recovery inspection",
+            )
+            Test.@test isdir(pre_kill_metadata.path)
+            Test.@test isfile(
+                pre_kill_record.output_root_reservation_marker,
+            )
+            rm(pre_kill_metadata.path; recursive = true)
+            mv(held_private, pre_kill_metadata.path)
+
+            held_shared = joinpath(replacement_hold, "shared")
+            mv(pre_kill_record.output_root_reservation_marker, held_shared)
+            write(
+                pre_kill_record.output_root_reservation_marker,
+                pre_kill_record.output_root_reservation_contents,
+            )
+            chmod(pre_kill_record.output_root_reservation_marker, 0o600)
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pre_kill_metadata;
+                    owner_token = pre_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                ),
+                ErrorException,
+                r"shared output-root reservation was replaced after recovery",
+            )
+            Test.@test isdir(pre_kill_metadata.path)
+            Test.@test isfile(
+                pre_kill_record.output_root_reservation_marker,
+            )
+            rm(pre_kill_record.output_root_reservation_marker)
+            mv(held_shared, pre_kill_record.output_root_reservation_marker)
+            provisional_reclaim =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pre_kill_metadata;
+                    owner_token = pre_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                )
+            Test.@test provisional_reclaim.status == :reclaimed
+            Test.@test provisional_reclaim.publication_state == :provisional
+            Test.@test !ispath(pre_kill_metadata.path)
+            Test.@test !ispath(
+                pre_kill_record.output_root_reservation_marker,
+            )
+            Test.@test Mycelia._with_metamdbg_output_domain_lock(
+                pre_kill_outdir,
+            ) do
+                return isempty(
+                    Mycelia._metamdbg_submission_reservation_paths(
+                        pre_kill_outdir,
+                    ),
+                )
+            end
+
+            post_kill_outdir =
+                joinpath(temporary_root, "post-rename-sigkill-output")
+            post_kill_ready =
+                joinpath(temporary_root, "post-rename-sigkill.ready")
+            _kill_metamdbg_reservation_publication!(
+                post_kill_outdir,
+                post_kill_ready,
+                :post_rename,
+            )
+            post_kill_private_lock =
+                Mycelia._metamdbg_output_lock_path(post_kill_outdir)
+            post_kill_cleanup_reservation =
+                Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                    post_kill_outdir,
+                )
+            post_kill_pid_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    Mycelia._metamdbg_canonical_output_path(post_kill_outdir),
+                )
+            Test.@test isdir(post_kill_private_lock)
+            Test.@test isdir(post_kill_cleanup_reservation)
+            Test.@test isfile(post_kill_pid_lock)
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    post_kill_outdir,
+                ),
+                ErrorException,
+                r"locked by another lifecycle",
+            )
+            post_kill_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    post_kill_outdir,
+                    ;
+                    confirm_process_dead = true,
+                ),
+            )
+            Test.@test !ispath(post_kill_private_lock)
+            Test.@test !ispath(post_kill_cleanup_reservation)
+            Test.@test !ispath(post_kill_pid_lock)
+            Test.@test post_kill_metadata.publication_state == :published
+            Test.@test post_kill_metadata.submission_state == :reserved
+            identity_free_post_metadata = (;
+                canonical_outdir = post_kill_metadata.canonical_outdir,
+                path = post_kill_metadata.path,
+                workflow_signature = post_kill_metadata.workflow_signature,
+                scheduler_job_name = post_kill_metadata.scheduler_job_name,
+                input_contract_signature =
+                    post_kill_metadata.input_contract_signature,
+                graph_k = post_kill_metadata.graph_k,
+                owner_token = post_kill_metadata.owner_token,
+                job_id = post_kill_metadata.job_id,
+                submission_state = post_kill_metadata.submission_state,
+                publication_state = post_kill_metadata.publication_state,
+            )
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    identity_free_post_metadata;
+                    owner_token = identity_free_post_metadata.owner_token,
+                    confirm_not_submitted = true,
+                ),
+                ArgumentError,
+                r"exact private and shared filesystem identities",
+            )
+            _test_metamdbg_error(
+                () -> Mycelia.bind_metamdbg_submission_reservation_job!(
+                    identity_free_post_metadata;
+                    owner_token = identity_free_post_metadata.owner_token,
+                    job_id = "102",
+                    confirm_submitted = true,
+                ),
+                ArgumentError,
+                r"exact private and shared filesystem identities",
+            )
+            post_kill_record =
+                Mycelia._metamdbg_submission_reservation_from_path(
+                    post_kill_metadata.path,
+                    post_kill_outdir,
+                )
+            post_replacement_hold =
+                joinpath(temporary_root, "published-replacement-hold")
+            mkpath(post_replacement_hold)
+            held_post_private = joinpath(post_replacement_hold, "private")
+            mv(post_kill_metadata.path, held_post_private)
+            mkpath(post_kill_metadata.path)
+            chmod(post_kill_metadata.path, 0o700)
+            post_replacement_contract = joinpath(
+                post_kill_metadata.path,
+                Mycelia._METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
+            )
+            write(post_replacement_contract, post_kill_record.contents)
+            chmod(post_replacement_contract, 0o600)
+            _test_metamdbg_error(
+                () -> Mycelia.bind_metamdbg_submission_reservation_job!(
+                    post_kill_metadata;
+                    owner_token = post_kill_metadata.owner_token,
+                    job_id = "103",
+                    confirm_submitted = true,
+                ),
+                ErrorException,
+                r"reservation was replaced after recovery inspection",
+            )
+            Test.@test !ispath(joinpath(
+                post_kill_metadata.path,
+                Mycelia._METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+            ))
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    post_kill_metadata;
+                    owner_token = post_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                ),
+                ErrorException,
+                r"reservation was replaced after recovery inspection",
+            )
+            Test.@test isdir(post_kill_metadata.path)
+            Test.@test isfile(
+                post_kill_record.output_root_reservation_marker,
+            )
+            rm(post_kill_metadata.path; recursive = true)
+            mv(held_post_private, post_kill_metadata.path)
+
+            held_post_shared = joinpath(post_replacement_hold, "shared")
+            mv(
+                post_kill_record.output_root_reservation_marker,
+                held_post_shared,
+            )
+            write(
+                post_kill_record.output_root_reservation_marker,
+                post_kill_record.output_root_reservation_contents,
+            )
+            chmod(post_kill_record.output_root_reservation_marker, 0o600)
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    post_kill_metadata;
+                    owner_token = post_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                ),
+                ErrorException,
+                r"shared output-root reservation was replaced after recovery",
+            )
+            Test.@test isdir(post_kill_metadata.path)
+            Test.@test isfile(
+                post_kill_record.output_root_reservation_marker,
+            )
+            rm(post_kill_record.output_root_reservation_marker)
+            mv(
+                held_post_shared,
+                post_kill_record.output_root_reservation_marker,
+            )
+            published_reclaim =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    post_kill_metadata;
+                    owner_token = post_kill_metadata.owner_token,
+                    confirm_not_submitted = true,
+                )
+            Test.@test published_reclaim.status == :reclaimed
+            Test.@test published_reclaim.publication_state == :published
+            Test.@test !ispath(post_kill_metadata.path)
+            Test.@test !ispath(
+                post_kill_record.output_root_reservation_marker,
+            )
+            Test.@test Mycelia._with_metamdbg_output_domain_lock(
+                post_kill_outdir,
+            ) do
+                return isempty(
+                    Mycelia._metamdbg_submission_reservation_paths(
+                        post_kill_outdir,
+                    ),
+                )
+            end
 
             missing_parent_root =
                 joinpath(temporary_root, "reclaim-missing-parent")

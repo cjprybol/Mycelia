@@ -21,6 +21,13 @@ import Logging
 import Mycelia
 import Test
 
+if !isdefined(@__MODULE__, :_autocycler_smoke_prerequisites)
+    Base.include(
+        @__MODULE__,
+        joinpath(@__DIR__, "..", "multi_input_hybrid_smoke_support.jl"),
+    )
+end
+
 function _autocycler_shell_quote(value::AbstractString)::String
     return "'" * replace(String(value), "'" => "'\"'\"'") * "'"
 end
@@ -196,126 +203,10 @@ function _autocycler_test_toolchain(;
     )
 end
 
-function _autocycler_smoke_env_enabled(
-        environment::AbstractDict,
-        name::AbstractString,
-)::Bool
-    value = String(get(environment, name, "false"))
-    return lowercase(strip(value)) == "true"
-end
-
-function _autocycler_real_smoke_enabled(
-        environment::AbstractDict,
-)::Bool
-    external_enabled =
-        _autocycler_smoke_env_enabled(environment, "MYCELIA_RUN_ALL") ||
-        _autocycler_smoke_env_enabled(environment, "MYCELIA_RUN_EXTERNAL")
-    smoke_enabled = _autocycler_smoke_env_enabled(
-        environment,
-        "MYCELIA_RUN_AUTOCYCLER_SMOKE",
-    )
-    if smoke_enabled && !external_enabled
-        throw(ArgumentError(
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE=true also requires " *
-            "MYCELIA_RUN_EXTERNAL=true (or MYCELIA_RUN_ALL=true).",
-        ))
-    end
-    return smoke_enabled
-end
-
-function _autocycler_real_smoke_inputs(
-        environment::AbstractDict,
-)::NamedTuple
-    long_reads = String(get(
-        environment,
-        "MYCELIA_AUTOCYCLER_LONG_READS",
-        "",
-    ))
-    short_reads_1 = String(get(
-        environment,
-        "MYCELIA_AUTOCYCLER_SHORT_READS_1",
-        "",
-    ))
-    short_reads_2 = String(get(
-        environment,
-        "MYCELIA_AUTOCYCLER_SHORT_READS_2",
-        "",
-    ))
-    read_type = String(get(
-        environment,
-        "MYCELIA_AUTOCYCLER_READ_TYPE",
-        "ont_r10",
-    ))
-    isempty(long_reads) && throw(
-        ArgumentError(
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE=true requires " *
-            "MYCELIA_AUTOCYCLER_LONG_READS.",
-        ),
-    )
-    xor(isempty(short_reads_1), isempty(short_reads_2)) && throw(
-        ArgumentError(
-            "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1 and " *
-            "MYCELIA_AUTOCYCLER_SHORT_READS_2, or leave both unset.",
-        ),
-    )
-    validated_read_type = Mycelia._validate_autocycler_parameters(
-        1,
-        1,
-        read_type,
-    )
-    long_read_snapshot = Mycelia._autocycler_input_snapshot(
-        long_reads,
-        "Autocycler smoke long-read FASTQ",
-    )
-    try
-        Mycelia._validate_autocycler_fastq(
-            long_read_snapshot.path,
-            "Autocycler smoke long-read input",
-        )
-    catch caught
-        caught isa InterruptException && rethrow()
-        caught isa ArgumentError && rethrow()
-        throw(ArgumentError(
-            "Autocycler smoke long-read input must be a valid FASTQ file. " *
-            "Cause: $(sprint(showerror, caught))",
-        ))
-    end
-    if !isempty(short_reads_1)
-        short_read_1_snapshot = Mycelia._autocycler_input_snapshot(
-            short_reads_1,
-            "Autocycler smoke paired short-read R1 FASTQ",
-        )
-        short_read_2_snapshot = Mycelia._autocycler_input_snapshot(
-            short_reads_2,
-            "Autocycler smoke paired short-read R2 FASTQ",
-        )
-        try
-            Mycelia._validate_autocycler_paired_fastqs(
-                short_read_1_snapshot.path,
-                short_read_2_snapshot.path,
-            )
-        catch caught
-            caught isa InterruptException && rethrow()
-            caught isa ArgumentError && rethrow()
-            throw(ArgumentError(
-                "Autocycler smoke paired short-read inputs must be valid " *
-                "FASTQ files. Cause: $(sprint(showerror, caught))",
-            ))
-        end
-        short_reads_1 = short_read_1_snapshot.path
-        short_reads_2 = short_read_2_snapshot.path
-    end
-    return (
-        long_reads = long_read_snapshot.path,
-        short_reads_1,
-        short_reads_2,
-        read_type = validated_read_type,
-    )
-end
-
-run_autocycler_smoke = _autocycler_real_smoke_enabled(ENV)
+autocycler_smoke_prerequisites = _autocycler_smoke_prerequisites(ENV)
+run_autocycler_smoke = autocycler_smoke_prerequisites.run_smoke
 autocycler_smoke_inputs = run_autocycler_smoke ?
-                          _autocycler_real_smoke_inputs(ENV) : nothing
+                          autocycler_smoke_prerequisites : nothing
 
 Test.@testset "Autocycler wrapper" begin
     Test.@testset "Constants, paths, and bundled environment" begin
@@ -2801,6 +2692,48 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test cleanup_result.autocycler_assembly_threads == 128
             Test.@test cleanup_result.polishing_threads == 256
 
+            cleanup_intermediate_mutation_out_dir = joinpath(
+                temp_dir,
+                "cleanup-mutated-retained-intermediate",
+            )
+            cleanup_mutated_intermediate = Ref("")
+            function cleanup_intermediate_mutating_remover(
+                    path::AbstractString,
+            )::Nothing
+                normalized_path = String(path)
+                if endswith(normalized_path, "filtered_1.sam")
+                    cleanup_mutated_intermediate[] = normalized_path
+                    write(normalized_path, "mutated during failed cleanup\n")
+                    throw(ErrorException("synthetic mutating cleanup failure"))
+                end
+                rm(normalized_path; force = true)
+                return nothing
+            end
+            cleanup_intermediate_mutation_error = Test.@test_logs (
+                :warn,
+                r"Autocycler could not remove a polishing intermediate",
+            ) min_level=Logging.Warn match_mode=:any begin
+                _autocycler_test_error() do
+                    Mycelia._run_autocycler_polished(
+                        long_reads,
+                        short_reads_1,
+                        short_reads_2,
+                        cleanup_intermediate_mutation_out_dir;
+                        dependency_checker = _autocycler_test_toolchain,
+                        runner = _autocycler_test_runner!,
+                        intermediate_remover =
+                            cleanup_intermediate_mutating_remover,
+                    )
+                end
+            end
+            Test.@test cleanup_intermediate_mutation_error isa ErrorException
+            Test.@test isfile(cleanup_mutated_intermediate[])
+            Test.@test occursin(
+                "Polypolish filtered R1 alignment changed after its validated " *
+                "Autocycler snapshot",
+                sprint(showerror, cleanup_intermediate_mutation_error),
+            )
+
             cleanup_mutation_out_dir =
                 joinpath(temp_dir, "cleanup-mutated-final-assembly")
             cleanup_mutated_final = Ref(false)
@@ -3415,14 +3348,16 @@ Test.@testset "Autocycler wrapper" begin
     end
 
     Test.@testset "Real-smoke gate and fixtures fail closed" begin
-        Test.@test !_autocycler_real_smoke_enabled(Dict{String, String}())
+        Test.@test !_autocycler_smoke_prerequisites(
+            Dict{String, String}(),
+        ).run_smoke
         for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
-            Test.@test !_autocycler_real_smoke_enabled(Dict(
+            Test.@test !_autocycler_smoke_prerequisites(Dict(
                 broad_gate => "true",
-            ))
+            )).run_smoke
         end
         missing_broad_gate_error = _autocycler_test_error() do
-            _autocycler_real_smoke_enabled(Dict(
+            _autocycler_smoke_prerequisites(Dict(
                 "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
             ))
         end
@@ -3436,9 +3371,8 @@ Test.@testset "Autocycler wrapper" begin
             "MYCELIA_RUN_EXTERNAL" => "true",
             "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
         )
-        Test.@test _autocycler_real_smoke_enabled(enabled_without_fixtures)
         missing_long_reads_error = _autocycler_test_error() do
-            _autocycler_real_smoke_inputs(enabled_without_fixtures)
+            _autocycler_smoke_prerequisites(enabled_without_fixtures)
         end
         Test.@test missing_long_reads_error isa ArgumentError
         Test.@test occursin(
@@ -3447,7 +3381,9 @@ Test.@testset "Autocycler wrapper" begin
         )
 
         incomplete_pair_error = _autocycler_test_error() do
-            _autocycler_real_smoke_inputs(Dict(
+            _autocycler_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => "long.fastq",
                 "MYCELIA_AUTOCYCLER_SHORT_READS_1" => "R1.fastq",
             ))
@@ -3461,7 +3397,9 @@ Test.@testset "Autocycler wrapper" begin
         mktempdir() do temp_dir
             missing_path = joinpath(temp_dir, "missing.fastq")
             missing_fixture_error = _autocycler_test_error() do
-                _autocycler_real_smoke_inputs(Dict(
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => missing_path,
                 ))
             end
@@ -3474,7 +3412,9 @@ Test.@testset "Autocycler wrapper" begin
             empty_path = joinpath(temp_dir, "empty.fastq")
             write(empty_path, "")
             empty_fixture_error = _autocycler_test_error() do
-                _autocycler_real_smoke_inputs(Dict(
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => empty_path,
                 ))
             end
@@ -3487,7 +3427,9 @@ Test.@testset "Autocycler wrapper" begin
             malformed_path = joinpath(temp_dir, "malformed.fastq")
             write(malformed_path, ">not_fastq\nACGT\n")
             malformed_fixture_error = _autocycler_test_error() do
-                _autocycler_real_smoke_inputs(Dict(
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => malformed_path,
                 ))
             end
@@ -3505,26 +3447,33 @@ Test.@testset "Autocycler wrapper" begin
             write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
 
             invalid_type_error = _autocycler_test_error() do
-                _autocycler_real_smoke_inputs(Dict(
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                     "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
                     "MYCELIA_AUTOCYCLER_READ_TYPE" => "illumina",
                 ))
             end
             Test.@test invalid_type_error isa ArgumentError
             Test.@test occursin(
-                "read_type must be one of",
+                "MYCELIA_AUTOCYCLER_READ_TYPE must be one of",
                 sprint(showerror, invalid_type_error),
             )
 
-            long_only = _autocycler_real_smoke_inputs(Dict(
+            long_only = _autocycler_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
             ))
+            Test.@test long_only.run_smoke
             Test.@test long_only.long_reads == abspath(long_reads)
             Test.@test isempty(long_only.short_reads_1)
             Test.@test isempty(long_only.short_reads_2)
             Test.@test long_only.read_type == "ont_r10"
 
-            paired = _autocycler_real_smoke_inputs(Dict(
+            paired = _autocycler_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
                 "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
                 "MYCELIA_AUTOCYCLER_SHORT_READS_1" => short_reads_1,
                 "MYCELIA_AUTOCYCLER_SHORT_READS_2" => short_reads_2,
@@ -3533,6 +3482,22 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test paired.short_reads_1 == abspath(short_reads_1)
             Test.@test paired.short_reads_2 == abspath(short_reads_2)
             Test.@test paired.read_type == "pacbio_hifi"
+
+            write(short_reads_1, "@pair/2\nACGT\n+\nIIII\n")
+            invalid_pair_error = _autocycler_test_error() do
+                _autocycler_smoke_prerequisites(Dict(
+                    "MYCELIA_RUN_EXTERNAL" => "true",
+                    "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                    "MYCELIA_AUTOCYCLER_LONG_READS" => long_reads,
+                    "MYCELIA_AUTOCYCLER_SHORT_READS_1" => short_reads_1,
+                    "MYCELIA_AUTOCYCLER_SHORT_READS_2" => short_reads_2,
+                ))
+            end
+            Test.@test invalid_pair_error isa ArgumentError
+            Test.@test occursin(
+                "invalid explicit mate roles",
+                sprint(showerror, invalid_pair_error),
+            )
         end
     end
 end
@@ -3976,6 +3941,57 @@ Test.@testset "Autocycler input content lifecycle binding" begin
             )
             Test.@test restored_steps == restored_case.expected_steps
         end
+
+        late_intermediate_inputs = write_inputs("late-intermediate-mutation")
+        late_intermediate_out_dir = joinpath(
+            temp_dir,
+            "late-intermediate-mutation-output",
+        )
+        late_intermediate_path = joinpath(
+            late_intermediate_out_dir,
+            "short_read_polishing",
+            "alignments_1.sam",
+        )
+        late_intermediate_steps = Symbol[]
+        late_intermediate_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                late_intermediate_inputs.long_reads,
+                late_intermediate_inputs.short_reads_1,
+                late_intermediate_inputs.short_reads_2,
+                late_intermediate_out_dir;
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    push!(late_intermediate_steps, step.name)
+                    _autocycler_test_runner!(step)
+                    if step.name == :pypolca
+                        write(
+                            late_intermediate_path,
+                            "mutated after its final consumer\n",
+                        )
+                    end
+                end,
+                keep_intermediates = true,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "late-intermediate-mutation-environment.pid",
+                ),
+            )
+        end
+        Test.@test late_intermediate_error isa ErrorException
+        Test.@test isfile(late_intermediate_path)
+        Test.@test occursin(
+            "BWA R1 alignment changed after its validated Autocycler snapshot",
+            sprint(showerror, late_intermediate_error),
+        )
+        Test.@test late_intermediate_steps == [
+            :autocycler,
+            :bwa_index,
+            :bwa_mem_1,
+            :bwa_mem_2,
+            :polypolish_filter,
+            :polypolish,
+            :pypolca,
+        ]
 
         pre_polish_inputs = write_inputs("pre-polish-consumption")
         pre_polish_steps = Symbol[]
