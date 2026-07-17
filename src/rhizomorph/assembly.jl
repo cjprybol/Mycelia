@@ -144,6 +144,7 @@ struct AssemblyConfig
     compact_unitigs::Bool                   # Populate simplified_graph via linear-chain compaction
     memory_profile::Symbol                  # build_kmer_graph evidence footprint (:full|:lightweight|:ultralight|...)
     qualmer_prefilter_min_count::Int        # Opt-in qualmer-graph coverage prefilter floor (1 = no-op on every path); DISTINCT from min_coverage (td-ck03)
+    qualmer_memory_profile::Symbol          # Opt-in qualmer-graph quality storage: :full = per-observation (byte-identical default); :ultralight_quality = O(distinct) exact-mean (memory-bound profile); :lightweight_quality = exact-mean but keeps a per-occurrence obs-id Set (O(occurrences), ~2x only) for multi-sample tracking (td-n8ax)
 
     # Optional read-correction front-end (opt-in; default :none preserves today's
     # single-k-from-uncorrected-reads behavior byte-for-byte).
@@ -241,6 +242,7 @@ struct AssemblyConfig
             compact_unitigs::Bool = false,
             memory_profile::Symbol = :full,
             qualmer_prefilter_min_count::Union{Int, Nothing} = nothing,
+            qualmer_memory_profile::Union{Symbol, Nothing} = nothing,
             corrector::Symbol = :none,
             skip_solid::Union{Bool, Nothing} = nothing,
             strategy::Union{Symbol, Nothing} = nothing,
@@ -277,6 +279,17 @@ struct AssemblyConfig
         # DISTINCT from min_coverage (the downstream solidity threshold).
         effective_qualmer_prefilter_min_count = qualmer_prefilter_min_count === nothing ?
                                                 1 : qualmer_prefilter_min_count
+        # Opt-in aggregate qualmer quality storage (td-n8ax). Default :full =
+        # per-observation evidence = byte-identical to today. Both aggregate
+        # profiles store a coverage counter + exact per-position mean and compose
+        # with the prefilter. ONLY :ultralight_quality is truly O(distinct) (no
+        # per-observation tracking) — the memory-bound profile for bacterial scale.
+        # :lightweight_quality ALSO keeps a per-occurrence obs-id Set (O(occurrences),
+        # ~2x reduction only) for multi-sample provenance, NOT the memory bound. Like
+        # the prefilter, aggregate storage CHANGES output, so it is never a silent
+        # default.
+        effective_qualmer_memory_profile = qualmer_memory_profile === nothing ?
+                                           :full : qualmer_memory_profile
         # Validation: Must specify exactly one of k or min_overlap
         if k === nothing && min_overlap === nothing
             k = 31  # Default to k-mer mode with k=31
@@ -373,6 +386,10 @@ struct AssemblyConfig
         if effective_qualmer_prefilter_min_count < 1
             error("qualmer_prefilter_min_count must be positive, got " *
                   "qualmer_prefilter_min_count=$(effective_qualmer_prefilter_min_count)")
+        end
+        if !(effective_qualmer_memory_profile in (:full, :lightweight_quality, :ultralight_quality))
+            error("qualmer_memory_profile must be :full, :lightweight_quality, or :ultralight_quality, " *
+                  "got qualmer_memory_profile=:$(effective_qualmer_memory_profile)")
         end
 
         # dedup_revcomp is now wired into the qualmer arm too (td-47di): the
@@ -508,6 +525,7 @@ struct AssemblyConfig
             compact_unitigs,
             memory_profile,
             effective_qualmer_prefilter_min_count,
+            effective_qualmer_memory_profile,
             corrector,
             effective_skip_solid,
             effective_strategy,
@@ -1495,6 +1513,7 @@ function _run_stage1_correction(
             skip_solid = knobs.skip_solid,
             graph_mode = corrector_graph_mode,
             qualmer_prefilter_min_count = config.qualmer_prefilter_min_count,
+            qualmer_memory_profile = config.qualmer_memory_profile,
             n_k_rungs = knobs.n_k_rungs,
             max_iterations_per_k = knobs.max_iterations_per_k,
             hard_window = knobs.hard_window,
@@ -1642,7 +1661,12 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
         reassembly_config = _auto_configure_assembly(corrected_reads;
             k = reassembly_k, corrector = :none,
             dedup_revcomp = config.dedup_revcomp,
-            graph_cleanup = corrector_cleanup)
+            graph_cleanup = corrector_cleanup,
+            # Forward the memory levers (td-n8ax): on the REBUILD-fallback path the
+            # re-assembly builds a fresh qualmer graph, so without these it would
+            # revert to :full / no-prefilter and re-inflate memory at bacterial scale.
+            qualmer_memory_profile = config.qualmer_memory_profile,
+            qualmer_prefilter_min_count = config.qualmer_prefilter_min_count)
         reused_graph = get(result_dict, :final_graph, nothing)
         _rmeta = result_dict[:metadata]
         can_reuse_graph = reused_graph !== nothing &&
@@ -2135,7 +2159,8 @@ function _assemble_qualmer_graph(observations, config)
     # Build qualmer graph using Phase 2 quality-aware algorithms
     mode = _graph_mode_symbol(config.graph_mode)
     graph = Rhizomorph.build_qualmer_graph(fastq_records, config.k; mode = mode,
-        min_count = config.qualmer_prefilter_min_count)
+        min_count = config.qualmer_prefilter_min_count,
+        memory_profile = config.qualmer_memory_profile)
 
     # Contig extraction + AssemblyResult assembly is factored into
     # `_qualmer_graph_to_assembly` so the iterative corrector can REUSE its already-
