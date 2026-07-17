@@ -4158,7 +4158,17 @@ function _run_multi_input_assembler(
     toolchain = Mycelia._require_unicycler_toolchain_provenance(
         result.toolchain,
     )
-    return merge(result, (; toolchain))
+    normalized_result = merge(result, (; toolchain))
+    if hasproperty(normalized_result, :contract) &&
+       normalized_result.contract isa AbstractString &&
+       isfile(normalized_result.contract)
+        child_integrity = _multi_input_unicycler_child_integrity(
+            normalized_result,
+            String(outdir),
+        )
+        return merge(normalized_result, (; child_integrity))
+    end
+    return normalized_result
 end
 
 function _run_multi_input_assembler(
@@ -4168,7 +4178,7 @@ function _run_multi_input_assembler(
         config::AutocyclerPolishConfig;
         runner::Function = Mycelia.run_autocycler_polished,
 )::NamedTuple
-    return runner(;
+    result = runner(;
         long_reads = inputs.long_reads.path,
         short_reads_1 = inputs.short_r1.path,
         short_reads_2 = inputs.short_r2.path,
@@ -4179,6 +4189,14 @@ function _run_multi_input_assembler(
         polypolish_careful = config.polypolish_careful,
         keep_intermediates = config.keep_intermediates,
     )
+    if hasproperty(result, :lifecycle_artifact_snapshots)
+        child_integrity = _multi_input_autocycler_child_integrity(
+            result,
+            String(outdir),
+        )
+        return merge(result, (; child_integrity))
+    end
+    return result
 end
 
 function _primary_assembly_path(result::NamedTuple)::String
@@ -4396,11 +4414,384 @@ function _require_reserved_multi_input_artifact(
     return normalized_path
 end
 
+function _multi_input_buffered_artifact_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString,
+)::NamedTuple
+    normalized_path = _require_reserved_multi_input_artifact(
+        path,
+        label,
+        reserved_outdir,
+    )
+    bytes = open(normalized_path, "r") do input
+        read(input)
+    end
+    isempty(bytes) && error(
+        "multi-input assembler $(label) became empty while its immutable " *
+        "byte snapshot was read: $(normalized_path).",
+    )
+    snapshot = (
+        path = normalized_path,
+        canonical_path = realpath(normalized_path),
+        size_bytes = length(bytes),
+        sha256 = bytes2hex(Mycelia.SHA.sha256(bytes)),
+    )
+    return (; snapshot, bytes)
+end
+
+function _multi_input_artifact_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString,
+)::NamedTuple
+    normalized_path = _require_reserved_multi_input_artifact(
+        path,
+        label,
+        reserved_outdir,
+    )
+    return (
+        path = normalized_path,
+        canonical_path = realpath(normalized_path),
+        size_bytes = filesize(normalized_path),
+        sha256 = _multi_input_file_sha256(normalized_path),
+    )
+end
+
+function _multi_input_expected_artifact_snapshot(
+        value::Any,
+        label::AbstractString,
+)::NamedTuple
+    path = if value isa NamedTuple && hasproperty(value, :path)
+        getproperty(value, :path)
+    elseif value isa AbstractDict && haskey(value, "canonical_path")
+        value["canonical_path"]
+    else
+        error("$(label) immutable snapshot does not report its artifact path.")
+    end
+    size_bytes = if value isa NamedTuple && hasproperty(value, :size_bytes)
+        getproperty(value, :size_bytes)
+    elseif value isa AbstractDict && haskey(value, "size_bytes")
+        value["size_bytes"]
+    else
+        error("$(label) immutable snapshot does not report size_bytes.")
+    end
+    sha256 = if value isa NamedTuple && hasproperty(value, :sha256)
+        getproperty(value, :sha256)
+    elseif value isa AbstractDict && haskey(value, "sha256")
+        value["sha256"]
+    else
+        error("$(label) immutable snapshot does not report sha256.")
+    end
+    size_bytes isa Integer || error(
+        "$(label) immutable snapshot size_bytes must be an integer.",
+    )
+    (sha256 isa AbstractString && occursin(r"^[0-9a-f]{64}$", sha256)) || error(
+        "$(label) immutable snapshot SHA-256 must be 64 lowercase hex digits.",
+    )
+    normalized_path = normpath(abspath(String(path)))
+    return (
+        path = normalized_path,
+        canonical_path = normalized_path,
+        size_bytes = Int(size_bytes),
+        sha256 = String(sha256),
+    )
+end
+
+function _require_matching_multi_input_artifact_snapshot(
+        expected::NamedTuple,
+        observed::NamedTuple,
+        label::AbstractString,
+)::Nothing
+    expected == observed && return nothing
+    error(
+        "multi-input assembler $(label) changed after its child wrapper " *
+        "bound an immutable artifact snapshot: expected path=$(expected.path), " *
+        "size=$(expected.size_bytes), sha256=$(expected.sha256); observed " *
+        "path=$(observed.path), size=$(observed.size_bytes), " *
+        "sha256=$(observed.sha256).",
+    )
+end
+
+function _multi_input_unicycler_child_integrity(
+        result::NamedTuple,
+        reserved_outdir::AbstractString,
+)::NamedTuple
+    hasproperty(result, :contract) || error(
+        "Unicycler child result did not report its durable run contract.",
+    )
+    contract_path = getproperty(result, :contract)
+    contract_path isa AbstractString || error(
+        "Unicycler child result reported a non-path durable run contract.",
+    )
+    contract = _multi_input_buffered_artifact_snapshot(
+        contract_path,
+        "Unicycler durable run contract",
+        reserved_outdir,
+    )
+    parsed = try
+        Mycelia.JSON.parse(String(contract.bytes))
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "Unicycler durable run contract is not valid JSON: " *
+            sprint(showerror, caught),
+        )
+    end
+    parsed isa AbstractDict || error(
+        "Unicycler durable run contract must be a JSON object.",
+    )
+    get(parsed, "schema", nothing) == Mycelia._UNICYCLER_CONTRACT_SCHEMA || error(
+        "Unicycler durable run contract has an unsupported schema.",
+    )
+    artifacts = get(parsed, "artifacts", nothing)
+    artifacts isa AbstractDict || error(
+        "Unicycler durable run contract does not bind output artifacts.",
+    )
+    expected = Dict{Symbol, NamedTuple}()
+    for (field, contract_key, label) in (
+            (:assembly, "assembly", "Unicycler assembly FASTA"),
+            (:graph, "graph", "Unicycler assembly GFA"),
+    )
+        haskey(artifacts, contract_key) || error(
+            "Unicycler durable run contract does not bind $(contract_key).",
+        )
+        result_path = field == :assembly ?
+                      _primary_assembly_path(result) :
+                      _required_multi_input_result_path(
+            result,
+            :unicycler,
+            field,
+            label,
+        )
+        child_snapshot = _multi_input_expected_artifact_snapshot(
+            artifacts[contract_key],
+            label,
+        )
+        observed = _multi_input_artifact_snapshot(
+            result_path,
+            label,
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            child_snapshot,
+            observed,
+            label,
+        )
+        expected[field] = child_snapshot
+    end
+    return (;
+        workflow = :unicycler,
+        expected,
+        contract = contract.snapshot,
+    )
+end
+
+function _multi_input_autocycler_child_integrity(
+        result::NamedTuple,
+        reserved_outdir::AbstractString,
+)::NamedTuple
+    hasproperty(result, :lifecycle_artifact_snapshots) || error(
+        "Autocycler-polished child result did not report immutable lifecycle " *
+        "artifact snapshots.",
+    )
+    lifecycle = result.lifecycle_artifact_snapshots
+    expected = Dict{Symbol, NamedTuple}()
+    for (field, snapshot_field, label) in (
+            (:assembly, :assembly, "Pypolca-polished assembly FASTA"),
+            (:graph, :graph, "Autocycler consensus GFA"),
+            (
+                :autocycler_assembly,
+                :autocycler_assembly,
+                "Autocycler consensus FASTA",
+            ),
+            (
+                :polypolish_assembly,
+                :polypolish_assembly,
+                "Polypolish assembly FASTA",
+            ),
+            (:pypolca_report, :pypolca_report, "Pypolca report"),
+    )
+        hasproperty(lifecycle, snapshot_field) || error(
+            "Autocycler-polished lifecycle snapshots do not bind " *
+            "$(snapshot_field).",
+        )
+        result_path = field == :assembly ?
+                      _primary_assembly_path(result) :
+                      _required_multi_input_result_path(
+            result,
+            :autocycler_polished,
+            field,
+            label,
+        )
+        child_snapshot = _multi_input_expected_artifact_snapshot(
+            getproperty(lifecycle, snapshot_field),
+            label,
+        )
+        observed = _multi_input_artifact_snapshot(
+            result_path,
+            label,
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            child_snapshot,
+            observed,
+            label,
+        )
+        expected[field] = child_snapshot
+    end
+    hasproperty(lifecycle, :intermediates) || error(
+        "Autocycler-polished lifecycle snapshots do not bind retained " *
+        "intermediates.",
+    )
+    intermediate_snapshots = NamedTuple[]
+    for (intermediate_index, retained) in enumerate(lifecycle.intermediates)
+        (
+            retained isa NamedTuple && hasproperty(retained, :path) &&
+            hasproperty(retained, :snapshot)
+        ) || error(
+            "Autocycler retained-intermediate snapshot $(intermediate_index) " *
+            "is malformed.",
+        )
+        label = hasproperty(retained, :label) ?
+                String(retained.label) :
+                "Autocycler retained intermediate $(intermediate_index)"
+        child_snapshot = _multi_input_expected_artifact_snapshot(
+            retained.snapshot,
+            label,
+        )
+        observed = _multi_input_artifact_snapshot(
+            String(retained.path),
+            label,
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            child_snapshot,
+            observed,
+            label,
+        )
+        push!(intermediate_snapshots, (;
+            path = String(retained.path),
+            snapshot = child_snapshot,
+            label,
+        ))
+    end
+    reported_intermediates = hasproperty(result, :intermediates) ?
+                             String.(result.intermediates) : String[]
+    bound_intermediates = String[
+        retained.path for retained in intermediate_snapshots
+    ]
+    allunique(bound_intermediates) || error(
+        "Autocycler-polished retained-intermediate lifecycle binding " *
+        "contains duplicate paths.",
+    )
+    reported_intermediates == bound_intermediates || error(
+        "Autocycler-polished retained-intermediate paths do not exactly match " *
+        "their immutable lifecycle snapshots.",
+    )
+    hasproperty(lifecycle, :planned_intermediates) || error(
+        "Autocycler-polished lifecycle snapshots do not bind planned " *
+        "intermediates.",
+    )
+    planned_values = lifecycle.planned_intermediates
+    (planned_values isa AbstractVector || planned_values isa Tuple) || error(
+        "Autocycler-polished planned-intermediate lifecycle binding is not " *
+        "a collection.",
+    )
+    planned_intermediates = String[]
+    for (planned_index, planned_value) in enumerate(planned_values)
+        planned_value isa AbstractString || error(
+            "Autocycler-polished planned intermediate $(planned_index) is " *
+            "not a path.",
+        )
+        push!(
+            planned_intermediates,
+            Mycelia._require_planned_autocycler_path_containment(
+                planned_value,
+                reserved_outdir,
+                "Autocycler planned polishing intermediate " *
+                "$(planned_index)",
+            ),
+        )
+    end
+    allunique(planned_intermediates) || error(
+        "Autocycler-polished planned-intermediate lifecycle binding " *
+        "contains duplicate paths.",
+    )
+    all(path -> path in planned_intermediates, bound_intermediates) || error(
+        "Autocycler-polished retained intermediates are not all present in " *
+        "the immutable planned-intermediate lifecycle binding.",
+    )
+    return (;
+        workflow = :autocycler_polished,
+        expected,
+        contract = nothing,
+        intermediates = intermediate_snapshots,
+        planned_intermediates,
+    )
+end
+
+function _multi_input_child_integrity(
+        result::NamedTuple,
+        workflow::Symbol,
+        reserved_outdir::AbstractString,
+)::NamedTuple
+    if hasproperty(result, :child_integrity)
+        integrity = result.child_integrity
+        integrity isa NamedTuple && hasproperty(integrity, :workflow) || error(
+            "multi-input child integrity binding is malformed.",
+        )
+        integrity.workflow == workflow || error(
+            "multi-input child integrity workflow does not match :$(workflow).",
+        )
+        if workflow == :unicycler
+            (
+                hasproperty(result, :contract) &&
+                result.contract isa AbstractString
+            ) || error(
+                "Unicycler child result did not propagate its durable run " *
+                "contract path.",
+            )
+            normpath(abspath(String(result.contract))) ==
+                integrity.contract.path || error(
+                "Unicycler child result contract path changed after its " *
+                "immutable adapter binding.",
+            )
+        elseif workflow == :autocycler_polished
+            hasproperty(result, :lifecycle_artifact_snapshots) || error(
+                "Autocycler-polished child result did not propagate lifecycle " *
+                "artifact snapshots.",
+            )
+            propagated_integrity =
+                _multi_input_autocycler_child_integrity(
+                    result,
+                    reserved_outdir,
+                )
+            propagated_integrity == integrity || error(
+                "Autocycler-polished lifecycle artifact snapshots changed " *
+                "after their immutable adapter binding.",
+            )
+        end
+        _require_unchanged_multi_input_child_integrity(
+            result,
+            reserved_outdir,
+            integrity,
+        )
+        return integrity
+    end
+    if workflow == :unicycler
+        return _multi_input_unicycler_child_integrity(result, reserved_outdir)
+    elseif workflow == :autocycler_polished
+        return _multi_input_autocycler_child_integrity(result, reserved_outdir)
+    end
+    error("unsupported multi-input workflow :$(workflow).")
+end
+
 function _validate_multi_input_assembler_result(
         result::NamedTuple,
         workflow::Symbol,
         reserved_outdir::AbstractString,
-)::Nothing
+)::NamedTuple
     primary_fields = Symbol[]
     hasproperty(result, :assembly) && push!(primary_fields, :assembly)
     hasproperty(result, :contigs) && push!(primary_fields, :contigs)
@@ -4476,7 +4867,7 @@ function _validate_multi_input_assembler_result(
             )
         end
     end
-    return nothing
+    return _multi_input_child_integrity(result, workflow, reserved_outdir)
 end
 
 function _is_multi_input_iupac_dna(sequence::AbstractString)::Bool
@@ -4615,6 +5006,279 @@ function _persistent_tool_artifacts(
     return artifacts
 end
 
+function _multi_input_result_artifact_path(
+        result::NamedTuple,
+        field::Symbol,
+)::String
+    return field == :assembly ?
+           _primary_assembly_path(result) :
+           String(getproperty(result, field))
+end
+
+function _multi_input_fasta_semantic_bytes(
+        bytes::AbstractVector{UInt8},
+)::AbstractVector{UInt8}
+    is_gzip = length(bytes) >= 2 && bytes[1] == 0x1f && bytes[2] == 0x8b
+    is_gzip || return bytes
+    stream = Mycelia.CodecZlib.GzipDecompressorStream(IOBuffer(bytes))
+    try
+        return read(stream)
+    finally
+        close(stream)
+    end
+end
+
+function _multi_input_semantic_child_artifacts(
+        result::NamedTuple,
+        workflow::Symbol,
+        reserved_outdir::AbstractString,
+        integrity::NamedTuple,
+)::NamedTuple
+    buffers = Dict{Symbol, NamedTuple}()
+    for (field, expected) in integrity.expected
+        path = _multi_input_result_artifact_path(result, field)
+        buffered = _multi_input_buffered_artifact_snapshot(
+            path,
+            replace(String(field), '_' => ' '),
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            expected,
+            buffered.snapshot,
+            replace(String(field), '_' => ' '),
+        )
+        buffers[field] = buffered
+    end
+    assembly = buffers[:assembly]
+    companion_assembly = workflow == :autocycler_polished ?
+                         buffers[:autocycler_assembly] : assembly
+    graph = buffers[:graph]
+    fasta_bytes = _multi_input_fasta_semantic_bytes(assembly.bytes)
+    assembly_sequences = Mycelia._unicycler_fasta_sequences(
+        fasta_bytes,
+        assembly.snapshot.path,
+        "multi-input $(workflow) assembly FASTA",
+    )
+    companion_sequences = if workflow == :unicycler
+        assembly_sequences
+    else
+        companion_fasta_bytes = _multi_input_fasta_semantic_bytes(
+            companion_assembly.bytes,
+        )
+        Mycelia._unicycler_fasta_sequences(
+            companion_fasta_bytes,
+            companion_assembly.snapshot.path,
+            "multi-input $(workflow) companion assembly FASTA",
+        )
+    end
+    gfa_sequences = Mycelia._unicycler_gfa_segment_sequences(
+        graph.bytes,
+        graph.snapshot.path,
+        "multi-input $(workflow) assembly GFA",
+    )
+    if workflow == :unicycler
+        Mycelia._require_matching_unicycler_artifact_sequences(
+            companion_sequences,
+            gfa_sequences,
+        )
+    else
+        Mycelia._require_matching_autocycler_companion_sequence_maps(
+            companion_sequences,
+            gfa_sequences,
+        )
+    end
+    reader = FASTX.FASTA.Reader(IOBuffer(fasta_bytes))
+    records = try
+        FASTX.FASTA.Record[record for record in reader]
+    finally
+        close(reader)
+    end
+    isempty(records) && error(
+        "multi-input workflow :$(workflow) produced 0 contigs from corrected reads.",
+    )
+    return (;
+        buffers,
+        records,
+        assembly_sequences,
+        companion_sequences,
+        gfa_sequences,
+    )
+end
+
+function _require_unchanged_multi_input_child_integrity(
+        result::NamedTuple,
+        reserved_outdir::AbstractString,
+        integrity::NamedTuple,
+)::Nothing
+    for (field, expected) in integrity.expected
+        observed = _multi_input_artifact_snapshot(
+            _multi_input_result_artifact_path(result, field),
+            replace(String(field), '_' => ' '),
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            expected,
+            observed,
+            replace(String(field), '_' => ' '),
+        )
+    end
+    if integrity.contract !== nothing
+        observed_contract = _multi_input_artifact_snapshot(
+            integrity.contract.path,
+            "Unicycler durable run contract",
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            integrity.contract,
+            observed_contract,
+            "Unicycler durable run contract",
+        )
+    end
+    if hasproperty(integrity, :intermediates)
+        reported_intermediates = hasproperty(result, :intermediates) ?
+                                 String.(result.intermediates) : String[]
+        bound_intermediates = String[
+            retained.path for retained in integrity.intermediates
+        ]
+        reported_intermediates == bound_intermediates || error(
+            "Autocycler-polished retained-intermediate paths changed after " *
+            "their immutable child binding.",
+        )
+        for retained in integrity.intermediates
+            observed = _multi_input_artifact_snapshot(
+                retained.path,
+                retained.label,
+                reserved_outdir,
+            )
+            _require_matching_multi_input_artifact_snapshot(
+                retained.snapshot,
+                observed,
+                retained.label,
+            )
+        end
+        hasproperty(integrity, :planned_intermediates) || error(
+            "Autocycler-polished child integrity does not bind planned " *
+            "intermediates.",
+        )
+        retained_paths = Set(bound_intermediates)
+        for (planned_index, planned_path) in enumerate(
+                integrity.planned_intermediates,
+        )
+            normalized_path =
+                Mycelia._require_planned_autocycler_path_containment(
+                    planned_path,
+                    reserved_outdir,
+                    "Autocycler planned polishing intermediate " *
+                    "$(planned_index)",
+                )
+            if (ispath(normalized_path) || islink(normalized_path)) &&
+               !(normalized_path in retained_paths)
+                error(
+                    "Autocycler polishing intermediate reappeared after its " *
+                    "completed child cleanup: $(normalized_path).",
+                )
+            end
+        end
+    end
+    return nothing
+end
+
+function _multi_input_artifact_content_provenance(
+        integrity::NamedTuple,
+)::Dict{String, Any}
+    content = Dict{String, Any}()
+    for (field, snapshot) in integrity.expected
+        content[String(field)] = Dict{String, Any}(
+            "path" => snapshot.path,
+            "size_bytes" => snapshot.size_bytes,
+            "sha256" => snapshot.sha256,
+        )
+    end
+    if integrity.contract !== nothing
+        content["child_contract"] = Dict{String, Any}(
+            "path" => integrity.contract.path,
+            "size_bytes" => integrity.contract.size_bytes,
+            "sha256" => integrity.contract.sha256,
+        )
+    end
+    if hasproperty(integrity, :intermediates)
+        content["retained_intermediates"] = Any[
+            Dict{String, Any}(
+                "path" => retained.snapshot.path,
+                "size_bytes" => retained.snapshot.size_bytes,
+                "sha256" => retained.snapshot.sha256,
+            ) for retained in integrity.intermediates
+        ]
+    end
+    return content
+end
+
+function _multi_input_tool_artifact_label(label::AbstractString)::String
+    label == "assembly" && return "final_assembly"
+    label == "graph" && return "raw_graph"
+    return String(label)
+end
+
+function _multi_input_tool_artifact_hash_value(
+        label::AbstractString,
+        value::Any,
+)::Any
+    if label == "retained_intermediates"
+        return String[artifact["sha256"] for artifact in value]
+    end
+    return value["sha256"]
+end
+
+function _require_unchanged_multi_input_artifact_content(
+        content::AbstractDict,
+        reserved_outdir::AbstractString,
+)::Nothing
+    for (label, value) in content
+        if label == "retained_intermediates"
+            for (index, retained) in enumerate(value)
+                expected = _multi_input_expected_artifact_snapshot(
+                    Dict{String, Any}(
+                        "canonical_path" => retained["path"],
+                        "size_bytes" => retained["size_bytes"],
+                        "sha256" => retained["sha256"],
+                    ),
+                    "retained intermediate $(index)",
+                )
+                observed = _multi_input_artifact_snapshot(
+                    expected.path,
+                    "retained intermediate $(index)",
+                    reserved_outdir,
+                )
+                _require_matching_multi_input_artifact_snapshot(
+                    expected,
+                    observed,
+                    "retained intermediate $(index)",
+                )
+            end
+            continue
+        end
+        expected = _multi_input_expected_artifact_snapshot(
+            Dict{String, Any}(
+                "canonical_path" => value["path"],
+                "size_bytes" => value["size_bytes"],
+                "sha256" => value["sha256"],
+            ),
+            String(label),
+        )
+        observed = _multi_input_artifact_snapshot(
+            expected.path,
+            String(label),
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            expected,
+            observed,
+            String(label),
+        )
+    end
+    return nothing
+end
+
 function _read_external_fasta(path::AbstractString)::Vector{FASTX.FASTA.Record}
     if !isfile(path) || filesize(path) == 0
         error("external assembler produced no non-empty contigs FASTA at $(path).")
@@ -4664,7 +5328,9 @@ function _wrap_multi_input_assembly(
         corrected_content_contract::Dict{String, Any} = Dict{String, Any}(),
         assembler_output_dir::Union{Nothing, String} = nothing,
 )::AssemblyResult
-    if assembler_output_dir !== nothing
+    child_integrity = if assembler_output_dir === nothing
+        nothing
+    else
         _validate_multi_input_assembler_result(
             result,
             workflow,
@@ -4672,7 +5338,17 @@ function _wrap_multi_input_assembly(
         )
     end
     assembly_path = _primary_assembly_path(result)
-    records = _read_external_fasta(assembly_path)
+    semantic_artifacts = child_integrity === nothing ?
+                         nothing :
+                         _multi_input_semantic_child_artifacts(
+        result,
+        workflow,
+        something(assembler_output_dir),
+        child_integrity,
+    )
+    records = semantic_artifacts === nothing ?
+              _read_external_fasta(assembly_path) :
+              semantic_artifacts.records
     isempty(records) && error(
         "multi-input workflow :$(workflow) produced 0 contigs from corrected reads.",
     )
@@ -4688,7 +5364,7 @@ function _wrap_multi_input_assembly(
     else
         _artifact_graph_path(result)
     end
-    if graph_path !== nothing
+    if graph_path !== nothing && semantic_artifacts === nothing
         if !isfile(graph_path) || filesize(graph_path) == 0
             error(
                 "multi-input workflow :$(workflow) produced no graph at " *
@@ -4707,15 +5383,27 @@ function _wrap_multi_input_assembly(
     if workflow == :autocycler_polished
         final_identifiers = Set(contig_names)
         for (field, label) in intermediate_fasta_fields
-            intermediate_records = _require_valid_multi_input_fasta(
-                _required_multi_input_result_path(
-                    result,
-                    workflow,
-                    field,
-                    label,
-                ),
+            intermediate_path = _required_multi_input_result_path(
+                result,
+                workflow,
+                field,
                 label,
             )
+            intermediate_records = if semantic_artifacts === nothing
+                _require_valid_multi_input_fasta(intermediate_path, label)
+            else
+                buffered = semantic_artifacts.buffers[field]
+                bytes = _multi_input_fasta_semantic_bytes(buffered.bytes)
+                sequences = Mycelia._unicycler_fasta_sequences(
+                    bytes,
+                    buffered.snapshot.path,
+                    label,
+                )
+                FASTX.FASTA.Record[
+                    FASTX.FASTA.Record(identifier, sequence) for
+                    (identifier, sequence) in sequences
+                ]
+            end
             _require_matching_multi_input_contig_identifiers(
                 intermediate_records,
                 final_identifiers,
@@ -4749,6 +5437,18 @@ function _wrap_multi_input_assembly(
     end
     assembler = workflow == :autocycler_polished ? "autocycler" : String(workflow)
     tool_artifacts = _persistent_tool_artifacts(result, output_dir)
+    tool_artifact_content = child_integrity === nothing ?
+                            nothing :
+                            _multi_input_artifact_content_provenance(
+        child_integrity,
+    )
+    tool_artifact_hashes = tool_artifact_content === nothing ?
+                           nothing :
+                           Dict{String, Any}(
+        _multi_input_tool_artifact_label(label) =>
+            _multi_input_tool_artifact_hash_value(label, value)
+        for (label, value) in tool_artifact_content
+    )
     toolchain = if workflow == :unicycler
         hasproperty(result, :toolchain) || error(
             "Unicycler workflow did not report realized toolchain provenance.",
@@ -4785,6 +5485,8 @@ function _wrap_multi_input_assembly(
         "retained_intermediates" => effective_retained_intermediates,
         "input_technologies" => input_technologies,
         "tool_artifacts" => tool_artifacts,
+        "tool_artifact_content" => tool_artifact_content,
+        "tool_artifact_hashes" => tool_artifact_hashes,
         "short_read_tech" => short_read_tech === nothing ? nothing :
                              String(short_read_tech),
         "long_read_tech" => long_read_tech === nothing ? nothing :
@@ -4805,6 +5507,13 @@ function _wrap_multi_input_assembly(
         "num_contigs" => length(contigs),
         "assembly_date" => string(Mycelia.Dates.now()),
     )
+    if child_integrity !== nothing
+        _require_unchanged_multi_input_child_integrity(
+            result,
+            something(assembler_output_dir),
+            child_integrity,
+        )
+    end
     return AssemblyResult(
         contigs,
         contig_names;
@@ -4824,6 +5533,7 @@ function _assemble_paired_short_long(
         after_source_semantic_validation_hook::Function =
             (short_r1, short_r2, long_reads) -> nothing,
         after_corrected_semantic_validation_hook::Function = inputs -> nothing,
+        after_assembler_return_hook::Function = result -> nothing,
         corrected_fastq_remover::Function = path -> rm(path; force = true),
         workflow_root_remover::Function = path -> rm(
             path;
@@ -4934,14 +5644,8 @@ function _assemble_paired_short_long(
                 short_r1,
                 short_r2,
                 prepared_long_reads;
-                change_context = "during short_r1 correction",
-            )
-            _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads;
-                change_context = "before short_r2 correction",
+                change_context =
+                    "during short_r1 correction and before short_r2 correction",
             )
             _verify_multi_input_corrected_read_set_content_identity(
                 corrected_r1_content_identity,
@@ -4977,14 +5681,8 @@ function _assemble_paired_short_long(
                 short_r1,
                 short_r2,
                 prepared_long_reads;
-                change_context = "during short_r2 correction",
-            )
-            _verify_multi_input_source_content_contract(
-                source_content_contract,
-                short_r1,
-                short_r2,
-                prepared_long_reads;
-                change_context = "before long_reads correction",
+                change_context =
+                    "during short_r2 correction and before long_reads correction",
             )
             _verify_multi_input_corrected_read_set_content_identity(
                 corrected_r1_content_identity,
@@ -5106,9 +5804,20 @@ function _assemble_paired_short_long(
             )
             tool_result =
                 Mycelia._with_allowed_output_root_ancestor_locks(
-                assembler_ancestor_locks,
-            ) do
-                assembler_runner(inputs, assembler_output_dir)
+                    assembler_ancestor_locks,
+                ) do
+                    assembler_runner(inputs, assembler_output_dir)
+                end
+            prehook_child_integrity = hasproperty(
+                tool_result,
+                :child_integrity,
+            ) ? deepcopy(tool_result.child_integrity) : nothing
+            after_assembler_return_hook(tool_result)
+            if prehook_child_integrity !== nothing
+                tool_result = merge(
+                    tool_result,
+                    (; child_integrity = prehook_child_integrity),
+                )
             end
             _require_unchanged_workflow_path_identity(
                 root.path,
@@ -5196,6 +5905,17 @@ function _assemble_paired_short_long(
                 assembler_output_identity,
                 assembler_label,
             )
+            tool_artifact_content = wrapped_result.assembly_stats[
+                "tool_artifact_content"
+            ]
+            tool_artifact_content isa AbstractDict || error(
+                "multi-input workflow did not persist immutable child " *
+                "artifact hashes.",
+            )
+            _require_unchanged_multi_input_artifact_content(
+                tool_artifact_content,
+                assembler_output_dir,
+            )
             return wrapped_result
         finally
             append!(
@@ -5231,6 +5951,10 @@ function _assemble_paired_short_long(
     reserved_root_plan = _plan_workflow_root(String(config.output_dir))
     lock_path = _multi_input_workflow_lock_path(
         String(reserved_root_plan.path),
+    )
+    _require_exclusive_multi_input_workflow_domain(
+        String(reserved_root_plan.path),
+        lock_path,
     )
     return workflow_lock_runner(lock_path) do
         _require_exclusive_multi_input_workflow_domain(

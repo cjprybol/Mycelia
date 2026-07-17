@@ -161,6 +161,339 @@ function _kill_metamdbg_reservation_publication!(
     return nothing
 end
 
+function _kill_metamdbg_job_record_publication!(
+        outdir::AbstractString,
+        reads::AbstractString,
+        phase::Symbol,
+        ;
+        live_check::Function = (
+            _process::Base.Process,
+            _reservation::NamedTuple,
+        ) -> nothing,
+)::NamedTuple
+    phase in (:pending_name, :pre_publication, :post_publication) || throw(
+        ArgumentError(
+            "phase must be :pending_name, :pre_publication, or " *
+            ":post_publication.",
+        ),
+    )
+    active_project = Base.active_project()
+    active_project isa AbstractString || error(
+        "A project is required for the metaMDBG job-bind SIGKILL fixture.",
+    )
+    normalized_outdir = String(outdir)
+    outputs = Mycelia._metamdbg_output_paths(normalized_outdir, 21)
+    input_contract = Mycelia._metamdbg_input_contract(
+        Mycelia._metamdbg_selected_input(String(reads), nothing),
+        3,
+    )
+    reservation = Mycelia._metamdbg_submission_reservation(
+        outputs,
+        input_contract,
+        21;
+        owner_token = "$(phase)-job-bind-owner",
+    )
+    Mycelia._with_metamdbg_output_lock(normalized_outdir) do
+        Mycelia._create_metamdbg_submission_reservation!(
+            reservation,
+            normalized_outdir,
+        )
+    end
+    ready_path = joinpath(
+        dirname(normalized_outdir),
+        "metamdbg-$(phase)-job-bind.ready",
+    )
+    script_path = joinpath(
+        dirname(normalized_outdir),
+        "metamdbg-$(phase)-job-bind.jl",
+    )
+    hook_keyword = if phase == :pending_name
+        "post_pending_job_record_creation_hook"
+    elseif phase == :pre_publication
+        "pre_job_record_publication_hook"
+    else
+        "post_job_record_publication_hook"
+    end
+    script = """
+    ENV["LD_LIBRARY_PATH"] = ""
+    const Mycelia = Base.require(Main, :Mycelia)
+
+    outdir = $(repr(normalized_outdir))
+    ready_path = $(repr(ready_path))
+    reservation_path = $(repr(reservation.path))
+    reservation = Mycelia._metamdbg_submission_reservation_from_path(
+        reservation_path,
+        outdir,
+    )
+    pause_hook = function (_args...)
+        write(ready_path, "ready\\n")
+        while true
+            sleep(60)
+        end
+    end
+    Mycelia._with_metamdbg_output_domain_lock(
+        outdir;
+        allowed_same_root_locks = (
+            reservation.output_root_reservation_marker,
+        ),
+    ) do
+        Mycelia._bind_metamdbg_submission_job!(
+            reservation,
+            "771";
+            $(hook_keyword) = pause_hook,
+        )
+    end
+    """
+    write(script_path, script)
+    project_directory = dirname(String(active_project))
+    process = run(
+        `$(Base.julia_cmd()) --project=$(project_directory) --startup-file=no --compiled-modules=yes $(script_path)`;
+        wait = false,
+    )
+    wait_status = Base.timedwait(
+        () -> isfile(ready_path) || !Base.process_running(process),
+        600.0;
+        pollint = 0.05,
+    )
+    if wait_status != :ok || !isfile(ready_path)
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+        error(
+            "metaMDBG $(phase) job-bind fixture did not reach its " *
+            "publication hook (exit=$(process.exitcode), " *
+            "signal=$(process.termsignal)).",
+        )
+    end
+    try
+        live_check(process, reservation)
+    finally
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+    end
+    Test.@test !success(process)
+    Test.@test process.termsignal == 9
+    return reservation
+end
+
+function _kill_metamdbg_runtime_transition!(
+        outdir::AbstractString,
+        reads::AbstractString,
+        phase::Symbol,
+        ;
+        live_check::Function = (
+            _process::Base.Process,
+            _reservation::NamedTuple,
+        ) -> nothing,
+)::NamedTuple
+    phase in (
+        :post_runtime_marker,
+        :post_private_rename,
+        :post_queued_release,
+        :post_runtime_release,
+        :post_consumed_rename,
+    ) || throw(
+        ArgumentError(
+            "phase must be a supported runtime transition hook.",
+        ),
+    )
+    normalized_outdir = String(outdir)
+    outputs = Mycelia._metamdbg_output_paths(normalized_outdir, 21)
+    input_contract = Mycelia._metamdbg_input_contract(
+        Mycelia._metamdbg_selected_input(String(reads), nothing),
+        3,
+    )
+    reservation = Mycelia._metamdbg_submission_reservation(
+        outputs,
+        input_contract,
+        21;
+        owner_token = "$(phase)-runtime-owner",
+    )
+    Mycelia._with_metamdbg_output_lock(normalized_outdir) do
+        Mycelia._create_metamdbg_submission_reservation!(
+            reservation,
+            normalized_outdir,
+        )
+    end
+    bound = Mycelia._bind_metamdbg_submission_job!(reservation, "8317")
+    fixture_root = dirname(normalized_outdir)
+    ready_path = joinpath(fixture_root, "metamdbg-$(phase)-runtime.ready")
+    fake_conda = joinpath(fixture_root, "metamdbg-$(phase)-fake-conda")
+    write(
+        fake_conda,
+        "#!/usr/bin/env bash\n" *
+        "set -euo pipefail\n" *
+        "[ \"\$1\" = run ] || exit 90\n" *
+        "shift\n" *
+        "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != python ]; do shift; done\n" *
+        "[ \"\$#\" -gt 0 ] || exit 91\n" *
+        "shift\n" *
+        "exec python3 \"\$@\"\n",
+    )
+    chmod(fake_conda, 0o700)
+    pause_hook = "touch $(Base.shell_escape(ready_path)); kill -STOP \$\$"
+    script = Mycelia._metamdbg_executor_script(
+        "false",
+        "false",
+        outputs,
+        21,
+        input_contract;
+        conda_runner = fake_conda,
+        submission_reservation = bound,
+        post_runtime_marker_publication_hook =
+            phase == :post_runtime_marker ? pause_hook : nothing,
+        post_runtime_private_rename_hook =
+            phase == :post_private_rename ? pause_hook : nothing,
+        post_queued_marker_release_hook =
+            phase == :post_queued_release ? pause_hook : nothing,
+        post_runtime_marker_release_hook =
+            phase == :post_runtime_release ? pause_hook : nothing,
+        post_consumed_owner_rename_hook =
+            phase == :post_consumed_rename ? pause_hook : nothing,
+        lock_retry_attempts = 1,
+        lock_retry_delay_seconds = 0.0,
+    )
+    script_path = joinpath(fixture_root, "metamdbg-$(phase)-runtime.sh")
+    write(script_path, script)
+    process = run(
+        addenv(`bash $(script_path)`, "SLURM_JOB_ID" => bound.job_id);
+        wait = false,
+    )
+    wait_status = Base.timedwait(
+        () -> isfile(ready_path) || !Base.process_running(process),
+        120.0;
+        pollint = 0.05,
+    )
+    if wait_status != :ok || !isfile(ready_path)
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+        error(
+            "metaMDBG $(phase) runtime fixture did not reach its transition " *
+            "hook (exit=$(process.exitcode), signal=$(process.termsignal)).",
+        )
+    end
+    try
+        live_check(process, bound)
+    finally
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+    end
+    Test.@test !success(process)
+    Test.@test process.termsignal == 9
+    return bound
+end
+
+function _kill_metamdbg_reclaim_transition!(
+        outdir::AbstractString,
+        reads::AbstractString,
+        phase::Symbol,
+        ;
+        resume_reclaiming::Bool = false,
+        live_check::Function = (
+            _process::Base.Process,
+            _reservation::NamedTuple,
+        ) -> nothing,
+)::NamedTuple
+    phase in (:post_private_rename, :post_shared_release) || throw(
+        ArgumentError(
+            "phase must be :post_private_rename or :post_shared_release.",
+        ),
+    )
+    active_project = Base.active_project()
+    active_project isa AbstractString || error(
+        "A project is required for the metaMDBG reclaim SIGKILL fixture.",
+    )
+    normalized_outdir = String(outdir)
+    outputs = Mycelia._metamdbg_output_paths(normalized_outdir, 21)
+    input_contract = Mycelia._metamdbg_input_contract(
+        Mycelia._metamdbg_selected_input(String(reads), nothing),
+        3,
+    )
+    reservation = Mycelia._metamdbg_submission_reservation(
+        outputs,
+        input_contract,
+        21;
+        owner_token = "$(phase)-reclaim-owner",
+    )
+    if !resume_reclaiming
+        Mycelia._with_metamdbg_output_lock(normalized_outdir) do
+            Mycelia._create_metamdbg_submission_reservation!(
+                reservation,
+                normalized_outdir,
+            )
+        end
+    end
+    ready_path = joinpath(
+        dirname(normalized_outdir),
+        "metamdbg-$(phase)-reclaim.ready",
+    )
+    script_path = joinpath(
+        dirname(normalized_outdir),
+        "metamdbg-$(phase)-reclaim.jl",
+    )
+    rm(ready_path; force = true)
+    hook_keyword = phase == :post_private_rename ?
+                   "post_private_rename_hook" : "post_shared_release_hook"
+    script = """
+    ENV["LD_LIBRARY_PATH"] = ""
+    const Mycelia = Base.require(Main, :Mycelia)
+
+    outdir = $(repr(normalized_outdir))
+    ready_path = $(repr(ready_path))
+    reservation_path = $(repr(
+        resume_reclaiming ? reservation.reclaiming_path : reservation.path,
+    ))
+    reservation = Mycelia._metamdbg_submission_reservation_from_path(
+        reservation_path,
+        outdir,
+    )
+    pause_hook = function (_reservation::NamedTuple)
+        write(ready_path, "ready\\n")
+        while true
+            sleep(60)
+        end
+    end
+    Mycelia._with_metamdbg_output_domain_lock(
+        outdir;
+        allowed_same_root_locks = (
+            reservation.output_root_reservation_marker,
+        ),
+    ) do
+        Mycelia._remove_metamdbg_submission_reservation!(
+            reservation;
+            $(hook_keyword) = pause_hook,
+        )
+    end
+    """
+    write(script_path, script)
+    project_directory = dirname(String(active_project))
+    process = run(
+        `$(Base.julia_cmd()) --project=$(project_directory) --startup-file=no --compiled-modules=yes $(script_path)`;
+        wait = false,
+    )
+    wait_status = Base.timedwait(
+        () -> isfile(ready_path) || !Base.process_running(process),
+        600.0;
+        pollint = 0.05,
+    )
+    if wait_status != :ok || !isfile(ready_path)
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+        error(
+            "metaMDBG $(phase) reclaim fixture did not reach its transition " *
+            "hook (exit=$(process.exitcode), signal=$(process.termsignal)).",
+        )
+    end
+    try
+        live_check(process, reservation)
+    finally
+        Base.process_running(process) && Base.kill(process, Base.SIGKILL)
+        wait(process)
+    end
+    Test.@test !success(process)
+    Test.@test process.termsignal == 9
+    return reservation
+end
+
 Test.@testset "metaMDBG input and artifact contracts" begin
     mktempdir() do temporary_root
         temporary_root = realpath(temporary_root)
@@ -201,10 +534,75 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             ArgumentError,
             r"exactly one input technology",
         )
+        unattested_ont_outdir =
+            joinpath(temporary_root, "unattested-ont-input")
+        _test_metamdbg_error(
+            () -> Mycelia._run_metamdbg(;
+                ont_reads = valid_reads,
+                outdir = unattested_ont_outdir,
+                dependency_checker,
+                local_runner = forbidden_runner,
+            ),
+            ArgumentError,
+            r"ont_r10_4_plus=true.*generic, R9, and unknown ONT",
+        )
+        Test.@test !ispath(unattested_ont_outdir)
+        _test_metamdbg_error(
+            () -> Mycelia._run_metamdbg(;
+                hifi_reads = valid_reads,
+                ont_r10_4_plus = true,
+                outdir = joinpath(temporary_root, "hifi-ont-attestation"),
+                dependency_checker,
+                local_runner = forbidden_runner,
+            ),
+            ArgumentError,
+            r"applies only when ont_reads is selected",
+        )
+        for (executor_name, executor) in (
+                (:local, Mycelia.LocalExecutor()),
+                (:collect, Mycelia.CollectExecutor()),
+                (:slurm, Mycelia.SlurmExecutor(dry_run = false)),
+        )
+            for graph_k in (0, -1)
+                invalid_graph_outdir = joinpath(
+                    temporary_root,
+                    "invalid-graph-$(executor_name)-$(graph_k)",
+                )
+                side_effect_calls = Ref(0)
+                _test_metamdbg_error(
+                    () -> Mycelia._run_metamdbg(;
+                        hifi_reads = valid_reads,
+                        outdir = invalid_graph_outdir,
+                        graph_k,
+                        executor,
+                        dependency_checker = () -> begin
+                            side_effect_calls[] += 1
+                            return _test_metamdbg_toolchain()
+                        end,
+                        local_runner = forbidden_runner,
+                        submission_runner = (
+                            _job::Mycelia.JobSpec,
+                            _executor::Mycelia.AbstractExecutor,
+                        ) -> begin
+                            side_effect_calls[] += 1
+                            return nothing
+                        end,
+                    ),
+                    ArgumentError,
+                    r"graph_k must be positive",
+                )
+                Test.@test side_effect_calls[] == 0
+                Test.@test !ispath(invalid_graph_outdir)
+                if executor isa Mycelia.CollectExecutor
+                    Test.@test isempty(executor.jobs)
+                end
+            end
+        end
         _test_metamdbg_error(
             () -> Mycelia._run_metamdbg(;
                 hifi_reads = valid_reads,
                 ont_reads = valid_reads,
+                ont_r10_4_plus = true,
                 outdir = joinpath(temporary_root, "both"),
                 dependency_checker,
                 local_runner = forbidden_runner,
@@ -498,6 +896,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             local_provisioning_calls = Ref(0)
             result = Mycelia._run_metamdbg(;
                 ont_reads = valid_reads,
+                ont_r10_4_plus = true,
                 outdir,
                 graph_k = 21,
                 dependency_checker = () -> begin
@@ -521,14 +920,20 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                        "H\tVN:Z:1.0\nS\tcontig-1\tACGT\n"
             outputs = Mycelia._metamdbg_output_paths(outdir, 21)
             expected_contract = Mycelia._metamdbg_input_contract(
-                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                Mycelia._metamdbg_selected_input(
+                    nothing,
+                    valid_reads,
+                    true,
+                ),
                 3,
             )
             Test.@test isfile(outputs.contract_marker)
             Test.@test read(outputs.contract_marker, String) ==
                        expected_contract.contents
             expected_input = only(expected_contract.contract.inputs)
-            Test.@test expected_contract.contract.schema_version == 4
+            Test.@test expected_contract.contract.schema_version == 5
+            Test.@test expected_contract.contract.platform_attestation ==
+                       "nanopore-r10.4-or-later"
             Test.@test expected_input.sha256 ==
                        Mycelia._metamdbg_sha256(valid_reads)
             Test.@test !hasproperty(expected_input, :modification_time_ns)
@@ -538,6 +943,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             Test.@test result.provenance.contract_signature ==
                        expected_contract.signature
+            Test.@test result.provenance.input_platform_attestation ==
+                       "nanopore-r10.4-or-later"
             Test.@test result.provenance.metamdbg_version == "1.4"
             Test.@test result.provenance.environment_name ==
                        Mycelia.METAMDBG_ENV_NAME
@@ -577,6 +984,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
 
             reused = Mycelia._run_metamdbg(;
                 ont_reads = valid_reads,
+                ont_r10_4_plus = true,
                 outdir,
                 graph_k = 21,
                 dependency_checker = () -> error(
@@ -596,6 +1004,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     graph_k = 21,
                     dependency_checker = () -> error(
@@ -614,6 +1023,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     graph_k = 21,
                     dependency_checker = () -> error(
@@ -631,6 +1041,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = changed_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     graph_k = 21,
                     dependency_checker = () -> begin
@@ -659,6 +1070,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     abundance_min = 4,
                     graph_k = 21,
@@ -681,7 +1093,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             write(valid_reads, "@read-1\nTGCA\n+\nIIII\n")
             run(`touch -r $(metadata_reference) $(valid_reads)`)
             changed_content_contract = Mycelia._metamdbg_input_contract(
-                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                Mycelia._metamdbg_selected_input(nothing, valid_reads, true),
                 3,
             )
             changed_content_input = only(changed_content_contract.contract.inputs)
@@ -695,6 +1107,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     graph_k = 21,
                     dependency_checker = () -> error(
@@ -708,14 +1121,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             write(valid_reads, "@read-1\nACGT\n+\nIIII\n")
             run(`touch -r $(metadata_reference) $(valid_reads)`)
             restored_contract = Mycelia._metamdbg_input_contract(
-                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                Mycelia._metamdbg_selected_input(nothing, valid_reads, true),
                 3,
             )
             Test.@test restored_contract.contents == expected_contract.contents
 
             run(`touch -t 203001010101 $(valid_reads)`)
             touched_contract = Mycelia._metamdbg_input_contract(
-                Mycelia._metamdbg_selected_input(nothing, valid_reads),
+                Mycelia._metamdbg_selected_input(nothing, valid_reads, true),
                 3,
             )
             Test.@test touched_contract.contents == expected_contract.contents
@@ -730,6 +1143,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir,
                     graph_k = 21,
                     dependency_checker = () -> begin
@@ -1478,6 +1892,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             withenv("MYCELIA_CONDA_RUNNER" => runner_one) do
                 default_runner_result = Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir = joinpath(
                         temporary_root,
                         "default-runner-nonlocal",
@@ -1854,6 +2269,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             _test_metamdbg_error(
                 () -> Mycelia._run_metamdbg(;
                     ont_reads = valid_reads,
+                    ont_r10_4_plus = true,
                     outdir = malformed_graph_outdir,
                     dependency_checker = _test_metamdbg_toolchain,
                     local_runner = function (_command::Cmd)
@@ -2036,6 +2452,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(temporary_remnant)
             rm(consumed_remnant)
 
+            no_pid_recovery_outdir =
+                joinpath(temporary_root, "no-pid-recovery-output")
+            _test_metamdbg_error(
+                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                    no_pid_recovery_outdir;
+                    confirm_process_dead = true,
+                ),
+                ErrorException,
+                r"requires a pre-existing canonical local PID.*no-op recovery",
+            )
+
             pre_kill_outdir =
                 joinpath(temporary_root, "pre-rename-sigkill-output")
             pre_kill_ready =
@@ -2118,13 +2545,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test isdir(pre_kill_private_lock)
             Test.@test isdir(pre_kill_cleanup_reservation)
             Test.@test isfile(pre_kill_pid_lock)
-            _test_metamdbg_error(
-                () -> Mycelia.inspect_metamdbg_submission_reservations(
+            pre_kill_locked_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
                     pre_kill_outdir,
                 ),
-                ErrorException,
-                r"locked by another lifecycle",
             )
+            Test.@test pre_kill_locked_metadata.publication_state ==
+                       :provisional
+            Test.@test pre_kill_locked_metadata.private_lock_identity !==
+                       nothing
+            Test.@test pre_kill_locked_metadata.cleanup_reservation_identity !==
+                       nothing
             canonical_pre_kill_pid_contents =
                 read(pre_kill_pid_lock, String)
             pre_kill_pid_mode = stat(pre_kill_pid_lock).mode & 0o777
@@ -2330,13 +2761,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test isdir(post_kill_private_lock)
             Test.@test isdir(post_kill_cleanup_reservation)
             Test.@test isfile(post_kill_pid_lock)
-            _test_metamdbg_error(
-                () -> Mycelia.inspect_metamdbg_submission_reservations(
+            post_kill_locked_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
                     post_kill_outdir,
                 ),
-                ErrorException,
-                r"locked by another lifecycle",
             )
+            Test.@test post_kill_locked_metadata.publication_state ==
+                       :published
+            Test.@test post_kill_locked_metadata.private_lock_identity !==
+                       nothing
+            Test.@test post_kill_locked_metadata.cleanup_reservation_identity !==
+                       nothing
             post_kill_metadata = only(
                 Mycelia.inspect_metamdbg_submission_reservations(
                     post_kill_outdir,
@@ -2478,6 +2913,841 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     ),
                 )
             end
+
+            for phase in (:pre_publication, :post_publication)
+                bind_cleanup_outdir = joinpath(
+                    temporary_root,
+                    "$(phase)-job-bind-cleanup-output",
+                )
+                bind_cleanup_outputs = Mycelia._metamdbg_output_paths(
+                    bind_cleanup_outdir,
+                    21,
+                )
+                bind_cleanup_contract = Mycelia._metamdbg_input_contract(
+                    Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                    3,
+                )
+                bind_cleanup_reservation =
+                    Mycelia._metamdbg_submission_reservation(
+                        bind_cleanup_outputs,
+                        bind_cleanup_contract,
+                        21;
+                        owner_token = "$(phase)-bind-cleanup-owner",
+                    )
+                Mycelia._with_metamdbg_output_lock(
+                    bind_cleanup_outdir,
+                ) do
+                    Mycelia._create_metamdbg_submission_reservation!(
+                        bind_cleanup_reservation,
+                        bind_cleanup_outdir,
+                    )
+                end
+                parent_entries_before = Set(readdir(temporary_root))
+                pre_bind_hook = phase == :pre_publication ?
+                                (
+                    _reservation::NamedTuple,
+                    _path::AbstractString,
+                ) -> error("synthetic pre-publication bind failure") :
+                                (
+                    _reservation::NamedTuple,
+                    _path::AbstractString,
+                ) -> nothing
+                post_bind_hook = phase == :post_publication ?
+                                 (_reservation::NamedTuple) -> error(
+                    "synthetic post-publication bind failure",
+                ) : (_reservation::NamedTuple) -> nothing
+                _test_metamdbg_error(
+                    () -> Mycelia._with_metamdbg_output_domain_lock(
+                        bind_cleanup_outdir;
+                        allowed_same_root_locks = (
+                            bind_cleanup_reservation.output_root_reservation_marker,
+                        ),
+                    ) do
+                        Mycelia._bind_metamdbg_submission_job!(
+                            bind_cleanup_reservation,
+                            "770";
+                            pre_job_record_publication_hook = pre_bind_hook,
+                            post_job_record_publication_hook = post_bind_hook,
+                        )
+                    end,
+                    ErrorException,
+                    r"synthetic (pre|post)-publication bind failure",
+                )
+                bind_cleanup_pending =
+                    Mycelia._metamdbg_pending_submission_job_path(
+                        bind_cleanup_outdir,
+                        bind_cleanup_reservation.output_root_reservation_capability,
+                        "770",
+                    )
+                Test.@test isfile(bind_cleanup_pending) ==
+                           (phase == :pre_publication)
+                Test.@test isfile(bind_cleanup_reservation.job_marker) ==
+                           (phase == :post_publication)
+                bind_cleanup_metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        bind_cleanup_outdir,
+                    ),
+                )
+                if phase == :pre_publication
+                    Test.@test bind_cleanup_metadata.job_id === nothing
+                    Test.@test bind_cleanup_metadata.pending_job_id == "770"
+                    Test.@test bind_cleanup_metadata.submission_state ==
+                               :submission_pending
+                    _test_metamdbg_error(
+                        () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                            bind_cleanup_metadata;
+                            owner_token = bind_cleanup_metadata.owner_token,
+                            confirm_not_submitted = true,
+                        ),
+                        ArgumentError,
+                        r"pending scheduler job evidence.*cannot be reclaimed",
+                    )
+                    bind_cleanup_metadata =
+                        Mycelia.bind_metamdbg_submission_reservation_job!(
+                            bind_cleanup_metadata;
+                            owner_token = bind_cleanup_metadata.owner_token,
+                            job_id = "770",
+                            confirm_submitted = true,
+                        )
+                end
+                Test.@test bind_cleanup_metadata.job_id == "770"
+                Test.@test !ispath(bind_cleanup_pending)
+                Test.@test Set(readdir(temporary_root)) ==
+                           parent_entries_before
+                cleanup_reclaimed =
+                    Mycelia.reclaim_metamdbg_submission_reservation!(
+                        bind_cleanup_metadata;
+                        owner_token = bind_cleanup_metadata.owner_token,
+                        job_id = bind_cleanup_metadata.job_id,
+                        confirm_cancelled = true,
+                    )
+                Test.@test cleanup_reclaimed.recovery_reason == :cancelled
+
+                bind_kill_outdir = joinpath(
+                    temporary_root,
+                    "$(phase)-job-bind-sigkill-output",
+                )
+                bind_reservation =
+                    _kill_metamdbg_job_record_publication!(
+                        bind_kill_outdir,
+                        valid_reads,
+                        phase;
+                        live_check = function (
+                                process::Base.Process,
+                                reservation::NamedTuple,
+                        )
+                            Test.@test Base.process_running(process)
+                            pid_lock =
+                                Mycelia._output_root_reservation_lock_path_from_canonical(
+                                    bind_kill_outdir,
+                                )
+                            private_lock =
+                                Mycelia._metamdbg_output_lock_path(
+                                    bind_kill_outdir,
+                                )
+                            cleanup_reservation =
+                                Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                                    bind_kill_outdir,
+                                )
+                            pending_job_record =
+                                Mycelia._metamdbg_pending_submission_job_path(
+                                    bind_kill_outdir,
+                                    reservation.output_root_reservation_capability,
+                                    "771",
+                                )
+                            tracked_paths = String[
+                                reservation.path,
+                                reservation.output_root_reservation_marker,
+                                pending_job_record,
+                                pid_lock,
+                                private_lock,
+                                cleanup_reservation,
+                            ]
+                            tracked_identities = map(tracked_paths) do path
+                                path_status = stat(path)
+                                return (;
+                                    device = path_status.device,
+                                    inode = path_status.inode,
+                                )
+                            end
+                            Test.@test isfile(reservation.job_marker) ==
+                                       (phase == :post_publication)
+                            live_metadata = only(
+                                Mycelia.inspect_metamdbg_submission_reservations(
+                                    bind_kill_outdir,
+                                ),
+                            )
+                            Test.@test live_metadata.pending_job_id == "771"
+                            Test.@test live_metadata.pending_job_complete
+                            Test.@test live_metadata.submission_state ==
+                                       (phase == :post_publication ?
+                                        :submission_commit_cleanup_pending :
+                                        :submission_pending)
+                            _test_metamdbg_error(
+                                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                                    live_metadata;
+                                    owner_token = live_metadata.owner_token,
+                                    confirm_not_submitted = true,
+                                ),
+                                ArgumentError,
+                                r"pending scheduler job evidence.*cannot be reclaimed",
+                            )
+                            _test_metamdbg_error(
+                                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                                    bind_kill_outdir;
+                                    confirm_process_dead = true,
+                                ),
+                                ErrorException,
+                                r"still names a live or remotely unverifiable process",
+                            )
+                            Test.@test all(ispath, tracked_paths)
+                            observed_identities = map(tracked_paths) do path
+                                path_status = stat(path)
+                                return (;
+                                    device = path_status.device,
+                                    inode = path_status.inode,
+                                )
+                            end
+                            Test.@test observed_identities ==
+                                       tracked_identities
+                            return nothing
+                        end,
+                    )
+                bind_metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        bind_kill_outdir;
+                        confirm_process_dead = true,
+                    ),
+                )
+                Test.@test bind_metadata.job_id == "771"
+                Test.@test bind_metadata.pending_job_id === nothing
+                Test.@test bind_metadata.private_lock_identity === nothing
+                Test.@test bind_metadata.cleanup_reservation_identity ===
+                           nothing
+                reclaimed_bind =
+                    Mycelia.reclaim_metamdbg_submission_reservation!(
+                        bind_metadata;
+                        owner_token = bind_metadata.owner_token,
+                        job_id = bind_metadata.job_id,
+                        confirm_cancelled = true,
+                    )
+                Test.@test reclaimed_bind.recovery_reason == :cancelled
+                Test.@test !ispath(bind_reservation.path)
+                Test.@test !ispath(
+                    bind_reservation.output_root_reservation_marker,
+                )
+                Test.@test !ispath(
+                    Mycelia._metamdbg_pending_submission_job_path(
+                        bind_kill_outdir,
+                        bind_reservation.output_root_reservation_capability,
+                        "771",
+                    ),
+                )
+                Test.@test isempty(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        bind_kill_outdir,
+                    ),
+                )
+            end
+
+            stale_clean_outdir = joinpath(
+                temporary_root,
+                "stale-clean-bind-metadata-output",
+            )
+            stale_clean_outputs =
+                Mycelia._metamdbg_output_paths(stale_clean_outdir, 21)
+            stale_clean_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            stale_clean_reservation = Mycelia._metamdbg_submission_reservation(
+                stale_clean_outputs,
+                stale_clean_contract,
+                21;
+                owner_token = "stale-clean-bind-owner",
+            )
+            Mycelia._with_metamdbg_output_lock(stale_clean_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    stale_clean_reservation,
+                    stale_clean_outdir,
+                )
+            end
+            stale_clean_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    stale_clean_outdir,
+                ),
+            )
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    stale_clean_outdir;
+                    allowed_same_root_locks = (
+                        stale_clean_reservation.output_root_reservation_marker,
+                    ),
+                ) do
+                    Mycelia._bind_metamdbg_submission_job!(
+                        stale_clean_reservation,
+                        "776";
+                        pre_job_record_publication_hook = (
+                            _reservation::NamedTuple,
+                            _path::AbstractString,
+                        ) -> error("synthetic accepted-job bind failure"),
+                    )
+                end,
+                ErrorException,
+                r"synthetic accepted-job bind failure",
+            )
+            stale_pending_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    stale_clean_outdir,
+                    stale_clean_reservation.output_root_reservation_capability,
+                    "776",
+                )
+            conflicting_pending_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    stale_clean_outdir,
+                    stale_clean_reservation.output_root_reservation_capability,
+                    "777",
+                )
+            _test_metamdbg_error(
+                () -> Mycelia.bind_metamdbg_submission_reservation_job!(
+                    stale_clean_metadata;
+                    owner_token = stale_clean_metadata.owner_token,
+                    job_id = "777",
+                    confirm_submitted = true,
+                ),
+                ErrorException,
+                r"pending scheduler job evidence appeared after inspection",
+            )
+            Test.@test isfile(stale_pending_path)
+            Test.@test !ispath(conflicting_pending_path)
+            Test.@test !ispath(stale_clean_reservation.job_marker)
+            exact_pending_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    stale_clean_outdir,
+                ),
+            )
+            exact_pending_bound =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    exact_pending_metadata;
+                    owner_token = exact_pending_metadata.owner_token,
+                    job_id = "776",
+                    confirm_submitted = true,
+                )
+            stale_clean_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    exact_pending_bound;
+                    owner_token = exact_pending_bound.owner_token,
+                    job_id = exact_pending_bound.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test stale_clean_reclaimed.recovery_reason == :cancelled
+
+            pending_cleanup_outdir = joinpath(
+                temporary_root,
+                "committed-pending-cleanup-failure-output",
+            )
+            pending_cleanup_outputs = Mycelia._metamdbg_output_paths(
+                pending_cleanup_outdir,
+                21,
+            )
+            pending_cleanup_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            pending_cleanup_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    pending_cleanup_outputs,
+                    pending_cleanup_contract,
+                    21;
+                    owner_token = "committed-pending-cleanup-owner",
+                )
+            Mycelia._with_metamdbg_output_lock(pending_cleanup_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    pending_cleanup_reservation,
+                    pending_cleanup_outdir,
+                )
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    pending_cleanup_outdir;
+                    allowed_same_root_locks = (
+                        pending_cleanup_reservation.output_root_reservation_marker,
+                    ),
+                ) do
+                    Mycelia._bind_metamdbg_submission_job!(
+                        pending_cleanup_reservation,
+                        "773";
+                        pending_job_record_remover = _path -> error(
+                            "synthetic pending removal failure",
+                        ),
+                    )
+                end,
+                ErrorException,
+                r"synthetic pending removal failure",
+            )
+            pending_cleanup_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pending_cleanup_outdir,
+                ),
+            )
+            Test.@test pending_cleanup_metadata.job_id == "773"
+            Test.@test pending_cleanup_metadata.pending_job_id == "773"
+            Test.@test pending_cleanup_metadata.submission_state ==
+                       :submission_commit_cleanup_pending
+            _test_metamdbg_error(
+                () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pending_cleanup_metadata;
+                    owner_token = pending_cleanup_metadata.owner_token,
+                    job_id = pending_cleanup_metadata.job_id,
+                    confirm_cancelled = true,
+                ),
+                ArgumentError,
+                r"pending scheduler job evidence.*cannot be reclaimed",
+            )
+            resumed_pending_cleanup =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    pending_cleanup_metadata;
+                    owner_token = pending_cleanup_metadata.owner_token,
+                    job_id = pending_cleanup_metadata.job_id,
+                    confirm_submitted = true,
+                )
+            Test.@test resumed_pending_cleanup.job_id == "773"
+            Test.@test resumed_pending_cleanup.pending_job_id === nothing
+            resumed_pending_cleanup = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pending_cleanup_outdir,
+                ),
+            )
+            pending_cleanup_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    resumed_pending_cleanup;
+                    owner_token = resumed_pending_cleanup.owner_token,
+                    job_id = resumed_pending_cleanup.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test pending_cleanup_reclaimed.recovery_reason == :cancelled
+
+            replacement_pending_outdir = joinpath(
+                temporary_root,
+                "pending-same-content-replacement-output",
+            )
+            replacement_pending_outputs = Mycelia._metamdbg_output_paths(
+                replacement_pending_outdir,
+                21,
+            )
+            replacement_pending_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            replacement_pending_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    replacement_pending_outputs,
+                    replacement_pending_contract,
+                    21;
+                    owner_token = "pending-replacement-owner",
+                )
+            Mycelia._with_metamdbg_output_lock(replacement_pending_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    replacement_pending_reservation,
+                    replacement_pending_outdir,
+                )
+            end
+            held_original_pending = joinpath(
+                temporary_root,
+                "held-original-pending-job-record",
+            )
+            replace_pending_hook = function (
+                    bound::NamedTuple,
+                    pending_path::AbstractString,
+            )
+                mv(pending_path, held_original_pending)
+                write(pending_path, bound.job_contents)
+                chmod(pending_path, 0o600)
+                return nothing
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    replacement_pending_outdir;
+                    allowed_same_root_locks = (
+                        replacement_pending_reservation.output_root_reservation_marker,
+                    ),
+                ) do
+                    Mycelia._bind_metamdbg_submission_job!(
+                        replacement_pending_reservation,
+                        "774";
+                        pre_job_record_publication_hook = replace_pending_hook,
+                    )
+                end,
+                ErrorException,
+                r"pending submission job record identity changed",
+            )
+            replacement_pending_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    replacement_pending_outdir,
+                    replacement_pending_reservation.output_root_reservation_capability,
+                    "774",
+                )
+            Test.@test isfile(replacement_pending_path)
+            Test.@test isfile(held_original_pending)
+            Test.@test !ispath(replacement_pending_reservation.job_marker)
+            rm(replacement_pending_path)
+            mv(held_original_pending, replacement_pending_path)
+            replacement_pending_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    replacement_pending_outdir,
+                ),
+            )
+            replacement_pending_bound =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    replacement_pending_metadata;
+                    owner_token = replacement_pending_metadata.owner_token,
+                    job_id = "774",
+                    confirm_submitted = true,
+                )
+            replacement_pending_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    replacement_pending_bound;
+                    owner_token = replacement_pending_bound.owner_token,
+                    job_id = replacement_pending_bound.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test replacement_pending_reclaimed.recovery_reason ==
+                       :cancelled
+
+            for replacement_kind in (:owner, :shared)
+                snapshot_outdir = joinpath(
+                    temporary_root,
+                    "pending-snapshot-$(replacement_kind)-replacement-output",
+                )
+                snapshot_outputs =
+                    Mycelia._metamdbg_output_paths(snapshot_outdir, 21)
+                snapshot_contract = Mycelia._metamdbg_input_contract(
+                    Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                    3,
+                )
+                snapshot_reservation =
+                    Mycelia._metamdbg_submission_reservation(
+                        snapshot_outputs,
+                        snapshot_contract,
+                        21;
+                        owner_token =
+                            "pending-snapshot-$(replacement_kind)-owner",
+                    )
+                Mycelia._with_metamdbg_output_lock(snapshot_outdir) do
+                    Mycelia._create_metamdbg_submission_reservation!(
+                        snapshot_reservation,
+                        snapshot_outdir,
+                    )
+                end
+                _test_metamdbg_error(
+                    () -> Mycelia._with_metamdbg_output_domain_lock(
+                        snapshot_outdir;
+                        allowed_same_root_locks = (
+                            snapshot_reservation.output_root_reservation_marker,
+                        ),
+                    ) do
+                        Mycelia._bind_metamdbg_submission_job!(
+                            snapshot_reservation,
+                            "778";
+                            pre_job_record_publication_hook = (
+                                _reservation::NamedTuple,
+                                _path::AbstractString,
+                            ) -> error("synthetic snapshot bind failure"),
+                        )
+                    end,
+                    ErrorException,
+                    r"synthetic snapshot bind failure",
+                )
+                held_snapshot_path = joinpath(
+                    temporary_root,
+                    "held-pending-snapshot-$(replacement_kind)",
+                )
+                snapshot_hook = function (
+                        records::Vector{NamedTuple},
+                )
+                    Test.@test length(records) == 1
+                    if replacement_kind == :owner
+                        mv(snapshot_reservation.path, held_snapshot_path)
+                        mkdir(snapshot_reservation.path)
+                        chmod(snapshot_reservation.path, 0o700)
+                        write(
+                            snapshot_reservation.contract_marker,
+                            snapshot_reservation.contents,
+                        )
+                        chmod(snapshot_reservation.contract_marker, 0o600)
+                    else
+                        mv(
+                            snapshot_reservation.output_root_reservation_marker,
+                            held_snapshot_path,
+                        )
+                        write(
+                            snapshot_reservation.output_root_reservation_marker,
+                            snapshot_reservation.output_root_reservation_contents,
+                        )
+                        chmod(
+                            snapshot_reservation.output_root_reservation_marker,
+                            0o600,
+                        )
+                    end
+                    return nothing
+                end
+                replacement_pattern = replacement_kind == :owner ?
+                                      r"reservation was replaced after recovery inspection" :
+                                      r"shared output-root reservation was replaced after recovery"
+                _test_metamdbg_error(
+                    () -> Mycelia._recover_metamdbg_pending_submission_job_records!(
+                        snapshot_outdir;
+                        post_initial_snapshot_hook = snapshot_hook,
+                    ),
+                    ErrorException,
+                    replacement_pattern,
+                )
+                Test.@test !ispath(snapshot_reservation.job_marker)
+                if replacement_kind == :owner
+                    rm(snapshot_reservation.path; recursive = true)
+                    mv(held_snapshot_path, snapshot_reservation.path)
+                else
+                    rm(snapshot_reservation.output_root_reservation_marker)
+                    mv(
+                        held_snapshot_path,
+                        snapshot_reservation.output_root_reservation_marker,
+                    )
+                end
+                snapshot_metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        snapshot_outdir,
+                    ),
+                )
+                Test.@test snapshot_metadata.pending_job_id == "778"
+                snapshot_bound =
+                    Mycelia.bind_metamdbg_submission_reservation_job!(
+                        snapshot_metadata;
+                        owner_token = snapshot_metadata.owner_token,
+                        job_id = "778",
+                        confirm_submitted = true,
+                    )
+                snapshot_reclaimed =
+                    Mycelia.reclaim_metamdbg_submission_reservation!(
+                        snapshot_bound;
+                        owner_token = snapshot_bound.owner_token,
+                        job_id = snapshot_bound.job_id,
+                        confirm_cancelled = true,
+                    )
+                Test.@test snapshot_reclaimed.recovery_reason == :cancelled
+            end
+
+            symlink_pending_outdir = joinpath(
+                temporary_root,
+                "pending-symlink-race-output",
+            )
+            symlink_pending_outputs =
+                Mycelia._metamdbg_output_paths(symlink_pending_outdir, 21)
+            symlink_pending_contract = Mycelia._metamdbg_input_contract(
+                Mycelia._metamdbg_selected_input(valid_reads, nothing),
+                3,
+            )
+            symlink_pending_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    symlink_pending_outputs,
+                    symlink_pending_contract,
+                    21;
+                    owner_token = "pending-symlink-owner",
+                )
+            Mycelia._with_metamdbg_output_lock(symlink_pending_outdir) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    symlink_pending_reservation,
+                    symlink_pending_outdir,
+                )
+            end
+            symlink_pending_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    symlink_pending_outdir,
+                    symlink_pending_reservation.output_root_reservation_capability,
+                    "775",
+                )
+            write(symlink_pending_path, "")
+            chmod(symlink_pending_path, 0o600)
+            captured_empty_pending =
+                Mycelia._metamdbg_pending_submission_job_record(
+                    symlink_pending_reservation,
+                    symlink_pending_path;
+                    allow_incomplete = true,
+                )
+            held_empty_pending = joinpath(
+                temporary_root,
+                "held-empty-pending-job-record",
+            )
+            symlink_target = joinpath(
+                temporary_root,
+                "pending-symlink-do-not-truncate",
+            )
+            write(symlink_target, "do-not-truncate")
+            chmod(symlink_target, 0o600)
+            swap_pending_for_symlink = function (_pending::NamedTuple)
+                mv(symlink_pending_path, held_empty_pending)
+                symlink(symlink_target, symlink_pending_path)
+                return nothing
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._complete_metamdbg_pending_submission_job_record!(
+                    symlink_pending_reservation,
+                    captured_empty_pending;
+                    pre_descriptor_open_hook = swap_pending_for_symlink,
+                ),
+                ErrorException,
+                r"descriptor was replaced before prefix completion",
+            )
+            Test.@test read(symlink_target, String) == "do-not-truncate"
+            Test.@test islink(symlink_pending_path)
+            Test.@test !ispath(symlink_pending_reservation.job_marker)
+            rm(symlink_pending_path)
+            mv(held_empty_pending, symlink_pending_path)
+            symlink_pending_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    symlink_pending_outdir,
+                ),
+            )
+            symlink_pending_bound =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    symlink_pending_metadata;
+                    owner_token = symlink_pending_metadata.owner_token,
+                    job_id = "775",
+                    confirm_submitted = true,
+                )
+            symlink_pending_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    symlink_pending_bound;
+                    owner_token = symlink_pending_bound.owner_token,
+                    job_id = symlink_pending_bound.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test symlink_pending_reclaimed.recovery_reason == :cancelled
+
+            pending_name_outdir = joinpath(
+                temporary_root,
+                "pending-name-job-bind-sigkill-output",
+            )
+            pending_name_reservation =
+                _kill_metamdbg_job_record_publication!(
+                    pending_name_outdir,
+                    valid_reads,
+                    :pending_name;
+                    live_check = function (
+                            process::Base.Process,
+                            reservation::NamedTuple,
+                    )
+                        Test.@test Base.process_running(process)
+                        pending_path =
+                            Mycelia._metamdbg_pending_submission_job_path(
+                                pending_name_outdir,
+                                reservation.output_root_reservation_capability,
+                                "771",
+                            )
+                        Test.@test isfile(pending_path)
+                        Test.@test filesize(pending_path) == 0
+                        Test.@test !ispath(reservation.job_marker)
+                        live_metadata = only(
+                            Mycelia.inspect_metamdbg_submission_reservations(
+                                pending_name_outdir,
+                            ),
+                        )
+                        Test.@test live_metadata.job_id === nothing
+                        Test.@test live_metadata.pending_job_id == "771"
+                        Test.@test !live_metadata.pending_job_complete
+                        Test.@test live_metadata.submission_state ==
+                                   :submission_pending
+                        _test_metamdbg_error(
+                            () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                                live_metadata;
+                                owner_token = live_metadata.owner_token,
+                                confirm_not_submitted = true,
+                            ),
+                            ArgumentError,
+                            r"pending scheduler job evidence.*cannot be reclaimed",
+                        )
+                        _test_metamdbg_error(
+                            () -> Mycelia.inspect_metamdbg_submission_reservations(
+                                pending_name_outdir;
+                                confirm_process_dead = true,
+                            ),
+                            ErrorException,
+                            r"still names a live or remotely unverifiable process",
+                        )
+                        Test.@test isfile(pending_path)
+                        Test.@test filesize(pending_path) == 0
+                        return nothing
+                    end,
+                )
+            pending_name_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    pending_name_outdir,
+                    pending_name_reservation.output_root_reservation_capability,
+                    "771",
+                )
+            failing_pending_recovery = function (outdir::AbstractString)
+                return Mycelia._recover_metamdbg_pending_submission_job_records!(
+                    outdir;
+                    pre_promotion_hook = (
+                        _reservation::NamedTuple,
+                        _pending::NamedTuple,
+                    ) -> error("synthetic pending promotion failure"),
+                )
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._inspect_metamdbg_submission_reservations(
+                    pending_name_outdir;
+                    confirm_process_dead = true,
+                    pending_recovery_function = failing_pending_recovery,
+                ),
+                ErrorException,
+                r"synthetic pending promotion failure",
+            )
+            pending_name_pid_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    pending_name_outdir,
+                )
+            pending_name_private_lock =
+                Mycelia._metamdbg_output_lock_path(pending_name_outdir)
+            pending_name_cleanup_reservation =
+                Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                    pending_name_outdir,
+                )
+            Test.@test !ispath(pending_name_pid_lock)
+            Test.@test !ispath(pending_name_private_lock)
+            Test.@test !ispath(pending_name_cleanup_reservation)
+            Test.@test isfile(pending_name_path)
+            recovered_pending_name = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pending_name_outdir,
+                ),
+            )
+            Test.@test recovered_pending_name.job_id === nothing
+            Test.@test recovered_pending_name.pending_job_id == "771"
+            Test.@test recovered_pending_name.pending_job_complete
+            recovered_pending_name =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    recovered_pending_name;
+                    owner_token = recovered_pending_name.owner_token,
+                    job_id = "771",
+                    confirm_submitted = true,
+                )
+            Test.@test recovered_pending_name.job_id == "771"
+            Test.@test recovered_pending_name.pending_job_id === nothing
+            Test.@test isfile(pending_name_reservation.job_marker)
+            Test.@test !ispath(pending_name_path)
+            reclaimed_pending_name =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    recovered_pending_name;
+                    owner_token = recovered_pending_name.owner_token,
+                    job_id = recovered_pending_name.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test reclaimed_pending_name.recovery_reason == :cancelled
+            Test.@test isempty(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pending_name_outdir,
+                ),
+            )
 
             missing_parent_root =
                 joinpath(temporary_root, "reclaim-missing-parent")
@@ -2754,7 +4024,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 end)
                 Test.@test conflict isa ArgumentError
                 Test.@test occursin(
-                    "already reserved",
+                    "active same-root output-root reservation",
                     sprint(showerror, conflict),
                 )
             end
@@ -2830,7 +4100,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     end)
                     Test.@test case_alias_conflict isa ArgumentError
                     Test.@test occursin(
-                        "already reserved",
+                        "active same-root output-root reservation",
                         sprint(showerror, case_alias_conflict),
                     )
                 end
@@ -2902,6 +4172,95 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     queued_parent_reservation,
                 )
             end
+
+            runtime_fence_root = joinpath(
+                temporary_root,
+                "shared-domain-runtime-fence",
+            )
+            mkpath(runtime_fence_root)
+            runtime_fence_outputs =
+                Mycelia._metamdbg_output_paths(runtime_fence_root, 21)
+            runtime_fence_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    runtime_fence_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "shared-domain-runtime-fence-owner",
+                )
+            runtime_fence_marker =
+                runtime_fence_reservation.runtime_output_root_reservation_marker
+            mkdir(runtime_fence_marker; mode = 0o700)
+            Mycelia._fsync_metamdbg_directory(runtime_fence_marker)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
+            missing_fenced_parent = joinpath(
+                runtime_fence_root,
+                "missing-parent",
+            )
+            nested_fenced_output = joinpath(
+                missing_fenced_parent,
+                "output",
+            )
+            nested_fenced_pid_lock =
+                Mycelia._output_root_reservation_lock_path_from_canonical(
+                    nested_fenced_output,
+                )
+            nested_fenced_private_lock =
+                Mycelia._metamdbg_output_lock_path(nested_fenced_output)
+            function require_runtime_fence_preflight!(
+                    action::Function,
+                    action_entered::Base.RefValue{Bool},
+            )::Nothing
+                observed_error = try
+                    action()
+                    nothing
+                catch caught
+                    caught isa InterruptException && rethrow()
+                    caught
+                end
+                Test.@test observed_error isa ArgumentError
+                if observed_error isa ArgumentError
+                    Test.@test occursin(
+                        runtime_fence_marker,
+                        sprint(showerror, observed_error),
+                    )
+                end
+                Test.@test !action_entered[]
+                Test.@test !ispath(missing_fenced_parent)
+                Test.@test !ispath(nested_fenced_pid_lock)
+                Test.@test !ispath(nested_fenced_private_lock)
+                return nothing
+            end
+
+            nested_meta_entered = Ref(false)
+            require_runtime_fence_preflight!(nested_meta_entered) do
+                Mycelia._with_metamdbg_output_domain_lock(
+                    nested_fenced_output,
+                ) do
+                    nested_meta_entered[] = true
+                end
+            end
+            nested_unicycler_entered = Ref(false)
+            require_runtime_fence_preflight!(nested_unicycler_entered) do
+                Mycelia._with_unicycler_output_lock(
+                    nested_fenced_output,
+                ) do _reserved
+                    nested_unicycler_entered[] = true
+                end
+            end
+            nested_autocycler_entered = Ref(false)
+            require_runtime_fence_preflight!(nested_autocycler_entered) do
+                Mycelia._with_autocycler_output_lock(
+                    nested_fenced_output,
+                ) do _reserved
+                    nested_autocycler_entered[] = true
+                end
+            end
+            rm(runtime_fence_marker; recursive = true)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
 
             queued_child =
                 joinpath(parent_root, "queued-meta-child")
@@ -3179,6 +4538,14 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test occursin("validate_fasta_stream", script)
             Test.@test occursin("validate_contigs", script)
             Test.@test occursin("validate_gfa", script)
+            Test.@test occursin(
+                "runtime refuses pending scheduler job evidence",
+                script,
+            )
+            Test.@test occursin(
+                "runtime refuses ambiguous pending scheduler job evidence",
+                script,
+            )
             Test.@test !occursin("link_from", script)
             Test.@test !occursin("path_reference", script)
             Test.@test !occursin("object_count = split", script)
@@ -3194,12 +4561,18 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 script,
             )
             Test.@test !occursin("grep -Eq", script)
-            Test.@test occursin("reservation_tombstone=", script)
+            Test.@test !occursin("reservation_tombstone=", script)
             Test.@test occursin(
                 "mv -- \"\$submission_reservation_dir\" " *
-                "\"\$reservation_tombstone\"",
+                "\"\$runtime_submission_reservation_dir\"",
                 script,
             )
+            Test.@test occursin(
+                "mv -- \"\$runtime_submission_reservation_dir\" " *
+                "\"\$consumed_submission_reservation_dir\"",
+                script,
+            )
+            Test.@test occursin("fsync_file_and_parent", script)
             Test.@test !occursin(
                 "rm -- \"\$submission_reservation_contract\"",
                 script,
@@ -3223,6 +4596,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             )
             script_lines = split(script, '\n')
             lock_position = findfirst(==("lock_acquired=1"), script_lines)
+            runtime_marker_position = findfirst(
+                ==("output_root_runtime_reservation_acquired=1"),
+                script_lines,
+            )
             validation_positions = findall(
                 ==("validate_metamdbg_inputs"),
                 script_lines,
@@ -3233,6 +4610,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 script_lines,
             )
             Test.@test length(validation_positions) == 3
+            Test.@test runtime_marker_position < lock_position
             Test.@test lock_position < first(validation_positions) <
                        reuse_position < validation_positions[2] <
                        last(validation_positions) <
@@ -3241,7 +4619,31 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test !occursin("\${contigs_gz}.tmp", script)
             Test.@test !occursin("rmdir -- \"\$lock_dir\" || true", script)
             Test.@test !occursin("< <(find", script)
-            Test.@test occursin("if ! find -P", script)
+            Test.@test !occursin("find -P", script)
+            Test.@test occursin("os.scandir(directory_descriptor)", script)
+            Test.@test occursin("O_NOFOLLOW", script)
+            Test.@test occursin("reservations-one-level", script)
+            Test.@test occursin("reservations-recursive", script)
+            Test.@test occursin("MAX_DEPTH = 256", script)
+            Test.@test occursin("MAX_ENTRIES = 1000000", script)
+            Test.@test occursin(
+                "MAX_MANIFEST_BYTES = 268435456",
+                script,
+            )
+            Test.@test occursin("while stack:", script)
+            Test.@test occursin(
+                "if second_manifest != first_manifest:",
+                script,
+            )
+            Test.@test occursin(
+                "successful inventory contains an unterminated NUL record",
+                script,
+            )
+            Test.@test occursin(
+                "could not completely enumerate \$inventory_label after " *
+                "3 attempts",
+                script,
+            )
             Test.@test occursin("metamdbg_output_root_identity", script)
             Test.@test occursin(
                 Mycelia._output_root_reservation_identity(dirname(abspath("/"))),
@@ -3357,6 +4759,521 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 end
                 return nothing
             end
+
+            pending_runtime_outdir = joinpath(
+                temporary_root,
+                "executor-pending-bind-cleanup",
+            )
+            pending_runtime_outputs, pending_runtime_reservation =
+                create_bound_runtime_fixture(
+                    pending_runtime_outdir,
+                    "executor-pending-bind-cleanup-owner",
+                    "883",
+                )
+            pending_runtime_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    pending_runtime_outdir,
+                    pending_runtime_reservation.output_root_reservation_capability,
+                    pending_runtime_reservation.job_id,
+                )
+            Base.Filesystem.hardlink(
+                pending_runtime_reservation.job_marker,
+                pending_runtime_path,
+            )
+            Mycelia._fsync_metamdbg_directory(dirname(pending_runtime_path))
+            pending_runtime_assembly_marker = joinpath(
+                temporary_root,
+                "executor-pending-bind-cleanup-assembly-ran",
+            )
+            pending_runtime_script = Mycelia._metamdbg_executor_script(
+                "touch " * Base.shell_escape(pending_runtime_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                pending_runtime_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = pending_runtime_reservation,
+            )
+            pending_runtime_script_path = joinpath(
+                temporary_root,
+                "executor-pending-bind-cleanup.sh",
+            )
+            write(pending_runtime_script_path, pending_runtime_script)
+            pending_runtime_log = IOBuffer()
+            pending_runtime_process = Base.withenv(
+                "SLURM_JOB_ID" => pending_runtime_reservation.job_id,
+            ) do
+                return run(pipeline(
+                    ignorestatus(`bash $(pending_runtime_script_path)`),
+                    stdout = pending_runtime_log,
+                    stderr = pending_runtime_log,
+                ))
+            end
+            Test.@test !success(pending_runtime_process)
+            Test.@test occursin(
+                "runtime refuses pending scheduler job evidence",
+                String(take!(pending_runtime_log)),
+            )
+            Test.@test isdir(pending_runtime_reservation.path)
+            Test.@test isfile(
+                pending_runtime_reservation.output_root_reservation_marker,
+            )
+            Test.@test isfile(pending_runtime_path)
+            Test.@test Base.Filesystem.samefile(
+                pending_runtime_reservation.job_marker,
+                pending_runtime_path,
+            )
+            Test.@test !ispath(pending_runtime_reservation.runtime_path)
+            Test.@test !ispath(
+                pending_runtime_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                Mycelia._metamdbg_output_lock_path(pending_runtime_outdir),
+            )
+            Test.@test !ispath(pending_runtime_assembly_marker)
+            pending_runtime_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    pending_runtime_outdir,
+                ),
+            )
+            Test.@test pending_runtime_metadata.submission_state ==
+                       :submission_commit_cleanup_pending
+            pending_runtime_bound =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    pending_runtime_metadata;
+                    owner_token = pending_runtime_metadata.owner_token,
+                    job_id = pending_runtime_metadata.job_id,
+                    confirm_submitted = true,
+                )
+            pending_runtime_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    pending_runtime_bound;
+                    owner_token = pending_runtime_bound.owner_token,
+                    job_id = pending_runtime_bound.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test pending_runtime_reclaimed.recovery_reason == :cancelled
+
+            foreign_pending_outdir = joinpath(
+                temporary_root,
+                "executor-foreign-pending-same-output",
+            )
+            foreign_pending_outputs, foreign_pending_reservation =
+                create_bound_runtime_fixture(
+                    foreign_pending_outdir,
+                    "executor-foreign-pending-same-output-owner",
+                    "884",
+                )
+            foreign_capability = repeat("a", 64)
+            if foreign_capability ==
+               foreign_pending_reservation.output_root_reservation_capability
+                foreign_capability = repeat("b", 64)
+            end
+            foreign_pending_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    foreign_pending_outdir,
+                    foreign_capability,
+                    "999",
+                )
+            open(foreign_pending_path, "w") do pending_io
+                write(pending_io, "foreign accepted-job evidence\n")
+                chmod(foreign_pending_path, 0o600)
+                Mycelia._fsync_metamdbg_file(
+                    pending_io,
+                    foreign_pending_path,
+                )
+            end
+            Mycelia._fsync_metamdbg_directory(dirname(foreign_pending_path))
+            foreign_pending_assembly_marker = joinpath(
+                temporary_root,
+                "executor-foreign-pending-same-output-assembly-ran",
+            )
+            foreign_pending_script = Mycelia._metamdbg_executor_script(
+                "touch " * Base.shell_escape(foreign_pending_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                foreign_pending_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = foreign_pending_reservation,
+            )
+            foreign_pending_script_path = joinpath(
+                temporary_root,
+                "executor-foreign-pending-same-output.sh",
+            )
+            write(foreign_pending_script_path, foreign_pending_script)
+            foreign_pending_log = IOBuffer()
+            foreign_pending_process = Base.withenv(
+                "SLURM_JOB_ID" => foreign_pending_reservation.job_id,
+            ) do
+                return run(pipeline(
+                    ignorestatus(`bash $(foreign_pending_script_path)`),
+                    stdout = foreign_pending_log,
+                    stderr = foreign_pending_log,
+                ))
+            end
+            Test.@test !success(foreign_pending_process)
+            Test.@test occursin(
+                "runtime refuses ambiguous pending scheduler job evidence",
+                String(take!(foreign_pending_log)),
+            )
+            Test.@test isdir(foreign_pending_reservation.path)
+            Test.@test isfile(
+                foreign_pending_reservation.output_root_reservation_marker,
+            )
+            Test.@test isfile(foreign_pending_path)
+            Test.@test !ispath(foreign_pending_reservation.runtime_path)
+            Test.@test !ispath(
+                foreign_pending_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                Mycelia._metamdbg_output_lock_path(foreign_pending_outdir),
+            )
+            Test.@test !ispath(foreign_pending_assembly_marker)
+            rm(foreign_pending_path)
+            Mycelia._fsync_metamdbg_directory(dirname(foreign_pending_path))
+            foreign_pending_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    foreign_pending_outdir,
+                ),
+            )
+            foreign_pending_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    foreign_pending_metadata;
+                    owner_token = foreign_pending_metadata.owner_token,
+                    job_id = foreign_pending_metadata.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test foreign_pending_reclaimed.recovery_reason == :cancelled
+
+            ignored_pending_parent = joinpath(
+                temporary_root,
+                "executor-ignores-other-output-pending-parent",
+            )
+            mkpath(ignored_pending_parent)
+            ignored_pending_target_outdir = joinpath(
+                ignored_pending_parent,
+                "executor-ignores-other-output-pending-target",
+            )
+            ignored_pending_outputs, ignored_pending_reservation =
+                create_bound_runtime_fixture(
+                    ignored_pending_target_outdir,
+                    "executor-ignores-other-output-pending-target-owner",
+                    "885",
+                )
+            ignored_pending_other_outdir = joinpath(
+                ignored_pending_parent,
+                "executor-ignores-other-output-pending-other",
+            )
+            ignored_pending_other_outputs = Mycelia._metamdbg_output_paths(
+                ignored_pending_other_outdir,
+                21,
+            )
+            ignored_pending_other_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    ignored_pending_other_outputs,
+                    input_contract,
+                    21;
+                    owner_token =
+                        "executor-ignores-other-output-pending-other-owner",
+                )
+            Mycelia._with_metamdbg_output_lock(
+                ignored_pending_other_outdir,
+            ) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    ignored_pending_other_reservation,
+                    ignored_pending_other_outdir,
+                )
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._with_metamdbg_output_domain_lock(
+                    ignored_pending_other_outdir;
+                    allowed_same_root_locks = (
+                        ignored_pending_other_reservation.output_root_reservation_marker,
+                    ),
+                ) do
+                    Mycelia._bind_metamdbg_submission_job!(
+                        ignored_pending_other_reservation,
+                        "886";
+                        pre_job_record_publication_hook = (
+                            _reservation::NamedTuple,
+                            _path::AbstractString,
+                        ) -> error("synthetic other-output bind failure"),
+                    )
+                end,
+                ErrorException,
+                r"synthetic other-output bind failure",
+            )
+            ignored_pending_other_path =
+                Mycelia._metamdbg_pending_submission_job_path(
+                    ignored_pending_other_outdir,
+                    ignored_pending_other_reservation.output_root_reservation_capability,
+                    "886",
+                )
+            Test.@test isfile(ignored_pending_other_path)
+            ignored_pending_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                ignored_pending_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = ignored_pending_reservation,
+            )
+            ignored_pending_script_path = joinpath(
+                temporary_root,
+                "executor-ignores-other-output-pending-target.sh",
+            )
+            write(ignored_pending_script_path, ignored_pending_script)
+            Test.@test Base.withenv(
+                "SLURM_JOB_ID" => ignored_pending_reservation.job_id,
+            ) do
+                success(`bash $(ignored_pending_script_path)`)
+            end
+            Test.@test isfile(ignored_pending_outputs.completion_marker)
+            Test.@test !ispath(ignored_pending_reservation.path)
+            Test.@test isdir(ignored_pending_reservation.consumed_path)
+            Test.@test isfile(ignored_pending_other_path)
+            ignored_pending_target_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    ignored_pending_target_outdir,
+                ),
+            )
+            ignored_pending_target_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    ignored_pending_target_metadata;
+                    owner_token = ignored_pending_target_metadata.owner_token,
+                    job_id = ignored_pending_target_metadata.job_id,
+                    confirm_terminal = :completed,
+                )
+            Test.@test ignored_pending_target_reclaimed.recovery_reason ==
+                       :completed
+            ignored_pending_other_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    ignored_pending_other_outdir,
+                ),
+            )
+            ignored_pending_other_bound =
+                Mycelia.bind_metamdbg_submission_reservation_job!(
+                    ignored_pending_other_metadata;
+                    owner_token = ignored_pending_other_metadata.owner_token,
+                    job_id = "886",
+                    confirm_submitted = true,
+                )
+            Test.@test !ispath(ignored_pending_other_path)
+            ignored_pending_other_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    ignored_pending_other_bound;
+                    owner_token = ignored_pending_other_bound.owner_token,
+                    job_id = ignored_pending_other_bound.job_id,
+                    confirm_cancelled = true,
+                )
+            Test.@test ignored_pending_other_reclaimed.recovery_reason ==
+                       :cancelled
+            Test.@test !ispath(ignored_pending_other_reservation.path)
+            Test.@test !ispath(
+                ignored_pending_other_reservation.output_root_reservation_marker,
+            )
+
+            multi_snapshot_outdir =
+                joinpath(temporary_root, "multi-record-inspection-race")
+            _, multi_consumed_reservation = create_bound_runtime_fixture(
+                multi_snapshot_outdir,
+                "multi-record-consumed-owner",
+                "881",
+            )
+            Mycelia._with_metamdbg_output_domain_lock(
+                multi_snapshot_outdir;
+                allowed_same_root_locks = (
+                    multi_consumed_reservation.output_root_reservation_marker,
+                ),
+            ) do
+                Mycelia._require_metamdbg_submission_reservation!(
+                    multi_consumed_reservation,
+                )
+                rm(multi_consumed_reservation.output_root_reservation_marker)
+                Mycelia._fsync_metamdbg_directory(
+                    dirname(
+                        multi_consumed_reservation.output_root_reservation_marker,
+                    ),
+                )
+                mv(
+                    multi_consumed_reservation.path,
+                    multi_consumed_reservation.consumed_path,
+                )
+                Mycelia._fsync_metamdbg_directory(
+                    dirname(multi_consumed_reservation.path),
+                )
+            end
+            multi_queued_outputs =
+                Mycelia._metamdbg_output_paths(multi_snapshot_outdir, 21)
+            multi_queued_reservation =
+                Mycelia._metamdbg_submission_reservation(
+                    multi_queued_outputs,
+                    input_contract,
+                    21;
+                    owner_token = "multi-record-queued-owner",
+                )
+            Mycelia._with_metamdbg_output_domain_lock(
+                multi_snapshot_outdir,
+            ) do
+                Mycelia._create_metamdbg_submission_reservation!(
+                    multi_queued_reservation,
+                    multi_snapshot_outdir,
+                )
+            end
+            multi_snapshot_hook_calls = Ref(0)
+            multi_snapshot_hook = function (snapshot::NamedTuple)
+                multi_snapshot_hook_calls[] += 1
+                Test.@test length(snapshot.reservations) == 2
+                Test.@test !ispath(
+                    Mycelia._output_root_reservation_lock_path_from_canonical(
+                        multi_snapshot_outdir,
+                    ),
+                )
+                Test.@test !ispath(
+                    Mycelia._metamdbg_output_lock_path(multi_snapshot_outdir),
+                )
+                Test.@test !ispath(
+                    Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                        multi_snapshot_outdir,
+                    ),
+                )
+                Mycelia._bind_metamdbg_submission_job_after_submit!(
+                    multi_queued_reservation,
+                    "882",
+                )
+                return nothing
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._inspect_metamdbg_submission_reservations(
+                    multi_snapshot_outdir;
+                    post_initial_snapshot_hook = multi_snapshot_hook,
+                ),
+                ErrorException,
+                r"reservation job_id changed during recovery inspection",
+            )
+            Test.@test multi_snapshot_hook_calls[] == 1
+            multi_snapshot_records =
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    multi_snapshot_outdir,
+                )
+            Test.@test length(multi_snapshot_records) == 2
+            multi_queued_metadata = only(filter(
+                record -> record.reservation_state == :queued,
+                multi_snapshot_records,
+            ))
+            multi_consumed_metadata = only(filter(
+                record -> record.reservation_state == :consumed,
+                multi_snapshot_records,
+            ))
+            Test.@test multi_queued_metadata.job_id == "882"
+            Mycelia.reclaim_metamdbg_submission_reservation!(
+                multi_queued_metadata;
+                owner_token = multi_queued_metadata.owner_token,
+                job_id = multi_queued_metadata.job_id,
+                confirm_cancelled = true,
+            )
+            Mycelia.reclaim_metamdbg_submission_reservation!(
+                multi_consumed_metadata;
+                owner_token = multi_consumed_metadata.owner_token,
+                job_id = multi_consumed_metadata.job_id,
+                confirm_terminal = :completed,
+            )
+
+            inspection_race_outdir =
+                joinpath(temporary_root, "inspection-runtime-race")
+            inspection_race_outputs, inspection_race_reservation =
+                create_bound_runtime_fixture(
+                    inspection_race_outdir,
+                    "inspection-runtime-race-owner",
+                    "880",
+                )
+            inspection_race_script = Mycelia._metamdbg_executor_script(
+                fake_asm,
+                fake_gfa,
+                inspection_race_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = inspection_race_reservation,
+            )
+            inspection_race_script_path = joinpath(
+                temporary_root,
+                "inspection-runtime-race.sh",
+            )
+            write(inspection_race_script_path, inspection_race_script)
+            inspection_hook_calls = Ref(0)
+            inspection_runtime_process = Ref{Union{Nothing, Base.Process}}(
+                nothing,
+            )
+            inspection_race_hook = function (_reservation::NamedTuple)
+                inspection_hook_calls[] += 1
+                pid_lock =
+                    Mycelia._output_root_reservation_lock_path_from_canonical(
+                        inspection_race_outdir,
+                    )
+                private_lock =
+                    Mycelia._metamdbg_output_lock_path(inspection_race_outdir)
+                cleanup_reservation =
+                    Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                        inspection_race_outdir,
+                    )
+                Test.@test !ispath(pid_lock)
+                Test.@test !ispath(private_lock)
+                Test.@test !ispath(cleanup_reservation)
+                process = run(
+                    addenv(
+                        `bash $(inspection_race_script_path)`,
+                        "SLURM_JOB_ID" => inspection_race_reservation.job_id,
+                    );
+                    wait = false,
+                )
+                inspection_runtime_process[] = process
+                wait(process)
+                Test.@test success(process)
+                Test.@test !ispath(pid_lock)
+                Test.@test !ispath(private_lock)
+                Test.@test !ispath(cleanup_reservation)
+                return nothing
+            end
+            _test_metamdbg_error(
+                () -> Mycelia._inspect_metamdbg_submission_reservations(
+                    inspection_race_outdir;
+                    post_initial_snapshot_hook = inspection_race_hook,
+                ),
+                ErrorException,
+                r"changed during recovery inspection|must be a regular, non-symlink directory",
+            )
+            Test.@test inspection_hook_calls[] == 1
+            Test.@test inspection_runtime_process[] isa Base.Process
+            if inspection_runtime_process[] isa Base.Process
+                Test.@test success(inspection_runtime_process[])
+            end
+            Test.@test !ispath(inspection_race_reservation.path)
+            Test.@test !ispath(
+                inspection_race_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                inspection_race_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test isdir(inspection_race_reservation.consumed_path)
+            inspection_race_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    inspection_race_outdir,
+                ),
+            )
+            Test.@test inspection_race_metadata.reservation_state == :consumed
+            reclaimed_inspection_race =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    inspection_race_metadata;
+                    owner_token = inspection_race_metadata.owner_token,
+                    job_id = inspection_race_metadata.job_id,
+                    confirm_terminal = :completed,
+                )
+            Test.@test reclaimed_inspection_race.recovery_reason == :completed
 
             owner_runtime_outdir =
                 joinpath(temporary_root, "executor-owner-capability")
@@ -3618,8 +5535,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 String(take!(unreadable_runtime_log))
             Test.@test !success(unreadable_runtime_process)
             Test.@test occursin(
-                "could not completely enumerate same-root or ancestor " *
-                "output reservations",
+                "could not durably fsync lifecycle path and containing " *
+                "directory",
                 unreadable_runtime_output,
             )
             Test.@test !ispath(unreadable_assembly_marker)
@@ -3638,6 +5555,1133 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 unreadable_reservation,
             )
 
+            function enumeration_retry_remnants(
+                    root::AbstractString,
+            )::Vector{String}
+                remnants = String[]
+                for (directory, directories, files) in walkdir(root)
+                    for name in vcat(directories, files)
+                        if startswith(name, ".mycelia-metamdbg-tmp.") ||
+                           endswith(name, ".attempt") ||
+                           endswith(name, ".errors")
+                            push!(remnants, joinpath(directory, name))
+                        end
+                    end
+                end
+                return remnants
+            end
+
+            aba_root = joinpath(temporary_root, "enumerator-aba-root")
+            aba_replacement = joinpath(
+                temporary_root,
+                "enumerator-aba-replacement",
+            )
+            aba_parked = joinpath(temporary_root, "enumerator-aba-parked")
+            mkpath(aba_root)
+            mkpath(aba_replacement)
+            aba_original_entry = joinpath(aba_root, "original-entry")
+            aba_replacement_entry = joinpath(
+                aba_replacement,
+                "replacement-entry",
+            )
+            write(aba_original_entry, "original\n")
+            aba_newline_entry = joinpath(aba_root, "original\nnewline-entry")
+            write(aba_newline_entry, "newline\n")
+            write(aba_replacement_entry, "replacement\n")
+            aba_open_ready = joinpath(temporary_root, "aba-open.ready")
+            aba_open_continue = joinpath(temporary_root, "aba-open.continue")
+            aba_enumeration_ready = joinpath(
+                temporary_root,
+                "aba-enumeration.ready",
+            )
+            aba_enumeration_continue = joinpath(
+                temporary_root,
+                "aba-enumeration.continue",
+            )
+            aba_inventory = joinpath(temporary_root, "aba-inventory.paths")
+            aba_open_hook = """
+            with open($(JSON.json(aba_open_ready)), "w", encoding="utf-8") as stream:
+                stream.write("ready\\n")
+            while not os.path.exists($(JSON.json(aba_open_continue))):
+                time.sleep(0.01)
+            """
+            aba_enumeration_hook = """
+            with open($(JSON.json(aba_enumeration_ready)), "w", encoding="utf-8") as stream:
+                stream.write("ready\\n")
+            while not os.path.exists($(JSON.json(aba_enumeration_continue))):
+                time.sleep(0.01)
+            """
+            aba_enumerator =
+                Mycelia._metamdbg_runtime_directory_enumerator_python(
+                    ;
+                    post_open_hook = aba_open_hook,
+                    post_enumeration_hook = aba_enumeration_hook,
+                )
+            python_path = Sys.which("python3")
+            python_path === nothing && error(
+                "python3 is required for the metaMDBG ABA enumerator test.",
+            )
+            depth_root = joinpath(
+                temporary_root,
+                "enumerator-depth-bound-root",
+            )
+            deep_directory = depth_root
+            for _depth in 1:Mycelia._METAMDBG_ENUMERATION_MAX_DEPTH
+                deep_directory = joinpath(deep_directory, "d")
+                mkpath(deep_directory)
+            end
+            depth_marker = joinpath(
+                deep_directory,
+                Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX * "too-deep",
+            )
+            mkpath(depth_marker)
+            depth_inventory = joinpath(
+                temporary_root,
+                "enumerator-depth-bound.paths",
+            )
+            depth_enumerator =
+                Mycelia._metamdbg_runtime_directory_enumerator_python()
+            depth_log = IOBuffer()
+            depth_process = run(pipeline(
+                ignorestatus(
+                    `$(python_path) -c $(depth_enumerator) $(depth_root) $(depth_inventory) reservations-recursive $(Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_PREFIX) $(Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)`,
+                );
+                stdout = depth_log,
+                stderr = depth_log,
+            ))
+            Test.@test !success(depth_process)
+            Test.@test occursin(
+                "directory manifest exceeds depth bound " *
+                string(Mycelia._METAMDBG_ENUMERATION_MAX_DEPTH),
+                String(take!(depth_log)),
+            )
+            Test.@test !ispath(depth_inventory)
+            aba_process = run(
+                `$(python_path) -c $(aba_enumerator) $(aba_root) $(aba_inventory) one-level "" ""`;
+                wait = false,
+            )
+            Test.@test Base.timedwait(
+                () -> isfile(aba_open_ready) || !Base.process_running(aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(aba_process)
+            mv(aba_root, aba_parked)
+            mv(aba_replacement, aba_root)
+            write(aba_open_continue, "continue\n")
+            Test.@test Base.timedwait(
+                () -> isfile(aba_enumeration_ready) ||
+                      !Base.process_running(aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(aba_process)
+            mv(aba_root, aba_replacement)
+            mv(aba_parked, aba_root)
+            write(aba_enumeration_continue, "continue\n")
+            wait(aba_process)
+            Test.@test success(aba_process)
+            aba_entries = filter(
+                !isempty,
+                split(String(read(aba_inventory)), '\0'),
+            )
+            Test.@test length(aba_entries) == 2
+            Test.@test Set(aba_entries) == Set((
+                aba_original_entry,
+                aba_newline_entry,
+            ))
+            Test.@test isfile(aba_original_entry)
+            Test.@test isfile(aba_newline_entry)
+            Test.@test isfile(aba_replacement_entry)
+
+            before_inventory_root = joinpath(
+                temporary_root,
+                "enumerator-before-inventory-root",
+            )
+            before_inventory_replacement = joinpath(
+                temporary_root,
+                "enumerator-before-inventory-replacement",
+            )
+            before_inventory_parked = joinpath(
+                temporary_root,
+                "enumerator-before-inventory-parked",
+            )
+            mkpath(before_inventory_root)
+            mkpath(before_inventory_replacement)
+            write(joinpath(before_inventory_root, "original"), "original\n")
+            write(
+                joinpath(before_inventory_replacement, "replacement"),
+                "replacement\n",
+            )
+            before_inventory_ready = joinpath(
+                temporary_root,
+                "before-inventory.ready",
+            )
+            before_inventory_continue = joinpath(
+                temporary_root,
+                "before-inventory.continue",
+            )
+            before_inventory_path = joinpath(
+                temporary_root,
+                "before-inventory.paths",
+            )
+            before_inventory_hook = """
+            with open($(JSON.json(before_inventory_ready)), "w", encoding="utf-8") as stream:
+                stream.write("ready\\n")
+            while not os.path.exists($(JSON.json(before_inventory_continue))):
+                time.sleep(0.01)
+            """
+            before_inventory_enumerator =
+                Mycelia._metamdbg_runtime_directory_enumerator_python(
+                    ;
+                    post_enumeration_hook = before_inventory_hook,
+                )
+            before_inventory_process = run(
+                ignorestatus(
+                    `$(python_path) -c $(before_inventory_enumerator) $(before_inventory_root) $(before_inventory_path) one-level "" ""`,
+                );
+                wait = false,
+            )
+            Test.@test Base.timedwait(
+                () -> isfile(before_inventory_ready) ||
+                      !Base.process_running(before_inventory_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(before_inventory_process)
+            mv(before_inventory_root, before_inventory_parked)
+            mv(before_inventory_replacement, before_inventory_root)
+            write(before_inventory_continue, "continue\n")
+            wait(before_inventory_process)
+            Test.@test !success(before_inventory_process)
+            Test.@test !ispath(before_inventory_path)
+            mv(before_inventory_root, before_inventory_replacement)
+            mv(before_inventory_parked, before_inventory_root)
+            Test.@test isfile(joinpath(before_inventory_root, "original"))
+            Test.@test isfile(joinpath(
+                before_inventory_replacement,
+                "replacement",
+            ))
+
+            after_inventory_root = joinpath(
+                temporary_root,
+                "enumerator-after-inventory-root",
+            )
+            after_inventory_replacement = joinpath(
+                temporary_root,
+                "enumerator-after-inventory-replacement",
+            )
+            after_inventory_parked = joinpath(
+                temporary_root,
+                "enumerator-after-inventory-parked",
+            )
+            mkpath(after_inventory_root)
+            mkpath(after_inventory_replacement)
+            write(joinpath(after_inventory_root, "original"), "original\n")
+            write(
+                joinpath(after_inventory_replacement, "replacement"),
+                "replacement\n",
+            )
+            after_inventory_ready = joinpath(
+                temporary_root,
+                "after-inventory.ready",
+            )
+            after_inventory_continue = joinpath(
+                temporary_root,
+                "after-inventory.continue",
+            )
+            after_inventory_path = joinpath(
+                temporary_root,
+                "after-inventory.paths",
+            )
+            after_inventory_hook = """
+            with open($(JSON.json(after_inventory_ready)), "w", encoding="utf-8") as stream:
+                stream.write("ready\\n")
+            while not os.path.exists($(JSON.json(after_inventory_continue))):
+                time.sleep(0.01)
+            """
+            after_inventory_enumerator =
+                Mycelia._metamdbg_runtime_directory_enumerator_python(
+                    ;
+                    post_inventory_hook = after_inventory_hook,
+                )
+            after_inventory_process = run(
+                ignorestatus(
+                    `$(python_path) -c $(after_inventory_enumerator) $(after_inventory_root) $(after_inventory_path) one-level "" ""`,
+                );
+                wait = false,
+            )
+            Test.@test Base.timedwait(
+                () -> isfile(after_inventory_ready) ||
+                      !Base.process_running(after_inventory_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(after_inventory_process)
+            mv(after_inventory_root, after_inventory_parked)
+            mv(after_inventory_replacement, after_inventory_root)
+            write(after_inventory_continue, "continue\n")
+            wait(after_inventory_process)
+            Test.@test !success(after_inventory_process)
+            Test.@test !ispath(after_inventory_path)
+            mv(after_inventory_root, after_inventory_replacement)
+            mv(after_inventory_parked, after_inventory_root)
+            Test.@test isfile(joinpath(after_inventory_root, "original"))
+            Test.@test isfile(joinpath(
+                after_inventory_replacement,
+                "replacement",
+            ))
+
+            function require_reservation_manifest_mutation_result!(
+                    label::String,
+                    setup::Function,
+                    mutation::Function,
+                    ;
+                    expect_rejection::Bool,
+                    enumeration_mode::String = "reservations-recursive",
+            )::Nothing
+                mutation_root = joinpath(
+                    temporary_root,
+                    "manifest-mutation-$(label)",
+                )
+                mkpath(mutation_root)
+                setup(mutation_root)
+                mutation_ready = joinpath(
+                    temporary_root,
+                    "manifest-mutation-$(label).ready",
+                )
+                mutation_continue = joinpath(
+                    temporary_root,
+                    "manifest-mutation-$(label).continue",
+                )
+                mutation_inventory = joinpath(
+                    temporary_root,
+                    "manifest-mutation-$(label).paths",
+                )
+                mutation_log = joinpath(
+                    temporary_root,
+                    "manifest-mutation-$(label).log",
+                )
+                mutation_hook = """
+                with open($(JSON.json(mutation_ready)), "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists($(JSON.json(mutation_continue))):
+                    time.sleep(0.01)
+                """
+                mutation_enumerator =
+                    Mycelia._metamdbg_runtime_directory_enumerator_python(
+                        ;
+                        post_inventory_hook = mutation_hook,
+                    )
+                mutation_command = if enumeration_mode == "reservations-recursive"
+                    `$(python_path) -c $(mutation_enumerator) $(mutation_root) $(mutation_inventory) reservations-recursive $(Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_PREFIX) $(Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)`
+                elseif enumeration_mode == "reservations-one-level"
+                    `$(python_path) -c $(mutation_enumerator) $(mutation_root) $(mutation_inventory) reservations-one-level $(Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)exact $(Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX) .mycelia-metamdbg-pending.fixture.`
+                else
+                    error(
+                        "unsupported reservation manifest test mode: " *
+                        enumeration_mode,
+                    )
+                end
+                mutation_log_io = open(mutation_log, "w")
+                mutation_process = run(
+                    pipeline(
+                        ignorestatus(mutation_command);
+                        stdout = mutation_log_io,
+                        stderr = mutation_log_io,
+                    );
+                    wait = false,
+                )
+                Test.@test Base.timedwait(
+                    () -> isfile(mutation_ready) ||
+                          !Base.process_running(mutation_process),
+                    30.0;
+                    pollint = 0.01,
+                ) == :ok
+                Test.@test Base.process_running(mutation_process)
+                mutation(mutation_root)
+                write(mutation_continue, "continue\n")
+                wait(mutation_process)
+                close(mutation_log_io)
+                if expect_rejection
+                    Test.@test !success(mutation_process)
+                    Test.@test occursin(
+                        "directory manifest changed before inventory " *
+                        "publication",
+                        read(mutation_log, String),
+                    )
+                    Test.@test !ispath(mutation_inventory)
+                else
+                    Test.@test success(mutation_process)
+                    Test.@test isfile(mutation_inventory)
+                end
+                return nothing
+            end
+
+            require_reservation_manifest_mutation_result!(
+                "unrelated-insert",
+                root -> begin
+                    mkpath(joinpath(root, "nested"))
+                    write(joinpath(root, "nested", "stable"), "stable\n")
+                end,
+                root -> write(
+                    joinpath(root, "nested", "inserted"),
+                    "inserted\n",
+                ),
+                ;
+                expect_rejection = false,
+            )
+            require_reservation_manifest_mutation_result!(
+                "unrelated-remove",
+                root -> begin
+                    mkpath(joinpath(root, "nested"))
+                    write(joinpath(root, "nested", "removed"), "removed\n")
+                end,
+                root -> rm(joinpath(root, "nested", "removed")),
+                ;
+                expect_rejection = false,
+            )
+            require_reservation_manifest_mutation_result!(
+                "unrelated-file-to-directory",
+                root -> write(joinpath(root, "changing"), "file\n"),
+                root -> begin
+                    rm(joinpath(root, "changing"))
+                    mkpath(joinpath(root, "changing"))
+                    write(
+                        joinpath(root, "changing", "descendant"),
+                        "descendant\n",
+                    )
+                end,
+                ;
+                expect_rejection = false,
+            )
+            require_reservation_manifest_mutation_result!(
+                "unrelated-symlink-to-directory",
+                root -> begin
+                    write(joinpath(root, "symlink-target"), "target\n")
+                    symlink("symlink-target", joinpath(root, "changing"))
+                end,
+                root -> begin
+                    rm(joinpath(root, "changing"))
+                    mkpath(joinpath(root, "changing"))
+                end,
+                ;
+                expect_rejection = false,
+            )
+            require_reservation_manifest_mutation_result!(
+                "unrelated-directory-identity",
+                root -> begin
+                    mkpath(joinpath(root, "changing"))
+                    write(joinpath(root, "changing", "stable"), "stable\n")
+                end,
+                root -> begin
+                    mv(
+                        joinpath(root, "changing"),
+                        joinpath(temporary_root, "parked-changing-directory"),
+                    )
+                    mkpath(joinpath(root, "changing"))
+                    write(joinpath(root, "changing", "stable"), "stable\n")
+                end,
+                ;
+                expect_rejection = false,
+            )
+
+            durable_reservation_name(label::String)::String =
+                Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX * label
+            require_reservation_manifest_mutation_result!(
+                "one-level-unrelated-insert",
+                root -> write(joinpath(root, "stable"), "stable\n"),
+                root -> write(joinpath(root, "inserted"), "inserted\n"),
+                ;
+                expect_rejection = false,
+                enumeration_mode = "reservations-one-level",
+            )
+            require_reservation_manifest_mutation_result!(
+                "one-level-reservation-insert",
+                root -> write(joinpath(root, "stable"), "stable\n"),
+                root -> mkpath(joinpath(
+                    root,
+                    durable_reservation_name("one-level-inserted"),
+                )),
+                ;
+                expect_rejection = true,
+                enumeration_mode = "reservations-one-level",
+            )
+            require_reservation_manifest_mutation_result!(
+                "reservation-insert",
+                root -> mkpath(joinpath(root, "nested")),
+                root -> mkpath(joinpath(
+                    root,
+                    "nested",
+                    durable_reservation_name("inserted"),
+                )),
+                ;
+                expect_rejection = true,
+            )
+            require_reservation_manifest_mutation_result!(
+                "reservation-remove",
+                root -> begin
+                    mkpath(joinpath(root, "nested"))
+                    mkpath(joinpath(
+                        root,
+                        "nested",
+                        durable_reservation_name("removed"),
+                    ))
+                end,
+                root -> rm(joinpath(
+                    root,
+                    "nested",
+                    durable_reservation_name("removed"),
+                )),
+                ;
+                expect_rejection = true,
+            )
+            require_reservation_manifest_mutation_result!(
+                "reservation-file-to-directory",
+                root -> write(
+                    joinpath(root, durable_reservation_name("changing")),
+                    "file\n",
+                ),
+                root -> begin
+                    changing = joinpath(
+                        root,
+                        durable_reservation_name("changing"),
+                    )
+                    rm(changing)
+                    mkpath(changing)
+                end,
+                ;
+                expect_rejection = true,
+            )
+            require_reservation_manifest_mutation_result!(
+                "reservation-symlink-to-directory",
+                root -> begin
+                    write(joinpath(root, "symlink-target"), "target\n")
+                    symlink(
+                        "symlink-target",
+                        joinpath(
+                            root,
+                            durable_reservation_name("changing"),
+                        ),
+                    )
+                end,
+                root -> begin
+                    changing = joinpath(
+                        root,
+                        durable_reservation_name("changing"),
+                    )
+                    rm(changing)
+                    mkpath(changing)
+                end,
+                ;
+                expect_rejection = true,
+            )
+            require_reservation_manifest_mutation_result!(
+                "reservation-directory-identity",
+                root -> begin
+                    changing = joinpath(
+                        root,
+                        durable_reservation_name("changing"),
+                    )
+                    mkpath(changing)
+                    write(joinpath(changing, "stable"), "stable\n")
+                end,
+                root -> begin
+                    changing = joinpath(
+                        root,
+                        durable_reservation_name("changing"),
+                    )
+                    mv(
+                        changing,
+                        joinpath(
+                            temporary_root,
+                            "parked-reservation-changing-directory",
+                        ),
+                    )
+                    mkpath(changing)
+                    write(joinpath(changing, "stable"), "stable\n")
+                end,
+                ;
+                expect_rejection = true,
+            )
+
+            nested_aba_root = joinpath(
+                temporary_root,
+                "enumerator-nested-aba-root",
+            )
+            nested_aba_directory = joinpath(nested_aba_root, "nested")
+            nested_aba_replacement = joinpath(
+                temporary_root,
+                "enumerator-nested-aba-replacement",
+            )
+            nested_aba_parked = joinpath(
+                temporary_root,
+                "enumerator-nested-aba-parked",
+            )
+            mkpath(nested_aba_directory)
+            mkpath(nested_aba_replacement)
+            nested_aba_marker = joinpath(
+                nested_aba_directory,
+                Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX * "nested",
+            )
+            write(nested_aba_marker, "nested marker\n")
+            nested_aba_open_ready = joinpath(
+                temporary_root,
+                "nested-aba-open.ready",
+            )
+            nested_aba_open_continue = joinpath(
+                temporary_root,
+                "nested-aba-open.continue",
+            )
+            nested_aba_enumeration_ready = joinpath(
+                temporary_root,
+                "nested-aba-enumeration.ready",
+            )
+            nested_aba_enumeration_continue = joinpath(
+                temporary_root,
+                "nested-aba-enumeration.continue",
+            )
+            nested_aba_inventory = joinpath(
+                temporary_root,
+                "nested-aba.paths",
+            )
+            nested_aba_open_hook = """
+            if manifest_generation == 1 and relative_parts == (b"nested",):
+                with open($(JSON.json(nested_aba_open_ready)), "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists($(JSON.json(nested_aba_open_continue))):
+                    time.sleep(0.01)
+            """
+            nested_aba_enumeration_hook = """
+            if manifest_generation == 1 and relative_parts == (b"nested",):
+                with open($(JSON.json(nested_aba_enumeration_ready)), "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists($(JSON.json(nested_aba_enumeration_continue))):
+                    time.sleep(0.01)
+            """
+            nested_aba_enumerator =
+                Mycelia._metamdbg_runtime_directory_enumerator_python(
+                    ;
+                    post_directory_open_hook = nested_aba_open_hook,
+                    post_directory_enumeration_hook =
+                        nested_aba_enumeration_hook,
+                )
+            nested_aba_process = run(
+                `$(python_path) -c $(nested_aba_enumerator) $(nested_aba_root) $(nested_aba_inventory) reservations-recursive $(Mycelia._OUTPUT_ROOT_RESERVATION_LOCK_PREFIX) $(Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)`;
+                wait = false,
+            )
+            Test.@test Base.timedwait(
+                () -> isfile(nested_aba_open_ready) ||
+                      !Base.process_running(nested_aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(nested_aba_process)
+            mv(nested_aba_directory, nested_aba_parked)
+            mv(nested_aba_replacement, nested_aba_directory)
+            write(nested_aba_open_continue, "continue\n")
+            Test.@test Base.timedwait(
+                () -> isfile(nested_aba_enumeration_ready) ||
+                      !Base.process_running(nested_aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(nested_aba_process)
+            mv(nested_aba_directory, nested_aba_replacement)
+            mv(nested_aba_parked, nested_aba_directory)
+            write(nested_aba_enumeration_continue, "continue\n")
+            wait(nested_aba_process)
+            Test.@test success(nested_aba_process)
+            nested_aba_entries = filter(
+                !isempty,
+                split(String(read(nested_aba_inventory)), '\0'),
+            )
+            Test.@test nested_aba_entries == [nested_aba_marker]
+            Test.@test isfile(nested_aba_marker)
+
+            generation_two_fence_parent = joinpath(
+                temporary_root,
+                "executor-generation-two-fence",
+            )
+            generation_two_fence_outdir = joinpath(
+                generation_two_fence_parent,
+                "output",
+            )
+            generation_two_fence_outputs,
+            generation_two_fence_reservation =
+                create_bound_runtime_fixture(
+                    generation_two_fence_outdir,
+                    "runtime-generation-two-fence-owner",
+                    "891",
+                )
+            generation_two_fence_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-generation-two-fence-assembly-ran",
+            )
+            generation_two_fence_ready = joinpath(
+                temporary_root,
+                "generation-two-fence.ready",
+            )
+            generation_two_fence_continue = joinpath(
+                temporary_root,
+                "generation-two-fence.continue",
+            )
+            generation_two_fence_hook = """
+            expected_root = os.fsencode(
+                $(JSON.json(generation_two_fence_parent))
+            )
+            ready_path = $(JSON.json(generation_two_fence_ready))
+            continue_path = $(JSON.json(generation_two_fence_continue))
+            if (
+                manifest_generation == 2
+                and relative_parts == ()
+                and root == expected_root
+            ):
+                with open(ready_path, "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists(continue_path):
+                    time.sleep(0.01)
+            """
+            generation_two_fence_script =
+                Mycelia._metamdbg_executor_script(
+                    "touch " *
+                    Base.shell_escape(
+                        generation_two_fence_assembly_marker,
+                    ) *
+                    "; " * fake_asm,
+                    fake_gfa,
+                    generation_two_fence_outputs,
+                    21,
+                    input_contract;
+                    conda_runner = fake_conda,
+                    submission_reservation =
+                        generation_two_fence_reservation,
+                    directory_enumerator_post_directory_open_hook =
+                        generation_two_fence_hook,
+                )
+            generation_two_fence_script_path = joinpath(
+                temporary_root,
+                "executor-generation-two-fence.sh",
+            )
+            write(
+                generation_two_fence_script_path,
+                generation_two_fence_script,
+            )
+            generation_two_fence_process = run(
+                addenv(
+                    `bash $(generation_two_fence_script_path)`,
+                    "SLURM_JOB_ID" =>
+                        generation_two_fence_reservation.job_id,
+                );
+                wait = false,
+            )
+            generation_two_fence_released = false
+            generation_two_runtime_marker =
+                generation_two_fence_reservation.runtime_output_root_reservation_marker
+            generation_two_queued_marker =
+                generation_two_fence_reservation.output_root_reservation_marker
+            try
+                Test.@test Base.timedwait(
+                    () -> isfile(generation_two_fence_ready) ||
+                          !Base.process_running(
+                              generation_two_fence_process,
+                          ),
+                    30.0;
+                    pollint = 0.01,
+                ) == :ok
+                Test.@test Base.process_running(
+                    generation_two_fence_process,
+                )
+                Test.@test isdir(generation_two_runtime_marker)
+                competing_parent = joinpath(
+                    generation_two_fence_outdir,
+                    "missing-competing-parent",
+                )
+                competing_outdir = joinpath(
+                    competing_parent,
+                    "output",
+                )
+                competing_pid_lock =
+                    Mycelia._output_root_reservation_lock_path_from_canonical(
+                        competing_outdir,
+                    )
+                competing_outputs = Mycelia._metamdbg_output_paths(
+                    competing_outdir,
+                    31,
+                )
+                competing_reservation =
+                    Mycelia._metamdbg_submission_reservation(
+                        competing_outputs,
+                        input_contract,
+                        31;
+                        owner_token =
+                            "generation-two-competing-owner",
+                    )
+                competing_action_entered = Ref(false)
+                competing_error = try
+                    Mycelia._with_allowed_output_root_ancestor_locks(
+                        (generation_two_queued_marker,),
+                    ) do
+                        Mycelia._with_metamdbg_output_domain_lock(
+                            competing_outdir,
+                        ) do
+                            competing_action_entered[] = true
+                            Mycelia._create_metamdbg_submission_reservation!(
+                                competing_reservation,
+                                competing_outdir,
+                            )
+                        end
+                    end
+                    nothing
+                catch caught
+                    caught isa InterruptException && rethrow()
+                    caught
+                end
+                Test.@test competing_error isa ArgumentError
+                if competing_error isa ArgumentError
+                    Test.@test occursin(
+                        generation_two_runtime_marker,
+                        sprint(showerror, competing_error),
+                    )
+                end
+                Test.@test !competing_action_entered[]
+                Test.@test !ispath(competing_parent)
+                Test.@test !ispath(competing_pid_lock)
+                Test.@test !ispath(competing_reservation.path)
+                Test.@test !ispath(
+                    competing_reservation.output_root_reservation_marker,
+                )
+                write(generation_two_fence_continue, "continue\n")
+                generation_two_fence_released = true
+            finally
+                if !generation_two_fence_released
+                    write(generation_two_fence_continue, "continue\n")
+                end
+                wait(generation_two_fence_process)
+            end
+            Test.@test success(generation_two_fence_process)
+            Test.@test ispath(generation_two_fence_assembly_marker)
+            Test.@test !ispath(generation_two_fence_reservation.path)
+            Test.@test !ispath(generation_two_queued_marker)
+            Test.@test !ispath(generation_two_runtime_marker)
+            Test.@test isdir(
+                generation_two_fence_reservation.consumed_path,
+            )
+
+            transient_find_parent = joinpath(
+                temporary_root,
+                "executor-transient-ancestor-find",
+            )
+            transient_find_outdir = joinpath(transient_find_parent, "output")
+            transient_find_outputs, transient_find_reservation =
+                create_bound_runtime_fixture(
+                    transient_find_outdir,
+                    "runtime-transient-ancestor-find-owner",
+                    "887",
+                )
+            transient_find_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-transient-ancestor-find-assembly-ran",
+            )
+            transient_conda_runner = joinpath(
+                temporary_root,
+                "transient-enumerator-conda",
+            )
+            transient_find_counter = joinpath(
+                temporary_root,
+                "transient-ancestor-find.count",
+            )
+            write(
+                transient_conda_runner,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "original_args=(\"\$@\")\n" *
+                "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != python ]; do shift; done\n" *
+                "if [ \"\$#\" -ge 5 ] && [ \"\$4\" = " *
+                Base.shell_escape(transient_find_parent) * " ]; then\n" *
+                "  count=0\n" *
+                "  [ ! -f " *
+                Base.shell_escape(transient_find_counter) *
+                " ] || count=\$(cat " *
+                Base.shell_escape(transient_find_counter) * ")\n" *
+                "  count=\$((count + 1))\n" *
+                "  printf '%s\\n' \"\$count\" > " *
+                Base.shell_escape(transient_find_counter) * "\n" *
+                "  if [ \"\$count\" -eq 1 ]; then\n" *
+                "    printf '%s\\0' \"\$4/.mycelia-output-root-reservation.partial\" > \"\$5\"\n" *
+                "    exit 97\n" *
+                "  fi\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(fake_conda) *
+                " \"\${original_args[@]}\"\n",
+            )
+            chmod(transient_conda_runner, 0o700)
+            transient_find_script = Mycelia._metamdbg_executor_script(
+                "touch " *
+                Base.shell_escape(transient_find_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                transient_find_outputs,
+                21,
+                input_contract;
+                conda_runner = transient_conda_runner,
+                submission_reservation = transient_find_reservation,
+            )
+            transient_find_script_path = joinpath(
+                temporary_root,
+                "executor-transient-ancestor-find.sh",
+            )
+            write(transient_find_script_path, transient_find_script)
+            transient_find_process = Base.withenv(
+                "SLURM_JOB_ID" => transient_find_reservation.job_id,
+            ) do
+                run(`bash $(transient_find_script_path)`)
+            end
+            Test.@test success(transient_find_process)
+            Test.@test parse(Int, strip(read(
+                transient_find_counter,
+                String,
+            ))) == 3
+            Test.@test isempty(
+                enumeration_retry_remnants(transient_find_parent),
+            )
+            Test.@test ispath(transient_find_assembly_marker)
+            Test.@test !ispath(transient_find_reservation.path)
+            Test.@test isdir(transient_find_reservation.consumed_path)
+            Test.@test !ispath(
+                transient_find_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                transient_find_reservation.runtime_output_root_reservation_marker,
+            )
+            transient_find_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    transient_find_outdir,
+                ),
+            )
+            transient_find_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    transient_find_metadata;
+                    owner_token = transient_find_metadata.owner_token,
+                    job_id = transient_find_metadata.job_id,
+                    confirm_terminal = :completed,
+                )
+            Test.@test transient_find_reclaimed.recovery_reason == :completed
+
+            persistent_find_parent = joinpath(
+                temporary_root,
+                "executor-persistent-ancestor-find",
+            )
+            persistent_find_outdir = joinpath(
+                persistent_find_parent,
+                "output",
+            )
+            persistent_find_outputs, persistent_find_reservation =
+                create_bound_runtime_fixture(
+                    persistent_find_outdir,
+                    "runtime-persistent-ancestor-find-owner",
+                    "888",
+                )
+            persistent_find_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-persistent-ancestor-find-assembly-ran",
+            )
+            persistent_conda_runner = joinpath(
+                temporary_root,
+                "persistent-enumerator-conda",
+            )
+            persistent_find_counter = joinpath(
+                temporary_root,
+                "persistent-ancestor-find.count",
+            )
+            write(
+                persistent_conda_runner,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "original_args=(\"\$@\")\n" *
+                "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != python ]; do shift; done\n" *
+                "if [ \"\$#\" -ge 5 ] && [ \"\$4\" = " *
+                Base.shell_escape(persistent_find_parent) * " ]; then\n" *
+                "  count=0\n" *
+                "  [ ! -f " *
+                Base.shell_escape(persistent_find_counter) *
+                " ] || count=\$(cat " *
+                Base.shell_escape(persistent_find_counter) * ")\n" *
+                "  count=\$((count + 1))\n" *
+                "  printf '%s\\n' \"\$count\" > " *
+                Base.shell_escape(persistent_find_counter) * "\n" *
+                "  printf '%s\\0' \"\$4/.mycelia-output-root-reservation.partial\" > \"\$5\"\n" *
+                "  exit 97\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(fake_conda) *
+                " \"\${original_args[@]}\"\n",
+            )
+            chmod(persistent_conda_runner, 0o700)
+            persistent_find_script = Mycelia._metamdbg_executor_script(
+                "touch " *
+                Base.shell_escape(persistent_find_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                persistent_find_outputs,
+                21,
+                input_contract;
+                conda_runner = persistent_conda_runner,
+                submission_reservation = persistent_find_reservation,
+            )
+            persistent_find_script_path = joinpath(
+                temporary_root,
+                "executor-persistent-ancestor-find.sh",
+            )
+            write(persistent_find_script_path, persistent_find_script)
+            persistent_find_log = IOBuffer()
+            persistent_find_process = Base.withenv(
+                "SLURM_JOB_ID" => persistent_find_reservation.job_id,
+            ) do
+                run(pipeline(
+                    ignorestatus(`bash $(persistent_find_script_path)`);
+                    stdout = persistent_find_log,
+                    stderr = persistent_find_log,
+                ))
+            end
+            persistent_find_output = String(take!(persistent_find_log))
+            Test.@test !success(persistent_find_process)
+            Test.@test occursin(
+                "could not completely enumerate same-root or ancestor " *
+                "output reservations after 3 attempts",
+                persistent_find_output,
+            )
+            Test.@test parse(Int, strip(read(
+                persistent_find_counter,
+                String,
+            ))) == 3
+            Test.@test isempty(
+                enumeration_retry_remnants(persistent_find_parent),
+            )
+            Test.@test !ispath(persistent_find_assembly_marker)
+            Test.@test isdir(persistent_find_reservation.path)
+            Test.@test isfile(
+                persistent_find_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                persistent_find_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                Mycelia._metamdbg_output_lock_path(persistent_find_outdir),
+            )
+            remove_queued_runtime_fixture!(
+                persistent_find_outdir,
+                persistent_find_reservation,
+            )
+
+            unterminated_find_parent = joinpath(
+                temporary_root,
+                "executor-unterminated-ancestor-find",
+            )
+            unterminated_find_outdir = joinpath(
+                unterminated_find_parent,
+                "output",
+            )
+            unterminated_find_outputs, unterminated_find_reservation =
+                create_bound_runtime_fixture(
+                    unterminated_find_outdir,
+                    "runtime-unterminated-ancestor-find-owner",
+                    "890",
+                )
+            unterminated_find_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-unterminated-ancestor-find-assembly-ran",
+            )
+            unterminated_conda_runner = joinpath(
+                temporary_root,
+                "unterminated-enumerator-conda",
+            )
+            unterminated_find_counter = joinpath(
+                temporary_root,
+                "unterminated-ancestor-find.count",
+            )
+            write(
+                unterminated_conda_runner,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "original_args=(\"\$@\")\n" *
+                "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != python ]; do shift; done\n" *
+                "if [ \"\$#\" -ge 5 ] && [ \"\$4\" = " *
+                Base.shell_escape(unterminated_find_parent) * " ]; then\n" *
+                "  count=0\n" *
+                "  [ ! -f " *
+                Base.shell_escape(unterminated_find_counter) *
+                " ] || count=\$(cat " *
+                Base.shell_escape(unterminated_find_counter) * ")\n" *
+                "  count=\$((count + 1))\n" *
+                "  printf '%s\\n' \"\$count\" > " *
+                Base.shell_escape(unterminated_find_counter) * "\n" *
+                "  printf '%s' \"\$4/unterminated-record\" > \"\$5\"\n" *
+                "  exit 0\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(fake_conda) *
+                " \"\${original_args[@]}\"\n",
+            )
+            chmod(unterminated_conda_runner, 0o700)
+            unterminated_find_script = Mycelia._metamdbg_executor_script(
+                "touch " *
+                Base.shell_escape(unterminated_find_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                unterminated_find_outputs,
+                21,
+                input_contract;
+                conda_runner = unterminated_conda_runner,
+                submission_reservation = unterminated_find_reservation,
+            )
+            unterminated_find_script_path = joinpath(
+                temporary_root,
+                "executor-unterminated-ancestor-find.sh",
+            )
+            write(unterminated_find_script_path, unterminated_find_script)
+            unterminated_find_log = IOBuffer()
+            unterminated_find_process = Base.withenv(
+                "SLURM_JOB_ID" => unterminated_find_reservation.job_id,
+            ) do
+                run(pipeline(
+                    ignorestatus(`bash $(unterminated_find_script_path)`);
+                    stdout = unterminated_find_log,
+                    stderr = unterminated_find_log,
+                ))
+            end
+            unterminated_find_output = String(take!(unterminated_find_log))
+            Test.@test !success(unterminated_find_process)
+            Test.@test occursin(
+                "successful inventory contains an unterminated NUL record",
+                unterminated_find_output,
+            )
+            Test.@test occursin(
+                "could not completely enumerate same-root or ancestor " *
+                "output reservations after 3 attempts",
+                unterminated_find_output,
+            )
+            Test.@test parse(Int, strip(read(
+                unterminated_find_counter,
+                String,
+            ))) == 3
+            Test.@test isempty(
+                enumeration_retry_remnants(unterminated_find_parent),
+            )
+            Test.@test !ispath(unterminated_find_assembly_marker)
+            Test.@test isdir(unterminated_find_reservation.path)
+            Test.@test isfile(
+                unterminated_find_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                unterminated_find_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                Mycelia._metamdbg_output_lock_path(unterminated_find_outdir),
+            )
+            remove_queued_runtime_fixture!(
+                unterminated_find_outdir,
+                unterminated_find_reservation,
+            )
+
             descendant_find_outdir =
                 joinpath(temporary_root, "executor-descendant-find", "output")
             descendant_find_outputs, descendant_find_reservation =
@@ -3651,6 +6695,38 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 temporary_root,
                 "runtime-descendant-find-assembly-ran",
             )
+            descendant_conda_runner = joinpath(
+                temporary_root,
+                "descendant-enumerator-conda",
+            )
+            descendant_find_counter = joinpath(
+                temporary_root,
+                "descendant-enumerator.count",
+            )
+            write(
+                descendant_conda_runner,
+                "#!/usr/bin/env bash\n" *
+                "set -euo pipefail\n" *
+                "original_args=(\"\$@\")\n" *
+                "while [ \"\$#\" -gt 0 ] && [ \"\$1\" != python ]; do shift; done\n" *
+                "if [ \"\$#\" -ge 5 ] && [ \"\$4\" = " *
+                Base.shell_escape(descendant_find_outdir) * " ]; then\n" *
+                "  count=0\n" *
+                "  [ ! -f " *
+                Base.shell_escape(descendant_find_counter) *
+                " ] || count=\$(cat " *
+                Base.shell_escape(descendant_find_counter) * ")\n" *
+                "  count=\$((count + 1))\n" *
+                "  printf '%s\\n' \"\$count\" > " *
+                Base.shell_escape(descendant_find_counter) * "\n" *
+                "  printf '%s\\0' \"\$4/$(Mycelia._OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)partial\" > \"\$5\"\n" *
+                "  echo 'synthetic descendant enumerator failure' >&2\n" *
+                "  exit 97\n" *
+                "fi\n" *
+                "exec " * Base.shell_escape(fake_conda) *
+                " \"\${original_args[@]}\"\n",
+            )
+            chmod(descendant_conda_runner, 0o700)
             descendant_find_script = Mycelia._metamdbg_executor_script(
                 "touch $(Base.shell_escape(descendant_find_assembly_marker)); " *
                 fake_asm,
@@ -3658,7 +6734,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 descendant_find_outputs,
                 21,
                 input_contract;
-                conda_runner = fake_conda,
+                conda_runner = descendant_conda_runner,
                 submission_reservation = descendant_find_reservation,
             )
             descendant_find_script_path = joinpath(
@@ -3666,29 +6742,9 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "executor-descendant-find.sh",
             )
             write(descendant_find_script_path, descendant_find_script)
-            fake_find_directory =
-                joinpath(temporary_root, "descendant-find-bin")
-            mkpath(fake_find_directory)
-            fake_find_path = joinpath(fake_find_directory, "find")
-            real_find_path = something(Sys.which("find"), "find")
-            write(
-                fake_find_path,
-                "#!/usr/bin/env bash\n" *
-                "set -euo pipefail\n" *
-                "if [ \"\$#\" -ge 2 ] && [ \"\$1\" = -P ] && " *
-                "[ \"\$2\" = " *
-                Base.shell_escape(descendant_find_outdir) *
-                " ]; then\n" *
-                "  exit 97\n" *
-                "fi\n" *
-                "exec " * Base.shell_escape(real_find_path) * " \"\$@\"\n",
-            )
-            chmod(fake_find_path, 0o700)
             descendant_find_log = IOBuffer()
             descendant_find_process = Base.withenv(
                 "SLURM_JOB_ID" => descendant_find_reservation.job_id,
-                "PATH" =>
-                    "$(fake_find_directory):$(get(ENV, "PATH", ""))",
             ) do
                 run(pipeline(
                     ignorestatus(`bash $(descendant_find_script_path)`);
@@ -3703,6 +6759,17 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "reservations",
                 descendant_find_output,
             )
+            Test.@test occursin(
+                "synthetic descendant enumerator failure",
+                descendant_find_output,
+            )
+            Test.@test parse(Int, strip(read(
+                descendant_find_counter,
+                String,
+            ))) == 3
+            Test.@test isempty(enumeration_retry_remnants(
+                dirname(descendant_find_outdir),
+            ))
             Test.@test !ispath(descendant_find_assembly_marker)
             Test.@test isdir(descendant_find_reservation.path)
             Test.@test isfile(
@@ -3717,6 +6784,159 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             remove_queued_runtime_fixture!(
                 descendant_find_outdir,
                 descendant_find_reservation,
+            )
+
+            descendant_aba_outdir = joinpath(
+                temporary_root,
+                "executor-descendant-aba",
+                "output",
+            )
+            descendant_aba_outputs, descendant_aba_reservation =
+                create_bound_runtime_fixture(
+                    descendant_aba_outdir,
+                    "runtime-descendant-aba-owner",
+                    "889",
+                )
+            mkpath(descendant_aba_outdir)
+            descendant_aba_foreign_root = joinpath(
+                descendant_aba_outdir,
+                "nested",
+                "foreign-output",
+            )
+            descendant_aba_foreign_marker =
+                Mycelia._output_root_durable_reservation_path_from_canonical(
+                    descendant_aba_foreign_root,
+                    "runtime-descendant-aba-foreign-owner",
+                )
+            mkpath(dirname(descendant_aba_foreign_marker))
+            write(descendant_aba_foreign_marker, "foreign descendant\n")
+            chmod(descendant_aba_foreign_marker, 0o600)
+            descendant_aba_replacement = joinpath(
+                dirname(descendant_aba_outdir),
+                "replacement-output",
+            )
+            descendant_aba_parked = joinpath(
+                dirname(descendant_aba_outdir),
+                "parked-output",
+            )
+            mkpath(descendant_aba_replacement)
+            descendant_aba_open_ready = joinpath(
+                temporary_root,
+                "descendant-aba-open.ready",
+            )
+            descendant_aba_open_continue = joinpath(
+                temporary_root,
+                "descendant-aba-open.continue",
+            )
+            descendant_aba_enumeration_ready = joinpath(
+                temporary_root,
+                "descendant-aba-enumeration.ready",
+            )
+            descendant_aba_enumeration_continue = joinpath(
+                temporary_root,
+                "descendant-aba-enumeration.continue",
+            )
+            descendant_aba_open_hook = """
+            if mode == "reservations-recursive" and os.fsdecode(root) == $(JSON.json(descendant_aba_outdir)):
+                with open($(JSON.json(descendant_aba_open_ready)), "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists($(JSON.json(descendant_aba_open_continue))):
+                    time.sleep(0.01)
+            """
+            descendant_aba_enumeration_hook = """
+            if mode == "reservations-recursive" and os.fsdecode(root) == $(JSON.json(descendant_aba_outdir)):
+                with open($(JSON.json(descendant_aba_enumeration_ready)), "w", encoding="utf-8") as stream:
+                    stream.write("ready\\n")
+                while not os.path.exists($(JSON.json(descendant_aba_enumeration_continue))):
+                    time.sleep(0.01)
+            """
+            descendant_aba_assembly_marker = joinpath(
+                temporary_root,
+                "runtime-descendant-aba-assembly-ran",
+            )
+            descendant_aba_script = Mycelia._metamdbg_executor_script(
+                "touch " *
+                Base.shell_escape(descendant_aba_assembly_marker) *
+                "; " * fake_asm,
+                fake_gfa,
+                descendant_aba_outputs,
+                21,
+                input_contract;
+                conda_runner = fake_conda,
+                submission_reservation = descendant_aba_reservation,
+                directory_enumerator_post_open_hook =
+                    descendant_aba_open_hook,
+                directory_enumerator_post_enumeration_hook =
+                    descendant_aba_enumeration_hook,
+            )
+            descendant_aba_script_path = joinpath(
+                temporary_root,
+                "executor-descendant-aba.sh",
+            )
+            write(descendant_aba_script_path, descendant_aba_script)
+            descendant_aba_log_path = joinpath(
+                temporary_root,
+                "executor-descendant-aba.log",
+            )
+            descendant_aba_log_io = open(descendant_aba_log_path, "w")
+            descendant_aba_process = run(
+                pipeline(
+                    ignorestatus(addenv(
+                        `bash $(descendant_aba_script_path)`,
+                        "SLURM_JOB_ID" => descendant_aba_reservation.job_id,
+                    ));
+                    stdout = descendant_aba_log_io,
+                    stderr = descendant_aba_log_io,
+                );
+                wait = false,
+            )
+            Test.@test Base.timedwait(
+                () -> isfile(descendant_aba_open_ready) ||
+                      !Base.process_running(descendant_aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(descendant_aba_process)
+            mv(descendant_aba_outdir, descendant_aba_parked)
+            mv(descendant_aba_replacement, descendant_aba_outdir)
+            write(descendant_aba_open_continue, "continue\n")
+            Test.@test Base.timedwait(
+                () -> isfile(descendant_aba_enumeration_ready) ||
+                      !Base.process_running(descendant_aba_process),
+                30.0;
+                pollint = 0.01,
+            ) == :ok
+            Test.@test Base.process_running(descendant_aba_process)
+            mv(descendant_aba_outdir, descendant_aba_replacement)
+            mv(descendant_aba_parked, descendant_aba_outdir)
+            write(descendant_aba_enumeration_continue, "continue\n")
+            wait(descendant_aba_process)
+            close(descendant_aba_log_io)
+            descendant_aba_output = read(descendant_aba_log_path, String)
+            Test.@test !success(descendant_aba_process)
+            Test.@test occursin(
+                "active descendant shared output-root reservation",
+                descendant_aba_output,
+            )
+            Test.@test !ispath(descendant_aba_assembly_marker)
+            Test.@test isdir(descendant_aba_reservation.path)
+            Test.@test isfile(
+                descendant_aba_reservation.output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                descendant_aba_reservation.runtime_output_root_reservation_marker,
+            )
+            Test.@test !ispath(
+                Mycelia._metamdbg_output_lock_path(descendant_aba_outdir),
+            )
+            Test.@test isfile(descendant_aba_foreign_marker)
+            Test.@test isempty(enumeration_retry_remnants(
+                dirname(descendant_aba_outdir),
+            ))
+            rm(descendant_aba_foreign_marker)
+            remove_queued_runtime_fixture!(
+                descendant_aba_outdir,
+                descendant_aba_reservation,
             )
 
             long_runtime_outdir = joinpath(
@@ -3929,7 +7149,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 delete_fail_output,
             )
             Test.@test !ispath(delete_fail_assembly_marker)
-            Test.@test isdir(delete_fail_reservation.path)
+            Test.@test !ispath(delete_fail_reservation.path)
+            Test.@test isdir(delete_fail_reservation.runtime_path)
             Test.@test !ispath(
                 delete_fail_reservation.output_root_reservation_marker,
             )
@@ -3970,7 +7191,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(
                 delete_fail_reservation.runtime_output_root_reservation_marker,
             )
-            rm(delete_fail_reservation.path; recursive = true)
+            rm(delete_fail_reservation.runtime_path; recursive = true)
 
             runtime_cleanup_parent =
                 joinpath(temporary_root, "executor-runtime-cleanup-domain")
@@ -4005,6 +7226,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             end
             Test.@test isfile(runtime_cleanup_outputs.completion_marker)
             Test.@test !ispath(runtime_cleanup_reservation.path)
+            Test.@test isdir(runtime_cleanup_reservation.runtime_path)
             Test.@test !ispath(
                 runtime_cleanup_reservation.output_root_reservation_marker,
             )
@@ -4050,6 +7272,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(
                 runtime_cleanup_reservation.runtime_output_root_reservation_marker,
             )
+            rm(runtime_cleanup_reservation.runtime_path; recursive = true)
 
             exceptional_runtime_outdir = joinpath(
                 temporary_root,
@@ -4086,6 +7309,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 success(`bash $(exceptional_runtime_script_path)`)
             end
             Test.@test !ispath(exceptional_runtime_reservation.path)
+            Test.@test isdir(exceptional_runtime_reservation.runtime_path)
             Test.@test !ispath(
                 exceptional_runtime_reservation.output_root_reservation_marker,
             )
@@ -4100,6 +7324,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(
                 exceptional_runtime_reservation.runtime_output_root_reservation_marker,
             )
+            rm(exceptional_runtime_reservation.runtime_path; recursive = true)
 
             replaced_runtime_outdir = joinpath(
                 temporary_root,
@@ -4136,6 +7361,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 success(`bash $(replaced_runtime_script_path)`)
             end
             Test.@test !ispath(replaced_runtime_reservation.path)
+            Test.@test isdir(replaced_runtime_reservation.runtime_path)
             Test.@test !ispath(
                 replaced_runtime_reservation.output_root_reservation_marker,
             )
@@ -4149,6 +7375,7 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             rm(
                 replaced_runtime_reservation.runtime_output_root_reservation_marker,
             )
+            rm(replaced_runtime_reservation.runtime_path; recursive = true)
 
             replaced_shared_runtime_outdir = joinpath(
                 temporary_root,
@@ -4189,13 +7416,31 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 "executor-runtime-replaced-shared-reservation.sh",
             )
             write(replaced_shared_script_path, replaced_shared_script)
-            Test.@test !Base.withenv(
+            Test.@test isempty(
+                Mycelia._metamdbg_pending_submission_job_paths(
+                    replaced_shared_runtime_outdir,
+                ),
+            )
+            replaced_shared_log = IOBuffer()
+            replaced_shared_process = Base.withenv(
                 "SLURM_JOB_ID" => replaced_shared_reservation.job_id,
             ) do
-                success(`bash $(replaced_shared_script_path)`)
+                return run(pipeline(
+                    ignorestatus(`bash $(replaced_shared_script_path)`),
+                    stdout = replaced_shared_log,
+                    stderr = replaced_shared_log,
+                ))
             end
+            replaced_shared_output = String(take!(replaced_shared_log))
+            Test.@test !success(replaced_shared_process)
+            Test.@test occursin(
+                "runtime output-root reservation identity changed after " *
+                "acquisition",
+                replaced_shared_output,
+            )
             Test.@test isfile(replaced_shared_outputs.completion_marker)
             Test.@test !ispath(replaced_shared_reservation.path)
+            Test.@test isdir(replaced_shared_reservation.runtime_path)
             Test.@test isdir(replaced_shared_private_lock)
             Test.@test isdir(replaced_shared_marker)
             Test.@test isdir(replaced_shared_original)
@@ -4209,10 +7454,24 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 ArgumentError,
                 r"active same-root output-root reservation",
             )
-            rm(replaced_shared_private_lock)
-            rm(replaced_shared_marker)
-            rm(replaced_shared_original)
-            rm(replaced_shared_cleanup_sentinel)
+            ispath(replaced_shared_private_lock) &&
+                rm(replaced_shared_private_lock; recursive = true)
+            ispath(replaced_shared_marker) &&
+                rm(replaced_shared_marker; recursive = true)
+            ispath(replaced_shared_original) &&
+                rm(replaced_shared_original; recursive = true)
+            ispath(replaced_shared_cleanup_sentinel) &&
+                rm(replaced_shared_cleanup_sentinel; recursive = true)
+            ispath(replaced_shared_reservation.runtime_path) && rm(
+                replaced_shared_reservation.runtime_path;
+                recursive = true,
+            )
+            if ispath(replaced_shared_reservation.path)
+                remove_queued_runtime_fixture!(
+                    replaced_shared_runtime_outdir,
+                    replaced_shared_reservation,
+                )
+            end
 
             swapped_runtime_outdir =
                 joinpath(temporary_root, "executor-output-root-swap")
@@ -5596,10 +8855,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     terminal_metadata;
                     owner_token = terminal_metadata.owner_token,
                     job_id = terminal_metadata.job_id,
-                    confirm_terminal = :completed,
+                    confirm_terminal = :running,
                 ),
                 ArgumentError,
-                r"accepts only :failed",
+                r"accepts only :failed or :completed",
             )
             Test.@test isdir(terminal_reservation.path)
             terminal_reclaimed =
@@ -5753,8 +9012,8 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                     job_id = "777",
                     confirm_submitted = true,
                 ),
-                ErrorException,
-                r"owner_token changed before its scheduler job could be bound",
+                ArgumentError,
+                r"active same-root output-root reservation",
             )
             current_bind_metadata = only(
                 Mycelia.inspect_metamdbg_submission_reservations(
@@ -6095,6 +9354,30 @@ Test.@testset "metaMDBG input and artifact contracts" begin
             Test.@test immediate_complete.status == :complete
             Test.@test immediate_complete.provenance.package_inventory_sha256 ==
                        _test_metamdbg_toolchain().package_inventory_sha256
+            consumed_metadata = only(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    immediate_outdir,
+                ),
+            )
+            Test.@test consumed_metadata.reservation_state == :consumed
+            Test.@test consumed_metadata.submission_state == :consumed
+            Test.@test consumed_metadata.lifecycle_owner == :runtime
+            Test.@test consumed_metadata.job_id == "456"
+            Test.@test consumed_metadata.queued_reservation_identity === nothing
+            Test.@test consumed_metadata.runtime_reservation_identity === nothing
+            consumed_reclaimed =
+                Mycelia.reclaim_metamdbg_submission_reservation!(
+                    consumed_metadata;
+                    owner_token = consumed_metadata.owner_token,
+                    job_id = consumed_metadata.job_id,
+                    confirm_terminal = :completed,
+                )
+            Test.@test consumed_reclaimed.recovery_reason == :completed
+            Test.@test isempty(
+                Mycelia.inspect_metamdbg_submission_reservations(
+                    immediate_outdir,
+                ),
+            )
         end
 
         Test.@testset "submission ambiguity preserves recovery state" begin
@@ -6553,6 +9836,429 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                 )
             end
             Test.@test !ispath(replacement_reservation.path)
+        end
+
+        Test.@testset "runtime transition crash recovery is identity-bound" begin
+            for phase in (
+                    :post_runtime_marker,
+                    :post_private_rename,
+                    :post_queued_release,
+                    :post_runtime_release,
+                    :post_consumed_rename,
+            )
+                runtime_outdir = joinpath(
+                    temporary_root,
+                    "$(phase)-runtime-transition-output",
+                )
+                live_metadata = Ref{Any}(nothing)
+                bound = _kill_metamdbg_runtime_transition!(
+                    runtime_outdir,
+                    valid_reads,
+                    phase;
+                    live_check = function (
+                            process::Base.Process,
+                            reservation::NamedTuple,
+                    )
+                        Test.@test Base.process_running(process)
+                        owner_path = if phase == :post_runtime_marker
+                            reservation.path
+                        elseif phase == :post_consumed_rename
+                            reservation.consumed_path
+                        else
+                            reservation.runtime_path
+                        end
+                        Test.@test isdir(owner_path)
+                        runtime_marker_exists = isdir(
+                            reservation.runtime_output_root_reservation_marker,
+                        )
+                        Test.@test runtime_marker_exists == !(phase in (
+                            :post_runtime_release,
+                            :post_consumed_rename,
+                        ))
+                        private_lock_path =
+                            Mycelia._metamdbg_output_lock_path(runtime_outdir)
+                        private_lock_exists = isdir(private_lock_path)
+                        Test.@test private_lock_exists == !(phase in (
+                            :post_runtime_marker,
+                            :post_runtime_release,
+                            :post_consumed_rename,
+                        ))
+                        queued_exists = isfile(
+                            reservation.output_root_reservation_marker,
+                        )
+                        Test.@test queued_exists ==
+                                   (phase in (
+                            :post_runtime_marker,
+                            :post_private_rename,
+                        ))
+                        before = (;
+                            owner = Mycelia._metamdbg_output_lock_identity(
+                                owner_path,
+                            ),
+                            runtime = runtime_marker_exists ?
+                                      Mycelia._metamdbg_output_lock_identity(
+                                reservation.runtime_output_root_reservation_marker,
+                            ) : nothing,
+                            private = private_lock_exists ?
+                                      Mycelia._metamdbg_output_lock_identity(
+                                private_lock_path,
+                            ) : nothing,
+                        )
+                        if phase == :post_consumed_rename
+                            _test_metamdbg_error(
+                                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                                    runtime_outdir;
+                                    confirm_process_dead = true,
+                                ),
+                                ErrorException,
+                                r"requires a pre-existing canonical local PID",
+                            )
+                            Test.@test Mycelia._metamdbg_output_lock_identity(
+                                owner_path,
+                            ) == before.owner
+                            confirmed = only(
+                                Mycelia.inspect_metamdbg_submission_reservations(
+                                    runtime_outdir,
+                                ),
+                            )
+                            Test.@test confirmed.reservation_state == :consumed
+                        else
+                            _test_metamdbg_error(
+                                () -> Mycelia.inspect_metamdbg_submission_reservations(
+                                runtime_outdir;
+                                confirm_process_dead = true,
+                                ),
+                                ErrorException,
+                                r"cannot recover scheduler-owned runtime state",
+                            )
+                        end
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            owner_path,
+                        ) == before.owner
+                        if runtime_marker_exists
+                            Test.@test Mycelia._metamdbg_output_lock_identity(
+                                reservation.runtime_output_root_reservation_marker,
+                            ) == before.runtime
+                        end
+                        if private_lock_exists
+                            Test.@test Mycelia._metamdbg_output_lock_identity(
+                                private_lock_path,
+                            ) == before.private
+                        end
+                        Test.@test isfile(
+                            reservation.output_root_reservation_marker,
+                        ) == queued_exists
+                        live_metadata[] = only(
+                            Mycelia.inspect_metamdbg_submission_reservations(
+                                runtime_outdir,
+                            ),
+                        )
+                        Test.@test live_metadata[].lifecycle_owner == :runtime
+                        Test.@test live_metadata[].private_lock_identity ==
+                                   before.private
+                        return nothing
+                    end,
+                )
+                metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        runtime_outdir,
+                    ),
+                )
+                expected_owner_path = if phase == :post_runtime_marker
+                    bound.path
+                elseif phase == :post_consumed_rename
+                    bound.consumed_path
+                else
+                    bound.runtime_path
+                end
+                Test.@test metadata.path == expected_owner_path
+                Test.@test metadata.job_id == bound.job_id
+                Test.@test metadata.owner_token == bound.owner_token
+                Test.@test metadata.reservation_state == if phase ==
+                                                            :post_runtime_marker
+                    :runtime_claiming
+                elseif phase == :post_private_rename
+                    :runtime_transition
+                elseif phase == :post_runtime_release
+                    :runtime_release_pending
+                elseif phase == :post_consumed_rename
+                    :consumed
+                else
+                    :runtime
+                end
+                Test.@test metadata.reservation_identity ==
+                           live_metadata[].reservation_identity
+                _test_metamdbg_error(
+                    () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                        metadata;
+                        owner_token = metadata.owner_token,
+                        confirm_not_submitted = true,
+                    ),
+                    ArgumentError,
+                    r"cannot be reclaimed as not submitted",
+                )
+                _test_metamdbg_error(
+                    () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                        metadata;
+                        owner_token = metadata.owner_token,
+                        job_id = "9999",
+                        confirm_terminal = :failed,
+                    ),
+                    ErrorException,
+                    r"job id does not match",
+                )
+                Test.@test isdir(expected_owner_path)
+                recovered =
+                    Mycelia.reclaim_metamdbg_submission_reservation!(
+                        metadata;
+                        owner_token = metadata.owner_token,
+                        job_id = metadata.job_id,
+                        confirm_terminal = :failed,
+                    )
+                Test.@test recovered.status == :reclaimed
+                Test.@test recovered.recovery_reason == :failed
+                Test.@test !ispath(expected_owner_path)
+                Test.@test !ispath(
+                    bound.runtime_output_root_reservation_marker,
+                )
+                Test.@test !ispath(bound.output_root_reservation_marker)
+                Test.@test !ispath(
+                    Mycelia._metamdbg_output_lock_path(runtime_outdir),
+                )
+                Test.@test isempty(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        runtime_outdir,
+                    ),
+                )
+            end
+        end
+
+        Test.@testset "explicit reclaim crash recovery stays discoverable" begin
+            for phase in (:post_private_rename, :post_shared_release)
+                reclaim_outdir = joinpath(
+                    temporary_root,
+                    "$(phase)-reclaim-transition-output",
+                )
+                live_identity = Ref{Any}(nothing)
+                live_pid_identity = Ref{Any}(nothing)
+                live_private_identity = Ref{Any}(nothing)
+                live_cleanup_identity = Ref{Any}(nothing)
+                reservation = _kill_metamdbg_reclaim_transition!(
+                    reclaim_outdir,
+                    valid_reads,
+                    phase;
+                    live_check = function (
+                            process::Base.Process,
+                            queued_reservation::NamedTuple,
+                    )
+                        Test.@test Base.process_running(process)
+                        Test.@test isdir(queued_reservation.reclaiming_path)
+                        Test.@test isdir(
+                            Mycelia._metamdbg_output_lock_path(reclaim_outdir),
+                        )
+                        pid_lock_path =
+                            Mycelia._output_root_reservation_lock_path_from_canonical(
+                                reclaim_outdir,
+                            )
+                        cleanup_path =
+                            Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                                reclaim_outdir,
+                            )
+                        Test.@test isfile(pid_lock_path)
+                        Test.@test isdir(cleanup_path)
+                        queued_marker_exists = isfile(
+                            queued_reservation.output_root_reservation_marker,
+                        )
+                        Test.@test queued_marker_exists ==
+                                   (phase == :post_private_rename)
+                        owner_identity =
+                            Mycelia._metamdbg_output_lock_identity(
+                                queued_reservation.reclaiming_path,
+                            )
+                        private_identity =
+                            Mycelia._metamdbg_output_lock_identity(
+                                Mycelia._metamdbg_output_lock_path(
+                                    reclaim_outdir,
+                                ),
+                            )
+                        pid_identity =
+                            Mycelia._metamdbg_output_root_pid_lock_identity(
+                                pid_lock_path,
+                            )
+                        cleanup_identity =
+                            Mycelia._metamdbg_output_lock_identity(cleanup_path)
+                        _test_metamdbg_error(
+                            () -> Mycelia.inspect_metamdbg_submission_reservations(
+                                reclaim_outdir;
+                                confirm_process_dead = true,
+                            ),
+                            ErrorException,
+                            r"still names a live or remotely unverifiable process",
+                        )
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            queued_reservation.reclaiming_path,
+                        ) == owner_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            Mycelia._metamdbg_output_lock_path(reclaim_outdir),
+                        ) == private_identity
+                        Test.@test Mycelia._metamdbg_output_root_pid_lock_identity(
+                            pid_lock_path,
+                        ) == pid_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            cleanup_path,
+                        ) == cleanup_identity
+                        inspected = only(
+                            Mycelia.inspect_metamdbg_submission_reservations(
+                                reclaim_outdir,
+                            ),
+                        )
+                        Test.@test inspected.lifecycle_owner == :recovery
+                        Test.@test inspected.private_lock_identity ==
+                                   private_identity
+                        Test.@test inspected.cleanup_reservation_identity ==
+                                   cleanup_identity
+                        _test_metamdbg_error(
+                            () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                                inspected;
+                                owner_token = inspected.owner_token,
+                                confirm_not_submitted = true,
+                            ),
+                            ArgumentError,
+                            r"reinspect with confirm_process_dead=true",
+                        )
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            queued_reservation.reclaiming_path,
+                        ) == owner_identity
+                        Test.@test Mycelia._metamdbg_output_root_pid_lock_identity(
+                            pid_lock_path,
+                        ) == pid_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            Mycelia._metamdbg_output_lock_path(reclaim_outdir),
+                        ) == private_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            cleanup_path,
+                        ) == cleanup_identity
+                        live_identity[] = inspected.reservation_identity
+                        live_pid_identity[] = pid_identity
+                        live_private_identity[] = private_identity
+                        live_cleanup_identity[] = cleanup_identity
+                        return nothing
+                    end,
+                )
+                metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        reclaim_outdir;
+                        confirm_process_dead = true,
+                    ),
+                )
+                Test.@test live_pid_identity[] !== nothing
+                Test.@test live_private_identity[] !== nothing
+                Test.@test live_cleanup_identity[] !== nothing
+                Test.@test metadata.path == reservation.reclaiming_path
+                Test.@test metadata.reservation_identity == live_identity[]
+                Test.@test metadata.private_lock_identity === nothing
+                Test.@test metadata.cleanup_reservation_identity === nothing
+                Test.@test metadata.reservation_state == if phase ==
+                                                            :post_private_rename
+                    :reclaiming
+                else
+                    :reclaim_release_pending
+                end
+                first_recovery_identity = metadata.reservation_identity
+                _kill_metamdbg_reclaim_transition!(
+                    reclaim_outdir,
+                    valid_reads,
+                    phase;
+                    resume_reclaiming = true,
+                    live_check = function (
+                            process::Base.Process,
+                            reclaiming_reservation::NamedTuple,
+                    )
+                        Test.@test Base.process_running(process)
+                        owner_identity =
+                            Mycelia._metamdbg_output_lock_identity(
+                                reclaiming_reservation.reclaiming_path,
+                            )
+                        Test.@test owner_identity == first_recovery_identity
+                        pid_lock_path =
+                            Mycelia._output_root_reservation_lock_path_from_canonical(
+                                reclaim_outdir,
+                            )
+                        private_lock_path =
+                            Mycelia._metamdbg_output_lock_path(reclaim_outdir)
+                        cleanup_path =
+                            Mycelia._metamdbg_lifecycle_cleanup_reservation_path(
+                                reclaim_outdir,
+                            )
+                        pid_identity =
+                            Mycelia._metamdbg_output_root_pid_lock_identity(
+                                pid_lock_path,
+                            )
+                        private_identity =
+                            Mycelia._metamdbg_output_lock_identity(
+                                private_lock_path,
+                            )
+                        cleanup_identity =
+                            Mycelia._metamdbg_output_lock_identity(cleanup_path)
+                        live_metadata = only(
+                            Mycelia.inspect_metamdbg_submission_reservations(
+                                reclaim_outdir,
+                            ),
+                        )
+                        _test_metamdbg_error(
+                            () -> Mycelia.reclaim_metamdbg_submission_reservation!(
+                                live_metadata;
+                                owner_token = live_metadata.owner_token,
+                                confirm_not_submitted = true,
+                            ),
+                            ArgumentError,
+                            r"reinspect with confirm_process_dead=true",
+                        )
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            reclaiming_reservation.reclaiming_path,
+                        ) == owner_identity
+                        Test.@test Mycelia._metamdbg_output_root_pid_lock_identity(
+                            pid_lock_path,
+                        ) == pid_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            private_lock_path,
+                        ) == private_identity
+                        Test.@test Mycelia._metamdbg_output_lock_identity(
+                            cleanup_path,
+                        ) == cleanup_identity
+                        return nothing
+                    end,
+                )
+                metadata = only(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        reclaim_outdir;
+                        confirm_process_dead = true,
+                    ),
+                )
+                Test.@test metadata.reservation_identity ==
+                           first_recovery_identity
+                Test.@test metadata.private_lock_identity === nothing
+                Test.@test metadata.cleanup_reservation_identity === nothing
+                recovered =
+                    Mycelia.reclaim_metamdbg_submission_reservation!(
+                        metadata;
+                        owner_token = metadata.owner_token,
+                        confirm_not_submitted = true,
+                    )
+                Test.@test recovered.recovery_reason == :not_submitted
+                Test.@test !ispath(reservation.reclaiming_path)
+                Test.@test !ispath(
+                    reservation.output_root_reservation_marker,
+                )
+                Test.@test !ispath(
+                    Mycelia._metamdbg_output_lock_path(reclaim_outdir),
+                )
+                Test.@test isempty(
+                    Mycelia.inspect_metamdbg_submission_reservations(
+                        reclaim_outdir,
+                    ),
+                )
+            end
         end
     end
 end

@@ -48,8 +48,12 @@ with one or more FASTQs for that technology. Upstream rejects a command that
 supplies both flags and selects one platform parameter set internally. Therefore
 metaMDBG is not a HiFi-plus-ONT combined assembler and is excluded from the
 multi-input adapter. `Mycelia.run_metamdbg` remains available for one or more
-HiFi *or* one or more ONT inputs and fails before provisioning when both,
-neither, an empty path set, or a missing/empty input file is supplied. The
+HiFi *or* one or more explicitly attested Nanopore R10.4-or-later inputs.
+`ont_reads` requires `ont_r10_4_plus = true`; generic, R9, and unknown ONT
+inputs are rejected before provisioning. HiFi calls retain their existing
+ergonomics and need no attestation keyword. The wrapper also fails before
+provisioning when both technologies, neither technology, an empty path set, a
+missing/empty input file, or a nonpositive `graph_k` is supplied. The
 wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
 records a digest of the complete normalized resolved Conda inventory (package
 name, version, build, and channel, including transitive packages). Environment
@@ -63,8 +67,9 @@ the entire output root, and that graph must have the requested k. A requested-k
 graph alongside any foreign-k graph is rejected. Reuse also requires the durable
 input contract to match the normalized input technology, ordered paths, file
 sizes, input SHA-256 digests, `abundance_min`, and pinned environment
-specification. Modification time is a transient same-invocation race snapshot
-only and is intentionally absent from the durable schema-v4 contract. A
+specification. The schema-v5 contract and its signature bind the explicit ONT
+R10.4-or-later attestation. Modification time is a transient same-invocation
+race snapshot only and is intentionally absent from that durable contract. A
 separate atomic completion manifest binds `graph_k`, the workflow signature,
 the realized package-inventory digest, and canonical artifact identities,
 sizes, and SHA-256 digests. Legacy plain contigs are normalized to
@@ -225,7 +230,9 @@ The single-technology metaMDBG wrapper applies the same fail-closed principles w
 the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification. Local
 execution returns
 `status = :complete` only after semantic FASTA/GFA validation and durable
-contract finalization. A nonlocal executor returns `status = :planned` for a
+contract finalization. Local and generated-runtime contract and completion
+publication fsync both the complete mode-0600 file and its containing directory
+before reporting success. A nonlocal executor returns `status = :planned` for a
 collected or dry-run job and `status = :submitted` for a real submission,
 together with the executor result and `expected_artifacts`; it does not present
 planned paths as completed artifacts. The submitted script independently locks
@@ -234,13 +241,88 @@ completion provenance. Real nonlocal execution is limited to the verifiable
 Slurm backend. Durable pre-submit reservations never expire automatically. A
 new reservation contains only a mode-0600 `contract.json` owner record and is
 reported as `submission_state = :reserved`. The wrapper submits the job held,
-atomically adds a mode-0600 `job.json` sidecar binding the exact scheduler job
-ID, workflow signature, and owner token, and only then releases it; inspection
-then reports `submission_state = :submitted`. A runtime job that starts after
-release must match the sidecar against `SLURM_JOB_ID` before atomically consuming
-the reservation. If that released job starts and consumes the reservation before
-the caller returns, the returned capability is reported as
-`submission_state = :consumed` rather than pretending the sidecar still exists.
+exclusively creates an adjacent empty mode-0600 pending record whose name binds
+the output identity, owner capability, and normalized scheduler job ID, fsyncs
+that descriptor and then its parent directory, and only then writes and fsyncs
+its canonical contents. It hardlinks that record to
+`job.json`, fsyncs the owner directory, and only then releases the job. The
+`job.json` directory fsync is the irreversible binding commit point; later
+ordinary errors retain the exact committed binding and clean only the pending
+name. Ordinary errors before that point also retain the accepted-ID pending
+record; exact public binding recovery resumes only the inspected pending job ID
+instead of treating it as an unsubmitted reservation. Inspection then reports
+`submission_state = :submitted`. Operators must complete confirmed-dead pending
+promotion or committed-pending cleanup before manually releasing the held Slurm
+job; the generated runtime rejects its exact output-, capability-, and job-ID-
+bound pending sidecar before it can publish a runtime marker, and rejects any
+other same-output pending evidence before it can consume the queued owner. A
+runtime job
+that starts after release must match the sidecar against `SLURM_JOB_ID` before
+moving through a durable, capability-keyed state machine. It first creates and
+fsyncs its shared runtime marker, atomically renames the same-parent queued
+owner directory to `runtime.<capability>`, fsyncs the parent, removes the queued
+shared marker, and fsyncs the parent again. At final cleanup it releases the
+exact private and shared runtime locks before renaming the owner record to the
+persistent,
+nonblocking `consumed.<capability>` audit state and fsyncing that transition.
+The owner record always retains `contract.json` and `job.json`; it is never
+hidden under an ephemeral runtime temporary directory. The caller reports
+`:runtime` or `:consumed` only after reconstructing the corresponding exact
+on-disk state, never from absence of the original queued path.
+
+Before attempting the private runtime lock, the generated job publishes and
+fsyncs its exact runtime marker and checks the complete output domain. That
+marker blocks competitors and makes a hard kill during private-lock acquisition
+inspectable as scheduler-owned `runtime_claiming` state. After acquiring the
+private lock, the job rechecks domain exclusivity before renaming its owner.
+Each output-domain check uses a descriptor-rooted, no-follow enumerator rather
+than a pathname-recursive `find`. Owner-record and output-content scans use a
+strict one-level mode that captures every byte-preserving relative name, entry
+type, device/inode identity, and the directory's exact name set. Output-domain
+ancestor scans instead manifest only the exact PID reservation name and the
+durable and pending reservation-name prefixes that are relevant at that
+ancestor. Recursive descendant scans traverse every encountered directory with
+an explicit iterative descriptor stack, but manifest only entries matching the
+PID or durable reservation prefixes. Each traversal retains descriptor and
+parent-entry identity checks and fails if a race prevents complete traversal;
+unrelated file or directory churn does not invalidate an otherwise complete
+reservation snapshot. The enumerator writes its private NUL-delimited inventory
+only after the first complete manifest, then captures a second complete manifest
+and returns the inventory only when the two reservation-relevant manifests are
+identical. Persistent relevant insertions, removals, and same-name type or
+identity replacements observed between those captures fail before the runtime
+consumes any inventory. Directory descriptors remain bound while their entries
+are inspected, so a temporary pathname replacement cannot redirect traversal
+into the replacement tree.
+
+The durable, fsynced runtime output-root reservation is the synchronization
+fence for supported concurrency. A cooperating Mycelia output-root writer must
+observe an already-established fence and refuse an overlapping reservation
+before creating an absent parent or publishing its own marker.
+metaMDBG, Unicycler, Autocycler, and the persistent multi-input workflow all run
+a read-only hierarchy preflight on their canonical planned root before creating
+an absent parent or PID record, then repeat the exclusivity scan after acquiring
+their own PID reservation. If the runtime fence appears during that race, both
+claims may briefly have symmetric reservation markers. Symmetric
+post-acquisition scans ensure at least one claimant yields before overlapping
+output actions; the losing claimant cleans its own reservation.
+The two manifests establish a complete snapshot of reservation-relevant
+pre-existing state and add fail-loud relevant drift detection around that fence;
+they are not a lock-free atomic snapshot against a same-UID process that
+deliberately bypasses the reservation protocol and continuously mutates the
+tree. Such noncooperating filesystem tampering after the runtime fence is
+unsupported and receives best-effort detection, not an atomic-exclusion
+guarantee.
+
+Enumeration is intentionally bounded and fails loudly above depth 256, above
+1,000,000 entries, or above 268,435,456 bytes of manifest accounting. These
+bounds prevent an adversarial or unexpectedly large output tree from exhausting
+the runtime job while preserving ample space for ordinary assembly layouts. A
+failed or unstable capture is retried at most three times; partial inventories
+and per-attempt diagnostics are removed between attempts. A successful helper
+result is accepted only when the inventory is empty or its final byte is NUL,
+so an exit-zero helper that emits a truncated record is also rejected before
+Bash consumption.
 
 A caller that dies before submission can inspect the on-disk reserved
 capability and reclaim it only with the exact owner token plus explicit
@@ -254,8 +336,40 @@ binds both private and shared filesystem identities so explicit recovery cannot
 remove replacements. A hard-killed production caller also leaves its private
 lifecycle lock, cleanup sentinel, and PID file. After independently proving the
 caller dead, inspection with `confirm_process_dead = true` removes only those
-exact same-user remnants; a live, remote, empty, malformed, noncanonical, or
-replaced PID file fails closed. An incomplete temporary remnant is nonblocking
+exact same-user submitter remnants and requires the pre-existing canonical local
+PID record as its evidence. Runtime owner or marker evidence, or a private lock
+without a PID record, is treated as scheduler ownership and is never mutated by
+that path; a live, remote, empty, malformed, noncanonical, or replaced PID file
+also fails closed. The explicit flag also rejects no-op recovery when no
+pre-existing PID record exists. Normal inspection, including queued inspection,
+is fully read-only and lockless: phase one captures every owner, pending record,
+and exact filesystem identity across the collection; only after that complete
+snapshot does phase two reparse and revalidate every record plus the complete
+before-and-after owner and pending-path inventories. A concurrent runtime
+therefore completes without encountering an
+inspector-created PID, sentinel, or private lock, while the inspector returns a
+coherent stable state or fails loudly on the transition. Job-ID binding holds
+the PID, sentinel, and private-lock domain. A hard kill after the pending name is
+fsynced but before `job.json` commits retains the exact accepted scheduler ID;
+confirmed-dead inspection validates and completes an empty pending record if
+necessary, promotes it to `job.json`, or verifies the already committed exact
+hardlink, then durably removes the pending name. Pending-only evidence is never
+eligible for `confirm_not_submitted`. Confirmed-dead recovery removes the exact
+private lock and cleanup sentinel while its replacement PID record is held,
+then attempts pending promotion; if promotion fails, it releases that PID and
+leaves the pending accepted-ID evidence available for exact public binding
+resume rather than recreating ambiguous lifecycle locks. Explicit pre-submit
+cleanup atomically
+renames the owner to a same-parent `reclaiming.<capability>` record and fsyncs
+the parent before it releases the queued marker. The transition holds the
+canonical PID record,
+cleanup sentinel, and private lock throughout. A hard kill therefore leaves an
+inspectable `reclaiming` or `reclaim_release_pending` record; a second reclaim
+while the first PID is live fails without changing any inode. Takeover requires
+independently confirming process death and reinspecting with
+`confirm_process_dead = true`. Inspection reports durable owner, queued-marker,
+runtime-marker, private-lock, and cleanup-sentinel identities. An incomplete
+temporary remnant is nonblocking
 only when no durable same-root marker could pair with it; otherwise inspection
 fails loudly instead of hiding a possibly corrupted capability. In the narrower
 process-death
@@ -266,8 +380,9 @@ reservation, then call
 exact owner token and job ID, and
 `confirm_submitted = true`. Binding and pre-submit reclaim require both exact
 filesystem identities returned by inspection and refuse same-content
-replacements. Submitted jobs can be reclaimed only with the exact recorded
-scheduler job ID after explicit cancellation or terminal-failed confirmation.
+replacements. Runtime and consumed states can be reclaimed only from freshly
+inspected identity-bound metadata with the exact recorded scheduler job ID after
+explicit cancellation or terminal-failed/terminal-completed confirmation.
 Reservation directories, owner records, and job sidecars must remain
 current-user-owned with modes 0700, 0600, and 0600, respectively; noncanonical,
 modified, or replacement records fail closed.

@@ -175,21 +175,22 @@ end
 
 function _validate_smoke_paired_fastqs(
         short_reads_1::AbstractString,
-        short_reads_2::AbstractString,
+        short_reads_2::AbstractString;
+        smoke_label::AbstractString = "Autocycler smoke",
 )::Int
     !Base.Filesystem.samefile(short_reads_1, short_reads_2) || throw(
         ArgumentError(
-            "Autocycler smoke paired short-read R1 and R2 must be distinct files.",
+            "$(smoke_label) paired short-read R1 and R2 must be distinct files.",
         ),
     )
     reader_1 = _smoke_fastq_reader(
         short_reads_1,
-        "Autocycler smoke paired short-read R1 FASTQ",
+        "$(smoke_label) paired short-read R1 FASTQ",
     )
     reader_2 = try
         _smoke_fastq_reader(
             short_reads_2,
-            "Autocycler smoke paired short-read R2 FASTQ",
+            "$(smoke_label) paired short-read R2 FASTQ",
         )
     catch
         close(reader_1)
@@ -202,7 +203,7 @@ function _validate_smoke_paired_fastqs(
         while next_1 !== nothing || next_2 !== nothing
             if next_1 === nothing || next_2 === nothing
                 throw(ArgumentError(
-                    "Autocycler smoke paired short reads have different counts " *
+                    "$(smoke_label) paired short reads have different counts " *
                     "after $(pair_count) complete pairs.",
                 ))
             end
@@ -218,13 +219,13 @@ function _validate_smoke_paired_fastqs(
             roles_valid = (role_1 === nothing && role_2 === nothing) ||
                           (role_1 == 1 && role_2 == 2)
             roles_valid || throw(ArgumentError(
-                "Autocycler smoke paired short reads have invalid explicit mate " *
+                "$(smoke_label) paired short reads have invalid explicit mate " *
                 "roles at record $(pair_count): R1=$(repr(identifier_1)), " *
                 "R2=$(repr(identifier_2)).",
             ))
             _smoke_pair_identifier(identifier_1) ==
             _smoke_pair_identifier(identifier_2) || throw(ArgumentError(
-                "Autocycler smoke paired short reads are out of sync at record " *
+                "$(smoke_label) paired short reads are out of sync at record " *
                 "$(pair_count): R1=$(repr(identifier_1)), " *
                 "R2=$(repr(identifier_2)).",
             ))
@@ -235,7 +236,7 @@ function _validate_smoke_paired_fastqs(
         caught isa InterruptException && rethrow()
         caught isa ArgumentError && rethrow()
         throw(ArgumentError(
-            "Autocycler smoke paired short-read inputs must be valid FASTQ " *
+            "$(smoke_label) paired short-read inputs must be valid FASTQ " *
             "files. Cause: $(sprint(showerror, caught))",
         ))
     finally
@@ -243,7 +244,7 @@ function _validate_smoke_paired_fastqs(
         close(reader_2)
     end
     pair_count > 0 || throw(ArgumentError(
-        "Autocycler smoke paired short reads must be non-empty.",
+        "$(smoke_label) paired short reads must be non-empty.",
     ))
     return pair_count
 end
@@ -377,15 +378,15 @@ function _multi_input_hybrid_smoke_prerequisites(
         "missing: $(join(missing_inputs, ", ")).",
     ))
     input_paths = (
-        short_r1 = abspath(String(environment[
+        short_r1 = abspath(strip(String(environment[
             _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[1]
-        ])),
-        short_r2 = abspath(String(environment[
+        ]))),
+        short_r2 = abspath(strip(String(environment[
             _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[2]
-        ])),
-        long_reads = abspath(String(environment[
+        ]))),
+        long_reads = abspath(strip(String(environment[
             _MULTI_INPUT_HYBRID_SMOKE_INPUT_ENV_VARS[3]
-        ])),
+        ]))),
     )
     for (label, path) in pairs(input_paths)
         isfile(path) || throw(ArgumentError(
@@ -395,6 +396,37 @@ function _multi_input_hybrid_smoke_prerequisites(
             "Hybrid smoke $(label) FASTQ is empty: $(path)",
         ))
     end
+    for (first_label, first_path, second_label, second_path) in (
+            (:short_r1, input_paths.short_r1, :short_r2, input_paths.short_r2),
+            (
+                :short_r1,
+                input_paths.short_r1,
+                :long_reads,
+                input_paths.long_reads,
+            ),
+            (
+                :short_r2,
+                input_paths.short_r2,
+                :long_reads,
+                input_paths.long_reads,
+            ),
+    )
+        !Base.Filesystem.samefile(first_path, second_path) || throw(
+            ArgumentError(
+                "Hybrid smoke $(first_label) and $(second_label) FASTQ inputs " *
+                "must be physically distinct files.",
+            ),
+        )
+    end
+    _validate_smoke_fastq(
+        input_paths.long_reads,
+        "Hybrid smoke long-read input",
+    )
+    _validate_smoke_paired_fastqs(
+        input_paths.short_r1,
+        input_paths.short_r2;
+        smoke_label = "Hybrid smoke",
+    )
     short_read_tech = _multi_input_hybrid_smoke_symbol(
         environment,
         "MYCELIA_HYBRID_SHORT_TECH",

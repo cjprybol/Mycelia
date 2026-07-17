@@ -245,16 +245,72 @@ function multi_input_fake_autocycler_toolchain(;
     )
 end
 
+function multi_input_fake_unicycler_contract(
+        outdir::AbstractString,
+        assembly::AbstractString,
+        graph::AbstractString,
+)::String
+    contract = Dict{String, Any}(
+        "schema" => Mycelia._UNICYCLER_CONTRACT_SCHEMA,
+        "artifacts" => Dict{String, Any}(
+            "assembly" => Mycelia._unicycler_artifact_fingerprint(assembly),
+            "graph" => Mycelia._unicycler_artifact_fingerprint(graph),
+        ),
+    )
+    path = joinpath(outdir, ".mycelia-unicycler-run-contract.json")
+    open(path, "w") do output
+        Mycelia.JSON.print(output, contract)
+        write(output, '\n')
+    end
+    return path
+end
+
+function multi_input_fake_autocycler_lifecycle(
+        outdir::AbstractString,
+        assembly::AbstractString,
+        graph::AbstractString,
+        autocycler_assembly::AbstractString,
+        polypolish_assembly::AbstractString,
+        pypolca_report::AbstractString,
+)::NamedTuple
+    snapshot = (
+        path::AbstractString,
+        label::AbstractString,
+    ) -> Mycelia._autocycler_artifact_snapshot(
+        path,
+        outdir,
+        label,
+    )
+    return (;
+        assembly = snapshot(assembly, "Pypolca-polished assembly FASTA"),
+        graph = snapshot(graph, "Autocycler consensus GFA"),
+        autocycler_assembly = snapshot(
+            autocycler_assembly,
+            "Autocycler consensus FASTA",
+        ),
+        polypolish_assembly = snapshot(
+            polypolish_assembly,
+            "Polypolish assembly FASTA",
+        ),
+        pypolca_report = snapshot(pypolca_report, "Pypolca report"),
+        intermediates = NamedTuple[],
+        planned_intermediates = String[],
+    )
+end
+
 function multi_input_fake_assembler_result(
         outdir::AbstractString;
         gzip::Bool = false,
         include_graph::Bool = true,
         use_contigs_key::Bool = false,
         include_polishing_artifacts::Bool = false,
+        assembly_records::Vector{Pair{String, String}} =
+            ["contig_1" => "ACGTACGT"],
 )::NamedTuple
     extension = gzip ? ".fasta.gz" : ".fasta"
     assembly = multi_input_write_fasta(
         joinpath(outdir, "assembly$(extension)");
+        records = assembly_records,
         gzip,
     )
     if include_graph
@@ -269,19 +325,46 @@ function multi_input_fake_assembler_result(
             )
             pypolca_report = joinpath(outdir, "pypolca.report")
             write(pypolca_report, "corrected_bases\t0\n")
-            return (;
+            lifecycle_artifact_snapshots =
+                multi_input_fake_autocycler_lifecycle(
+                    outdir,
+                    assembly,
+                    graph,
+                    autocycler_assembly,
+                    polypolish_assembly,
+                    pypolca_report,
+                )
+            result = (;
                 assembly,
                 graph,
                 autocycler_assembly,
                 polypolish_assembly,
                 pypolca_report,
                 toolchain = multi_input_fake_autocycler_toolchain(),
+                lifecycle_artifact_snapshots,
             )
+            child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    result,
+                    outdir,
+                )
+            return merge(result, (; child_integrity))
         end
         toolchain = multi_input_fake_unicycler_toolchain()
-        return use_contigs_key ?
-               (; contigs = assembly, graph, toolchain) :
-               (; assembly, graph, toolchain)
+        contract = multi_input_fake_unicycler_contract(
+            outdir,
+            assembly,
+            graph,
+        )
+        result = use_contigs_key ?
+                 (; contigs = assembly, graph, contract, toolchain) :
+                 (; assembly, graph, contract, toolchain)
+        child_integrity =
+            Mycelia.Rhizomorph._multi_input_unicycler_child_integrity(
+                result,
+                outdir,
+            )
+        return merge(result, (; child_integrity))
     end
     toolchain = multi_input_fake_unicycler_toolchain()
     return use_contigs_key ? (; contigs = assembly, toolchain) :
@@ -675,6 +758,77 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             end
             Test.@test correction_calls[] == 0
             Test.@test assembler_calls[] == 0
+        end
+    end
+
+    Test.@testset "persistent root preflight preserves fenced parents" begin
+        mktempdir() do temp_dir
+            runtime_fence_root = joinpath(temp_dir, "runtime-fence")
+            mkpath(runtime_fence_root)
+            runtime_fence_marker =
+                Mycelia._output_root_durable_reservation_path_from_canonical(
+                    runtime_fence_root,
+                    "metamdbg-runtime-multi-input-preflight",
+                )
+            mkdir(runtime_fence_marker; mode = 0o700)
+            Mycelia._fsync_metamdbg_directory(runtime_fence_marker)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
+            missing_parent = joinpath(runtime_fence_root, "missing-parent")
+            blocked_output = joinpath(missing_parent, "hybrid-output")
+            blocked_lock =
+                Mycelia.Rhizomorph._multi_input_workflow_lock_path(
+                    blocked_output,
+                )
+            config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                output_dir = blocked_output,
+            )
+            correction_calls = Ref(0)
+            assembler_calls = Ref(0)
+            function forbidden_correction_runner(
+                    _reads::Any,
+                    _config::Mycelia.Rhizomorph.AssemblyConfig,
+            )::NamedTuple
+                correction_calls[] += 1
+                error("runtime fence preflight must precede correction")
+            end
+            function forbidden_assembler_runner(
+                    _inputs::Any,
+                    _outdir::AbstractString,
+            )::NamedTuple
+                assembler_calls[] += 1
+                error("runtime fence preflight must precede assembly")
+            end
+            observed_error = try
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    config,
+                    :unicycler;
+                    correction_runner = forbidden_correction_runner,
+                    assembler_runner = forbidden_assembler_runner,
+                )
+                nothing
+            catch caught
+                caught isa InterruptException && rethrow()
+                caught
+            end
+            Test.@test observed_error isa ArgumentError
+            if observed_error isa ArgumentError
+                Test.@test occursin(
+                    runtime_fence_marker,
+                    sprint(showerror, observed_error),
+                )
+            end
+            Test.@test correction_calls[] == 0
+            Test.@test assembler_calls[] == 0
+            Test.@test !ispath(missing_parent)
+            Test.@test !ispath(blocked_lock)
+            rm(runtime_fence_marker; recursive = true)
+            Mycelia._fsync_metamdbg_directory(
+                dirname(runtime_fence_marker),
+            )
         end
     end
 
@@ -2167,6 +2321,20 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         )
         Test.@test result.assembly_stats["corrected_fastqs"] === nothing
         Test.@test result.assembly_stats["tool_artifacts"] === nothing
+        ephemeral_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(ephemeral_artifact_content)) ==
+                   Set(["assembly", "graph", "child_contract"])
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", artifact["sha256"]) for
+            artifact in values(ephemeral_artifact_content)
+        )
+        Test.@test result.assembly_stats["tool_artifact_hashes"] == Dict(
+            "final_assembly" => ephemeral_artifact_content["assembly"]["sha256"],
+            "raw_graph" => ephemeral_artifact_content["graph"]["sha256"],
+            "child_contract" =>
+                ephemeral_artifact_content["child_contract"]["sha256"],
+        )
         Test.@test result.assembly_stats["input_technologies"] == Dict(
             "short_r1" => "illumina",
             "short_r2" => "illumina",
@@ -2870,6 +3038,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                 outdir;
                 include_graph = true,
                 include_polishing_artifacts = true,
+                assembly_records = ["contig_1" => "TGCATGCA"],
             )
             return merge(
                 result,
@@ -2895,6 +3064,7 @@ Test.@testset "multi-input hybrid assembly contracts" begin
         )
         Test.@test [call.technology for call in correction_calls] ==
                    [:illumina, :illumina, :pacbio_hifi]
+        Test.@test result.contigs == ["TGCATGCA"]
         Test.@test result.assembly_stats["workflow"] == "autocycler_polished"
         Test.@test result.assembly_stats["method"] == "HybridAssembly"
         Test.@test result.assembly_stats["assembler"] == "autocycler"
@@ -2933,6 +3103,30 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             "pypolca_report",
         ])
         Test.@test all(isfile, values(tool_artifacts))
+        tool_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(tool_artifact_content)) == Set([
+            "assembly",
+            "graph",
+            "autocycler_assembly",
+            "polypolish_assembly",
+            "pypolca_report",
+            "retained_intermediates",
+        ])
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", artifact["sha256"]) for
+            (label, artifact) in tool_artifact_content if
+            label != "retained_intermediates"
+        )
+        Test.@test all(
+            occursin(r"^[0-9a-f]{64}$", hash) for
+            (label, hash) in result.assembly_stats["tool_artifact_hashes"] if
+            label != "retained_intermediates"
+        )
+        Test.@test Set(keys(result.assembly_stats["tool_artifact_hashes"])) ==
+                   Set(vcat(collect(keys(tool_artifacts)), [
+            "retained_intermediates",
+        ]))
         Test.@test result.assembly_stats["raw_graph"] == tool_artifacts["raw_graph"]
         Test.@test result.assembly_stats["toolchain"] ==
                    multi_input_fake_autocycler_toolchain()
@@ -3138,6 +3332,13 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             "final_assembly" => assembly_path[],
             "raw_graph" => graph_path[],
         )
+        persistent_artifact_content =
+            result.assembly_stats["tool_artifact_content"]
+        Test.@test Set(keys(persistent_artifact_content)) ==
+                   Set(["assembly", "graph", "child_contract"])
+        Test.@test result.assembly_stats["tool_artifact_hashes"][
+            "final_assembly"
+        ] == persistent_artifact_content["assembly"]["sha256"]
 
         stale_dir = mktempdir()
         write(joinpath(stale_dir, "stale.txt"), "stale")
@@ -3346,7 +3547,19 @@ Test.@testset "multi-input hybrid assembly contracts" begin
                     ),
                     assembler_runner = (inputs, outdir) -> begin
                         symlink(postcheck_assembler_dir, outdir)
-                        return multi_input_fake_assembler_result(outdir)
+                        assembly = multi_input_write_fasta(
+                            joinpath(outdir, "assembly.fasta"),
+                        )
+                        graph = joinpath(outdir, "assembly.gfa")
+                        write(
+                            graph,
+                            "H\tVN:Z:1.0\nS\tcontig_1\tACGTACGT\n",
+                        )
+                        return (;
+                            assembly,
+                            graph,
+                            toolchain = multi_input_fake_unicycler_toolchain(),
+                        )
                     end,
                 )
             end
@@ -3398,6 +3611,338 @@ Test.@testset "multi-input hybrid assembly contracts" begin
             Test.@test isfile(external_graph)
             Test.@test isfile(external_report)
             Test.@test all(call -> !isfile(call.corrected_fastq), correction_calls)
+        end
+    end
+
+    Test.@testset "child immutable artifacts survive high-level return" begin
+        mktempdir() do temp_dir
+            for (workflow, config, include_polishing_artifacts) in (
+                    (
+                        :unicycler,
+                        Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                            output_dir = joinpath(temp_dir, "unicycler"),
+                        ),
+                        false,
+                    ),
+                    (
+                        :autocycler_polished,
+                        Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                            output_dir = joinpath(temp_dir, "autocycler"),
+                        ),
+                        true,
+                    ),
+            )
+                correction_calls = NamedTuple[]
+                test_throws_message(
+                    ErrorException,
+                    "changed after its child wrapper bound an immutable " *
+                    "artifact snapshot",
+                ) do
+                    Mycelia.Rhizomorph._assemble_paired_short_long(
+                        (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                        MULTI_INPUT_LONG,
+                        config,
+                        workflow;
+                        correction_runner = multi_input_fake_correction_runner(
+                            correction_calls,
+                        ),
+                        assembler_runner = (inputs, outdir) ->
+                            multi_input_fake_assembler_result(
+                                outdir;
+                                include_polishing_artifacts,
+                            ),
+                        after_assembler_return_hook = result -> write(
+                            result.assembly,
+                            ">contig_1\nTGCATGCA\n",
+                        ),
+                    )
+                end
+            end
+
+            mismatched_unicycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "Unicycler assembly FASTA and GFA contain different sequences",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = joinpath(
+                            temp_dir,
+                            "mismatched-unicycler-companions",
+                        ),
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        mismatched_unicycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_fake_assembler_result(
+                            outdir;
+                            assembly_records = [
+                                "contig_1" => "TGCATGCA",
+                            ],
+                        ),
+                )
+            end
+
+            mismatched_autocycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "Autocycler consensus FASTA and GFA contain different " *
+                "sequences",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                        output_dir = joinpath(
+                            temp_dir,
+                            "mismatched-autocycler-companions",
+                        ),
+                    ),
+                    :autocycler_polished;
+                    correction_runner = multi_input_fake_correction_runner(
+                        mismatched_autocycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) -> begin
+                        base_result = multi_input_fake_assembler_result(
+                            outdir;
+                            include_polishing_artifacts = true,
+                        )
+                        write(
+                            base_result.autocycler_assembly,
+                            ">contig_1\nTGCATGCA\n",
+                        )
+                        lifecycle_artifact_snapshots =
+                            multi_input_fake_autocycler_lifecycle(
+                                outdir,
+                                base_result.assembly,
+                                base_result.graph,
+                                base_result.autocycler_assembly,
+                                base_result.polypolish_assembly,
+                                base_result.pypolca_report,
+                            )
+                        rebound_result = merge(
+                            base_result,
+                            (; lifecycle_artifact_snapshots),
+                        )
+                        child_integrity =
+                            Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                                rebound_result,
+                                outdir,
+                            )
+                        return merge(rebound_result, (; child_integrity))
+                    end,
+                )
+            end
+
+            lifecycle_metadata_outdir = joinpath(
+                temp_dir,
+                "mutated-autocycler-lifecycle-metadata",
+                "assembler_autocycler_polished",
+            )
+            lifecycle_metadata_result = multi_input_fake_assembler_result(
+                lifecycle_metadata_outdir;
+                include_polishing_artifacts = true,
+            )
+            retained_path = joinpath(
+                lifecycle_metadata_outdir,
+                "retained.sam",
+            )
+            write(retained_path, "@HD\tVN:1.6\n")
+            retained_snapshot = Mycelia._autocycler_artifact_snapshot(
+                retained_path,
+                lifecycle_metadata_outdir,
+                "retained alignment",
+            )
+            retained_binding = (;
+                path = retained_path,
+                snapshot = retained_snapshot,
+                label = "original retained alignment",
+            )
+            bound_lifecycle = merge(
+                lifecycle_metadata_result.lifecycle_artifact_snapshots,
+                (;
+                    intermediates = [retained_binding],
+                    planned_intermediates = [retained_path],
+                ),
+            )
+            unbound_metadata_result = merge(
+                lifecycle_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots = bound_lifecycle,
+                    intermediates = [retained_path],
+                ),
+            )
+            duplicate_retained_lifecycle = merge(
+                bound_lifecycle,
+                (; intermediates = [retained_binding, retained_binding]),
+            )
+            duplicate_retained_result = merge(
+                lifecycle_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        duplicate_retained_lifecycle,
+                    intermediates = [retained_path, retained_path],
+                ),
+            )
+            test_throws_message(
+                ErrorException,
+                "retained-intermediate lifecycle binding contains duplicate " *
+                "paths",
+            ) do
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    duplicate_retained_result,
+                    lifecycle_metadata_outdir,
+                )
+            end
+            bound_child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    unbound_metadata_result,
+                    lifecycle_metadata_outdir,
+                )
+            bound_metadata_result = merge(
+                unbound_metadata_result,
+                (; child_integrity = bound_child_integrity),
+            )
+            tampered_lifecycle = merge(
+                bound_lifecycle,
+                (;
+                    intermediates = [
+                        merge(
+                            retained_binding,
+                            (; label = "tampered retained alignment"),
+                        ),
+                    ],
+                ),
+            )
+            tampered_metadata_result = merge(
+                bound_metadata_result,
+                (; lifecycle_artifact_snapshots = tampered_lifecycle),
+            )
+            test_throws_message(
+                ErrorException,
+                "lifecycle artifact snapshots changed after their immutable " *
+                "adapter binding",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    tampered_metadata_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            removed_planned_path = joinpath(
+                lifecycle_metadata_outdir,
+                "removed-planned.sam",
+            )
+            tampered_planned_lifecycle = merge(
+                bound_lifecycle,
+                (;
+                    planned_intermediates = [
+                        retained_path,
+                        removed_planned_path,
+                    ],
+                ),
+            )
+            tampered_planned_result = merge(
+                bound_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        tampered_planned_lifecycle,
+                ),
+            )
+            test_throws_message(
+                ErrorException,
+                "lifecycle artifact snapshots changed after their immutable " *
+                "adapter binding",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    tampered_planned_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            cleanup_unbound_result = merge(
+                unbound_metadata_result,
+                (;
+                    lifecycle_artifact_snapshots =
+                        tampered_planned_lifecycle,
+                ),
+            )
+            cleanup_child_integrity =
+                Mycelia.Rhizomorph._multi_input_autocycler_child_integrity(
+                    cleanup_unbound_result,
+                    lifecycle_metadata_outdir,
+                )
+            cleanup_bound_result = merge(
+                cleanup_unbound_result,
+                (; child_integrity = cleanup_child_integrity),
+            )
+            write(removed_planned_path, "recreated after child cleanup\n")
+            test_throws_message(
+                ErrorException,
+                "polishing intermediate reappeared after its completed child " *
+                "cleanup",
+            ) do
+                Mycelia.Rhizomorph._validate_multi_input_assembler_result(
+                    cleanup_bound_result,
+                    :autocycler_polished,
+                    lifecycle_metadata_outdir,
+                )
+            end
+
+            missing_unicycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "did not propagate its durable run contract path",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.UnicyclerHybridConfig(
+                        output_dir = joinpath(temp_dir, "missing-contract"),
+                    ),
+                    :unicycler;
+                    correction_runner = multi_input_fake_correction_runner(
+                        missing_unicycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_without_field(
+                            multi_input_fake_assembler_result(outdir),
+                            :contract,
+                        ),
+                )
+            end
+
+            missing_autocycler_calls = NamedTuple[]
+            test_throws_message(
+                ErrorException,
+                "did not propagate lifecycle artifact snapshots",
+            ) do
+                Mycelia.Rhizomorph._assemble_paired_short_long(
+                    (MULTI_INPUT_R1, MULTI_INPUT_R2),
+                    MULTI_INPUT_LONG,
+                    Mycelia.Rhizomorph.AutocyclerPolishConfig(
+                        output_dir = joinpath(temp_dir, "missing-lifecycle"),
+                    ),
+                    :autocycler_polished;
+                    correction_runner = multi_input_fake_correction_runner(
+                        missing_autocycler_calls,
+                    ),
+                    assembler_runner = (inputs, outdir) ->
+                        multi_input_without_field(
+                            multi_input_fake_assembler_result(
+                                outdir;
+                                include_polishing_artifacts = true,
+                            ),
+                            :lifecycle_artifact_snapshots,
+                        ),
+                )
+            end
         end
     end
 
@@ -4087,8 +4632,14 @@ Test.@testset "multi-input hybrid assembly contracts" begin
 
             for (label, keyword_arguments) in (
                     ("hifi_reads", (; hifi_reads = String[])),
-                    ("ont_reads", (; ont_reads = "")),
-                    ("ont_reads", (; ont_reads = [" "])),
+                    (
+                        "ont_reads",
+                        (; ont_reads = "", ont_r10_4_plus = true),
+                    ),
+                    (
+                        "ont_reads",
+                        (; ont_reads = [" "], ont_r10_4_plus = true),
+                    ),
             )
                 empty_outdir = joinpath(temp_dir, "empty-$(label)-$(gensym())")
                 test_throws_message(ArgumentError, "at least one non-empty path") do

@@ -251,12 +251,18 @@ function _require_exclusive_output_root_reservation(
         subject::AbstractString,
         reservation_kind::AbstractString = "output-root",
         stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
+        allowed_same_root_locks::Tuple = (),
 )::Nothing
     normalized_root = normpath(abspath(String(workflow_root)))
     normalized_own_lock = normpath(abspath(String(own_lock_path)))
+    normalized_allowed_same_root_locks = Set(
+        normpath(abspath(String(lock_path))) for
+            lock_path in allowed_same_root_locks
+    )
     allowed_ancestor_locks = _current_allowed_output_root_ancestor_locks()
     for lock_path in _same_output_root_reservation_paths(normalized_root)
         lock_path == normalized_own_lock && continue
+        lock_path in normalized_allowed_same_root_locks && continue
         _output_root_reservation_is_active(lock_path; stale_age) || continue
         throw(ArgumentError(
             "$(subject) overlaps an active same-root " *

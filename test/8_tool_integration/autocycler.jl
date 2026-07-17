@@ -1656,6 +1656,10 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.outdir == abspath(joinpath(temp_dir, "autocycler-run"))
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
+            Test.@test result.artifact_snapshots.assembly.sha256 ==
+                       Mycelia._autocycler_sha256(result.assembly)
+            Test.@test result.artifact_snapshots.graph.sha256 ==
+                       Mycelia._autocycler_sha256(result.graph)
             Test.@test !ispath(output_lock_path)
 
             mismatched_companion_runner = function (step::NamedTuple)
@@ -2180,6 +2184,8 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test result.requested_threads == 4
             Test.@test result.autocycler_assembly_threads == 4
             Test.@test result.polishing_threads == 4
+            Test.@test result.lifecycle_artifact_snapshots.assembly.sha256 ==
+                       Mycelia._autocycler_sha256(result.assembly)
             Test.@test result.input_snapshots.long_reads.path ==
                        abspath(long_reads)
             Test.@test result.input_snapshots.short_reads_1.size_bytes ==
@@ -2299,6 +2305,84 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test occursin(
                 "complete Autocycler and paired-short polishing lifecycle",
                 sprint(showerror, lifecycle_mutation_error),
+            )
+
+            final_dependency_out_dir = joinpath(
+                temp_dir,
+                "final-dependency-artifact-mutation",
+            )
+            final_dependency_checks = Ref(0)
+            final_dependency_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    final_dependency_out_dir;
+                    dependency_checker = () -> begin
+                        final_dependency_checks[] += 1
+                        if final_dependency_checks[] == 3
+                            write(
+                                joinpath(
+                                    final_dependency_out_dir,
+                                    "short_read_polishing",
+                                    "pypolca",
+                                    "autocycler_polished_corrected.fasta",
+                                ),
+                                ">contig_1\nTGCATGCA\n",
+                            )
+                        end
+                        return initial_toolchain
+                    end,
+                    runner = _autocycler_test_runner!,
+                    environment_lock_path,
+                    environment_lock_runner,
+                )
+            end
+            Test.@test final_dependency_checks[] == 3
+            Test.@test final_dependency_error isa ErrorException
+            Test.@test occursin(
+                "Pypolca-polished Autocycler assembly changed after its " *
+                "validated Autocycler snapshot",
+                sprint(showerror, final_dependency_error),
+            )
+
+            recreated_dependency_out_dir = joinpath(
+                temp_dir,
+                "final-dependency-intermediate-recreation",
+            )
+            recreated_dependency_path = joinpath(
+                recreated_dependency_out_dir,
+                "short_read_polishing",
+                "alignments_1.sam",
+            )
+            recreated_dependency_checks = Ref(0)
+            recreated_dependency_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    recreated_dependency_out_dir;
+                    dependency_checker = () -> begin
+                        recreated_dependency_checks[] += 1
+                        if recreated_dependency_checks[] == 3
+                            write(
+                                recreated_dependency_path,
+                                "recreated after successful cleanup\n",
+                            )
+                        end
+                        return initial_toolchain
+                    end,
+                    runner = _autocycler_test_runner!,
+                    environment_lock_path,
+                    environment_lock_runner,
+                )
+            end
+            Test.@test recreated_dependency_checks[] == 3
+            Test.@test recreated_dependency_error isa ErrorException
+            Test.@test isfile(recreated_dependency_path)
+            Test.@test occursin(
+                "polishing intermediate reappeared after its completed cleanup",
+                sprint(showerror, recreated_dependency_error),
             )
 
             renamed_polypolish_pypolca_calls = Ref(0)
@@ -2421,7 +2505,8 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test mutated_graph_error isa ErrorException
             Test.@test occursin(
-                "Autocycler consensus GFA changed after its validated Autocycler snapshot",
+                "Autocycler consensus GFA changed before immutable semantic " *
+                "validation",
                 sprint(showerror, mutated_graph_error),
             )
 
@@ -2453,7 +2538,8 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test malformed_raw_error isa ErrorException
             Test.@test occursin(
-                "Autocycler consensus FASTA is not valid FASTA",
+                "Autocycler consensus FASTA changed before immutable semantic " *
+                "validation",
                 sprint(showerror, malformed_raw_error),
             )
 
@@ -2692,6 +2778,50 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test cleanup_result.autocycler_assembly_threads == 128
             Test.@test cleanup_result.polishing_threads == 256
 
+            recreated_out_dir = joinpath(
+                temp_dir,
+                "cleanup-recreated-earlier-intermediate",
+            )
+            recreated_path = Ref("")
+            recreated_contents = Ref("")
+            recreation_attempts = String[]
+            function recreating_remover(path::AbstractString)::Nothing
+                normalized_path = String(path)
+                push!(recreation_attempts, normalized_path)
+                if length(recreation_attempts) == 1
+                    recreated_path[] = normalized_path
+                    recreated_contents[] = read(normalized_path, String)
+                end
+                rm(normalized_path; force = true)
+                if length(recreation_attempts) == 2
+                    write(recreated_path[], recreated_contents[])
+                end
+                return nothing
+            end
+            recreated_result = Test.@test_logs (
+                :warn,
+                r"retained a polishing intermediate after cleanup",
+            ) min_level=Logging.Warn begin
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    recreated_out_dir;
+                    dependency_checker = _autocycler_test_toolchain,
+                    runner = _autocycler_test_runner!,
+                    intermediate_remover = recreating_remover,
+                )
+            end
+            recreated_plan = Mycelia._autocycler_polishing_command_plan(
+                recreated_result.autocycler_assembly,
+                short_reads_1,
+                short_reads_2,
+                recreated_result.outdir,
+            )
+            Test.@test recreation_attempts == recreated_plan.intermediate_files
+            Test.@test recreated_result.intermediates == [recreated_path[]]
+            Test.@test read(recreated_path[], String) == recreated_contents[]
+
             cleanup_intermediate_mutation_out_dir = joinpath(
                 temp_dir,
                 "cleanup-mutated-retained-intermediate",
@@ -2767,7 +2897,8 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test cleanup_mutation_error isa ErrorException
             Test.@test cleanup_mutated_final[]
             Test.@test occursin(
-                "Pypolca-polished Autocycler assembly changed after its validated Autocycler snapshot",
+                "Pypolca-polished Autocycler assembly changed before immutable " *
+                "semantic validation",
                 sprint(showerror, cleanup_mutation_error),
             )
 
@@ -3560,6 +3691,71 @@ Test.@testset "Autocycler input content lifecycle binding" begin
             return (; long_reads, short_reads_1, short_reads_2)
         end
 
+        gzip_input = joinpath(temp_dir, "spooled-long.fastq.gz")
+        open(gzip_input, "w") do output
+            compressor = Mycelia.CodecZlib.GzipCompressorStream(output)
+            try
+                write(compressor, "@long\nACGT\n+\nIIII\n")
+            finally
+                close(compressor)
+            end
+        end
+        gzip_binding = Mycelia._autocycler_spooled_input_snapshot(
+            gzip_input,
+            "Gzip long-read FASTQ",
+        )
+        gzip_spool_root = gzip_binding.spool_root
+        try
+            Test.@test basename(gzip_binding.semantic_path) ==
+                       basename(gzip_input)
+            Test.@test Mycelia._validate_autocycler_fastq(
+                gzip_binding.semantic_path,
+                "Gzip long-read input",
+            ) == 1
+            Test.@test gzip_binding.snapshot.sha256 ==
+                       Mycelia._autocycler_sha256(gzip_input)
+        finally
+            Mycelia._cleanup_autocycler_input_spool!(gzip_binding)
+        end
+        Test.@test !ispath(gzip_spool_root)
+
+        malformed_pair_r1 = joinpath(temp_dir, "malformed-pair-R1.fastq")
+        malformed_pair_r2 = joinpath(temp_dir, "malformed-pair-R2.fasta")
+        write(malformed_pair_r1, "@pair/1\nACGT\n+\nIIII\n")
+        write(malformed_pair_r2, ">pair/2\nACGT\n")
+        malformed_spool_roots = String[]
+        malformed_pair_error = _autocycler_test_error() do
+            Mycelia._with_autocycler_spooled_input_snapshot(
+                malformed_pair_r1,
+                "Malformed pair R1",
+            ) do short_read_1_binding
+                push!(
+                    malformed_spool_roots,
+                    short_read_1_binding.spool_root,
+                )
+                return Mycelia._with_autocycler_spooled_input_snapshot(
+                    malformed_pair_r2,
+                    "Malformed pair R2",
+                ) do short_read_2_binding
+                    push!(
+                        malformed_spool_roots,
+                        short_read_2_binding.spool_root,
+                    )
+                    return Mycelia._validate_autocycler_paired_fastqs(
+                        short_read_1_binding.semantic_path,
+                        short_read_2_binding.semantic_path,
+                    )
+                end
+            end
+        end
+        Test.@test malformed_pair_error isa ArgumentError
+        Test.@test occursin(
+            "must be FASTQ files",
+            sprint(showerror, malformed_pair_error),
+        )
+        Test.@test length(malformed_spool_roots) == 2
+        Test.@test all(!ispath, malformed_spool_roots)
+
         semantic_long_inputs = write_inputs("semantic-long")
         semantic_long_dependency_calls = Ref(0)
         semantic_long_runner_calls = Ref(0)
@@ -3592,6 +3788,35 @@ Test.@testset "Autocycler input content lifecycle binding" begin
         )
         Test.@test semantic_long_dependency_calls[] == 0
         Test.@test semantic_long_runner_calls[] == 0
+
+        semantic_artifact_inputs = write_inputs("semantic-artifact")
+        semantic_artifact_runner_calls = Ref(0)
+        semantic_artifact_error = _autocycler_test_error() do
+            Mycelia._run_autocycler(
+                semantic_artifact_inputs.long_reads,
+                joinpath(temp_dir, "semantic-artifact-output");
+                dependency_checker = () -> toolchain,
+                runner = step -> begin
+                    semantic_artifact_runner_calls[] += 1
+                    _autocycler_test_runner!(step)
+                end,
+                after_artifact_semantic_validation_hook = artifacts -> write(
+                    artifacts.assembly,
+                    ">contig_1\nTGCATGCA\n",
+                ),
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "semantic-artifact-environment.pid",
+                ),
+            )
+        end
+        Test.@test semantic_artifact_error isa ErrorException
+        Test.@test occursin(
+            "Autocycler consensus FASTA changed after its validated " *
+            "Autocycler snapshot",
+            sprint(showerror, semantic_artifact_error),
+        )
+        Test.@test semantic_artifact_runner_calls[] == 1
 
         for role in (:short_reads_1, :short_reads_2)
             semantic_pair_inputs = write_inputs("semantic-$(role)")
@@ -4058,6 +4283,52 @@ Test.@testset "Autocycler input content lifecycle binding" begin
             sprint(showerror, final_error),
         )
         Test.@test final_steps == [
+            :autocycler,
+            :bwa_index,
+            :bwa_mem_1,
+            :bwa_mem_2,
+            :polypolish_filter,
+            :polypolish,
+            :pypolca,
+        ]
+
+        outer_final_inputs = write_inputs("outer-final-input-gate")
+        outer_final_dependency_calls = Ref(0)
+        outer_final_steps = Symbol[]
+        outer_final_error = _autocycler_test_error() do
+            Mycelia._run_autocycler_polished(
+                outer_final_inputs.long_reads,
+                outer_final_inputs.short_reads_1,
+                outer_final_inputs.short_reads_2,
+                joinpath(temp_dir, "outer-final-input-gate-output");
+                dependency_checker = () -> begin
+                    outer_final_dependency_calls[] += 1
+                    if outer_final_dependency_calls[] == 3
+                        write(
+                            outer_final_inputs.long_reads,
+                            "@long\nTGCA\n+\nIIII\n",
+                        )
+                    end
+                    return toolchain
+                end,
+                runner = step -> begin
+                    push!(outer_final_steps, step.name)
+                    _autocycler_test_runner!(step)
+                end,
+                environment_lock_path = joinpath(
+                    temp_dir,
+                    "outer-final-input-gate-environment.pid",
+                ),
+            )
+        end
+        Test.@test outer_final_dependency_calls[] == 3
+        Test.@test outer_final_error isa ErrorException
+        Test.@test occursin(
+            "Long-read FASTQ changed after its initial path/size/SHA-256 " *
+            "snapshot",
+            sprint(showerror, outer_final_error),
+        )
+        Test.@test outer_final_steps == [
             :autocycler,
             :bwa_index,
             :bwa_mem_1,

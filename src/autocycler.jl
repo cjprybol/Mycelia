@@ -135,6 +135,78 @@ function _autocycler_sha256(path::AbstractString)::String
     end
 end
 
+function _autocycler_sha256(bytes::AbstractVector{UInt8})::String
+    return SHA.bytes2hex(SHA.sha256(bytes))
+end
+
+function _autocycler_spooled_input_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = _require_nonempty_autocycler_file(path, label)
+    canonical_path = realpath(normalized_path)
+    spool_root = mktempdir(; prefix = "mycelia-autocycler-input-")
+    spool_path = joinpath(spool_root, basename(normalized_path))
+    try
+        open(normalized_path, "r") do input
+            open(spool_path, "w") do output
+                buffer = Vector{UInt8}(undef, 1024 * 1024)
+                while !eof(input)
+                    count = readbytes!(input, buffer)
+                    count == 0 && break
+                    write(output, @view buffer[1:count])
+                end
+            end
+        end
+        chmod(spool_path, 0o400)
+    catch
+        rm(spool_root; recursive = true, force = true)
+        rethrow()
+    end
+    try
+        filesize(spool_path) > 0 || throw(ArgumentError(
+            "$(label) became empty while its private semantic snapshot was " *
+            "materialized: $(normalized_path)",
+        ))
+        snapshot = (
+            path = normalized_path,
+            canonical_path,
+            size_bytes = filesize(spool_path),
+            sha256 = _autocycler_sha256(spool_path),
+        )
+        return (; snapshot, semantic_path = spool_path, spool_root)
+    catch
+        _cleanup_autocycler_input_spool!(
+            (; semantic_path = spool_path, spool_root),
+        )
+        rethrow()
+    end
+end
+
+function _cleanup_autocycler_input_spool!(binding::NamedTuple)::Nothing
+    try
+        if ispath(binding.semantic_path)
+            chmod(binding.semantic_path, 0o600)
+        end
+    finally
+        rm(binding.spool_root; recursive = true, force = true)
+    end
+    return nothing
+end
+
+function _with_autocycler_spooled_input_snapshot(
+        function_to_run::Function,
+        path::AbstractString,
+        label::AbstractString,
+)::Any
+    binding = _autocycler_spooled_input_snapshot(path, label)
+    try
+        return function_to_run(binding)
+    finally
+        _cleanup_autocycler_input_spool!(binding)
+    end
+end
+
 function _autocycler_input_snapshot(
         path::AbstractString,
         label::AbstractString,
@@ -936,6 +1008,31 @@ function _autocycler_artifact_snapshot(
     )
 end
 
+function _autocycler_buffered_artifact_snapshot(
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = _require_contained_regular_autocycler_artifact(
+        path,
+        workflow_root,
+        label,
+    )
+    bytes = open(normalized_path, "r") do input
+        read(input)
+    end
+    isempty(bytes) && throw(ErrorException(
+        "$(label) became empty while its immutable byte snapshot was read: " *
+        "$(normalized_path)",
+    ))
+    snapshot = (
+        path = normalized_path,
+        size_bytes = length(bytes),
+        sha256 = _autocycler_sha256(bytes),
+    )
+    return (; snapshot, bytes)
+end
+
 function _require_unchanged_autocycler_artifact(
         expected_snapshot::NamedTuple,
         path::AbstractString,
@@ -960,55 +1057,37 @@ function _require_unchanged_autocycler_artifact(
     return observed_snapshot
 end
 
-function _require_valid_autocycler_fasta(
+function _autocycler_fasta_sequence_map_from_reader(
+        reader::Any,
         path::AbstractString,
         label::AbstractString,
-)::String
-    normalized_path = _require_nonempty_autocycler_file(path, label)
-    islink(normalized_path) && throw(
-        ErrorException(
-            "$(label) must be a regular, non-symlink FASTA file: " *
-            "$(normalized_path).",
-        ),
-    )
-    reader = try
-        Mycelia.open_fastx(normalized_path)
-    catch error
-        error isa InterruptException && rethrow()
-        throw(
-            ErrorException(
-                "$(label) is not valid FASTA: $(normalized_path). Cause: " *
-                sprint(showerror, error),
-            ),
-        )
-    end
-    record_count = 0
-    identifiers = Set{String}()
+)::Dict{String, String}
+    sequences = Dict{String, String}()
     try
-        for record in reader
+        for (record_count, record) in enumerate(reader)
             record isa FASTX.FASTA.Record || throw(
                 ErrorException(
-                    "$(label) is not valid FASTA: $(normalized_path).",
+                    "$(label) is not valid FASTA: $(path).",
                 ),
             )
             identifier = String(FASTX.identifier(record))
             isempty(identifier) && throw(
                 ErrorException(
                     "$(label) contains an empty FASTA identifier at record " *
-                    "$(record_count + 1): $(normalized_path).",
+                    "$(record_count): $(path).",
                 ),
             )
-            identifier in identifiers && throw(
+            haskey(sequences, identifier) && throw(
                 ErrorException(
                     "$(label) contains duplicate FASTA identifier " *
-                    "$(repr(identifier)): $(normalized_path).",
+                    "$(repr(identifier)): $(path).",
                 ),
             )
             sequence = FASTX.sequence(String, record)
             isempty(sequence) && throw(
                 ErrorException(
                     "$(label) contains an empty FASTA sequence at record " *
-                    "$(record_count + 1): $(normalized_path).",
+                    "$(record_count): $(path).",
                 ),
             )
             occursin(
@@ -1017,7 +1096,7 @@ function _require_valid_autocycler_fasta(
             ) || throw(
                 ErrorException(
                     "$(label) contains invalid DNA at FASTA record " *
-                    "$(record_count + 1): $(normalized_path).",
+                    "$(record_count): $(path).",
                 ),
             )
             try
@@ -1027,13 +1106,12 @@ function _require_valid_autocycler_fasta(
                 throw(
                     ErrorException(
                         "$(label) contains invalid DNA at FASTA record " *
-                        "$(record_count + 1): $(normalized_path). Cause: " *
+                        "$(record_count): $(path). Cause: " *
                         sprint(showerror, error),
                     ),
                 )
             end
-            push!(identifiers, identifier)
-            record_count += 1
+            sequences[identifier] = uppercase(sequence)
         end
     catch error
         error isa InterruptException && rethrow()
@@ -1042,34 +1120,26 @@ function _require_valid_autocycler_fasta(
         end
         throw(
             ErrorException(
-                "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+                "$(label) is not valid FASTA: $(path). Cause: " *
                 sprint(showerror, error),
             ),
         )
     finally
         close(reader)
     end
-    record_count > 0 || throw(
-        ErrorException("$(label) contains no FASTA records: $(normalized_path)."),
+    isempty(sequences) && throw(
+        ErrorException("$(label) contains no FASTA records: $(path)."),
     )
-    return normalized_path
+    return sequences
 end
 
-function _autocycler_fasta_identifier_set(
+function _autocycler_fasta_sequence_map(
+        bytes::AbstractVector{UInt8},
         path::AbstractString,
         label::AbstractString,
-)::Set{String}
-    normalized_path = _require_valid_autocycler_fasta(path, label)
-    identifiers = Set{String}()
-    reader = Mycelia.open_fastx(normalized_path)
-    try
-        for record in reader
-            push!(identifiers, String(FASTX.identifier(record)))
-        end
-    finally
-        close(reader)
-    end
-    return identifiers
+)::Dict{String, String}
+    reader = FASTX.FASTA.Reader(IOBuffer(bytes))
+    return _autocycler_fasta_sequence_map_from_reader(reader, path, label)
 end
 
 function _require_matching_autocycler_contig_identifiers(
@@ -1098,37 +1168,22 @@ function _require_valid_autocycler_gfa(
     return _require_valid_metamdbg_gfa(path, label)
 end
 
-function _autocycler_fasta_sequence_map(
-        path::AbstractString,
-        label::AbstractString,
-)::Dict{String, String}
-    normalized_path = _require_valid_autocycler_fasta(path, label)
-    sequences = Dict{String, String}()
-    reader = Mycelia.open_fastx(normalized_path)
-    try
-        for record in reader
-            identifier = String(FASTX.identifier(record))
-            sequences[identifier] = uppercase(FASTX.sequence(String, record))
-        end
-    finally
-        close(reader)
-    end
-    return sequences
-end
-
 function _autocycler_gfa_sequence_map(
+        bytes::AbstractVector{UInt8},
         path::AbstractString,
         label::AbstractString,
 )::Dict{String, String}
-    normalized_path = _require_valid_autocycler_gfa(path, label)
+    input = IOBuffer(bytes)
+    _require_valid_metamdbg_gfa_input(input, label, path)
+    seekstart(input)
     sequences = Dict{String, String}()
-    for (line_number, line) in enumerate(eachline(normalized_path))
+    for (line_number, line) in enumerate(eachline(input))
         startswith(line, "S\t") || continue
         fields = split(line, '\t'; keepempty = true)
         length(fields) >= 3 || throw(
             ErrorException(
                 "$(label) has a malformed segment at line $(line_number): " *
-                "$(normalized_path).",
+                "$(path).",
             ),
         )
         identifier = fields[2]
@@ -1153,18 +1208,10 @@ function _autocycler_gfa_sequence_map(
     return sequences
 end
 
-function _require_matching_autocycler_companion_artifacts(
-        assembly::AbstractString,
-        graph::AbstractString,
+function _require_matching_autocycler_companion_sequence_maps(
+        fasta_sequences::AbstractDict,
+        gfa_sequences::AbstractDict,
 )::Nothing
-    fasta_sequences = _autocycler_fasta_sequence_map(
-        assembly,
-        "Autocycler consensus FASTA",
-    )
-    gfa_sequences = _autocycler_gfa_sequence_map(
-        graph,
-        "Autocycler consensus GFA",
-    )
     fasta_identifiers = Set(keys(fasta_sequences))
     gfa_identifiers = Set(keys(gfa_sequences))
     fasta_identifiers == gfa_identifiers || throw(
@@ -1187,6 +1234,111 @@ function _require_matching_autocycler_companion_artifacts(
         ),
     )
     return nothing
+end
+
+function _require_matching_autocycler_companion_artifacts(
+        assembly_bytes::AbstractVector{UInt8},
+        assembly::AbstractString,
+        graph_bytes::AbstractVector{UInt8},
+        graph::AbstractString,
+)::Nothing
+    fasta_sequences = _autocycler_fasta_sequence_map(
+        assembly_bytes,
+        assembly,
+        "Autocycler consensus FASTA",
+    )
+    gfa_sequences = _autocycler_gfa_sequence_map(
+        graph_bytes,
+        graph,
+        "Autocycler consensus GFA",
+    )
+    return _require_matching_autocycler_companion_sequence_maps(
+        fasta_sequences,
+        gfa_sequences,
+    )
+end
+
+function _require_expected_autocycler_artifact_snapshot(
+        expected_snapshot::NamedTuple,
+        buffered_snapshot::NamedTuple,
+        label::AbstractString,
+)::Nothing
+    buffered_snapshot == expected_snapshot && return nothing
+    throw(ErrorException(
+        "$(label) changed before immutable semantic validation: expected " *
+        "size=$(expected_snapshot.size_bytes), " *
+        "sha256=$(expected_snapshot.sha256); observed " *
+        "size=$(buffered_snapshot.size_bytes), " *
+        "sha256=$(buffered_snapshot.sha256).",
+    ))
+end
+
+function _autocycler_buffered_semantic_fasta(
+        expected_snapshot::NamedTuple,
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    buffered = _autocycler_buffered_artifact_snapshot(
+        path,
+        workflow_root,
+        label,
+    )
+    _require_expected_autocycler_artifact_snapshot(
+        expected_snapshot,
+        buffered.snapshot,
+        label,
+    )
+    sequences = _autocycler_fasta_sequence_map(
+        buffered.bytes,
+        buffered.snapshot.path,
+        label,
+    )
+    _require_unchanged_autocycler_artifact(
+        expected_snapshot,
+        buffered.snapshot.path,
+        workflow_root,
+        label,
+    )
+    return (;
+        path = buffered.snapshot.path,
+        snapshot = buffered.snapshot,
+        sequences,
+    )
+end
+
+function _autocycler_buffered_semantic_gfa(
+        expected_snapshot::NamedTuple,
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    buffered = _autocycler_buffered_artifact_snapshot(
+        path,
+        workflow_root,
+        label,
+    )
+    _require_expected_autocycler_artifact_snapshot(
+        expected_snapshot,
+        buffered.snapshot,
+        label,
+    )
+    sequences = _autocycler_gfa_sequence_map(
+        buffered.bytes,
+        buffered.snapshot.path,
+        label,
+    )
+    _require_unchanged_autocycler_artifact(
+        expected_snapshot,
+        buffered.snapshot.path,
+        workflow_root,
+        label,
+    )
+    return (;
+        path = buffered.snapshot.path,
+        snapshot = buffered.snapshot,
+        sequences,
+    )
 end
 
 function _autocycler_pair_identifier(identifier::AbstractString)::String
@@ -1235,11 +1387,11 @@ function _autocycler_pair_role(
     return identifier_role === nothing ? casava_role : identifier_role
 end
 
-function _validate_autocycler_fastq(
+function _validate_autocycler_fastq_reader(
+        reader::Any,
         path::AbstractString,
         label::AbstractString,
 )::Int
-    reader = Mycelia.open_fastx(path)
     record_count = 0
     try
         for record in reader
@@ -1255,6 +1407,17 @@ function _validate_autocycler_fastq(
     return record_count
 end
 
+function _validate_autocycler_fastq(
+        path::AbstractString,
+        label::AbstractString,
+)::Int
+    return _validate_autocycler_fastq_reader(
+        Mycelia.open_fastx(path),
+        path,
+        label,
+    )
+end
+
 function _validate_autocycler_paired_fastqs(
         short_reads_1::AbstractString,
         short_reads_2::AbstractString,
@@ -1263,7 +1426,25 @@ function _validate_autocycler_paired_fastqs(
         "Autocycler paired short-read R1 and R2 must be distinct files.",
     ))
     reader_1 = Mycelia.open_fastx(short_reads_1)
-    reader_2 = Mycelia.open_fastx(short_reads_2)
+    reader_2 = try
+        Mycelia.open_fastx(short_reads_2)
+    catch
+        try
+            close(reader_1)
+        finally
+            rethrow()
+        end
+    end
+    return _validate_autocycler_paired_fastq_readers(
+        reader_1,
+        reader_2,
+    )
+end
+
+function _validate_autocycler_paired_fastq_readers(
+        reader_1::Any,
+        reader_2::Any,
+)::Int
     pair_count = 0
     try
         next_1 = iterate(reader_1)
@@ -1317,8 +1498,11 @@ function _validate_autocycler_paired_fastqs(
             next_2 = iterate(reader_2, state_2)
         end
     finally
-        close(reader_1)
-        close(reader_2)
+        try
+            close(reader_1)
+        finally
+            close(reader_2)
+        end
     end
     pair_count > 0 || throw(
         ArgumentError("Autocycler paired short reads must be non-empty."),
@@ -1402,6 +1586,12 @@ function _with_autocycler_output_lock(
     poll_interval > 0 || throw(ArgumentError("poll_interval must be positive."))
     canonical_out_dir = _canonical_autocycler_output_path(out_dir)
     lock_path = _autocycler_output_lock_path_from_canonical(canonical_out_dir)
+    _require_exclusive_output_root_reservation(
+        canonical_out_dir,
+        lock_path;
+        subject = "Autocycler output directory",
+        stale_age,
+    )
     mkpath(dirname(lock_path))
     locked_action = function ()
         _require_exclusive_output_root_reservation(
@@ -1913,9 +2103,11 @@ function _cleanup_autocycler_polishing_intermediates!(
         directory_identities::Tuple = (),
         remover::Function = path -> rm(path; force = true),
 )::Vector{String}
-    retained = String[]
-    for path in paths
-        normalized_path = normpath(abspath(String(path)))
+    normalized_paths = String[
+        normpath(abspath(String(path))) for path in paths
+    ]
+    cleanup_failures = Set{String}()
+    for normalized_path in normalized_paths
         cleanup_error = nothing
         try
             for identity in directory_identities
@@ -1935,13 +2127,21 @@ function _cleanup_autocycler_polishing_intermediates!(
             cleanup_error = error
         end
         if cleanup_error !== nothing
+            push!(cleanup_failures, normalized_path)
             cleanup_message =
                 "Autocycler could not remove a polishing intermediate"
             @warn cleanup_message path = normalized_path cleanup_error
         end
+    end
+
+    # A later remover callback can recreate a path visited earlier. Rescan the
+    # complete plan only after every removal attempt so no retained capability
+    # can disappear from the returned inventory.
+    retained = String[]
+    for normalized_path in normalized_paths
         if ispath(normalized_path) || islink(normalized_path)
             push!(retained, normalized_path)
-            if cleanup_error === nothing
+            if !(normalized_path in cleanup_failures)
                 retained_message =
                     "Autocycler retained a polishing intermediate after cleanup"
                 @warn retained_message path = normalized_path
@@ -2257,6 +2457,7 @@ function _run_autocycler_with_reserved_output(
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
         long_read_snapshot::NamedTuple,
+        after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
 )::NamedTuple
     validated_out_dir = _validate_autocycler_output_dir(reserved_out_dir)
     normalized_toolchain =
@@ -2320,25 +2521,35 @@ function _run_autocycler_with_reserved_output(
         after_step = verify_long_read_after_step,
     )
     autocycler_output_snapshots = something(output_snapshots[])
-    contained_assembly = _require_contained_regular_autocycler_artifact(
+    buffered_assembly = _autocycler_buffered_artifact_snapshot(
         plan.assembly,
         prepared_out_dir,
         "Autocycler consensus FASTA",
     )
-    assembly = _require_valid_autocycler_fasta(
-        contained_assembly,
+    _require_expected_autocycler_artifact_snapshot(
+        autocycler_output_snapshots.assembly,
+        buffered_assembly.snapshot,
         "Autocycler consensus FASTA",
     )
-    contained_graph = _require_contained_regular_autocycler_artifact(
+    buffered_graph = _autocycler_buffered_artifact_snapshot(
         plan.graph,
         prepared_out_dir,
         "Autocycler consensus GFA",
     )
-    graph = _require_valid_autocycler_gfa(
-        contained_graph,
+    _require_expected_autocycler_artifact_snapshot(
+        autocycler_output_snapshots.graph,
+        buffered_graph.snapshot,
         "Autocycler consensus GFA",
     )
-    _require_matching_autocycler_companion_artifacts(assembly, graph)
+    assembly = buffered_assembly.snapshot.path
+    graph = buffered_graph.snapshot.path
+    _require_matching_autocycler_companion_artifacts(
+        buffered_assembly.bytes,
+        assembly,
+        buffered_graph.bytes,
+        graph,
+    )
+    after_artifact_semantic_validation_hook((; assembly, graph))
     _require_unchanged_autocycler_artifact(
         autocycler_output_snapshots.assembly,
         assembly,
@@ -2378,6 +2589,7 @@ function _run_autocycler(
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         after_input_semantic_validation_hook::Function = snapshots -> nothing,
+        after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
@@ -2398,12 +2610,17 @@ function _run_autocycler(
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    long_read_snapshot = _autocycler_input_snapshot(
+    long_read_snapshot = _with_autocycler_spooled_input_snapshot(
         long_reads,
         "Long-read FASTQ",
-    )
+    ) do long_read_binding
+        _validate_autocycler_fastq(
+            long_read_binding.semantic_path,
+            "Long-read input",
+        )
+        return long_read_binding.snapshot
+    end
     normalized_long_reads = long_read_snapshot.path
-    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
     input_snapshots = (; long_reads = long_read_snapshot)
     after_input_semantic_validation_hook(input_snapshots)
     _require_unchanged_autocycler_input(
@@ -2438,6 +2655,7 @@ function _run_autocycler(
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
                 long_read_snapshot,
+                after_artifact_semantic_validation_hook,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -2448,17 +2666,21 @@ function _run_autocycler(
                 result.output_root_identity,
                 result.outdir,
             )
-            _require_matching_autocycler_companion_artifacts(
-                _require_contained_regular_autocycler_artifact(
-                    result.assembly,
-                    result.outdir,
-                    "Autocycler consensus FASTA",
-                ),
-                _require_contained_regular_autocycler_artifact(
-                    result.graph,
-                    result.outdir,
-                    "Autocycler consensus GFA",
-                ),
+            final_assembly_binding = _autocycler_buffered_semantic_fasta(
+                result.assembly_snapshot,
+                result.assembly,
+                result.outdir,
+                "Autocycler consensus FASTA",
+            )
+            final_graph_binding = _autocycler_buffered_semantic_gfa(
+                result.graph_snapshot,
+                result.graph,
+                result.outdir,
+                "Autocycler consensus GFA",
+            )
+            _require_matching_autocycler_companion_sequence_maps(
+                final_assembly_binding.sequences,
+                final_graph_binding.sequences,
             )
             _require_unchanged_autocycler_artifact(
                 result.assembly_snapshot,
@@ -2485,6 +2707,10 @@ function _run_autocycler(
                 requested_threads = result.requested_threads,
                 autocycler_assembly_threads =
                     result.autocycler_assembly_threads,
+                artifact_snapshots = (;
+                    assembly = result.assembly_snapshot,
+                    graph = result.graph_snapshot,
+                ),
                 input_snapshots,
             )
         end
@@ -2534,6 +2760,8 @@ provenance, including the deterministic full Conda inventory and its SHA-256.
 `input_snapshots.long_reads` records the normalized and canonical input path,
 byte size, and SHA-256 value that were verified immediately before consumption
 and again after final artifact validation.
+`artifact_snapshots` records the exact assembly/GFA byte sizes and SHA-256
+values used for semantic validation and final live-path comparison.
 `output_root_identity` records the bound canonical path, device, and inode used
 for lifecycle swap detection.
 `requested_threads` records the caller request and
@@ -2577,6 +2805,7 @@ function _run_autocycler_polished_with_reserved_output(
         conda_runner::AbstractString,
         environment_prefix::AbstractString,
         input_snapshots::NamedTuple,
+        after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
 )::NamedTuple
     autocycler_result = _run_autocycler_with_reserved_output(
         normalized_long_reads,
@@ -2589,6 +2818,7 @@ function _run_autocycler_polished_with_reserved_output(
         conda_runner,
         environment_prefix,
         long_read_snapshot = input_snapshots.long_reads,
+        after_artifact_semantic_validation_hook,
     )
     normalized_out_dir = autocycler_result.outdir
     _require_unchanged_autocycler_toolchain(
@@ -2608,10 +2838,13 @@ function _run_autocycler_polished_with_reserved_output(
         autocycler_result.outdir,
         "Autocycler consensus GFA",
     )
-    autocycler_identifiers = _autocycler_fasta_identifier_set(
+    bound_autocycler_assembly = _autocycler_buffered_semantic_fasta(
+        autocycler_result.assembly_snapshot,
         autocycler_result.assembly,
+        autocycler_result.outdir,
         "Autocycler consensus FASTA",
     )
+    autocycler_identifiers = Set(keys(bound_autocycler_assembly.sequences))
     autocycler_assembly_snapshot = autocycler_result.assembly_snapshot
     autocycler_graph_snapshot = autocycler_result.graph_snapshot
 
@@ -2835,16 +3068,13 @@ function _run_autocycler_polished_with_reserved_output(
             normalized_out_dir,
             "Polypolish Autocycler assembly",
         )
-        contained_polypolish_assembly =
-            _require_contained_regular_autocycler_artifact(
-                polishing_plan.polypolish_assembly,
-                normalized_out_dir,
-                "Polypolish Autocycler assembly",
-            )
-        validated_polypolish_assembly = _require_valid_autocycler_fasta(
-            contained_polypolish_assembly,
+        bound_polypolish_assembly = _autocycler_buffered_semantic_fasta(
+            polypolish_snapshot,
+            polishing_plan.polypolish_assembly,
+            normalized_out_dir,
             "Polypolish Autocycler assembly",
         )
+        validated_polypolish_assembly = bound_polypolish_assembly.path
         _require_unchanged_autocycler_artifact(
             autocycler_assembly_snapshot,
             autocycler_result.assembly,
@@ -2857,10 +3087,7 @@ function _run_autocycler_polished_with_reserved_output(
             normalized_out_dir,
             "Autocycler consensus GFA",
         )
-        polypolish_identifiers = _autocycler_fasta_identifier_set(
-            validated_polypolish_assembly,
-            "Polypolish Autocycler assembly",
-        )
+        polypolish_identifiers = Set(keys(bound_polypolish_assembly.sequences))
         _require_matching_autocycler_contig_identifiers(
             autocycler_identifiers,
             polypolish_identifiers,
@@ -2889,47 +3116,38 @@ function _run_autocycler_polished_with_reserved_output(
             :pypolca,
             polishing_plan.pypolca_report,
         )
-        contained_final_assembly =
-            _require_contained_regular_autocycler_artifact(
-                polishing_plan.assembly,
-                normalized_out_dir,
-                "Pypolca-polished Autocycler assembly",
-            )
-        validated_final_assembly = _require_valid_autocycler_fasta(
-            contained_final_assembly,
+        bound_final_assembly = _autocycler_buffered_semantic_fasta(
+            final_assembly_snapshot,
+            polishing_plan.assembly,
+            normalized_out_dir,
             "Pypolca-polished Autocycler assembly",
         )
+        validated_final_assembly = bound_final_assembly.path
 
-        final_contained_autocycler_assembly =
-            _require_contained_regular_autocycler_artifact(
+        bound_final_autocycler_assembly =
+            _autocycler_buffered_semantic_fasta(
+                autocycler_assembly_snapshot,
                 autocycler_result.assembly,
                 normalized_out_dir,
                 "Autocycler consensus FASTA",
             )
-        validated_autocycler_assembly = _require_valid_autocycler_fasta(
-            final_contained_autocycler_assembly,
-            "Autocycler consensus FASTA",
-        )
-        final_contained_graph =
-            _require_contained_regular_autocycler_artifact(
-                autocycler_result.graph,
-                normalized_out_dir,
-                "Autocycler consensus GFA",
-            )
-        validated_graph = _require_valid_autocycler_gfa(
-            final_contained_graph,
+        validated_autocycler_assembly = bound_final_autocycler_assembly.path
+        bound_final_graph = _autocycler_buffered_semantic_gfa(
+            autocycler_graph_snapshot,
+            autocycler_result.graph,
+            normalized_out_dir,
             "Autocycler consensus GFA",
         )
-        final_contained_polypolish_assembly =
-            _require_contained_regular_autocycler_artifact(
+        validated_graph = bound_final_graph.path
+        bound_final_polypolish_assembly =
+            _autocycler_buffered_semantic_fasta(
+                polypolish_snapshot,
                 validated_polypolish_assembly,
                 normalized_out_dir,
                 "Polypolish Autocycler assembly",
             )
-        validated_polypolish_assembly = _require_valid_autocycler_fasta(
-            final_contained_polypolish_assembly,
-            "Polypolish Autocycler assembly",
-        )
+        validated_polypolish_assembly =
+            bound_final_polypolish_assembly.path
         validated_pypolca_report =
             _require_contained_regular_autocycler_artifact(
                 polishing_plan.pypolca_report,
@@ -2937,53 +3155,24 @@ function _run_autocycler_polished_with_reserved_output(
                 "Pypolca report",
             )
         _require_unchanged_autocycler_artifact(
-            final_assembly_snapshot,
-            validated_final_assembly,
-            normalized_out_dir,
-            "Pypolca-polished Autocycler assembly",
-        )
-        _require_unchanged_autocycler_artifact(
             pypolca_report_snapshot,
             validated_pypolca_report,
             normalized_out_dir,
             "Pypolca report",
         )
 
-        _require_unchanged_autocycler_artifact(
-            autocycler_assembly_snapshot,
-            validated_autocycler_assembly,
-            normalized_out_dir,
-            "Autocycler consensus FASTA",
-        )
-        _require_unchanged_autocycler_artifact(
-            autocycler_graph_snapshot,
-            validated_graph,
-            normalized_out_dir,
-            "Autocycler consensus GFA",
-        )
-        _require_unchanged_autocycler_artifact(
-            polypolish_snapshot,
-            validated_polypolish_assembly,
-            normalized_out_dir,
-            "Polypolish Autocycler assembly",
-        )
-        _require_matching_autocycler_companion_artifacts(
-            validated_autocycler_assembly,
-            validated_graph,
+        _require_matching_autocycler_companion_sequence_maps(
+            bound_final_autocycler_assembly.sequences,
+            bound_final_graph.sequences,
         )
 
-        final_autocycler_identifiers = _autocycler_fasta_identifier_set(
-            validated_autocycler_assembly,
-            "Autocycler consensus FASTA",
-        )
-        final_polypolish_identifiers = _autocycler_fasta_identifier_set(
-            validated_polypolish_assembly,
-            "Polypolish Autocycler assembly",
-        )
-        final_identifiers = _autocycler_fasta_identifier_set(
-            validated_final_assembly,
-            "Pypolca-polished Autocycler assembly",
-        )
+        final_autocycler_identifiers = Set(keys(
+            bound_final_autocycler_assembly.sequences,
+        ))
+        final_polypolish_identifiers = Set(keys(
+            bound_final_polypolish_assembly.sequences,
+        ))
+        final_identifiers = Set(keys(bound_final_assembly.sequences))
         _require_matching_autocycler_contig_identifiers(
             final_autocycler_identifiers,
             final_polypolish_identifiers,
@@ -3032,70 +3221,42 @@ function _run_autocycler_polished_with_reserved_output(
     end
     verify_polishing_intermediate_artifacts(retained_intermediates)
 
-    autocycler_assembly = _require_valid_autocycler_fasta(
-        _require_contained_regular_autocycler_artifact(
-            autocycler_assembly,
-            normalized_out_dir,
-            "Autocycler consensus FASTA",
-        ),
-        "Autocycler consensus FASTA",
-    )
-    graph = _require_valid_autocycler_gfa(
-        _require_contained_regular_autocycler_artifact(
-            graph,
-            normalized_out_dir,
-            "Autocycler consensus GFA",
-        ),
-        "Autocycler consensus GFA",
-    )
-    _require_matching_autocycler_companion_artifacts(
-        autocycler_assembly,
-        graph,
-    )
-    polypolish_assembly = _require_valid_autocycler_fasta(
-        _require_contained_regular_autocycler_artifact(
-            polypolish_assembly,
-            normalized_out_dir,
-            "Polypolish Autocycler assembly",
-        ),
-        "Polypolish Autocycler assembly",
-    )
-    final_assembly = _require_valid_autocycler_fasta(
-        _require_contained_regular_autocycler_artifact(
-            final_assembly,
-            normalized_out_dir,
-            "Pypolca-polished Autocycler assembly",
-        ),
-        "Pypolca-polished Autocycler assembly",
-    )
-    pypolca_report = _require_contained_regular_autocycler_artifact(
-        pypolca_report,
-        normalized_out_dir,
-        "Pypolca report",
-    )
-    _require_unchanged_autocycler_artifact(
+    bound_return_autocycler_assembly = _autocycler_buffered_semantic_fasta(
         autocycler_assembly_snapshot,
         autocycler_assembly,
         normalized_out_dir,
         "Autocycler consensus FASTA",
     )
-    _require_unchanged_autocycler_artifact(
+    autocycler_assembly = bound_return_autocycler_assembly.path
+    bound_return_graph = _autocycler_buffered_semantic_gfa(
         autocycler_graph_snapshot,
         graph,
         normalized_out_dir,
         "Autocycler consensus GFA",
     )
-    _require_unchanged_autocycler_artifact(
+    graph = bound_return_graph.path
+    _require_matching_autocycler_companion_sequence_maps(
+        bound_return_autocycler_assembly.sequences,
+        bound_return_graph.sequences,
+    )
+    bound_return_polypolish_assembly = _autocycler_buffered_semantic_fasta(
         polypolish_snapshot,
         polypolish_assembly,
         normalized_out_dir,
         "Polypolish Autocycler assembly",
     )
-    _require_unchanged_autocycler_artifact(
+    polypolish_assembly = bound_return_polypolish_assembly.path
+    bound_return_final_assembly = _autocycler_buffered_semantic_fasta(
         final_assembly_snapshot,
         final_assembly,
         normalized_out_dir,
         "Pypolca-polished Autocycler assembly",
+    )
+    final_assembly = bound_return_final_assembly.path
+    pypolca_report = _require_contained_regular_autocycler_artifact(
+        pypolca_report,
+        normalized_out_dir,
+        "Pypolca report",
     )
     _require_unchanged_autocycler_artifact(
         pypolca_report_snapshot,
@@ -3103,18 +3264,11 @@ function _run_autocycler_polished_with_reserved_output(
         normalized_out_dir,
         "Pypolca report",
     )
-    final_autocycler_identifiers = _autocycler_fasta_identifier_set(
-        autocycler_assembly,
-        "Autocycler consensus FASTA",
-    )
-    final_polypolish_identifiers = _autocycler_fasta_identifier_set(
-        polypolish_assembly,
-        "Polypolish Autocycler assembly",
-    )
-    final_identifiers = _autocycler_fasta_identifier_set(
-        final_assembly,
-        "Pypolca-polished Autocycler assembly",
-    )
+    final_autocycler_identifiers =
+        Set(keys(bound_return_autocycler_assembly.sequences))
+    final_polypolish_identifiers =
+        Set(keys(bound_return_polypolish_assembly.sequences))
+    final_identifiers = Set(keys(bound_return_final_assembly.sequences))
     _require_matching_autocycler_contig_identifiers(
         final_autocycler_identifiers,
         final_polypolish_identifiers,
@@ -3129,6 +3283,30 @@ function _run_autocycler_polished_with_reserved_output(
     )
     @info "Autocycler paired-short polishing complete" assembly = final_assembly
 
+    retained_intermediate_snapshots = NamedTuple[]
+    for retained_path in retained_intermediates
+        producer = only(Symbol[
+            candidate_producer for (candidate_producer, candidate_paths) in
+            produced_artifact_paths if retained_path in candidate_paths
+        ])
+        push!(retained_intermediate_snapshots, (;
+            path = retained_path,
+            snapshot = captured_polishing_artifact_snapshot(
+                producer,
+                retained_path,
+            ),
+            label = polishing_artifact_label(producer, retained_path),
+        ))
+    end
+    lifecycle_artifact_snapshots = (;
+        autocycler_assembly = autocycler_assembly_snapshot,
+        graph = autocycler_graph_snapshot,
+        polypolish_assembly = polypolish_snapshot,
+        assembly = final_assembly_snapshot,
+        pypolca_report = pypolca_report_snapshot,
+        intermediates = retained_intermediate_snapshots,
+        planned_intermediates = copy(polishing_plan.intermediate_files),
+    )
     return (
         outdir = normalized_out_dir,
         assembly = final_assembly,
@@ -3143,6 +3321,7 @@ function _run_autocycler_polished_with_reserved_output(
         autocycler_assembly_threads =
             autocycler_result.autocycler_assembly_threads,
         polishing_threads = Int(threads),
+        lifecycle_artifact_snapshots,
     )
 end
 
@@ -3162,6 +3341,7 @@ function _run_autocycler_polished(
             _ensure_autocycler_installed_locked_default,
         runner::Function = _default_autocycler_step_runner,
         after_input_semantic_validation_hook::Function = snapshots -> nothing,
+        after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
         intermediate_remover::Function = path -> rm(path; force = true),
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
@@ -3183,32 +3363,56 @@ function _run_autocycler_polished(
         read_type,
     )
     normalized_out_dir = _validate_autocycler_output_dir(out_dir)
-    input_snapshots = (
-        long_reads = _autocycler_input_snapshot(
-            long_reads,
-            "Long-read FASTQ",
-        ),
-        short_reads_1 = _autocycler_input_snapshot(
-            short_reads_1,
-            "Paired short-read R1 FASTQ",
-        ),
-        short_reads_2 = _autocycler_input_snapshot(
-            short_reads_2,
-            "Paired short-read R2 FASTQ",
-        ),
+    normalized_long_reads = _require_nonempty_autocycler_file(
+        long_reads,
+        "Long-read FASTQ",
     )
-    normalized_long_reads = input_snapshots.long_reads.path
-    normalized_short_reads_1 = input_snapshots.short_reads_1.path
-    normalized_short_reads_2 = input_snapshots.short_reads_2.path
+    normalized_short_reads_1 = _require_nonempty_autocycler_file(
+        short_reads_1,
+        "Paired short-read R1 FASTQ",
+    )
+    normalized_short_reads_2 = _require_nonempty_autocycler_file(
+        short_reads_2,
+        "Paired short-read R2 FASTQ",
+    )
     _validate_autocycler_input_sources(
         normalized_long_reads,
         normalized_short_reads_1,
         normalized_short_reads_2,
     )
-    _validate_autocycler_fastq(normalized_long_reads, "Long-read input")
-    _validate_autocycler_paired_fastqs(
-        normalized_short_reads_1,
-        normalized_short_reads_2,
+    long_read_snapshot = _with_autocycler_spooled_input_snapshot(
+        normalized_long_reads,
+        "Long-read FASTQ",
+    ) do long_read_binding
+        _validate_autocycler_fastq(
+            long_read_binding.semantic_path,
+            "Long-read input",
+        )
+        return long_read_binding.snapshot
+    end
+    short_read_1_snapshot, short_read_2_snapshot =
+        _with_autocycler_spooled_input_snapshot(
+            normalized_short_reads_1,
+            "Paired short-read R1 FASTQ",
+        ) do short_read_1_binding
+        return _with_autocycler_spooled_input_snapshot(
+            normalized_short_reads_2,
+            "Paired short-read R2 FASTQ",
+        ) do short_read_2_binding
+            _validate_autocycler_paired_fastqs(
+                short_read_1_binding.semantic_path,
+                short_read_2_binding.semantic_path,
+            )
+            return (
+                short_read_1_binding.snapshot,
+                short_read_2_binding.snapshot,
+            )
+        end
+    end
+    input_snapshots = (
+        long_reads = long_read_snapshot,
+        short_reads_1 = short_read_1_snapshot,
+        short_reads_2 = short_read_2_snapshot,
     )
     after_input_semantic_validation_hook(input_snapshots)
     _require_unchanged_autocycler_input(
@@ -3257,6 +3461,7 @@ function _run_autocycler_polished(
                 conda_runner = resolved_runner,
                 environment_prefix = resolved_prefix,
                 input_snapshots,
+                after_artifact_semantic_validation_hook,
             )
             _require_unchanged_autocycler_toolchain(
                 initial_toolchain,
@@ -3279,7 +3484,79 @@ function _run_autocycler_polished(
                 input_snapshots.short_reads_2,
                 "Paired short-read R2 FASTQ",
             )
-            return merge(result, (; input_snapshots))
+            lifecycle_snapshots = result.lifecycle_artifact_snapshots
+            for (snapshot_name, artifact_path, label) in (
+                    (
+                        :autocycler_assembly,
+                        result.autocycler_assembly,
+                        "Autocycler consensus FASTA",
+                    ),
+                    (:graph, result.graph, "Autocycler consensus GFA"),
+                    (
+                        :polypolish_assembly,
+                        result.polypolish_assembly,
+                        "Polypolish Autocycler assembly",
+                    ),
+                    (
+                        :assembly,
+                        result.assembly,
+                        "Pypolca-polished Autocycler assembly",
+                    ),
+                    (:pypolca_report, result.pypolca_report, "Pypolca report"),
+            )
+                _require_unchanged_autocycler_artifact(
+                    getproperty(lifecycle_snapshots, snapshot_name),
+                    artifact_path,
+                    result.outdir,
+                    label,
+                )
+            end
+            retained_paths = Set(
+                retained.path for retained in lifecycle_snapshots.intermediates
+            )
+            for planned_path in lifecycle_snapshots.planned_intermediates
+                normalized_path =
+                    normpath(abspath(String(planned_path)))
+                _require_planned_autocycler_path_containment(
+                    normalized_path,
+                    result.outdir,
+                    "Autocycler planned polishing intermediate",
+                )
+                if (ispath(normalized_path) || islink(normalized_path)) &&
+                   !(normalized_path in retained_paths)
+                    throw(ErrorException(
+                        "Autocycler polishing intermediate reappeared after " *
+                        "its completed cleanup: $(normalized_path). Refusing " *
+                        "to return an incomplete cleanup inventory.",
+                    ))
+                end
+            end
+            for retained in lifecycle_snapshots.intermediates
+                _require_unchanged_autocycler_artifact(
+                    retained.snapshot,
+                    retained.path,
+                    result.outdir,
+                    retained.label,
+                )
+            end
+            return (;
+                outdir = result.outdir,
+                assembly = result.assembly,
+                graph = result.graph,
+                autocycler_assembly = result.autocycler_assembly,
+                polypolish_assembly = result.polypolish_assembly,
+                pypolca_report = result.pypolca_report,
+                intermediates = result.intermediates,
+                toolchain = result.toolchain,
+                output_root_identity = result.output_root_identity,
+                requested_threads = result.requested_threads,
+                autocycler_assembly_threads =
+                    result.autocycler_assembly_threads,
+                polishing_threads = result.polishing_threads,
+                lifecycle_artifact_snapshots =
+                    result.lifecycle_artifact_snapshots,
+                input_snapshots,
+            )
         end
     end
 end
@@ -3347,6 +3624,9 @@ A named tuple with final `assembly`, raw `graph`, `autocycler_assembly`,
 provenance, including the deterministic full Conda inventory and its SHA-256.
 `input_snapshots` records the normalized and canonical paths, byte sizes, and
 SHA-256 values bound for the long-read and both paired-short inputs.
+`lifecycle_artifact_snapshots` binds the raw consensus/GFA, both polished
+assemblies, Pypolca report, and every retained intermediate to their exact byte
+sizes and SHA-256 values for the high-level hybrid return boundary.
 `output_root_identity` records the bound canonical path, device, and inode used
 for lifecycle swap detection.
 `intermediates` lists files retained by an explicit

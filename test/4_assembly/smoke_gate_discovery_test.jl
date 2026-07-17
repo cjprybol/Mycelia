@@ -1,7 +1,16 @@
-# Regression coverage for the preflight driver used by the canonical Pkg.test
-# entrypoint.
+# Regression coverage for canonical smoke-preflight wiring and its shared parser.
 
 import Test
+
+if !isdefined(@__MODULE__, :_multi_input_hybrid_smoke_prerequisites)
+    include(
+        Base.joinpath(
+            @__DIR__,
+            "..",
+            "multi_input_hybrid_smoke_support.jl",
+        ),
+    )
+end
 
 const _SMOKE_DISCOVERY_ENV_NAMES = (
     "MYCELIA_RUN_ALL",
@@ -23,7 +32,7 @@ const _SMOKE_DISCOVERY_ENV_NAMES = (
 )
 
 function _run_smoke_discovery(
-    overrides::Pair{String, String}...,
+        overrides::Pair{String, String}...,
 )::NamedTuple
     project_root = Base.normpath(Base.joinpath(@__DIR__, "..", ".."))
     preflight_path = Base.joinpath(
@@ -53,70 +62,55 @@ function _run_smoke_discovery(
     return (; ok = Base.success(process), output = String(Base.take!(output)))
 end
 
-Test.@testset "canonical smoke discovery preflight" begin
-    for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
-        for broad_value in ("true", " true ")
-            broad_only = _run_smoke_discovery(broad_gate => broad_value)
-            Test.@test broad_only.ok
-            Test.@test isempty(strip(broad_only.output))
-        end
+function _smoke_prerequisite_error(action::Function)::Exception
+    try
+        action()
+    catch error
+        return error
     end
+    Base.error("Expected smoke prerequisite validation to fail")
+end
 
-    for dedicated_gate in (
-            "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE",
-            "MYCELIA_RUN_AUTOCYCLER_POLISHED",
+function _hybrid_smoke_environment(
+        input_paths::NamedTuple,
+        overrides::Pair{String, String}...,
+)::Dict{String, String}
+    environment = Dict{String, String}(
+        "MYCELIA_RUN_EXTERNAL" => "true",
+        "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+        "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
+        "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
+        "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
     )
-        dedicated_only = _run_smoke_discovery(dedicated_gate => "true")
-        Test.@test !dedicated_only.ok
-        Test.@test occursin(
-            "also require MYCELIA_RUN_EXTERNAL=true",
-            dedicated_only.output,
-        )
+    for override in overrides
+        environment[first(override)] = last(override)
     end
+    return environment
+end
 
-    standalone_without_broad_gate = _run_smoke_discovery(
+Test.@testset "canonical smoke discovery preflight" begin
+    # Keep subprocess coverage only for canonical-driver wiring. Parser and
+    # compatibility matrices below call the shared prerequisites directly.
+    broad_only = _run_smoke_discovery("MYCELIA_RUN_EXTERNAL" => " true ")
+    Test.@test broad_only.ok
+
+    dedicated_only = _run_smoke_discovery(
+        "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+    )
+    Test.@test !dedicated_only.ok
+    Test.@test occursin(
+        "also require MYCELIA_RUN_EXTERNAL=true",
+        dedicated_only.output,
+    )
+
+    standalone_only = _run_smoke_discovery(
         "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
     )
-    Test.@test !standalone_without_broad_gate.ok
+    Test.@test !standalone_only.ok
     Test.@test occursin(
         "MYCELIA_RUN_AUTOCYCLER_SMOKE=true also requires " *
         "MYCELIA_RUN_EXTERNAL=true",
-        standalone_without_broad_gate.output,
-    )
-
-    standalone_without_fixtures = _run_smoke_discovery(
-        "MYCELIA_RUN_EXTERNAL" => "true",
-        "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-    )
-    Test.@test !standalone_without_fixtures.ok
-    Test.@test occursin(
-        "requires MYCELIA_AUTOCYCLER_LONG_READS",
-        standalone_without_fixtures.output,
-    )
-
-    missing_fixtures = _run_smoke_discovery(
-        "MYCELIA_RUN_EXTERNAL" => "true",
-        "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-    )
-    Test.@test !missing_fixtures.ok
-    Test.@test occursin("missing:", missing_fixtures.output)
-
-    missing_autocycler_fixtures = _run_smoke_discovery(
-        "MYCELIA_RUN_EXTERNAL" => "true",
-        "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-        "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
-    )
-    Test.@test !missing_autocycler_fixtures.ok
-    Test.@test occursin("missing:", missing_autocycler_fixtures.output)
-
-    missing_parent_gate = _run_smoke_discovery(
-        "MYCELIA_RUN_EXTERNAL" => "true",
-        "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
-    )
-    Test.@test !missing_parent_gate.ok
-    Test.@test occursin(
-        "also requires MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true",
-        missing_parent_gate.output,
+        standalone_only.output,
     )
 
     Base.mktempdir() do temporary_root
@@ -125,145 +119,138 @@ Test.@testset "canonical smoke discovery preflight" begin
             short_r2 = Base.joinpath(temporary_root, "reads_R2.fastq"),
             long_reads = Base.joinpath(temporary_root, "long.fastq"),
         )
-        for path in values(input_paths)
-            Base.write(path, "@read\nACGT\n+\nIIII\n")
-        end
-        for broad_gate in ("MYCELIA_RUN_ALL", "MYCELIA_RUN_EXTERNAL")
-            valid_opt_in = _run_smoke_discovery(
-                broad_gate => " true ",
-                "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-                "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
-                "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
-                "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
-            )
-            Test.@test valid_opt_in.ok
-            Test.@test isempty(strip(valid_opt_in.output))
-        end
+        Base.write(input_paths.short_r1, "@pair/1\nACGT\n+\nIIII\n")
+        Base.write(input_paths.short_r2, "@pair/2\nACGT\n+\nIIII\n")
+        Base.write(input_paths.long_reads, "@long\nACGT\n+\nIIII\n")
 
-        standalone_paths = (
-            long_reads = Base.joinpath(
-                temporary_root,
-                "standalone_long.fastq",
-            ),
-            short_r1 = Base.joinpath(
-                temporary_root,
-                "standalone_R1.fastq",
-            ),
-            short_r2 = Base.joinpath(
-                temporary_root,
-                "standalone_R2.fastq",
-            ),
-        )
-        Base.write(
-            standalone_paths.long_reads,
-            "@long\nACGT\n+\nIIII\n",
-        )
-        Base.write(
-            standalone_paths.short_r1,
-            "@pair/1\nACGT\n+\nIIII\n",
-        )
-        Base.write(
-            standalone_paths.short_r2,
-            "@pair/2\nACGT\n+\nIIII\n",
-        )
-
-        half_pair = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_1" =>
-                standalone_paths.short_r1,
-        )
-        Test.@test !half_pair.ok
-        Test.@test occursin(
-            "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1",
-            half_pair.output,
-        )
-
-        malformed_long_reads = Base.joinpath(
-            temporary_root,
-            "malformed_long.fastq",
-        )
-        Base.write(malformed_long_reads, ">not_fastq\nACGT\n")
-        malformed_fixture = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" => malformed_long_reads,
-        )
-        Test.@test !malformed_fixture.ok
-        Test.@test occursin("must be a valid FASTQ file", malformed_fixture.output)
-
-        invalid_pair_r1 = Base.joinpath(
-            temporary_root,
-            "invalid_pair_R1.fastq",
-        )
-        Base.write(invalid_pair_r1, "@pair/2\nACGT\n+\nIIII\n")
-        invalid_pair = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_1" => invalid_pair_r1,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_2" =>
-                standalone_paths.short_r2,
-        )
-        Test.@test !invalid_pair.ok
-        Test.@test occursin("invalid explicit mate roles", invalid_pair.output)
-
-        missing_pair_fixture = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_1" =>
-                standalone_paths.short_r1,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_2" => Base.joinpath(
-                temporary_root,
-                "missing_R2.fastq",
-            ),
-        )
-        Test.@test !missing_pair_fixture.ok
-        Test.@test occursin(
-            "paired short-read R2 FASTQ not found",
-            missing_pair_fixture.output,
-        )
-
-        invalid_standalone_read_type = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-            "MYCELIA_AUTOCYCLER_READ_TYPE" => "illumina",
-        )
-        Test.@test !invalid_standalone_read_type.ok
-        Test.@test occursin(
-            "MYCELIA_AUTOCYCLER_READ_TYPE must be one of",
-            invalid_standalone_read_type.output,
-        )
-
-        valid_standalone_long_only = _run_smoke_discovery(
-            "MYCELIA_RUN_EXTERNAL" => "true",
-            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-        )
-        Test.@test valid_standalone_long_only.ok
-        Test.@test isempty(strip(valid_standalone_long_only.output))
-
-        valid_standalone_pair = _run_smoke_discovery(
+        combined_wiring = _run_smoke_discovery(
             "MYCELIA_RUN_ALL" => " true ",
+            "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+            "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
             "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
-            "MYCELIA_AUTOCYCLER_LONG_READS" =>
-                standalone_paths.long_reads,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_1" =>
-                standalone_paths.short_r1,
-            "MYCELIA_AUTOCYCLER_SHORT_READS_2" =>
-                standalone_paths.short_r2,
-            "MYCELIA_AUTOCYCLER_READ_TYPE" => "pacbio_hifi",
+            "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
+            "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
+            "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
+            "MYCELIA_AUTOCYCLER_READ_TYPE" => "ont_r10",
+            "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+            "MYCELIA_AUTOCYCLER_SHORT_READS_1" => input_paths.short_r1,
+            "MYCELIA_AUTOCYCLER_SHORT_READS_2" => input_paths.short_r2,
         )
-        Test.@test valid_standalone_pair.ok
-        Test.@test isempty(strip(valid_standalone_pair.output))
+        Test.@test combined_wiring.ok
+        Test.@test isempty(strip(combined_wiring.output))
+    end
+end
+
+Test.@testset "direct smoke prerequisite parser coverage" begin
+    Test.@test _multi_input_hybrid_smoke_prerequisites(
+        Dict{String, String}(),
+    ) == (; run_smoke = false, run_autocycler = false)
+    Test.@test _autocycler_smoke_prerequisites(
+        Dict{String, String}(),
+    ) == (; run_smoke = false)
+
+    missing_parent = _smoke_prerequisite_error() do
+        _multi_input_hybrid_smoke_prerequisites(Dict(
+            "MYCELIA_RUN_EXTERNAL" => "true",
+            "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+        ))
+    end
+    Test.@test missing_parent isa ArgumentError
+    Test.@test occursin(
+        "also requires MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE=true",
+        sprint(showerror, missing_parent),
+    )
+
+    missing_fixtures = _smoke_prerequisite_error() do
+        _multi_input_hybrid_smoke_prerequisites(Dict(
+            "MYCELIA_RUN_EXTERNAL" => "true",
+            "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
+        ))
+    end
+    Test.@test missing_fixtures isa ArgumentError
+    Test.@test occursin("missing:", sprint(showerror, missing_fixtures))
+
+    Base.mktempdir() do temporary_root
+        input_paths = (
+            short_r1 = Base.joinpath(temporary_root, "direct_R1.fastq"),
+            short_r2 = Base.joinpath(temporary_root, "direct_R2.fastq"),
+            long_reads = Base.joinpath(temporary_root, "direct_long.fastq"),
+        )
+        Base.write(input_paths.short_r1, "@pair/1\nACGT\n+\nIIII\n")
+        Base.write(input_paths.short_r2, "@pair/2\nACGT\n+\nIIII\n")
+        Base.write(input_paths.long_reads, "@long\nACGT\n+\nIIII\n")
+        environment = _hybrid_smoke_environment(input_paths)
+        prerequisites = _multi_input_hybrid_smoke_prerequisites(environment)
+        Test.@test prerequisites.run_smoke
+        Test.@test !prerequisites.run_autocycler
+        Test.@test prerequisites.input_paths == (
+            short_r1 = Base.abspath(input_paths.short_r1),
+            short_r2 = Base.abspath(input_paths.short_r2),
+            long_reads = Base.abspath(input_paths.long_reads),
+        )
+
+        malformed = Base.joinpath(temporary_root, "malformed.fastq")
+        Base.write(malformed, ">not_fastq\nACGT\n")
+        malformed_error = _smoke_prerequisite_error() do
+            _multi_input_hybrid_smoke_prerequisites(
+                _hybrid_smoke_environment(
+                    merge(input_paths, (; long_reads = malformed)),
+                ),
+            )
+        end
+        Test.@test malformed_error isa ArgumentError
+        Test.@test occursin(
+            "must be a valid FASTQ file",
+            sprint(showerror, malformed_error),
+        )
+
+        alias_r2 = Base.joinpath(temporary_root, "alias_R2.fastq")
+        Base.symlink(input_paths.short_r1, alias_r2)
+        alias_error = _smoke_prerequisite_error() do
+            _multi_input_hybrid_smoke_prerequisites(
+                _hybrid_smoke_environment(
+                    merge(input_paths, (; short_r2 = alias_r2)),
+                ),
+            )
+        end
+        Test.@test alias_error isa ArgumentError
+        Test.@test occursin(
+            "must be physically distinct files",
+            sprint(showerror, alias_error),
+        )
+
+        reversed_r1 = Base.joinpath(temporary_root, "reversed_R1.fastq")
+        reversed_r2 = Base.joinpath(temporary_root, "reversed_R2.fastq")
+        Base.write(reversed_r1, "@pair/2\nACGT\n+\nIIII\n")
+        Base.write(reversed_r2, "@pair/1\nACGT\n+\nIIII\n")
+        reversed_error = _smoke_prerequisite_error() do
+            _multi_input_hybrid_smoke_prerequisites(
+                _hybrid_smoke_environment(merge(
+                    input_paths,
+                    (; short_r1 = reversed_r1, short_r2 = reversed_r2),
+                )),
+            )
+        end
+        Test.@test reversed_error isa ArgumentError
+        Test.@test occursin(
+            "invalid explicit mate roles",
+            sprint(showerror, reversed_error),
+        )
+
+        unsynced_r2 = Base.joinpath(temporary_root, "unsynced_R2.fastq")
+        Base.write(unsynced_r2, "@different/2\nACGT\n+\nIIII\n")
+        unsynced_error = _smoke_prerequisite_error() do
+            _multi_input_hybrid_smoke_prerequisites(
+                _hybrid_smoke_environment(
+                    merge(input_paths, (; short_r2 = unsynced_r2)),
+                ),
+            )
+        end
+        Test.@test unsynced_error isa ArgumentError
+        Test.@test occursin(
+            "out of sync at record 1",
+            sprint(showerror, unsynced_error),
+        )
 
         incompatible_read_types = (
             :nanopore => (:pacbio_clr, :pacbio_hifi),
@@ -272,22 +259,22 @@ Test.@testset "canonical smoke discovery preflight" begin
         )
         for (long_read_tech, read_types) in incompatible_read_types
             for read_type in read_types
-                incompatible = _run_smoke_discovery(
-                    "MYCELIA_RUN_EXTERNAL" => "true",
-                    "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-                    "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
-                    "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
-                    "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
-                    "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
-                    "MYCELIA_HYBRID_LONG_TECH" => String(long_read_tech),
-                    "MYCELIA_AUTOCYCLER_READ_TYPE" => String(read_type),
-                )
-                Test.@test !incompatible.ok
+                incompatible_error = _smoke_prerequisite_error() do
+                    _multi_input_hybrid_smoke_prerequisites(
+                        _hybrid_smoke_environment(
+                            input_paths,
+                            "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+                            "MYCELIA_HYBRID_LONG_TECH" =>
+                                String(long_read_tech),
+                            "MYCELIA_AUTOCYCLER_READ_TYPE" => String(read_type),
+                        ),
+                    )
+                end
+                Test.@test incompatible_error isa ArgumentError
                 Test.@test occursin(
-                    "MYCELIA_AUTOCYCLER_READ_TYPE=:$(read_type) is " *
-                    "incompatible with MYCELIA_HYBRID_LONG_TECH=" *
-                    ":$(long_read_tech)",
-                    incompatible.output,
+                    "READ_TYPE=:$(read_type) is incompatible with " *
+                    "MYCELIA_HYBRID_LONG_TECH=:$(long_read_tech)",
+                    sprint(showerror, incompatible_error),
                 )
             end
         end
@@ -299,19 +286,56 @@ Test.@testset "canonical smoke discovery preflight" begin
         )
         for (long_read_tech, read_types) in compatible_read_types
             for read_type in read_types
-                compatible = _run_smoke_discovery(
-                    "MYCELIA_RUN_EXTERNAL" => "true",
-                    "MYCELIA_RUN_MULTI_INPUT_HYBRID_SMOKE" => "true",
-                    "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
-                    "MYCELIA_HYBRID_SHORT_R1" => input_paths.short_r1,
-                    "MYCELIA_HYBRID_SHORT_R2" => input_paths.short_r2,
-                    "MYCELIA_HYBRID_LONG_READS" => input_paths.long_reads,
-                    "MYCELIA_HYBRID_LONG_TECH" => String(long_read_tech),
-                    "MYCELIA_AUTOCYCLER_READ_TYPE" => String(read_type),
+                compatible = _multi_input_hybrid_smoke_prerequisites(
+                    _hybrid_smoke_environment(
+                        input_paths,
+                        "MYCELIA_RUN_AUTOCYCLER_POLISHED" => "true",
+                        "MYCELIA_HYBRID_LONG_TECH" => String(long_read_tech),
+                        "MYCELIA_AUTOCYCLER_READ_TYPE" => String(read_type),
+                    ),
                 )
-                Test.@test compatible.ok
-                Test.@test isempty(strip(compatible.output))
+                Test.@test compatible.run_autocycler
+                Test.@test compatible.autocycler_read_type == read_type
             end
         end
+
+        half_pair_error = _smoke_prerequisite_error() do
+            _autocycler_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_EXTERNAL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+                "MYCELIA_AUTOCYCLER_SHORT_READS_1" => input_paths.short_r1,
+            ))
+        end
+        Test.@test half_pair_error isa ArgumentError
+        Test.@test occursin(
+            "Set both MYCELIA_AUTOCYCLER_SHORT_READS_1",
+            sprint(showerror, half_pair_error),
+        )
+
+        invalid_read_type = _smoke_prerequisite_error() do
+            _autocycler_smoke_prerequisites(Dict(
+                "MYCELIA_RUN_ALL" => "true",
+                "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+                "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+                "MYCELIA_AUTOCYCLER_READ_TYPE" => "illumina",
+            ))
+        end
+        Test.@test invalid_read_type isa ArgumentError
+        Test.@test occursin(
+            "MYCELIA_AUTOCYCLER_READ_TYPE must be one of",
+            sprint(showerror, invalid_read_type),
+        )
+
+        standalone = _autocycler_smoke_prerequisites(Dict(
+            "MYCELIA_RUN_EXTERNAL" => "true",
+            "MYCELIA_RUN_AUTOCYCLER_SMOKE" => "true",
+            "MYCELIA_AUTOCYCLER_LONG_READS" => input_paths.long_reads,
+            "MYCELIA_AUTOCYCLER_SHORT_READS_1" => input_paths.short_r1,
+            "MYCELIA_AUTOCYCLER_SHORT_READS_2" => input_paths.short_r2,
+            "MYCELIA_AUTOCYCLER_READ_TYPE" => "pacbio_hifi",
+        ))
+        Test.@test standalone.run_smoke
+        Test.@test standalone.read_type == "pacbio_hifi"
     end
 end

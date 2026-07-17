@@ -271,6 +271,210 @@ Test.@testset "common Unicycler wrapper contract" begin
         end
     end
 
+    Test.@testset "final lifecycle checks reject post-validation mutation" begin
+        mktempdir() do temp_dir
+            lock_path = joinpath(temp_dir, "unicycler-environment.pid")
+
+            semantic_binding_dir = joinpath(temp_dir, "semantic-binding")
+            semantic_binding_hooks = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = semantic_binding_dir,
+                    input_fingerprinter = _test_unicycler_input_fingerprint,
+                    after_artifact_semantic_validation_hook = artifacts -> begin
+                        semantic_binding_hooks[] += 1
+                        write(artifacts.assembly, ">contig\nTGCA\n")
+                        write(
+                            artifacts.graph,
+                            "H\tVN:Z:1.0\nS\tcontig\tTGCA\n",
+                        )
+                    end,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command -> begin
+                        mkpath(semantic_binding_dir)
+                        write(
+                            joinpath(semantic_binding_dir, "assembly.fasta"),
+                            ">contig\nACGT\n",
+                        )
+                        write(
+                            joinpath(semantic_binding_dir, "assembly.gfa"),
+                            "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                        )
+                    end,
+                ),
+                "changed while its stable semantic artifact snapshot was " *
+                "being bound",
+            )
+            Test.@test semantic_binding_hooks[] == 1
+            Test.@test !ispath(joinpath(
+                semantic_binding_dir,
+                Mycelia._UNICYCLER_CONTRACT_FILENAME,
+            ))
+
+            final_fingerprint_dir = joinpath(temp_dir, "final-fingerprinter")
+            final_fingerprint_calls = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = final_fingerprint_dir,
+                    input_fingerprinter = (path, label) -> begin
+                        final_fingerprint_calls[] += 1
+                        fingerprint = _test_unicycler_input_fingerprint(
+                            path,
+                            label,
+                        )
+                        if final_fingerprint_calls[] == 6
+                            write(
+                                joinpath(
+                                    final_fingerprint_dir,
+                                    "assembly.fasta",
+                                ),
+                                ">contig\nTGCA\n",
+                            )
+                            write(
+                                joinpath(
+                                    final_fingerprint_dir,
+                                    "assembly.gfa",
+                                ),
+                                "H\tVN:Z:1.0\nS\tcontig\tTGCA\n",
+                            )
+                        end
+                        return fingerprint
+                    end,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command -> begin
+                        mkpath(final_fingerprint_dir)
+                        write(
+                            joinpath(final_fingerprint_dir, "assembly.fasta"),
+                            ">contig\nACGT\n",
+                        )
+                        write(
+                            joinpath(final_fingerprint_dir, "assembly.gfa"),
+                            "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                        )
+                    end,
+                ),
+                "changed after its validated semantic artifact snapshot",
+            )
+            Test.@test final_fingerprint_calls[] == 6
+            Test.@test !ispath(joinpath(
+                final_fingerprint_dir,
+                Mycelia._UNICYCLER_CONTRACT_FILENAME,
+            ))
+
+            post_contract_dir = joinpath(temp_dir, "post-contract")
+            post_contract_calls = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = post_contract_dir,
+                    input_fingerprinter = (path, label) -> begin
+                        post_contract_calls[] += 1
+                        fingerprint = _test_unicycler_input_fingerprint(
+                            path,
+                            label,
+                        )
+                        if post_contract_calls[] == 9
+                            write(
+                                joinpath(
+                                    post_contract_dir,
+                                    Mycelia._UNICYCLER_CONTRACT_FILENAME,
+                                ),
+                                "{}\n",
+                            )
+                        end
+                        return fingerprint
+                    end,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command -> begin
+                        mkpath(post_contract_dir)
+                        write(
+                            joinpath(post_contract_dir, "assembly.fasta"),
+                            ">contig\nACGT\n",
+                        )
+                        write(
+                            joinpath(post_contract_dir, "assembly.gfa"),
+                            "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                        )
+                    end,
+                ),
+                "durable input, parameter, toolchain, or artifact contract " *
+                "does not match",
+            )
+            Test.@test post_contract_calls[] == 9
+
+            reuse_dir = joinpath(temp_dir, "post-contract-reuse")
+            fresh = Mycelia._run_unicycler_with_contract(
+                short_1 = "/reads/r1.fastq",
+                short_2 = "/reads/r2.fastq",
+                long_reads = "/reads/long.fastq",
+                outdir = reuse_dir,
+                input_fingerprinter = _test_unicycler_input_fingerprint,
+                environment_preparer = runner -> nothing,
+                toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                environment_lock_path = lock_path,
+                command_runner = command -> begin
+                    mkpath(reuse_dir)
+                    write(
+                        joinpath(reuse_dir, "assembly.fasta"),
+                        ">contig\nACGT\n",
+                    )
+                    write(
+                        joinpath(reuse_dir, "assembly.gfa"),
+                        "H\tVN:Z:1.0\nS\tcontig\tACGT\n",
+                    )
+                end,
+            )
+            Test.@test fresh.status == :completed
+            reuse_fingerprint_calls = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._run_unicycler_with_contract(
+                    short_1 = "/reads/r1.fastq",
+                    short_2 = "/reads/r2.fastq",
+                    long_reads = "/reads/long.fastq",
+                    outdir = reuse_dir,
+                    input_fingerprinter = (path, label) -> begin
+                        reuse_fingerprint_calls[] += 1
+                        fingerprint = _test_unicycler_input_fingerprint(
+                            path,
+                            label,
+                        )
+                        if reuse_fingerprint_calls[] == 6
+                            write(
+                                joinpath(reuse_dir, "assembly.fasta"),
+                                ">contig\nTGCA\n",
+                            )
+                            write(
+                                joinpath(reuse_dir, "assembly.gfa"),
+                                "H\tVN:Z:1.0\nS\tcontig\tTGCA\n",
+                            )
+                        end
+                        return fingerprint
+                    end,
+                    environment_preparer = runner -> nothing,
+                    toolchain_inspector = runner -> _test_unicycler_toolchain(),
+                    environment_lock_path = lock_path,
+                    command_runner = command -> error("reuse unexpectedly ran"),
+                ),
+                "changed after its validated semantic artifact snapshot",
+            )
+            Test.@test reuse_fingerprint_calls[] == 6
+        end
+    end
+
     Test.@testset "assembly FASTA and GFA are semantic companions" begin
         cases = (
             (

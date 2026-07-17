@@ -1452,6 +1452,12 @@ function _with_unicycler_output_lock(
 )::Any
     canonical_outdir = _canonical_planned_unicycler_output_path(outdir)
     lock_path = _unicycler_output_lock_path(canonical_outdir)
+    _require_exclusive_output_root_reservation(
+        canonical_outdir,
+        lock_path;
+        subject = "Unicycler outdir",
+        stale_age = _UNICYCLER_ENVIRONMENT_LOCK_STALE_SECONDS,
+    )
     mkpath(dirname(lock_path))
     locked_action = function ()
         _require_exclusive_output_root_reservation(
@@ -1664,20 +1670,12 @@ function _unicycler_input_fingerprints(
     )
 end
 
-function _unicycler_fasta_sequences(
+function _unicycler_fasta_sequences_from_reader(
+        reader::FASTX.FASTA.Reader,
         path::AbstractString,
         label::AbstractString,
 )::Dict{String, String}
     records = Dict{String, String}()
-    reader = try
-        Mycelia.open_fastx(path)
-    catch caught
-        caught isa InterruptException && rethrow()
-        error(
-            "Unicycler $(label) is not valid FASTA: $(repr(path)). Cause: " *
-            sprint(showerror, caught),
-        )
-    end
     try
         for record in reader
             record isa FASTX.FASTA.Record || error(
@@ -1720,13 +1718,40 @@ function _unicycler_fasta_sequences(
     return records
 end
 
-function _unicycler_gfa_segment_sequences(
+function _unicycler_fasta_sequences(
         path::AbstractString,
         label::AbstractString,
 )::Dict{String, String}
-    _require_valid_metamdbg_gfa(path, "Unicycler $(label)")
+    reader = try
+        Mycelia.open_fastx(path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "Unicycler $(label) is not valid FASTA: $(repr(path)). Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    return _unicycler_fasta_sequences_from_reader(reader, path, label)
+end
+
+function _unicycler_fasta_sequences(
+        bytes::AbstractVector{UInt8},
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    reader = FASTX.FASTA.Reader(IOBuffer(bytes))
+    return _unicycler_fasta_sequences_from_reader(reader, path, label)
+end
+
+function _unicycler_gfa_segment_sequences_from_input(
+        input::IO,
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    _require_valid_metamdbg_gfa_input(input, "Unicycler $(label)", path)
+    seekstart(input)
     segments = Dict{String, String}()
-    for (line_number, line) in enumerate(eachline(path))
+    for (line_number, line) in enumerate(eachline(input))
         isempty(line) && continue
         startswith(line, "#") && continue
         fields = split(line, '\t'; keepempty = true)
@@ -1760,6 +1785,35 @@ function _unicycler_gfa_segment_sequences(
     return segments
 end
 
+function _unicycler_gfa_segment_sequences(
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    normalized_path = _require_metamdbg_regular_file(
+        path,
+        "Unicycler $(label)",
+    )
+    return open(normalized_path, "r") do input
+        _unicycler_gfa_segment_sequences_from_input(
+            input,
+            normalized_path,
+            label,
+        )
+    end
+end
+
+function _unicycler_gfa_segment_sequences(
+        bytes::AbstractVector{UInt8},
+        path::AbstractString,
+        label::AbstractString,
+)::Dict{String, String}
+    return _unicycler_gfa_segment_sequences_from_input(
+        IOBuffer(bytes),
+        path,
+        label,
+    )
+end
+
 function _require_valid_unicycler_artifacts(
         assembly_path::AbstractString,
         graph_path::AbstractString,
@@ -1783,6 +1837,17 @@ function _require_valid_unicycler_artifacts(
         graph,
         "assembly GFA",
     )
+    _require_matching_unicycler_artifact_sequences(
+        fasta_sequences,
+        gfa_sequences,
+    )
+    return (; assembly, graph)
+end
+
+function _require_matching_unicycler_artifact_sequences(
+        fasta_sequences::AbstractDict,
+        gfa_sequences::AbstractDict,
+)::Nothing
     fasta_identifiers = Set(keys(fasta_sequences))
     gfa_identifiers = Set(keys(gfa_sequences))
     fasta_identifiers == gfa_identifiers || error(
@@ -1800,7 +1865,7 @@ function _require_valid_unicycler_artifacts(
         "Unicycler assembly FASTA and GFA contain different sequences for " *
         "contigs $(repr(mismatched)).",
     )
-    return (; assembly, graph)
+    return nothing
 end
 
 function _unicycler_artifact_fingerprint(path::AbstractString)::Dict{String, Any}
@@ -1812,6 +1877,91 @@ function _unicycler_artifact_fingerprint(path::AbstractString)::Dict{String, Any
     )
 end
 
+function _unicycler_buffered_artifact_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+        outdir::AbstractString,
+)::NamedTuple
+    normalized_path = _require_unicycler_artifact(path, label, outdir)
+    bytes = open(normalized_path, "r") do input
+        read(input)
+    end
+    isempty(bytes) && error(
+        "Unicycler $(label) became empty while its stable byte snapshot was read.",
+    )
+    fingerprint = Dict{String, Any}(
+        "canonical_path" => normalized_path,
+        "size_bytes" => length(bytes),
+        "sha256" => SHA.bytes2hex(SHA.sha256(bytes)),
+    )
+    return (; path = normalized_path, bytes, fingerprint)
+end
+
+function _unicycler_semantic_artifact_snapshots(
+        assembly_path::AbstractString,
+        graph_path::AbstractString,
+        outdir::AbstractString;
+        after_semantic_validation_hook::Function = artifacts -> nothing,
+)::NamedTuple
+    assembly = _unicycler_buffered_artifact_snapshot(
+        assembly_path,
+        "assembly FASTA",
+        outdir,
+    )
+    graph = _unicycler_buffered_artifact_snapshot(
+        graph_path,
+        "assembly GFA",
+        outdir,
+    )
+    fasta_sequences = _unicycler_fasta_sequences(
+        assembly.bytes,
+        assembly.path,
+        "assembly FASTA",
+    )
+    gfa_sequences = _unicycler_gfa_segment_sequences(
+        graph.bytes,
+        graph.path,
+        "assembly GFA",
+    )
+    _require_matching_unicycler_artifact_sequences(
+        fasta_sequences,
+        gfa_sequences,
+    )
+    artifacts = (; assembly = assembly.path, graph = graph.path)
+    snapshots = (;
+        assembly = assembly.fingerprint,
+        graph = graph.fingerprint,
+    )
+    after_semantic_validation_hook(artifacts)
+    observed_snapshots = (;
+        assembly = _unicycler_artifact_fingerprint(artifacts.assembly),
+        graph = _unicycler_artifact_fingerprint(artifacts.graph),
+    )
+    observed_snapshots == snapshots || error(
+        "Unicycler assembly FASTA or GFA changed while its stable semantic " *
+        "artifact snapshot was being bound; refusing unvalidated bytes.",
+    )
+    return (; artifacts..., snapshots)
+end
+
+function _require_unchanged_unicycler_artifacts(
+        expected_snapshots::NamedTuple,
+        assembly_path::AbstractString,
+        graph_path::AbstractString,
+        outdir::AbstractString,
+)::NamedTuple
+    observed = _unicycler_semantic_artifact_snapshots(
+        assembly_path,
+        graph_path,
+        outdir,
+    )
+    observed.snapshots == expected_snapshots || error(
+        "Unicycler assembly FASTA or GFA changed after its validated semantic " *
+        "artifact snapshot; refusing stale lifecycle provenance.",
+    )
+    return (; assembly = observed.assembly, graph = observed.graph)
+end
+
 function _unicycler_run_contract(
         input_fingerprints::AbstractDict,
         threads::Int,
@@ -1819,8 +1969,7 @@ function _unicycler_run_contract(
         kmers::Union{Nothing, String},
         environment_prefix::AbstractString,
         toolchain::AbstractDict,
-        assembly::AbstractString,
-        graph::AbstractString,
+        artifact_snapshots::NamedTuple,
 )::Dict{String, Any}
     return Dict{String, Any}(
         "schema" => _UNICYCLER_CONTRACT_SCHEMA,
@@ -1833,8 +1982,8 @@ function _unicycler_run_contract(
         ),
         "toolchain" => deepcopy(toolchain),
         "artifacts" => Dict{String, Any}(
-            "assembly" => _unicycler_artifact_fingerprint(assembly),
-            "graph" => _unicycler_artifact_fingerprint(graph),
+            "assembly" => deepcopy(artifact_snapshots.assembly),
+            "graph" => deepcopy(artifact_snapshots.graph),
         ),
     )
 end
@@ -1854,8 +2003,10 @@ function _write_unicycler_run_contract(
         JSON.print(temporary_io, contract, 2)
         write(temporary_io, '\n')
         flush(temporary_io)
+        _fsync_metamdbg_file(temporary_io, temporary_path)
         close(temporary_io)
         mv(temporary_path, marker)
+        _fsync_metamdbg_directory(normalized_outdir)
     finally
         isopen(temporary_io) && close(temporary_io)
         (ispath(temporary_path) || islink(temporary_path)) &&
@@ -1934,6 +2085,8 @@ function _run_unicycler_with_contract(;
                     ),
             ),
         input_fingerprinter::Function = _unicycler_input_fingerprint,
+        after_artifact_semantic_validation_hook::Function =
+            artifacts -> nothing,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_unicycler_environment_lock,
         output_lock_runner::Function = _with_unicycler_output_lock,
@@ -2041,17 +2194,20 @@ function _run_unicycler_with_contract(;
             if ispath(assembly) || islink(assembly) ||
                ispath(graph) || islink(graph) ||
                ispath(contract_marker) || islink(contract_marker)
-                validated_artifacts = _require_valid_unicycler_artifacts(
+                bound_artifacts = _unicycler_semantic_artifact_snapshots(
                     assembly,
                     graph,
-                    reserved_outdir,
+                    reserved_outdir;
+                    after_semantic_validation_hook =
+                        after_artifact_semantic_validation_hook,
                 )
                 (ispath(contract_marker) || islink(contract_marker)) || error(
                     "Refusing unbound legacy Unicycler output reuse: missing " *
                     "durable run-contract marker $(repr(contract_marker)).",
                 )
-                assembly = validated_artifacts.assembly
-                graph = validated_artifacts.graph
+                assembly = bound_artifacts.assembly
+                graph = bound_artifacts.graph
+                artifact_snapshots = bound_artifacts.snapshots
                 input_fingerprints = _unicycler_input_fingerprints(
                     short_1,
                     short_2,
@@ -2065,9 +2221,30 @@ function _run_unicycler_with_contract(;
                     kmers,
                     resolved_environment_prefix,
                     toolchain_before,
+                    artifact_snapshots,
+                )
+                contract_marker = _require_matching_unicycler_run_contract(
+                    reserved_outdir,
+                    expected_contract,
+                )
+                final_input_fingerprints = _unicycler_input_fingerprints(
+                    short_1,
+                    short_2,
+                    long_reads;
+                    fingerprinter = input_fingerprinter,
+                )
+                final_input_fingerprints == input_fingerprints || error(
+                    "Unicycler input content changed while contract-verified " *
+                    "output was being reused; refusing stale provenance.",
+                )
+                final_artifacts = _require_unchanged_unicycler_artifacts(
+                    artifact_snapshots,
                     assembly,
                     graph,
+                    reserved_outdir,
                 )
+                assembly = final_artifacts.assembly
+                graph = final_artifacts.graph
                 contract_marker = _require_matching_unicycler_run_contract(
                     reserved_outdir,
                     expected_contract,
@@ -2135,13 +2312,16 @@ function _run_unicycler_with_contract(;
                 normalized_outdir,
                 reserved_outdir,
             )
-            validated_artifacts = _require_valid_unicycler_artifacts(
+            bound_artifacts = _unicycler_semantic_artifact_snapshots(
                 assembly,
                 graph,
-                reserved_outdir,
+                reserved_outdir;
+                after_semantic_validation_hook =
+                    after_artifact_semantic_validation_hook,
             )
-            assembly = validated_artifacts.assembly
-            graph = validated_artifacts.graph
+            assembly = bound_artifacts.assembly
+            graph = bound_artifacts.graph
+            artifact_snapshots = bound_artifacts.snapshots
             toolchain_after = _require_unicycler_toolchain_provenance(
                 _invoke_unicycler_environment_callback(
                     toolchain_inspector,
@@ -2157,13 +2337,14 @@ function _run_unicycler_with_contract(;
                 normalized_outdir,
                 reserved_outdir,
             )
-            validated_artifacts = _require_valid_unicycler_artifacts(
+            final_artifacts = _require_unchanged_unicycler_artifacts(
+                artifact_snapshots,
                 assembly,
                 graph,
                 reserved_outdir,
             )
-            assembly = validated_artifacts.assembly
-            graph = validated_artifacts.graph
+            assembly = final_artifacts.assembly
+            graph = final_artifacts.graph
             observed_inputs = _unicycler_input_fingerprints(
                 short_1,
                 short_2,
@@ -2174,6 +2355,14 @@ function _run_unicycler_with_contract(;
                 "Unicycler input content changed while the assembler ran; " *
                 "refusing a stale run contract.",
             )
+            final_artifacts = _require_unchanged_unicycler_artifacts(
+                artifact_snapshots,
+                assembly,
+                graph,
+                reserved_outdir,
+            )
+            assembly = final_artifacts.assembly
+            graph = final_artifacts.graph
             contract = _unicycler_run_contract(
                 input_fingerprints,
                 threads,
@@ -2181,20 +2370,37 @@ function _run_unicycler_with_contract(;
                 kmers,
                 resolved_environment_prefix,
                 toolchain_after,
-                assembly,
-                graph,
+                artifact_snapshots,
             )
             contract_marker = _write_unicycler_run_contract(
+                reserved_outdir,
+                contract,
+            )
+            final_input_fingerprints = _unicycler_input_fingerprints(
+                short_1,
+                short_2,
+                long_reads;
+                fingerprinter = input_fingerprinter,
+            )
+            final_input_fingerprints == input_fingerprints || error(
+                "Unicycler input content changed while its durable contract " *
+                "was published; refusing stale lifecycle provenance.",
+            )
+            final_artifacts = _require_unchanged_unicycler_artifacts(
+                artifact_snapshots,
+                assembly,
+                graph,
+                reserved_outdir,
+            )
+            assembly = final_artifacts.assembly
+            graph = final_artifacts.graph
+            contract_marker = _require_matching_unicycler_run_contract(
                 reserved_outdir,
                 contract,
             )
             _require_unchanged_unicycler_output_plan(
                 normalized_outdir,
                 reserved_outdir,
-            )
-            _require_matching_unicycler_run_contract(
-                reserved_outdir,
-                contract,
             )
             return (;
                 status = :completed,
@@ -3748,6 +3954,7 @@ end
 function _metamdbg_selected_input(
         hifi_reads::Union{String, Vector{String}, Nothing},
         ont_reads::Union{String, Vector{String}, Nothing},
+        ont_r10_4_plus::Bool = false,
 )::NamedTuple
     has_hifi_reads = hifi_reads !== nothing
     has_ont_reads = ont_reads !== nothing
@@ -3755,6 +3962,18 @@ function _metamdbg_selected_input(
         throw(ArgumentError(
             "metaMDBG requires exactly one input technology: provide " *
             "either hifi_reads or ont_reads, but not both.",
+        ))
+    end
+    if has_hifi_reads && ont_r10_4_plus
+        throw(ArgumentError(
+            "ont_r10_4_plus applies only when ont_reads is selected.",
+        ))
+    elseif has_ont_reads && !ont_r10_4_plus
+        throw(ArgumentError(
+            "metaMDBG ont_reads require ont_r10_4_plus=true as an explicit " *
+            "attestation that every input was generated with supported " *
+            "Nanopore R10.4 or later chemistry; generic, R9, and unknown ONT " *
+            "inputs are not supported.",
         ))
     end
 
@@ -3789,7 +4008,8 @@ function _metamdbg_selected_input(
         end
         push!(normalized_paths, normalized_path)
     end
-    return (; flag, paths = normalized_paths)
+    platform_attestation = has_ont_reads ? "nanopore-r10.4-or-later" : nothing
+    return (; flag, paths = normalized_paths, platform_attestation)
 end
 
 const METAMDBG_VERSION = "1.4"
@@ -3799,7 +4019,7 @@ const METAMDBG_ENV_NAME =
     "metamdbg-$(METAMDBG_VERSION)-$(first(METAMDBG_ENVIRONMENT_SPEC_SHA256, 16))"
 const _METAMDBG_INSTALL_LOCK_STALE_SECONDS = 600
 const _METAMDBG_INSTALL_LOCK_REFRESH_SECONDS = 60
-const _METAMDBG_CONTRACT_SCHEMA_VERSION = 4
+const _METAMDBG_CONTRACT_SCHEMA_VERSION = 5
 const _METAMDBG_CONTRACT_FILENAME = "mycelia_metamdbg_contract.json"
 const _METAMDBG_COMPLETION_SCHEMA_VERSION = 1
 const _METAMDBG_COMPLETION_FILENAME = "mycelia_metamdbg_completion.json"
@@ -3807,9 +4027,14 @@ const _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION = 3
 const _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME = "contract.json"
 const _METAMDBG_SUBMISSION_RESERVATION_JOB_SCHEMA_VERSION = 1
 const _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME = "job.json"
+const _METAMDBG_PENDING_SUBMISSION_JOB_PREFIX =
+    ".mycelia-metamdbg-job-pending."
 const _METAMDBG_OUTPUT_ROOT_RESERVATION_SCHEMA_VERSION = 1
 const _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS = 300
 const _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS = 1.0
+const _METAMDBG_ENUMERATION_MAX_DEPTH = 256
+const _METAMDBG_ENUMERATION_MAX_ENTRIES = 1_000_000
+const _METAMDBG_ENUMERATION_MAX_MANIFEST_BYTES = 268_435_456
 const _METAMDBG_IUPAC_DNA_REGEX =
     r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$"
 const _METAMDBG_GFA_IDENTIFIER_REGEX = r"^[!-)+-<>-~][!-~]*$"
@@ -4006,6 +4231,440 @@ if len(names) != len(set(names)):
 with destination.open("w", encoding="utf-8", newline="\n") as stream:
     for record in inventory:
         stream.write("\t".join(record) + "\n")
+"""
+end
+
+function _metamdbg_runtime_fsync_python()::String
+    return raw"""
+import os
+import pathlib
+import sys
+
+
+path = pathlib.Path(sys.argv[1])
+file_descriptor = os.open(path, os.O_RDONLY)
+try:
+    os.fsync(file_descriptor)
+finally:
+    os.close(file_descriptor)
+directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+directory_descriptor = os.open(path.parent, directory_flags)
+try:
+    os.fsync(directory_descriptor)
+finally:
+    os.close(directory_descriptor)
+"""
+end
+
+function _metamdbg_runtime_directory_enumerator_python(
+        ;
+        post_open_hook::Union{Nothing, AbstractString} = nothing,
+        post_enumeration_hook::Union{Nothing, AbstractString} = nothing,
+        post_inventory_hook::Union{Nothing, AbstractString} = nothing,
+        post_directory_open_hook::Union{Nothing, AbstractString} = nothing,
+        post_directory_enumeration_hook::Union{Nothing, AbstractString} =
+            nothing,
+)::String
+    function indent_hook(
+            hook::Union{Nothing, AbstractString},
+            spaces::Int = 4,
+    )::String
+        hook === nothing && return ""
+        lines = split(String(hook), '\n'; keepempty = true)
+        indentation = repeat(" ", spaces)
+        return join((indentation * line for line in lines), '\n') * "\n"
+    end
+    open_hook = indent_hook(post_open_hook)
+    enumeration_hook = indent_hook(post_enumeration_hook)
+    inventory_hook = indent_hook(post_inventory_hook)
+    directory_open_hook = indent_hook(post_directory_open_hook)
+    directory_enumeration_hook = indent_hook(
+        post_directory_enumeration_hook,
+    )
+    limit_declarations = """
+MAX_DEPTH = $(_METAMDBG_ENUMERATION_MAX_DEPTH)
+MAX_ENTRIES = $(_METAMDBG_ENUMERATION_MAX_ENTRIES)
+MAX_MANIFEST_BYTES = $(_METAMDBG_ENUMERATION_MAX_MANIFEST_BYTES)
+
+
+"""
+    return raw"""
+import os
+import stat
+import sys
+import time
+
+""" * limit_declarations * raw"""
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def identity(status: os.stat_result) -> tuple[int, int, int]:
+    return (status.st_dev, status.st_ino, stat.S_IFMT(status.st_mode))
+
+
+def directory_names(directory_descriptor: int) -> tuple[bytes, ...]:
+    names = []
+    name_bytes = 0
+    with os.scandir(directory_descriptor) as iterator:
+        for entry in iterator:
+            name = os.fsencode(entry.name)
+            if not name or b"/" in name or b"\x00" in name:
+                fail("directory enumeration returned an invalid entry name")
+            if len(names) >= MAX_ENTRIES:
+                fail(f"directory enumeration exceeds {MAX_ENTRIES} entries")
+            name_bytes += len(name) + 1
+            if name_bytes > MAX_MANIFEST_BYTES:
+                fail(
+                    "one directory name set exceeds the manifest byte bound "
+                    f"of {MAX_MANIFEST_BYTES}"
+                )
+            names.append(name)
+    names.sort()
+    return tuple(names)
+
+
+def post_directory_open(
+    manifest_generation: int,
+    relative_parts: tuple[bytes, ...],
+) -> None:
+""" * directory_open_hook * raw"""    return None
+
+
+def post_directory_enumeration(
+    manifest_generation: int,
+    relative_parts: tuple[bytes, ...],
+) -> None:
+""" * directory_enumeration_hook * raw"""    return None
+
+
+def account_manifest_bytes(state: dict[str, int], additional_bytes: int) -> None:
+    state["bytes"] += additional_bytes
+    if state["bytes"] > MAX_MANIFEST_BYTES:
+        fail(f"directory manifest exceeds its byte bound of {MAX_MANIFEST_BYTES}")
+
+
+def entry_status(
+    directory_descriptor: int,
+    name: bytes,
+) -> os.stat_result:
+    return os.stat(
+        name,
+        dir_fd=directory_descriptor,
+        follow_symlinks=False,
+    )
+
+
+def build_manifest(
+    root_descriptor: int,
+    recursive: bool,
+    manifest_generation: int,
+    include_all_entries: bool,
+    exact_names: tuple[bytes, ...],
+    name_prefixes: tuple[bytes, ...],
+) -> tuple[tuple[tuple, tuple], tuple[bytes, ...]]:
+    entries = {}
+    directories = {}
+    state = {"entries": 0, "traversed": 0, "bytes": 0}
+
+    def name_is_relevant(name: bytes) -> bool:
+        return (
+            include_all_entries
+            or name in exact_names
+            or any(name.startswith(prefix) for prefix in name_prefixes)
+        )
+
+    def account_traversed_path(relative_path: bytes) -> None:
+        state["traversed"] += 1
+        if state["traversed"] > MAX_ENTRIES:
+            fail(f"directory traversal exceeds {MAX_ENTRIES} entries")
+        account_manifest_bytes(state, len(relative_path) + 32)
+
+    def record_entry(
+        relative_path: bytes,
+        status: os.stat_result,
+    ) -> None:
+        if relative_path in entries:
+            fail("directory manifest contains a duplicate relative path")
+        state["entries"] += 1
+        if state["entries"] > MAX_ENTRIES:
+            fail(f"directory manifest exceeds {MAX_ENTRIES} entries")
+        account_manifest_bytes(state, len(relative_path) + 32)
+        entries[relative_path] = identity(status)
+
+    def frame(
+        descriptor: int,
+        relative_parts: tuple[bytes, ...],
+        expected_status: os.stat_result,
+        parent_descriptor: int | None,
+        parent_name: bytes | None,
+    ) -> dict[str, object]:
+        if len(relative_parts) > MAX_DEPTH:
+            fail(f"directory manifest exceeds depth bound {MAX_DEPTH}")
+        descriptor_status = os.fstat(descriptor)
+        if identity(descriptor_status) != identity(expected_status):
+            fail("directory changed while its no-follow descriptor was opened")
+        post_directory_open(manifest_generation, relative_parts)
+        names = directory_names(descriptor)
+        relative_path = b"/".join(relative_parts)
+        if include_all_entries:
+            if relative_path in directories:
+                fail("directory manifest contains a duplicate directory path")
+            directories[relative_path] = (identity(descriptor_status), names)
+            account_manifest_bytes(
+                state,
+                len(relative_path) + sum(len(name) + 1 for name in names) + 32,
+            )
+        return {
+            "descriptor": descriptor,
+            "relative_parts": relative_parts,
+            "status": descriptor_status,
+            "names": names,
+            "index": 0,
+            "relevant_entries": {},
+            "parent_descriptor": parent_descriptor,
+            "parent_name": parent_name,
+        }
+
+    root_copy = os.dup(root_descriptor)
+    stack = []
+    try:
+        try:
+            root_frame = frame(
+                root_copy,
+                (),
+                os.fstat(root_descriptor),
+                None,
+                None,
+            )
+        except BaseException:
+            os.close(root_copy)
+            raise
+        stack.append(root_frame)
+        while stack:
+            current = stack[-1]
+            names = current["names"]
+            index = current["index"]
+            if index < len(names):
+                name = names[index]
+                current["index"] = index + 1
+                descriptor = current["descriptor"]
+                relative_parts = current["relative_parts"] + (name,)
+                if len(relative_parts) > MAX_DEPTH:
+                    fail(f"directory manifest exceeds depth bound {MAX_DEPTH}")
+                relative_path = b"/".join(relative_parts)
+                if not include_all_entries:
+                    account_traversed_path(relative_path)
+                    if not recursive and not name_is_relevant(name):
+                        continue
+                status = entry_status(descriptor, name)
+                if name_is_relevant(name):
+                    record_entry(relative_path, status)
+                    current["relevant_entries"][relative_path] = identity(status)
+                if recursive and stat.S_ISDIR(status.st_mode):
+                    child_descriptor = os.open(
+                        name,
+                        directory_flags,
+                        dir_fd=descriptor,
+                    )
+                    try:
+                        child_frame = frame(
+                            child_descriptor,
+                            relative_parts,
+                            status,
+                            descriptor,
+                            name,
+                        )
+                    except BaseException:
+                        os.close(child_descriptor)
+                        raise
+                    stack.append(child_frame)
+                continue
+
+            descriptor = current["descriptor"]
+            relative_parts = current["relative_parts"]
+            if include_all_entries:
+                if directory_names(descriptor) != names:
+                    fail("directory name set changed during manifest capture")
+                for name in names:
+                    relative_path = b"/".join(relative_parts + (name,))
+                    if (
+                        identity(entry_status(descriptor, name))
+                        != entries[relative_path]
+                    ):
+                        fail("directory entry identity changed during manifest capture")
+            else:
+                relevant_entries = tuple(
+                    sorted(
+                        (
+                            b"/".join(relative_parts + (name,)),
+                            identity(entry_status(descriptor, name)),
+                        )
+                        for name in directory_names(descriptor)
+                        if name_is_relevant(name)
+                    )
+                )
+                captured_relevant_entries = tuple(
+                    sorted(current["relevant_entries"].items())
+                )
+                if relevant_entries != captured_relevant_entries:
+                    fail("reservation entry set changed during manifest capture")
+            post_directory_enumeration(manifest_generation, relative_parts)
+            if include_all_entries:
+                if directory_names(descriptor) != names:
+                    fail("directory name set changed during manifest hook")
+                for name in names:
+                    relative_path = b"/".join(relative_parts + (name,))
+                    if (
+                        identity(entry_status(descriptor, name))
+                        != entries[relative_path]
+                    ):
+                        fail("directory entry identity changed during manifest hook")
+            else:
+                relevant_entries_after_hook = tuple(
+                    sorted(
+                        (
+                            b"/".join(relative_parts + (name,)),
+                            identity(entry_status(descriptor, name)),
+                        )
+                        for name in directory_names(descriptor)
+                        if name_is_relevant(name)
+                    )
+                )
+                if relevant_entries_after_hook != captured_relevant_entries:
+                    fail("reservation entry set changed during manifest hook")
+            parent_descriptor = current["parent_descriptor"]
+            parent_name = current["parent_name"]
+            if parent_descriptor is not None:
+                observed_parent_identity = identity(
+                    entry_status(parent_descriptor, parent_name)
+                )
+                if observed_parent_identity != identity(current["status"]):
+                    fail("descendant directory path changed after traversal")
+            os.close(descriptor)
+            stack.pop()
+    finally:
+        for current in reversed(stack):
+            try:
+                os.close(current["descriptor"])
+            except OSError:
+                pass
+
+    frozen_manifest = (
+        tuple(sorted(entries.items())),
+        tuple(sorted(directories.items())),
+    )
+    return frozen_manifest, tuple(sorted(entries))
+
+
+def require_root_path_identity(
+    root_path: bytes,
+    expected_status: os.stat_result,
+) -> None:
+    path_status = os.stat(root_path, follow_symlinks=False)
+    if identity(path_status) != identity(expected_status):
+        fail("enumeration root path does not retain its opened directory inode")
+
+
+root = os.fsencode(sys.argv[1])
+inventory = os.fsencode(sys.argv[2])
+mode = sys.argv[3]
+for required_flag in ("O_DIRECTORY", "O_NOFOLLOW"):
+    if not hasattr(os, required_flag):
+        fail(f"platform lacks required directory flag {required_flag}")
+directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+root_descriptor = os.open(root, directory_flags)
+inventory_created = False
+try:
+    root_status = os.fstat(root_descriptor)
+    if not stat.S_ISDIR(root_status.st_mode):
+        fail("enumeration descriptor is not a directory")
+""" * open_hook * raw"""    if mode == "one-level":
+        recursive = False
+        include_all_entries = True
+        exact_names = ()
+        reservation_prefixes = ()
+    elif mode == "reservations-one-level":
+        if len(sys.argv) != 7:
+            fail(
+                "one-level reservation enumeration requires an exact name "
+                "and two prefixes"
+            )
+        recursive = False
+        include_all_entries = False
+        exact_names = (os.fsencode(sys.argv[4]),)
+        reservation_prefixes = tuple(
+            prefix
+            for prefix in (
+                os.fsencode(sys.argv[5]),
+                os.fsencode(sys.argv[6]),
+            )
+            if prefix
+        )
+        if any(not name or b"/" in name for name in exact_names) or any(
+            b"/" in prefix for prefix in reservation_prefixes
+        ):
+            fail("one-level reservation name or prefix is invalid")
+    elif mode == "reservations-recursive":
+        if len(sys.argv) not in (6, 7):
+            fail("recursive reservation enumeration requires two prefixes")
+        recursive = True
+        include_all_entries = False
+        exact_names = ()
+        reservation_prefixes = (
+            os.fsencode(sys.argv[4]),
+            os.fsencode(sys.argv[5]),
+        )
+        if any(not prefix or b"/" in prefix for prefix in reservation_prefixes):
+            fail("recursive reservation prefix is invalid")
+    else:
+        fail(f"unsupported directory enumeration mode: {mode}")
+    first_manifest, first_entry_paths = build_manifest(
+        root_descriptor,
+        recursive,
+        1,
+        include_all_entries,
+        exact_names,
+        reservation_prefixes,
+    )
+""" * enumeration_hook * raw"""    require_root_path_identity(root, root_status)
+    normalized_root = root.rstrip(b"/") or b"/"
+    separator = b"" if normalized_root == b"/" else b"/"
+    inventory_entries = first_entry_paths
+    inventory_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    inventory_descriptor = os.open(inventory, inventory_flags, 0o600)
+    inventory_created = True
+    try:
+        with os.fdopen(inventory_descriptor, "wb", closefd=True) as stream:
+            for relative_path in inventory_entries:
+                stream.write(normalized_root + separator + relative_path)
+                stream.write(b"\x00")
+    except BaseException:
+        try:
+            os.close(inventory_descriptor)
+        except OSError:
+            pass
+        raise
+""" * inventory_hook * raw"""    second_manifest, _second_entry_paths = build_manifest(
+        root_descriptor,
+        recursive,
+        2,
+        include_all_entries,
+        exact_names,
+        reservation_prefixes,
+    )
+    if second_manifest != first_manifest:
+        fail("directory manifest changed before inventory publication")
+    require_root_path_identity(root, root_status)
+except BaseException:
+    if inventory_created:
+        try:
+            os.unlink(inventory)
+        except FileNotFoundError:
+            pass
+    raise
+finally:
+    os.close(root_descriptor)
 """
 end
 
@@ -4479,6 +5138,7 @@ function _metamdbg_output_paths(
         outdir::AbstractString,
         graph_k::Int,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     normalized_outdir = _metamdbg_canonical_output_path(outdir)
     return (
         outdir = normalized_outdir,
@@ -4497,6 +5157,11 @@ function _metamdbg_output_paths(
             _METAMDBG_COMPLETION_FILENAME,
         ),
     )
+end
+
+function _require_positive_metamdbg_graph_k(graph_k::Int)::Int
+    graph_k > 0 || throw(ArgumentError("graph_k must be positive."))
+    return graph_k
 end
 
 function _metamdbg_canonical_output_path(outdir::AbstractString)::String
@@ -4952,14 +5617,47 @@ function _recover_dead_metamdbg_private_output_lock!(
 end
 
 function _recover_dead_metamdbg_lifecycle_locks!(
-        outdir::AbstractString,
+        outdir::AbstractString;
+        pending_recovery_function::Function =
+            _recover_metamdbg_pending_submission_job_records!,
 )::Nothing
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
     reservation_lock_path =
         _output_root_reservation_lock_path_from_canonical(canonical_outdir)
-    if _output_root_path_entry_exists(reservation_lock_path)
-        _remove_dead_metamdbg_output_root_pid_lock!(reservation_lock_path)
+    private_lock_path = _metamdbg_output_lock_path(canonical_outdir)
+    cleanup_reservation_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    runtime_owner_exists = any(
+        path -> _metamdbg_submission_reservation_path_state(
+            path,
+            canonical_outdir,
+        ) == :runtime,
+        _metamdbg_submission_reservation_paths(canonical_outdir),
+    )
+    runtime_marker_exists =
+        _metamdbg_has_runtime_scheduler_evidence(canonical_outdir)
+    (runtime_owner_exists || runtime_marker_exists) && error(
+        "metaMDBG refuses dead-submitter lock recovery while durable runtime " *
+        "scheduler ownership exists. Use exact job-ID-bound terminal or " *
+        "cancelled recovery instead.",
+    )
+    had_pid_lock = _output_root_path_entry_exists(reservation_lock_path)
+    has_private_state =
+        _output_root_path_entry_exists(private_lock_path) ||
+        _output_root_path_entry_exists(cleanup_reservation_path)
+    if !had_pid_lock
+        has_private_state && error(
+            "metaMDBG refuses dead-process recovery because private " *
+            "lifecycle state exists without its pre-existing local PID " *
+            "ownership record. The state may belong to a scheduler runtime; " *
+            "use explicit job-ID recovery evidence.",
+        )
+        error(
+            "metaMDBG confirm_process_dead requires a pre-existing canonical " *
+            "local PID ownership record; refusing a no-op recovery.",
+        )
     end
+    _remove_dead_metamdbg_output_root_pid_lock!(reservation_lock_path)
     stale_age = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
     lock_handle = FileWatching.Pidfile.trymkpidlock(
         reservation_lock_path;
@@ -4971,12 +5669,9 @@ function _recover_dead_metamdbg_lifecycle_locks!(
         "dead-process recovery: $(reservation_lock_path).",
     )
     try
-        private_lock_path = _metamdbg_output_lock_path(canonical_outdir)
         if _output_root_path_entry_exists(private_lock_path)
             _recover_dead_metamdbg_private_output_lock!(private_lock_path)
         end
-        cleanup_reservation_path =
-            _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
         if _output_root_path_entry_exists(cleanup_reservation_path)
             cleanup_identity =
                 _metamdbg_output_lock_identity(cleanup_reservation_path)
@@ -4985,21 +5680,71 @@ function _recover_dead_metamdbg_lifecycle_locks!(
                 cleanup_identity,
             )
         end
+        pending_recovery_function(canonical_outdir)
     finally
         Base.close(lock_handle)
     end
     return nothing
 end
 
+function _metamdbg_has_runtime_scheduler_evidence(
+        outdir::AbstractString,
+)::Bool
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    reservation_paths = _metamdbg_submission_reservation_paths(
+        canonical_outdir;
+        include_consumed = true,
+    )
+    known_queued_markers = Set{String}()
+    for path in reservation_paths
+        path_state = _metamdbg_submission_reservation_path_state(
+            path,
+            canonical_outdir,
+        )
+        path_state == :runtime && return true
+        reservation = _metamdbg_submission_reservation_from_path(
+            path,
+            canonical_outdir;
+            allow_provisional = true,
+        )
+        push!(
+            known_queued_markers,
+            reservation.output_root_reservation_marker,
+        )
+        _output_root_path_entry_exists(
+            reservation.runtime_output_root_reservation_marker,
+        ) && return true
+    end
+    cleanup_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    reservation_lock_path =
+        _output_root_reservation_lock_path_from_canonical(canonical_outdir)
+    for path in _same_output_root_reservation_paths(canonical_outdir)
+        path in (cleanup_path, reservation_lock_path) && continue
+        path in known_queued_markers && continue
+        _output_root_path_entry_exists(path) && return true
+    end
+    return false
+end
+
 function _with_metamdbg_output_domain_lock(
         action::Function,
         outdir::AbstractString,
+        ;
+        allowed_same_root_locks::Tuple = (),
 )::Any
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
     reservation_lock_path =
         _output_root_reservation_lock_path_from_canonical(canonical_outdir)
-    mkpath(dirname(reservation_lock_path))
     stale_age = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
+    _require_exclusive_output_root_reservation(
+        canonical_outdir,
+        reservation_lock_path;
+        subject = "metaMDBG outdir",
+        stale_age,
+        allowed_same_root_locks,
+    )
+    mkpath(dirname(reservation_lock_path))
     lock_handle = FileWatching.Pidfile.trymkpidlock(
         reservation_lock_path;
         stale_age,
@@ -5026,6 +5771,7 @@ function _with_metamdbg_output_domain_lock(
             reservation_lock_path;
             subject = "metaMDBG outdir",
             stale_age,
+            allowed_same_root_locks,
         )
         _publish_metamdbg_lifecycle_cleanup_reservation!(canonical_outdir)
         cleanup_reservation_identity =
@@ -5127,6 +5873,7 @@ function _metamdbg_input_contract(
         schema_version = _METAMDBG_CONTRACT_SCHEMA_VERSION,
         input_technology,
         input_flag = selected_input.flag,
+        platform_attestation = selected_input.platform_attestation,
         inputs,
         abundance_min,
         toolchain,
@@ -5284,6 +6031,87 @@ function _metamdbg_submission_reservation_prefix(
     return ".mycelia-metamdbg-submission.$(output_identity)."
 end
 
+function _metamdbg_pending_submission_job_prefix(
+        outdir::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    output_identity = _output_root_reservation_identity(normalized_outdir)
+    return "$(_METAMDBG_PENDING_SUBMISSION_JOB_PREFIX)$(output_identity)."
+end
+
+function _metamdbg_pending_submission_job_path(
+        outdir::AbstractString,
+        capability::AbstractString,
+        job_id::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    normalized_capability = String(capability)
+    occursin(r"^[0-9a-f]{64}$", normalized_capability) || error(
+        "metaMDBG pending submission job record requires a lowercase " *
+        "SHA-256 owner capability.",
+    )
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    return joinpath(
+        dirname(normalized_outdir),
+        _metamdbg_pending_submission_job_prefix(normalized_outdir) *
+        "$(normalized_capability).$(normalized_job_id).json",
+    )
+end
+
+function _metamdbg_pending_submission_job_paths(
+        outdir::AbstractString,
+)::Vector{String}
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    parent = dirname(normalized_outdir)
+    isdir(parent) || return String[]
+    prefix = _metamdbg_pending_submission_job_prefix(normalized_outdir)
+    return sort!(filter(
+        path -> startswith(basename(path), prefix),
+        readdir(parent; join = true),
+    ))
+end
+
+function _metamdbg_pending_submission_job_path_parts(
+        path::AbstractString,
+        outdir::AbstractString,
+)::NamedTuple
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    normalized_path = normpath(abspath(String(path)))
+    dirname(normalized_path) == dirname(normalized_outdir) || error(
+        "metaMDBG pending submission job record is outside its output-root " *
+        "parent: $(normalized_path).",
+    )
+    prefix = _metamdbg_pending_submission_job_prefix(normalized_outdir)
+    filename = basename(normalized_path)
+    startswith(filename, prefix) || error(
+        "metaMDBG pending submission job record has an invalid prefix: " *
+        "$(normalized_path).",
+    )
+    ncodeunits(filename) > ncodeunits(prefix) || error(
+        "metaMDBG found a malformed pending submission job record: " *
+        "$(normalized_path).",
+    )
+    suffix = filename[(ncodeunits(prefix) + 1):end]
+    parsed = match(r"^([0-9a-f]{64})\.([0-9]+)\.json$", suffix)
+    parsed === nothing && error(
+        "metaMDBG found a malformed pending submission job record: " *
+        "$(normalized_path). Remove it only after confirming no scheduler " *
+        "job owns it.",
+    )
+    capability = parsed.captures[1]
+    job_id = _normalize_metamdbg_job_id(parsed.captures[2])
+    expected_path = _metamdbg_pending_submission_job_path(
+        normalized_outdir,
+        capability,
+        job_id,
+    )
+    expected_path == normalized_path || error(
+        "metaMDBG pending submission job record path is not canonical: " *
+        "$(normalized_path).",
+    )
+    return (; path = normalized_path, capability, job_id)
+end
+
 function _metamdbg_submission_reservation_path(
         outdir::AbstractString,
         workflow_signature::AbstractString,
@@ -5297,6 +6125,57 @@ function _metamdbg_submission_reservation_path(
     return joinpath(
         dirname(normalized_outdir),
         _metamdbg_submission_reservation_prefix(normalized_outdir) * signature,
+    )
+end
+
+function _metamdbg_runtime_submission_reservation_path(
+        outdir::AbstractString,
+        capability::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    normalized_capability = String(capability)
+    occursin(r"^[0-9a-f]{64}$", normalized_capability) || error(
+        "metaMDBG runtime reservation requires a lowercase SHA-256 owner " *
+        "capability, got $(repr(normalized_capability)).",
+    )
+    return joinpath(
+        dirname(normalized_outdir),
+        _metamdbg_submission_reservation_prefix(normalized_outdir) *
+        "runtime.$(normalized_capability)",
+    )
+end
+
+function _metamdbg_consumed_submission_reservation_path(
+        outdir::AbstractString,
+        capability::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    normalized_capability = String(capability)
+    occursin(r"^[0-9a-f]{64}$", normalized_capability) || error(
+        "metaMDBG consumed reservation requires a lowercase SHA-256 owner " *
+        "capability, got $(repr(normalized_capability)).",
+    )
+    return joinpath(
+        dirname(normalized_outdir),
+        _metamdbg_submission_reservation_prefix(normalized_outdir) *
+        "consumed.$(normalized_capability)",
+    )
+end
+
+function _metamdbg_reclaiming_submission_reservation_path(
+        outdir::AbstractString,
+        capability::AbstractString,
+)::String
+    normalized_outdir = _metamdbg_canonical_output_path(outdir)
+    normalized_capability = String(capability)
+    occursin(r"^[0-9a-f]{64}$", normalized_capability) || error(
+        "metaMDBG reclaiming reservation requires a lowercase SHA-256 owner " *
+        "capability, got $(repr(normalized_capability)).",
+    )
+    return joinpath(
+        dirname(normalized_outdir),
+        _metamdbg_submission_reservation_prefix(normalized_outdir) *
+        "reclaiming.$(normalized_capability)",
     )
 end
 
@@ -5352,6 +6231,7 @@ function _metamdbg_workflow_contract(
         input_contract::NamedTuple,
         graph_k::Int,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     contract = (;
         schema_version = _METAMDBG_SUBMISSION_RESERVATION_SCHEMA_VERSION,
         canonical_outdir = outputs.outdir,
@@ -5449,6 +6329,18 @@ function _metamdbg_submission_reservation(
         )
     return (;
         path,
+        runtime_path = _metamdbg_runtime_submission_reservation_path(
+            outputs.outdir,
+            output_root_reservation.output_root_reservation_capability,
+        ),
+        consumed_path = _metamdbg_consumed_submission_reservation_path(
+            outputs.outdir,
+            output_root_reservation.output_root_reservation_capability,
+        ),
+        reclaiming_path = _metamdbg_reclaiming_submission_reservation_path(
+            outputs.outdir,
+            output_root_reservation.output_root_reservation_capability,
+        ),
         contract_marker = joinpath(
             path,
             _METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME,
@@ -5467,6 +6359,7 @@ function _metamdbg_submission_reservation(
         contents,
         job_id = nothing,
         job_contents = nothing,
+        pending_job_marker = nothing,
         submission_state = :reserved,
     )
 end
@@ -5514,8 +6407,536 @@ function _metamdbg_bound_submission_reservation(
         job_id = normalized_job_id,
         job_contents =
             _metamdbg_submission_job_contents(reservation, normalized_job_id),
+        pending_job_marker = _metamdbg_pending_submission_job_path(
+            reservation.canonical_outdir,
+            reservation.output_root_reservation_capability,
+            normalized_job_id,
+        ),
         submission_state = :submitted,
     ))
+end
+
+function _metamdbg_pending_submission_job_identity(
+        path::AbstractString,
+)::NamedTuple
+    normalized_path = normpath(abspath(String(path)))
+    isfile(normalized_path) && !islink(normalized_path) || error(
+        "metaMDBG pending submission job record must be a regular, " *
+        "non-symlink file: $(normalized_path).",
+    )
+    pending_status = stat(normalized_path)
+    pending_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG pending submission job record is not owned by the current " *
+        "user: $(normalized_path).",
+    )
+    (pending_status.mode & 0o777) == 0o600 || error(
+        "metaMDBG pending submission job record must have mode 0600: " *
+        "$(normalized_path).",
+    )
+    return (; device = pending_status.device, inode = pending_status.inode)
+end
+
+function _metamdbg_pending_submission_job_descriptor_identity(
+        pending_io::Base.Filesystem.File,
+        path::AbstractString,
+)::NamedTuple
+    pending_status = stat(pending_io)
+    pending_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG pending submission job descriptor is not owned by the " *
+        "current user: $(path).",
+    )
+    (pending_status.mode & 0o777) == 0o600 || error(
+        "metaMDBG pending submission job descriptor must have mode 0600: " *
+        "$(path).",
+    )
+    return (; device = pending_status.device, inode = pending_status.inode)
+end
+
+function _metamdbg_pending_submission_job_record(
+        reservation::NamedTuple,
+        path::AbstractString;
+        allow_empty::Bool = false,
+        allow_incomplete::Bool = false,
+)::NamedTuple
+    parts = _metamdbg_pending_submission_job_path_parts(
+        path,
+        reservation.canonical_outdir,
+    )
+    parts.capability == reservation.output_root_reservation_capability || error(
+        "metaMDBG pending submission job record does not match its exact " *
+        "owner capability: $(parts.path).",
+    )
+    identity = _metamdbg_pending_submission_job_identity(parts.path)
+    pending_io = Base.Filesystem.open(
+        parts.path,
+        Base.JL_O_RDONLY | Base.JL_O_CLOEXEC,
+    )
+    bytes = try
+        _metamdbg_pending_submission_job_descriptor_identity(
+            pending_io,
+            parts.path,
+        ) == identity || error(
+            "metaMDBG pending submission job record was replaced before its " *
+            "contents were read: $(parts.path).",
+        )
+        captured_bytes = read(pending_io)
+        _metamdbg_pending_submission_job_descriptor_identity(
+            pending_io,
+            parts.path,
+        ) == identity || error(
+            "metaMDBG pending submission job descriptor changed while its " *
+            "contents were read: $(parts.path).",
+        )
+        captured_bytes
+    finally
+        close(pending_io)
+    end
+    _metamdbg_pending_submission_job_identity(parts.path) == identity || error(
+        "metaMDBG pending submission job record was replaced while being " *
+        "validated: $(parts.path).",
+    )
+    expected_contents = _metamdbg_submission_job_contents(
+        reservation,
+        parts.job_id,
+    )
+    expected_bytes = collect(codeunits(expected_contents))
+    is_complete = bytes == expected_bytes
+    is_prefix = length(bytes) <= length(expected_bytes) &&
+                bytes == expected_bytes[1:length(bytes)]
+    is_recoverable_prefix = allow_incomplete && is_prefix
+    if !is_complete && !is_recoverable_prefix
+        if isempty(bytes) && allow_empty
+            nothing
+        else
+            error(
+                "metaMDBG pending submission job record is not canonical or " *
+                "does not match its workflow owner: $(parts.path).",
+            )
+        end
+    end
+    return merge(parts, (;
+        bytes,
+        identity,
+        is_complete,
+    ))
+end
+
+function _require_unchanged_metamdbg_pending_submission_job_record(
+        reservation::NamedTuple,
+        expected::NamedTuple;
+        allow_empty::Bool = false,
+        allow_incomplete::Bool = false,
+)::NamedTuple
+    observed = _metamdbg_pending_submission_job_record(
+        reservation,
+        expected.path;
+        allow_empty,
+        allow_incomplete,
+    )
+    for field in (
+            :path,
+            :capability,
+            :job_id,
+            :bytes,
+            :identity,
+            :is_complete,
+        )
+        getproperty(observed, field) == getproperty(expected, field) || error(
+            "metaMDBG pending submission job record $(field) changed during " *
+            "recovery inspection: $(expected.path).",
+        )
+    end
+    return observed
+end
+
+function _metamdbg_pending_submission_job_record_for_reservation(
+        reservation::NamedTuple,
+        pending_paths::AbstractVector{<:AbstractString};
+        allow_empty::Bool = false,
+        allow_incomplete::Bool = false,
+)::Union{Nothing, NamedTuple}
+    candidates = filter(pending_paths) do path
+        parts = _metamdbg_pending_submission_job_path_parts(
+            path,
+            reservation.canonical_outdir,
+        )
+        return parts.capability ==
+               reservation.output_root_reservation_capability
+    end
+    length(candidates) <= 1 || error(
+        "metaMDBG found multiple pending scheduler job records for one exact " *
+        "owner capability: $(join(candidates, ", ")).",
+    )
+    isempty(candidates) && return nothing
+    return _metamdbg_pending_submission_job_record(
+        reservation,
+        only(candidates);
+        allow_empty,
+        allow_incomplete,
+    )
+end
+
+function _complete_metamdbg_pending_submission_job_record!(
+        reservation::NamedTuple,
+        pending::NamedTuple;
+        pre_descriptor_open_hook::Function =
+            (_pending::NamedTuple) -> nothing,
+)::NamedTuple
+    pending.is_complete && return pending
+    _require_unchanged_metamdbg_pending_submission_job_record(
+        reservation,
+        pending;
+        allow_incomplete = true,
+    )
+    expected_bytes = collect(codeunits(_metamdbg_submission_job_contents(
+        reservation,
+        pending.job_id,
+    )))
+    length(pending.bytes) < length(expected_bytes) || error(
+        "metaMDBG incomplete pending scheduler job record is not a strict " *
+        "canonical prefix: $(pending.path).",
+    )
+    remaining_bytes = expected_bytes[(length(pending.bytes) + 1):end]
+    pre_descriptor_open_hook(pending)
+    pending_io = Base.Filesystem.open(
+        pending.path,
+        Base.JL_O_RDWR | Base.JL_O_CLOEXEC,
+    )
+    try
+        _metamdbg_pending_submission_job_descriptor_identity(
+            pending_io,
+            pending.path,
+        ) == pending.identity || error(
+            "metaMDBG pending scheduler job descriptor was replaced before " *
+            "prefix completion: $(pending.path).",
+        )
+        descriptor_bytes = read(pending_io)
+        descriptor_bytes == pending.bytes || error(
+            "metaMDBG pending scheduler job contents changed before prefix " *
+            "completion: $(pending.path).",
+        )
+        _metamdbg_pending_submission_job_identity(pending.path) ==
+            pending.identity || error(
+            "metaMDBG pending scheduler job path was replaced before prefix " *
+            "completion: $(pending.path).",
+        )
+        seekend(pending_io)
+        write(pending_io, remaining_bytes)
+        _fsync_metamdbg_descriptor(Base.fd(pending_io), pending.path)
+        _metamdbg_pending_submission_job_descriptor_identity(
+            pending_io,
+            pending.path,
+        ) == pending.identity || error(
+            "metaMDBG pending scheduler job descriptor changed during prefix " *
+            "completion: $(pending.path).",
+        )
+    finally
+        close(pending_io)
+    end
+    _fsync_metamdbg_directory(dirname(pending.path))
+    completed = _metamdbg_pending_submission_job_record(
+        reservation,
+        pending.path,
+    )
+    completed.identity == pending.identity || error(
+        "metaMDBG pending scheduler job record was replaced while completing " *
+        "its canonical prefix: $(pending.path).",
+    )
+    return completed
+end
+
+function _remove_exact_metamdbg_job_marker!(
+        marker::AbstractString,
+        expected_identity::NamedTuple,
+)::Nothing
+    _output_root_path_entry_exists(marker) || return nothing
+    _metamdbg_pending_submission_job_identity(marker) == expected_identity ||
+        error(
+            "metaMDBG refuses to remove a replacement scheduler job marker: " *
+            "$(marker).",
+        )
+    rm(marker)
+    !_output_root_path_entry_exists(marker) || error(
+        "metaMDBG scheduler job marker reappeared after rollback: $(marker).",
+    )
+    _fsync_metamdbg_directory(dirname(marker))
+    return nothing
+end
+
+function _publish_metamdbg_pending_submission_job_record!(
+        reservation::NamedTuple,
+        pending::NamedTuple,
+        reservation_identity::NamedTuple,
+        shared_reservation_identity::NamedTuple,
+)::NamedTuple
+    pending.is_complete || error(
+        "metaMDBG refuses to publish an incomplete pending scheduler job " *
+        "record: $(pending.path).",
+    )
+    _require_unchanged_metamdbg_recovery_identities(
+        reservation,
+        reservation_identity,
+        shared_reservation_identity,
+    )
+    pending = _require_unchanged_metamdbg_pending_submission_job_record(
+        reservation,
+        pending,
+    )
+    _metamdbg_pending_submission_job_paths(reservation.canonical_outdir) ==
+        [pending.path] || error(
+        "metaMDBG found ambiguous pending scheduler job evidence before exact " *
+        "publication.",
+    )
+    marker = reservation.job_marker
+    bound_reservation = _metamdbg_bound_submission_reservation(
+        reservation,
+        pending.job_id,
+    )
+    !_output_root_path_entry_exists(marker) || error(
+        "metaMDBG refuses to overwrite an existing durable submission job " *
+        "record: $(marker).",
+    )
+    linked = false
+    committed = false
+    try
+        Base.Filesystem.hardlink(pending.path, marker)
+        linked = true
+        _metamdbg_pending_submission_job_identity(marker) ==
+            pending.identity || error(
+            "metaMDBG newly linked scheduler job marker does not retain the " *
+            "validated pending inode.",
+        )
+        _metamdbg_pending_submission_job_identity(pending.path) ==
+            pending.identity || error(
+            "metaMDBG pending scheduler job path was replaced during " *
+            "publication.",
+        )
+        Base.Filesystem.samefile(marker, pending.path) || error(
+            "metaMDBG scheduler job marker and pending record are not the " *
+            "same publication inode.",
+        )
+        _metamdbg_pending_submission_job_paths(reservation.canonical_outdir) ==
+            [pending.path] || error(
+            "metaMDBG pending scheduler job inventory changed during exact " *
+            "publication.",
+        )
+        _require_unchanged_metamdbg_recovery_identities(
+            bound_reservation,
+            reservation_identity,
+            shared_reservation_identity,
+        )
+        _fsync_metamdbg_directory(reservation.path)
+        committed = true
+        _metamdbg_pending_submission_job_identity(marker) ==
+            pending.identity || error(
+            "metaMDBG committed scheduler job marker changed after its owner " *
+            "directory fsync.",
+        )
+        _require_unchanged_metamdbg_recovery_identities(
+            bound_reservation,
+            reservation_identity,
+            shared_reservation_identity,
+        )
+    catch primary_error
+        if linked && !committed
+            try
+                _remove_exact_metamdbg_job_marker!(
+                    marker,
+                    pending.identity,
+                )
+            catch cleanup_error
+                @warn "metaMDBG failed to roll back an uncommitted exact " *
+                      "scheduler job marker while preserving the primary " *
+                      "publication failure" marker primary_error cleanup_error
+            end
+        end
+        Base.rethrow()
+    end
+    return _metamdbg_submission_reservation_from_path(
+        reservation.path,
+        reservation.canonical_outdir,
+    )
+end
+
+function _remove_metamdbg_pending_submission_job_record!(
+        reservation::NamedTuple,
+        pending::NamedTuple;
+        pending_remover::Function = rm,
+)::Nothing
+    _require_unchanged_metamdbg_pending_submission_job_record(
+        reservation,
+        pending,
+    )
+    pending_remover(pending.path)
+    !_output_root_path_entry_exists(pending.path) || error(
+        "metaMDBG pending scheduler job record remains after removal: " *
+        "$(pending.path).",
+    )
+    _fsync_metamdbg_directory(dirname(pending.path))
+    return nothing
+end
+
+function _resume_metamdbg_pending_submission_job_record!(
+        reservation::NamedTuple,
+        pending::NamedTuple,
+        reservation_identity::NamedTuple,
+        shared_reservation_identity::NamedTuple;
+        pre_promotion_hook::Function =
+            (_reservation::NamedTuple, _pending::NamedTuple) -> nothing,
+        pending_remover::Function = rm,
+)::NamedTuple
+    _require_unchanged_metamdbg_recovery_identities(
+        reservation,
+        reservation_identity,
+        shared_reservation_identity,
+    )
+    pending = _complete_metamdbg_pending_submission_job_record!(
+        reservation,
+        pending,
+    )
+    _require_unchanged_metamdbg_recovery_identities(
+        reservation,
+        reservation_identity,
+        shared_reservation_identity,
+    )
+    pre_promotion_hook(reservation, pending)
+    _require_unchanged_metamdbg_recovery_identities(
+        reservation,
+        reservation_identity,
+        shared_reservation_identity,
+    )
+    pending = _require_unchanged_metamdbg_pending_submission_job_record(
+        reservation,
+        pending,
+    )
+    bound = if reservation.job_id === nothing
+        _publish_metamdbg_pending_submission_job_record!(
+            reservation,
+            pending,
+            reservation_identity,
+            shared_reservation_identity,
+        )
+    else
+        reservation.job_id == pending.job_id || error(
+            "metaMDBG committed scheduler job ID conflicts with its pending " *
+            "record.",
+        )
+        pending.bytes == collect(codeunits(reservation.job_contents)) || error(
+            "metaMDBG committed scheduler job content conflicts with its " *
+            "pending record.",
+        )
+        _metamdbg_pending_submission_job_identity(reservation.job_marker) ==
+            pending.identity || error(
+            "metaMDBG committed scheduler job marker does not retain the " *
+            "validated pending inode.",
+        )
+        Base.Filesystem.samefile(
+            reservation.job_marker,
+            pending.path,
+        ) || error(
+            "metaMDBG committed scheduler job marker is not the pending " *
+            "publication inode.",
+        )
+        reservation
+    end
+    _remove_metamdbg_pending_submission_job_record!(
+        bound,
+        pending;
+        pending_remover,
+    )
+    _require_unchanged_metamdbg_recovery_identities(
+        bound,
+        reservation_identity,
+        shared_reservation_identity,
+    )
+    return _metamdbg_submission_reservation_from_path(
+        bound.path,
+        bound.canonical_outdir,
+    )
+end
+
+function _recover_metamdbg_pending_submission_job_records!(
+        outdir::AbstractString;
+        pre_promotion_hook::Function =
+            (_reservation::NamedTuple, _pending::NamedTuple) -> nothing,
+        post_initial_snapshot_hook::Function =
+            (_records::Vector{NamedTuple}) -> nothing,
+)::Nothing
+    canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    pending_paths =
+        _metamdbg_pending_submission_job_paths(canonical_outdir)
+    isempty(pending_paths) && return nothing
+    owner_paths = _metamdbg_submission_reservation_paths(
+        canonical_outdir;
+        include_consumed = true,
+    )
+    owners_by_capability = Dict{String, NamedTuple}()
+    for owner_path in owner_paths
+        owner = _metamdbg_submission_reservation_from_path(
+            owner_path,
+            canonical_outdir;
+            allow_provisional = true,
+        )
+        capability = owner.output_root_reservation_capability
+        haskey(owners_by_capability, capability) && error(
+            "metaMDBG found multiple owner records for one pending scheduler " *
+            "job capability: $(capability).",
+        )
+        owners_by_capability[capability] = owner
+    end
+    recovery_records = NamedTuple[]
+    seen_capabilities = Set{String}()
+    for pending_path in pending_paths
+        parts = _metamdbg_pending_submission_job_path_parts(
+            pending_path,
+            canonical_outdir,
+        )
+        owner = get(owners_by_capability, parts.capability, nothing)
+        owner isa NamedTuple || error(
+            "metaMDBG pending scheduler job record has no exact durable owner " *
+            "record: $(pending_path).",
+        )
+        owner.reservation_state == :queued || error(
+            "metaMDBG pending scheduler job record is paired with unsupported " *
+            "owner state $(repr(owner.reservation_state)): $(pending_path).",
+        )
+        parts.capability in seen_capabilities && error(
+            "metaMDBG found multiple pending scheduler job records for one " *
+            "exact owner capability: $(parts.capability).",
+        )
+        push!(seen_capabilities, parts.capability)
+        pending = _metamdbg_pending_submission_job_record(
+            owner,
+            pending_path;
+            allow_incomplete = true,
+        )
+        reservation_identity =
+            _metamdbg_submission_reservation_identity(owner)
+        shared_reservation_identity =
+            _metamdbg_shared_reservation_identity(owner)
+        push!(recovery_records, (;
+            owner,
+            pending,
+            reservation_identity,
+            shared_reservation_identity,
+        ))
+    end
+    post_initial_snapshot_hook(recovery_records)
+    for recovery in recovery_records
+        recovered_owner = _resume_metamdbg_pending_submission_job_record!(
+            recovery.owner,
+            recovery.pending,
+            recovery.reservation_identity,
+            recovery.shared_reservation_identity;
+            pre_promotion_hook,
+        )
+        _require_metamdbg_submission_reservation!(recovered_owner)
+    end
+    isempty(_metamdbg_pending_submission_job_paths(canonical_outdir)) || error(
+        "metaMDBG pending scheduler job records remain after confirmed-dead " *
+        "recovery.",
+    )
+    return nothing
 end
 
 function _metamdbg_submission_reservation_path_state(
@@ -5537,10 +6958,16 @@ function _metamdbg_submission_reservation_path_state(
     suffix = filename[(ncodeunits(prefix) + 1):end]
     if occursin(r"^[0-9a-f]{64}$", suffix)
         return :published
+    elseif occursin(r"^runtime\.[0-9a-f]{64}$", suffix)
+        return :runtime
+    elseif occursin(r"^reclaiming\.[0-9a-f]{64}$", suffix)
+        return :reclaiming
     elseif startswith(suffix, "tmp.") && ncodeunits(suffix) > 4
         return :provisional
-    elseif startswith(suffix, "consumed.") && ncodeunits(suffix) > 9
+    elseif occursin(r"^consumed\.[0-9a-f]{64}$", suffix)
         return :consumed
+    elseif startswith(suffix, "consumed.") && ncodeunits(suffix) > 9
+        return :legacy_consumed
     end
     error(
         "metaMDBG found a malformed submission reservation entry: " *
@@ -5569,6 +6996,8 @@ end
 
 function _metamdbg_submission_reservation_paths(
         outdir::AbstractString,
+        ;
+        include_consumed::Bool = false,
 )::Vector{String}
     normalized_outdir = _metamdbg_canonical_output_path(outdir)
     parent = dirname(normalized_outdir)
@@ -5589,7 +7018,13 @@ function _metamdbg_submission_reservation_paths(
             push!(published_paths, path)
         elseif path_state == :provisional
             push!(provisional_candidates, path)
+        elseif path_state == :runtime
+            push!(published_paths, path)
+        elseif path_state == :reclaiming
+            push!(published_paths, path)
         elseif path_state == :consumed
+            include_consumed && push!(published_paths, path)
+        elseif path_state == :legacy_consumed
             continue
         end
     end
@@ -5686,6 +7121,32 @@ function _require_metamdbg_output_root_reservation_marker!(
     return marker
 end
 
+function _require_metamdbg_runtime_output_root_reservation_marker!(
+        reservation::NamedTuple,
+)::String
+    marker = reservation.runtime_output_root_reservation_marker
+    if !isdir(marker) || islink(marker)
+        error(
+            "metaMDBG runtime output-root reservation must be a regular, " *
+            "non-symlink directory: $(marker).",
+        )
+    end
+    marker_status = stat(marker)
+    marker_status.uid == Base.Libc.getuid() || error(
+        "metaMDBG runtime output-root reservation is not owned by the " *
+        "current user: $(marker).",
+    )
+    (marker_status.mode & 0o777) == 0o700 || error(
+        "metaMDBG runtime output-root reservation must have mode 0700: " *
+        "$(marker).",
+    )
+    isempty(readdir(marker)) || error(
+        "metaMDBG runtime output-root reservation contains unexpected " *
+        "entries: $(marker).",
+    )
+    return marker
+end
+
 function _publish_metamdbg_output_root_reservation_marker!(
         reservation::NamedTuple,
 )::String
@@ -5740,6 +7201,12 @@ function _require_no_active_metamdbg_submission_reservation!(
     isempty(active_reservations) || error(
         "metaMDBG output has an active nonlocal submission reservation: " *
         "$(join(active_reservations, ", ")). Refusing competing execution.",
+    )
+    pending_job_records = _metamdbg_pending_submission_job_paths(outdir)
+    isempty(pending_job_records) || error(
+        "metaMDBG output has pending scheduler job evidence: " *
+        "$(join(pending_job_records, ", ")). Recover the exact accepted job " *
+        "before competing execution.",
     )
     return nothing
 end
@@ -5844,6 +7311,15 @@ function _metamdbg_shared_reservation_identity(
     return (; device = metadata.device, inode = metadata.inode)
 end
 
+function _metamdbg_runtime_shared_reservation_identity(
+        reservation::NamedTuple,
+)::NamedTuple
+    marker =
+        _require_metamdbg_runtime_output_root_reservation_marker!(reservation)
+    metadata = stat(marker)
+    return (; device = metadata.device, inode = metadata.inode)
+end
+
 function _require_unchanged_metamdbg_recovery_identities(
         reservation::NamedTuple,
         reservation_identity::NamedTuple,
@@ -5875,8 +7351,8 @@ function _metamdbg_submission_reservation_from_path(
         normalized_path,
         canonical_outdir,
     )
-    path_state == :consumed && error(
-        "metaMDBG consumed reservation tombstones are not recovery " *
+    path_state == :legacy_consumed && error(
+        "metaMDBG legacy consumed reservation remnants are not recovery " *
         "capabilities: $(normalized_path).",
     )
     if path_state == :provisional && !allow_provisional
@@ -5966,8 +7442,8 @@ function _metamdbg_submission_reservation_from_path(
         "metaMDBG submission reservation graph_k must be an integer.",
     )
     graph_k = Int(graph_k_value)
-    graph_k >= 0 || error(
-        "metaMDBG submission reservation graph_k must be nonnegative.",
+    graph_k > 0 || error(
+        "metaMDBG submission reservation graph_k must be positive.",
     )
     workflow_signature = get(parsed, "workflow_signature", nothing)
     workflow_signature isa AbstractString &&
@@ -5999,8 +7475,12 @@ function _metamdbg_submission_reservation_from_path(
             "metaMDBG submission reservation path does not match its workflow " *
             "signature.",
         )
-        expected = merge(expected, (; publication_state = :published))
-    else
+        expected = merge(expected, (;
+            publication_state = :published,
+            reservation_state = :queued,
+            lifecycle_owner = :submitter,
+        ))
+    elseif path_state == :provisional
         _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME in entries && error(
             "metaMDBG provisional pre-submit reservation must not contain a " *
             "scheduler job record: $(normalized_path).",
@@ -6013,7 +7493,44 @@ function _metamdbg_submission_reservation_from_path(
                 _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
             ),
             publication_state = :provisional,
+            reservation_state = :provisional,
+            lifecycle_owner = :submitter,
         ))
+    elseif path_state in (:runtime, :consumed, :reclaiming)
+        expected_path = if path_state == :runtime
+            expected.runtime_path
+        elseif path_state == :consumed
+            expected.consumed_path
+        else
+            expected.reclaiming_path
+        end
+        expected_path == normalized_path || error(
+            "metaMDBG $(path_state) reservation path does not match its " *
+            "owner capability.",
+        )
+        if path_state in (:runtime, :consumed)
+            _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME in entries || error(
+                "metaMDBG $(path_state) reservation must retain its exact " *
+                "scheduler job record: $(normalized_path).",
+            )
+        end
+        expected = merge(expected, (;
+            path = normalized_path,
+            contract_marker = marker,
+            job_marker = joinpath(
+                normalized_path,
+                _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
+            ),
+            publication_state = :published,
+            reservation_state = path_state,
+            lifecycle_owner = path_state == :reclaiming ?
+                              :recovery : :runtime,
+        ))
+    else
+        error(
+            "metaMDBG cannot reconstruct reservation path state " *
+            "$(repr(path_state)).",
+        )
     end
     expected.workflow_signature == workflow_signature || error(
         "metaMDBG submission reservation workflow signature is inconsistent.",
@@ -6061,10 +7578,83 @@ function _metamdbg_submission_reservation_from_path(
             "match its workflow owner.",
         )
     end
-    if require_output_root_reservation
-        return _require_metamdbg_submission_reservation!(expected)
+    if path_state in (:published, :provisional)
+        if require_output_root_reservation
+            _require_metamdbg_submission_reservation!(expected)
+        else
+            _require_metamdbg_private_submission_reservation!(expected)
+        end
+        runtime_exists = _output_root_path_entry_exists(
+            expected.runtime_output_root_reservation_marker,
+        )
+        if runtime_exists
+            _require_metamdbg_runtime_output_root_reservation_marker!(expected)
+            return merge(expected, (;
+                reservation_state = :runtime_claiming,
+                lifecycle_owner = :runtime,
+                submission_state = :runtime,
+            ))
+        end
+        return expected
+    elseif path_state == :runtime
+        _require_metamdbg_private_submission_reservation!(expected)
+        queued_exists = _output_root_path_entry_exists(
+            expected.output_root_reservation_marker,
+        )
+        runtime_exists = _output_root_path_entry_exists(
+            expected.runtime_output_root_reservation_marker,
+        )
+        queued_exists &&
+            _require_metamdbg_output_root_reservation_marker!(expected)
+        runtime_exists &&
+            _require_metamdbg_runtime_output_root_reservation_marker!(expected)
+        reservation_state = if queued_exists && runtime_exists
+            :runtime_transition
+        elseif runtime_exists
+            :runtime
+        elseif queued_exists
+            :runtime_transition_ambiguous
+        else
+            :runtime_release_pending
+        end
+        return merge(expected, (;
+            reservation_state,
+            submission_state = :runtime,
+        ))
+    elseif path_state == :reclaiming
+        _require_metamdbg_private_submission_reservation!(expected)
+        queued_exists = _output_root_path_entry_exists(
+            expected.output_root_reservation_marker,
+        )
+        runtime_exists = _output_root_path_entry_exists(
+            expected.runtime_output_root_reservation_marker,
+        )
+        runtime_exists && error(
+            "metaMDBG explicit reclaim transition unexpectedly has a runtime " *
+            "shared marker.",
+        )
+        queued_exists &&
+            _require_metamdbg_output_root_reservation_marker!(expected)
+        return merge(expected, (;
+            reservation_state = queued_exists ?
+                                :reclaiming : :reclaim_release_pending,
+        ))
     end
-    return _require_metamdbg_private_submission_reservation!(expected)
+    _require_metamdbg_private_submission_reservation!(expected)
+    queued_exists = _output_root_path_entry_exists(
+        expected.output_root_reservation_marker,
+    )
+    runtime_exists = _output_root_path_entry_exists(
+        expected.runtime_output_root_reservation_marker,
+    )
+    !queued_exists && !runtime_exists || error(
+        "metaMDBG consumed reservation still has a queued or runtime shared " *
+        "marker; refusing to treat it as durably consumed.",
+    )
+    return merge(expected, (;
+        reservation_state = :consumed,
+        submission_state = :consumed,
+    ))
 end
 
 function _create_metamdbg_submission_reservation!(
@@ -6168,6 +7758,14 @@ end
 function _bind_metamdbg_submission_job!(
         reservation::NamedTuple,
         job_id::AbstractString,
+        ;
+        post_pending_job_record_creation_hook::Function =
+            (_reservation::NamedTuple, _path::AbstractString) -> nothing,
+        pre_job_record_publication_hook::Function =
+            (_reservation::NamedTuple, _path::AbstractString) -> nothing,
+        post_job_record_publication_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
+        pending_job_record_remover::Function = rm,
 )::NamedTuple
     _require_metamdbg_submission_reservation!(reservation)
     bound_reservation =
@@ -6179,41 +7777,103 @@ function _bind_metamdbg_submission_job!(
             "job record: $(marker).",
         )
     end
-    temporary_path, temporary_io = mktemp(dirname(reservation.path))
-    published = false
+    existing_pending_paths = _metamdbg_pending_submission_job_paths(
+        reservation.canonical_outdir,
+    )
+    isempty(existing_pending_paths) || error(
+        "metaMDBG refuses a new scheduler job binding while pending accepted-ID " *
+        "evidence exists: $(join(existing_pending_paths, ", ")).",
+    )
+    pending_path = bound_reservation.pending_job_marker
+    _output_root_path_entry_exists(pending_path) && error(
+        "metaMDBG refuses to overwrite an existing pending scheduler job " *
+        "record: $(pending_path).",
+    )
+    pending_io = nothing
+    pending_record = nothing
+    bound_owner = nothing
+    committed = false
     try
-        write(temporary_io, bound_reservation.job_contents)
-        chmod(temporary_path, 0o600)
-        _fsync_metamdbg_file(temporary_io, temporary_path)
-        close(temporary_io)
-        Base.Filesystem.hardlink(temporary_path, marker)
-        published = true
-        _fsync_metamdbg_directory(reservation.path)
-        rm(temporary_path)
-        _fsync_metamdbg_directory(dirname(reservation.path))
-        _require_metamdbg_submission_reservation!(bound_reservation)
+        pending_io = Base.Filesystem.open(
+            pending_path,
+            Base.JL_O_WRONLY |
+            Base.JL_O_CREAT |
+            Base.JL_O_EXCL |
+            Base.JL_O_CLOEXEC,
+            0o600,
+        )
+        _fsync_metamdbg_descriptor(Base.fd(pending_io), pending_path)
+        _fsync_metamdbg_directory(dirname(pending_path))
+        post_pending_job_record_creation_hook(
+            bound_reservation,
+            pending_path,
+        )
+        write(pending_io, bound_reservation.job_contents)
+        _fsync_metamdbg_descriptor(Base.fd(pending_io), pending_path)
+        close(pending_io)
+        pending_io = nothing
+        _fsync_metamdbg_directory(dirname(pending_path))
+        pending_record = _metamdbg_pending_submission_job_record(
+            reservation,
+            pending_path,
+        )
+        pending_record.job_id == bound_reservation.job_id || error(
+            "metaMDBG pending scheduler job record lost its exact job ID.",
+        )
+        reservation_identity =
+            _metamdbg_submission_reservation_identity(reservation)
+        shared_reservation_identity =
+            _metamdbg_shared_reservation_identity(reservation)
+        pre_job_record_publication_hook(
+            bound_reservation,
+            pending_path,
+        )
+        _require_unchanged_metamdbg_recovery_identities(
+            reservation,
+            reservation_identity,
+            shared_reservation_identity,
+        )
+        pending_record =
+            _require_unchanged_metamdbg_pending_submission_job_record(
+                reservation,
+                pending_record,
+            )
+        bound_owner = _publish_metamdbg_pending_submission_job_record!(
+            reservation,
+            pending_record,
+            reservation_identity,
+            shared_reservation_identity,
+        )
+        committed = true
+        post_job_record_publication_hook(bound_owner)
+        _remove_metamdbg_pending_submission_job_record!(
+            bound_owner,
+            pending_record;
+            pending_remover = pending_job_record_remover,
+        )
+        _require_metamdbg_submission_reservation!(bound_owner)
     catch primary_error
-        isopen(temporary_io) && close(temporary_io)
-        if ispath(temporary_path)
-            try
-                rm(temporary_path)
-            catch cleanup_error
-                @warn "metaMDBG failed to clean an unpublished submission " *
-                      "job record while preserving the primary bind failure" temporary_path primary_error cleanup_error
-            end
+        if pending_io !== nothing && isopen(pending_io)
+            close(pending_io)
         end
-        if published && ispath(marker)
+        if committed && pending_record isa NamedTuple &&
+           bound_owner isa NamedTuple &&
+           _output_root_path_entry_exists(pending_path)
             try
-                rm(marker)
+                _remove_metamdbg_pending_submission_job_record!(
+                    bound_owner,
+                    pending_record;
+                    pending_remover = pending_job_record_remover,
+                )
             catch cleanup_error
-                @warn "metaMDBG failed to remove an invalid newly published " *
-                      "submission job record while preserving the primary " *
-                      "bind failure" marker primary_error cleanup_error
+                @warn "metaMDBG failed to clean its committed pending " *
+                      "scheduler job record while preserving the primary " *
+                      "bind failure" pending_path primary_error cleanup_error
             end
         end
         Base.rethrow()
     end
-    return bound_reservation
+    return bound_owner
 end
 
 """
@@ -6227,8 +7887,23 @@ job ID. Set `confirm_submitted = true` only after independently confirming that
 the exact scheduler job belongs to this reservation. Binding requires the fully
 published record and both filesystem identities returned by inspection, so a
 same-content private or shared replacement fails before `job.json` publication.
-The job record is published atomically under the output lock and becomes
-available through `inspect_metamdbg_submission_reservations`.
+The job record is published atomically under the output-domain lock and becomes
+available through `inspect_metamdbg_submission_reservations`. Binding holds the
+full canonical local PID record, cleanup sentinel, and private lifecycle lock,
+and first publishes an adjacent capability-and-job-ID-bound pending record.
+Hard termination before or after durable `job.json` publication therefore
+retains the exact accepted scheduler ID. Confirmed-dead inspection validates
+and promotes pending-only evidence or verifies the exact hardlink before
+durably removing the pending name. An ordinary precommit error retains pending
+evidence for idempotent exact-job resume through this function. Once `job.json`
+and its owner directory are fsynced, that commit is irreversible: a later
+ordinary error preserves the exact bound owner and removes only the unchanged
+pending inode when possible. A committed pending-cleanup remnant can be resumed
+idempotently through the same API.
+Complete either pending-recovery path before manually releasing the held Slurm
+job; generated runtimes reject exact bound-job pending evidence before runtime
+ownership publication and any other same-output pending evidence before owner
+consumption.
 """
 function bind_metamdbg_submission_reservation_job!(
         metadata::NamedTuple;
@@ -6268,9 +7943,46 @@ function bind_metamdbg_submission_reservation_job!(
         "metaMDBG scheduler job binding requires the exact private and " *
         "shared filesystem identities returned by inspection.",
     ))
-    metadata.job_id === nothing || error(
-        "metaMDBG submission reservation already has a scheduler job id.",
+    submission_state = hasproperty(metadata, :submission_state) ?
+                       metadata.submission_state : :reserved
+    has_pending_evidence = submission_state in (
+        :submission_pending,
+        :submission_commit_cleanup_pending,
     )
+    if has_pending_evidence
+        all(
+            field -> hasproperty(metadata, field),
+            (
+                :pending_job_id,
+                :pending_job_path,
+                :pending_job_identity,
+                :pending_job_complete,
+            ),
+        ) || throw(ArgumentError(
+            "metaMDBG pending-job recovery requires every exact pending " *
+            "identity returned by inspection.",
+        ))
+        metadata.pending_job_id isa AbstractString || error(
+            "metaMDBG pending-job recovery metadata has no exact scheduler " *
+            "job ID.",
+        )
+    else
+        metadata.job_id === nothing || error(
+            "metaMDBG submission reservation already has a scheduler job id.",
+        )
+    end
+    normalized_job_id = _normalize_metamdbg_job_id(job_id)
+    if has_pending_evidence
+        normalized_job_id == metadata.pending_job_id || error(
+            "metaMDBG requested scheduler job ID does not match the exact " *
+            "pending job record.",
+        )
+        if metadata.job_id isa AbstractString
+            normalized_job_id == metadata.job_id || error(
+                "metaMDBG committed and pending scheduler job IDs conflict.",
+            )
+        end
+    end
     normalized_owner_token = String(owner_token)
     normalized_owner_token == metadata.owner_token || error(
         "metaMDBG reservation owner token does not match the durable " *
@@ -6298,7 +8010,12 @@ function bind_metamdbg_submission_reservation_job!(
     expected.workflow_signature == metadata.workflow_signature || error(
         "metaMDBG reservation workflow signature does not match metadata.",
     )
-    bound = _with_metamdbg_output_lock(outputs.outdir) do
+    bound = _with_metamdbg_output_domain_lock(
+        outputs.outdir;
+        allowed_same_root_locks = (
+            expected.output_root_reservation_marker,
+        ),
+    ) do
         current = _metamdbg_submission_reservation_from_path(
             expected.path,
             outputs.outdir,
@@ -6317,15 +8034,73 @@ function bind_metamdbg_submission_reservation_job!(
                 "scheduler job could be bound.",
             )
         end
-        current.job_id === nothing || error(
-            "metaMDBG submission reservation already has a scheduler job id.",
-        )
+        if current.job_id != metadata.job_id
+            metadata.job_id === nothing && current.job_id isa AbstractString &&
+                error(
+                    "metaMDBG submission reservation already has a scheduler " *
+                    "job id.",
+                )
+            error(
+                "metaMDBG submission scheduler job state changed after " *
+                "inspection.",
+            )
+        end
         _require_unchanged_metamdbg_recovery_identities(
             current,
             metadata.reservation_identity,
             metadata.shared_reservation_identity,
         )
-        _bind_metamdbg_submission_job!(current, job_id)
+        if has_pending_evidence
+            pending_paths = _metamdbg_pending_submission_job_paths(
+                outputs.outdir,
+            )
+            pending =
+                _metamdbg_pending_submission_job_record_for_reservation(
+                    current,
+                    pending_paths;
+                    allow_incomplete = true,
+                )
+            pending isa NamedTuple || error(
+                "metaMDBG inspected pending scheduler job record disappeared " *
+                "before exact recovery.",
+            )
+            pending.path == metadata.pending_job_path || error(
+                "metaMDBG pending scheduler job path changed after inspection.",
+            )
+            pending.job_id == normalized_job_id || error(
+                "metaMDBG pending scheduler job ID changed after inspection.",
+            )
+            pending.identity == metadata.pending_job_identity || error(
+                "metaMDBG pending scheduler job inode changed after inspection.",
+            )
+            pending.is_complete == metadata.pending_job_complete || error(
+                "metaMDBG pending scheduler job completion state changed after " *
+                "inspection.",
+            )
+            pending_paths == [pending.path] || error(
+                "metaMDBG found additional pending scheduler job evidence after " *
+                "inspection; refusing ambiguous exact-job recovery.",
+            )
+            _resume_metamdbg_pending_submission_job_record!(
+                current,
+                pending,
+                metadata.reservation_identity,
+                metadata.shared_reservation_identity,
+            )
+        else
+            pending_paths = _metamdbg_pending_submission_job_paths(
+                outputs.outdir,
+            )
+            isempty(pending_paths) || error(
+                "metaMDBG pending scheduler job evidence appeared after " *
+                "inspection; reinspect and recover the exact accepted job ID.",
+            )
+            current.job_id === nothing || error(
+                "metaMDBG submission reservation already has a scheduler job " *
+                "id.",
+            )
+            _bind_metamdbg_submission_job!(current, normalized_job_id)
+        end
     end
     return (;
         canonical_outdir = bound.canonical_outdir,
@@ -6338,6 +8113,10 @@ function bind_metamdbg_submission_reservation_job!(
         job_id = bound.job_id,
         submission_state = bound.submission_state,
         publication_state = :published,
+        pending_job_id = nothing,
+        pending_job_path = nothing,
+        pending_job_identity = nothing,
+        pending_job_complete = nothing,
         reservation_identity = metadata.reservation_identity,
         shared_reservation_identity = metadata.shared_reservation_identity,
     )
@@ -6345,8 +8124,21 @@ end
 
 function _remove_metamdbg_submission_reservation!(
         reservation::NamedTuple,
+        ;
+        post_private_rename_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
+        post_shared_release_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
 )::Nothing
     output_root_marker = reservation.output_root_reservation_marker
+    pending_job_records = _metamdbg_pending_submission_job_paths(
+        reservation.canonical_outdir,
+    )
+    isempty(pending_job_records) || error(
+        "metaMDBG refuses reservation removal while pending scheduler job " *
+        "evidence exists: $(join(pending_job_records, ", ")). Recover and " *
+        "verify the exact accepted job first.",
+    )
     if !ispath(reservation.path) && !islink(reservation.path)
         if ispath(output_root_marker) || islink(output_root_marker)
             error(
@@ -6357,45 +8149,162 @@ function _remove_metamdbg_submission_reservation!(
         end
         return nothing
     end
-    _require_metamdbg_submission_reservation!(reservation)
-    tombstone_root = mktempdir(
-        dirname(reservation.path);
-        prefix = _metamdbg_submission_reservation_prefix(
-            reservation.canonical_outdir,
-        ) * "consumed.",
+    path_state = _metamdbg_submission_reservation_path_state(
+        reservation.path,
+        reservation.canonical_outdir,
     )
-    chmod(tombstone_root, 0o700)
-    tombstone = joinpath(tombstone_root, "reservation")
-    try
-        mv(reservation.path, tombstone)
-    catch primary_error
-        try
-            rm(tombstone_root; recursive = true)
-        catch cleanup_error
-            @warn "metaMDBG failed to clean an unused reservation tombstone " *
-                  "while preserving the primary atomic-consumption failure" tombstone_root primary_error cleanup_error
+    transition = if path_state in (:published, :provisional)
+        _require_metamdbg_submission_reservation!(reservation)
+        reclaiming_path = reservation.reclaiming_path
+        if _output_root_path_entry_exists(reclaiming_path)
+            error(
+                "metaMDBG refuses to overwrite an existing identity-bound " *
+                "reclaim transition: $(reclaiming_path).",
+            )
         end
-        Base.rethrow()
-    end
-    try
-        rm(output_root_marker)
-        _fsync_metamdbg_directory(dirname(output_root_marker))
-    catch cleanup_error
+        mv(reservation.path, reclaiming_path)
+        _fsync_metamdbg_directory(dirname(reclaiming_path))
+        _metamdbg_submission_reservation_from_path(
+            reclaiming_path,
+            reservation.canonical_outdir,
+        )
+    elseif path_state == :reclaiming
+        _metamdbg_submission_reservation_from_path(
+            reservation.path,
+            reservation.canonical_outdir,
+        )
+    else
         error(
-            "metaMDBG atomically consumed its private submission " *
-            "reservation but could not durably release its shared " *
-            "output-root reservation. The output domain remains fail-closed " *
-            "or its release durability is unknown: $(output_root_marker). " *
-            "Cause: $(sprint(showerror, cleanup_error))",
+            "metaMDBG cannot explicitly reclaim reservation state " *
+            "$(repr(path_state)).",
         )
     end
-    try
-        rm(tombstone; recursive = true)
-        rm(tombstone_root)
-    catch cleanup_error
-        @warn "metaMDBG atomically consumed its submission reservation but " *
-              "left a nonblocking tombstone remnant" tombstone_root cleanup_error
+    post_private_rename_hook(transition)
+    if _output_root_path_entry_exists(output_root_marker)
+        _require_metamdbg_output_root_reservation_marker!(transition)
+        rm(output_root_marker)
+        _fsync_metamdbg_directory(dirname(output_root_marker))
     end
+    !_output_root_path_entry_exists(output_root_marker) || error(
+        "metaMDBG shared output-root reservation reappeared during explicit " *
+        "reclaim: $(output_root_marker).",
+    )
+    post_shared_release_hook(transition)
+    current = _metamdbg_submission_reservation_from_path(
+        transition.path,
+        transition.canonical_outdir,
+    )
+    current.reservation_state == :reclaim_release_pending || error(
+        "metaMDBG explicit reclaim did not reach its durable shared-release " *
+        "state.",
+    )
+    rm(current.path; recursive = true)
+    !_output_root_path_entry_exists(current.path) || error(
+        "metaMDBG reclaim transition reappeared after removal: $(current.path).",
+    )
+    _fsync_metamdbg_directory(dirname(current.path))
+    return nothing
+end
+
+function _require_metamdbg_optional_recovery_identity(
+        path::AbstractString,
+        expected_identity::Union{Nothing, NamedTuple},
+        identity_function::Function,
+        label::AbstractString,
+)::Nothing
+    exists = _output_root_path_entry_exists(path)
+    (expected_identity === nothing) == !exists || error(
+        "metaMDBG $(label) presence changed after recovery inspection: $(path).",
+    )
+    if exists
+        identity_function(path) == expected_identity || error(
+            "metaMDBG $(label) identity changed after recovery inspection: " *
+            "$(path).",
+        )
+    end
+    return nothing
+end
+
+function _remove_metamdbg_runtime_recovery_state!(
+        reservation::NamedTuple,
+        metadata::NamedTuple,
+)::Nothing
+    _metamdbg_submission_reservation_identity(reservation) ==
+        metadata.reservation_identity || error(
+        "metaMDBG runtime owner record changed after recovery inspection.",
+    )
+    _require_metamdbg_optional_recovery_identity(
+        reservation.output_root_reservation_marker,
+        metadata.queued_reservation_identity,
+        path -> begin
+            marker = _require_metamdbg_output_root_reservation_marker!(
+                reservation,
+            )
+            marker == path || error("metaMDBG queued marker path changed.")
+            status = stat(marker)
+            return (; device = status.device, inode = status.inode)
+        end,
+        "queued shared reservation",
+    )
+    _require_metamdbg_optional_recovery_identity(
+        reservation.runtime_output_root_reservation_marker,
+        metadata.runtime_reservation_identity,
+        path -> begin
+            marker = _require_metamdbg_runtime_output_root_reservation_marker!(
+                reservation,
+            )
+            marker == path || error("metaMDBG runtime marker path changed.")
+            status = stat(marker)
+            return (; device = status.device, inode = status.inode)
+        end,
+        "runtime shared reservation",
+    )
+    private_lock_path = _metamdbg_output_lock_path(reservation.canonical_outdir)
+    _require_metamdbg_optional_recovery_identity(
+        private_lock_path,
+        metadata.private_lock_identity,
+        _metamdbg_output_lock_identity,
+        "runtime private lifecycle lock",
+    )
+    cleanup_path = _metamdbg_lifecycle_cleanup_reservation_path(
+        reservation.canonical_outdir,
+    )
+    _require_metamdbg_optional_recovery_identity(
+        cleanup_path,
+        metadata.cleanup_reservation_identity,
+        _metamdbg_output_lock_identity,
+        "runtime lifecycle cleanup reservation",
+    )
+    if metadata.private_lock_identity !== nothing
+        _recover_dead_metamdbg_private_output_lock!(private_lock_path)
+    end
+    if metadata.cleanup_reservation_identity !== nothing
+        _remove_metamdbg_lifecycle_cleanup_reservation!(
+            cleanup_path,
+            metadata.cleanup_reservation_identity,
+        )
+    end
+    if metadata.queued_reservation_identity !== nothing
+        rm(reservation.output_root_reservation_marker)
+        _fsync_metamdbg_directory(
+            dirname(reservation.output_root_reservation_marker),
+        )
+    end
+    if metadata.runtime_reservation_identity !== nothing
+        rm(reservation.runtime_output_root_reservation_marker)
+        _fsync_metamdbg_directory(
+            dirname(reservation.runtime_output_root_reservation_marker),
+        )
+    end
+    _metamdbg_submission_reservation_identity(reservation) ==
+        metadata.reservation_identity || error(
+        "metaMDBG runtime owner record changed during recovery.",
+    )
+    rm(reservation.path; recursive = true)
+    !_output_root_path_entry_exists(reservation.path) || error(
+        "metaMDBG runtime owner record reappeared during recovery.",
+    )
+    _fsync_metamdbg_directory(dirname(reservation.path))
     return nothing
 end
 
@@ -6464,15 +8373,34 @@ function _write_metamdbg_contract!(
         )
     end
     temporary_path, temporary_io = mktemp(dirname(marker))
+    published = false
     try
         write(temporary_io, input_contract.contents)
-        flush(temporary_io)
-        close(temporary_io)
         chmod(temporary_path, 0o600)
+        _fsync_metamdbg_file(temporary_io, temporary_path)
+        close(temporary_io)
         filesize(temporary_path) > 0 || error(
             "Failed to write metaMDBG provenance contract marker: $(marker).",
         )
-        mv(temporary_path, marker)
+        Base.Filesystem.hardlink(temporary_path, marker)
+        published = true
+        _fsync_metamdbg_directory(dirname(marker))
+        rm(temporary_path)
+        read(marker, String) == input_contract.contents || error(
+            "Failed to verify metaMDBG provenance contract marker: $(marker).",
+        )
+    catch primary_error
+        if published && (ispath(marker) || islink(marker))
+            try
+                rm(marker)
+                _fsync_metamdbg_directory(dirname(marker))
+            catch cleanup_error
+                @warn "metaMDBG failed to remove an invalid newly published " *
+                      "contract marker while preserving the primary " *
+                      "publication failure" marker primary_error cleanup_error
+            end
+        end
+        Base.rethrow()
     finally
         isopen(temporary_io) && close(temporary_io)
         rm(temporary_path; force = true)
@@ -6799,223 +8727,236 @@ function _metamdbg_gfa_path_step_identifiers(
     return identifiers
 end
 
-function _require_valid_metamdbg_gfa(
-        path::AbstractString,
+function _require_valid_metamdbg_gfa_input(
+        input::IO,
         label::AbstractString,
-)::String
-    normalized_path = _require_metamdbg_regular_file(path, label)
+        normalized_path::AbstractString,
+)::Nothing
+    seekstart(input)
     segment_identifiers = Set{String}()
     record_identifiers = Set{String}()
-    open(normalized_path, "r") do input
-        for (line_number, raw_line) in enumerate(eachline(input))
-            line = chomp(raw_line)
-            isempty(strip(line)) && continue
-            startswith(line, "#") && continue
-            fields = split(line, '\t'; keepempty = true)
-            record_type = String(first(fields))
-            if record_type == "H"
-                _require_valid_metamdbg_gfa_tags(
-                    fields,
-                    2,
-                    "GFA header",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                for tag in @view fields[2:end]
-                    components = split(tag, ':'; limit = 3, keepempty = true)
-                    if first(components) == "VN"
-                        components[2] == "Z" &&
-                            occursin(r"^1\.[0-9]+$", components[3]) || error(
-                            "$(label) declares a non-GFA1 VN header at line " *
-                            "$(line_number): $(normalized_path).",
-                        )
-                    end
-                end
-            elseif record_type == "S"
-                length(fields) >= 3 || error(
-                    "$(label) has a malformed GFA segment at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                identifier = _require_valid_metamdbg_gfa_identifier(
-                    fields[2],
-                    "GFA segment",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                identifier in record_identifiers && error(
-                    "$(label) has duplicate GFA segment/path name " *
-                    "$(repr(identifier)): $(normalized_path).",
-                )
-                sequence = String(fields[3])
-                if isempty(sequence) || sequence == "*"
-                    error(
-                        "$(label) has no sequence for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path).",
+    for (line_number, raw_line) in enumerate(eachline(input))
+        line = chomp(raw_line)
+        isempty(strip(line)) && continue
+        startswith(line, "#") && continue
+        fields = split(line, '\t'; keepempty = true)
+        record_type = String(first(fields))
+        if record_type == "H"
+            _require_valid_metamdbg_gfa_tags(
+                fields,
+                2,
+                "GFA header",
+                line_number,
+                label,
+                normalized_path,
+            )
+            for tag in @view fields[2:end]
+                components = split(tag, ':'; limit = 3, keepempty = true)
+                if first(components) == "VN"
+                    components[2] == "Z" &&
+                        occursin(r"^1\.[0-9]+$", components[3]) || error(
+                        "$(label) declares a non-GFA1 VN header at line " *
+                        "$(line_number): $(normalized_path).",
                     )
                 end
-                occursin(_METAMDBG_IUPAC_DNA_REGEX, sequence) || error(
-                    "$(label) has invalid DNA for GFA segment " *
-                    "$(repr(identifier)): $(normalized_path).",
-                )
-                try
-                    BioSequences.LongDNA{4}(sequence)
-                catch caught
-                    caught isa InterruptException && rethrow()
-                    error(
-                        "$(label) has invalid DNA for GFA segment " *
-                        "$(repr(identifier)): $(normalized_path). Cause: " *
-                        sprint(showerror, caught),
-                    )
-                end
-                _require_valid_metamdbg_gfa_tags(
-                    fields,
-                    4,
-                    "GFA segment",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(segment_identifiers, identifier)
-                push!(record_identifiers, identifier)
-            elseif record_type == "L"
-                length(fields) >= 6 || error(
-                    "$(label) has a malformed GFA link at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                _require_valid_metamdbg_gfa_identifier(
-                    fields[2],
-                    "GFA link source",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                _require_valid_metamdbg_gfa_orientation(
-                    fields[3],
-                    "GFA link source",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                _require_valid_metamdbg_gfa_identifier(
-                    fields[4],
-                    "GFA link destination",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                _require_valid_metamdbg_gfa_orientation(
-                    fields[5],
-                    "GFA link destination",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                _require_valid_metamdbg_gfa_cigar(
-                    fields[6],
-                    "GFA link",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                _require_valid_metamdbg_gfa_tags(
-                    fields,
-                    7,
-                    "GFA link",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-            elseif record_type == "P"
-                length(fields) >= 4 || error(
-                    "$(label) has a malformed GFA path at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-                path_identifier = _require_valid_metamdbg_gfa_identifier(
-                    fields[2],
-                    "GFA path",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                path_identifier in record_identifiers && error(
-                    "$(label) has duplicate GFA segment/path name " *
-                    "$(repr(path_identifier)): $(normalized_path).",
-                )
-                steps = _metamdbg_gfa_path_step_identifiers(
-                    fields[3],
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                overlap_field = String(fields[4])
-                if overlap_field != "*"
-                    overlaps = split(overlap_field, ','; keepempty = true)
-                    length(overlaps) == length(steps) - 1 || error(
-                        "$(label) has the wrong number of GFA path overlaps " *
-                        "at line $(line_number): $(normalized_path).",
-                    )
-                    for overlap in overlaps
-                        _require_valid_metamdbg_gfa_cigar(
-                            overlap,
-                            "GFA path",
-                            line_number,
-                            label,
-                            normalized_path,
-                        )
-                    end
-                end
-                _require_valid_metamdbg_gfa_tags(
-                    fields,
-                    5,
-                    "GFA path",
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-                push!(record_identifiers, path_identifier)
-            else
+            end
+        elseif record_type == "S"
+            length(fields) >= 3 || error(
+                "$(label) has a malformed GFA segment at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            identifier = _require_valid_metamdbg_gfa_identifier(
+                fields[2],
+                "GFA segment",
+                line_number,
+                label,
+                normalized_path,
+            )
+            identifier in record_identifiers && error(
+                "$(label) has duplicate GFA segment/path name " *
+                "$(repr(identifier)): $(normalized_path).",
+            )
+            sequence = String(fields[3])
+            if isempty(sequence) || sequence == "*"
                 error(
-                    "$(label) has unknown GFA record type " *
-                    "$(repr(record_type)) at line $(line_number): " *
-                    "$(normalized_path).",
+                    "$(label) has no sequence for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path).",
                 )
             end
+            occursin(_METAMDBG_IUPAC_DNA_REGEX, sequence) || error(
+                "$(label) has invalid DNA for GFA segment " *
+                "$(repr(identifier)): $(normalized_path).",
+            )
+            try
+                BioSequences.LongDNA{4}(sequence)
+            catch caught
+                caught isa InterruptException && rethrow()
+                error(
+                    "$(label) has invalid DNA for GFA segment " *
+                    "$(repr(identifier)): $(normalized_path). Cause: " *
+                    sprint(showerror, caught),
+                )
+            end
+            _require_valid_metamdbg_gfa_tags(
+                fields,
+                4,
+                "GFA segment",
+                line_number,
+                label,
+                normalized_path,
+            )
+            push!(segment_identifiers, identifier)
+            push!(record_identifiers, identifier)
+        elseif record_type == "L"
+            length(fields) >= 6 || error(
+                "$(label) has a malformed GFA link at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            _require_valid_metamdbg_gfa_identifier(
+                fields[2],
+                "GFA link source",
+                line_number,
+                label,
+                normalized_path,
+            )
+            _require_valid_metamdbg_gfa_orientation(
+                fields[3],
+                "GFA link source",
+                line_number,
+                label,
+                normalized_path,
+            )
+            _require_valid_metamdbg_gfa_identifier(
+                fields[4],
+                "GFA link destination",
+                line_number,
+                label,
+                normalized_path,
+            )
+            _require_valid_metamdbg_gfa_orientation(
+                fields[5],
+                "GFA link destination",
+                line_number,
+                label,
+                normalized_path,
+            )
+            _require_valid_metamdbg_gfa_cigar(
+                fields[6],
+                "GFA link",
+                line_number,
+                label,
+                normalized_path,
+            )
+            _require_valid_metamdbg_gfa_tags(
+                fields,
+                7,
+                "GFA link",
+                line_number,
+                label,
+                normalized_path,
+            )
+        elseif record_type == "P"
+            length(fields) >= 4 || error(
+                "$(label) has a malformed GFA path at line " *
+                "$(line_number): $(normalized_path).",
+            )
+            path_identifier = _require_valid_metamdbg_gfa_identifier(
+                fields[2],
+                "GFA path",
+                line_number,
+                label,
+                normalized_path,
+            )
+            path_identifier in record_identifiers && error(
+                "$(label) has duplicate GFA segment/path name " *
+                "$(repr(path_identifier)): $(normalized_path).",
+            )
+            steps = _metamdbg_gfa_path_step_identifiers(
+                fields[3],
+                line_number,
+                label,
+                normalized_path,
+            )
+            overlap_field = String(fields[4])
+            if overlap_field != "*"
+                overlaps = split(overlap_field, ','; keepempty = true)
+                length(overlaps) == length(steps) - 1 || error(
+                    "$(label) has the wrong number of GFA path overlaps " *
+                    "at line $(line_number): $(normalized_path).",
+                )
+                for overlap in overlaps
+                    _require_valid_metamdbg_gfa_cigar(
+                        overlap,
+                        "GFA path",
+                        line_number,
+                        label,
+                        normalized_path,
+                    )
+                end
+            end
+            _require_valid_metamdbg_gfa_tags(
+                fields,
+                5,
+                "GFA path",
+                line_number,
+                label,
+                normalized_path,
+            )
+            push!(record_identifiers, path_identifier)
+        else
+            error(
+                "$(label) has unknown GFA record type " *
+                "$(repr(record_type)) at line $(line_number): " *
+                "$(normalized_path).",
+            )
         end
     end
     isempty(segment_identifiers) && error(
         "$(label) contains no sequence-bearing GFA segments: " *
         "$(normalized_path).",
     )
-    open(normalized_path, "r") do input
-        for (line_number, raw_line) in enumerate(eachline(input))
-            line = chomp(raw_line)
-            isempty(strip(line)) && continue
-            startswith(line, "#") && continue
-            fields = split(line, '\t'; keepempty = true)
-            record_type = String(first(fields))
-            referenced_identifiers = if record_type == "L"
-                String[fields[2], fields[4]]
-            elseif record_type == "P"
-                _metamdbg_gfa_path_step_identifiers(
-                    fields[3],
-                    line_number,
-                    label,
-                    normalized_path,
-                )
-            else
-                continue
-            end
-            reference_type = record_type == "L" ? "link" : "path"
-            for identifier in referenced_identifiers
-                identifier in segment_identifiers || error(
-                    "$(label) has a dangling GFA $(reference_type) segment " *
-                    "reference $(repr(identifier)) at line " *
-                    "$(line_number): $(normalized_path).",
-                )
-            end
+    seekstart(input)
+    for (line_number, raw_line) in enumerate(eachline(input))
+        line = chomp(raw_line)
+        isempty(strip(line)) && continue
+        startswith(line, "#") && continue
+        fields = split(line, '\t'; keepempty = true)
+        record_type = String(first(fields))
+        referenced_identifiers = if record_type == "L"
+            String[fields[2], fields[4]]
+        elseif record_type == "P"
+            _metamdbg_gfa_path_step_identifiers(
+                fields[3],
+                line_number,
+                label,
+                normalized_path,
+            )
+        else
+            continue
         end
+        reference_type = record_type == "L" ? "link" : "path"
+        for identifier in referenced_identifiers
+            identifier in segment_identifiers || error(
+                "$(label) has a dangling GFA $(reference_type) segment " *
+                "reference $(repr(identifier)) at line " *
+                "$(line_number): $(normalized_path).",
+            )
+        end
+    end
+    return nothing
+end
+
+function _require_valid_metamdbg_gfa(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    normalized_path = _require_metamdbg_regular_file(path, label)
+    open(normalized_path, "r") do input
+        _require_valid_metamdbg_gfa_input(
+            input,
+            label,
+            normalized_path,
+        )
     end
     return normalized_path
 end
@@ -7091,6 +9032,7 @@ function _metamdbg_graph_candidates(
         outputs::NamedTuple,
         graph_k::Int,
 )::Vector{String}
+    _require_positive_metamdbg_graph_k(graph_k)
     isdir(outputs.outdir) || return String[]
     prefix = "assemblyGraph_k$(graph_k)_"
     return sort!(filter(
@@ -7119,6 +9061,7 @@ function _normalize_metamdbg_graph!(
         outputs::NamedTuple,
         graph_k::Int,
 )::Union{Nothing, String}
+    _require_positive_metamdbg_graph_k(graph_k)
     candidates = _metamdbg_graph_candidates(outputs, graph_k)
     isempty(candidates) && return nothing
     length(candidates) == 1 || error(
@@ -7158,6 +9101,7 @@ function _require_metamdbg_artifacts!(
         ;
         output_root_identity::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     if output_root_identity !== nothing
         _require_unchanged_metamdbg_output_root(
             output_root_identity,
@@ -7241,6 +9185,7 @@ function _metamdbg_completion_manifest(
         ;
         digest_function::Function = _metamdbg_sha256,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     toolchain_summary = _metamdbg_completion_toolchain_summary(toolchain)
     workflow = _metamdbg_workflow_contract(outputs, input_contract, graph_k)
     contigs_path = realpath(artifacts.contigs)
@@ -7299,11 +9244,12 @@ function _write_metamdbg_completion_manifest!(
     published = false
     try
         write(temporary_io, completion.contents)
-        flush(temporary_io)
-        close(temporary_io)
         chmod(temporary_path, 0o600)
+        _fsync_metamdbg_file(temporary_io, temporary_path)
+        close(temporary_io)
         Base.Filesystem.hardlink(temporary_path, marker)
         published = true
+        _fsync_metamdbg_directory(dirname(marker))
         rm(temporary_path)
         read(marker, String) == completion.contents || error(
             "Failed to write metaMDBG completion manifest: $(marker).",
@@ -7322,6 +9268,7 @@ function _write_metamdbg_completion_manifest!(
         if published && ispath(marker)
             try
                 rm(marker)
+                _fsync_metamdbg_directory(dirname(marker))
             catch cleanup_error
                 @warn "metaMDBG failed to remove an invalid newly published " *
                       "completion manifest while preserving the primary " *
@@ -7369,6 +9316,7 @@ function _require_metamdbg_completion_manifest!(
         ;
         digest_function::Function = _metamdbg_sha256,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     marker = outputs.completion_marker
     if !isfile(marker) || islink(marker) || filesize(marker) == 0
         error(
@@ -7443,11 +9391,28 @@ function _metamdbg_executor_script(
         environment_path::AbstractString = last(_metamdbg_paths()),
         submission_reservation::Union{Nothing, NamedTuple} = nothing,
         threads::Union{Nothing, Int} = nothing,
+        post_runtime_marker_publication_hook::Union{Nothing, String} = nothing,
+        post_runtime_private_rename_hook::Union{Nothing, String} = nothing,
+        post_queued_marker_release_hook::Union{Nothing, String} = nothing,
+        post_runtime_marker_release_hook::Union{Nothing, String} = nothing,
+        post_consumed_owner_rename_hook::Union{Nothing, String} = nothing,
         post_completion_publication_hook::Union{Nothing, String} = nothing,
+        directory_enumerator_post_open_hook::Union{Nothing, String} = nothing,
+        directory_enumerator_post_enumeration_hook::Union{Nothing, String} =
+            nothing,
+        directory_enumerator_post_inventory_hook::Union{Nothing, String} =
+            nothing,
+        directory_enumerator_post_directory_open_hook::Union{Nothing, String} =
+            nothing,
+        directory_enumerator_post_directory_enumeration_hook::Union{
+            Nothing,
+            String,
+        } = nothing,
         lock_retry_attempts::Int = _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS,
         lock_retry_delay_seconds::Real =
             _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS,
 )::String
+    _require_positive_metamdbg_graph_k(graph_k)
     lock_retry_attempts > 0 || throw(ArgumentError(
         "metaMDBG executor lock_retry_attempts must be positive.",
     ))
@@ -7463,12 +9428,33 @@ function _metamdbg_executor_script(
         _require_verified_metamdbg_environment_spec(environment_path)
     outdir_parent = dirname(outputs.outdir)
     outdir_identity = _output_root_reservation_identity(outputs.outdir)
+    pending_submission_job_prefix = joinpath(
+        outdir_parent,
+        _metamdbg_pending_submission_job_prefix(outputs.outdir),
+    )
     lock_path = _metamdbg_output_lock_path(outputs.outdir)
     effective_submission_reservation = if submission_reservation === nothing
         _metamdbg_submission_reservation(outputs, input_contract, graph_k)
     else
         submission_reservation
     end
+    pending_submission_job_owner_prefix =
+        pending_submission_job_prefix *
+        effective_submission_reservation.output_root_reservation_capability *
+        "."
+    directory_enumerator = _metamdbg_shell_literal(
+        _metamdbg_runtime_directory_enumerator_python(
+            ;
+            post_open_hook = directory_enumerator_post_open_hook,
+            post_enumeration_hook =
+                directory_enumerator_post_enumeration_hook,
+            post_inventory_hook = directory_enumerator_post_inventory_hook,
+            post_directory_open_hook =
+                directory_enumerator_post_directory_open_hook,
+            post_directory_enumeration_hook =
+                directory_enumerator_post_directory_enumeration_hook,
+        ),
+    )
     input_declaration_lines = String[]
     input_validation_function_lines = String[
         "validate_metamdbg_inputs() {",
@@ -7570,11 +9556,15 @@ function _metamdbg_executor_script(
     )
     reservation_declaration_lines = String[
         "submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.path))",
+        "runtime_submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.runtime_path))",
+        "consumed_submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.consumed_path))",
         "submission_reservation_contract=$(_metamdbg_shell_literal(effective_submission_reservation.contract_marker))",
         "submission_reservation_job=$(_metamdbg_shell_literal(effective_submission_reservation.job_marker))",
         "submission_output_root_reservation=$(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_marker))",
         "runtime_output_root_reservation=$(_metamdbg_shell_literal(effective_submission_reservation.runtime_output_root_reservation_marker))",
         "runtime_cleanup_failure_reservation=$(_metamdbg_shell_literal(_metamdbg_lifecycle_cleanup_reservation_path(outputs.outdir)))",
+        "pending_submission_job_prefix=$(_metamdbg_shell_literal(pending_submission_job_prefix))",
+        "pending_submission_job_owner_prefix=$(_metamdbg_shell_literal(pending_submission_job_owner_prefix))",
     ]
     reservation_validation_function_lines = String[
         "metamdbg_file_mode() {",
@@ -7624,6 +9614,15 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG shared output-root reservation does not match this owner capability\" >&2",
         "  return 1",
         "}",
+        "if [ -z \"\${SLURM_JOB_ID:-}\" ]; then",
+        "  echo \"metaMDBG bound submission reservation requires SLURM_JOB_ID\" >&2",
+        "  return 1",
+        "fi",
+        "pending_submission_job=\"\${pending_submission_job_owner_prefix}\${SLURM_JOB_ID}.json\"",
+        "if [ -e \"\$pending_submission_job\" ] || [ -L \"\$pending_submission_job\" ]; then",
+        "  echo \"metaMDBG runtime refuses pending scheduler job evidence; complete exact binding recovery before scheduler release\" >&2",
+        "  return 1",
+        "fi",
         "collect_metamdbg_directory_entries \"\$submission_reservation_dir\" \"\$reservation_entries_file\" \"submission reservation\"",
         "reservation_entry_count=0",
         "while IFS= read -r -d '' reservation_entry; do",
@@ -7635,10 +9634,6 @@ function _metamdbg_executor_script(
         "fi",
         "if [ \"\$(metamdbg_file_uid \"\$submission_reservation_job\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$submission_reservation_job\")\" != \"600\" ]; then",
         "  echo \"metaMDBG submission reservation job record owner or mode is invalid\" >&2",
-        "  return 1",
-        "fi",
-        "if [ -z \"\${SLURM_JOB_ID:-}\" ]; then",
-        "  echo \"metaMDBG bound submission reservation requires SLURM_JOB_ID\" >&2",
         "  return 1",
         "fi",
         "printf '%s' $(_metamdbg_shell_literal(first(job_record_parts))) > \"\$expected_reservation_job\"",
@@ -7706,15 +9701,47 @@ function _metamdbg_executor_script(
         "  local enumeration_root=\"\$1\"",
         "  local inventory_path=\"\$2\"",
         "  local inventory_label=\"\$3\"",
-        "  if [ ! -d \"\$enumeration_root\" ] || [ -L \"\$enumeration_root\" ]; then",
-        "    echo \"metaMDBG cannot enumerate \$inventory_label because its root is missing, replaced, or not a regular directory: \$enumeration_root\" >&2",
-        "    return 1",
-        "  fi",
-        "  if ! find -P \"\$enumeration_root\" -mindepth 1 -maxdepth 1 -print0 > \"\$inventory_path\"; then",
-        "    rm -f -- \"\$inventory_path\"",
-        "    echo \"metaMDBG could not completely enumerate \$inventory_label; refusing execution\" >&2",
-        "    return 1",
-        "  fi",
+        "  local enumeration_mode=\"\${4:-one-level}\"",
+        "  local reservation_lock_prefix=\"\${5:-}\"",
+        "  local reservation_durable_prefix=\"\${6:-}\"",
+        "  local reservation_pending_prefix=\"\${7:-}\"",
+        "  local attempt_inventory=\"\${inventory_path}.attempt\"",
+        "  local attempt_errors=\"\${inventory_path}.errors\"",
+        "  local enumeration_attempt=1",
+        "  local last_inventory_byte",
+        "  while [ \"\$enumeration_attempt\" -le 3 ]; do",
+        "    rm -f -- \"\$attempt_inventory\" \"\$attempt_errors\"",
+        "    if [ ! -d \"\$enumeration_root\" ] || [ -L \"\$enumeration_root\" ]; then",
+        "      rm -f -- \"\$inventory_path\"",
+        "      echo \"metaMDBG cannot enumerate \$inventory_label because its root is missing, replaced, or not a regular directory: \$enumeration_root\" >&2",
+        "      return 1",
+        "    fi",
+        "    if \"\$conda_runner\" run -n \"\$environment_name\" python -c $(directory_enumerator) \"\$enumeration_root\" \"\$attempt_inventory\" \"\$enumeration_mode\" \"\$reservation_lock_prefix\" \"\$reservation_durable_prefix\" \"\$reservation_pending_prefix\" 2> \"\$attempt_errors\"; then",
+        "      if [ ! -f \"\$attempt_inventory\" ] || [ -L \"\$attempt_inventory\" ]; then",
+        "        printf '%s\\n' \"metaMDBG enumerator exited successfully without a regular inventory\" > \"\$attempt_errors\"",
+        "      elif [ -s \"\$attempt_inventory\" ]; then",
+        "        last_inventory_byte=\$(tail -c 1 \"\$attempt_inventory\" | od -An -t u1 | tr -d '[:space:]')",
+        "        if [ \"\$last_inventory_byte\" = 0 ]; then",
+        "          mv -- \"\$attempt_inventory\" \"\$inventory_path\"",
+        "          rm -f -- \"\$attempt_errors\"",
+        "          return 0",
+        "        fi",
+        "        printf '%s\\n' \"metaMDBG successful inventory contains an unterminated NUL record\" > \"\$attempt_errors\"",
+        "      else",
+        "        mv -- \"\$attempt_inventory\" \"\$inventory_path\"",
+        "        rm -f -- \"\$attempt_errors\"",
+        "        return 0",
+        "      fi",
+        "    fi",
+        "    if [ \"\$enumeration_attempt\" -eq 3 ] && [ -s \"\$attempt_errors\" ]; then",
+        "      cat \"\$attempt_errors\" >&2",
+        "    fi",
+        "    rm -f -- \"\$attempt_inventory\" \"\$attempt_errors\"",
+        "    enumeration_attempt=\$((enumeration_attempt + 1))",
+        "  done",
+        "  rm -f -- \"\$inventory_path\"",
+        "  echo \"metaMDBG could not completely enumerate \$inventory_label after 3 attempts; refusing execution\" >&2",
+        "  return 1",
         "}",
         "require_exclusive_output_root_domain() {",
         "  local reservation_root=\"\$outdir\"",
@@ -7722,6 +9749,7 @@ function _metamdbg_executor_script(
         "  local root_identity",
         "  local pid_reservation",
         "  local durable_prefix",
+        "  local pending_prefix",
         "  local candidate",
         "  local inventory_path",
         "  while :; do",
@@ -7736,8 +9764,16 @@ function _metamdbg_executor_script(
         "    fi",
         "    output_root_scan_index=\$((output_root_scan_index + 1))",
         "    inventory_path=\"\$secure_tmpdir/output-root-domain-\$output_root_scan_index.paths\"",
-        "    collect_metamdbg_directory_entries \"\$reservation_parent\" \"\$inventory_path\" \"same-root or ancestor output reservations\"",
+        "    pending_prefix=",
+        "    if [ \"\$reservation_parent\" = \"\$outdir_parent\" ]; then",
+        "      pending_prefix=\"\${pending_submission_job_prefix##*/}\"",
+        "    fi",
+        "    collect_metamdbg_directory_entries \"\$reservation_parent\" \"\$inventory_path\" \"same-root or ancestor output reservations\" \"reservations-one-level\" \"\${pid_reservation##*/}\" \"\${durable_prefix##*/}\" \"\$pending_prefix\"",
         "    while IFS= read -r -d '' candidate; do",
+        "      if [[ \"\$candidate\" == \"\$pending_submission_job_prefix\"* ]]; then",
+        "        echo \"metaMDBG runtime refuses ambiguous pending scheduler job evidence before owner consumption\" >&2",
+        "        return 1",
+        "      fi",
         "      if [ \"\$candidate\" = \"\$pid_reservation\" ]; then",
         "        echo \"metaMDBG overlaps an active shared output-root reservation: \$candidate\" >&2",
         "        return 1",
@@ -7766,11 +9802,7 @@ function _metamdbg_executor_script(
         "  if [ -d \"\$outdir\" ]; then",
         "    output_root_scan_index=\$((output_root_scan_index + 1))",
         "    inventory_path=\"\$secure_tmpdir/output-root-domain-\$output_root_scan_index.paths\"",
-        "    if ! find -P \"\$outdir\" -mindepth 1 \\( -name '$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)*' -o -name '$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)*' \\) -print0 > \"\$inventory_path\"; then",
-        "      rm -f -- \"\$inventory_path\"",
-        "      echo \"metaMDBG could not completely enumerate descendant output reservations; refusing execution\" >&2",
-        "      return 1",
-        "    fi",
+        "    collect_metamdbg_directory_entries \"\$outdir\" \"\$inventory_path\" \"descendant output reservations\" \"reservations-recursive\" \"$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)\" \"$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)\"",
         "    while IFS= read -r -d '' candidate; do",
         "      if [ \"\$candidate\" = \"\$submission_output_root_reservation\" ]; then",
         "        continue",
@@ -7787,22 +9819,40 @@ function _metamdbg_executor_script(
     ]
     reservation_consumption_lines = String[
         "validate_submission_reservation",
-        "reservation_tombstone=\"\$secure_tmpdir/consumed-reservation\"",
-        "mv -- \"\$submission_reservation_dir\" \"\$reservation_tombstone\"",
+        "if [ -e \"\$runtime_submission_reservation_dir\" ] || [ -L \"\$runtime_submission_reservation_dir\" ] || [ -e \"\$consumed_submission_reservation_dir\" ] || [ -L \"\$consumed_submission_reservation_dir\" ]; then",
+        "  echo \"metaMDBG runtime or consumed owner state already exists for this capability\" >&2",
+        "  exit 1",
+        "fi",
+        "mv -- \"\$submission_reservation_dir\" \"\$runtime_submission_reservation_dir\"",
+        "runtime_owner_record_acquired=1",
+        "bound_runtime_owner_record_identity=\$(metamdbg_directory_identity \"\$runtime_submission_reservation_dir\") || bound_runtime_owner_record_identity=",
+        "if [ -z \"\$bound_runtime_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its durable runtime owner record identity\" >&2",
+        "  exit 1",
+        "fi",
+        "fsync_file_and_parent \"\$runtime_submission_reservation_dir\"",
+        (post_runtime_private_rename_hook === nothing ? "true" :
+         post_runtime_private_rename_hook),
         "if ! rm -- \"\$submission_output_root_reservation\"; then",
         "  echo \"metaMDBG failed to consume its queued shared output-root reservation\" >&2",
         "  cleanup_safe_to_release_domain=0",
-        "  if ! mv -- \"\$reservation_tombstone\" \"\$submission_reservation_dir\"; then",
-        "    preserve_secure_tmpdir=1",
-        "    echo \"metaMDBG could not restore its private owner reservation; retaining all locks and recovery state at \$reservation_tombstone\" >&2",
-        "  fi",
         "  exit 1",
         "fi",
-        "rm -rf -- \"\$reservation_tombstone\"",
+        "fsync_file_and_parent \"\$runtime_submission_reservation_dir\"",
+        "if [ -e \"\$submission_output_root_reservation\" ] || [ -L \"\$submission_output_root_reservation\" ]; then",
+        "  echo \"metaMDBG queued shared output-root reservation reappeared after durable release\" >&2",
+        "  cleanup_safe_to_release_domain=0",
+        "  exit 1",
+        "fi",
+        "queued_output_root_reservation_released=1",
+        (post_queued_marker_release_hook === nothing ? "true" :
+         post_queued_marker_release_hook),
     ]
     inventory_canonicalizer = _metamdbg_shell_literal(
         _metamdbg_runtime_inventory_canonicalizer_python(),
     )
+    durability_fsyncer =
+        _metamdbg_shell_literal(_metamdbg_runtime_fsync_python())
     gfa_validator =
         _metamdbg_shell_literal(_metamdbg_runtime_gfa_validator_python())
     completion_publication_hook = post_completion_publication_hook === nothing ?
@@ -7833,8 +9883,11 @@ function _metamdbg_executor_script(
         "bound_outdir_identity=",
         "bound_lock_identity=",
         "bound_runtime_output_root_reservation_identity=",
+        "bound_runtime_owner_record_identity=",
         "lock_acquired=0",
         "output_root_runtime_reservation_acquired=0",
+        "runtime_owner_record_acquired=0",
+        "queued_output_root_reservation_released=0",
         "output_root_scan_index=0",
         "preserve_secure_tmpdir=0",
         "cleanup_safe_to_release_domain=1",
@@ -7856,6 +9909,12 @@ function _metamdbg_executor_script(
         "}",
         "sha256_text() {",
         "  printf '%s' \"\$1\" | sha256_stream",
+        "}",
+        "fsync_file_and_parent() {",
+        "  if ! \"\$conda_runner\" run -n \"\$environment_name\" python -c $(durability_fsyncer) \"\$1\"; then",
+        "    echo \"metaMDBG could not durably fsync lifecycle path and containing directory: \$1\" >&2",
+        "    return 1",
+        "  fi",
         "}",
         "metamdbg_directory_identity() {",
         "  local path=\"\$1\"",
@@ -7965,6 +10024,13 @@ function _metamdbg_executor_script(
         "        cleanup_safe_to_release_domain=0",
         "        [ \"\$status\" -ne 0 ] || status=1",
         "      elif rmdir -- \"\$runtime_output_root_reservation\"; then",
+        "        if [ \"\$runtime_owner_record_acquired\" -eq 1 ]; then",
+        "          fsync_file_and_parent \"\$runtime_submission_reservation_dir\"",
+        "        else",
+        "          fsync_file_and_parent \"\$submission_reservation_dir\"",
+        "        fi",
+        (post_runtime_marker_release_hook === nothing ? "        true" :
+         "        $(post_runtime_marker_release_hook)"),
         "        output_root_runtime_reservation_acquired=0",
         "      else",
         "        publish_metamdbg_runtime_cleanup_reservation || true",
@@ -7973,6 +10039,32 @@ function _metamdbg_executor_script(
         "      fi",
         "    else",
         "      echo \"metaMDBG retained shared output-root reservation after inner cleanup failure: \$runtime_output_root_reservation\" >&2",
+        "      [ \"\$status\" -ne 0 ] || status=1",
+        "    fi",
+        "  fi",
+        "  if [ \"\$runtime_owner_record_acquired\" -eq 1 ]; then",
+        "    if [ \"\$cleanup_safe_to_release_domain\" -eq 1 ] && [ \"\$queued_output_root_reservation_released\" -eq 1 ] && [ \"\$lock_acquired\" -eq 0 ] && [ \"\$output_root_runtime_reservation_acquired\" -eq 0 ]; then",
+        "      observed_runtime_owner_identity=",
+        "      if [ -d \"\$runtime_submission_reservation_dir\" ] && [ ! -L \"\$runtime_submission_reservation_dir\" ]; then",
+        "        observed_runtime_owner_identity=\$(metamdbg_directory_identity \"\$runtime_submission_reservation_dir\") || observed_runtime_owner_identity=",
+        "      fi",
+        "      if [ -z \"\$observed_runtime_owner_identity\" ] || [ \"\$observed_runtime_owner_identity\" != \"\$bound_runtime_owner_record_identity\" ]; then",
+        "        echo \"metaMDBG durable runtime owner record identity changed during cleanup\" >&2",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      elif [ -e \"\$consumed_submission_reservation_dir\" ] || [ -L \"\$consumed_submission_reservation_dir\" ]; then",
+        "        echo \"metaMDBG refuses to overwrite an existing consumed owner record\" >&2",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      elif mv -- \"\$runtime_submission_reservation_dir\" \"\$consumed_submission_reservation_dir\"; then",
+        (post_consumed_owner_rename_hook === nothing ? "        true" :
+         "        $(post_consumed_owner_rename_hook)"),
+        "        fsync_file_and_parent \"\$consumed_submission_reservation_dir\"",
+        "        runtime_owner_record_acquired=0",
+        "      else",
+        "        echo \"metaMDBG failed to publish its durable consumed owner record\" >&2",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      fi",
+        "    else",
+        "      echo \"metaMDBG retained its durable runtime owner record after lifecycle cleanup failure: \$runtime_submission_reservation_dir\" >&2",
         "      [ \"\$status\" -ne 0 ] || status=1",
         "    fi",
         "  fi",
@@ -8004,9 +10096,24 @@ function _metamdbg_executor_script(
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_contents)) > \"\$expected_output_root_reservation\"",
         "chmod 600 \"\$expected_output_root_reservation\"",
         "validate_submission_reservation",
+        "if ! mkdir -m 700 -- \"\$runtime_output_root_reservation\" 2>/dev/null; then",
+        "  echo \"metaMDBG could not acquire its exact runtime output-root reservation: \$runtime_output_root_reservation\" >&2",
+        "  exit 1",
+        "fi",
+        "output_root_runtime_reservation_acquired=1",
+        "bound_runtime_output_root_reservation_identity=\$(metamdbg_directory_identity \"\$runtime_output_root_reservation\") || bound_runtime_output_root_reservation_identity=",
+        "if [ -z \"\$bound_runtime_output_root_reservation_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its runtime output-root reservation identity\" >&2",
+        "  exit 1",
+        "fi",
+        "fsync_file_and_parent \"\$runtime_output_root_reservation\"",
+        (post_runtime_marker_publication_hook === nothing ? "true" :
+         post_runtime_marker_publication_hook),
+        "require_exclusive_output_root_domain",
         "lock_attempt=1",
         "while ! mkdir -m 700 -- \"\$lock_dir\" 2>/dev/null; do",
         "  validate_submission_reservation",
+        "  require_owned_runtime_output_root_reservation",
         "  if [ \"\$lock_attempt\" -ge \"\$lock_retry_attempts\" ]; then",
         "    echo \"metaMDBG output remained locked after \$lock_retry_attempts attempts: \$lock_dir\" >&2",
         "    exit 1",
@@ -8018,16 +10125,6 @@ function _metamdbg_executor_script(
         "bound_lock_identity=\$(metamdbg_directory_identity \"\$lock_dir\")",
         "if [ -z \"\$bound_lock_identity\" ]; then",
         "  echo \"metaMDBG could not bind its private lifecycle lock identity\" >&2",
-        "  exit 1",
-        "fi",
-        "if ! mkdir -m 700 -- \"\$runtime_output_root_reservation\" 2>/dev/null; then",
-        "  echo \"metaMDBG could not acquire its exact runtime output-root reservation: \$runtime_output_root_reservation\" >&2",
-        "  exit 1",
-        "fi",
-        "output_root_runtime_reservation_acquired=1",
-        "bound_runtime_output_root_reservation_identity=\$(metamdbg_directory_identity \"\$runtime_output_root_reservation\") || bound_runtime_output_root_reservation_identity=",
-        "if [ -z \"\$bound_runtime_output_root_reservation_identity\" ]; then",
-        "  echo \"metaMDBG could not bind its runtime output-root reservation identity\" >&2",
         "  exit 1",
         "fi",
         "require_exclusive_output_root_domain",
@@ -8314,8 +10411,10 @@ function _metamdbg_executor_script(
         "  fi",
         "  cp -- \"\$expected_contract\" \"\$contract_new\"",
         "  chmod 600 \"\$contract_new\"",
+        "  fsync_file_and_parent \"\$contract_new\"",
         "  require_unchanged_metamdbg_output_root",
         "  mv -n -- \"\$contract_new\" \"\$contract_marker\"",
+        "  fsync_file_and_parent \"\$contract_marker\"",
         "  require_unchanged_metamdbg_output_root",
         "  if [ -e \"\$contract_new\" ]; then",
         "    echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
@@ -8326,7 +10425,9 @@ function _metamdbg_executor_script(
         "require_unchanged_metamdbg_output_root",
         "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact before completion publication\"",
         "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact before completion publication\"",
+        "fsync_file_and_parent \"\$completion_new\"",
         "mv -n -- \"\$completion_new\" \"\$completion_marker\"",
+        "fsync_file_and_parent \"\$completion_marker\"",
         "require_unchanged_metamdbg_output_root",
         "if [ -e \"\$completion_new\" ]; then",
         "  echo \"metaMDBG refused to overwrite a concurrent completion manifest\" >&2",
@@ -8366,10 +10467,13 @@ function _metamdbg_provenance(
         ;
         completion::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     toolchain = _metamdbg_expected_toolchain()
     workflow = _metamdbg_workflow_contract(outputs, input_contract, graph_k)
     provenance = (;
         contract_signature = input_contract.signature,
+        input_platform_attestation =
+            input_contract.contract.platform_attestation,
         workflow_signature = workflow.signature,
         graph_k,
         metamdbg_version = toolchain.metamdbg_version,
@@ -8406,6 +10510,7 @@ function _metamdbg_complete_result(
         graph_k::Int,
         completion::NamedTuple,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     return (;
         status = :complete,
         outdir = outputs.outdir,
@@ -8431,6 +10536,7 @@ function _metamdbg_planned_result(
         ;
         submission_reservation::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
+    _require_positive_metamdbg_graph_k(graph_k)
     status in (:planned, :submitted) || throw(ArgumentError(
         "metaMDBG asynchronous status must be :planned or :submitted.",
     ))
@@ -8464,6 +10570,18 @@ function _metamdbg_planned_result(
             owner_token = submission_reservation.owner_token,
             job_id,
             submission_state = submission_reservation.submission_state,
+            publication_state = hasproperty(
+                submission_reservation,
+                :publication_state,
+            ) ? submission_reservation.publication_state : :published,
+            reservation_state = hasproperty(
+                submission_reservation,
+                :reservation_state,
+            ) ? submission_reservation.reservation_state : :queued,
+            lifecycle_owner = hasproperty(
+                submission_reservation,
+                :lifecycle_owner,
+            ) ? submission_reservation.lifecycle_owner : :submitter,
         ),
     ))
 end
@@ -8474,6 +10592,7 @@ function _metamdbg_existing_artifacts(
         ;
         output_root_identity::Union{Nothing, NamedTuple} = nothing,
 )::Union{Nothing, NamedTuple}
+    _require_positive_metamdbg_graph_k(graph_k)
     if output_root_identity !== nothing
         _require_unchanged_metamdbg_output_root(
             output_root_identity,
@@ -8598,9 +10717,16 @@ function _metamdbg_submission_recovery_guidance(
     return "SLURM job $(normalized_job_id) remains held or has an unknown " *
            "release state. Its durable reservation is $(reservation.path) " *
            "and scheduler name is $(reservation.scheduler_job_name). Inspect " *
-           "that exact job with `scontrol show job $(normalized_job_id)` before " *
-           "running `scontrol release $(normalized_job_id)` or cancelling and " *
-           "reclaiming the reservation."
+           "that exact job with `scontrol show job $(normalized_job_id)`, then " *
+           "inspect the reservation with " *
+           "`inspect_metamdbg_submission_reservations`. If pending evidence " *
+           "remains, first complete confirmed-dead recovery when required and " *
+           "resume the exact ID with " *
+           "`bind_metamdbg_submission_reservation_job!`; verify a fresh " *
+           "inspection has no pending evidence before running `scontrol " *
+           "release $(normalized_job_id)`. To cancel instead, confirm exact-job " *
+           "cancellation, complete the same pending cleanup, and only then " *
+           "reclaim the reservation."
 end
 
 function _release_metamdbg_submission_job!(
@@ -8631,8 +10757,55 @@ function _release_metamdbg_submission_job!(
             ),
         )
     end
-    return ispath(reservation.path) ? reservation :
-           merge(reservation, (; submission_state = :consumed))
+    queued_exists = _output_root_path_entry_exists(reservation.path)
+    runtime_exists = _output_root_path_entry_exists(reservation.runtime_path)
+    consumed_exists = _output_root_path_entry_exists(reservation.consumed_path)
+    state_count = count(identity, Bool[
+        queued_exists,
+        runtime_exists,
+        consumed_exists,
+    ])
+    state_count <= 1 || error(
+        "metaMDBG scheduler release observed multiple private reservation " *
+        "states for exact job $(normalized_job_id); refusing an ambiguous " *
+        "lifecycle transition.",
+    )
+    if queued_exists
+        current = _metamdbg_submission_reservation_from_path(
+            reservation.path,
+            reservation.canonical_outdir,
+        )
+        current.job_id == normalized_job_id || error(
+            "metaMDBG queued reservation job identity changed after scheduler " *
+            "release.",
+        )
+        return current
+    elseif runtime_exists
+        current = _metamdbg_submission_reservation_from_path(
+            reservation.runtime_path,
+            reservation.canonical_outdir,
+        )
+        current.job_id == normalized_job_id || error(
+            "metaMDBG runtime reservation job identity changed after scheduler " *
+            "release.",
+        )
+        return current
+    elseif consumed_exists
+        current = _metamdbg_submission_reservation_from_path(
+            reservation.consumed_path,
+            reservation.canonical_outdir,
+        )
+        current.job_id == normalized_job_id || error(
+            "metaMDBG consumed reservation job identity changed after " *
+            "scheduler release.",
+        )
+        return current
+    end
+    error(
+        "metaMDBG scheduler release could not discover a queued, runtime, or " *
+        "durably consumed owner record for exact job $(normalized_job_id). " *
+        "Refusing to infer :consumed from path absence.",
+    )
 end
 
 function _cleanup_metamdbg_submission_reservation_after_failure!(
@@ -8642,7 +10815,12 @@ function _cleanup_metamdbg_submission_reservation_after_failure!(
     if !ispath(reservation.path) && !islink(reservation.path)
         return nothing
     end
-    _with_metamdbg_output_lock(outputs.outdir) do
+    _with_metamdbg_output_domain_lock(
+        outputs.outdir;
+        allowed_same_root_locks = (
+            reservation.output_root_reservation_marker,
+        ),
+    ) do
         _remove_metamdbg_submission_reservation!(reservation)
     end
     return nothing
@@ -8652,7 +10830,12 @@ function _bind_metamdbg_submission_job_after_submit!(
         reservation::NamedTuple,
         job_id::AbstractString,
 )::NamedTuple
-    return _with_metamdbg_output_lock(reservation.canonical_outdir) do
+    return _with_metamdbg_output_domain_lock(
+        reservation.canonical_outdir;
+        allowed_same_root_locks = (
+            reservation.output_root_reservation_marker,
+        ),
+    ) do
         current = _metamdbg_submission_reservation_from_path(
             reservation.path,
             reservation.canonical_outdir,
@@ -8695,6 +10878,7 @@ end
 function _run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
         ont_reads::Union{String, Vector{String}, Nothing} = nothing,
+        ont_r10_4_plus::Bool = false,
         outdir::String = "metamdbg_output",
         abundance_min::Int = 3,
         threads::Int = get_default_threads(),
@@ -8718,10 +10902,14 @@ function _run_metamdbg(;
         submission_release_runner::Function = Mycelia.release_slurm_job,
         input_digest_function::Function = _metamdbg_sha256,
 )::NamedTuple
-    selected_input = _metamdbg_selected_input(hifi_reads, ont_reads)
+    _require_positive_metamdbg_graph_k(graph_k)
+    selected_input = _metamdbg_selected_input(
+        hifi_reads,
+        ont_reads,
+        ont_r10_4_plus,
+    )
     abundance_min > 0 || throw(ArgumentError("abundance_min must be positive."))
     threads > 0 || throw(ArgumentError("threads must be positive."))
-    graph_k >= 0 || throw(ArgumentError("graph_k must be nonnegative."))
     outputs = _metamdbg_output_paths(outdir, graph_k)
     resolved_conda_runner =
         _canonical_metamdbg_conda_runner(conda_runner)
@@ -9222,53 +11410,326 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 Inspect durable metaMDBG submission reservations for an output root.
 
 Each returned record is reconstructed from and verified against its mode-0600
-on-disk owner contract under the output lock. A shared-marker-paired temporary
-record is reported with `publication_state = :provisional`; this makes the
-pre-rename and rename-before-parent-fsync crash windows explicitly recoverable.
-Inspection binds both private and shared filesystem identities, never expires a
-reservation, and never removes one. A hard-killed caller can also leave its
-private lifecycle directory, cleanup sentinel, and output-root PID file. After
-independently proving that caller is dead, set `confirm_process_dead = true` to
-remove only those exact same-user dead-process locks before inspection. A PID
-that is still live or remotely unverifiable fails closed.
+on-disk owner contract. Normal inspection is fully read-only and lockless for
+queued, scheduler-owned runtime, reclaiming, and immutable consumed-audit
+records. It verifies complete before-and-after owner and pending-path
+inventories, double-parsed owner state, and exact owner, queued-marker,
+runtime-marker, pending-job, private-lock, and cleanup-sentinel identities. A
+concurrent lifecycle transition therefore produces either one coherent stable
+state or a fail-loud state-change error; inspection never publishes a PID,
+sentinel, or private lock that could interfere with a released runtime. A
+shared-marker-paired temporary record is reported with
+`publication_state = :provisional`. A durable pending scheduler-job record is
+reported as `submission_state = :submission_pending` with its exact
+`pending_job_id`; if `job.json` is already committed, the cleanup window is
+reported as `:submission_commit_cleanup_pending`.
+
+After independently proving a pre-submit caller dead, set
+`confirm_process_dead = true` to remove its exact same-user submitter locks. That
+path requires a pre-existing canonical local dead PID record. Runtime evidence
+or private state without that PID fails closed and requires exact scheduler
+job-ID cancellation or terminal-state recovery instead.
 """
 function inspect_metamdbg_submission_reservations(
         outdir::AbstractString,
         ;
         confirm_process_dead::Bool = false,
 )::Vector{NamedTuple}
+    return _inspect_metamdbg_submission_reservations(
+        outdir;
+        confirm_process_dead,
+    )
+end
+
+function _inspect_metamdbg_submission_reservations(
+        outdir::AbstractString,
+        ;
+        confirm_process_dead::Bool = false,
+        post_initial_snapshot_hook::Function =
+            (_snapshot::NamedTuple) -> nothing,
+        pending_recovery_function::Function =
+            _recover_metamdbg_pending_submission_job_records!,
+)::Vector{NamedTuple}
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
+    all_paths = _metamdbg_submission_reservation_paths(
+        canonical_outdir;
+        include_consumed = true,
+    )
+    pending_paths =
+        _metamdbg_pending_submission_job_paths(canonical_outdir)
+    has_runtime_owner = any(all_paths) do path
+        state = _metamdbg_submission_reservation_path_state(
+            path,
+            canonical_outdir,
+        )
+        return state == :runtime
+    end
+    has_runtime_marker =
+        _metamdbg_has_runtime_scheduler_evidence(canonical_outdir)
     if confirm_process_dead
-        _recover_dead_metamdbg_lifecycle_locks!(canonical_outdir)
+        (has_runtime_owner || has_runtime_marker) && error(
+            "metaMDBG confirm_process_dead cannot recover scheduler-owned " *
+            "runtime state. Confirm the exact job terminal or cancelled and " *
+            "use job-ID-bound reservation recovery.",
+        )
+        _recover_dead_metamdbg_lifecycle_locks!(
+            canonical_outdir;
+            pending_recovery_function,
+        )
+        all_paths = _metamdbg_submission_reservation_paths(
+            canonical_outdir;
+            include_consumed = true,
+        )
+        pending_paths =
+            _metamdbg_pending_submission_job_paths(canonical_outdir)
     end
-    return _with_metamdbg_output_lock(canonical_outdir) do
-        map(_metamdbg_submission_reservation_paths(canonical_outdir)) do path
-            reservation = _metamdbg_submission_reservation_from_path(
-                path,
-                canonical_outdir;
-                allow_provisional = true,
+    private_lock_path = _metamdbg_output_lock_path(canonical_outdir)
+    private_lock_identity = if _output_root_path_entry_exists(private_lock_path)
+        _metamdbg_output_lock_identity(private_lock_path)
+    else
+        nothing
+    end
+    cleanup_reservation_path =
+        _metamdbg_lifecycle_cleanup_reservation_path(canonical_outdir)
+    cleanup_reservation_identity = if _output_root_path_entry_exists(
+            cleanup_reservation_path,
+        )
+        _metamdbg_output_lock_identity(cleanup_reservation_path)
+    else
+        nothing
+    end
+    function pending_submission_state(
+            reservation::NamedTuple,
+            pending::Union{Nothing, NamedTuple},
+    )::Symbol
+        pending === nothing && return reservation.submission_state
+        reservation.job_id === nothing && return :submission_pending
+        pending.is_complete || error(
+            "metaMDBG committed scheduler job record is paired with an " *
+            "incomplete pending record.",
+        )
+        pending.job_id == reservation.job_id || error(
+            "metaMDBG committed scheduler job ID conflicts with its pending " *
+            "record.",
+        )
+        pending.bytes == collect(codeunits(reservation.job_contents)) || error(
+            "metaMDBG committed scheduler job content conflicts with its " *
+            "pending record.",
+        )
+        _metamdbg_pending_submission_job_identity(reservation.job_marker) ==
+            pending.identity || error(
+            "metaMDBG committed scheduler job marker does not retain its " *
+            "pending publication inode.",
+        )
+        Base.Filesystem.samefile(
+            reservation.job_marker,
+            pending.path,
+        ) || error(
+            "metaMDBG committed and pending scheduler job records are not the " *
+            "same publication inode.",
+        )
+        return :submission_commit_cleanup_pending
+    end
+    phase_one = map(all_paths) do path
+        reservation = _metamdbg_submission_reservation_from_path(
+            path,
+            canonical_outdir;
+            allow_provisional = true,
+        )
+        reservation_identity =
+            _metamdbg_submission_reservation_identity(reservation)
+        queued_reservation_identity = if _output_root_path_entry_exists(
+                reservation.output_root_reservation_marker,
             )
-            reservation_identity =
-                _metamdbg_submission_reservation_identity(reservation)
-            shared_reservation_identity =
-                _metamdbg_shared_reservation_identity(reservation)
-            return (;
-                canonical_outdir = reservation.canonical_outdir,
-                path = reservation.path,
-                workflow_signature = reservation.workflow_signature,
-                scheduler_job_name = reservation.scheduler_job_name,
-                input_contract_signature =
-                    reservation.input_contract_signature,
-                graph_k = reservation.graph_k,
-                owner_token = reservation.owner_token,
-                job_id = reservation.job_id,
-                submission_state = reservation.submission_state,
-                publication_state = reservation.publication_state,
-                reservation_identity,
-                shared_reservation_identity,
-            )
+            _metamdbg_shared_reservation_identity(reservation)
+        else
+            nothing
         end
+        runtime_reservation_identity = if _output_root_path_entry_exists(
+                reservation.runtime_output_root_reservation_marker,
+            )
+            _metamdbg_runtime_shared_reservation_identity(reservation)
+        else
+            nothing
+        end
+        pending = _metamdbg_pending_submission_job_record_for_reservation(
+            reservation,
+            pending_paths;
+            allow_incomplete = true,
+        )
+        submission_state = pending_submission_state(reservation, pending)
+        return (;
+            reservation,
+            reservation_identity,
+            queued_reservation_identity,
+            runtime_reservation_identity,
+            pending,
+            submission_state,
+        )
     end
+    accounted_pending_paths = Set(String[
+        snapshot.pending.path for snapshot in phase_one
+        if snapshot.pending !== nothing
+    ])
+    accounted_pending_paths == Set(pending_paths) || error(
+        "metaMDBG found pending scheduler job evidence without an exact " *
+        "durable owner record.",
+    )
+    post_initial_snapshot_hook((;
+        reservations = getproperty.(phase_one, :reservation),
+        pending_paths = copy(pending_paths),
+    ))
+    phase_two_paths = _metamdbg_submission_reservation_paths(
+        canonical_outdir;
+        include_consumed = true,
+    )
+    phase_two_paths == all_paths || error(
+        "metaMDBG reservation path inventory changed during recovery " *
+        "inspection.",
+    )
+    phase_two_pending_paths =
+        _metamdbg_pending_submission_job_paths(canonical_outdir)
+    phase_two_pending_paths == pending_paths || error(
+        "metaMDBG pending scheduler job path inventory changed during " *
+        "recovery inspection.",
+    )
+    _require_metamdbg_optional_recovery_identity(
+        private_lock_path,
+        private_lock_identity,
+        _metamdbg_output_lock_identity,
+        "private lifecycle lock",
+    )
+    _require_metamdbg_optional_recovery_identity(
+        cleanup_reservation_path,
+        cleanup_reservation_identity,
+        _metamdbg_output_lock_identity,
+        "lifecycle cleanup reservation",
+    )
+    records = map(phase_one) do snapshot
+        reservation = snapshot.reservation
+        final_reservation = _metamdbg_submission_reservation_from_path(
+            reservation.path,
+            canonical_outdir;
+            allow_provisional = true,
+        )
+        for field in (
+                :canonical_outdir,
+                :path,
+                :workflow_signature,
+                :scheduler_job_name,
+                :input_contract_signature,
+                :graph_k,
+                :owner_token,
+                :job_id,
+                :submission_state,
+                :publication_state,
+                :reservation_state,
+                :lifecycle_owner,
+            )
+            getproperty(final_reservation, field) ==
+                getproperty(reservation, field) || error(
+                    "metaMDBG reservation $(field) changed during recovery " *
+                    "inspection: $(reservation.path).",
+                )
+        end
+        _metamdbg_submission_reservation_identity(final_reservation) ==
+            snapshot.reservation_identity || error(
+                "metaMDBG reservation owner identity changed during recovery " *
+                "inspection: $(reservation.path).",
+            )
+        _require_metamdbg_optional_recovery_identity(
+            reservation.output_root_reservation_marker,
+            snapshot.queued_reservation_identity,
+            _path -> _metamdbg_shared_reservation_identity(final_reservation),
+            "queued shared reservation",
+        )
+        _require_metamdbg_optional_recovery_identity(
+            reservation.runtime_output_root_reservation_marker,
+            snapshot.runtime_reservation_identity,
+            _path ->
+                _metamdbg_runtime_shared_reservation_identity(final_reservation),
+            "runtime shared reservation",
+        )
+        final_pending =
+            _metamdbg_pending_submission_job_record_for_reservation(
+                final_reservation,
+                phase_two_pending_paths;
+                allow_incomplete = true,
+            )
+        (snapshot.pending === nothing) == (final_pending === nothing) || error(
+            "metaMDBG pending scheduler job presence changed during recovery " *
+            "inspection: $(reservation.path).",
+        )
+        if snapshot.pending !== nothing
+            final_pending =
+                _require_unchanged_metamdbg_pending_submission_job_record(
+                    final_reservation,
+                    snapshot.pending;
+                    allow_incomplete = true,
+                )
+        end
+        pending_submission_state(final_reservation, final_pending) ==
+            snapshot.submission_state || error(
+                "metaMDBG pending scheduler submission state changed during " *
+                "recovery inspection: $(reservation.path).",
+            )
+        pending = snapshot.pending
+        return (;
+            canonical_outdir = reservation.canonical_outdir,
+            path = reservation.path,
+            workflow_signature = reservation.workflow_signature,
+            scheduler_job_name = reservation.scheduler_job_name,
+            input_contract_signature = reservation.input_contract_signature,
+            graph_k = reservation.graph_k,
+            owner_token = reservation.owner_token,
+            job_id = reservation.job_id,
+            pending_job_id = pending === nothing ? nothing : pending.job_id,
+            pending_job_path = pending === nothing ? nothing : pending.path,
+            pending_job_identity = pending === nothing ?
+                                   nothing : pending.identity,
+            pending_job_complete = pending === nothing ?
+                                   nothing : pending.is_complete,
+            submission_state = snapshot.submission_state,
+            publication_state = reservation.publication_state,
+            reservation_state = reservation.reservation_state,
+            lifecycle_owner = reservation.lifecycle_owner,
+            reservation_identity = snapshot.reservation_identity,
+            shared_reservation_identity =
+                snapshot.queued_reservation_identity,
+            queued_reservation_identity =
+                snapshot.queued_reservation_identity,
+            runtime_reservation_identity =
+                snapshot.runtime_reservation_identity,
+            private_lock_identity,
+            cleanup_reservation_identity,
+        )
+    end
+    final_paths = _metamdbg_submission_reservation_paths(
+        canonical_outdir;
+        include_consumed = true,
+    )
+    final_paths == all_paths || error(
+        "metaMDBG reservation path inventory changed during final recovery " *
+        "inspection validation.",
+    )
+    _metamdbg_pending_submission_job_paths(canonical_outdir) == pending_paths ||
+        error(
+            "metaMDBG pending scheduler job path inventory changed during " *
+            "final recovery inspection validation.",
+        )
+    _require_metamdbg_optional_recovery_identity(
+        private_lock_path,
+        private_lock_identity,
+        _metamdbg_output_lock_identity,
+        "private lifecycle lock",
+    )
+    _require_metamdbg_optional_recovery_identity(
+        cleanup_reservation_path,
+        cleanup_reservation_identity,
+        _metamdbg_output_lock_identity,
+        "lifecycle cleanup reservation",
+    )
+    return records
 end
 
 """
@@ -9284,12 +11745,18 @@ that the job cannot start. For a process death before submission, first call
 `inspect_metamdbg_submission_reservations`, independently confirm that no job
 was submitted, then pass that inspected record, its exact owner token, and
 `confirm_not_submitted = true`. The confirmation modes are mutually exclusive.
-If the exact submitted job instead reaches a terminal failed state,
-pass its exact `job_id` and `confirm_terminal = :failed` after independently
-confirming that scheduler state. The reservation is removed under the output
-lock only when the
-on-disk owner record still matches exactly. Missing, consumed, or
-replacement-owner reservations fail loudly and are never removed automatically.
+If the exact submitted job instead reaches a terminal failed or completed
+state, pass its exact `job_id` and `confirm_terminal = :failed` or `:completed`
+after independently confirming that scheduler state. Runtime and consumed
+recovery additionally requires all identities from a fresh inspection. The
+reservation is removed only when the complete on-disk owner state still matches
+exactly. Pre-submit reclaim transitions run under a canonical local PID record,
+cleanup sentinel, and private lifecycle lock. A hard-killed transition remains
+discoverable as `:reclaiming` or `:reclaim_release_pending`; while its PID is
+live, another reclaim cannot mutate any owner state. After independently
+confirming process death, reinspect with `confirm_process_dead = true` before
+takeover. Missing or replacement-owner reservations fail loudly and no state
+expires automatically.
 """
 function reclaim_metamdbg_submission_reservation!(
         metadata::NamedTuple,
@@ -9307,12 +11774,14 @@ function reclaim_metamdbg_submission_reservation!(
     ])
     confirmation_count == 1 || throw(ArgumentError(
         "Set exactly one of confirm_cancelled=true, " *
-        "confirm_not_submitted=true, or confirm_terminal=:failed after " *
+        "confirm_not_submitted=true, or confirm_terminal=:failed/:completed " *
+        "after " *
         "independently verifying the corresponding scheduler state.",
     ))
-    confirm_terminal === nothing || confirm_terminal == :failed || throw(
+    confirm_terminal === nothing ||
+        confirm_terminal in (:failed, :completed) || throw(
         ArgumentError(
-            "metaMDBG confirm_terminal currently accepts only :failed.",
+            "metaMDBG confirm_terminal accepts only :failed or :completed.",
         ),
     )
     required_fields = (
@@ -9336,10 +11805,84 @@ function reclaim_metamdbg_submission_reservation!(
         "metaMDBG reservation publication_state must be :published or " *
         ":provisional.",
     ))
+    submission_state = hasproperty(metadata, :submission_state) ?
+                       metadata.submission_state : :reserved
+    if submission_state in (
+            :submission_pending,
+            :submission_commit_cleanup_pending,
+        )
+        throw(ArgumentError(
+            "metaMDBG pending scheduler job evidence may represent an " *
+            "accepted job and cannot be reclaimed as unsubmitted or stable " *
+            "submitted state. Resume the exact job ID with " *
+            "bind_metamdbg_submission_reservation_job! and " *
+            "confirm_submitted=true. If a hard-killed binder left lifecycle " *
+            "locks, independently confirm it is dead and reinspect with " *
+            "confirm_process_dead=true first.",
+        ))
+    end
     if publication_state == :provisional
         confirm_not_submitted || throw(ArgumentError(
             "A provisional metaMDBG reservation can be reclaimed only after " *
             "confirm_not_submitted=true.",
+        ))
+    end
+    reservation_state = if hasproperty(metadata, :reservation_state)
+        metadata.reservation_state
+    elseif publication_state == :provisional
+        :provisional
+    else
+        :queued
+    end
+    runtime_states = (
+        :runtime_claiming,
+        :runtime_transition,
+        :runtime_transition_ambiguous,
+        :runtime,
+        :runtime_release_pending,
+        :consumed,
+    )
+    reclaim_states = (:reclaiming, :reclaim_release_pending)
+    identity_bound_states = (runtime_states..., reclaim_states...)
+    reservation_state in (
+        :queued,
+        :provisional,
+        identity_bound_states...,
+    ) || throw(
+        ArgumentError(
+            "metaMDBG reservation metadata has an unsupported durable state: " *
+            "$(repr(reservation_state)).",
+        ),
+    )
+    if reservation_state in runtime_states
+        confirm_not_submitted && throw(ArgumentError(
+            "Scheduler-owned metaMDBG runtime or consumed state cannot be " *
+            "reclaimed as not submitted; provide exact job-ID cancellation " *
+            "or terminal-state evidence.",
+        ))
+    end
+    if reservation_state in identity_bound_states
+        all(
+            field -> hasproperty(metadata, field),
+            (
+                :reservation_identity,
+                :queued_reservation_identity,
+                :runtime_reservation_identity,
+                :private_lock_identity,
+                :cleanup_reservation_identity,
+            ),
+        ) || throw(ArgumentError(
+            "Identity-bound metaMDBG recovery requires every exact filesystem " *
+            "identity returned by inspection.",
+        ))
+    end
+    if reservation_state in reclaim_states &&
+       (metadata.private_lock_identity !== nothing ||
+        metadata.cleanup_reservation_identity !== nothing)
+        throw(ArgumentError(
+            "A metaMDBG reclaim transition still has process-owned lifecycle " *
+            "state. Independently confirm that its local process is dead, " *
+            "then reinspect with confirm_process_dead=true before takeover.",
         ))
     end
     if confirm_not_submitted
@@ -9412,10 +11955,24 @@ function reclaim_metamdbg_submission_reservation!(
     expected_reservation.workflow_signature == metadata.workflow_signature ||
         error("metaMDBG reservation workflow signature does not match metadata.")
     metadata_path = normpath(abspath(String(metadata.path)))
-    if publication_state == :published
+    if reservation_state == :queued
         expected_reservation.path == metadata_path || error(
-            "metaMDBG reservation path does not match its recomputed workflow " *
-            "path.",
+            "metaMDBG queued reservation path does not match its recomputed " *
+            "workflow path.",
+        )
+    elseif reservation_state in identity_bound_states
+        expected_path = if reservation_state == :consumed
+            expected_reservation.consumed_path
+        elseif reservation_state == :runtime_claiming
+            expected_reservation.path
+        elseif reservation_state in reclaim_states
+            expected_reservation.reclaiming_path
+        else
+            expected_reservation.runtime_path
+        end
+        expected_path == metadata_path || error(
+            "metaMDBG runtime reservation path does not match its recomputed " *
+            "owner capability.",
         )
     else
         _metamdbg_submission_reservation_path_state(
@@ -9430,7 +11987,7 @@ function reclaim_metamdbg_submission_reservation!(
         "metaMDBG submission reservation is missing or was already consumed: " *
         "$(metadata_path).",
     )
-    _with_metamdbg_output_lock(outputs.outdir) do
+    recover_current = function ()
         ispath(metadata_path) || error(
             "metaMDBG submission reservation is missing or was already consumed: " *
             "$(metadata_path).",
@@ -9458,21 +12015,98 @@ function reclaim_metamdbg_submission_reservation!(
                     "explicit recovery.",
                 )
         end
-        has_reservation_identity = hasproperty(metadata, :reservation_identity)
-        has_shared_identity =
-            hasproperty(metadata, :shared_reservation_identity)
-        has_reservation_identity == has_shared_identity || throw(ArgumentError(
-            "metaMDBG recovery metadata must provide both private and shared " *
-            "filesystem identities together.",
-        ))
-        if has_reservation_identity
-            _require_unchanged_metamdbg_recovery_identities(
-                current,
-                metadata.reservation_identity,
-                metadata.shared_reservation_identity,
-            )
+        hasproperty(current, :reservation_state) &&
+            current.reservation_state == reservation_state || error(
+            "metaMDBG durable reservation state changed after inspection.",
+        )
+        return current
+    end
+    if reservation_state in runtime_states
+        reservation_lock_path =
+            _output_root_reservation_lock_path_from_canonical(outputs.outdir)
+        stale_age = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS
+        lock_handle = FileWatching.Pidfile.trymkpidlock(
+            reservation_lock_path;
+            stale_age,
+            refresh = stale_age / 2,
+        )
+        lock_handle === false && error(
+            "metaMDBG runtime recovery could not acquire its exact output-root " *
+            "recovery lock; another lifecycle may still be active.",
+        )
+        try
+            current = recover_current()
+            _remove_metamdbg_runtime_recovery_state!(current, metadata)
+        finally
+            Base.close(lock_handle)
         end
-        _remove_metamdbg_submission_reservation!(current)
+    elseif reservation_state in reclaim_states
+        _with_metamdbg_output_domain_lock(
+            outputs.outdir;
+            allowed_same_root_locks = (
+                expected_reservation.output_root_reservation_marker,
+            ),
+        ) do
+            current = recover_current()
+            _metamdbg_submission_reservation_identity(current) ==
+                metadata.reservation_identity || error(
+                "metaMDBG reclaim owner changed after recovery inspection.",
+            )
+            _require_metamdbg_optional_recovery_identity(
+                current.output_root_reservation_marker,
+                metadata.queued_reservation_identity,
+                path -> begin
+                    marker =
+                        _require_metamdbg_output_root_reservation_marker!(
+                            current,
+                        )
+                    marker == path || error(
+                        "metaMDBG queued reclaim marker path changed.",
+                    )
+                    marker_status = stat(marker)
+                    return (;
+                        device = marker_status.device,
+                        inode = marker_status.inode,
+                    )
+                end,
+                "queued reclaim reservation",
+            )
+            _require_metamdbg_optional_recovery_identity(
+                current.runtime_output_root_reservation_marker,
+                metadata.runtime_reservation_identity,
+                _path ->
+                    _metamdbg_runtime_shared_reservation_identity(current),
+                "runtime reclaim reservation",
+            )
+            _remove_metamdbg_submission_reservation!(current)
+        end
+    else
+        _with_metamdbg_output_domain_lock(
+            outputs.outdir;
+            allowed_same_root_locks = (
+                expected_reservation.output_root_reservation_marker,
+            ),
+        ) do
+            current = recover_current()
+            has_reservation_identity =
+                hasproperty(metadata, :reservation_identity)
+            has_shared_identity =
+                hasproperty(metadata, :shared_reservation_identity)
+            has_reservation_identity == has_shared_identity || throw(
+                ArgumentError(
+                    "metaMDBG recovery metadata must provide both private " *
+                    "and shared filesystem identities together.",
+                ),
+            )
+            if has_reservation_identity
+                _require_unchanged_metamdbg_recovery_identities(
+                    current,
+                    metadata.reservation_identity,
+                    metadata.shared_reservation_identity,
+                )
+            end
+            _remove_metamdbg_submission_reservation!(current)
+        end
     end
     return (;
         status = :reclaimed,
@@ -9486,6 +12120,7 @@ function reclaim_metamdbg_submission_reservation!(
         end,
         path = metadata_path,
         publication_state,
+        reservation_state,
     )
 end
 
@@ -9499,10 +12134,15 @@ Run metaMDBG assembler for metagenomic long-read assembly.
   (PacBio) read file(s) (default: nothing).
 - `ont_reads::Union{String,Vector{String},Nothing}`: Existing, nonempty ONT
   (Nanopore) read file(s) (default: nothing).
+- `ont_r10_4_plus::Bool`: Required explicit attestation for `ont_reads` that
+  every input was generated with Nanopore R10.4 or later chemistry. Generic,
+  R9, and unknown ONT inputs are rejected (default: false). It must remain
+  false for HiFi input.
 - `outdir::String`: Output directory path (default: "metamdbg_output").
 - `abundance_min::Int`: Minimum abundance threshold (default: 3).
 - `threads::Int`: Number of threads to use (default: get_default_threads()).
-- `graph_k::Int`: Graph resolution requested from `metaMDBG gfa` (default: 21).
+- `graph_k::Int`: Strictly positive graph resolution requested from
+  `metaMDBG gfa` (default: 21).
 
 Exactly one input technology is required. metaMDBG v1.4 rejects simultaneous
 `--in-hifi` and `--in-ont`; mixed HiFi-plus-ONT assembly is therefore excluded
@@ -9532,7 +12172,9 @@ The graph alias resolves to metaMDBG's validated dynamic
   sizes and SHA-256 content digests, `abundance_min`, metaMDBG 1.4, the
   spec-addressed environment name, and the bundled environment-spec checksum.
   Modification times exist only in the invocation snapshot and are never
-  serialized into the durable schema-v4 contract. Tool execution uses private,
+  serialized into the durable schema-v5 contract. For ONT input, that contract
+  and its signature bind the required Nanopore R10.4-or-later attestation. Tool
+  execution uses private,
   mode-0400 staged input copies verified against that contract, so transient
   source mutation cannot affect assembled bytes. Local and runtime lifecycles
   compare the complete normalized Conda inventory before and after all tool
@@ -9549,16 +12191,23 @@ The graph alias resolves to metaMDBG's validated dynamic
   runtime consumes it under the output lock; collected and dry-run jobs persist
   no reservation and therefore fail closed if executed directly. Active
   reservations block competing execution before input hashing. Runtime jobs
-  validate their exact reservation before bounded output-lock retries and
-  atomically rename it to a private tombstone only after acquiring the lock.
+  validate their exact reservation, publish and fsync their exact runtime
+  marker, and check output-domain exclusivity before bounded private-lock
+  retries. The durable marker makes every subsequent hard-kill window
+  scheduler-inspectable. After acquiring the private lock and rechecking the
+  domain, they atomically rename the owner to a same-parent, capability-keyed
+  runtime record.
   Reservation creation makes the complete temporary owner record and its parent
   entry durable, then publishes the shared marker before its private atomic
   rename. An incomplete temporary remnant is nonblocking only when no durable
   same-root marker could pair with it; ambiguous corruption fails loudly. A
   temporary owner record paired to its exact shared marker is an active,
   inspectable `publication_state = :provisional` recovery capability. This
-  covers hard termination before rename and rename durability. Consumed
-  tombstone remnants are nonblocking.
+  covers hard termination before rename and rename durability. Runtime
+  transition records remain inspectable across hard termination. Successful
+  cleanup durably renames the owner record to a persistent, nonblocking
+  `consumed.<capability>` audit state only after releasing the queued and runtime
+  shared markers.
   Reservations never auto-expire:
   after scheduler-confirmed cancellation, reclaim one explicitly with
   `reclaim_metamdbg_submission_reservation!`, the returned owner token and job
@@ -9567,12 +12216,20 @@ The graph alias resolves to metaMDBG's validated dynamic
   `inspect_metamdbg_submission_reservations`; after proving the caller process
   dead, `confirm_process_dead = true` removes its exact identity-checked private
   lock, cleanup sentinel, and canonical local PID file. Live, remote, malformed,
-  empty, and replacement PID files fail closed. Pre-submit reclaim and recovery
+  empty, absent, and replacement PID files fail closed; the flag refuses a
+  no-op when no pre-existing PID ownership record exists. Pre-submit reclaim and recovery
   job binding require the exact private and shared identities returned by
-  inspection and refuse same-content replacements. Reclaim only after explicit
-  independent confirmation that no job was submitted.
-  A submitted job confirmed terminal-failed can be reclaimed with its exact job
-  id and `confirm_terminal = :failed`.
+  inspection and refuse same-content replacements. Pre-submit cleanup first
+  renames its owner to the same-parent, capability-keyed `reclaiming` state and
+  fsyncs that transition before releasing the queued marker. It holds the local
+  PID, sentinel, and private lock throughout; a hard-killed transition therefore
+  remains inspectable, blocks a second live reclaim without inode changes, and
+  requires confirmed-dead inspection before takeover. Reclaim only after
+  explicit independent confirmation that no job was submitted.
+  A submitted runtime or consumed record confirmed terminal-failed or
+  terminal-completed can be reclaimed from freshly inspected, identity-bound
+  metadata with its exact job id and `confirm_terminal = :failed` or
+  `:completed`.
 - Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
   environment and records a normalized digest over every resolved package's
   name, version, build, and channel before execution.
@@ -9586,6 +12243,7 @@ The graph alias resolves to metaMDBG's validated dynamic
 function run_metamdbg(;
         hifi_reads::Union{String, Vector{String}, Nothing} = nothing,
         ont_reads::Union{String, Vector{String}, Nothing} = nothing,
+        ont_r10_4_plus::Bool = false,
         outdir::String = "metamdbg_output",
         abundance_min::Int = 3,
         threads::Int = get_default_threads(),
@@ -9604,6 +12262,7 @@ function run_metamdbg(;
     return _run_metamdbg(;
         hifi_reads,
         ont_reads,
+        ont_r10_4_plus,
         outdir,
         abundance_min,
         threads,
