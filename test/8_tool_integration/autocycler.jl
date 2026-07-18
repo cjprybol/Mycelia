@@ -1858,8 +1858,10 @@ Test.@testset "Autocycler wrapper" begin
 
             replacement_intermediate =
                 joinpath(temp_dir, "replacement-intermediate.sam")
+            replacement_original = replacement_intermediate * ".original"
+            original_contents = "original owned artifact\n"
             replacement_contents = "same-path replacement sentinel\n"
-            write(replacement_intermediate, "original owned artifact\n")
+            write(replacement_intermediate, original_contents)
             replacement_snapshot =
                 Mycelia._autocycler_cleanup_artifact_snapshot(
                     replacement_intermediate,
@@ -1881,7 +1883,9 @@ Test.@testset "Autocycler wrapper" begin
                         label,
                     )
                 replacement_validator_calls[] += 1
-                rm(target)
+                # Keep the owned inode linked so Linux cannot recycle it for
+                # the same-path replacement used by this identity-fence test.
+                mv(target, replacement_original)
                 write(target, replacement_contents)
                 return observed_snapshot
             end
@@ -1902,6 +1906,11 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test replacement_retained == [replacement_intermediate]
             Test.@test read(replacement_intermediate, String) ==
                        replacement_contents
+            Test.@test !Base.Filesystem.samefile(
+                replacement_intermediate,
+                replacement_original,
+            )
+            Test.@test read(replacement_original, String) == original_contents
 
             unbound_intermediate = joinpath(temp_dir, "unbound.sam")
             unbound_contents = "unbound sentinel\n"
