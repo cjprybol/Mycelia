@@ -73,8 +73,9 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # )
 #
 # # High-level corrected multi-input workflows use typed sibling adapters.
-# unicycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+# unicycler_result = Mycelia.Rhizomorph.assemble_unicycler_hybrid(
+#     "reads_R1.fastq.gz",
+#     "reads_R2.fastq.gz",
 #     "reads_ont.fastq.gz";
 #     config = Mycelia.Rhizomorph.UnicyclerHybridConfig(
 #         output_dir = "hybrid_unicycler_out",
@@ -87,8 +88,9 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # unicycler_toolchain = unicycler_result.assembly_stats["toolchain"]
 # unicycler_toolchain["package_inventory_sha256"]
 # unicycler_toolchain["packages"]
-# autocycler_result = Mycelia.Rhizomorph.assemble_hybrid(
-#     ("reads_R1.fastq.gz", "reads_R2.fastq.gz"),
+# autocycler_result = Mycelia.Rhizomorph.assemble_autocycler_polished(
+#     "reads_R1.fastq.gz",
+#     "reads_R2.fastq.gz",
 #     "reads_hifi.fastq.gz";
 #     config = Mycelia.Rhizomorph.AutocyclerPolishConfig(
 #         long_read_tech = :pacbio_hifi,
