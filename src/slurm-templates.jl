@@ -43,18 +43,86 @@ Base.@kwdef struct JobSpecValidation
     warnings::Vector{String} = String[]
 end
 
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Record a backend submission result.
+
+For `sbatch`, `scheduler_acceptance` is `:accepted` only when one exact parsable
+job reference was returned. Federated references retain both `job_id` and
+`job_cluster`; unscoped references retain `job_id` with `job_cluster = nothing`.
+Once `sbatch` has been invoked, every result without that proof is `:unknown`; a
+client exit code or diagnostic text cannot prove that the controller rejected
+the request. The supported states are `:not_attempted`, `:accepted`, and
+`:unknown`. Failures established before invoking the scheduler use
+`:not_attempted`; this includes a demonstrably missing `sbatch` executable at
+the pre-spawn check. A failure after the runner is invoked remains `:unknown`.
+"""
 Base.@kwdef struct SubmitResult
     ok::Bool = false
     dry_run::Bool = true
+    held::Bool = false
+    scheduler_acceptance::Symbol = :not_attempted
     site::Symbol = :local
     backend::Symbol = :none
     artifact_path::Union{Nothing, String} = nothing
     artifact_text::Union{Nothing, String} = nothing
     submit_command::Union{Nothing, String} = nothing
     job_id::Union{Nothing, String} = nothing
+    job_cluster::Union{Nothing, String} = nothing
     stdout::Union{Nothing, String} = nothing
     warnings::Vector{String} = String[]
     errors::Vector{String} = String[]
+end
+
+function SubmitResult(
+        ok::Bool,
+        dry_run::Bool,
+        site::Symbol,
+        backend::Symbol,
+        artifact_path::Union{Nothing, String},
+        artifact_text::Union{Nothing, String},
+        submit_command::Union{Nothing, String},
+        job_id::Union{Nothing, String},
+        stdout::Union{Nothing, String},
+        warnings::Vector{String},
+        errors::Vector{String},
+)::SubmitResult
+    stdout_reference = if backend == :sbatch && stdout isa AbstractString
+        _extract_sbatch_job_reference(stdout)
+    else
+        nothing
+    end
+    scheduler_acceptance = if dry_run || backend != :sbatch
+        :not_attempted
+    elseif ok &&
+           job_id isa AbstractString &&
+           occursin(r"^[0-9]+$", job_id) &&
+           stdout_reference !== nothing &&
+           stdout_reference.job_id == job_id
+        :accepted
+    else
+        :unknown
+    end
+    job_cluster = scheduler_acceptance == :accepted &&
+                  stdout_reference !== nothing ?
+                  stdout_reference.job_cluster : nothing
+    return SubmitResult(;
+        ok,
+        dry_run,
+        held = false,
+        scheduler_acceptance,
+        site,
+        backend,
+        artifact_path,
+        artifact_text,
+        submit_command,
+        job_id,
+        job_cluster,
+        stdout,
+        warnings,
+        errors,
+    )
 end
 
 const VALID_JOB_SITES = Set([:nersc, :lawrencium, :scg, :local, :cloudbuild])
@@ -1459,25 +1527,275 @@ function render_salloc(job::JobSpec)::String
     error("render_salloc is only supported for site=:nersc or site=:scg")
 end
 
-function _default_sbatch_path(job::JobSpec)::String
-    mkpath(DEFAULT_SLURM_SCRIPTDIR)
+function _default_sbatch_path(
+        job::JobSpec;
+        scriptdir::AbstractString = DEFAULT_SLURM_SCRIPTDIR,
+)::String
+    normalized_scriptdir = normpath(abspath(String(scriptdir)))
+    mkpath(normalized_scriptdir)
     timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
-    filename = "$(timestamp)-$(_sanitize_filename(job.job_name)).sbatch"
-    return joinpath(DEFAULT_SLURM_SCRIPTDIR, filename)
+    nonce = lowercase(string(UUIDs.uuid4()))
+    filename =
+        "$(timestamp)-$(_sanitize_filename(job.job_name))-$(nonce).sbatch"
+    return joinpath(normalized_scriptdir, filename)
+end
+
+function _default_submission_artifact_path(
+        job::JobSpec,
+        prefix::AbstractString,
+        extension::AbstractString;
+        artifactdir::AbstractString = pwd(),
+)::String
+    normalized_artifactdir = normpath(abspath(String(artifactdir)))
+    timestamp = Dates.format(Dates.now(), "yyyy-mm-dd-HHMMSS")
+    nonce = lowercase(string(UUIDs.uuid4()))
+    filename =
+        "$(prefix)-$(timestamp)-$(_sanitize_filename(job.job_name))-" *
+        "$(nonce)$(extension)"
+    return joinpath(normalized_artifactdir, filename)
+end
+
+function _submission_artifact_descriptor_identity(
+        artifact::Base.Filesystem.File,
+        path::AbstractString,
+)::NamedTuple
+    artifact_status = stat(artifact)
+    isfile(artifact_status) || error(
+        "Submission artifact descriptor is not a regular file: $(path).",
+    )
+    return (;
+        path = normpath(abspath(String(path))),
+        device = UInt64(artifact_status.device),
+        inode = UInt64(artifact_status.inode),
+        size_bytes = Int(artifact_status.size),
+        mode = UInt64(artifact_status.mode) & UInt64(0o777),
+        mtime = Float64(artifact_status.mtime),
+        ctime = Float64(artifact_status.ctime),
+    )
+end
+
+function _fsync_submission_artifact_descriptor(
+        artifact::Base.Filesystem.File,
+        path::AbstractString,
+)::Nothing
+    raw_descriptor = Base.fd(artifact)
+    result = ccall(:fsync, Cint, (Base.RawFD,), raw_descriptor)
+    result == 0 || throw(SystemError(
+        "fsync submission artifact $(path)",
+        Base.Libc.errno(),
+    ))
+    return nothing
+end
+
+function _fchmod_submission_artifact_descriptor(
+        artifact::Base.Filesystem.File,
+        path::AbstractString,
+)::Nothing
+    raw_descriptor = Base.fd(artifact)
+    result = ccall(
+        :fchmod,
+        Cint,
+        (Base.RawFD, Cuint),
+        raw_descriptor,
+        0o600,
+    )
+    result == 0 || throw(SystemError(
+        "fchmod submission artifact $(path)",
+        Base.Libc.errno(),
+    ))
+    return nothing
+end
+
+function _close_submission_artifact_after_error!(
+        artifact::IO,
+        primary_error::Any,
+        path::AbstractString,
+)::Nothing
+    try
+        close(artifact)
+    catch cleanup_error
+        if primary_error isa InterruptException
+            @warn(
+                "Submission artifact cleanup failed while preserving interrupt",
+                path,
+                cleanup_error,
+            )
+        elseif cleanup_error isa InterruptException
+            throw(cleanup_error)
+        else
+            @warn(
+                "Submission artifact cleanup failed while preserving primary error",
+                path,
+                primary_error,
+                cleanup_error,
+            )
+        end
+    end
+    return nothing
+end
+
+function _require_exact_submission_artifact_descriptor!(
+        artifact::Base.Filesystem.File,
+        binding::NamedTuple,
+)::Nothing
+    before = _submission_artifact_descriptor_identity(
+        artifact,
+        binding.path,
+    )
+    before == binding.identity || error(
+        "Submission artifact changed identity before validation: " *
+        "$(binding.path).",
+    )
+    seekstart(artifact)
+    observed_sha256 = SHA.bytes2hex(SHA.sha256(artifact))
+    after = _submission_artifact_descriptor_identity(
+        artifact,
+        binding.path,
+    )
+    after == binding.identity || error(
+        "Submission artifact changed during validation: $(binding.path).",
+    )
+    observed_sha256 == binding.sha256 || error(
+        "Submission artifact content changed before execution: " *
+        "$(binding.path).",
+    )
+    seekstart(artifact)
+    return nothing
+end
+
+function _require_exact_submission_artifact_path(
+        binding::NamedTuple,
+)::Nothing
+    path_status = lstat(binding.path)
+    path_identity = (;
+        path = binding.path,
+        device = UInt64(path_status.device),
+        inode = UInt64(path_status.inode),
+        size_bytes = Int(path_status.size),
+        mode = UInt64(path_status.mode) & UInt64(0o777),
+        mtime = Float64(path_status.mtime),
+        ctime = Float64(path_status.ctime),
+    )
+    isfile(path_status) && !islink(path_status) || error(
+        "Submission artifact path is not a regular non-symlink file: " *
+        "$(binding.path).",
+    )
+    path_identity == binding.identity || error(
+        "Submission artifact path changed before execution: " *
+        "$(binding.path).",
+    )
+    return nothing
+end
+
+function _require_exact_submission_artifact(
+        binding::NamedTuple,
+)::Nothing
+    artifact = Base.Filesystem.open(
+        binding.path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    try
+        _require_exact_submission_artifact_descriptor!(artifact, binding)
+        _require_exact_submission_artifact_path(binding)
+        close(artifact)
+    catch primary_error
+        if isopen(artifact)
+            _close_submission_artifact_after_error!(
+                artifact,
+                primary_error,
+                binding.path,
+            )
+        end
+        rethrow()
+    end
+    return nothing
+end
+
+function _write_exclusive_submission_artifact(
+        path::AbstractString,
+        script::AbstractString,
+)::NamedTuple
+    normalized_path = normpath(abspath(String(path)))
+    mkpath(dirname(normalized_path))
+    artifact = Base.Filesystem.open(
+        normalized_path,
+        Base.JL_O_WRONLY |
+        Base.JL_O_CREAT |
+        Base.JL_O_EXCL |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+        0o600,
+    )
+    final_identity = nothing
+    try
+        initial_identity = _submission_artifact_descriptor_identity(
+            artifact,
+            normalized_path,
+        )
+        initial_identity.size_bytes == 0 || error(
+            "New submission artifact was not empty: $(normalized_path).",
+        )
+        _fchmod_submission_artifact_descriptor(artifact, normalized_path)
+        write(artifact, String(script))
+        flush(artifact)
+        _fsync_submission_artifact_descriptor(artifact, normalized_path)
+        written_identity = _submission_artifact_descriptor_identity(
+            artifact,
+            normalized_path,
+        )
+        written_identity.device == initial_identity.device &&
+            written_identity.inode == initial_identity.inode || error(
+            "Submission artifact descriptor changed while writing: " *
+            "$(normalized_path).",
+        )
+        written_identity.size_bytes == ncodeunits(script) || error(
+            "Submission artifact byte count changed while writing: " *
+            "$(normalized_path).",
+        )
+        written_identity.mode == UInt64(0o600) || error(
+            "Submission artifact mode is not 0600: $(normalized_path).",
+        )
+        final_identity = _submission_artifact_descriptor_identity(
+            artifact,
+            normalized_path,
+        )
+        close(artifact)
+    catch primary_error
+        if isopen(artifact)
+            _close_submission_artifact_after_error!(
+                artifact,
+                primary_error,
+                normalized_path,
+            )
+        end
+        rethrow()
+    end
+    binding = (;
+        path = normalized_path,
+        identity = final_identity,
+        sha256 = SHA.bytes2hex(
+            SHA.sha256(Vector{UInt8}(codeunits(String(script)))),
+        ),
+    )
+    _require_exact_submission_artifact(binding)
+    return binding
 end
 
 """
 $(DocStringExtensions.TYPEDSIGNATURES)
 
 Write a rendered sbatch script to disk and return its path.
+
+The destination is created with exclusive, no-follow semantics and mode `0600`.
+An existing destination, including a symlink, is never truncated or replaced.
 """
 function write_sbatch(job::JobSpec; path::Union{Nothing, String} = nothing)::String
     script = render_sbatch(job)
     output_path = something(path, _default_sbatch_path(normalize_job_spec(job)))
-    mkpath(dirname(output_path))
-    write(output_path, script)
-    chmod(output_path, 0o755)
-    return output_path
+    binding = _write_exclusive_submission_artifact(output_path, script)
+    return binding.path
 end
 
 function _docker_run_command(job::JobSpec)::String
@@ -1644,9 +1962,201 @@ function _is_interactive_job(job::JobSpec)::Bool
     return job.site == :scg && partition == "interactive"
 end
 
-function _extract_sbatch_job_id(stdout_text::AbstractString)
-    match_entry = match(r"Submitted batch job (\d+)", String(stdout_text))
-    return match_entry === nothing ? nothing : match_entry.captures[1]
+function _extract_sbatch_job_reference(
+        stdout_text::AbstractString,
+)::Union{Nothing, NamedTuple}
+    job_references = NamedTuple[]
+    for line in split(String(stdout_text), '\n'; keepempty = false)
+        match_entry = match(
+            r"^([0-9]+)(?:;([A-Za-z0-9_.-]+))?$",
+            strip(line),
+        )
+        match_entry === nothing && continue
+        job_cluster = match_entry.captures[2]
+        push!(job_references, (;
+            job_id = String(match_entry.captures[1]),
+            job_cluster = job_cluster === nothing ? nothing : String(job_cluster),
+        ))
+    end
+    return length(job_references) == 1 ? only(job_references) : nothing
+end
+
+function _read_command_with_artifact(
+        command::Cmd,
+        artifact::IO,
+)::String
+    return read(pipeline(command; stdin = artifact), String)
+end
+
+function _private_submission_artifact(
+        artifact_text::AbstractString,
+)::IOBuffer
+    artifact_bytes = Vector{UInt8}(codeunits(String(artifact_text)))
+    return IOBuffer(artifact_bytes; read = true, write = false)
+end
+
+function _run_private_submission_artifact_command(
+        artifact_text::AbstractString,
+        command::Cmd,
+        artifact_runner::Function,
+)::Any
+    artifact = _private_submission_artifact(artifact_text)
+    try
+        result = artifact_runner(command, artifact)
+        close(artifact)
+        return result
+    catch primary_error
+        if isopen(artifact)
+            _close_submission_artifact_after_error!(
+                artifact,
+                primary_error,
+                "private in-memory submission snapshot",
+            )
+        end
+        rethrow()
+    end
+end
+
+function _run_sbatch_command(
+        command::Cmd,
+        artifact::IO,
+)::NamedTuple
+    stdout_buffer = IOBuffer()
+    stderr_buffer = IOBuffer()
+    process = Base.run(pipeline(
+        Base.ignorestatus(command);
+        stdin = artifact,
+        stdout = stdout_buffer,
+        stderr = stderr_buffer,
+    ))
+    return (;
+        exit_code = Int(process.exitcode),
+        term_signal = Int(process.termsignal),
+        stdout = String(take!(stdout_buffer)),
+        stderr = String(take!(stderr_buffer)),
+    )
+end
+
+function _submission_artifact_audit_error(
+        binding::NamedTuple,
+)::Any
+    try
+        _require_exact_submission_artifact(binding)
+        return nothing
+    catch caught
+        caught isa InterruptException && rethrow()
+        return caught
+    end
+end
+
+function _submission_artifact_audit_diagnostic(
+        phase::AbstractString,
+        audit_error::Any,
+)::String
+    return "Persisted submission artifact $(phase) audit failed: " *
+           sprint(showerror, audit_error)
+end
+
+function _audit_submission_artifact_after_interrupt!(
+        binding::NamedTuple,
+        primary_error::InterruptException,
+)::Nothing
+    try
+        _require_exact_submission_artifact(binding)
+    catch audit_error
+        @warn(
+            "Persisted submission artifact post-execution audit failed " *
+            "while preserving interrupt",
+            artifact_path = binding.path,
+            primary_error,
+            audit_error,
+        )
+    end
+    return nothing
+end
+
+function _normalize_sbatch_execution(result::Any)::NamedTuple
+    result isa NamedTuple || error(
+        "sbatch runner must return a NamedTuple execution record.",
+    )
+    required_fields = (:exit_code, :term_signal, :stdout, :stderr)
+    all(field -> hasproperty(result, field), required_fields) || error(
+        "sbatch runner execution record is incomplete.",
+    )
+    result.exit_code isa Integer || error(
+        "sbatch runner exit_code must be an integer.",
+    )
+    result.term_signal isa Integer || error(
+        "sbatch runner term_signal must be an integer.",
+    )
+    result.stdout isa AbstractString || error(
+        "sbatch runner stdout must be a string.",
+    )
+    result.stderr isa AbstractString || error(
+        "sbatch runner stderr must be a string.",
+    )
+    return (;
+        exit_code = Int(result.exit_code),
+        term_signal = Int(result.term_signal),
+        stdout = String(result.stdout),
+        stderr = String(result.stderr),
+    )
+end
+
+function _normalize_slurm_job_id(job_id::AbstractString)::String
+    normalized_job_id = strip(String(job_id))
+    occursin(r"^[0-9]+$", normalized_job_id) || throw(ArgumentError(
+        "SLURM job id must contain only decimal digits.",
+    ))
+    return normalized_job_id
+end
+
+function _normalize_slurm_job_cluster(
+        job_cluster::AbstractString,
+)::String
+    normalized_job_cluster = strip(String(job_cluster))
+    occursin(r"^[A-Za-z0-9_.-]+$", normalized_job_cluster) || throw(
+        ArgumentError(
+            "SLURM cluster must contain only letters, decimal digits, " *
+            "underscore, dot, or hyphen.",
+        ),
+    )
+    return normalized_job_cluster
+end
+
+"""
+$(DocStringExtensions.TYPEDSIGNATURES)
+
+Release one exact held SLURM job and return its normalized job id. Pass the
+exact nonempty `job_cluster` for a federated job; it is released with
+`scontrol -M <cluster> release <job_id>`. Leave `job_cluster = nothing` only for
+an unscoped job.
+"""
+function release_slurm_job(
+        job_id::AbstractString;
+        job_cluster::Union{Nothing, AbstractString} = nothing,
+        command_runner::Function = Base.run,
+        scontrol_path::Union{Nothing, AbstractString} = Sys.which("scontrol"),
+)::String
+    normalized_job_id = _normalize_slurm_job_id(job_id)
+    normalized_job_cluster = job_cluster === nothing ?
+                             nothing :
+                             _normalize_slurm_job_cluster(job_cluster)
+    display_reference = normalized_job_cluster === nothing ?
+                        normalized_job_id :
+                        "$(normalized_job_id);$(normalized_job_cluster)"
+    scontrol_path === nothing && error(
+        "scontrol is unavailable; SLURM job $(display_reference) remains held.",
+    )
+    normalized_scontrol_path = String(scontrol_path)
+    isempty(strip(normalized_scontrol_path)) && throw(ArgumentError(
+        "scontrol_path must be nonempty when provided.",
+    ))
+    command = normalized_job_cluster === nothing ?
+              `$(normalized_scontrol_path) release $(normalized_job_id)` :
+              `$(normalized_scontrol_path) -M $(normalized_job_cluster) release $(normalized_job_id)`
+    command_runner(command)
+    return normalized_job_id
 end
 
 """
@@ -1654,20 +2164,51 @@ $(DocStringExtensions.TYPEDSIGNATURES)
 
 Submit a `JobSpec` to its target backend.
 
-- `dry_run=true`: print rendered artifact + exact submit command, no execution.
+- `dry_run=true`: print the rendered artifact plus a shell-equivalent planned
+  submit-command representation for audit, with no execution.
 - `dry_run=false`: write artifact and execute submit command where applicable.
+
+The artifact-backed Docker path, executed Cloud Build path, and noninteractive
+`sbatch` path each receive a private, read-only in-memory snapshot of the
+already-rendered artifact over standard input. The fail-loud/no-overwrite file
+is independent persisted evidence: it is validated before execution and
+audited again after the runner returns. Evidence drift therefore cannot change
+the bytes supplied to Docker, Cloud Build, or `sbatch`, and any detected drift
+makes the result fail even when the backend runner otherwise succeeds.
+Interactive `salloc` is excluded: it executes the rendered interactive command
+directly and does not create this persisted artifact/snapshot pair.
+
+For one exact accepted `sbatch` reference, `accepted_sbatch_callback` is invoked
+once before the persisted-evidence post-submission audit. Its canonical record
+contains `held`, `job_id`, `job_cluster`, `stdout`, and `artifact_path`. An
+ordinary callback failure makes `ok=false` without discarding the accepted job
+handle; an interrupt preserves the interrupt after a best-effort evidence audit.
 """
 function submit(
         job::JobSpec;
         dry_run::Bool = true,
+        hold::Bool = false,
         path::Union{Nothing, String} = nothing,
         allow_invalid::Bool = false,
         io::IO = stdout,
         execute_interactive::Bool = false,
-        execute_cloudbuild::Bool = false
+        execute_cloudbuild::Bool = false,
+        sbatch_runner::Function = _run_sbatch_command,
+        sbatch_locator::Function = Sys.which,
+        command_reader::Function = command -> read(command, String),
+        artifact_runner::Function = _read_command_with_artifact,
+        cloudbuild_locator::Function = Sys.which,
+        post_artifact_write_hook::Function = binding -> nothing,
+        accepted_sbatch_callback::Function = record -> nothing,
 )::SubmitResult
     normalized_job = normalize_job_spec(job)
     report = validate(normalized_job)
+
+    if hold && normalized_job.site in (:local, :cloudbuild)
+        throw(ArgumentError(
+            "hold=true is supported only for noninteractive SLURM batch jobs.",
+        ))
+    end
 
     if !isempty(report.errors) && !allow_invalid
         return SubmitResult(
@@ -1682,9 +2223,15 @@ function submit(
 
     if normalized_job.site == :local
         artifact_text = render_docker_run(normalized_job)
-        artifact_path = something(path,
-            joinpath(pwd(), "docker-run-$(_sanitize_filename(normalized_job.job_name)).sh"))
-        submit_command = "bash " * _shell_quote(artifact_path)
+        artifact_path = something(
+            path,
+            _default_submission_artifact_path(
+                normalized_job,
+                "docker-run",
+                ".sh",
+            ),
+        )
+        submit_command = "bash < " * _shell_quote(artifact_path)
 
         if dry_run
             _print_dry_run(io, artifact_text, submit_command)
@@ -1701,42 +2248,118 @@ function submit(
             )
         end
 
-        mkpath(dirname(artifact_path))
-        write(artifact_path, artifact_text)
-        chmod(artifact_path, 0o755)
+        binding = _write_exclusive_submission_artifact(
+            artifact_path,
+            artifact_text,
+        )
+        artifact_path = binding.path
+        submit_command = "bash < " * _shell_quote(artifact_path)
+        post_artifact_write_hook(binding)
 
-        try
-            output = read(`bash $artifact_path`, String)
-            return SubmitResult(
-                ok = true,
-                dry_run = false,
-                site = normalized_job.site,
-                backend = :docker,
-                artifact_path = artifact_path,
-                artifact_text = artifact_text,
-                submit_command = submit_command,
-                stdout = output,
-                warnings = report.warnings,
-                errors = report.errors
-            )
-        catch e
+        preaudit_error = _submission_artifact_audit_error(binding)
+        if preaudit_error !== nothing
             return SubmitResult(
                 ok = false,
                 dry_run = false,
+                scheduler_acceptance = :not_attempted,
                 site = normalized_job.site,
                 backend = :docker,
                 artifact_path = artifact_path,
                 artifact_text = artifact_text,
                 submit_command = submit_command,
                 warnings = report.warnings,
-                errors = vcat(report.errors, [string(e)])
+                errors = vcat(
+                    report.errors,
+                    [
+                        _submission_artifact_audit_diagnostic(
+                            "pre-execution",
+                            preaudit_error,
+                        ),
+                    ],
+                ),
             )
         end
+
+        output = nothing
+        try
+            runner_output = _run_private_submission_artifact_command(
+                artifact_text,
+                `bash`,
+                artifact_runner,
+            )
+            runner_output isa AbstractString || error(
+                "Submission artifact runner must return command output text.",
+            )
+            output = String(runner_output)
+        catch runner_error
+            if runner_error isa InterruptException
+                _audit_submission_artifact_after_interrupt!(
+                    binding,
+                    runner_error,
+                )
+                rethrow()
+            end
+            postaudit_error = _submission_artifact_audit_error(binding)
+            backend_errors = [sprint(showerror, runner_error)]
+            if postaudit_error !== nothing
+                push!(
+                    backend_errors,
+                    _submission_artifact_audit_diagnostic(
+                        "post-execution",
+                        postaudit_error,
+                    ),
+                )
+            end
+            return SubmitResult(
+                ok = false,
+                dry_run = false,
+                scheduler_acceptance = :not_attempted,
+                site = normalized_job.site,
+                backend = :docker,
+                artifact_path = artifact_path,
+                artifact_text = artifact_text,
+                submit_command = submit_command,
+                warnings = report.warnings,
+                errors = vcat(report.errors, backend_errors),
+            )
+        end
+
+        postaudit_error = _submission_artifact_audit_error(binding)
+        return SubmitResult(
+            ok = postaudit_error === nothing,
+            dry_run = false,
+            scheduler_acceptance = :not_attempted,
+            site = normalized_job.site,
+            backend = :docker,
+            artifact_path = artifact_path,
+            artifact_text = artifact_text,
+            submit_command = submit_command,
+            stdout = output,
+            warnings = report.warnings,
+            errors = postaudit_error === nothing ?
+                     report.errors :
+                     vcat(
+                report.errors,
+                [
+                    _submission_artifact_audit_diagnostic(
+                        "post-execution",
+                        postaudit_error,
+                    ),
+                ],
+            ),
+        )
     elseif normalized_job.site == :cloudbuild
         artifact_text = render_cloudbuild(normalized_job)
-        artifact_path = something(path,
-            joinpath(pwd(), "cloudbuild-$(_sanitize_filename(normalized_job.job_name)).yaml"))
-        submit_command = "gcloud builds submit --config $(artifact_path) ."
+        artifact_path = something(
+            path,
+            _default_submission_artifact_path(
+                normalized_job,
+                "cloudbuild",
+                ".yaml",
+            ),
+        )
+        submit_command = "gcloud builds submit --config=/dev/stdin . < " *
+                         _shell_quote(artifact_path)
 
         if dry_run
             _print_dry_run(io, artifact_text, submit_command)
@@ -1753,8 +2376,37 @@ function submit(
             )
         end
 
-        mkpath(dirname(artifact_path))
-        write(artifact_path, artifact_text)
+        binding = _write_exclusive_submission_artifact(
+            artifact_path,
+            artifact_text,
+        )
+        artifact_path = binding.path
+        submit_command = "gcloud builds submit --config=/dev/stdin . < " *
+                         _shell_quote(artifact_path)
+        post_artifact_write_hook(binding)
+        preaudit_error = _submission_artifact_audit_error(binding)
+        if preaudit_error !== nothing
+            return SubmitResult(
+                ok = false,
+                dry_run = false,
+                scheduler_acceptance = :not_attempted,
+                site = normalized_job.site,
+                backend = :cloudbuild,
+                artifact_path = artifact_path,
+                artifact_text = artifact_text,
+                submit_command = submit_command,
+                warnings = report.warnings,
+                errors = vcat(
+                    report.errors,
+                    [
+                        _submission_artifact_audit_diagnostic(
+                            "pre-execution",
+                            preaudit_error,
+                        ),
+                    ],
+                ),
+            )
+        end
 
         if !execute_cloudbuild
             return SubmitResult(
@@ -1773,7 +2425,8 @@ function submit(
             )
         end
 
-        if Sys.which("gcloud") === nothing
+        gcloud_path = cloudbuild_locator("gcloud")
+        if gcloud_path === nothing
             return SubmitResult(
                 ok = false,
                 dry_run = false,
@@ -1787,36 +2440,80 @@ function submit(
             )
         end
 
+        output = nothing
         try
-            output = read(`gcloud builds submit --config=$artifact_path .`, String)
-            return SubmitResult(
-                ok = true,
-                dry_run = false,
-                site = normalized_job.site,
-                backend = :cloudbuild,
-                artifact_path = artifact_path,
-                artifact_text = artifact_text,
-                submit_command = submit_command,
-                stdout = output,
-                warnings = report.warnings,
-                errors = report.errors
+            runner_output = _run_private_submission_artifact_command(
+                artifact_text,
+                `$(String(gcloud_path)) builds submit --config=/dev/stdin .`,
+                artifact_runner,
             )
-        catch e
+            runner_output isa AbstractString || error(
+                "Submission artifact runner must return command output text.",
+            )
+            output = String(runner_output)
+        catch runner_error
+            if runner_error isa InterruptException
+                _audit_submission_artifact_after_interrupt!(
+                    binding,
+                    runner_error,
+                )
+                rethrow()
+            end
+            postaudit_error = _submission_artifact_audit_error(binding)
+            backend_errors = [sprint(showerror, runner_error)]
+            if postaudit_error !== nothing
+                push!(
+                    backend_errors,
+                    _submission_artifact_audit_diagnostic(
+                        "post-execution",
+                        postaudit_error,
+                    ),
+                )
+            end
             return SubmitResult(
                 ok = false,
                 dry_run = false,
+                scheduler_acceptance = :not_attempted,
                 site = normalized_job.site,
                 backend = :cloudbuild,
                 artifact_path = artifact_path,
                 artifact_text = artifact_text,
                 submit_command = submit_command,
                 warnings = report.warnings,
-                errors = vcat(report.errors, [string(e)])
+                errors = vcat(report.errors, backend_errors),
             )
         end
+
+        postaudit_error = _submission_artifact_audit_error(binding)
+        return SubmitResult(
+            ok = postaudit_error === nothing,
+            dry_run = false,
+            scheduler_acceptance = :not_attempted,
+            site = normalized_job.site,
+            backend = :cloudbuild,
+            artifact_path = artifact_path,
+            artifact_text = artifact_text,
+            submit_command = submit_command,
+            stdout = output,
+            warnings = report.warnings,
+            errors = postaudit_error === nothing ?
+                     report.errors :
+                     vcat(
+                report.errors,
+                [
+                    _submission_artifact_audit_diagnostic(
+                        "post-execution",
+                        postaudit_error,
+                    ),
+                ],
+            ),
+        )
     end
 
     if _is_interactive_job(normalized_job)
+        hold && throw(ArgumentError(
+            "hold=true is not supported for interactive SLURM jobs.",
+        ))
         artifact_text = render_salloc(normalized_job)
         submit_command = artifact_text
 
@@ -1851,7 +2548,7 @@ function submit(
         end
 
         try
-            output = read(`bash -lc $submit_command`, String)
+            output = command_reader(`bash -lc $submit_command`)
             return SubmitResult(
                 ok = true,
                 dry_run = false,
@@ -1864,6 +2561,7 @@ function submit(
                 errors = report.errors
             )
         catch e
+            e isa InterruptException && rethrow()
             return SubmitResult(
                 ok = false,
                 dry_run = false,
@@ -1879,13 +2577,15 @@ function submit(
 
     artifact_text = render_sbatch(normalized_job)
     artifact_path = something(path, _default_sbatch_path(normalized_job))
-    submit_command = "sbatch " * _shell_quote(artifact_path)
+    submit_command = "sbatch " * (hold ? "--hold " : "") *
+                     "--parsable < " * _shell_quote(artifact_path)
 
     if dry_run
         _print_dry_run(io, artifact_text, submit_command)
         return SubmitResult(
             ok = true,
             dry_run = true,
+            held = hold,
             site = normalized_job.site,
             backend = :sbatch,
             artifact_path = artifact_path,
@@ -1896,39 +2596,207 @@ function submit(
         )
     end
 
-    mkpath(dirname(artifact_path))
-    write(artifact_path, artifact_text)
-    chmod(artifact_path, 0o755)
+    binding = _write_exclusive_submission_artifact(
+        artifact_path,
+        artifact_text,
+    )
+    artifact_path = binding.path
+    submit_command = "sbatch " * (hold ? "--hold " : "") *
+                     "--parsable < " * _shell_quote(artifact_path)
+    post_artifact_write_hook(binding)
 
-    try
-        output = read(`sbatch $artifact_path`, String)
-        job_id = _extract_sbatch_job_id(output)
-        return SubmitResult(
-            ok = true,
-            dry_run = false,
-            site = normalized_job.site,
-            backend = :sbatch,
-            artifact_path = artifact_path,
-            artifact_text = artifact_text,
-            submit_command = submit_command,
-            job_id = job_id,
-            stdout = output,
-            warnings = report.warnings,
-            errors = report.errors
-        )
-    catch e
+    preaudit_error = _submission_artifact_audit_error(binding)
+    if preaudit_error !== nothing
         return SubmitResult(
             ok = false,
             dry_run = false,
+            held = hold,
+            scheduler_acceptance = :not_attempted,
             site = normalized_job.site,
             backend = :sbatch,
             artifact_path = artifact_path,
             artifact_text = artifact_text,
             submit_command = submit_command,
             warnings = report.warnings,
-            errors = vcat(report.errors, [string(e)])
+            errors = vcat(
+                report.errors,
+                [
+                    _submission_artifact_audit_diagnostic(
+                        "pre-execution",
+                        preaudit_error,
+                    ),
+                ],
+            ),
         )
     end
+
+    if sbatch_runner === _run_sbatch_command &&
+       sbatch_locator("sbatch") === nothing
+        return SubmitResult(
+            ok = false,
+            dry_run = false,
+            held = hold,
+            scheduler_acceptance = :not_attempted,
+            site = normalized_job.site,
+            backend = :sbatch,
+            artifact_path = artifact_path,
+            artifact_text = artifact_text,
+            submit_command = submit_command,
+            warnings = report.warnings,
+            errors = vcat(
+                report.errors,
+                [
+                    "sbatch is unavailable at the pre-spawn check; " *
+                    "scheduler submission was not attempted",
+                ],
+            ),
+        )
+    end
+
+    submit_cmd = hold ?
+                 `sbatch --hold --parsable` :
+                 `sbatch --parsable`
+    execution = nothing
+    try
+        execution = _normalize_sbatch_execution(
+            _run_private_submission_artifact_command(
+                artifact_text,
+                submit_cmd,
+                sbatch_runner,
+            ),
+        )
+    catch runner_error
+        if runner_error isa InterruptException
+            _audit_submission_artifact_after_interrupt!(
+                binding,
+                runner_error,
+            )
+            rethrow()
+        end
+        postaudit_error = _submission_artifact_audit_error(binding)
+        backend_errors = [
+            "sbatch runner failed after invocation; scheduler acceptance " *
+            "is unknown: $(sprint(showerror, runner_error))",
+        ]
+        if postaudit_error !== nothing
+            push!(
+                backend_errors,
+                _submission_artifact_audit_diagnostic(
+                    "post-submission",
+                    postaudit_error,
+                ),
+            )
+        end
+        return SubmitResult(
+            ok = false,
+            dry_run = false,
+            held = hold,
+            scheduler_acceptance = :unknown,
+            site = normalized_job.site,
+            backend = :sbatch,
+            artifact_path = artifact_path,
+            artifact_text = artifact_text,
+            submit_command = submit_command,
+            warnings = report.warnings,
+            errors = vcat(report.errors, backend_errors),
+        )
+    end
+
+    output = execution.stdout
+    job_reference = _extract_sbatch_job_reference(output)
+    scheduler_acceptance =
+        job_reference === nothing ? :unknown : :accepted
+    if scheduler_acceptance != :accepted
+        postaudit_error = _submission_artifact_audit_error(binding)
+        diagnostic = if execution.term_signal != 0
+            "sbatch terminated by signal $(execution.term_signal); " *
+            "scheduler acceptance is unknown"
+        else
+            "sbatch returned no single exact parsable '<digits>' or " *
+            "'<digits>;<cluster>' record after exiting with code " *
+            "$(execution.exit_code); scheduler acceptance is unknown"
+        end
+        if !isempty(strip(execution.stderr))
+            diagnostic *= ": $(strip(execution.stderr))"
+        end
+        backend_errors = [diagnostic]
+        if postaudit_error !== nothing
+            push!(
+                backend_errors,
+                _submission_artifact_audit_diagnostic(
+                    "post-submission",
+                    postaudit_error,
+                ),
+            )
+        end
+        return SubmitResult(
+            ok = false,
+            dry_run = false,
+            held = hold,
+            scheduler_acceptance = scheduler_acceptance,
+            site = normalized_job.site,
+            backend = :sbatch,
+            artifact_path = artifact_path,
+            artifact_text = artifact_text,
+            submit_command = submit_command,
+            stdout = output,
+            warnings = report.warnings,
+            errors = vcat(report.errors, backend_errors),
+        )
+    end
+
+    accepted_record = (;
+        held = hold,
+        job_id = job_reference.job_id,
+        job_cluster = job_reference.job_cluster,
+        stdout = output,
+        artifact_path,
+    )
+    callback_error = nothing
+    try
+        accepted_sbatch_callback(accepted_record)
+    catch caught
+        if caught isa InterruptException
+            _audit_submission_artifact_after_interrupt!(binding, caught)
+            rethrow()
+        end
+        callback_error = caught
+    end
+
+    postaudit_error = _submission_artifact_audit_error(binding)
+    backend_errors = copy(report.errors)
+    if callback_error !== nothing
+        push!(
+            backend_errors,
+            "Accepted sbatch callback failed after scheduler acceptance: " *
+            sprint(showerror, callback_error),
+        )
+    end
+    if postaudit_error !== nothing
+        push!(
+            backend_errors,
+            _submission_artifact_audit_diagnostic(
+                "post-submission",
+                postaudit_error,
+            ),
+        )
+    end
+    return SubmitResult(
+        ok = callback_error === nothing && postaudit_error === nothing,
+        dry_run = false,
+        held = hold,
+        scheduler_acceptance = :accepted,
+        site = normalized_job.site,
+        backend = :sbatch,
+        artifact_path = artifact_path,
+        artifact_text = artifact_text,
+        submit_command = submit_command,
+        job_id = accepted_record.job_id,
+        job_cluster = accepted_record.job_cluster,
+        stdout = output,
+        warnings = report.warnings,
+        errors = backend_errors,
+    )
 end
 
 """

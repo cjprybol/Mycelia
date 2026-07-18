@@ -6,6 +6,384 @@ function nonempty_file(path::AbstractString)
     return isfile(path) && filesize(path) > 0
 end
 
+function _canonical_conda_runner(
+        conda_runner::AbstractString;
+        subject::AbstractString,
+        require_nonempty::Bool = true,
+)::String
+    reported_runner = String(conda_runner)
+    if require_nonempty && isempty(strip(reported_runner))
+        throw(ArgumentError(
+            "$(subject) conda_runner must be a non-empty executable name or path.",
+        ))
+    end
+    executable = Sys.which(reported_runner)
+    candidate = executable === nothing ?
+                abspath(reported_runner) : String(executable)
+    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+end
+
+function _canonical_conda_environment_prefix(
+        environment_prefix::AbstractString;
+        subject::AbstractString,
+        repr_existing_ancestor::Bool,
+        ancestor_message_period::Bool,
+)::String
+    reported_prefix = String(environment_prefix)
+    isempty(strip(reported_prefix)) && throw(ArgumentError(
+        "$(subject) environment_prefix must be a non-empty path.",
+    ))
+    normalized_prefix = normpath(abspath(reported_prefix))
+    existing_ancestor = normalized_prefix
+    missing_components = String[]
+    while !ispath(existing_ancestor) && !islink(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    if !isdir(existing_ancestor)
+        displayed_ancestor = repr_existing_ancestor ?
+                             repr(existing_ancestor) : existing_ancestor
+        terminal = ancestor_message_period ? "." : ""
+        throw(ArgumentError(
+            "$(subject) environment prefix has a non-directory existing " *
+            "ancestor: $(displayed_ancestor)$(terminal)",
+        ))
+    end
+    canonical_ancestor = realpath(existing_ancestor)
+    return isempty(missing_components) ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, missing_components...))
+end
+
+function _normalize_prebound_input_descriptor(
+        descriptor::NamedTuple,
+        path::AbstractString,
+        label::AbstractString;
+        subject::AbstractString,
+)::NamedTuple
+    required_fields = (
+        :path,
+        :canonical_path,
+        :size_bytes,
+        :sha256,
+        :device,
+        :inode,
+    )
+    keys(descriptor) == required_fields || throw(ArgumentError(
+        "$(subject) prebound $(label) contract must have fields " *
+        "$(required_fields), got $(keys(descriptor)).",
+    ))
+    normalized_path = normpath(abspath(String(path)))
+    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
+        ArgumentError(
+            "$(subject) prebound $(label) path does not match its contract.",
+        ),
+    )
+    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
+        "$(subject) prebound $(label) must be a regular non-symlink file.",
+    ))
+    canonical_path = realpath(normalized_path)
+    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
+        "$(subject) prebound $(label) canonical path does not match its contract.",
+    ))
+    status = stat(normalized_path)
+    normalized = (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = Int(descriptor.size_bytes),
+        sha256 = String(descriptor.sha256),
+        device = UInt64(descriptor.device),
+        inode = UInt64(descriptor.inode),
+    )
+    normalized.size_bytes > 0 || throw(ArgumentError(
+        "$(subject) prebound $(label) must be non-empty.",
+    ))
+    UInt64(status.device) == normalized.device &&
+        UInt64(status.inode) == normalized.inode &&
+        filesize(normalized_path) == normalized.size_bytes || throw(
+        ArgumentError(
+            "$(subject) prebound $(label) physical identity or size changed " *
+            "before child-lock acquisition.",
+        ),
+    )
+    return normalized
+end
+
+function _conda_package_record_field(
+        package_record::Union{NamedTuple, AbstractDict},
+        field::Symbol,
+)::Any
+    if package_record isa NamedTuple
+        return hasproperty(package_record, field) ?
+               getproperty(package_record, field) : nothing
+    end
+    return get(
+        package_record,
+        String(field),
+        get(package_record, field, nothing),
+    )
+end
+
+const _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX = ".mycelia-output-root.pid."
+const _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX =
+    ".mycelia-output-root.reservation."
+const _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS = 7 * 24 * 60 * 60
+const _OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK = ReentrantLock()
+const _OUTPUT_ROOT_ALLOWED_ANCESTORS = IdDict{Task, Vector{String}}()
+
+function _output_root_path_entry_exists(path::AbstractString)::Bool
+    return ispath(path) || islink(path)
+end
+
+function _output_root_reservation_lock_path_from_canonical(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    root_identity = _output_root_reservation_identity(normalized_root)
+    lock_name = "$(_OUTPUT_ROOT_RESERVATION_LOCK_PREFIX)$(root_identity)"
+    return joinpath(dirname(normalized_root), lock_name)
+end
+
+function _output_root_reservation_identity(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    # Use a fail-closed filesystem-equivalence key so case and Unicode
+    # spelling aliases cannot split one physical reservation domain.
+    filesystem_equivalence_key = Base.Unicode.normalize(
+        normalized_root;
+        casefold = true,
+        compose = true,
+        stable = true,
+    )
+    return SHA.bytes2hex(SHA.sha256(filesystem_equivalence_key))
+end
+
+function _output_root_durable_reservation_path_from_canonical(
+        canonical_root::AbstractString,
+        capability::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    normalized_capability = String(capability)
+    occursin(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$", normalized_capability) ||
+        throw(ArgumentError(
+            "Output-root durable reservation capability must contain only " *
+            "letters, digits, period, underscore, or hyphen.",
+        ))
+    root_identity = _output_root_reservation_identity(normalized_root)
+    capability_identity =
+        SHA.bytes2hex(SHA.sha256(normalized_capability))
+    reservation_name =
+        "$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)$(root_identity)." *
+        capability_identity
+    return joinpath(dirname(normalized_root), reservation_name)
+end
+
+function _output_root_durable_reservation_prefix_from_canonical(
+        canonical_root::AbstractString,
+)::String
+    normalized_root = normpath(abspath(String(canonical_root)))
+    root_identity = _output_root_reservation_identity(normalized_root)
+    return "$(_OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)$(root_identity)."
+end
+
+function _is_output_root_durable_reservation_path(
+        reservation_path::AbstractString,
+)::Bool
+    return startswith(
+        basename(String(reservation_path)),
+        _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX,
+    )
+end
+
+function _is_output_root_pid_reservation_path(
+        reservation_path::AbstractString,
+)::Bool
+    return startswith(
+        basename(String(reservation_path)),
+        _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX,
+    )
+end
+
+function _output_root_reservation_is_active(
+        lock_path::AbstractString;
+        stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
+)::Bool
+    stale_age > 0 || throw(ArgumentError("stale_age must be positive."))
+    normalized_lock_path = normpath(abspath(String(lock_path)))
+    _output_root_path_entry_exists(normalized_lock_path) || return false
+    !_is_output_root_pid_reservation_path(normalized_lock_path) &&
+        _is_output_root_durable_reservation_path(normalized_lock_path) &&
+        return true
+    lock_handle = try
+        FileWatching.Pidfile.trymkpidlock(
+            normalized_lock_path;
+            stale_age,
+            refresh = stale_age / 2,
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        throw(ArgumentError(
+            "Unable to validate output-root reservation " *
+            "$(normalized_lock_path): $(sprint(showerror, caught))",
+        ))
+    end
+    lock_handle === false && return true
+    Base.close(lock_handle)
+    return false
+end
+
+function _same_output_root_reservation_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    parent = dirname(normalized_root)
+    isdir(parent) || return String[]
+    durable_prefix =
+        _output_root_durable_reservation_prefix_from_canonical(normalized_root)
+    reservation_paths = String[
+        _output_root_reservation_lock_path_from_canonical(normalized_root),
+    ]
+    for entry in readdir(parent; join = true)
+        startswith(basename(entry), durable_prefix) || continue
+        push!(reservation_paths, entry)
+    end
+    return sort!(unique!(reservation_paths))
+end
+
+function _ancestor_output_root_reservation_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    dirname(normalized_root) == normalized_root && return String[]
+    lock_paths = String[]
+    ancestor = dirname(normalized_root)
+    while true
+        append!(lock_paths, _same_output_root_reservation_paths(ancestor))
+        parent = dirname(ancestor)
+        parent == ancestor && break
+        ancestor = parent
+    end
+    return sort!(unique!(lock_paths))
+end
+
+function _descendant_output_root_reservation_lock_paths(
+        workflow_root::AbstractString,
+)::Vector{String}
+    normalized_root = normpath(abspath(String(workflow_root)))
+    if islink(normalized_root) || !isdir(normalized_root)
+        return String[]
+    end
+    lock_paths = String[]
+    for (directory, directories, files) in walkdir(
+            normalized_root;
+            follow_symlinks = false,
+    )
+        directory_entries = copy(directories)
+        filter!(
+            child -> !islink(joinpath(directory, child)),
+            directories,
+        )
+        for entry in Iterators.flatten((directory_entries, files))
+            startswith(entry, ".") || continue
+            is_reservation =
+                startswith(entry, _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX) ||
+                startswith(entry, _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX)
+            is_reservation || continue
+            push!(lock_paths, joinpath(directory, entry))
+        end
+    end
+    return sort!(lock_paths)
+end
+
+function _current_allowed_output_root_ancestor_locks()::Set{String}
+    task = current_task()
+    return Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+        return Set(get(_OUTPUT_ROOT_ALLOWED_ANCESTORS, task, String[]))
+    end
+end
+
+function _with_allowed_output_root_ancestor_locks(
+        action::Function,
+        lock_paths::Tuple,
+)::Any
+    normalized_lock_paths = String[
+        normpath(abspath(String(lock_path))) for lock_path in lock_paths
+    ]
+    isempty(normalized_lock_paths) && return action()
+    task = current_task()
+    previous_lock_paths = Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+        previous = copy(get(
+            _OUTPUT_ROOT_ALLOWED_ANCESTORS,
+            task,
+            String[],
+        ))
+        _OUTPUT_ROOT_ALLOWED_ANCESTORS[task] = vcat(
+            previous,
+            normalized_lock_paths,
+        )
+        return previous
+    end
+    try
+        return action()
+    finally
+        Base.lock(_OUTPUT_ROOT_ALLOWED_ANCESTORS_LOCK) do
+            if isempty(previous_lock_paths)
+                delete!(_OUTPUT_ROOT_ALLOWED_ANCESTORS, task)
+            else
+                _OUTPUT_ROOT_ALLOWED_ANCESTORS[task] = previous_lock_paths
+            end
+        end
+    end
+end
+
+function _require_exclusive_output_root_reservation(
+        workflow_root::AbstractString,
+        own_lock_path::AbstractString;
+        subject::AbstractString,
+        reservation_kind::AbstractString = "output-root",
+        stale_age::Real = _OUTPUT_ROOT_RESERVATION_STALE_AGE_SECONDS,
+        allowed_same_root_locks::Tuple = (),
+)::Nothing
+    normalized_root = normpath(abspath(String(workflow_root)))
+    normalized_own_lock = normpath(abspath(String(own_lock_path)))
+    normalized_allowed_same_root_locks = Set(
+        normpath(abspath(String(lock_path))) for
+            lock_path in allowed_same_root_locks
+    )
+    allowed_ancestor_locks = _current_allowed_output_root_ancestor_locks()
+    for lock_path in _same_output_root_reservation_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        lock_path in normalized_allowed_same_root_locks && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active same-root " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
+    for lock_path in
+        _ancestor_output_root_reservation_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        lock_path in allowed_ancestor_locks && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active ancestor " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
+    for lock_path in
+        _descendant_output_root_reservation_lock_paths(normalized_root)
+        lock_path == normalized_own_lock && continue
+        _output_root_reservation_is_active(lock_path; stale_age) || continue
+        throw(ArgumentError(
+            "$(subject) overlaps an active descendant " *
+            "$(reservation_kind) reservation: $(lock_path)",
+        ))
+    end
+    return nothing
+end
+
 """
 Collapse duplicate rows in a DataFrame by consolidating non-missing values.
 
