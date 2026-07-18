@@ -244,6 +244,10 @@ The installer uses the immutable environment name
 the first 16 hexadecimal characters of the pinned bundled-environment SHA-256.
 A same-version interprocess lock serializes direct installation, first-use
 creation, revalidation, assembly, polishing, cleanup, and final artifact audit.
+Independent workflows sharing that environment prefix therefore serialize by
+design; `jobs` is the supported intra-workflow concurrency control. Relaxing
+this boundary requires a crash-safe readers-writer admission and stale-reader
+recovery protocol rather than narrowing the existing exclusive lock ad hoc.
 The final audit rechecks artifact bytes, FASTA/GFA semantics, and contig-ID
 identity across the Autocycler, Polypolish, and Pypolca stages. An existing
 spec-hash-addressed environment is never recreated in place. Missing or

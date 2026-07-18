@@ -12957,16 +12957,6 @@ function _require_valid_assembly_fasta(
                 "$(label) contains invalid DNA at FASTA record " *
                 "$(record_count + 1): $(normalized_path).",
             )
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch caught
-                caught isa InterruptException && rethrow()
-                error(
-                    "$(label) contains invalid DNA at FASTA record " *
-                    "$(record_count + 1): $(normalized_path). Cause: " *
-                    sprint(showerror, caught),
-                )
-            end
             push!(identifiers, identifier)
             record_count += 1
         end
@@ -13300,16 +13290,6 @@ function _require_valid_assembly_gfa_input(
                 "$(label) has invalid DNA for GFA segment " *
                 "$(repr(identifier)): $(normalized_path).",
             )
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch caught
-                caught isa InterruptException && rethrow()
-                error(
-                    "$(label) has invalid DNA for GFA segment " *
-                    "$(repr(identifier)): $(normalized_path). Cause: " *
-                    sprint(showerror, caught),
-                )
-            end
             _require_valid_metamdbg_gfa_tags(
                 fields,
                 4,

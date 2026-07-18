@@ -13,6 +13,23 @@ struct _TestInterruptingMetamdbgString <: AbstractString
     interrupt::InterruptException
 end
 
+Base.ncodeunits(::_TestInterruptingMetamdbgString)::Int = 1
+
+function Base.codeunit(
+        value::_TestInterruptingMetamdbgString,
+        index::Integer,
+)::UInt8
+    index == 1 || throw(BoundsError(value, index))
+    return Base.codeunit("x", 1)
+end
+
+function Base.isvalid(
+        ::_TestInterruptingMetamdbgString,
+        index::Integer,
+)::Bool
+    return index == 1
+end
+
 function Base.String(value::_TestInterruptingMetamdbgString)::String
     throw(value.interrupt)
 end
@@ -910,10 +927,13 @@ Test.@testset "metaMDBG durable directory and unlink fences" begin
         Test.@test !ispath(ordered_file)
 
         replacement_file = joinpath(temporary_root, "replacement-file.json")
+        replacement_original = replacement_file * ".original"
         write(replacement_file, "original\n")
         original_identity =
             Mycelia._metamdbg_regular_file_identity(replacement_file)
-        rm(replacement_file)
+        # Keep the original inode linked so Linux cannot recycle it for the
+        # replacement fixture before the identity fence runs.
+        mv(replacement_file, replacement_original)
         write(replacement_file, "replacement\n")
         _test_metamdbg_error(
             () -> Mycelia._remove_exact_metamdbg_durable_file!(
@@ -923,6 +943,7 @@ Test.@testset "metaMDBG durable directory and unlink fences" begin
             ErrorException,
             r"refuses to remove a replacement durable file",
         )
+        Test.@test read(replacement_original, String) == "original\n"
         Test.@test read(replacement_file, String) == "replacement\n"
 
         retained_file = joinpath(temporary_root, "retained-file.json")
@@ -14492,6 +14513,10 @@ Test.@testset "metaMDBG input and artifact contracts" begin
                         "callback-validation-interrupt.sbatch",
                     ),
                 )
+                Test.@test Base.ncodeunits(validation_record.job_id) == 1
+                Test.@test Base.codeunit(validation_record.job_id, 1) ==
+                           Base.codeunit("x", 1)
+                Test.@test Base.isvalid(validation_record.job_id, 1)
                 validation_release_calls = Ref(0)
                 validation_runner_failure = ErrorException(
                     "synthetic runner failure after validation interrupt",
