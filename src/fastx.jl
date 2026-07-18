@@ -2957,3 +2957,49 @@ scores = quality_string_to_phred("!#%+")  # Returns [0, 2, 4, 10]
 function quality_string_to_phred(quality_string::AbstractString)::Vector{UInt8}
     return UInt8[Int(c) - 33 for c in quality_string]
 end
+
+function _fastq_pair_identifier(identifier::AbstractString)::String
+    first_token = first(split(String(identifier)))
+    return replace(first_token, r"/[12]$" => "")
+end
+
+function _fastq_identifier_pair_role(
+        identifier::AbstractString,
+)::Union{Nothing, Int}
+    first_token = first(split(String(identifier)))
+    role_match = match(r"/([12])$", first_token)
+    return role_match === nothing ? nothing :
+           parse(Int, something(only(role_match.captures)))
+end
+
+function _fastq_casava_pair_role(
+        description::AbstractString,
+)::Union{Nothing, Int}
+    description_tokens = split(String(description))
+    length(description_tokens) >= 2 || return nothing
+    role_match = match(
+        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
+        description_tokens[2],
+    )
+    return role_match === nothing ? nothing :
+           parse(Int, something(only(role_match.captures)))
+end
+
+function _fastq_explicit_pair_role(
+        identifier::AbstractString,
+        description::AbstractString = "";
+        conflict_subject::AbstractString = "FASTQ",
+)::Union{Nothing, Int}
+    identifier_role = _fastq_identifier_pair_role(identifier)
+    casava_role = _fastq_casava_pair_role(description)
+    if identifier_role !== nothing && casava_role !== nothing &&
+       identifier_role != casava_role
+        throw(ArgumentError(
+            "$(conflict_subject) identifier and CASAVA description contain " *
+            "conflicting explicit mate roles: " *
+            "identifier=$(repr(String(identifier))), " *
+            "description=$(repr(String(description))).",
+        ))
+    end
+    return identifier_role === nothing ? casava_role : identifier_role
+end

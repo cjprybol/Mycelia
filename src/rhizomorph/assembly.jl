@@ -721,10 +721,11 @@ Configuration for independently corrected paired short reads plus long reads,
 assembled with Unicycler. `input_snapshot_byte_ceiling` bounds cumulative
 workflow-owned source and correction-output copies across the complete
 high-level lifecycle; exhaustion fails before the next correction or assembler
-side effect and exact partial snapshots are removed. The child consumes those
-already-bound corrected snapshots directly, so child-spool and scheduler-only
-keywords are unsupported here. Route-owned input/output/thread keywords are
-rejected.
+side effect. Exact identity-bound cleanup of workflow-owned partial snapshots
+is attempted; cleanup failures are fail-loud and may retain or report evidence.
+The child consumes those already-bound corrected snapshots directly, so child-
+spool and scheduler-only keywords are unsupported here. Route-owned input/
+output/thread keywords are rejected.
 """
 struct UnicyclerHybridConfig{
         CorrectionOptions<:NamedTuple,
@@ -1579,15 +1580,259 @@ function _validate_and_promote_corrected_fastq!(
     end
 end
 
+function _substitution_error_rate(
+        sequencing_tech::Symbol,
+)::Union{Nothing, Float64}
+    sequencing_tech == :pacbio_hifi || return nothing
+    return Mycelia.indel_error_profile(sequencing_tech).base_error_rate
+end
+
+function _owned_assembly_artifact_identity(
+        path::AbstractString,
+        artifact_kind::Symbol,
+        label::AbstractString,
+)::NamedTuple
+    normalized_path = normpath(abspath(String(path)))
+    valid_kind = artifact_kind in (:file, :directory)
+    valid_kind || throw(ArgumentError(
+        "owned assembly artifact kind must be :file or :directory.",
+    ))
+    valid_entry = artifact_kind == :file ?
+                  isfile(normalized_path) : isdir(normalized_path)
+    valid_entry && !islink(normalized_path) || error(
+        "$(label) must be an existing, non-symlink $(artifact_kind): " *
+        "$(normalized_path).",
+    )
+    realpath(normalized_path) == normalized_path || error(
+        "$(label) must not resolve through a symlink component: " *
+        "$(normalized_path).",
+    )
+    status = stat(normalized_path)
+    return (;
+        path = normalized_path,
+        device = status.device,
+        inode = status.inode,
+    )
+end
+
+function _normalize_stage1_corrected_fastq_identity(
+        corrected_fastq::AbstractString,
+        raw_identity::Any,
+        label::AbstractString,
+)::NamedTuple
+    raw_identity isa NamedTuple || error(
+        "$(label) corrected_fastq_identity must be a NamedTuple.",
+    )
+    required_fields = (:path, :device, :inode)
+    all(field -> hasproperty(raw_identity, field), required_fields) || error(
+        "$(label) corrected_fastq_identity must contain path, device, and " *
+        "inode fields.",
+    )
+    normalized_path = normpath(abspath(String(corrected_fastq)))
+    identity_path = try
+        normpath(abspath(String(raw_identity.path)))
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "$(label) corrected_fastq_identity path is invalid. Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    identity_path == normalized_path || error(
+        "$(label) corrected_fastq_identity path does not match corrected_fastq: " *
+        "$(identity_path) != $(normalized_path).",
+    )
+    for field in (:device, :inode)
+        value = getproperty(raw_identity, field)
+        value isa Integer && 0 <= value <= typemax(UInt64) || error(
+            "$(label) corrected_fastq_identity $(field) must be a nonnegative " *
+            "UInt64-compatible integer.",
+        )
+    end
+    return (;
+        path = normalized_path,
+        device = UInt64(raw_identity.device),
+        inode = UInt64(raw_identity.inode),
+    )
+end
+
+function _require_current_stage1_corrected_fastq_identity(
+        expected_identity::NamedTuple,
+        label::AbstractString,
+)::NamedTuple
+    observed_identity = try
+        _owned_assembly_artifact_identity(
+            expected_identity.path,
+            :file,
+            "$(label) corrected FASTQ",
+        )
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "$(label) corrected FASTQ no longer matches its producer-bound " *
+            "filesystem identity at $(expected_identity.path). Cause: " *
+            sprint(showerror, caught),
+        )
+    end
+    if observed_identity.device != expected_identity.device ||
+       observed_identity.inode != expected_identity.inode
+        error(
+            "$(label) corrected FASTQ changed filesystem identity after " *
+            "producer capture at $(expected_identity.path); expected " *
+            "device=$(expected_identity.device), inode=$(expected_identity.inode), " *
+            "observed device=$(observed_identity.device), " *
+            "inode=$(observed_identity.inode).",
+        )
+    end
+    return expected_identity
+end
+
+function _adopt_stage1_corrected_fastq_identity(
+        stage::Any,
+        corrected_fastq::AbstractString,
+        label::AbstractString;
+        allow_legacy_identity_fallback::Bool = false,
+)::NamedTuple
+    if !hasproperty(stage, :corrected_fastq_identity)
+        allow_legacy_identity_fallback || error(
+            "$(label) correction result is missing corrected_fastq_identity.",
+        )
+        @debug(
+            "$(label): binding corrected FASTQ identity for an injected legacy " *
+            "correction runner that did not report corrected_fastq_identity",
+            corrected_fastq,
+        )
+        return _owned_assembly_artifact_identity(
+            corrected_fastq,
+            :file,
+            "$(label) legacy corrected FASTQ",
+        )
+    end
+    expected_identity = _normalize_stage1_corrected_fastq_identity(
+        corrected_fastq,
+        stage.corrected_fastq_identity,
+        label,
+    )
+    return _require_current_stage1_corrected_fastq_identity(
+        expected_identity,
+        label,
+    )
+end
+
+function _remove_exact_owned_assembly_file!(
+        path::AbstractString,
+        expected_identity::NamedTuple,
+)::Nothing
+    Mycelia._remove_exact_assembly_durable_file!(path, expected_identity)
+    return nothing
+end
+
+function _remove_exact_owned_assembly_directory!(
+        path::AbstractString,
+        expected_identity::NamedTuple,
+)::Nothing
+    Mycelia._remove_exact_assembly_durable_directory!(
+        path,
+        expected_identity;
+        recursive = true,
+    )
+    return nothing
+end
+
+function _remove_bound_owned_assembly_artifact!(
+        expected_identity::NamedTuple,
+        remover::Function,
+)::Nothing
+    _workflow_path_entry_exists(expected_identity.path) || return nothing
+    remover(expected_identity.path, expected_identity)
+    return nothing
+end
+
+function _cleanup_owned_assembly_artifacts!(
+        file_identities::Tuple,
+        directory_identities::Tuple,
+        cleanup_label::AbstractString;
+        exact_file_remover::Function = _remove_exact_owned_assembly_file!,
+        exact_directory_remover::Function =
+            _remove_exact_owned_assembly_directory!,
+)::Nothing
+    file_cleanup_steps = Tuple(
+        () -> _remove_bound_owned_assembly_artifact!(
+            identity,
+            exact_file_remover,
+        ) for identity in file_identities
+    )
+    directory_cleanup_steps = Tuple(
+        () -> _remove_bound_owned_assembly_artifact!(
+            identity,
+            exact_directory_remover,
+        ) for identity in directory_identities
+    )
+    Mycelia._run_cleanup_steps!(
+        (file_cleanup_steps..., directory_cleanup_steps...),
+        cleanup_label,
+    )
+    return nothing
+end
+
+function _finalize_stage1_correction_cleanup!(
+        temporary_directory_identities::Tuple,
+        promoted_fastq_identity::Union{Nothing, NamedTuple},
+        ephemeral::Bool;
+        exact_file_remover::Function = _remove_exact_owned_assembly_file!,
+        exact_directory_remover::Function =
+            _remove_exact_owned_assembly_directory!,
+)::Nothing
+    try
+        _cleanup_owned_assembly_artifacts!(
+            (),
+            temporary_directory_identities,
+            "Stage-1 correction temporary-root cleanup";
+            exact_file_remover,
+            exact_directory_remover,
+        )
+    catch primary_cleanup_error
+        if ephemeral && promoted_fastq_identity !== nothing
+            Mycelia._run_cleanup_after_primary_error!(
+                () -> _cleanup_owned_assembly_artifacts!(
+                    (promoted_fastq_identity,),
+                    (),
+                    "Stage-1 corrected FASTQ cleanup after root-cleanup " *
+                    "failure";
+                    exact_file_remover,
+                    exact_directory_remover,
+                ),
+                primary_cleanup_error,
+                "Stage-1 corrected FASTQ cleanup failed while preserving " *
+                "the primary temporary-root cleanup failure";
+                cleanup_evidence = promoted_fastq_identity.path,
+            )
+        end
+        Base.rethrow()
+    end
+    return nothing
+end
+
 """
     _run_stage1_correction(
         reads,
         config::AssemblyConfig;
         materialize_corrected_reads=true,
         persistent_output_dir=config.output_dir,
+        exact_file_remover=_remove_exact_owned_assembly_file!,
+        exact_directory_remover=_remove_exact_owned_assembly_directory!,
+    ) -> (;
+        corrected_reads,
+        corrected_read_count,
+        corrected_fastq,
+        corrected_fastq_identity,
+        result_dict,
+        knobs,
+        max_k,
+        ephemeral,
+        indel_params,
+        substitution_error_rate,
     )
-        -> (; corrected_reads, corrected_fastq, result_dict, knobs, max_k,
-              ephemeral, indel_params)
 
 Run Stage-1 correction (`Mycelia.mycelia_iterative_assemble`, the iterative +
 skip-solid maximum-likelihood corrector) and PERSIST the corrected FASTQ to a
@@ -1613,25 +1858,22 @@ must give each concurrent Stage-1 run its own output directory.
 
 Returns a NamedTuple: optionally materialized `corrected_reads`, the validated
 `corrected_read_count`, persistent FASTQ path (`corrected_fastq`), whether the
-caller owns cleanup (`ephemeral`), and the corrector's `result_dict`, tier
-`knobs`, and `max_k`. Callers should consume the returned `corrected_fastq`, not
+caller owns cleanup (`ephemeral`), its exact `corrected_fastq_identity`, and the
+corrector's `result_dict`, tier `knobs`, and `max_k`. Callers should consume the
+returned `corrected_fastq`, not
 `result_dict[:metadata][:final_fastq_file]` (both point at the same persisted
 path after this returns). Fails loud (never returns) on a missing/absent
 corrected FASTQ or a 0-read correction, guarding both callers.
 """
-function _substitution_error_rate(
-        sequencing_tech::Symbol,
-)::Union{Nothing, Float64}
-    sequencing_tech == :pacbio_hifi || return nothing
-    return Mycelia.indel_error_profile(sequencing_tech).base_error_rate
-end
-
 function _run_stage1_correction(
-        reads,
+        reads::Any,
         config::AssemblyConfig;
         materialize_corrected_reads::Bool = true,
-        persistent_output_dir::Union{Nothing, AbstractString} = config.output_dir
-)
+        persistent_output_dir::Union{Nothing, AbstractString} = config.output_dir,
+        exact_file_remover::Function = _remove_exact_owned_assembly_file!,
+        exact_directory_remover::Function =
+            _remove_exact_owned_assembly_directory!,
+)::NamedTuple
     _log_info(config,
         "Routing assembly through iterative corrector " *
         "(corrector=:iterative, strategy=:$(config.strategy))")
@@ -1670,9 +1912,41 @@ function _run_stage1_correction(
     destination_existed = isfile(persistent_fastq)
 
     input_dir = mktempdir(; cleanup = false)
-    corrector_output_dir = mktempdir(; cleanup = false)
+    input_dir_identity = _owned_assembly_artifact_identity(
+        input_dir,
+        :directory,
+        "Stage-1 correction input root",
+    )
+    corrector_output_dir = try
+        mktempdir(; cleanup = false)
+    catch primary_error
+        Mycelia._run_cleanup_after_primary_error!(
+            () -> _cleanup_owned_assembly_artifacts!(
+                (),
+                (input_dir_identity,),
+                "Stage-1 correction temporary-root cleanup";
+                exact_file_remover,
+                exact_directory_remover,
+            ),
+            primary_error,
+            "Stage-1 correction temporary-root cleanup failed while " *
+            "preserving the primary root-creation failure";
+            cleanup_evidence = input_dir,
+        )
+        Base.rethrow()
+    end
+    corrector_output_dir_identity = _owned_assembly_artifact_identity(
+        corrector_output_dir,
+        :directory,
+        "Stage-1 correction output root",
+    )
+    temporary_directory_identities = (
+        input_dir_identity,
+        corrector_output_dir_identity,
+    )
     promoted_here = false
-    try
+    promoted_fastq_identity = nothing
+    stage1_result = try
         temp_fastq = joinpath(input_dir, "corrector_input.fastq")
         _write_reads_to_fastq(reads, temp_fastq)
         expected_corrected_read_count = open(
@@ -1771,27 +2045,61 @@ function _run_stage1_correction(
         )
         promoted_here = true
         persistent_fastq = promotion.corrected_fastq
+        promoted_fastq_identity = _owned_assembly_artifact_identity(
+            persistent_fastq,
+            :file,
+            "Stage-1 corrected FASTQ",
+        )
         corrected_reads = promotion.corrected_reads
         n_corrected = promotion.n_corrected
         # Keep returned metadata honest: the original corrector path is inside the
         # doomed temporary directory; downstream consumers must see the promoted path.
         result_dict[:metadata][:final_fastq_file] = persistent_fastq
-        return (; corrected_reads, corrected_read_count = n_corrected,
+        (; corrected_reads, corrected_read_count = n_corrected,
             corrected_fastq = persistent_fastq,
+            corrected_fastq_identity = promoted_fastq_identity,
             result_dict, knobs, max_k, ephemeral, indel_params,
             substitution_error_rate)
-    catch
+    catch primary_error
         # Invalid output never replaces a prior destination. If a later in-memory
         # bookkeeping error occurs after a first-time promotion, clean only the file
         # this call introduced; a validated replacement of a prior file is retained.
-        promoted_here && !destination_existed && rm(persistent_fastq; force = true)
-        rethrow()
-    finally
-        # Prompt cleanup so repeated assemblies in a long-lived process do not leak
-        # the input FASTQ + corrector output dirs until process exit (review #2).
-        rm(input_dir; recursive = true, force = true)
-        rm(corrector_output_dir; recursive = true, force = true)
+        cleanup_file_identities = if promoted_here &&
+                                     !destination_existed &&
+                                     promoted_fastq_identity !== nothing
+            (promoted_fastq_identity,)
+        else
+            ()
+        end
+        Mycelia._run_cleanup_after_primary_error!(
+            () -> _cleanup_owned_assembly_artifacts!(
+                cleanup_file_identities,
+                temporary_directory_identities,
+                "Stage-1 correction owned-artifact cleanup";
+                exact_file_remover,
+                exact_directory_remover,
+            ),
+            primary_error,
+            "Stage-1 correction owned-artifact cleanup failed while " *
+            "preserving the primary correction failure";
+            cleanup_evidence = (
+                persistent_fastq,
+                input_dir,
+                corrector_output_dir,
+            ),
+        )
+        Base.rethrow()
     end
+    # Prompt cleanup so repeated assemblies in a long-lived process do not leak
+    # the input FASTQ + corrector output dirs until process exit (review #2).
+    _finalize_stage1_correction_cleanup!(
+        temporary_directory_identities,
+        promoted_fastq_identity,
+        ephemeral;
+        exact_file_remover,
+        exact_directory_remover,
+    )
+    return stage1_result
 end
 
 """
@@ -1815,20 +2123,49 @@ quality-aware (qualmer) path a naive `assemble_genome` on FASTQ reads would —
 i.e. it mirrors the naive-on-FASTQ baseline, keeping the comparison apples-to-
 apples.
 """
-function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
+function _assemble_with_iterative_corrector(
+        reads::Any,
+        config::AssemblyConfig;
+        correction_runner::Function = _run_stage1_correction,
+        after_corrected_identity_adoption_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        exact_file_remover::Function = _remove_exact_owned_assembly_file!,
+)::AssemblyResult
     # Stage 1: materialize + persist the corrected reads (shared with the hybrid
     # OLC route, td-ohob). The helper owns the corrector's temp dirs and returns
     # the corrected reads in memory plus everything the re-assembly tail consumes
     # (result_dict for graph reuse + stat stamps, tier knobs, max_k) with no
     # recomputation — so the native output stays byte-identical.
-    stage1 = _run_stage1_correction(reads, config)
-    # `indel_params` is a correction-phase value the tail stamps into
-    # assembly_stats["indel_moves"] (merged from the sequencing_tech/indel work) —
-    # thread it through the helper's return so the extracted tail keeps that stamp.
-    (; corrected_reads, result_dict, knobs, max_k, indel_params,
-        substitution_error_rate) = stage1
-    n_corrected = length(corrected_reads)
-    try
+    stage1 = correction_runner(reads, config)
+    corrected_fastq_identity = _adopt_stage1_corrected_fastq_identity(
+        stage1,
+        stage1.corrected_fastq,
+        "native iterative-corrector consumer";
+        allow_legacy_identity_fallback =
+            correction_runner !== _run_stage1_correction,
+    )
+    cleanup_runner = () -> _cleanup_owned_assembly_artifacts!(
+        (corrected_fastq_identity,),
+        (),
+        "native iterative-corrector FASTQ cleanup";
+        exact_file_remover,
+    )
+    assembly_result = try
+        after_corrected_identity_adoption_hook(
+            corrected_fastq_identity.path,
+            corrected_fastq_identity,
+        )
+        _require_current_stage1_corrected_fastq_identity(
+            corrected_fastq_identity,
+            "native iterative-corrector consumer",
+        )
+        # `indel_params` is a correction-phase value the tail stamps into
+        # assembly_stats["indel_moves"] (merged from sequencing_tech/indel work) —
+        # thread it through the helper's return so the extracted tail keeps that
+        # stamp.
+        (; corrected_reads, result_dict, knobs, max_k, indel_params,
+            substitution_error_rate) = stage1
+        n_corrected = length(corrected_reads)
         # mycelia_iterative_assemble is a read CORRECTOR: its :final_assembly is the
         # corrected READS, not an assembly. Re-assemble the corrected reads through
         # the naive path so assemble_genome returns real contigs + a graph —
@@ -2016,20 +2353,23 @@ function _assemble_with_iterative_corrector(reads, config::AssemblyConfig)
                   "contigs — the corrected read set did not assemble."
         end
         _log_info(config, "Re-assembled corrected reads into $(length(assembly.contigs)) contigs")
-        return assembly
-    finally
-        # The persisted corrected FASTQ is an ephemeral tempfile ONLY when the
-        # helper minted one (config.output_dir unset); then it is ours to delete,
-        # preserving the historical no-stray-file behavior of the native
-        # re-assembly. A caller-supplied output_dir is the caller's to keep for the
-        # hybrid-OLC handoff (td-ohob). We branch on the helper's returned
-        # `ephemeral` flag rather than re-deriving the predicate from config, so the
-        # ownership decision lives at the single point that made it. The corrector's
-        # own temp dirs were already cleaned by _run_stage1_correction.
+        assembly
+    catch primary_error
         if stage1.ephemeral
-            rm(stage1.corrected_fastq; force = true)
+            Mycelia._run_cleanup_after_primary_error!(
+                cleanup_runner,
+                primary_error,
+                "native iterative-corrector FASTQ cleanup failed while " *
+                "preserving the primary re-assembly failure";
+                cleanup_evidence = corrected_fastq_identity.path,
+            )
         end
+        Base.rethrow()
     end
+    # The corrected FASTQ is ours only on the ephemeral route. Exact removal binds
+    # cleanup to the producer-captured inode and refuses a same-path replacement.
+    stage1.ephemeral && cleanup_runner()
+    return assembly_result
 end
 
 """
@@ -2597,17 +2937,107 @@ and long-read (:flye/:metaflye/:canu/:hifiasm, td-wvto), routed by
 sequencing_tech. Paired-short R1/R2 plus long reads use the separate
 three-input `assemble_hybrid` contract below.
 """
-function _assemble_hybrid_olc(reads, config::AssemblyConfig)
+function _assemble_hybrid_olc(
+        reads::Any,
+        config::AssemblyConfig;
+        correction_runner::Function = _run_stage1_correction,
+        olc_runner::Function = _run_olc_tool,
+        contig_wrapper::Function = _wrap_external_contigs,
+        after_corrected_identity_adoption_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        temp_directory_creator::Function = () -> mktempdir(; cleanup = false),
+        exact_file_remover::Function = _remove_exact_owned_assembly_file!,
+        exact_directory_remover::Function =
+            _remove_exact_owned_assembly_directory!,
+)::Any
     tool = _resolve_olc_tool(config)
     _log_info(config,
         "Hybrid-OLC route (a): Stage-1 correction -> external assembler :$(tool)")
-    stage1 = _run_stage1_correction(reads, config; materialize_corrected_reads = false)
+    stage1 = correction_runner(
+        reads,
+        config;
+        materialize_corrected_reads = false,
+    )
+    corrected_fastq_identity = _adopt_stage1_corrected_fastq_identity(
+        stage1,
+        stage1.corrected_fastq,
+        "hybrid-OLC consumer";
+        allow_legacy_identity_fallback =
+            correction_runner !== _run_stage1_correction,
+    )
+    corrected_fastq_cleanup_runner = () ->
+        _cleanup_owned_assembly_artifacts!(
+            (corrected_fastq_identity,),
+            (),
+            "hybrid-OLC corrected FASTQ cleanup";
+            exact_file_remover,
+            exact_directory_remover,
+        )
+    try
+        after_corrected_identity_adoption_hook(
+            corrected_fastq_identity.path,
+            corrected_fastq_identity,
+        )
+        _require_current_stage1_corrected_fastq_identity(
+            corrected_fastq_identity,
+            "hybrid-OLC consumer",
+        )
+    catch primary_error
+        if stage1.ephemeral
+            Mycelia._run_cleanup_after_primary_error!(
+                corrected_fastq_cleanup_runner,
+                primary_error,
+                "hybrid-OLC corrected FASTQ cleanup failed while preserving " *
+                "the primary identity-adoption failure";
+                cleanup_evidence = corrected_fastq_identity.path,
+            )
+        end
+        Base.rethrow()
+    end
     # The external assembler writes into its own output dir. Co-locate it with the
     # persisted corrected FASTQ when the caller owns output_dir; otherwise a temp
     # dir cleaned alongside the ephemeral corrected FASTQ.
-    olc_outdir = config.output_dir === nothing ?
-                 mktempdir(; cleanup = false) :
-                 mkpath(joinpath(config.output_dir, "olc_$(tool)"))
+    olc_outdir = if config.output_dir === nothing
+        try
+            temp_directory_creator()
+        catch primary_error
+            cleanup_file_identities = stage1.ephemeral ?
+                                      (corrected_fastq_identity,) : ()
+            Mycelia._run_cleanup_after_primary_error!(
+                () -> _cleanup_owned_assembly_artifacts!(
+                    cleanup_file_identities,
+                    (),
+                    "hybrid-OLC owned-artifact cleanup";
+                    exact_file_remover,
+                    exact_directory_remover,
+                ),
+                primary_error,
+                "hybrid-OLC cleanup failed while preserving the primary " *
+                "assembler-root creation failure";
+                cleanup_evidence = corrected_fastq_identity.path,
+            )
+            Base.rethrow()
+        end
+    else
+        mkpath(joinpath(config.output_dir, "olc_$(tool)"))
+    end
+    olc_outdir_identity = config.output_dir === nothing ?
+                          _owned_assembly_artifact_identity(
+        olc_outdir,
+        :directory,
+        "hybrid-OLC assembler root",
+    ) : nothing
+    cleanup_file_identities = stage1.ephemeral ?
+                              (corrected_fastq_identity,) : ()
+    cleanup_directory_identities = olc_outdir_identity === nothing ?
+                                   () : (olc_outdir_identity,)
+    cleanup_runner = () -> _cleanup_owned_assembly_artifacts!(
+        cleanup_file_identities,
+        cleanup_directory_identities,
+        "hybrid-OLC owned-artifact cleanup";
+        exact_file_remover,
+        exact_directory_remover,
+    )
     # Stale-output guard: the external wrappers skip re-running when their contigs
     # file already exists, so a reused (non-empty) output_dir would silently return
     # a PRIOR run's assembly, ignoring THESE corrected reads. Warn loudly.
@@ -2616,29 +3046,38 @@ function _assemble_hybrid_olc(reads, config::AssemblyConfig)
               "skip re-running and return a STALE prior assembly — use a fresh " *
               "output_dir per run." olc_outdir
     end
-    try
-        contigs_fasta = _run_olc_tool(tool, stage1.corrected_fastq, olc_outdir, config)
+    assembled_result = try
+        _require_current_stage1_corrected_fastq_identity(
+            corrected_fastq_identity,
+            "hybrid-OLC consumer before assembler consumption",
+        )
+        contigs_fasta = olc_runner(
+            tool,
+            corrected_fastq_identity.path,
+            olc_outdir,
+            config,
+        )
         if !isfile(contigs_fasta)
             error("external OLC assembler :$(tool) produced no contigs file " *
                   "(expected at $(contigs_fasta))")
         end
         _log_info(config, "External :$(tool) assembly complete; wrapping contigs")
-        return _wrap_external_contigs(contigs_fasta, tool, config, stage1)
-    finally
-        # Ephemeral (output_dir unset): the corrected FASTQ and the assembler's temp
-        # output dir are both ours to clean. A caller-supplied output_dir keeps them.
-        # Wrap cleanup so a failing rm (e.g. a locked file on an HPC/NFS mount) is
-        # WARNed rather than replacing the in-flight assembler exception — Julia's
-        # finally-throw discards the original error.
-        if stage1.ephemeral
-            try
-                rm(stage1.corrected_fastq; force = true)
-                rm(olc_outdir; recursive = true, force = true)
-            catch cleanup_err
-                @warn "hybrid-OLC: cleanup of ephemeral artifacts failed" cleanup_err
-            end
-        end
+        contig_wrapper(contigs_fasta, tool, config, stage1)
+    catch primary_error
+        Mycelia._run_cleanup_after_primary_error!(
+            cleanup_runner,
+            primary_error,
+            "hybrid-OLC cleanup failed while preserving the primary " *
+            "assembly failure";
+            cleanup_evidence = (
+                corrected_fastq_identity.path,
+                olc_outdir,
+            ),
+        )
+        Base.rethrow()
     end
+    cleanup_runner()
+    return assembled_result
 end
 
 """
@@ -2953,13 +3392,40 @@ end
 function _Stage1CleanupToken(
         corrected_fastq::AbstractString,
         ephemeral::Bool,
-)
+)::_Stage1CleanupToken
+    # Compatibility-only constructor for injected legacy correction runners and
+    # direct tests that predate the producer identity contract. Production
+    # consumers call the identity-bearing constructor below.
     normalized_fastq = normpath(abspath(String(corrected_fastq)))
     identity = _workflow_path_identity(
         normalized_fastq,
         "corrected FASTQ cleanup target",
     )
     return _Stage1CleanupToken(normalized_fastq, ephemeral, identity)
+end
+
+function _Stage1CleanupToken(
+        corrected_fastq::AbstractString,
+        ephemeral::Bool,
+        producer_identity::NamedTuple,
+)::_Stage1CleanupToken
+    normalized_identity = _normalize_stage1_corrected_fastq_identity(
+        corrected_fastq,
+        producer_identity,
+        "multi-input cleanup token",
+    )
+    _require_current_stage1_corrected_fastq_identity(
+        normalized_identity,
+        "multi-input cleanup token",
+    )
+    return _Stage1CleanupToken(
+        normalized_identity.path,
+        ephemeral,
+        _WorkflowPathIdentity(
+            normalized_identity.device,
+            normalized_identity.inode,
+        ),
+    )
 end
 
 function _prepare_read_source(source::AbstractString)::Vector{String}
@@ -3025,49 +3491,6 @@ function _validate_distinct_in_memory_read_records(
     return nothing
 end
 
-function _canonical_pair_identifier(identifier::AbstractString)::String
-    first_token = first(split(String(identifier)))
-    return replace(first_token, r"/[12]$" => "")
-end
-
-function _identifier_pair_role(
-        identifier::AbstractString,
-)::Union{Nothing, Int}
-    first_token = first(split(String(identifier)))
-    role_match = match(r"/([12])$", first_token)
-    return role_match === nothing ? nothing : parse(Int, only(role_match.captures))
-end
-
-function _casava_pair_role(
-        description::AbstractString,
-)::Union{Nothing, Int}
-    description_tokens = split(String(description))
-    length(description_tokens) >= 2 || return nothing
-    role_match = match(
-        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
-        description_tokens[2],
-    )
-    return role_match === nothing ? nothing :
-           parse(Int, something(only(role_match.captures)))
-end
-
-function _explicit_pair_role(
-        identifier::AbstractString,
-        description::AbstractString = "",
-)::Union{Nothing, Int}
-    identifier_role = _identifier_pair_role(identifier)
-    casava_role = _casava_pair_role(description)
-    if identifier_role !== nothing && casava_role !== nothing &&
-       identifier_role != casava_role
-        throw(ArgumentError(
-            "FASTQ identifier and CASAVA description contain conflicting " *
-            "explicit mate roles: identifier=$(repr(String(identifier))), " *
-            "description=$(repr(String(description))).",
-        ))
-    end
-    return identifier_role === nothing ? casava_role : identifier_role
-end
-
 struct _ReadIdentity
     identifier::String
     description::String
@@ -3089,11 +3512,11 @@ function _validate_explicit_pair_roles(
         stage::AbstractString,
         record_number::Int,
 )::Nothing
-    r1_role = _explicit_pair_role(
+    r1_role = Mycelia._fastq_explicit_pair_role(
         r1_identity.identifier,
         r1_identity.description,
     )
-    r2_role = _explicit_pair_role(
+    r2_role = Mycelia._fastq_explicit_pair_role(
         r2_identity.identifier,
         r2_identity.description,
     )
@@ -3115,19 +3538,19 @@ function _validate_corrected_explicit_pair_roles(
         corrected_r2_identity::_ReadIdentity,
         record_number::Int,
 )::Nothing
-    input_r1_role = _explicit_pair_role(
+    input_r1_role = Mycelia._fastq_explicit_pair_role(
         input_r1_identity.identifier,
         input_r1_identity.description,
     )
-    input_r2_role = _explicit_pair_role(
+    input_r2_role = Mycelia._fastq_explicit_pair_role(
         input_r2_identity.identifier,
         input_r2_identity.description,
     )
-    corrected_r1_role = _explicit_pair_role(
+    corrected_r1_role = Mycelia._fastq_explicit_pair_role(
         corrected_r1_identity.identifier,
         corrected_r1_identity.description,
     )
-    corrected_r2_role = _explicit_pair_role(
+    corrected_r2_role = Mycelia._fastq_explicit_pair_role(
         corrected_r2_identity.identifier,
         corrected_r2_identity.description,
     )
@@ -3262,6 +3685,8 @@ end
 function _require_path_backed_fastq_sources(
         reads::Any,
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Nothing
     paths = _read_source_paths(reads)
     paths === nothing && return nothing
@@ -3281,20 +3706,27 @@ function _require_path_backed_fastq_sources(
             ))
         end
         try
-            for (record_index, record) in enumerate(reader)
-                record isa FASTX.FASTQ.Record || throw(ArgumentError(
-                    "$(label) source $(source_index) record " *
-                    "$(record_index) is not FASTQ: $(normalized_path).",
-                ))
-            end
+            Mycelia._run_with_cleanup!(
+                () -> begin
+                    for (record_index, record) in enumerate(reader)
+                        record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                            "$(label) source $(source_index) record " *
+                            "$(record_index) is not FASTQ: $(normalized_path).",
+                        ))
+                    end
+                    return nothing
+                end,
+                () -> reader_closer(reader),
+                "$(label) source $(source_index) FASTQ reader cleanup failed " *
+                "while preserving the primary validation failure";
+                cleanup_evidence = normalized_path,
+            )
         catch caught
             caught isa InterruptException && rethrow()
             throw(ArgumentError(
                 "$(label) source $(source_index) is not valid FASTQ: " *
                 "$(normalized_path). Cause: $(sprint(showerror, caught))",
             ))
-        finally
-            close(reader)
         end
     end
     return nothing
@@ -3560,6 +3992,32 @@ function _reserve_multi_input_snapshot_bytes!(
     return nothing
 end
 
+function _cleanup_multi_input_partial_snapshot_after_error!(
+        destination_path::AbstractString,
+        destination_identity::Union{Nothing, NamedTuple},
+        primary_error::Any,
+        label::AbstractString,
+        exact_file_remover::Function,
+)::Nothing
+    destination_identity === nothing && return nothing
+    normalized_destination = normpath(abspath(String(destination_path)))
+    _workflow_path_entry_exists(normalized_destination) || return nothing
+    Mycelia._run_cleanup_after_primary_error!(
+        () -> exact_file_remover(
+            normalized_destination,
+            destination_identity,
+        ),
+        primary_error,
+        "$(label) exact partial-snapshot cleanup failed while preserving " *
+        "the primary snapshot failure";
+        cleanup_evidence = (;
+            path = normalized_destination,
+            expected_identity = destination_identity,
+        ),
+    )
+    return nothing
+end
+
 function _multi_input_stable_path_snapshot!(
         source_path::AbstractString,
         destination_path::AbstractString,
@@ -3569,6 +4027,9 @@ function _multi_input_stable_path_snapshot!(
             (label, source, destination) -> nothing,
         after_stream_copy_hook::Function =
             (label, source, destination) -> nothing,
+        descriptor_closer::Function = close,
+        exact_file_remover::Function =
+            Mycelia._remove_exact_assembly_durable_file!,
 )::Dict{String, Any}
     normalized_source = normpath(abspath(String(source_path)))
     isfile(normalized_source) || throw(ArgumentError(
@@ -3591,6 +4052,8 @@ function _multi_input_stable_path_snapshot!(
     destination_identity = nothing
     source_sha256 = nothing
     consumed_sha256 = nothing
+    input = nothing
+    output = nothing
     try
         input = Base.Filesystem.open(
             canonical_source,
@@ -3598,107 +4061,129 @@ function _multi_input_stable_path_snapshot!(
             Base.JL_O_NOFOLLOW |
             Base.JL_O_CLOEXEC,
         )
-        output = nothing
-        try
-            input_status = stat(input)
-            input_status.device == initial_status.device &&
-                input_status.inode == initial_status.inode &&
-                filesize(input) == initial_size || error(
-                    "$(label) changed before its stable snapshot was copied.",
+        Mycelia._run_with_cleanup!(
+            () -> begin
+                input_status = stat(input)
+                input_status.device == initial_status.device &&
+                    input_status.inode == initial_status.inode &&
+                    filesize(input) == initial_size || error(
+                        "$(label) changed before its stable snapshot was copied.",
+                    )
+                output = Base.Filesystem.open(
+                    normalized_destination,
+                    Base.JL_O_RDWR |
+                    Base.JL_O_CREAT |
+                    Base.JL_O_EXCL |
+                    Base.JL_O_NOFOLLOW |
+                    Base.JL_O_CLOEXEC,
+                    0o600,
                 )
-            output = Base.Filesystem.open(
-                normalized_destination,
-                Base.JL_O_RDWR |
-                Base.JL_O_CREAT |
-                Base.JL_O_EXCL |
-                Base.JL_O_NOFOLLOW |
-                Base.JL_O_CLOEXEC,
-                0o600,
-            )
-            output_status = stat(output)
-            destination_identity = (;
-                path = normalized_destination,
-                device = output_status.device,
-                inode = output_status.inode,
-            )
-            after_destination_open_hook(
-                label,
-                canonical_source,
-                normalized_destination,
-            )
-            streamed_context = Mycelia.SHA.SHA2_256_CTX()
-            remaining = initial_size
-            buffer = Vector{UInt8}(undef, 1024 * 1024)
-            while remaining > 0
-                requested = min(length(buffer), remaining)
-                count = readbytes!(input, buffer, requested)
-                count > 0 || error(
-                    "$(label) shrank while its stable snapshot was copied.",
+                output_status = stat(output)
+                destination_identity = (;
+                    path = normalized_destination,
+                    device = output_status.device,
+                    inode = output_status.inode,
                 )
-                bytes = @view buffer[1:count]
-                Mycelia.SHA.update!(streamed_context, bytes)
-                write(output, bytes) == count || error(
-                    "$(label) stable snapshot write was incomplete.",
+                after_destination_open_hook(
+                    label,
+                    canonical_source,
+                    normalized_destination,
                 )
-                remaining -= count
-            end
-            eof(input) || error(
-                "$(label) grew while its stable snapshot was copied.",
-            )
-            streamed_sha256 = bytes2hex(
-                Mycelia.SHA.digest!(streamed_context),
-            )
-            source_sha256 = streamed_sha256
-            after_stream_copy_hook(
-                label,
-                canonical_source,
-                normalized_destination,
-            )
-            seekstart(input)
-            rebound_source_sha256 = bytes2hex(Mycelia.SHA.sha256(input))
-            rebound_input_status = stat(input)
-            rebound_input_status.device == initial_status.device &&
-                rebound_input_status.inode == initial_status.inode &&
-                filesize(input) == initial_size || error(
-                    "$(label) changed physical identity or size during its " *
-                    "stable snapshot copy.",
+                streamed_context = Mycelia.SHA.SHA2_256_CTX()
+                remaining = initial_size
+                buffer = Vector{UInt8}(undef, 1024 * 1024)
+                while remaining > 0
+                    requested = min(length(buffer), remaining)
+                    count = readbytes!(input, buffer, requested)
+                    count > 0 || error(
+                        "$(label) shrank while its stable snapshot was copied.",
+                    )
+                    bytes = @view buffer[1:count]
+                    Mycelia.SHA.update!(streamed_context, bytes)
+                    write(output, bytes) == count || error(
+                        "$(label) stable snapshot write was incomplete.",
+                    )
+                    remaining -= count
+                end
+                eof(input) || error(
+                    "$(label) grew while its stable snapshot was copied.",
                 )
-            ccall(
-                :fsync,
-                Cint,
-                (Cint,),
-                reinterpret(Cint, Base.fd(output)),
-            ) == 0 || throw(SystemError(
-                "fsync $(label) stable snapshot",
-                Base.Libc.errno(),
-            ))
-            seekstart(output)
-            consumed_sha256 = bytes2hex(Mycelia.SHA.sha256(output))
-            rebound_output_status = stat(output)
-            rebound_output_status.device == destination_identity.device &&
-                rebound_output_status.inode == destination_identity.inode &&
-                filesize(output) == initial_size || error(
-                    "$(label) stable snapshot destination changed while " *
-                    "being hashed.",
+                streamed_sha256 = bytes2hex(
+                    Mycelia.SHA.digest!(streamed_context),
                 )
-            source_sha256 == rebound_source_sha256 == consumed_sha256 || error(
-                    "$(label) source bytes changed while its stable snapshot " *
-                    "was copied; refusing mixed consumed bytes.",
+                source_sha256 = streamed_sha256
+                after_stream_copy_hook(
+                    label,
+                    canonical_source,
+                    normalized_destination,
                 )
-            ccall(
-                :fchmod,
-                Cint,
-                (Cint, Base.Cmode_t),
-                reinterpret(Cint, Base.fd(output)),
-                Base.Cmode_t(0o400),
-            ) == 0 || throw(SystemError(
-                "fchmod $(label) stable snapshot",
-                Base.Libc.errno(),
-            ))
-        finally
-            output === nothing || close(output)
-            close(input)
-        end
+                seekstart(input)
+                rebound_source_sha256 = bytes2hex(Mycelia.SHA.sha256(input))
+                rebound_input_status = stat(input)
+                rebound_input_status.device == initial_status.device &&
+                    rebound_input_status.inode == initial_status.inode &&
+                    filesize(input) == initial_size || error(
+                        "$(label) changed physical identity or size during its " *
+                        "stable snapshot copy.",
+                    )
+                ccall(
+                    :fsync,
+                    Cint,
+                    (Cint,),
+                    reinterpret(Cint, Base.fd(output)),
+                ) == 0 || throw(SystemError(
+                    "fsync $(label) stable snapshot",
+                    Base.Libc.errno(),
+                ))
+                seekstart(output)
+                consumed_sha256 = bytes2hex(Mycelia.SHA.sha256(output))
+                rebound_output_status = stat(output)
+                rebound_output_status.device == destination_identity.device &&
+                    rebound_output_status.inode == destination_identity.inode &&
+                    filesize(output) == initial_size || error(
+                        "$(label) stable snapshot destination changed while " *
+                        "being hashed.",
+                    )
+                source_sha256 == rebound_source_sha256 == consumed_sha256 || error(
+                        "$(label) source bytes changed while its stable snapshot " *
+                        "was copied; refusing mixed consumed bytes.",
+                    )
+                ccall(
+                    :fchmod,
+                    Cint,
+                    (Cint, Base.Cmode_t),
+                    reinterpret(Cint, Base.fd(output)),
+                    Base.Cmode_t(0o400),
+                ) == 0 || throw(SystemError(
+                    "fchmod $(label) stable snapshot",
+                    Base.Libc.errno(),
+                ))
+                return nothing
+            end,
+            () -> Mycelia._run_cleanup_steps!(
+                (
+                    () -> begin
+                        if output !== nothing && isopen(output)
+                            descriptor_closer(output)
+                        end
+                        return nothing
+                    end,
+                    () -> begin
+                        if input !== nothing && isopen(input)
+                            descriptor_closer(input)
+                        end
+                        return nothing
+                    end,
+                ),
+                "$(label) stable snapshot descriptors",
+            ),
+            "$(label) stable snapshot descriptor cleanup failed while " *
+            "preserving the primary copy failure";
+            cleanup_evidence = (;
+                source = canonical_source,
+                destination = normalized_destination,
+            ),
+        )
         final_status = stat(normalized_source)
         final_canonical = realpath(normalized_source)
         stable_source = initial_status.device == final_status.device &&
@@ -3738,34 +4223,14 @@ function _multi_input_stable_path_snapshot!(
             "sha256" => consumed_sha256,
         )
     catch caught
-        caught isa InterruptException && rethrow()
-        if destination_identity !== nothing &&
-           isfile(normalized_destination) &&
-           !islink(normalized_destination)
-            observed_status = stat(normalized_destination)
-            observed_identity = (;
-                device = observed_status.device,
-                inode = observed_status.inode,
-            )
-            if observed_identity.device == destination_identity.device &&
-               observed_identity.inode == destination_identity.inode
-                try
-                    Mycelia._remove_exact_metamdbg_durable_file!(
-                        normalized_destination,
-                        destination_identity,
-                    )
-                catch cleanup_error
-                    cleanup_error isa InterruptException && rethrow()
-                    error(
-                        "$(label) stable snapshot failed and exact cleanup " *
-                        "also failed. Snapshot cause: " *
-                        "$(sprint(showerror, caught)). Cleanup cause: " *
-                        "$(sprint(showerror, cleanup_error))",
-                    )
-                end
-            end
-        end
-        throw(caught)
+        _cleanup_multi_input_partial_snapshot_after_error!(
+            normalized_destination,
+            destination_identity,
+            caught,
+            label,
+            exact_file_remover,
+        )
+        rethrow()
     end
 end
 
@@ -3777,17 +4242,21 @@ function _multi_input_snapshot_semantic_identity(
         path::AbstractString,
         label::AbstractString,
         expected_count::Int,
+        ;
+        reader_closer::Function = close,
 )::Dict{String, Any}
     reader = Mycelia.open_fastx(path)
-    try
-        return _multi_input_record_stream_content_identity(
+    return Mycelia._run_with_cleanup!(
+        () -> _multi_input_record_stream_content_identity(
             reader,
             label,
             expected_count,
-        )
-    finally
-        close(reader)
-    end
+        ),
+        () -> reader_closer(reader),
+        "$(label) stable snapshot reader cleanup failed while preserving " *
+        "the primary semantic-validation failure";
+        cleanup_evidence = String(path),
+    )
 end
 
 function _materialize_multi_input_source_snapshot(
@@ -3801,6 +4270,9 @@ function _materialize_multi_input_source_snapshot(
             (label, source, destination) -> nothing,
         after_stream_copy_hook::Function =
             (label, source, destination) -> nothing,
+        descriptor_closer::Function = close,
+        exact_file_remover::Function =
+            Mycelia._remove_exact_assembly_durable_file!,
 )::NamedTuple
     snapshot_root = _require_workflow_child_directory(
         joinpath(workflow_root, "stable_inputs", String(label)),
@@ -3834,104 +4306,109 @@ function _materialize_multi_input_source_snapshot(
             snapshot_root,
             "$(label) stable input snapshot root",
         )
-        output = Base.Filesystem.open(
-            snapshot_path,
-            Base.JL_O_WRONLY |
-            Base.JL_O_CREAT |
-            Base.JL_O_EXCL |
-            Base.JL_O_NOFOLLOW |
-            Base.JL_O_CLOEXEC,
-            0o600,
-        )
-        output_status = stat(output)
-        output_identity = (;
-            path = snapshot_path,
-            device = output_status.device,
-            inode = output_status.inode,
-        )
+        output = nothing
+        writer = nothing
+        output_identity = nothing
         try
-            after_destination_open_hook(label, nothing, snapshot_path)
-            writer = FASTX.FASTQ.Writer(output)
-            try
-                for (record_index, record) in enumerate(reads)
-                    record isa FASTX.FASTQ.Record || throw(ArgumentError(
-                        "$(label) in-memory source record $(record_index) " *
-                        "is not FASTQ.",
-                    ))
-                    FASTX.write(writer, record)
-                end
-                ccall(
-                    :fchmod,
-                    Cint,
-                    (Cint, Base.Cmode_t),
-                    reinterpret(Cint, Base.fd(output)),
-                    Base.Cmode_t(0o400),
-                ) == 0 || throw(SystemError(
-                    "fchmod $(label) stable in-memory snapshot",
-                    Base.Libc.errno(),
-                ))
-            finally
-                close(writer)
-            end
-        catch caught
-            caught isa InterruptException && rethrow()
-            isopen(output) && close(output)
-            if isfile(snapshot_path) && !islink(snapshot_path)
-                observed_status = stat(snapshot_path)
-                observed_identity = (;
-                    device = observed_status.device,
-                    inode = observed_status.inode,
-                )
-                if observed_identity.device == output_identity.device &&
-                   observed_identity.inode == output_identity.inode
-                    try
-                        Mycelia._remove_exact_metamdbg_durable_file!(
-                            snapshot_path,
-                            output_identity,
-                        )
-                    catch cleanup_error
-                        cleanup_error isa InterruptException && rethrow()
-                        error(
-                            "$(label) stable in-memory snapshot failed and " *
-                            "exact cleanup also failed. Snapshot cause: " *
-                            "$(sprint(showerror, caught)). Cleanup cause: " *
-                            "$(sprint(showerror, cleanup_error))",
-                        )
+            output = Base.Filesystem.open(
+                snapshot_path,
+                Base.JL_O_WRONLY |
+                Base.JL_O_CREAT |
+                Base.JL_O_EXCL |
+                Base.JL_O_NOFOLLOW |
+                Base.JL_O_CLOEXEC,
+                0o600,
+            )
+            output_status = stat(output)
+            output_identity = (;
+                path = snapshot_path,
+                device = output_status.device,
+                inode = output_status.inode,
+            )
+            Mycelia._run_with_cleanup!(
+                () -> begin
+                    after_destination_open_hook(label, nothing, snapshot_path)
+                    writer = FASTX.FASTQ.Writer(output)
+                    for (record_index, record) in enumerate(reads)
+                        record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                            "$(label) in-memory source record $(record_index) " *
+                            "is not FASTQ.",
+                        ))
+                        FASTX.write(writer, record)
                     end
-                end
-            end
-            throw(caught)
+                    ccall(
+                        :fchmod,
+                        Cint,
+                        (Cint, Base.Cmode_t),
+                        reinterpret(Cint, Base.fd(output)),
+                        Base.Cmode_t(0o400),
+                    ) == 0 || throw(SystemError(
+                        "fchmod $(label) stable in-memory snapshot",
+                        Base.Libc.errno(),
+                    ))
+                    return nothing
+                end,
+                () -> Mycelia._run_cleanup_steps!(
+                    (
+                        () -> begin
+                            if writer !== nothing
+                                descriptor_closer(writer)
+                            end
+                            return nothing
+                        end,
+                        () -> begin
+                            if output !== nothing && isopen(output)
+                                descriptor_closer(output)
+                            end
+                            return nothing
+                        end,
+                    ),
+                    "$(label) stable in-memory snapshot descriptors",
+                ),
+                "$(label) stable in-memory snapshot descriptor cleanup failed " *
+                "while preserving the primary serialization failure";
+                cleanup_evidence = snapshot_path,
+            )
+            _require_unchanged_workflow_path_identity(
+                snapshot_root,
+                snapshot_root_identity,
+                "$(label) stable input snapshot root",
+            )
+            isfile(snapshot_path) && !islink(snapshot_path) || error(
+                "$(label) stable in-memory snapshot was replaced while written.",
+            )
+            final_status = stat(snapshot_path)
+            output_identity == (;
+                path = snapshot_path,
+                device = final_status.device,
+                inode = final_status.inode,
+            ) || error(
+                "$(label) stable in-memory snapshot changed physical identity.",
+            )
+            filesize(snapshot_path) > 0 || error(
+                "$(label) stable input snapshot is empty.",
+            )
+            filesize(snapshot_path) == serialized_bytes || error(
+                "$(label) in-memory FASTQ serialization changed its exact " *
+                "preflight byte count.",
+            )
+            push!(snapshot_paths, snapshot_path)
+            push!(snapshot_records, Dict{String, Any}(
+                "kind" => "stable_in_memory_snapshot",
+                "path" => snapshot_path,
+                "size_bytes" => filesize(snapshot_path),
+                "sha256" => _multi_input_file_sha256(snapshot_path),
+            ))
+        catch caught
+            _cleanup_multi_input_partial_snapshot_after_error!(
+                snapshot_path,
+                output_identity,
+                caught,
+                "$(label) stable in-memory snapshot",
+                exact_file_remover,
+            )
+            rethrow()
         end
-        _require_unchanged_workflow_path_identity(
-            snapshot_root,
-            snapshot_root_identity,
-            "$(label) stable input snapshot root",
-        )
-        isfile(snapshot_path) && !islink(snapshot_path) || error(
-            "$(label) stable in-memory snapshot was replaced while written.",
-        )
-        final_status = stat(snapshot_path)
-        output_identity == (;
-            path = snapshot_path,
-            device = final_status.device,
-            inode = final_status.inode,
-        ) || error(
-            "$(label) stable in-memory snapshot changed physical identity.",
-        )
-        filesize(snapshot_path) > 0 || error(
-            "$(label) stable input snapshot is empty.",
-        )
-        filesize(snapshot_path) == serialized_bytes || error(
-            "$(label) in-memory FASTQ serialization changed its exact " *
-            "preflight byte count.",
-        )
-        push!(snapshot_paths, snapshot_path)
-        push!(snapshot_records, Dict{String, Any}(
-            "kind" => "stable_in_memory_snapshot",
-            "path" => snapshot_path,
-            "size_bytes" => filesize(snapshot_path),
-            "sha256" => _multi_input_file_sha256(snapshot_path),
-        ))
     else
         for (source_index, path) in enumerate(paths)
             snapshot_path = joinpath(
@@ -3945,6 +4422,8 @@ function _materialize_multi_input_source_snapshot(
                 budget;
                 after_destination_open_hook,
                 after_stream_copy_hook,
+                descriptor_closer,
+                exact_file_remover,
             ))
             push!(snapshot_paths, snapshot_path)
         end
@@ -3957,7 +4436,8 @@ function _materialize_multi_input_source_snapshot(
                                _multi_input_snapshot_semantic_identity(
             only(snapshot_paths),
             label,
-            record_count,
+            record_count;
+            reader_closer = descriptor_closer,
         ) : nothing,
         "sha256" => _multi_input_path_set_sha256(
             Dict{String, Any}[
@@ -4198,6 +4678,8 @@ function _validate_paired_reads(
         short_r1::Any,
         short_r2::Any,
         stage::AbstractString,
+        ;
+        cursor_closer::Function = _close_read_identifier_cursor!,
 )::Int
     _read_sources_overlap(short_r1, short_r2) && throw(ArgumentError(
         "$(stage) paired short-read R1 and R2 sources must be distinct.",
@@ -4205,96 +4687,126 @@ function _validate_paired_reads(
     r1_cursor = _read_identifier_cursor(short_r1)
     r2_cursor = _read_identifier_cursor(short_r2)
     paired_count = 0
-    try
-        while true
-            r1_identity = _next_read_identity!(r1_cursor)
-            r2_identity = _next_read_identity!(r2_cursor)
-            if r1_identity === nothing && r2_identity === nothing
-                paired_count > 0 || throw(ArgumentError(
-                    "$(stage) paired short reads must be non-empty; observed " *
-                    "R1=0, R2=0.",
-                ))
-                return paired_count
-            elseif r1_identity === nothing || r2_identity === nothing
-                r1_count = paired_count + (r1_identity === nothing ? 0 : 1)
-                r2_count = paired_count + (r2_identity === nothing ? 0 : 1)
-                r1_count = _drain_read_identifier_cursor!(r1_cursor, r1_count)
-                r2_count = _drain_read_identifier_cursor!(r2_cursor, r2_count)
-                throw(ArgumentError(
-                    "$(stage) paired short reads have different counts: " *
-                    "R1=$(r1_count), R2=$(r2_count).",
-                ))
-            end
+    return Mycelia._run_with_cleanup!(
+        () -> begin
+            while true
+                r1_identity = _next_read_identity!(r1_cursor)
+                r2_identity = _next_read_identity!(r2_cursor)
+                if r1_identity === nothing && r2_identity === nothing
+                    paired_count > 0 || throw(ArgumentError(
+                        "$(stage) paired short reads must be non-empty; " *
+                        "observed R1=0, R2=0.",
+                    ))
+                    return paired_count
+                elseif r1_identity === nothing || r2_identity === nothing
+                    r1_count = paired_count + (r1_identity === nothing ? 0 : 1)
+                    r2_count = paired_count + (r2_identity === nothing ? 0 : 1)
+                    r1_count = _drain_read_identifier_cursor!(
+                        r1_cursor,
+                        r1_count,
+                    )
+                    r2_count = _drain_read_identifier_cursor!(
+                        r2_cursor,
+                        r2_count,
+                    )
+                    throw(ArgumentError(
+                        "$(stage) paired short reads have different counts: " *
+                        "R1=$(r1_count), R2=$(r2_count).",
+                    ))
+                end
 
-            paired_count += 1
-            _validate_explicit_pair_roles(
-                r1_identity,
-                r2_identity,
-                stage,
-                paired_count,
-            )
-            r1_identifier = _canonical_pair_identifier(r1_identity.identifier)
-            r2_identifier = _canonical_pair_identifier(r2_identity.identifier)
-            if r1_identifier == r2_identifier
-                continue
+                paired_count += 1
+                _validate_explicit_pair_roles(
+                    r1_identity,
+                    r2_identity,
+                    stage,
+                    paired_count,
+                )
+                r1_identifier = Mycelia._fastq_pair_identifier(
+                    r1_identity.identifier,
+                )
+                r2_identifier = Mycelia._fastq_pair_identifier(
+                    r2_identity.identifier,
+                )
+                r1_identifier == r2_identifier && continue
+                throw(ArgumentError(
+                    "$(stage) paired short reads are out of sync at record " *
+                    "$(paired_count): R1=$(repr(r1_identity.identifier)), " *
+                    "R2=$(repr(r2_identity.identifier)).",
+                ))
             end
-            throw(ArgumentError(
-                "$(stage) paired short reads are out of sync at record " *
-                "$(paired_count): R1=$(repr(r1_identity.identifier)), " *
-                "R2=$(repr(r2_identity.identifier)).",
-            ))
-        end
-    finally
-        _close_read_identifier_cursor!(r1_cursor)
-        _close_read_identifier_cursor!(r2_cursor)
-    end
+        end,
+        () -> Mycelia._run_cleanup_steps!(
+            (
+                () -> cursor_closer(r1_cursor),
+                () -> cursor_closer(r2_cursor),
+            ),
+            "$(stage) paired-read identifier cursors",
+        ),
+        "$(stage) paired-read cursor cleanup failed while preserving the " *
+        "primary pairing-validation failure";
+        cleanup_evidence = stage,
+    )
 end
 
 function _validate_corrected_identifiers_preserved(
         input_reads::Any,
         corrected_fastq::AbstractString,
         label::AbstractString,
+        ;
+        cursor_closer::Function = _close_read_identifier_cursor!,
 )::Int
     input_cursor = _read_identifier_cursor(input_reads)
     corrected_cursor = _read_identifier_cursor([String(corrected_fastq)])
     record_count = 0
-    try
-        while true
-            input_identity = _next_read_identity!(input_cursor)
-            corrected_identity = _next_read_identity!(corrected_cursor)
-            if input_identity === nothing && corrected_identity === nothing
-                return record_count
-            elseif input_identity === nothing || corrected_identity === nothing
-                input_count = record_count + (input_identity === nothing ? 0 : 1)
-                corrected_count =
-                    record_count + (corrected_identity === nothing ? 0 : 1)
-                input_count = _drain_read_identifier_cursor!(
-                    input_cursor,
-                    input_count,
-                )
-                corrected_count = _drain_read_identifier_cursor!(
-                    corrected_cursor,
-                    corrected_count,
-                )
+    return Mycelia._run_with_cleanup!(
+        () -> begin
+            while true
+                input_identity = _next_read_identity!(input_cursor)
+                corrected_identity = _next_read_identity!(corrected_cursor)
+                if input_identity === nothing && corrected_identity === nothing
+                    return record_count
+                elseif input_identity === nothing || corrected_identity === nothing
+                    input_count =
+                        record_count + (input_identity === nothing ? 0 : 1)
+                    corrected_count =
+                        record_count + (corrected_identity === nothing ? 0 : 1)
+                    input_count = _drain_read_identifier_cursor!(
+                        input_cursor,
+                        input_count,
+                    )
+                    corrected_count = _drain_read_identifier_cursor!(
+                        corrected_cursor,
+                        corrected_count,
+                    )
+                    throw(ArgumentError(
+                        "$(label) correction changed read count: " *
+                        "input=$(input_count), corrected=$(corrected_count).",
+                    ))
+                end
+
+                record_count += 1
+                input_identity.identifier == corrected_identity.identifier &&
+                    continue
                 throw(ArgumentError(
-                    "$(label) correction changed read count: " *
-                    "input=$(input_count), corrected=$(corrected_count).",
+                    "$(label) correction changed read order or identifier at " *
+                    "record $(record_count): " *
+                    "input=$(repr(input_identity.identifier)), " *
+                    "corrected=$(repr(corrected_identity.identifier)).",
                 ))
             end
-
-            record_count += 1
-            input_identity.identifier == corrected_identity.identifier && continue
-            throw(ArgumentError(
-                "$(label) correction changed read order or identifier at " *
-                "record $(record_count): " *
-                "input=$(repr(input_identity.identifier)), " *
-                "corrected=$(repr(corrected_identity.identifier)).",
-            ))
-        end
-    finally
-        _close_read_identifier_cursor!(input_cursor)
-        _close_read_identifier_cursor!(corrected_cursor)
-    end
+        end,
+        () -> Mycelia._run_cleanup_steps!(
+            (
+                () -> cursor_closer(input_cursor),
+                () -> cursor_closer(corrected_cursor),
+            ),
+            "$(label) identifier-preservation cursors",
+        ),
+        "$(label) identifier-preservation cursor cleanup failed while " *
+        "preserving the primary validation failure";
+        cleanup_evidence = corrected_fastq,
+    )
 end
 
 function _validate_corrected_identifiers_preserved(
@@ -4329,6 +4841,8 @@ function _validate_corrected_pair_preserved(
         corrected_r1::_CorrectedReadSet,
         corrected_r2::_CorrectedReadSet,
         expected_pair_count::Int,
+        ;
+        cursor_closer::Function = _close_read_identifier_cursor!,
 )::Int
     input_r1_cursor = _read_identifier_cursor(input_r1)
     input_r2_cursor = _read_identifier_cursor(input_r2)
@@ -4340,81 +4854,100 @@ function _validate_corrected_pair_preserved(
     corrected_r2_count = 0
     first_r1_mismatch = nothing
     first_r2_mismatch = nothing
-    try
-        while true
-            input_r1_identity = _next_read_identity!(input_r1_cursor)
-            input_r2_identity = _next_read_identity!(input_r2_cursor)
-            corrected_r1_identity = _next_read_identity!(corrected_r1_cursor)
-            corrected_r2_identity = _next_read_identity!(corrected_r2_cursor)
+    Mycelia._run_with_cleanup!(
+        () -> begin
+            while true
+                input_r1_identity = _next_read_identity!(input_r1_cursor)
+                input_r2_identity = _next_read_identity!(input_r2_cursor)
+                corrected_r1_identity = _next_read_identity!(corrected_r1_cursor)
+                corrected_r2_identity = _next_read_identity!(corrected_r2_cursor)
 
-            input_r1_identity === nothing || (input_r1_count += 1)
-            input_r2_identity === nothing || (input_r2_count += 1)
-            corrected_r1_identity === nothing || (corrected_r1_count += 1)
-            corrected_r2_identity === nothing || (corrected_r2_count += 1)
+                input_r1_identity === nothing || (input_r1_count += 1)
+                input_r2_identity === nothing || (input_r2_count += 1)
+                corrected_r1_identity === nothing || (corrected_r1_count += 1)
+                corrected_r2_identity === nothing || (corrected_r2_count += 1)
 
-            if corrected_r1_identity !== nothing &&
-               corrected_r2_identity !== nothing
-                if input_r1_identity !== nothing && input_r2_identity !== nothing
-                    _validate_corrected_explicit_pair_roles(
-                        input_r1_identity,
-                        input_r2_identity,
-                        corrected_r1_identity,
-                        corrected_r2_identity,
-                        corrected_r1_count,
+                if corrected_r1_identity !== nothing &&
+                   corrected_r2_identity !== nothing
+                    if input_r1_identity !== nothing &&
+                       input_r2_identity !== nothing
+                        _validate_corrected_explicit_pair_roles(
+                            input_r1_identity,
+                            input_r2_identity,
+                            corrected_r1_identity,
+                            corrected_r2_identity,
+                            corrected_r1_count,
+                        )
+                    else
+                        _validate_explicit_pair_roles(
+                            corrected_r1_identity,
+                            corrected_r2_identity,
+                            "corrected",
+                            corrected_r1_count,
+                        )
+                    end
+                    if Mycelia._fastq_pair_identifier(
+                            corrected_r1_identity.identifier,
+                    ) != Mycelia._fastq_pair_identifier(
+                            corrected_r2_identity.identifier,
                     )
-                else
-                    _validate_explicit_pair_roles(
-                        corrected_r1_identity,
-                        corrected_r2_identity,
-                        "corrected",
-                        corrected_r1_count,
+                        throw(ArgumentError(
+                            "corrected paired short reads are out of sync at " *
+                            "record $(corrected_r1_count): " *
+                            "R1=$(repr(corrected_r1_identity.identifier)), " *
+                            "R2=$(repr(corrected_r2_identity.identifier)).",
+                        ))
+                    end
+                end
+
+                if first_r1_mismatch === nothing &&
+                   input_r1_identity !== nothing &&
+                   corrected_r1_identity !== nothing &&
+                   input_r1_identity.identifier !=
+                   corrected_r1_identity.identifier
+                    first_r1_mismatch = (
+                        input_r1_count,
+                        input_r1_identity.identifier,
+                        corrected_r1_identity.identifier,
                     )
                 end
-                if _canonical_pair_identifier(corrected_r1_identity.identifier) !=
-                   _canonical_pair_identifier(corrected_r2_identity.identifier)
-                    throw(ArgumentError(
-                        "corrected paired short reads are out of sync at record " *
-                        "$(corrected_r1_count): " *
-                        "R1=$(repr(corrected_r1_identity.identifier)), " *
-                        "R2=$(repr(corrected_r2_identity.identifier)).",
-                    ))
+                if first_r2_mismatch === nothing &&
+                   input_r2_identity !== nothing &&
+                   corrected_r2_identity !== nothing &&
+                   input_r2_identity.identifier !=
+                   corrected_r2_identity.identifier
+                    first_r2_mismatch = (
+                        input_r2_count,
+                        input_r2_identity.identifier,
+                        corrected_r2_identity.identifier,
+                    )
+                end
+
+                if input_r1_identity === nothing &&
+                   input_r2_identity === nothing &&
+                   corrected_r1_identity === nothing &&
+                   corrected_r2_identity === nothing
+                    break
                 end
             end
-
-            if first_r1_mismatch === nothing &&
-               input_r1_identity !== nothing &&
-               corrected_r1_identity !== nothing &&
-               input_r1_identity.identifier != corrected_r1_identity.identifier
-                first_r1_mismatch = (
-                    input_r1_count,
-                    input_r1_identity.identifier,
-                    corrected_r1_identity.identifier,
-                )
-            end
-            if first_r2_mismatch === nothing &&
-               input_r2_identity !== nothing &&
-               corrected_r2_identity !== nothing &&
-               input_r2_identity.identifier != corrected_r2_identity.identifier
-                first_r2_mismatch = (
-                    input_r2_count,
-                    input_r2_identity.identifier,
-                    corrected_r2_identity.identifier,
-                )
-            end
-
-            if input_r1_identity === nothing &&
-               input_r2_identity === nothing &&
-               corrected_r1_identity === nothing &&
-               corrected_r2_identity === nothing
-                break
-            end
-        end
-    finally
-        _close_read_identifier_cursor!(input_r1_cursor)
-        _close_read_identifier_cursor!(input_r2_cursor)
-        _close_read_identifier_cursor!(corrected_r1_cursor)
-        _close_read_identifier_cursor!(corrected_r2_cursor)
-    end
+            return nothing
+        end,
+        () -> Mycelia._run_cleanup_steps!(
+            (
+                () -> cursor_closer(input_r1_cursor),
+                () -> cursor_closer(input_r2_cursor),
+                () -> cursor_closer(corrected_r1_cursor),
+                () -> cursor_closer(corrected_r2_cursor),
+            ),
+            "corrected paired-read identifier cursors",
+        ),
+        "corrected paired-read cursor cleanup failed while preserving the " *
+        "primary pairing or identifier-validation failure";
+        cleanup_evidence = (;
+            corrected_r1 = corrected_r1.path,
+            corrected_r2 = corrected_r2.path,
+        ),
+    )
 
     corrected_r1_count == corrected_r2_count || throw(ArgumentError(
         "corrected paired short reads have different counts: " *
@@ -4461,17 +4994,24 @@ end
 function _count_nonempty_reads(
         sources::AbstractVector{<:AbstractString},
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Int
     count = 0
     for source in sources
         reader = Mycelia.open_fastx(source)
-        try
-            for _ in reader
-                count += 1
-            end
-        finally
-            close(reader)
-        end
+        Mycelia._run_with_cleanup!(
+            () -> begin
+                for _ in reader
+                    count += 1
+                end
+                return nothing
+            end,
+            () -> reader_closer(reader),
+            "$(label) read-count reader cleanup failed while preserving the " *
+            "primary parse failure";
+            cleanup_evidence = String(source),
+        )
     end
     count > 0 || throw(ArgumentError("$(label) must contain at least one read."))
     return count
@@ -4486,19 +5026,26 @@ end
 function _count_nonempty_fastq_reads(
         path::AbstractString,
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Int
     reader = Mycelia.open_fastx(path)
     count = 0
-    try
-        for record in reader
-            record isa FASTX.FASTQ.Record || error(
-                "$(label) correction output is not FASTQ: $(path).",
-            )
-            count += 1
-        end
-    finally
-        close(reader)
-    end
+    Mycelia._run_with_cleanup!(
+        () -> begin
+            for record in reader
+                record isa FASTX.FASTQ.Record || error(
+                    "$(label) correction output is not FASTQ: $(path).",
+                )
+                count += 1
+            end
+            return nothing
+        end,
+        () -> reader_closer(reader),
+        "$(label) corrected FASTQ reader cleanup failed while preserving the " *
+        "primary validation failure";
+        cleanup_evidence = String(path),
+    )
     count > 0 || error("$(label) correction produced 0 corrected FASTQ records.")
     return count
 end
@@ -4559,6 +5106,8 @@ end
 function _with_multi_input_workflow_lock(
         action::Function,
         lock_path::AbstractString,
+        ;
+        lock_closer::Function = Base.close,
 )::Any
     normalized_lock_path = abspath(lock_path)
     mkpath(dirname(normalized_lock_path))
@@ -4572,11 +5121,13 @@ function _with_multi_input_workflow_lock(
         "Persistent multi-input output_dir is already reserved by another " *
         "workflow: $(normalized_lock_path)",
     ))
-    try
-        return action()
-    finally
-        Base.close(lock_handle)
-    end
+    return Mycelia._run_with_cleanup!(
+        action,
+        () -> lock_closer(lock_handle),
+        "multi-input workflow PID-lock cleanup failed while preserving the " *
+        "primary workflow failure";
+        cleanup_evidence = normalized_lock_path,
+    )
 end
 
 function _nearest_existing_workflow_ancestor(path::AbstractString)::String
@@ -4795,6 +5346,9 @@ function _correct_read_set!(
         correction_runner::Function,
         protected_paths::Vector{String} = String[],
         workflow_root_identity::Union{Nothing, _WorkflowPathIdentity} = nothing,
+        ;
+        after_corrected_identity_adoption_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
 )::_CorrectedReadSet
     stage_label = "$(label) correction stage"
     expected_root_identity = workflow_root_identity === nothing ?
@@ -4857,6 +5411,14 @@ function _correct_read_set!(
         "component: $(corrected_fastq) resolves to " *
         "$(canonical_corrected_fastq).",
     )
+    corrected_fastq_identity = _adopt_stage1_corrected_fastq_identity(
+        stage,
+        corrected_fastq,
+        "$(label) multi-input consumer";
+        allow_legacy_identity_fallback =
+            correction_runner !== _run_multi_input_stage1_correction,
+    )
+    corrected_fastq = corrected_fastq_identity.path
     relative_corrected_path = relpath(
         canonical_corrected_fastq,
         stage_output_dir,
@@ -4893,7 +5455,19 @@ function _correct_read_set!(
     end
     push!(
         cleanup_tokens,
-        _Stage1CleanupToken(corrected_fastq, !persist),
+        _Stage1CleanupToken(
+            corrected_fastq,
+            !persist,
+            corrected_fastq_identity,
+        ),
+    )
+    after_corrected_identity_adoption_hook(
+        corrected_fastq,
+        corrected_fastq_identity,
+    )
+    _require_current_stage1_corrected_fastq_identity(
+        corrected_fastq_identity,
+        "$(label) multi-input consumer before corrected-read consumption",
     )
     if filesize(corrected_fastq) == 0
         error(
@@ -4926,64 +5500,86 @@ function _correct_read_set!(
     )
 end
 
+function _cleanup_multi_input_stage!(
+        token::_Stage1CleanupToken,
+        retained_files::Vector{String};
+        pre_remove_hook::Function = path -> nothing,
+)::Nothing
+    token.ephemeral || return nothing
+    _workflow_path_entry_exists(token.corrected_fastq) || return nothing
+    cleanup_path = normpath(abspath(token.corrected_fastq))
+    cleanup_is_safe = try
+        !islink(cleanup_path) &&
+            isfile(cleanup_path) &&
+            realpath(cleanup_path) == cleanup_path &&
+            _workflow_path_identity(
+                cleanup_path,
+                "corrected FASTQ cleanup target",
+            ) == token.identity
+    catch cleanup_identity_error
+        if cleanup_identity_error isa InterruptException
+            _workflow_path_entry_exists(cleanup_path) &&
+                push!(retained_files, cleanup_path)
+            rethrow()
+        end
+        false
+    end
+    if !cleanup_is_safe
+        @warn(
+            "multi-input assembly: refusing corrected FASTQ cleanup " *
+            "after path identity changed",
+            corrected_fastq = cleanup_path,
+        )
+        push!(retained_files, cleanup_path)
+        return nothing
+    end
+    cleanup_failed = false
+    try
+        expected_identity = (;
+            path = cleanup_path,
+            device = token.identity.device,
+            inode = token.identity.inode,
+        )
+        pre_remove_hook(cleanup_path)
+        Mycelia._remove_exact_assembly_durable_file!(
+            cleanup_path,
+            expected_identity,
+        )
+    catch cleanup_error
+        if cleanup_error isa InterruptException
+            _workflow_path_entry_exists(cleanup_path) &&
+                push!(retained_files, cleanup_path)
+            rethrow()
+        end
+        cleanup_failed = true
+        @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
+    end
+    if _workflow_path_entry_exists(cleanup_path)
+        push!(retained_files, cleanup_path)
+        cleanup_failed || @warn(
+            "multi-input assembly: corrected FASTQ cleanup retained path",
+            corrected_fastq = cleanup_path,
+        )
+    end
+    return nothing
+end
+
 function _cleanup_multi_input_stages!(
         cleanup_tokens::Vector{_Stage1CleanupToken};
         pre_remove_hook::Function = path -> nothing,
+        retained_files::Vector{String} = String[],
 )::Vector{String}
-    retained_files = String[]
-    for token in cleanup_tokens
-        if token.ephemeral
-            if !_workflow_path_entry_exists(token.corrected_fastq)
-                continue
-            end
-            cleanup_path = normpath(abspath(token.corrected_fastq))
-            cleanup_is_safe = try
-                !islink(cleanup_path) &&
-                    isfile(cleanup_path) &&
-                    realpath(cleanup_path) == cleanup_path &&
-                    _workflow_path_identity(
-                        cleanup_path,
-                        "corrected FASTQ cleanup target",
-                    ) == token.identity
-            catch cleanup_identity_error
-                cleanup_identity_error isa InterruptException && rethrow()
-                false
-            end
-            if !cleanup_is_safe
-                @warn(
-                    "multi-input assembly: refusing corrected FASTQ cleanup " *
-                    "after path identity changed",
-                    corrected_fastq = cleanup_path,
-                )
-                push!(retained_files, cleanup_path)
-                continue
-            end
-            cleanup_failed = false
-            try
-                expected_identity = (;
-                    path = cleanup_path,
-                    device = token.identity.device,
-                    inode = token.identity.inode,
-                )
-                pre_remove_hook(cleanup_path)
-                Mycelia._remove_exact_metamdbg_durable_file!(
-                    cleanup_path,
-                    expected_identity,
-                )
-            catch cleanup_error
-                cleanup_error isa InterruptException && rethrow()
-                cleanup_failed = true
-                @warn "multi-input assembly: corrected FASTQ cleanup failed" cleanup_error
-            end
-            if _workflow_path_entry_exists(cleanup_path)
-                push!(retained_files, cleanup_path)
-                cleanup_failed || @warn(
-                    "multi-input assembly: corrected FASTQ cleanup retained path",
-                    corrected_fastq = cleanup_path,
-                )
-            end
-        end
-    end
+    cleanup_steps = Tuple(
+        () -> _cleanup_multi_input_stage!(
+            token,
+            retained_files;
+            pre_remove_hook,
+        ) for token in cleanup_tokens
+    )
+    Mycelia._run_cleanup_steps!(
+        cleanup_steps,
+        "multi-input corrected FASTQ cleanup",
+    )
     return unique!(retained_files)
 end
 
@@ -5027,7 +5623,7 @@ function _cleanup_multi_input_root!(
             inode = observed_identity.inode,
         )
         pre_remove_hook(normalized_root)
-        Mycelia._remove_exact_metamdbg_durable_directory!(
+        Mycelia._remove_exact_assembly_durable_directory!(
             normalized_root,
             exact_identity;
             recursive = true,
@@ -5045,42 +5641,6 @@ function _cleanup_multi_input_root!(
         )
     end
     return retained
-end
-
-function _normalize_unicycler_package_inventory(
-        package_records::Any,
-)::Vector{NamedTuple}
-    return Mycelia._normalize_unicycler_package_inventory(package_records)
-end
-
-function _unicycler_conda_package_inventory(;
-        conda_runner::AbstractString = Mycelia.CONDA_RUNNER,
-        command_reader::Function = command -> read(command, String),
-)::Vector{NamedTuple}
-    return Mycelia._unicycler_conda_package_inventory(;
-        conda_runner,
-        command_reader,
-    )
-end
-
-function _unicycler_package_inventory_sha256(
-        package_records::Any,
-)::String
-    return Mycelia._unicycler_package_inventory_sha256(package_records)
-end
-
-function _unicycler_toolchain_provenance(;
-        inventory_reader::Function = _unicycler_conda_package_inventory,
-)::Dict{String, Any}
-    return Mycelia._unicycler_toolchain_provenance(;
-        inventory_reader,
-    )
-end
-
-function _require_unicycler_toolchain_provenance(
-        toolchain::Any,
-)::Dict{String, Any}
-    return Mycelia._require_unicycler_toolchain_provenance(toolchain)
 end
 
 """
@@ -5409,7 +5969,7 @@ function _require_reserved_multi_input_artifact(
     return normalized_path
 end
 
-function _multi_input_buffered_artifact_snapshot(
+function _multi_input_artifact_binding(
         path::AbstractString,
         label::AbstractString,
         reserved_outdir::AbstractString,
@@ -5419,38 +5979,171 @@ function _multi_input_buffered_artifact_snapshot(
         label,
         reserved_outdir,
     )
-    bytes = open(normalized_path, "r") do input
-        read(input)
-    end
-    isempty(bytes) && error(
-        "multi-input assembler $(label) became empty while its immutable " *
-        "byte snapshot was read: $(normalized_path).",
-    )
-    snapshot = (
+    path_status = stat(normalized_path)
+    return (
         path = normalized_path,
         canonical_path = realpath(normalized_path),
-        size_bytes = length(bytes),
-        sha256 = bytes2hex(Mycelia.SHA.sha256(bytes)),
+        device = path_status.device,
+        inode = path_status.inode,
+        size_bytes = filesize(normalized_path),
     )
-    return (; snapshot, bytes)
+end
+
+function _multi_input_with_bound_artifact_input(
+        action::Function,
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString;
+        descriptor_opener::Function = path -> Base.Filesystem.open(
+            path,
+            Base.JL_O_RDONLY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        ),
+        descriptor_closer::Function = close,
+)::Any
+    binding = _multi_input_artifact_binding(
+        path,
+        label,
+        reserved_outdir,
+    )
+    descriptor::Base.Filesystem.File = descriptor_opener(binding.path)
+    input::IOStream = try
+        Base.fdio(
+            binding.path,
+            reinterpret(Cint, Base.fd(descriptor)),
+            false,
+        )
+    catch primary_error
+        Mycelia._run_cleanup_after_primary_error!(
+            () -> isopen(descriptor) ? close(descriptor) : nothing,
+            primary_error,
+            "multi-input assembler $(label) raw descriptor cleanup failed " *
+            "while preserving the primary stream-binding failure";
+            cleanup_evidence = binding.path,
+        )
+        rethrow()
+    end
+    cleanup_runner = () -> Mycelia._run_cleanup_steps!(
+        (
+            () -> isopen(input) ? descriptor_closer(input) : nothing,
+            () -> isopen(descriptor) ? close(descriptor) : nothing,
+        ),
+        "multi-input assembler $(label) descriptor streams",
+    )
+    result = try
+        descriptor_status = stat(descriptor)
+        descriptor_status.device == binding.device &&
+            descriptor_status.inode == binding.inode &&
+            filesize(input) == binding.size_bytes || error(
+                "multi-input assembler $(label) changed before its " *
+                "descriptor-bound streaming read: $(binding.path).",
+            )
+        snapshot = (;
+            path = binding.path,
+            canonical_path = binding.canonical_path,
+            size_bytes = binding.size_bytes,
+            sha256 = _multi_input_descriptor_sha256(input),
+        )
+        streamed_result = action(input, binding, snapshot)
+        rebound_status = stat(descriptor)
+        rebound_status.device == binding.device &&
+            rebound_status.inode == binding.inode &&
+            filesize(input) == binding.size_bytes || error(
+                "multi-input assembler $(label) changed during its " *
+                "descriptor-bound streaming read: $(binding.path).",
+            )
+        rebound_binding = _multi_input_artifact_binding(
+            binding.path,
+            label,
+            reserved_outdir,
+        )
+        rebound_binding == binding || error(
+            "multi-input assembler $(label) path changed during its " *
+            "descriptor-bound streaming read: $(binding.path).",
+        )
+        streamed_result
+    catch primary_error
+        Mycelia._run_cleanup_after_primary_error!(
+            cleanup_runner,
+            primary_error,
+            "multi-input assembler $(label) descriptor cleanup failed " *
+            "while preserving the primary streaming-validation failure";
+            cleanup_evidence = binding.path,
+        )
+        rethrow()
+    end
+    cleanup_runner()
+    return result
 end
 
 function _multi_input_artifact_snapshot(
         path::AbstractString,
         label::AbstractString,
-        reserved_outdir::AbstractString,
+        reserved_outdir::AbstractString;
+        descriptor_opener::Function = path -> Base.Filesystem.open(
+            path,
+            Base.JL_O_RDONLY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        ),
+        descriptor_closer::Function = close,
 )::NamedTuple
-    normalized_path = _require_reserved_multi_input_artifact(
+    return _multi_input_with_bound_artifact_input(
+        path,
+        label,
+        reserved_outdir;
+        descriptor_opener,
+        descriptor_closer,
+    ) do input, binding, snapshot
+        return snapshot
+    end
+end
+
+function _multi_input_descriptor_sha256(
+        input::IOStream,
+)::String
+    seekstart(input)
+    return bytes2hex(Mycelia.SHA.sha256(input))
+end
+
+const _MULTI_INPUT_CHILD_CONTRACT_BYTE_CEILING = 1024 * 1024
+
+function _multi_input_bounded_artifact_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString;
+        byte_ceiling::Integer = _MULTI_INPUT_CHILD_CONTRACT_BYTE_CEILING,
+)::NamedTuple
+    byte_ceiling > 0 || throw(ArgumentError(
+        "multi-input bounded artifact byte ceiling must be positive.",
+    ))
+    return _multi_input_with_bound_artifact_input(
         path,
         label,
         reserved_outdir,
-    )
-    return (
-        path = normalized_path,
-        canonical_path = realpath(normalized_path),
-        size_bytes = filesize(normalized_path),
-        sha256 = _multi_input_file_sha256(normalized_path),
-    )
+    ) do input, binding, snapshot
+        binding.size_bytes <= byte_ceiling || error(
+            "multi-input assembler $(label) exceeds its bounded read ceiling " *
+            "of $(byte_ceiling) bytes: $(binding.path).",
+        )
+        bytes = Vector{UInt8}(undef, binding.size_bytes)
+        seekstart(input)
+        readbytes!(input, bytes, binding.size_bytes) == binding.size_bytes ||
+            error(
+                "multi-input assembler $(label) ended before its bounded " *
+                "descriptor read completed: $(binding.path).",
+            )
+        eof(input) || error(
+            "multi-input assembler $(label) grew during its bounded " *
+            "descriptor read: $(binding.path).",
+        )
+        bytes2hex(Mycelia.SHA.sha256(bytes)) == snapshot.sha256 || error(
+            "multi-input assembler $(label) changed during its bounded " *
+            "descriptor read: $(binding.path).",
+        )
+        return (; snapshot, bytes)
+    end
 end
 
 function _multi_input_expected_artifact_snapshot(
@@ -5519,7 +6212,7 @@ function _multi_input_unicycler_child_integrity(
     contract_path isa AbstractString || error(
         "Unicycler child result reported a non-path durable run contract.",
     )
-    contract = _multi_input_buffered_artifact_snapshot(
+    contract = _multi_input_bounded_artifact_snapshot(
         contract_path,
         "Unicycler durable run contract",
         reserved_outdir,
@@ -5872,6 +6565,8 @@ end
 function _require_valid_multi_input_fasta(
         path::AbstractString,
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Vector{FASTX.FASTA.Record}
     normalized_path = _require_tool_artifact(path, label)
     islink(normalized_path) && error(
@@ -5888,56 +6583,65 @@ function _require_valid_multi_input_fasta(
     end
     records = FASTX.FASTA.Record[]
     contig_identifiers = Set{String}()
-    try
-        for (record_number, record) in enumerate(reader)
-            record isa FASTX.FASTA.Record || error(
-                "$(label) is not valid FASTA: $(normalized_path).",
-            )
-            identifier = String(FASTX.identifier(record))
-            isempty(identifier) && error(
-                "$(label) contains an empty FASTA identifier at record " *
-                "$(record_number): $(normalized_path).",
-            )
-            identifier in contig_identifiers && error(
-                "$(label) contains duplicate FASTA identifier " *
-                "$(repr(identifier)): $(normalized_path).",
-            )
-            sequence = FASTX.sequence(String, record)
-            isempty(sequence) && error(
-                "$(label) contains an empty FASTA sequence at record " *
-                "$(record_number): $(normalized_path).",
-            )
-            _is_multi_input_iupac_dna(sequence) || error(
-                "$(label) contains invalid DNA at FASTA record " *
-                "$(record_number): $(normalized_path).",
-            )
+    Mycelia._run_with_cleanup!(
+        () -> begin
             try
-                BioSequences.LongDNA{4}(sequence)
+                for (record_number, record) in enumerate(reader)
+                    record isa FASTX.FASTA.Record || error(
+                        "$(label) is not valid FASTA: $(normalized_path).",
+                    )
+                    identifier = String(FASTX.identifier(record))
+                    isempty(identifier) && error(
+                        "$(label) contains an empty FASTA identifier at " *
+                        "record $(record_number): $(normalized_path).",
+                    )
+                    identifier in contig_identifiers && error(
+                        "$(label) contains duplicate FASTA identifier " *
+                        "$(repr(identifier)): $(normalized_path).",
+                    )
+                    sequence = FASTX.sequence(String, record)
+                    isempty(sequence) && error(
+                        "$(label) contains an empty FASTA sequence at record " *
+                        "$(record_number): $(normalized_path).",
+                    )
+                    _is_multi_input_iupac_dna(sequence) || error(
+                        "$(label) contains invalid DNA at FASTA record " *
+                        "$(record_number): $(normalized_path).",
+                    )
+                    try
+                        BioSequences.LongDNA{4}(sequence)
+                    catch caught
+                        caught isa InterruptException && rethrow()
+                        error(
+                            "$(label) contains invalid DNA at FASTA record " *
+                            "$(record_number): $(normalized_path). Cause: " *
+                            sprint(showerror, caught),
+                        )
+                    end
+                    push!(contig_identifiers, identifier)
+                    push!(records, record)
+                end
+                isempty(records) && error(
+                    "$(label) contains no FASTA records: " *
+                    "$(normalized_path).",
+                )
             catch caught
                 caught isa InterruptException && rethrow()
+                if caught isa ErrorException &&
+                   startswith(caught.msg, String(label))
+                    rethrow()
+                end
                 error(
-                    "$(label) contains invalid DNA at FASTA record " *
-                    "$(record_number): $(normalized_path). Cause: " *
+                    "$(label) is not valid FASTA: $(normalized_path). Cause: " *
                     sprint(showerror, caught),
                 )
             end
-            push!(contig_identifiers, identifier)
-            push!(records, record)
-        end
-    catch caught
-        caught isa InterruptException && rethrow()
-        if caught isa ErrorException && startswith(caught.msg, String(label))
-            rethrow()
-        end
-        error(
-            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
-            sprint(showerror, caught),
-        )
-    finally
-        close(reader)
-    end
-    isempty(records) && error(
-        "$(label) contains no FASTA records: $(normalized_path).",
+            return nothing
+        end,
+        () -> reader_closer(reader),
+        "$(label) FASTA reader cleanup failed while preserving the primary " *
+        "semantic-validation failure";
+        cleanup_evidence = normalized_path,
     )
     return records
 end
@@ -5950,6 +6654,18 @@ function _require_matching_multi_input_contig_identifiers(
     observed_identifiers = Set(
         String(FASTX.identifier(record)) for record in records
     )
+    return _require_matching_multi_input_contig_identifiers(
+        observed_identifiers,
+        expected_identifiers,
+        label,
+    )
+end
+
+function _require_matching_multi_input_contig_identifiers(
+        observed_identifiers::Set{String},
+        expected_identifiers::Set{String},
+        label::AbstractString,
+)::Nothing
     observed_identifiers == expected_identifiers && return nothing
     missing_identifiers = sort!(collect(setdiff(
         expected_identifiers,
@@ -5964,13 +6680,6 @@ function _require_matching_multi_input_contig_identifiers(
         "missing identifiers: $(repr(missing_identifiers)); unexpected " *
         "identifiers: $(repr(unexpected_identifiers)).",
     )
-end
-
-function _require_valid_multi_input_gfa(
-        path::AbstractString,
-        label::AbstractString,
-)::String
-    return Mycelia._require_valid_metamdbg_gfa(path, label)
 end
 
 function _persistent_tool_artifacts(
@@ -6010,16 +6719,155 @@ function _multi_input_result_artifact_path(
            String(getproperty(result, field))
 end
 
-function _multi_input_fasta_semantic_bytes(
-        bytes::AbstractVector{UInt8},
-)::AbstractVector{UInt8}
-    is_gzip = length(bytes) >= 2 && bytes[1] == 0x1f && bytes[2] == 0x8b
-    is_gzip || return bytes
-    stream = Mycelia.CodecZlib.GzipDecompressorStream(IOBuffer(bytes))
-    try
-        return read(stream)
-    finally
-        close(stream)
+function _multi_input_normalized_sequence_sha256(
+        sequence::AbstractString,
+)::String
+    normalized_sequence = uppercase(String(sequence))
+    return bytes2hex(Mycelia.SHA.sha256(codeunits(normalized_sequence)))
+end
+
+function _multi_input_streamed_fasta_artifact(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString,
+        expected::NamedTuple;
+        materialize_records::Bool = false,
+)::NamedTuple
+    reader_ref = Ref{Any}(nothing)
+    stream_ref = Ref{Any}(nothing)
+    descriptor_closer = input -> begin
+        reader = reader_ref[]
+        stream = stream_ref[]
+        if reader !== nothing
+            close(reader)
+        elseif stream !== nothing && stream !== input
+            close(stream)
+        elseif isopen(input)
+            close(input)
+        end
+        return nothing
+    end
+    return _multi_input_with_bound_artifact_input(
+        path,
+        label,
+        reserved_outdir;
+        descriptor_closer,
+    ) do input, binding, snapshot
+        _require_matching_multi_input_artifact_snapshot(
+            expected,
+            snapshot,
+            label,
+        )
+        seekstart(input)
+        magic = read(input, min(binding.size_bytes, 2))
+        seekstart(input)
+        stream = length(magic) == 2 &&
+                 magic[1] == 0x1f &&
+                 magic[2] == 0x8b ?
+                 Mycelia.CodecZlib.GzipDecompressorStream(input) : input
+        stream_ref[] = stream
+        reader = FASTX.FASTA.Reader(stream)
+        reader_ref[] = reader
+        sequence_digests = Dict{String, String}()
+        records = FASTX.FASTA.Record[]
+        try
+            for (record_number, record) in enumerate(reader)
+                record isa FASTX.FASTA.Record || error(
+                    "$(label) is not valid FASTA: $(binding.path).",
+                )
+                identifier = strip(String(FASTX.identifier(record)))
+                isempty(identifier) && error(
+                    "$(label) contains an empty FASTA identifier at record " *
+                    "$(record_number): $(binding.path).",
+                )
+                haskey(sequence_digests, identifier) && error(
+                    "$(label) contains duplicate FASTA identifier " *
+                    "$(repr(identifier)): $(binding.path).",
+                )
+                sequence = FASTX.sequence(String, record)
+                isempty(sequence) && error(
+                    "$(label) contains an empty FASTA sequence at record " *
+                    "$(record_number): $(binding.path).",
+                )
+                _is_multi_input_iupac_dna(sequence) || error(
+                    "$(label) contains invalid DNA at FASTA record " *
+                    "$(record_number): $(binding.path).",
+                )
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch caught
+                    caught isa InterruptException && rethrow()
+                    error(
+                        "$(label) contains invalid DNA at FASTA record " *
+                        "$(record_number): $(binding.path). Cause: " *
+                        sprint(showerror, caught),
+                    )
+                end
+                sequence_digests[identifier] =
+                    _multi_input_normalized_sequence_sha256(sequence)
+                materialize_records && push!(
+                    records,
+                    FASTX.FASTA.Record(identifier, sequence),
+                )
+            end
+        catch caught
+            caught isa InterruptException && rethrow()
+            if caught isa ErrorException &&
+               startswith(caught.msg, String(label))
+                rethrow()
+            end
+            error(
+                "$(label) is not valid FASTA: $(binding.path). Cause: " *
+                sprint(showerror, caught),
+            )
+        end
+        isempty(sequence_digests) && error(
+            "$(label) contains no FASTA records: $(binding.path).",
+        )
+        return (; snapshot, sequence_digests, records)
+    end
+end
+
+function _multi_input_streamed_gfa_artifact(
+        path::AbstractString,
+        label::AbstractString,
+        reserved_outdir::AbstractString,
+        expected::NamedTuple,
+)::NamedTuple
+    return _multi_input_with_bound_artifact_input(
+        path,
+        label,
+        reserved_outdir,
+    ) do input, binding, snapshot
+        _require_matching_multi_input_artifact_snapshot(
+            expected,
+            snapshot,
+            label,
+        )
+        seekstart(input)
+        Mycelia._require_valid_assembly_gfa_input(
+            input,
+            label,
+            binding.path,
+        )
+        seekstart(input)
+        sequence_digests = Dict{String, String}()
+        for raw_line in eachline(input)
+            line = chomp(raw_line)
+            isempty(strip(line)) && continue
+            startswith(line, "#") && continue
+            fields = split(line, '\t'; keepempty = true)
+            first(fields) == "S" || continue
+            identifier = String(fields[2])
+            sequence = String(fields[3])
+            sequence_digests[identifier] =
+                _multi_input_normalized_sequence_sha256(sequence)
+        end
+        isempty(sequence_digests) && error(
+            "$(label) contains no sequence-bearing GFA segments: " *
+            "$(binding.path).",
+        )
+        return (; snapshot, sequence_digests)
     end
 end
 
@@ -6029,74 +6877,78 @@ function _multi_input_semantic_child_artifacts(
         reserved_outdir::AbstractString,
         integrity::NamedTuple,
 )::NamedTuple
-    buffers = Dict{Symbol, NamedTuple}()
-    for (field, expected) in integrity.expected
-        path = _multi_input_result_artifact_path(result, field)
-        buffered = _multi_input_buffered_artifact_snapshot(
-            path,
-            replace(String(field), '_' => ' '),
-            reserved_outdir,
-        )
-        _require_matching_multi_input_artifact_snapshot(
-            expected,
-            buffered.snapshot,
-            replace(String(field), '_' => ' '),
-        )
-        buffers[field] = buffered
-    end
-    assembly = buffers[:assembly]
-    companion_assembly = workflow == :autocycler_polished ?
-                         buffers[:autocycler_assembly] : assembly
-    graph = buffers[:graph]
-    fasta_bytes = _multi_input_fasta_semantic_bytes(assembly.bytes)
-    assembly_sequences = Mycelia._unicycler_fasta_sequences(
-        fasta_bytes,
-        assembly.snapshot.path,
+    assembly = _multi_input_streamed_fasta_artifact(
+        _multi_input_result_artifact_path(result, :assembly),
         "multi-input $(workflow) assembly FASTA",
+        reserved_outdir,
+        integrity.expected[:assembly];
+        materialize_records = true,
     )
-    companion_sequences = if workflow == :unicycler
-        assembly_sequences
+    graph = _multi_input_streamed_gfa_artifact(
+        _multi_input_result_artifact_path(result, :graph),
+        "multi-input $(workflow) assembly GFA",
+        reserved_outdir,
+        integrity.expected[:graph],
+    )
+    companion = if workflow == :unicycler
+        assembly
     else
-        companion_fasta_bytes = _multi_input_fasta_semantic_bytes(
-            companion_assembly.bytes,
-        )
-        Mycelia._unicycler_fasta_sequences(
-            companion_fasta_bytes,
-            companion_assembly.snapshot.path,
-            "multi-input $(workflow) companion assembly FASTA",
+        _multi_input_streamed_fasta_artifact(
+            _multi_input_result_artifact_path(
+                result,
+                :autocycler_assembly,
+            ),
+            "Autocycler consensus FASTA",
+            reserved_outdir,
+            integrity.expected[:autocycler_assembly],
         )
     end
-    gfa_sequences = Mycelia._unicycler_gfa_segment_sequences(
-        graph.bytes,
-        graph.snapshot.path,
-        "multi-input $(workflow) assembly GFA",
-    )
     if workflow == :unicycler
         Mycelia._require_matching_unicycler_artifact_sequences(
-            companion_sequences,
-            gfa_sequences,
+            companion.sequence_digests,
+            graph.sequence_digests,
         )
     else
         Mycelia._require_matching_autocycler_companion_sequence_maps(
-            companion_sequences,
-            gfa_sequences,
+            companion.sequence_digests,
+            graph.sequence_digests,
         )
     end
-    reader = FASTX.FASTA.Reader(IOBuffer(fasta_bytes))
-    records = try
-        FASTX.FASTA.Record[record for record in reader]
-    finally
-        close(reader)
+    sequence_digests = Dict{Symbol, Dict{String, String}}(
+        :assembly => assembly.sequence_digests,
+        :graph => graph.sequence_digests,
+    )
+    if workflow == :autocycler_polished
+        polypolish = _multi_input_streamed_fasta_artifact(
+            _multi_input_result_artifact_path(
+                result,
+                :polypolish_assembly,
+            ),
+            "Polypolish assembly FASTA",
+            reserved_outdir,
+            integrity.expected[:polypolish_assembly],
+        )
+        pypolca_report = _multi_input_artifact_snapshot(
+            _multi_input_result_artifact_path(result, :pypolca_report),
+            "Pypolca report",
+            reserved_outdir,
+        )
+        _require_matching_multi_input_artifact_snapshot(
+            integrity.expected[:pypolca_report],
+            pypolca_report,
+            "Pypolca report",
+        )
+        sequence_digests[:autocycler_assembly] =
+            companion.sequence_digests
+        sequence_digests[:polypolish_assembly] =
+            polypolish.sequence_digests
     end
-    isempty(records) && error(
+    isempty(assembly.records) && error(
         "multi-input workflow :$(workflow) produced 0 contigs from corrected reads.",
     )
     return (;
-        buffers,
-        records,
-        assembly_sequences,
-        companion_sequences,
-        gfa_sequences,
+        records = assembly.records,
+        sequence_digests,
     )
 end
 
@@ -6366,7 +7218,7 @@ function _wrap_multi_input_assembly(
                 "$(graph_path).",
             )
         end
-        _require_valid_multi_input_gfa(
+        Mycelia._require_valid_assembly_gfa(
             graph_path,
             "multi-input workflow :$(workflow) graph",
         )
@@ -6384,26 +7236,26 @@ function _wrap_multi_input_assembly(
                 field,
                 label,
             )
-            intermediate_records = if semantic_artifacts === nothing
-                _require_valid_multi_input_fasta(intermediate_path, label)
-            else
-                buffered = semantic_artifacts.buffers[field]
-                bytes = _multi_input_fasta_semantic_bytes(buffered.bytes)
-                sequences = Mycelia._unicycler_fasta_sequences(
-                    bytes,
-                    buffered.snapshot.path,
+            if semantic_artifacts === nothing
+                intermediate_records = _require_valid_multi_input_fasta(
+                    intermediate_path,
                     label,
                 )
-                FASTX.FASTA.Record[
-                    FASTX.FASTA.Record(identifier, sequence) for
-                    (identifier, sequence) in sequences
-                ]
+                _require_matching_multi_input_contig_identifiers(
+                    intermediate_records,
+                    final_identifiers,
+                    label,
+                )
+            else
+                intermediate_identifiers = Set(keys(
+                    semantic_artifacts.sequence_digests[field],
+                ))
+                _require_matching_multi_input_contig_identifiers(
+                    intermediate_identifiers,
+                    final_identifiers,
+                    label,
+                )
             end
-            _require_matching_multi_input_contig_identifiers(
-                intermediate_records,
-                final_identifiers,
-                label,
-            )
         end
     else
         for (field, label) in intermediate_fasta_fields
@@ -6448,7 +7300,9 @@ function _wrap_multi_input_assembly(
         hasproperty(result, :toolchain) || error(
             "Unicycler workflow did not report realized toolchain provenance.",
         )
-        _require_unicycler_toolchain_provenance(result.toolchain)
+        Mycelia._require_unicycler_toolchain_provenance(
+            result.toolchain,
+        )
     elseif workflow == :autocycler_polished
         hasproperty(result, :toolchain) || error(
             "Autocycler-polished workflow did not report realized toolchain " *
@@ -7049,29 +7903,56 @@ function _assemble_paired_short_long(
             )
             return wrapped_result
         finally
-            append!(
-                retained_cleanup_files,
-                _cleanup_multi_input_stages!(
-                    cleanup_tokens;
-                    pre_remove_hook = corrected_fastq_cleanup_hook,
-                ),
+            cleanup_steps = (
+                () -> begin
+                    _cleanup_multi_input_stages!(
+                        cleanup_tokens;
+                        pre_remove_hook = corrected_fastq_cleanup_hook,
+                        retained_files = retained_cleanup_files,
+                    )
+                    return nothing
+                end,
+                () -> begin
+                    root.ephemeral || return nothing
+                    retained_root = try
+                        _cleanup_multi_input_root!(
+                            root.path;
+                            expected_identity = root.identity,
+                            pre_remove_hook = workflow_root_cleanup_hook,
+                        )
+                    catch cleanup_error
+                        _workflow_path_entry_exists(root.path) &&
+                            push!(retained_cleanup_roots, root.path)
+                        rethrow()
+                    end
+                    retained_root && push!(retained_cleanup_roots, root.path)
+                    return nothing
+                end,
+                () -> begin
+                    # A failed per-file removal may still be recovered by
+                    # recursive root cleanup; report only paths that exist
+                    # after the full cleanup chain.
+                    filter!(
+                        _workflow_path_entry_exists,
+                        retained_cleanup_files,
+                    )
+                    filter!(
+                        _workflow_path_entry_exists,
+                        retained_cleanup_roots,
+                    )
+                    filter!(
+                        _workflow_path_entry_exists,
+                        retained_intermediates,
+                    )
+                    unique!(retained_cleanup_files)
+                    unique!(retained_cleanup_roots)
+                    unique!(retained_intermediates)
+                    return nothing
+                end,
             )
-            if root.ephemeral && _cleanup_multi_input_root!(
-                    root.path;
-                    expected_identity = root.identity,
-                    pre_remove_hook = workflow_root_cleanup_hook,
-            )
-                push!(retained_cleanup_roots, root.path)
-            end
-            # A failed per-file removal may still be recovered by recursive root
-            # cleanup; report only paths that exist after the full cleanup chain.
-            filter!(
-                _workflow_path_entry_exists,
-                retained_cleanup_files,
-            )
-            filter!(
-                _workflow_path_entry_exists,
-                retained_intermediates,
+            Mycelia._run_cleanup_steps!(
+                cleanup_steps,
+                "multi-input workflow cleanup",
             )
         end
     end

@@ -1,4 +1,7 @@
 # Shared private-fixture gate and FASTQ parsing for hybrid assembly smoke tests.
+# `MYCELIA_ASSEMBLER_TEST_THREADS` defaults to 2 and
+# `MYCELIA_AUTOCYCLER_TEST_JOBS` defaults to 1; both accept only 1:4. The
+# Autocycler-polished gate also requires an exact `MYCELIA_AUTOCYCLER_READ_TYPE`.
 
 import CodecZlib
 import FASTX

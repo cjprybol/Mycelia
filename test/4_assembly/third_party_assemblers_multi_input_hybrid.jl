@@ -24,6 +24,10 @@
 #
 #   MYCELIA_RUN_AUTOCYCLER_POLISHED=true
 #   MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10
+#   MYCELIA_AUTOCYCLER_TEST_JOBS=1
+#
+# `MYCELIA_AUTOCYCLER_TEST_JOBS` defaults to 1 and must be in 1:4. The shared
+# `MYCELIA_ASSEMBLER_TEST_THREADS` control defaults to 2 and must be in 1:4.
 #
 # Run from the Mycelia repository root:
 #
@@ -287,9 +291,9 @@ function _assert_unicycler_toolchain(stats::AbstractDict)::Nothing
     Test.@test "unicycler" in package_names
     Test.@test "spades" in package_names
     normalized_packages =
-        Mycelia.Rhizomorph._normalize_unicycler_package_inventory(packages)
+        Mycelia._normalize_unicycler_package_inventory(packages)
     expected_inventory_sha256 =
-        Mycelia.Rhizomorph._unicycler_package_inventory_sha256(
+        Mycelia._unicycler_package_inventory_sha256(
             normalized_packages,
         )
     Test.@test inventory_sha256 == expected_inventory_sha256

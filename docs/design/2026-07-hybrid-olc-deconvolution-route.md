@@ -31,9 +31,11 @@ explicit `ont_r9`, `ont_r10`, `pacbio_clr`, or `pacbio_hifi` chemistry. Its
 consensus is then polished by aligning corrected R1 and R2 separately with
 `bwa mem -a`, filtering the paired alignments with Polypolish, running
 Polypolish, and finally running Pypolca in `--careful` mode. The raw Autocycler
-GFA is never described as a sequence-polished graph. It is retained only when
-the caller supplies a persistent output directory; ephemeral high-level runs
-delete route-owned tool outputs after wrapping the final assembly.
+GFA is never described as a sequence-polished graph. Persistent runs retain it.
+Ephemeral high-level runs attempt exact identity-bound cleanup of route-owned
+tool outputs after wrapping the final assembly. Cleanup is never silent: a
+failure propagates when no result can be returned or retains and reports exact
+evidence with the result.
 
 Autocycler is intended for bacterial isolate genomes where most or all input
 assemblies can be complete. It is not an appropriate benchmark arm when complete
@@ -53,12 +55,16 @@ HiFi *or* one or more explicitly attested Nanopore R10.4-or-later inputs.
 inputs are rejected before provisioning. HiFi calls retain their existing
 ergonomics and need no attestation keyword. The wrapper also fails before
 provisioning when both technologies, neither technology, an empty path set, a
-missing/empty input file, or a nonpositive `graph_k` is supplied. The
-wrapper uses a spec-hash-addressed metaMDBG 1.4 environment and
-records a digest of the complete normalized resolved Conda inventory (package
-name, version, build, and channel, including transitive packages). Environment
-discovery, creation, inventory, local commands, and generated runtime scripts
-all use one canonical Conda executable. The install lock is anchored beneath
+missing/empty input file, or a nonpositive `graph_k` is supplied. Completed
+local or generated-runtime execution uses a spec-hash-addressed metaMDBG 1.4
+environment and records a digest of the complete normalized resolved Conda
+inventory (package name, version, build, and channel, including transitive
+packages). Contract-verified reuse reports the inventory digest and package
+count bound by its completion manifest. Planned and submitted results carry
+expected environment-specification provenance only and do not claim that
+installation or a resolved inventory has been realized. Environment discovery,
+creation, inventory, local commands, and generated runtime scripts all use one
+canonical Conda executable. The install lock is anchored beneath
 that executable's Conda root rather than a Julia depot, so two wrappers cannot
 concurrently mutate the same environment through different depots and two
 independent Conda roots do not block each other. The wrapper reuses only
@@ -75,10 +81,11 @@ the realized package-inventory digest, and canonical artifact identities,
 sizes, and SHA-256 digests. Legacy plain contigs are normalized to
 `contigs.fasta.gz`. Each tool-execution lifecycle stages mode-0400 private input
 copies, verifies them against the captured SHA-256 contract, and runs metaMDBG
-only against those staged paths. Local and submitted lifecycles capture the
-full normalized Conda inventory before and after all tool commands and reject
-any drift. Submitted jobs also recompute every source input digest after
-acquiring the runtime output lock and immediately before publication. Any
+only against those staged paths. Local execution and a submitted job's
+generated runtime capture the full normalized Conda inventory before and after
+all tool commands and reject any drift. Submitted jobs also recompute every
+source input digest after acquiring the runtime output lock and immediately
+before publication. Any
 nonempty output directory without the input contract, or any complete artifact
 set without its matching completion manifest, is rejected rather than adopted.
 Partial contracted contigs are likewise never resumed because they lack
@@ -156,27 +163,31 @@ remains available when selecting workflows dynamically.
 ## Ownership and failure behavior
 
 With `output_dir = nothing`, the route owns a temporary workflow root and every
-corrected FASTQ. Cleanup is best effort for ordinary filesystem failures, with
-retained paths recorded in result provenance when a result can be returned;
-cancellation is always rethrown. With a caller-supplied output directory,
-corrected FASTQs and final tool artifacts are
-preserved for auditing. A non-empty persistent output directory is rejected so
-stale assemblies cannot be mistaken for current results. Large alignment SAMs,
-filtered SAMs, and BWA index files are removed after successful polishing by
-default and after polishing failures. `keep_intermediates = true` retains and
-records them explicitly and therefore requires a persistent `output_dir`.
+corrected FASTQ. Exact identity-bound cleanup is attempted after success or
+failure. A cleanup failure fails loudly or reports retained evidence alongside
+an existing primary failure rather than deleting a replacement or silently
+losing failure context; cancellation remains fail-loud. When a result can still
+be returned, its provenance records retained paths. With a caller-supplied
+output directory, corrected FASTQs and final tool artifacts are preserved for
+auditing. A non-empty persistent output directory is rejected so
+stale assemblies cannot be mistaken for current results. Exact identity-bound
+removal of large alignment SAMs, filtered SAMs, and BWA index files is attempted
+after successful polishing by default and after polishing failures.
+`keep_intermediates = true` retains and records them explicitly and therefore
+requires a persistent `output_dir`.
 
 Both high-level configs apply `input_snapshot_byte_ceiling` cumulatively to
 workflow-owned stable copies of the three original inputs and all three
 correction outputs. Before each copy, the route checks both the remaining
 configured budget and currently available bytes under the reserved workflow
-root. A ceiling, free-space, write, or content-integrity failure removes only
-the exact inode created for the partial snapshot and fails before the next
-correction or combined assembler call. Path-backed copies bind the streamed
-source/copy digest, a source rehash, and a consumed-snapshot rehash; all three
-must agree. In-memory FASTQ identity is streamed rather than
-duplicating the full record set. The reserved high-level `output_dir` (or its
-ephemeral equivalent) owns these snapshots, and the combined-input child
+root. A ceiling, free-space, write, or content-integrity failure attempts to
+remove only the exact inode created for the partial snapshot and fails before
+the next correction or combined assembler call. Cleanup failure is reported
+and may retain the exact evidence rather than remove a replacement. Path-backed
+copies bind the streamed source/copy digest, a source rehash, and a
+consumed-snapshot rehash; all three must agree. In-memory FASTQ identity is
+streamed rather than duplicating the full record set. The reserved high-level
+`output_dir` (or its ephemeral equivalent) owns these snapshots, and the combined-input child
 revalidates and consumes the already-bound corrected snapshots without making
 a second scratch copy. Standalone `run_unicycler` and
 `run_autocycler_polished` calls retain their public `input_spool_parent` and
@@ -194,16 +205,17 @@ cannot share a lifecycle.
 
 ## Provenance and reproducibility
 
-Every `AssemblyResult` records the workflow, exact correction technologies,
-input and corrected read counts, requested options, effective per-read-set
-correction knobs, `max_k`, indel parameters, substitution-error rate, polishing
-order, cleanup retention, and caller-owned artifacts. Injected correction
-runners that do not report an effective field record it as unavailable rather
-than copying the requested value. `read_content_provenance` binds each original
-source to a deterministic content identity and each corrected FASTQ to its
-canonical path, size, and SHA-256. Path-backed sources record per-file canonical
-paths, sizes, and SHA-256 digests; in-memory sources record their read count,
-identifier digest, and full record-content digest.
+Every multi-input workflow `AssemblyResult` records the workflow, exact
+correction technologies, input and corrected read counts, requested options,
+effective per-read-set correction knobs, `max_k`, indel parameters,
+substitution-error rate, polishing order, cleanup retention, and caller-owned
+artifacts. Injected correction runners that do not report an effective field
+record it as unavailable rather than copying the requested value.
+`read_content_provenance` binds each original source to a deterministic content
+identity and each corrected FASTQ to its canonical path, size, and SHA-256.
+Path-backed sources record per-file canonical paths, sizes, and SHA-256 digests;
+in-memory sources record their read count, identifier digest, and full
+record-content digest.
 
 The common `run_unicycler` wrapper, and therefore the Unicycler hybrid arm, uses
 the realized `unicycler` Conda environment rather than claiming a spec-pinned
@@ -246,30 +258,36 @@ prefixes are canonicalized through their nearest existing physical ancestor,
 so an install performed through one stable alias can be consumed through
 another alias without selecting a different environment or lock domain.
 
-The single-technology metaMDBG wrapper applies the same fail-closed principles with
-the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification. Local
-execution returns
+The single-technology metaMDBG wrapper applies the same fail-closed principles
+with the separate `metamdbg-1.4-3b51b282e8aa768d` environment specification.
+Local execution returns
 `status = :complete` only after semantic FASTA/GFA validation and durable
 contract finalization. Local and generated-runtime contract and completion
 publication fsync both the complete mode-0600 file and its containing directory
-before reporting success. A nonlocal executor returns `status = :planned` for a
-collected or dry-run job. It returns `status = :submitted` only after a real
-held Slurm job's exact normalized `(job_id, job_cluster)` reference is durably
-bound, its pending publication name is durably removed, and that exact job is
-released. Unscoped submissions record `job_cluster = nothing`; federation
-submissions retain the cluster returned by `sbatch --parsable`. The result
-includes the executor result and `expected_artifacts`; it does not present
-planned paths as completed artifacts. The submitted script independently locks
-the output root and performs the same validation before atomically committing
-completion provenance. Real nonlocal execution is limited to the verifiable
-Slurm backend.
+before reporting success. Completed execution and contract-verified reuse
+report resolved package-inventory digest/count provenance. A nonlocal executor
+returns `status = :planned` for a collected or dry-run job. It returns
+`status = :submitted` only after a real held Slurm job's exact normalized
+`(job_id, job_cluster)` reference is durably bound, its pending publication name
+is durably removed, and that exact job is released. Planned and submitted
+results carry expected environment-specification provenance only; neither
+claims a realized package inventory. Unscoped submissions record
+`job_cluster = nothing`; federation submissions retain the cluster returned by
+`sbatch --parsable`. The result includes the executor result and
+`expected_artifacts`; those are paths the command is expected to produce, not
+completed artifacts. The submitted script independently locks the output root
+and performs the same validation before atomically committing completion
+provenance. Real nonlocal execution is limited to the verifiable Slurm backend.
 Durable pre-submit reservations never expire automatically. A new reservation
 contains only a mode-0600 `contract.json` owner record and is reported as
-`submission_state = :reserved`. The wrapper submits the job held,
-exclusively creates an adjacent empty mode-0600 pending record whose name binds
-the output identity, owner capability, normalized scheduler job ID, and optional
-federation cluster, fsyncs that descriptor and then its parent directory, and
-only then writes and fsyncs its canonical contents. It hardlinks that record to
+`submission_state = :reserved`. It is durably published through an atomic
+same-parent rename; provisional owner/shared-marker crash windows remain
+inspectable rather than being reported as a completed claim. The wrapper
+submits the job held, then exclusively creates an adjacent empty mode-0600
+pending record whose name binds the output identity, owner capability,
+normalized scheduler job ID, and optional federation cluster. It fsyncs that
+descriptor and then its parent directory, and only then writes and fsyncs its
+canonical contents. It hardlinks that record to
 `job.json`, fsyncs the owner directory, and only then releases the job. The
 `job.json` directory fsync is the irreversible binding commit point; later
 ordinary errors retain the exact committed binding and clean only the pending
@@ -350,11 +368,13 @@ Enumeration is intentionally bounded and fails loudly above depth 256, above
 1,000,000 entries, or above 268,435,456 bytes of manifest accounting. These
 bounds prevent an adversarial or unexpectedly large output tree from exhausting
 the runtime job while preserving ample space for ordinary assembly layouts. A
-failed or unstable capture is retried at most three times; partial inventories
-and per-attempt diagnostics are removed between attempts. A successful helper
-result is accepted only when the inventory is empty or its final byte is NUL,
-so an exit-zero helper that emits a truncated record is also rejected before
-Bash consumption.
+failed or unstable capture is retried at most three times. Each attempt uses
+isolated inventory and diagnostic paths under the secure temporary directory.
+Unpublished partial inventories and per-attempt diagnostics stay isolated until
+the secure temporary directory's lifecycle cleanup and may be retained on
+fail-closed exits. A successful helper result is accepted only when the
+inventory is empty or its final byte is NUL, so an exit-zero helper that emits
+a truncated record is also rejected before Bash consumption.
 
 A caller that dies before submission can inspect the on-disk reserved
 capability and reclaim it only with the exact owner token plus explicit
@@ -467,6 +487,7 @@ MYCELIA_HYBRID_SHORT_R1=/path/to/reads_R1.fastq.gz \
 MYCELIA_HYBRID_SHORT_R2=/path/to/reads_R2.fastq.gz \
 MYCELIA_HYBRID_LONG_READS=/path/to/long_reads.fastq.gz \
 MYCELIA_AUTOCYCLER_READ_TYPE=ont_r10 \
+MYCELIA_AUTOCYCLER_TEST_JOBS=1 \
 MYCELIA_ASSEMBLER_TEST_THREADS=2 \
 julia --project=. -e \
   'include("test/4_assembly/third_party_assemblers_multi_input_hybrid.jl")'
@@ -480,6 +501,10 @@ or a dedicated-plus-external run with missing prerequisites, fails loudly.
 `MYCELIA_ASSEMBLER_TEST_THREADS` defaults to `2` for these private-fixture smoke
 paths and must parse as an integer from `1` through `4`; malformed and
 out-of-range values fail before either assembler runs.
+`MYCELIA_AUTOCYCLER_TEST_JOBS` controls concurrent alternative-assembler jobs
+for the Autocycler-polished arm, defaults to `1`, and likewise must be an integer
+from `1` through `4`. `MYCELIA_AUTOCYCLER_READ_TYPE` selects its exact long-read
+chemistry and must agree with `MYCELIA_HYBRID_LONG_TECH`.
 
 The lower-level direct-wrapper smoke in
 `test/8_tool_integration/autocycler.jl` is a separate gate: it uses

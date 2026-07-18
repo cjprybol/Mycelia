@@ -104,8 +104,10 @@ println("- Quality Control: FastQC, Quast, BUSCO")
 # read_content = unicycler_result.assembly_stats["read_content_provenance"]
 # read_content["source_inputs"]
 # read_content["corrected_fastqs"]
-# # Exact partial snapshots are cleaned on ceiling, free-space, write, or hash
-# # failure. High-level children consume the already-bound corrected snapshots
+# # Ceiling, free-space, write, or hash failures attempt exact identity-bound
+# # partial-snapshot cleanup. Cleanup is never silent: a failure propagates when
+# # no result can be returned or retains and reports exact evidence with the
+# # result. High-level children consume the already-bound corrected snapshots
 # # directly, without a second scratch copy. Standalone run_unicycler and
 # # run_autocycler_polished calls still expose input_spool_parent and
 # # input_spool_byte_ceiling when a direct wrapper needs bounded scratch.

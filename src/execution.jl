@@ -153,8 +153,17 @@ function execute(job::JobSpec, ::LocalExecutor)
     return true
 end
 
-function execute(job::JobSpec, executor::SlurmExecutor)::SubmitResult
-    return submit(job; dry_run = executor.dry_run, hold = executor.hold)
+function execute(
+        job::JobSpec,
+        executor::SlurmExecutor;
+        accepted_sbatch_callback::Function = record -> nothing,
+)::SubmitResult
+    return submit(
+        job;
+        dry_run = executor.dry_run,
+        hold = executor.hold,
+        accepted_sbatch_callback,
+    )
 end
 
 function execute(job::JobSpec, executor::CollectExecutor)::Int

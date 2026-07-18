@@ -6,6 +6,125 @@ function nonempty_file(path::AbstractString)
     return isfile(path) && filesize(path) > 0
 end
 
+function _canonical_conda_runner(
+        conda_runner::AbstractString;
+        subject::AbstractString,
+        require_nonempty::Bool = true,
+)::String
+    reported_runner = String(conda_runner)
+    if require_nonempty && isempty(strip(reported_runner))
+        throw(ArgumentError(
+            "$(subject) conda_runner must be a non-empty executable name or path.",
+        ))
+    end
+    executable = Sys.which(reported_runner)
+    candidate = executable === nothing ?
+                abspath(reported_runner) : String(executable)
+    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+end
+
+function _canonical_conda_environment_prefix(
+        environment_prefix::AbstractString;
+        subject::AbstractString,
+        repr_existing_ancestor::Bool,
+        ancestor_message_period::Bool,
+)::String
+    reported_prefix = String(environment_prefix)
+    isempty(strip(reported_prefix)) && throw(ArgumentError(
+        "$(subject) environment_prefix must be a non-empty path.",
+    ))
+    normalized_prefix = normpath(abspath(reported_prefix))
+    existing_ancestor = normalized_prefix
+    missing_components = String[]
+    while !ispath(existing_ancestor) && !islink(existing_ancestor)
+        parent = dirname(existing_ancestor)
+        parent == existing_ancestor && break
+        pushfirst!(missing_components, basename(existing_ancestor))
+        existing_ancestor = parent
+    end
+    if !isdir(existing_ancestor)
+        displayed_ancestor = repr_existing_ancestor ?
+                             repr(existing_ancestor) : existing_ancestor
+        terminal = ancestor_message_period ? "." : ""
+        throw(ArgumentError(
+            "$(subject) environment prefix has a non-directory existing " *
+            "ancestor: $(displayed_ancestor)$(terminal)",
+        ))
+    end
+    canonical_ancestor = realpath(existing_ancestor)
+    return isempty(missing_components) ? canonical_ancestor :
+           normpath(joinpath(canonical_ancestor, missing_components...))
+end
+
+function _normalize_prebound_input_descriptor(
+        descriptor::NamedTuple,
+        path::AbstractString,
+        label::AbstractString;
+        subject::AbstractString,
+)::NamedTuple
+    required_fields = (
+        :path,
+        :canonical_path,
+        :size_bytes,
+        :sha256,
+        :device,
+        :inode,
+    )
+    keys(descriptor) == required_fields || throw(ArgumentError(
+        "$(subject) prebound $(label) contract must have fields " *
+        "$(required_fields), got $(keys(descriptor)).",
+    ))
+    normalized_path = normpath(abspath(String(path)))
+    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
+        ArgumentError(
+            "$(subject) prebound $(label) path does not match its contract.",
+        ),
+    )
+    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
+        "$(subject) prebound $(label) must be a regular non-symlink file.",
+    ))
+    canonical_path = realpath(normalized_path)
+    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
+        "$(subject) prebound $(label) canonical path does not match its contract.",
+    ))
+    status = stat(normalized_path)
+    normalized = (;
+        path = normalized_path,
+        canonical_path,
+        size_bytes = Int(descriptor.size_bytes),
+        sha256 = String(descriptor.sha256),
+        device = UInt64(descriptor.device),
+        inode = UInt64(descriptor.inode),
+    )
+    normalized.size_bytes > 0 || throw(ArgumentError(
+        "$(subject) prebound $(label) must be non-empty.",
+    ))
+    UInt64(status.device) == normalized.device &&
+        UInt64(status.inode) == normalized.inode &&
+        filesize(normalized_path) == normalized.size_bytes || throw(
+        ArgumentError(
+            "$(subject) prebound $(label) physical identity or size changed " *
+            "before child-lock acquisition.",
+        ),
+    )
+    return normalized
+end
+
+function _conda_package_record_field(
+        package_record::Union{NamedTuple, AbstractDict},
+        field::Symbol,
+)::Any
+    if package_record isa NamedTuple
+        return hasproperty(package_record, field) ?
+               getproperty(package_record, field) : nothing
+    end
+    return get(
+        package_record,
+        String(field),
+        get(package_record, field, nothing),
+    )
+end
+
 const _OUTPUT_ROOT_RESERVATION_LOCK_PREFIX = ".mycelia-output-root.pid."
 const _OUTPUT_ROOT_DURABLE_RESERVATION_PREFIX =
     ".mycelia-output-root.reservation."
@@ -15,25 +134,6 @@ const _OUTPUT_ROOT_ALLOWED_ANCESTORS = IdDict{Task, Vector{String}}()
 
 function _output_root_path_entry_exists(path::AbstractString)::Bool
     return ispath(path) || islink(path)
-end
-
-function _canonical_planned_output_root(path::AbstractString)::String
-    normalized_path = normpath(abspath(String(path)))
-    existing_ancestor = normalized_path
-    missing_components = String[]
-    while !_output_root_path_entry_exists(existing_ancestor)
-        parent = dirname(existing_ancestor)
-        parent == existing_ancestor && break
-        pushfirst!(missing_components, basename(existing_ancestor))
-        existing_ancestor = parent
-    end
-    isdir(existing_ancestor) || throw(ArgumentError(
-        "Output root has a non-directory existing ancestor: " *
-        "$(existing_ancestor)",
-    ))
-    canonical_ancestor = realpath(existing_ancestor)
-    return isempty(missing_components) ? canonical_ancestor :
-           normpath(joinpath(canonical_ancestor, missing_components...))
 end
 
 function _output_root_reservation_lock_path_from_canonical(
@@ -58,13 +158,6 @@ function _output_root_reservation_identity(
         stable = true,
     )
     return SHA.bytes2hex(SHA.sha256(filesystem_equivalence_key))
-end
-
-function _output_root_reservation_lock_path(
-        workflow_root::AbstractString,
-)::String
-    canonical_root = _canonical_planned_output_root(workflow_root)
-    return _output_root_reservation_lock_path_from_canonical(canonical_root)
 end
 
 function _output_root_durable_reservation_path_from_canonical(

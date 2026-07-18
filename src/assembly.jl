@@ -1333,39 +1333,18 @@ end
 function _canonical_unicycler_conda_runner(
         conda_runner::AbstractString,
 )::String
-    reported_runner = String(conda_runner)
-    isempty(strip(reported_runner)) && throw(ArgumentError(
-        "Unicycler conda_runner must be a non-empty executable name or path.",
-    ))
-    executable = Sys.which(reported_runner)
-    candidate = executable === nothing ?
-                abspath(reported_runner) : String(executable)
-    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+    return _canonical_conda_runner(conda_runner; subject = "Unicycler")
 end
 
 function _canonical_unicycler_environment_prefix(
         environment_prefix::AbstractString,
 )::String
-    reported_prefix = String(environment_prefix)
-    isempty(strip(reported_prefix)) && throw(ArgumentError(
-        "Unicycler environment_prefix must be a non-empty path.",
-    ))
-    normalized_prefix = normpath(abspath(reported_prefix))
-    existing_ancestor = normalized_prefix
-    missing_components = String[]
-    while !ispath(existing_ancestor) && !islink(existing_ancestor)
-        parent = dirname(existing_ancestor)
-        parent == existing_ancestor && break
-        pushfirst!(missing_components, basename(existing_ancestor))
-        existing_ancestor = parent
-    end
-    isdir(existing_ancestor) || throw(ArgumentError(
-        "Unicycler environment prefix has a non-directory existing " *
-        "ancestor: $(repr(existing_ancestor)).",
-    ))
-    canonical_ancestor = realpath(existing_ancestor)
-    return isempty(missing_components) ? canonical_ancestor :
-           normpath(joinpath(canonical_ancestor, missing_components...))
+    return _canonical_conda_environment_prefix(
+        environment_prefix;
+        subject = "Unicycler",
+        repr_existing_ancestor = true,
+        ancestor_message_period = true,
+    )
 end
 
 function _unicycler_environment_prefix(
@@ -1494,11 +1473,20 @@ function _with_unicycler_output_lock(
         "Unicycler outdir is already reserved by another output-root " *
         "workflow: $(lock_path)",
     ))
-    try
-        return locked_action()
-    finally
-        Base.close(lock_handle)
+    result = try
+        locked_action()
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> Base.close(lock_handle),
+            primary_error,
+            "Unicycler output-lock cleanup failed while preserving the " *
+            "primary workflow failure";
+            cleanup_evidence = lock_path,
+        )
+        Base.rethrow()
     end
+    Base.close(lock_handle)
+    return result
 end
 
 function _unicycler_output_adjacent_spool_parent(
@@ -1722,51 +1710,6 @@ function _unicycler_input_fingerprints(
     )
 end
 
-function _unicycler_pair_identifier(identifier::AbstractString)::String
-    first_token = first(split(String(identifier)))
-    return replace(first_token, r"/[12]$" => "")
-end
-
-function _unicycler_identifier_pair_role(
-        identifier::AbstractString,
-)::Union{Nothing, Int}
-    first_token = first(split(String(identifier)))
-    role_match = match(r"/([12])$", first_token)
-    return role_match === nothing ? nothing :
-           parse(Int, something(only(role_match.captures)))
-end
-
-function _unicycler_casava_pair_role(
-        description::AbstractString,
-)::Union{Nothing, Int}
-    description_tokens = split(String(description))
-    length(description_tokens) >= 2 || return nothing
-    role_match = match(
-        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
-        description_tokens[2],
-    )
-    return role_match === nothing ? nothing :
-           parse(Int, something(only(role_match.captures)))
-end
-
-function _unicycler_pair_role(
-        identifier::AbstractString,
-        description::AbstractString,
-)::Union{Nothing, Int}
-    identifier_role = _unicycler_identifier_pair_role(identifier)
-    casava_role = _unicycler_casava_pair_role(description)
-    if identifier_role !== nothing && casava_role !== nothing &&
-       identifier_role != casava_role
-        throw(ArgumentError(
-            "Unicycler FASTQ identifier and CASAVA description contain " *
-            "conflicting explicit mate roles: " *
-            "identifier=$(repr(String(identifier))), " *
-            "description=$(repr(String(description))).",
-        ))
-    end
-    return identifier_role === nothing ? casava_role : identifier_role
-end
-
 function _require_unicycler_fastq_path(
         path::AbstractString,
         label::AbstractString,
@@ -1800,6 +1743,8 @@ end
 function _validate_unicycler_fastq(
         path::AbstractString,
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Int
     reader = _open_unicycler_fastq(path, label)
     record_count = 0
@@ -1812,16 +1757,26 @@ function _validate_unicycler_fastq(
             record_count += 1
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        caught isa ArgumentError && rethrow()
-        throw(ArgumentError(
-            "Unicycler $(label) is not valid FASTQ: " *
-            "$(repr(normpath(abspath(String(path))))). " *
-            "Cause: $(sprint(showerror, caught))",
-        ))
-    finally
-        close(reader)
+        primary_error = if caught isa InterruptException ||
+                           caught isa ArgumentError
+            caught
+        else
+            ArgumentError(
+                "Unicycler $(label) is not valid FASTQ: " *
+                "$(repr(normpath(abspath(String(path))))). " *
+                "Cause: $(sprint(showerror, caught))",
+            )
+        end
+        _run_cleanup_after_primary_error!(
+            () -> reader_closer(reader),
+            primary_error,
+            "Unicycler $(label) FASTQ reader cleanup failed while " *
+            "preserving the primary validation failure";
+            cleanup_evidence = path,
+        )
+        primary_error === caught ? Base.rethrow() : throw(primary_error)
     end
+    reader_closer(reader)
     record_count > 0 || throw(ArgumentError(
         "Unicycler $(label) must contain at least one FASTQ record.",
     ))
@@ -1831,13 +1786,21 @@ end
 function _validate_unicycler_paired_fastqs(
         short_1::AbstractString,
         short_2::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Int
     reader_1 = _open_unicycler_fastq(short_1, "short-read input R1")
     reader_2 = try
         _open_unicycler_fastq(short_2, "short-read input R2")
-    catch
-        close(reader_1)
-        rethrow()
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> reader_closer(reader_1),
+            primary_error,
+            "Unicycler R1 FASTQ reader cleanup failed while preserving " *
+            "the primary R2-open failure";
+            cleanup_evidence = short_1,
+        )
+        Base.rethrow()
     end
     pair_count = 0
     try
@@ -1861,13 +1824,15 @@ function _validate_unicycler_paired_fastqs(
             end
             identifier_1 = String(FASTX.identifier(record_1))
             identifier_2 = String(FASTX.identifier(record_2))
-            role_1 = _unicycler_pair_role(
+            role_1 = _fastq_explicit_pair_role(
                 identifier_1,
                 String(FASTX.description(record_1)),
+                conflict_subject = "Unicycler FASTQ",
             )
-            role_2 = _unicycler_pair_role(
+            role_2 = _fastq_explicit_pair_role(
                 identifier_2,
                 String(FASTX.description(record_2)),
+                conflict_subject = "Unicycler FASTQ",
             )
             roles_valid = (role_1 === nothing && role_2 === nothing) ||
                           (role_1 == 1 && role_2 == 2)
@@ -1877,8 +1842,8 @@ function _validate_unicycler_paired_fastqs(
                 "R1=$(repr(identifier_1)), R2=$(repr(identifier_2)); " *
                 "expected R1 role 1 followed by R2 role 2.",
             ))
-            _unicycler_pair_identifier(identifier_1) ==
-                _unicycler_pair_identifier(identifier_2) ||
+            _fastq_pair_identifier(identifier_1) ==
+                _fastq_pair_identifier(identifier_2) ||
                 throw(ArgumentError(
                     "Unicycler paired short reads are out of sync at record " *
                     "$(pair_count): R1=$(repr(identifier_1)), " *
@@ -1888,19 +1853,37 @@ function _validate_unicycler_paired_fastqs(
             next_2 = iterate(reader_2, state_2)
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        caught isa ArgumentError && rethrow()
-        throw(ArgumentError(
-            "Unicycler paired short-read inputs are not valid FASTQ. " *
-            "Cause: $(sprint(showerror, caught))",
-        ))
-    finally
-        try
-            close(reader_1)
-        finally
-            close(reader_2)
+        primary_error = if caught isa InterruptException ||
+                           caught isa ArgumentError
+            caught
+        else
+            ArgumentError(
+                "Unicycler paired short-read inputs are not valid FASTQ. " *
+                "Cause: $(sprint(showerror, caught))",
+            )
         end
+        _run_cleanup_after_primary_error!(
+            () -> _run_cleanup_steps!(
+                (
+                    () -> reader_closer(reader_1),
+                    () -> reader_closer(reader_2),
+                ),
+                "Unicycler paired FASTQ readers",
+            ),
+            primary_error,
+            "Unicycler paired FASTQ reader cleanup failed while preserving " *
+            "the primary validation failure";
+            cleanup_evidence = (short_1, short_2),
+        )
+        primary_error === caught ? Base.rethrow() : throw(primary_error)
     end
+    _run_cleanup_steps!(
+        (
+            () -> reader_closer(reader_1),
+            () -> reader_closer(reader_2),
+        ),
+        "Unicycler paired FASTQ readers",
+    )
     pair_count > 0 || throw(ArgumentError(
         "Unicycler paired short reads must be non-empty.",
     ))
@@ -2006,57 +1989,19 @@ function _normalize_unicycler_prebound_input(
         path::AbstractString,
         label::AbstractString,
 )::NamedTuple
-    required_fields = (
-        :path,
-        :canonical_path,
-        :size_bytes,
-        :sha256,
-        :device,
-        :inode,
+    return _normalize_prebound_input_descriptor(
+        descriptor,
+        path,
+        label;
+        subject = "Unicycler",
     )
-    keys(descriptor) == required_fields || throw(ArgumentError(
-        "Unicycler prebound $(label) contract must have fields " *
-        "$(required_fields), got $(keys(descriptor)).",
-    ))
-    normalized_path = normpath(abspath(String(path)))
-    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
-        ArgumentError(
-            "Unicycler prebound $(label) path does not match its contract.",
-        ),
-    )
-    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
-        "Unicycler prebound $(label) must be a regular non-symlink file.",
-    ))
-    canonical_path = realpath(normalized_path)
-    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
-        "Unicycler prebound $(label) canonical path does not match its contract.",
-    ))
-    status = stat(normalized_path)
-    normalized = (;
-        path = normalized_path,
-        canonical_path,
-        size_bytes = Int(descriptor.size_bytes),
-        sha256 = String(descriptor.sha256),
-        device = UInt64(descriptor.device),
-        inode = UInt64(descriptor.inode),
-    )
-    normalized.size_bytes > 0 || throw(ArgumentError(
-        "Unicycler prebound $(label) must be non-empty.",
-    ))
-    UInt64(status.device) == normalized.device &&
-        UInt64(status.inode) == normalized.inode &&
-        filesize(normalized_path) == normalized.size_bytes || throw(
-        ArgumentError(
-            "Unicycler prebound $(label) physical identity or size changed " *
-            "before child-lock acquisition.",
-        ),
-    )
-    return normalized
 end
 
 function _require_unchanged_unicycler_prebound_input(
         expected::NamedTuple,
         label::AbstractString,
+        ;
+        input_closer::Function = close,
 )::Dict{String, Any}
     isfile(expected.path) && !islink(expected.path) || error(
         "Unicycler prebound $(label) is missing or no longer a regular file.",
@@ -2070,7 +2015,7 @@ function _require_unchanged_unicycler_prebound_input(
         Base.JL_O_NOFOLLOW |
         Base.JL_O_CLOEXEC,
     )
-    try
+    result = try
         before = stat(input)
         UInt64(before.device) == expected.device &&
             UInt64(before.inode) == expected.inode &&
@@ -2090,7 +2035,7 @@ function _require_unchanged_unicycler_prebound_input(
             "Unicycler prebound $(label) content changed before any child " *
             "tool side effect.",
         )
-        return Dict{String, Any}(
+        Dict{String, Any}(
             "canonical_path" => expected.canonical_path,
             "size_bytes" => expected.size_bytes,
             "sha256" => expected.sha256,
@@ -2099,9 +2044,18 @@ function _require_unchanged_unicycler_prebound_input(
                 "sha256" => expected.sha256,
             ),
         )
-    finally
-        close(input)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> input_closer(input),
+            primary_error,
+            "Unicycler prebound $(label) descriptor cleanup failed while " *
+            "preserving the primary validation failure";
+            cleanup_evidence = expected.path,
+        )
+        Base.rethrow()
     end
+    input_closer(input)
+    return result
 end
 
 function _normalize_unicycler_prebound_input_contract(
@@ -2245,6 +2199,8 @@ end
 function _remove_exact_private_input_spool_root!(
         expected::NamedTuple,
         label::AbstractString,
+        ;
+        descriptor_closer::Function = close,
 )::Nothing
     parent_path = dirname(expected.path)
     parent = Base.Filesystem.open(
@@ -2285,18 +2241,134 @@ function _remove_exact_private_input_spool_root!(
             observed.inode == expected.inode || error(
                 "$(label) private input spool root changed during cleanup.",
             )
-        close(root)
+        descriptor_closer(root)
         root = nothing
         _metamdbg_unlinkat(
             parent,
             basename(expected.path);
             directory_entry = true,
         )
-    finally
-        root === nothing || close(root)
-        close(parent)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> _run_cleanup_steps!(
+                (
+                    () -> begin
+                        if root !== nothing && isopen(root)
+                            descriptor_closer(root)
+                        end
+                        return nothing
+                    end,
+                    () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+                ),
+                "$(label) private input spool descriptors",
+            ),
+            primary_error,
+            "$(label) private input spool descriptor cleanup failed while " *
+            "preserving the primary exact-removal failure";
+            cleanup_evidence = expected.path,
+        )
+        Base.rethrow()
+    end
+    _run_cleanup_steps!(
+        (
+            () -> begin
+                if root !== nothing && isopen(root)
+                    descriptor_closer(root)
+                end
+                return nothing
+            end,
+            () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+        ),
+        "$(label) private input spool descriptors",
+    )
+    return nothing
+end
+
+function _handle_cleanup_failure_with_primary(
+        primary_error::Any,
+        cleanup_error::Any,
+        message::AbstractString;
+        cleanup_evidence::Any = nothing,
+)::Nothing
+    if cleanup_error isa InterruptException &&
+       !(primary_error isa InterruptException)
+        throw(cleanup_error)
+    end
+    @warn String(message) cleanup_evidence primary_error cleanup_error
+    return nothing
+end
+
+function _run_cleanup_after_primary_error!(
+        cleanup_runner::Function,
+        primary_error::Any,
+        message::AbstractString;
+        cleanup_evidence::Any = nothing,
+)::Nothing
+    try
+        cleanup_runner()
+    catch cleanup_error
+        _handle_cleanup_failure_with_primary(
+            primary_error,
+            cleanup_error,
+            message;
+            cleanup_evidence,
+        )
     end
     return nothing
+end
+
+function _run_cleanup_steps!(
+        cleanup_steps::Tuple,
+        cleanup_label::AbstractString,
+)::Nothing
+    cleanup_errors = Any[]
+    for cleanup_step in cleanup_steps
+        cleanup_step isa Function || throw(ArgumentError(
+            "$(cleanup_label) cleanup steps must be callable functions.",
+        ))
+        try
+            cleanup_step()
+        catch cleanup_error
+            push!(cleanup_errors, cleanup_error)
+        end
+    end
+    isempty(cleanup_errors) && return nothing
+    selected_index = findfirst(
+        cleanup_error -> cleanup_error isa InterruptException,
+        cleanup_errors,
+    )
+    selected_index === nothing && (selected_index = firstindex(cleanup_errors))
+    selected_error = cleanup_errors[selected_index]
+    for (index, cleanup_error) in enumerate(cleanup_errors)
+        index == selected_index && continue
+        @warn(
+            "$(cleanup_label) encountered an additional cleanup failure",
+            selected_error,
+            cleanup_error,
+        )
+    end
+    throw(selected_error)
+end
+
+function _run_with_cleanup!(
+        action::Function,
+        cleanup_runner::Function,
+        cleanup_message::AbstractString;
+        cleanup_evidence::Any = nothing,
+)::Any
+    result = try
+        action()
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_runner,
+            primary_error,
+            cleanup_message;
+            cleanup_evidence,
+        )
+        Base.rethrow()
+    end
+    cleanup_runner()
+    return result
 end
 
 function _unicycler_stable_input_snapshot(
@@ -2305,6 +2377,7 @@ function _unicycler_stable_input_snapshot(
         spool_root::AbstractString,
         spool_name::AbstractString;
         after_copy_hook::Function = binding -> nothing,
+        stream_closer::Function = close,
 )::NamedTuple
     _require_unchanged_unicycler_input_source(source, label)
     extension = endswith(lowercase(source.path), ".gz") ? ".fastq.gz" :
@@ -2317,43 +2390,58 @@ function _unicycler_stable_input_snapshot(
         Base.JL_O_CLOEXEC,
     )
     output = nothing
-    try
-        input_status = stat(input)
-        input_status.device == source.device &&
-            input_status.inode == source.inode &&
-            filesize(input) == source.size_bytes || throw(ErrorException(
-                "Unicycler $(label) changed physical identity or size before " *
-                "its stable snapshot was copied.",
+    _run_with_cleanup!(
+        () -> begin
+            input_status = stat(input)
+            input_status.device == source.device &&
+                input_status.inode == source.inode &&
+                filesize(input) == source.size_bytes || throw(ErrorException(
+                    "Unicycler $(label) changed physical identity or size " *
+                    "before its stable snapshot was copied.",
+                ))
+            output = Base.Filesystem.open(
+                consumed_path,
+                Base.JL_O_WRONLY |
+                Base.JL_O_CREAT |
+                Base.JL_O_EXCL |
+                Base.JL_O_NOFOLLOW |
+                Base.JL_O_CLOEXEC,
+                0o600,
+            )
+            remaining = source.size_bytes
+            buffer = Vector{UInt8}(undef, 1024 * 1024)
+            while remaining > 0
+                requested = min(length(buffer), remaining)
+                count = readbytes!(input, buffer, requested)
+                count > 0 || throw(ErrorException(
+                    "Unicycler $(label) shrank while its stable input " *
+                    "snapshot was materialized.",
+                ))
+                write(output, @view buffer[1:count])
+                remaining -= count
+            end
+            eof(input) || throw(ErrorException(
+                "Unicycler $(label) grew while its stable input snapshot " *
+                "was materialized.",
             ))
-        output = Base.Filesystem.open(
-            consumed_path,
-            Base.JL_O_WRONLY |
-            Base.JL_O_CREAT |
-            Base.JL_O_EXCL |
-            Base.JL_O_NOFOLLOW |
-            Base.JL_O_CLOEXEC,
-            0o600,
-        )
-        remaining = source.size_bytes
-        buffer = Vector{UInt8}(undef, 1024 * 1024)
-        while remaining > 0
-            requested = min(length(buffer), remaining)
-            count = readbytes!(input, buffer, requested)
-            count > 0 || throw(ErrorException(
-                "Unicycler $(label) shrank while its stable input " *
-                "snapshot was materialized.",
-            ))
-            write(output, @view buffer[1:count])
-            remaining -= count
-        end
-        eof(input) || throw(ErrorException(
-            "Unicycler $(label) grew while its stable input snapshot " *
-            "was materialized.",
-        ))
-    finally
-        output === nothing || close(output)
-        close(input)
-    end
+            return nothing
+        end,
+        () -> _run_cleanup_steps!(
+            (
+                () -> begin
+                    if output !== nothing && isopen(output)
+                        stream_closer(output)
+                    end
+                    return nothing
+                end,
+                () -> isopen(input) ? stream_closer(input) : nothing,
+            ),
+            "Unicycler stable-input copy streams",
+        ),
+        "Unicycler stable-input stream cleanup failed while preserving the " *
+        "primary copy failure";
+        cleanup_evidence = consumed_path,
+    )
     after_copy_hook((;
         source_path = source.path,
         consumed_path,
@@ -2438,7 +2526,7 @@ function _with_unicycler_stable_input_snapshots(
     )
     chmod(spool_root, 0o700)
     spool_root_identity = _unicycler_spool_root_identity(spool_root)
-    try
+    result = try
         _require_unchanged_unicycler_spool_root(spool_root_identity)
         short_1_binding = _unicycler_stable_input_snapshot(
             sources[1],
@@ -2487,7 +2575,7 @@ function _with_unicycler_stable_input_snapshots(
                          short_2_binding.provenance,
             "long_reads" => long_binding.provenance,
         )
-        return action((;
+        action((;
             short_1 = short_1_binding.path,
             short_2 = short_2_binding === nothing ? nothing :
                       short_2_binding.path,
@@ -2495,24 +2583,43 @@ function _with_unicycler_stable_input_snapshots(
             input_fingerprints,
             spool_root,
         ))
-    catch caught
-        caught isa InterruptException && rethrow()
-        if caught isa Base.IOError || caught isa SystemError
-            throw(ErrorException(
-                "Unicycler input spooling failed after cleanup, possibly " *
-                "because scratch space was exhausted: " *
-                sprint(showerror, caught),
-            ))
-        end
-        rethrow()
-    finally
-        if ispath(spool_root) || islink(spool_root)
+    catch primary_error
+        cleanup_succeeded = true
+        try
             _remove_exact_private_input_spool_root!(
                 spool_root_identity,
                 "Unicycler",
             )
+        catch cleanup_error
+            cleanup_succeeded = false
+            cleanup_message =
+                "Unicycler retained private input spool cleanup evidence " *
+                "while preserving the primary workflow failure"
+            _handle_cleanup_failure_with_primary(
+                primary_error,
+                cleanup_error,
+                cleanup_message;
+                cleanup_evidence = spool_root,
+            )
         end
+        primary_error isa InterruptException && Base.rethrow()
+        if primary_error isa Base.IOError || primary_error isa SystemError
+            cleanup_status = cleanup_succeeded ?
+                             "cleanup completed" :
+                             "cleanup evidence retained"
+            throw(ErrorException(
+                "Unicycler input spooling failed ($(cleanup_status)), possibly " *
+                "because scratch space was exhausted: " *
+                sprint(showerror, primary_error),
+            ))
+        end
+        Base.rethrow()
     end
+    _remove_exact_private_input_spool_root!(
+        spool_root_identity,
+        "Unicycler",
+    )
+    return result
 end
 
 function _validate_unicycler_stable_input_snapshots(
@@ -2680,12 +2787,19 @@ function _unicycler_observed_input_fingerprints(
     return observed
 end
 
-function _unicycler_fasta_sequences_from_reader(
+function _unicycler_normalized_sequence_sha256(
+        sequence::AbstractString,
+)::String
+    return SHA.bytes2hex(SHA.sha256(codeunits(uppercase(String(sequence)))))
+end
+
+function _unicycler_fasta_sequence_digests_from_reader(
         reader::FASTX.FASTA.Reader,
         path::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_closer::Function = close,
 )::Dict{String, String}
-    records = Dict{String, String}()
+    digests = Dict{String, String}()
     try
         for record in reader
             record isa FASTX.FASTA.Record || error(
@@ -2695,7 +2809,7 @@ function _unicycler_fasta_sequences_from_reader(
             isempty(identifier) && error(
                 "Unicycler $(label) contains an empty FASTA identifier.",
             )
-            haskey(records, identifier) && error(
+            haskey(digests, identifier) && error(
                 "Unicycler $(label) contains duplicate FASTA identifier " *
                 repr(identifier),
             )
@@ -2708,32 +2822,44 @@ function _unicycler_fasta_sequences_from_reader(
                 "Unicycler $(label) contains invalid DNA for FASTA record " *
                 repr(identifier),
             )
-            records[identifier] = sequence
+            digests[identifier] =
+                _unicycler_normalized_sequence_sha256(sequence)
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        if caught isa ErrorException && startswith(caught.msg, "Unicycler ")
-            rethrow()
+        primary_error = if caught isa InterruptException ||
+                           (caught isa ErrorException &&
+                            startswith(caught.msg, "Unicycler "))
+            caught
+        else
+            ErrorException(
+                "Unicycler $(label) is not valid FASTA: $(repr(path)). " *
+                "Cause: $(sprint(showerror, caught))",
+            )
         end
-        error(
-            "Unicycler $(label) is not valid FASTA: $(repr(path)). Cause: " *
-            sprint(showerror, caught),
+        _run_cleanup_after_primary_error!(
+            () -> reader_closer(reader),
+            primary_error,
+            "Unicycler $(label) FASTA digest reader cleanup failed while " *
+            "preserving the primary validation failure";
+            cleanup_evidence = path,
         )
-    finally
-        close(reader)
+        primary_error === caught ? Base.rethrow() : throw(primary_error)
     end
-    isempty(records) && error(
+    reader_closer(reader)
+    isempty(digests) && error(
         "Unicycler $(label) contains no FASTA records: $(repr(path)).",
     )
-    return records
+    return digests
 end
 
-function _unicycler_fasta_sequences(
+function _unicycler_fasta_sequence_digests(
         path::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_opener::Function = Mycelia.open_fastx,
+        reader_closer::Function = close,
 )::Dict{String, String}
     reader = try
-        Mycelia.open_fastx(path)
+        reader_opener(path)
     catch caught
         caught isa InterruptException && rethrow()
         error(
@@ -2741,26 +2867,22 @@ function _unicycler_fasta_sequences(
             sprint(showerror, caught),
         )
     end
-    return _unicycler_fasta_sequences_from_reader(reader, path, label)
+    return _unicycler_fasta_sequence_digests_from_reader(
+        reader,
+        path,
+        label;
+        reader_closer,
+    )
 end
 
-function _unicycler_fasta_sequences(
-        bytes::AbstractVector{UInt8},
-        path::AbstractString,
-        label::AbstractString,
-)::Dict{String, String}
-    reader = FASTX.FASTA.Reader(IOBuffer(bytes))
-    return _unicycler_fasta_sequences_from_reader(reader, path, label)
-end
-
-function _unicycler_gfa_segment_sequences_from_input(
+function _unicycler_gfa_segment_sequence_digests_from_input(
         input::IO,
         path::AbstractString,
         label::AbstractString,
 )::Dict{String, String}
     _require_valid_metamdbg_gfa_input(input, "Unicycler $(label)", path)
     seekstart(input)
-    segments = Dict{String, String}()
+    digests = Dict{String, String}()
     for (line_number, line) in enumerate(eachline(input))
         isempty(line) && continue
         startswith(line, "#") && continue
@@ -2776,7 +2898,7 @@ function _unicycler_gfa_segment_sequences_from_input(
             "Unicycler $(label) has an empty segment identifier at line " *
             "$(line_number).",
         )
-        haskey(segments, identifier) && error(
+        haskey(digests, identifier) && error(
             "Unicycler $(label) contains duplicate segment identifier " *
             repr(identifier),
         )
@@ -2787,71 +2909,45 @@ function _unicycler_gfa_segment_sequences_from_input(
         occursin(r"^[ACGTRYSWKMBDHVN]+$", sequence) || error(
             "Unicycler $(label) segment $(repr(identifier)) contains invalid DNA.",
         )
-        segments[identifier] = sequence
+        digests[identifier] =
+            _unicycler_normalized_sequence_sha256(sequence)
     end
-    isempty(segments) && error(
+    isempty(digests) && error(
         "Unicycler $(label) contains no GFA segment records: $(repr(path)).",
     )
-    return segments
+    return digests
 end
 
-function _unicycler_gfa_segment_sequences(
+function _unicycler_gfa_segment_sequence_digests(
         path::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        input_opener::Function = path -> open(path, "r"),
+        input_closer::Function = close,
 )::Dict{String, String}
     normalized_path = _require_metamdbg_regular_file(
         path,
         "Unicycler $(label)",
     )
-    return open(normalized_path, "r") do input
-        _unicycler_gfa_segment_sequences_from_input(
+    input = try
+        input_opener(normalized_path)
+    catch caught
+        caught isa InterruptException && rethrow()
+        error(
+            "Unicycler $(label) is not valid GFA: $(repr(normalized_path)). " *
+            "Cause: $(sprint(showerror, caught))",
+        )
+    end
+    return _run_with_cleanup!(
+        () -> _unicycler_gfa_segment_sequence_digests_from_input(
             input,
             normalized_path,
             label,
-        )
-    end
-end
-
-function _unicycler_gfa_segment_sequences(
-        bytes::AbstractVector{UInt8},
-        path::AbstractString,
-        label::AbstractString,
-)::Dict{String, String}
-    return _unicycler_gfa_segment_sequences_from_input(
-        IOBuffer(bytes),
-        path,
-        label,
+        ),
+        () -> input_closer(input),
+        "Unicycler $(label) GFA digest input cleanup failed while preserving " *
+        "the primary validation failure";
+        cleanup_evidence = normalized_path,
     )
-end
-
-function _require_valid_unicycler_artifacts(
-        assembly_path::AbstractString,
-        graph_path::AbstractString,
-        outdir::AbstractString,
-)::NamedTuple
-    assembly = _require_unicycler_artifact(
-        assembly_path,
-        "assembly FASTA",
-        outdir,
-    )
-    graph = _require_unicycler_artifact(
-        graph_path,
-        "assembly GFA",
-        outdir,
-    )
-    fasta_sequences = _unicycler_fasta_sequences(
-        assembly,
-        "assembly FASTA",
-    )
-    gfa_sequences = _unicycler_gfa_segment_sequences(
-        graph,
-        "assembly GFA",
-    )
-    _require_matching_unicycler_artifact_sequences(
-        fasta_sequences,
-        gfa_sequences,
-    )
-    return (; assembly, graph)
 end
 
 function _require_matching_unicycler_artifact_sequences(
@@ -2878,33 +2974,52 @@ function _require_matching_unicycler_artifact_sequences(
     return nothing
 end
 
-function _unicycler_artifact_fingerprint(path::AbstractString)::Dict{String, Any}
+function _unicycler_streaming_artifact_sha256(
+        path::AbstractString;
+        input_opener::Function = path -> open(path, "r"),
+        input_closer::Function = close,
+)::String
+    input = input_opener(path)
+    return _run_with_cleanup!(
+        () -> SHA.bytes2hex(SHA.sha256(input)),
+        () -> input_closer(input),
+        "Unicycler artifact digest input cleanup failed while preserving the " *
+        "primary streaming digest failure";
+        cleanup_evidence = path,
+    )
+end
+
+function _unicycler_artifact_fingerprint(
+        path::AbstractString,
+)::Dict{String, Any}
     normalized_path = normpath(abspath(String(path)))
     return Dict{String, Any}(
         "canonical_path" => realpath(normalized_path),
         "size_bytes" => filesize(normalized_path),
-        "sha256" => _unicycler_sha256(normalized_path),
+        "sha256" => _unicycler_streaming_artifact_sha256(normalized_path),
     )
 end
 
-function _unicycler_buffered_artifact_snapshot(
+function _unicycler_streaming_semantic_artifact_snapshot(
         path::AbstractString,
         label::AbstractString,
         outdir::AbstractString,
+        sequence_digester::Function;
+        artifact_fingerprinter::Function = _unicycler_artifact_fingerprint,
 )::NamedTuple
     normalized_path = _require_unicycler_artifact(path, label, outdir)
-    bytes = open(normalized_path, "r") do input
-        read(input)
-    end
-    isempty(bytes) && error(
-        "Unicycler $(label) became empty while its stable byte snapshot was read.",
+    fingerprint_before = artifact_fingerprinter(normalized_path)
+    sequence_digests = sequence_digester(normalized_path, label)
+    fingerprint_after = artifact_fingerprinter(normalized_path)
+    fingerprint_after == fingerprint_before || error(
+        "Unicycler $(label) changed while its streaming semantic artifact " *
+        "snapshot was being read; refusing unvalidated content.",
     )
-    fingerprint = Dict{String, Any}(
-        "canonical_path" => normalized_path,
-        "size_bytes" => length(bytes),
-        "sha256" => SHA.bytes2hex(SHA.sha256(bytes)),
+    return (;
+        path = normalized_path,
+        sequence_digests,
+        fingerprint = fingerprint_before,
     )
-    return (; path = normalized_path, bytes, fingerprint)
 end
 
 function _unicycler_semantic_artifact_snapshots(
@@ -2912,30 +3027,29 @@ function _unicycler_semantic_artifact_snapshots(
         graph_path::AbstractString,
         outdir::AbstractString;
         after_semantic_validation_hook::Function = artifacts -> nothing,
+        fasta_sequence_digester::Function =
+            _unicycler_fasta_sequence_digests,
+        gfa_sequence_digester::Function =
+            _unicycler_gfa_segment_sequence_digests,
+        artifact_fingerprinter::Function = _unicycler_artifact_fingerprint,
 )::NamedTuple
-    assembly = _unicycler_buffered_artifact_snapshot(
+    assembly = _unicycler_streaming_semantic_artifact_snapshot(
         assembly_path,
         "assembly FASTA",
         outdir,
+        fasta_sequence_digester;
+        artifact_fingerprinter,
     )
-    graph = _unicycler_buffered_artifact_snapshot(
+    graph = _unicycler_streaming_semantic_artifact_snapshot(
         graph_path,
         "assembly GFA",
         outdir,
-    )
-    fasta_sequences = _unicycler_fasta_sequences(
-        assembly.bytes,
-        assembly.path,
-        "assembly FASTA",
-    )
-    gfa_sequences = _unicycler_gfa_segment_sequences(
-        graph.bytes,
-        graph.path,
-        "assembly GFA",
+        gfa_sequence_digester;
+        artifact_fingerprinter,
     )
     _require_matching_unicycler_artifact_sequences(
-        fasta_sequences,
-        gfa_sequences,
+        assembly.sequence_digests,
+        graph.sequence_digests,
     )
     artifacts = (; assembly = assembly.path, graph = graph.path)
     snapshots = (;
@@ -2944,12 +3058,12 @@ function _unicycler_semantic_artifact_snapshots(
     )
     after_semantic_validation_hook(artifacts)
     observed_snapshots = (;
-        assembly = _unicycler_artifact_fingerprint(artifacts.assembly),
-        graph = _unicycler_artifact_fingerprint(artifacts.graph),
+        assembly = artifact_fingerprinter(artifacts.assembly),
+        graph = artifact_fingerprinter(artifacts.graph),
     )
     observed_snapshots == snapshots || error(
         "Unicycler assembly FASTA or GFA changed while its stable semantic " *
-        "artifact snapshot was being bound; refusing unvalidated bytes.",
+        "artifact snapshot was being bound; refusing unvalidated content.",
     )
     return (; artifacts..., snapshots)
 end
@@ -3001,6 +3115,11 @@ end
 function _write_unicycler_run_contract(
         outdir::AbstractString,
         contract::AbstractDict,
+        ;
+        after_temporary_binding_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
 )::String
     normalized_outdir = _require_exact_unicycler_output_dir(outdir)
     marker = joinpath(normalized_outdir, _UNICYCLER_CONTRACT_FILENAME)
@@ -3012,19 +3131,85 @@ function _write_unicycler_run_contract(
         normalized_outdir;
         cleanup = false,
     )
+    temporary_identity = _metamdbg_regular_file_identity(temporary_path)
+    cleanup_temporary = function ()
+        _run_cleanup_steps!(
+            (
+                () -> isopen(temporary_io) ? close(temporary_io) : nothing,
+                () -> begin
+                    if _output_root_path_entry_exists(temporary_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            temporary_path,
+                            temporary_identity,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "Unicycler run-contract temporary artifact",
+        )
+        return nothing
+    end
+    cleanup_failed_publication = function ()
+        _run_cleanup_steps!(
+            (
+                cleanup_temporary,
+                () -> begin
+                    if _output_root_path_entry_exists(marker)
+                        _remove_exact_metamdbg_durable_file!(
+                            marker,
+                            merge(temporary_identity, (; path = marker)),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "Unicycler run-contract publication",
+        )
+        return nothing
+    end
     try
+        after_temporary_binding_hook(temporary_path, temporary_identity)
         JSON.print(temporary_io, contract, 2)
         write(temporary_io, '\n')
         flush(temporary_io)
         _fsync_metamdbg_file(temporary_io, temporary_path)
         close(temporary_io)
-        mv(temporary_path, marker)
+        observed_temporary_identity =
+            _metamdbg_regular_file_identity(temporary_path)
+        _metamdbg_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "Unicycler run-contract temporary artifact was replaced before " *
+            "publication: $(temporary_path).",
+        )
+        Base.Filesystem.hardlink(temporary_path, marker)
+        post_hardlink_hook(marker, temporary_identity)
+        observed_marker_identity = _metamdbg_regular_file_identity(marker)
+        _metamdbg_path_identity_matches(
+            observed_marker_identity,
+            merge(temporary_identity, (; path = marker)),
+        ) && Base.Filesystem.samefile(temporary_path, marker) || error(
+            "Unicycler run-contract publication did not bind its validated " *
+            "temporary inode: $(marker).",
+        )
         _fsync_metamdbg_directory(normalized_outdir)
-    finally
-        isopen(temporary_io) && close(temporary_io)
-        (ispath(temporary_path) || islink(temporary_path)) &&
-            rm(temporary_path; force = true)
+        _remove_exact_metamdbg_durable_file!(
+            temporary_path,
+            temporary_identity,
+        )
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_failed_publication,
+            primary_error,
+            "Unicycler run-contract cleanup failed while preserving the " *
+            "primary publication failure";
+            cleanup_evidence = temporary_path,
+        )
+        Base.rethrow()
     end
+    cleanup_temporary()
     _require_unicycler_artifact(marker, "run-contract marker", normalized_outdir)
     return marker
 end
@@ -3104,6 +3289,8 @@ function _run_unicycler_with_contract(;
         input_fingerprinter::Function = _unicycler_input_fingerprint,
         after_artifact_semantic_validation_hook::Function =
             artifacts -> nothing,
+        pre_empty_output_removal_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
         pre_environment_validation::Function = () -> nothing,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_unicycler_environment_lock,
@@ -3315,17 +3502,33 @@ function _run_unicycler_with_contract(;
             end
             if isdir(reserved_outdir)
                 _require_exact_unicycler_output_dir(reserved_outdir)
+                reserved_outdir_identity =
+                    _metamdbg_directory_path_identity(reserved_outdir)
                 isempty(readdir(reserved_outdir)) || throw(ArgumentError(
                     "Refusing to remove non-empty Unicycler outdir without a " *
                     "completed assembly: $(repr(reserved_outdir)).",
                 ))
+                pre_empty_output_removal_hook(
+                    reserved_outdir,
+                    reserved_outdir_identity,
+                )
+                _metamdbg_directory_path_identity(reserved_outdir) ==
+                    reserved_outdir_identity || throw(ArgumentError(
+                    "Unicycler outdir was replaced before identity-bound " *
+                    "nonrecursive removal: $(repr(reserved_outdir)).",
+                ))
                 try
-                    rm(reserved_outdir)
+                    _remove_exact_metamdbg_durable_directory!(
+                        reserved_outdir,
+                        reserved_outdir_identity,
+                    )
                 catch removal_error
                     removal_error isa InterruptException && rethrow()
                     throw(ArgumentError(
                         "Unicycler outdir changed or was not empty during " *
-                        "nonrecursive removal: $(repr(reserved_outdir)).",
+                        "identity-bound nonrecursive removal: " *
+                        "$(repr(reserved_outdir)). Cause: " *
+                        sprint(showerror, removal_error),
                     ))
                 end
             end
@@ -3497,6 +3700,8 @@ function _run_unicycler(;
         input_fingerprinter::Function = _unicycler_input_fingerprint,
         after_artifact_semantic_validation_hook::Function =
             artifacts -> nothing,
+        pre_empty_output_removal_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_unicycler_environment_lock,
         output_lock_runner::Function = _with_unicycler_output_lock,
@@ -3568,6 +3773,7 @@ function _run_unicycler(;
             toolchain_inspector,
             input_fingerprinter,
             after_artifact_semantic_validation_hook,
+            pre_empty_output_removal_hook,
             pre_environment_validation,
             environment_lock_path,
             environment_lock_runner,
@@ -3749,8 +3955,8 @@ Named tuple containing:
   unbound output fails loudly. Fresh local runs report a locked before/after
   package inventory.
 - `CollectExecutor`, `DryRunExecutor`, and `SlurmExecutor(dry_run=true)` return
-  `status=:planned`, the submission result, and only the FASTA/GFA paths
-  actually produced by the planned raw command. Such output has no reusable
+  `status=:planned`, the submission result, and only the FASTA/GFA paths that
+  the planned raw command is expected to produce. Such output has no reusable
   Mycelia contract marker and therefore cannot be reused by a later local call.
   Real nonlocal submission remains disabled until the remote runtime can hold
   the same lifecycle locks and finalize the durable contract.
@@ -3764,13 +3970,15 @@ Named tuple containing:
   revalidates their FASTQ semantics, record counts, and hashes, and only then
   prepares the environment. The command never consumes caller paths; the
   durable contract retains their canonical provenance and the exact
-  consumed-snapshot hashes. Snapshot cleanup is guaranteed on success or
-  failure.
+  consumed-snapshot hashes. Exact identity-bound snapshot cleanup is attempted
+  after success or failure. A cleanup failure fails loudly or reports retained
+  evidence alongside an existing primary failure rather than deleting a
+  replacement or silently losing failure context.
 - Returns `outdir`, `assembly`, and `graph` as canonical absolute safety fields,
   even when the caller supplied a relative path or a stable parent-directory
   alias. `requested_outdir` is audit-only caller spelling and must not be used
   for artifact access or cleanup authority.
-- Utilizes all available CPU threads
+- Uses the configured `threads` count.
 """
 function run_unicycler(;
         short_1::AbstractString,
@@ -5396,21 +5604,6 @@ function _metamdbg_expected_toolchain()::NamedTuple
     )
 end
 
-function _metamdbg_package_record_field(
-        package_record::Union{NamedTuple, AbstractDict},
-        field::Symbol,
-)::Any
-    if package_record isa NamedTuple
-        return hasproperty(package_record, field) ?
-               getproperty(package_record, field) : nothing
-    end
-    return get(
-        package_record,
-        String(field),
-        get(package_record, field, nothing),
-    )
-end
-
 function _metamdbg_normalized_package_inventory(
         package_records::AbstractVector,
 )::Vector{NamedTuple}
@@ -5423,12 +5616,12 @@ function _metamdbg_normalized_package_inventory(
             "metaMDBG conda package inventory record $(record_index) is not " *
             "an object.",
         )
-        name = _metamdbg_package_record_field(package_record, :name)
-        version = _metamdbg_package_record_field(package_record, :version)
-        build = _metamdbg_package_record_field(package_record, :build_string)
+        name = _conda_package_record_field(package_record, :name)
+        version = _conda_package_record_field(package_record, :version)
+        build = _conda_package_record_field(package_record, :build_string)
         build === nothing &&
-            (build = _metamdbg_package_record_field(package_record, :build))
-        channel = _metamdbg_package_record_field(package_record, :channel)
+            (build = _conda_package_record_field(package_record, :build))
+        channel = _conda_package_record_field(package_record, :channel)
         fields = (; name, version, build, channel)
         for (field_name, value) in pairs(fields)
             value isa AbstractString && !isempty(value) || error(
@@ -5552,6 +5745,51 @@ try:
     os.fsync(directory_descriptor)
 finally:
     os.close(directory_descriptor)
+"""
+end
+
+function _metamdbg_runtime_consumed_owner_validator_python()::String
+    return raw"""
+import os
+import stat
+import sys
+
+
+path = sys.argv[1]
+expected_identity = sys.argv[2]
+expected_names = frozenset(sys.argv[3:])
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+descriptor = os.open(path, flags)
+try:
+    status_before = os.fstat(descriptor)
+    identity_before = f"{status_before.st_dev}:{status_before.st_ino}"
+    if not stat.S_ISDIR(status_before.st_mode):
+        raise RuntimeError("consumed owner descriptor is not a directory")
+    if identity_before != expected_identity:
+        raise RuntimeError("consumed owner descriptor identity changed")
+    path_status_before = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(path_status_before.st_mode)
+        or f"{path_status_before.st_dev}:{path_status_before.st_ino}"
+        != expected_identity
+    ):
+        raise RuntimeError("consumed owner path identity changed")
+    with os.scandir(descriptor) as iterator:
+        names = [entry.name for entry in iterator]
+    if len(names) != len(expected_names) or frozenset(names) != expected_names:
+        raise RuntimeError("consumed owner has an unexpected entry set")
+    status_after = os.fstat(descriptor)
+    if f"{status_after.st_dev}:{status_after.st_ino}" != expected_identity:
+        raise RuntimeError("consumed owner descriptor changed during scan")
+    path_status_after = os.stat(path, follow_symlinks=False)
+    if (
+        not stat.S_ISDIR(path_status_after.st_mode)
+        or f"{path_status_after.st_dev}:{path_status_after.st_ino}"
+        != expected_identity
+    ):
+        raise RuntimeError("consumed owner path changed during scan")
+finally:
+    os.close(descriptor)
 """
 end
 
@@ -5874,6 +6112,7 @@ for required_flag in ("O_DIRECTORY", "O_NOFOLLOW"):
 directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 root_descriptor = os.open(root, directory_flags)
 inventory_created = False
+inventory_identity = None
 try:
     root_status = os.fstat(root_descriptor)
     if not stat.S_ISDIR(root_status.st_mode):
@@ -5933,6 +6172,7 @@ try:
     inventory_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     inventory_descriptor = os.open(inventory, inventory_flags, 0o600)
     inventory_created = True
+    inventory_identity = identity(os.fstat(inventory_descriptor))
     try:
         with os.fdopen(inventory_descriptor, "wb", closefd=True) as stream:
             for relative_path in inventory_entries:
@@ -5944,7 +6184,11 @@ try:
         except OSError:
             pass
         raise
-""" * inventory_hook * raw"""    second_manifest, _second_entry_paths = build_manifest(
+""" * inventory_hook * raw"""    if identity(
+        os.stat(inventory, follow_symlinks=False)
+    ) != inventory_identity:
+        fail("directory inventory path changed after publication")
+    second_manifest, _second_entry_paths = build_manifest(
         root_descriptor,
         recursive,
         2,
@@ -5955,10 +6199,14 @@ try:
     if second_manifest != first_manifest:
         fail("directory manifest changed before inventory publication")
     require_root_path_identity(root, root_status)
+    if identity(os.stat(inventory, follow_symlinks=False)) != inventory_identity:
+        fail("directory inventory path changed during validation")
 except BaseException:
-    if inventory_created:
+    if inventory_created and inventory_identity is not None:
         try:
-            os.unlink(inventory)
+            observed_inventory = os.stat(inventory, follow_symlinks=False)
+            if identity(observed_inventory) == inventory_identity:
+                os.unlink(inventory)
         except FileNotFoundError:
             pass
     raise
@@ -6307,10 +6555,11 @@ end
 function _canonical_metamdbg_conda_runner(
         conda_runner::AbstractString,
 )::String
-    executable = Sys.which(String(conda_runner))
-    candidate = executable === nothing ?
-                abspath(String(conda_runner)) : String(executable)
-    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+    return _canonical_conda_runner(
+        conda_runner;
+        subject = "metaMDBG",
+        require_nonempty = false,
+    )
 end
 
 function _metamdbg_environment_prefix(
@@ -6584,11 +6833,21 @@ function _with_metamdbg_output_root_guard(
             )
         catch identity_error
             identity_error isa InterruptException && rethrow()
-            error(
-                "metaMDBG output root changed while $(operation) failed. " *
-                "Operation cause: $(sprint(showerror, primary_error)). " *
-                "Identity cause: $(sprint(showerror, identity_error))",
-            )
+            if primary_error isa InterruptException
+                @warn(
+                    "metaMDBG output root changed while preserving an " *
+                    "interrupted operation",
+                    operation,
+                    primary_error,
+                    identity_error,
+                )
+            else
+                error(
+                    "metaMDBG output root changed while $(operation) failed. " *
+                    "Operation cause: $(sprint(showerror, primary_error)). " *
+                    "Identity cause: $(sprint(showerror, identity_error))",
+                )
+            end
         end
         Base.rethrow()
     end
@@ -6706,9 +6965,21 @@ function _with_metamdbg_output_lock(
             catch preservation_error
                 @error "metaMDBG could not preserve a shared fail-closed " *
                        "reservation after private lifecycle cleanup failed" lock_path primary_error cleanup_error preservation_error
+                _handle_cleanup_failure_with_primary(
+                    primary_error,
+                    preservation_error,
+                    "metaMDBG output-lock cleanup evidence preservation " *
+                    "failed while preserving the primary workflow failure";
+                    cleanup_evidence = lock_path,
+                )
             end
-            @warn "metaMDBG failed to release its output lock while preserving " *
-                  "the primary workflow failure" lock_path primary_error cleanup_error
+            _handle_cleanup_failure_with_primary(
+                primary_error,
+                cleanup_error,
+                "metaMDBG failed to release its output lock while preserving " *
+                "the primary workflow failure";
+                cleanup_evidence = lock_path,
+            )
         end
         Base.rethrow()
     end
@@ -6718,6 +6989,11 @@ function _with_metamdbg_output_lock(
         try
             lock_cleanup_failure_handler(lock_path, cleanup_error)
         catch preservation_error
+            if cleanup_error isa InterruptException
+                throw(cleanup_error)
+            elseif preservation_error isa InterruptException
+                rethrow()
+            end
             error(
                 "metaMDBG private lifecycle cleanup failed and its shared " *
                 "fail-closed reservation could not be published. Private " *
@@ -6813,17 +7089,11 @@ function _remove_metamdbg_lifecycle_cleanup_reservation!(
     return nothing
 end
 
-function _metamdbg_output_root_pid_lock_identity(
-        lock_path::AbstractString,
-)::NamedTuple
-    normalized_path = normpath(abspath(String(lock_path)))
-    return _metamdbg_output_root_pid_lock_snapshot(normalized_path).identity
-end
-
 function _metamdbg_output_root_pid_lock_snapshot(
         lock_path::AbstractString;
         post_parent_descriptor_open_hook::Function =
             (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
 )::NamedTuple
     normalized_path = normpath(abspath(String(lock_path)))
     parent_identity =
@@ -6836,7 +7106,7 @@ function _metamdbg_output_root_pid_lock_snapshot(
         Base.JL_O_CLOEXEC,
     )
     lock = nothing
-    try
+    result = try
         _require_unchanged_metamdbg_directory_descriptor(
             parent,
             parent_identity,
@@ -6902,13 +7172,41 @@ function _metamdbg_output_root_pid_lock_snapshot(
             "metaMDBG output-root PID lock parent changed while its snapshot " *
             "was read: $(parent_identity.path).",
         )
-        return (; identity, contents)
-    finally
-        if lock !== nothing && isopen(lock)
-            close(lock)
-        end
-        close(parent)
+        (; identity, contents)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> _run_cleanup_steps!(
+                (
+                    () -> begin
+                        if lock !== nothing && isopen(lock)
+                            descriptor_closer(lock)
+                        end
+                        return nothing
+                    end,
+                    () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+                ),
+                "metaMDBG output-root PID-lock descriptors",
+            ),
+            primary_error,
+            "metaMDBG output-root PID-lock descriptor cleanup failed while " *
+            "preserving the primary snapshot failure";
+            cleanup_evidence = normalized_path,
+        )
+        Base.rethrow()
     end
+    _run_cleanup_steps!(
+        (
+            () -> begin
+                if lock !== nothing && isopen(lock)
+                    descriptor_closer(lock)
+                end
+                return nothing
+            end,
+            () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+        ),
+        "metaMDBG output-root PID-lock descriptors",
+    )
+    return result
 end
 
 function _remove_dead_metamdbg_output_root_pid_lock!(
@@ -7105,9 +7403,17 @@ function _recover_dead_metamdbg_lifecycle_locks!(
             )
         end
         pending_recovery_function(canonical_outdir)
-    finally
-        Base.close(lock_handle)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> Base.close(lock_handle),
+            primary_error,
+            "metaMDBG recovered lifecycle-lock cleanup failed while " *
+            "preserving the primary recovery failure";
+            cleanup_evidence = reservation_lock_path,
+        )
+        Base.rethrow()
     end
+    Base.close(lock_handle)
     return nothing
 end
 
@@ -7190,7 +7496,32 @@ function _with_metamdbg_output_domain_lock(
         private_cleanup_failed[] = true
         return nothing
     end
-    try
+    cleanup_domain = function ()
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if cleanup_reservation_identity !== nothing
+                        if private_cleanup_failed[]
+                            _require_unchanged_metamdbg_lifecycle_cleanup_reservation(
+                                cleanup_reservation_path,
+                                cleanup_reservation_identity,
+                            )
+                        else
+                            _remove_metamdbg_lifecycle_cleanup_reservation!(
+                                cleanup_reservation_path,
+                                cleanup_reservation_identity,
+                            )
+                        end
+                    end
+                    return nothing
+                end,
+                () -> Base.close(lock_handle),
+            ),
+            "metaMDBG output-domain",
+        )
+        return nothing
+    end
+    result = try
         _require_exclusive_output_root_reservation(
             canonical_outdir,
             reservation_lock_path;
@@ -7201,30 +7532,23 @@ function _with_metamdbg_output_domain_lock(
         _publish_metamdbg_lifecycle_cleanup_reservation!(canonical_outdir)
         cleanup_reservation_identity =
             _metamdbg_output_lock_identity(cleanup_reservation_path)
-        return _with_metamdbg_output_lock(
+        _with_metamdbg_output_lock(
             action,
             canonical_outdir;
             lock_cleanup_failure_handler = cleanup_failure_handler,
         )
-    finally
-        try
-            if cleanup_reservation_identity !== nothing
-                if private_cleanup_failed[]
-                    _require_unchanged_metamdbg_lifecycle_cleanup_reservation(
-                        cleanup_reservation_path,
-                        cleanup_reservation_identity,
-                    )
-                else
-                    _remove_metamdbg_lifecycle_cleanup_reservation!(
-                        cleanup_reservation_path,
-                        cleanup_reservation_identity,
-                    )
-                end
-            end
-        finally
-            Base.close(lock_handle)
-        end
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_domain,
+            primary_error,
+            "metaMDBG output-domain cleanup failed while preserving the " *
+            "primary workflow failure";
+            cleanup_evidence = canonical_outdir,
+        )
+        Base.rethrow()
     end
+    cleanup_domain()
+    return result
 end
 
 function _metamdbg_input_snapshot(
@@ -7353,6 +7677,9 @@ function _copy_metamdbg_input!(
         staging_root_identity::NamedTuple;
         pre_destination_open_hook::Function =
             (_root::NamedTuple, _destination::AbstractString) -> nothing,
+        post_copy_hook::Function =
+            (_source::AbstractString, _destination::AbstractString) -> nothing,
+        stream_closer::Function = close,
 )::String
     normalized_destination = normpath(abspath(String(destination)))
     dirname(normalized_destination) == staging_root_identity.path || error(
@@ -7386,6 +7713,22 @@ function _copy_metamdbg_input!(
         Base.JL_O_CLOEXEC;
         mode = 0o600,
     )
+    input = nothing
+    cleanup_streams = function ()
+        _run_cleanup_steps!(
+            (
+                () -> isopen(output) ? stream_closer(output) : nothing,
+                () -> begin
+                    if input !== nothing && isopen(input)
+                        stream_closer(input)
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG staged-input copy streams",
+        )
+        return nothing
+    end
     output_identity = try
         output_status = stat(output)
         isfile(output_status) || error(
@@ -7410,14 +7753,14 @@ function _copy_metamdbg_input!(
                 saved_errno,
             ))
         end
-        open(source, "r") do input
-            buffer = Vector{UInt8}(undef, 1024 * 1024)
-            while !eof(input)
-                bytes_read = readbytes!(input, buffer)
-                bytes_read == 0 && break
-                write(output, view(buffer, 1:bytes_read))
-            end
+        input = open(source, "r")
+        buffer = Vector{UInt8}(undef, 1024 * 1024)
+        while !eof(input)
+            bytes_read = readbytes!(input, buffer)
+            bytes_read == 0 && break
+            write(output, view(buffer, 1:bytes_read))
         end
+        post_copy_hook(source, normalized_destination)
         _fsync_metamdbg_descriptor(
             Base.fd(output),
             normalized_destination,
@@ -7446,9 +7789,17 @@ function _copy_metamdbg_input!(
             device = final_status.device,
             inode = final_status.inode,
         )
-    finally
-        close(output)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_streams,
+            primary_error,
+            "metaMDBG staged-input stream cleanup failed while preserving " *
+            "the primary copy failure";
+            cleanup_evidence = normalized_destination,
+        )
+        Base.rethrow()
     end
+    cleanup_streams()
     _require_unchanged_metamdbg_directory_descriptor(
         staging_directory,
         staging_root_identity,
@@ -7476,6 +7827,7 @@ function _cleanup_staged_metamdbg_inputs!(
         staged::NamedTuple;
         pre_remove_hook::Function =
             (_root::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
 )::Nothing
     root_descriptor = staged.root_descriptor
     try
@@ -7496,9 +7848,23 @@ function _cleanup_staged_metamdbg_inputs!(
             staged.root_identity;
             recursive = true,
         )
-    finally
-        root_descriptor !== nothing && isopen(root_descriptor) &&
-            close(root_descriptor)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> begin
+                if root_descriptor !== nothing && isopen(root_descriptor)
+                    descriptor_closer(root_descriptor)
+                end
+                return nothing
+            end,
+            primary_error,
+            "metaMDBG staged-input root descriptor cleanup failed while " *
+            "preserving the primary exact-removal failure";
+            cleanup_evidence = staged.root,
+        )
+        Base.rethrow()
+    end
+    if root_descriptor !== nothing && isopen(root_descriptor)
+        descriptor_closer(root_descriptor)
     end
     return nothing
 end
@@ -7633,11 +7999,15 @@ function _stage_metamdbg_inputs!(
                 root_descriptor = staging_directory,
             ))
         catch cleanup_error
-            cleanup_error isa InterruptException && rethrow()
             cleanup_message =
                 "metaMDBG retained staged-input cleanup evidence while " *
                 "preserving the primary staging failure"
-            @warn cleanup_message staging_root primary_error cleanup_error
+            _handle_cleanup_failure_with_primary(
+                primary_error,
+                cleanup_error,
+                cleanup_message;
+                cleanup_evidence = staging_root,
+            )
         end
         Base.rethrow()
     end
@@ -8208,6 +8578,7 @@ function _metamdbg_pending_submission_job_record(
         path::AbstractString;
         allow_empty::Bool = false,
         allow_incomplete::Bool = false,
+        descriptor_closer::Function = close,
 )::NamedTuple
     parts = _metamdbg_pending_submission_job_path_parts(
         path,
@@ -8222,26 +8593,30 @@ function _metamdbg_pending_submission_job_record(
         parts.path,
         Base.JL_O_RDONLY | Base.JL_O_CLOEXEC,
     )
-    bytes = try
-        _metamdbg_pending_submission_job_descriptor_identity(
-            pending_io,
-            parts.path,
-        ) == identity || error(
-            "metaMDBG pending submission job record was replaced before its " *
-            "contents were read: $(parts.path).",
-        )
-        captured_bytes = read(pending_io)
-        _metamdbg_pending_submission_job_descriptor_identity(
-            pending_io,
-            parts.path,
-        ) == identity || error(
-            "metaMDBG pending submission job descriptor changed while its " *
-            "contents were read: $(parts.path).",
-        )
-        captured_bytes
-    finally
-        close(pending_io)
-    end
+    bytes = _run_with_cleanup!(
+        () -> begin
+            _metamdbg_pending_submission_job_descriptor_identity(
+                pending_io,
+                parts.path,
+            ) == identity || error(
+                "metaMDBG pending submission job record was replaced before " *
+                "its contents were read: $(parts.path).",
+            )
+            captured_bytes = read(pending_io)
+            _metamdbg_pending_submission_job_descriptor_identity(
+                pending_io,
+                parts.path,
+            ) == identity || error(
+                "metaMDBG pending submission job descriptor changed while " *
+                "its contents were read: $(parts.path).",
+            )
+            return captured_bytes
+        end,
+        () -> descriptor_closer(pending_io),
+        "metaMDBG pending scheduler-job descriptor cleanup failed while " *
+        "preserving the primary record-read failure";
+        cleanup_evidence = parts.path,
+    )
     _metamdbg_pending_submission_job_identity(parts.path) == identity || error(
         "metaMDBG pending submission job record was replaced while being " *
         "validated: $(parts.path).",
@@ -8275,8 +8650,13 @@ function _metamdbg_pending_submission_job_record(
             )
         end
     end
-    selected_index = is_complete ? only(complete_indices) :
-                     (isempty(prefix_indices) ? 1 : first(prefix_indices))
+    selected_index = if is_complete
+        only(complete_indices)
+    elseif isempty(prefix_indices)
+        1
+    else
+        first(prefix_indices)
+    end
     selected_candidate = content_candidates[selected_index]
     return merge(parts, (;
         bytes,
@@ -8348,6 +8728,7 @@ function _complete_metamdbg_pending_submission_job_record!(
         pending::NamedTuple;
         pre_descriptor_open_hook::Function =
             (_pending::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
 )::NamedTuple
     pending.is_complete && return pending
     _require_unchanged_metamdbg_pending_submission_job_record(
@@ -8371,37 +8752,42 @@ function _complete_metamdbg_pending_submission_job_record!(
         pending.path,
         Base.JL_O_RDWR | Base.JL_O_CLOEXEC,
     )
-    try
-        _metamdbg_pending_submission_job_descriptor_identity(
-            pending_io,
-            pending.path,
-        ) == pending.identity || error(
-            "metaMDBG pending scheduler job descriptor was replaced before " *
-            "prefix completion: $(pending.path).",
-        )
-        descriptor_bytes = read(pending_io)
-        descriptor_bytes == pending.bytes || error(
-            "metaMDBG pending scheduler job contents changed before prefix " *
-            "completion: $(pending.path).",
-        )
-        _metamdbg_pending_submission_job_identity(pending.path) ==
-            pending.identity || error(
-            "metaMDBG pending scheduler job path was replaced before prefix " *
-            "completion: $(pending.path).",
-        )
-        seekend(pending_io)
-        write(pending_io, remaining_bytes)
-        _fsync_metamdbg_descriptor(Base.fd(pending_io), pending.path)
-        _metamdbg_pending_submission_job_descriptor_identity(
-            pending_io,
-            pending.path,
-        ) == pending.identity || error(
-            "metaMDBG pending scheduler job descriptor changed during prefix " *
-            "completion: $(pending.path).",
-        )
-    finally
-        close(pending_io)
-    end
+    _run_with_cleanup!(
+        () -> begin
+            _metamdbg_pending_submission_job_descriptor_identity(
+                pending_io,
+                pending.path,
+            ) == pending.identity || error(
+                "metaMDBG pending scheduler job descriptor was replaced " *
+                "before prefix completion: $(pending.path).",
+            )
+            descriptor_bytes = read(pending_io)
+            descriptor_bytes == pending.bytes || error(
+                "metaMDBG pending scheduler job contents changed before " *
+                "prefix completion: $(pending.path).",
+            )
+            _metamdbg_pending_submission_job_identity(pending.path) ==
+                pending.identity || error(
+                    "metaMDBG pending scheduler job path was replaced before " *
+                    "prefix completion: $(pending.path).",
+                )
+            seekend(pending_io)
+            write(pending_io, remaining_bytes)
+            _fsync_metamdbg_descriptor(Base.fd(pending_io), pending.path)
+            _metamdbg_pending_submission_job_descriptor_identity(
+                pending_io,
+                pending.path,
+            ) == pending.identity || error(
+                "metaMDBG pending scheduler job descriptor changed during " *
+                "prefix completion: $(pending.path).",
+            )
+            return nothing
+        end,
+        () -> descriptor_closer(pending_io),
+        "metaMDBG pending scheduler-job descriptor cleanup failed while " *
+        "preserving the primary prefix-completion failure";
+        cleanup_evidence = pending.path,
+    )
     _fsync_metamdbg_directory(dirname(pending.path))
     completed = _metamdbg_pending_submission_job_record(
         reservation,
@@ -8436,6 +8822,11 @@ function _publish_metamdbg_pending_submission_job_record!(
         pending::NamedTuple,
         reservation_identity::NamedTuple,
         shared_reservation_identity::NamedTuple,
+        ;
+        pre_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
 )::NamedTuple
     pending.is_complete || error(
         "metaMDBG refuses to publish an incomplete pending scheduler job " *
@@ -8466,11 +8857,16 @@ function _publish_metamdbg_pending_submission_job_record!(
         "metaMDBG refuses to overwrite an existing durable submission job " *
         "record: $(marker).",
     )
-    linked = false
     committed = false
     try
+        pre_hardlink_hook(pending.path, pending.identity)
+        _metamdbg_pending_submission_job_identity(pending.path) ==
+            pending.identity || error(
+            "metaMDBG pending scheduler job path was replaced before exact " *
+            "publication.",
+        )
         Base.Filesystem.hardlink(pending.path, marker)
-        linked = true
+        post_hardlink_hook(marker, pending.identity)
         _metamdbg_pending_submission_job_identity(marker) ==
             pending.identity || error(
             "metaMDBG newly linked scheduler job marker does not retain the " *
@@ -8508,16 +8904,21 @@ function _publish_metamdbg_pending_submission_job_record!(
             shared_reservation_identity,
         )
     catch primary_error
-        if linked && !committed
+        if !committed && _output_root_path_entry_exists(marker)
             try
                 _remove_exact_metamdbg_job_marker!(
                     marker,
                     pending.identity,
                 )
             catch cleanup_error
-                @warn "metaMDBG failed to roll back an uncommitted exact " *
-                      "scheduler job marker while preserving the primary " *
-                      "publication failure" marker primary_error cleanup_error
+                _handle_cleanup_failure_with_primary(
+                    primary_error,
+                    cleanup_error,
+                    "metaMDBG failed to roll back an uncommitted exact " *
+                    "scheduler job marker while preserving the primary " *
+                    "publication failure";
+                    cleanup_evidence = marker,
+                )
             end
         end
         Base.rethrow()
@@ -8843,7 +9244,7 @@ function _metamdbg_submission_reservation_paths(
     return sort!(vcat(published_paths, active_provisional_paths))
 end
 
-function _fsync_metamdbg_descriptor(
+function _fsync_assembly_descriptor(
         descriptor::Union{Integer, Base.RawFD},
         label::AbstractString,
 )::Nothing
@@ -8855,6 +9256,13 @@ function _fsync_metamdbg_descriptor(
         throw(SystemError("fsync $(label)", saved_errno))
     end
     return nothing
+end
+
+function _fsync_metamdbg_descriptor(
+        descriptor::Union{Integer, Base.RawFD},
+        label::AbstractString,
+)::Nothing
+    return _fsync_assembly_descriptor(descriptor, label)
 end
 
 function _fsync_metamdbg_file(
@@ -8929,13 +9337,14 @@ function _fsync_bound_metamdbg_directory(
     return nothing
 end
 
-function _fsync_metamdbg_directory(
+function _fsync_assembly_directory(
         path::AbstractString;
         expected_identity::Union{Nothing, NamedTuple} = nothing,
         post_descriptor_open_hook::Function =
             (_path::AbstractString, _identity::NamedTuple) -> nothing,
         post_fsync_hook::Function =
             (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
 )::Nothing
     bound_identity = _metamdbg_directory_path_identity(path)
     if expected_identity !== nothing
@@ -8951,39 +9360,62 @@ function _fsync_metamdbg_directory(
         Base.JL_O_NOFOLLOW |
         Base.JL_O_CLOEXEC,
     )
-    try
-        descriptor_identity = _metamdbg_directory_descriptor_identity(
-            directory,
-            bound_identity.path,
-        )
-        descriptor_identity == bound_identity || error(
-            "metaMDBG durable directory was replaced before its descriptor " *
-            "could be bound: $(bound_identity.path).",
-        )
-        post_descriptor_open_hook(bound_identity.path, bound_identity)
-        _metamdbg_directory_path_identity(bound_identity.path) ==
-            bound_identity || error(
-            "metaMDBG durable directory path changed before fsync: " *
-            "$(bound_identity.path).",
-        )
-        _fsync_bound_metamdbg_directory(
-            directory,
-            bound_identity,
-            bound_identity.path,
-        )
-        post_fsync_hook(bound_identity.path, bound_identity)
-        _metamdbg_directory_path_identity(bound_identity.path) ==
-            bound_identity || error(
-            "metaMDBG durable directory path changed during fsync: " *
-            "$(bound_identity.path).",
-        )
-    finally
-        close(directory)
-    end
+    _run_with_cleanup!(
+        () -> begin
+            descriptor_identity = _metamdbg_directory_descriptor_identity(
+                directory,
+                bound_identity.path,
+            )
+            descriptor_identity == bound_identity || error(
+                "metaMDBG durable directory was replaced before its " *
+                "descriptor could be bound: $(bound_identity.path).",
+            )
+            post_descriptor_open_hook(bound_identity.path, bound_identity)
+            _metamdbg_directory_path_identity(bound_identity.path) ==
+                bound_identity || error(
+                    "metaMDBG durable directory path changed before fsync: " *
+                    "$(bound_identity.path).",
+                )
+            _fsync_bound_metamdbg_directory(
+                directory,
+                bound_identity,
+                bound_identity.path,
+            )
+            post_fsync_hook(bound_identity.path, bound_identity)
+            _metamdbg_directory_path_identity(bound_identity.path) ==
+                bound_identity || error(
+                    "metaMDBG durable directory path changed during fsync: " *
+                    "$(bound_identity.path).",
+                )
+            return nothing
+        end,
+        () -> descriptor_closer(directory),
+        "metaMDBG durable-directory descriptor cleanup failed while " *
+        "preserving the primary fsync failure";
+        cleanup_evidence = bound_identity.path,
+    )
     return nothing
 end
 
-function _metamdbg_regular_file_identity(
+function _fsync_metamdbg_directory(
+        path::AbstractString;
+        expected_identity::Union{Nothing, NamedTuple} = nothing,
+        post_descriptor_open_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_fsync_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
+)::Nothing
+    return _fsync_assembly_directory(
+        path;
+        expected_identity,
+        post_descriptor_open_hook,
+        post_fsync_hook,
+        descriptor_closer,
+    )
+end
+
+function _assembly_regular_file_identity(
         path::AbstractString,
 )::NamedTuple
     normalized_path = normpath(abspath(String(path)))
@@ -8999,7 +9431,13 @@ function _metamdbg_regular_file_identity(
     )
 end
 
-function _metamdbg_path_identity_matches(
+function _metamdbg_regular_file_identity(
+        path::AbstractString,
+)::NamedTuple
+    return _assembly_regular_file_identity(path)
+end
+
+function _assembly_path_identity_matches(
         observed::NamedTuple,
         expected::NamedTuple,
 )::Bool
@@ -9012,10 +9450,23 @@ function _metamdbg_path_identity_matches(
     )
 end
 
-function _metamdbg_file_descriptor_number(
+function _metamdbg_path_identity_matches(
+        observed::NamedTuple,
+        expected::NamedTuple,
+)::Bool
+    return _assembly_path_identity_matches(observed, expected)
+end
+
+function _assembly_file_descriptor_number(
         file::Base.Filesystem.File,
 )::Cint
     return reinterpret(Cint, Base.fd(file))
+end
+
+function _metamdbg_file_descriptor_number(
+        file::Base.Filesystem.File,
+)::Cint
+    return _assembly_file_descriptor_number(file)
 end
 
 function _metamdbg_require_single_path_component(
@@ -9072,6 +9523,8 @@ function _metamdbg_openat_entry_identity(
         component::AbstractString,
         path::AbstractString,
         expect_directory::Bool,
+        ;
+        descriptor_closer::Function = close,
 )::NamedTuple
     entry = _metamdbg_openat(
         directory,
@@ -9081,7 +9534,7 @@ function _metamdbg_openat_entry_identity(
         Base.JL_O_NOFOLLOW |
         Base.JL_O_CLOEXEC,
     )
-    try
+    result = try
         entry_status = stat(entry)
         type_matches = expect_directory ?
                        isdir(entry_status) : isfile(entry_status)
@@ -9089,14 +9542,64 @@ function _metamdbg_openat_entry_identity(
             "metaMDBG descriptor-relative durable entry changed type: " *
             "$(path).",
         )
-        return (;
+        (;
             path = normpath(abspath(String(path))),
             device = entry_status.device,
             inode = entry_status.inode,
         )
-    finally
-        close(entry)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> descriptor_closer(entry),
+            primary_error,
+            "metaMDBG descriptor-relative entry cleanup failed while " *
+            "preserving the primary identity failure";
+            cleanup_evidence = path,
+        )
+        Base.rethrow()
     end
+    descriptor_closer(entry)
+    return result
+end
+
+function _metamdbg_openat_entry_snapshot(
+        directory::Base.Filesystem.File,
+        component::AbstractString,
+        path::AbstractString;
+        descriptor_closer::Function = close,
+)::NamedTuple
+    entry = _metamdbg_openat(
+        directory,
+        component,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NONBLOCK |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    return _run_with_cleanup!(
+        () -> begin
+            entry_status = stat(entry)
+            entry_kind = if isdir(entry_status)
+                :directory
+            elseif isfile(entry_status)
+                :file
+            else
+                error(
+                    "metaMDBG quarantined child is neither a regular file " *
+                    "nor a regular directory: $(path).",
+                )
+            end
+            identity = (;
+                path = normpath(abspath(String(path))),
+                device = entry_status.device,
+                inode = entry_status.inode,
+            )
+            return (; identity, entry_kind)
+        end,
+        () -> descriptor_closer(entry),
+        "metaMDBG quarantined-child snapshot descriptor cleanup failed " *
+        "while preserving the primary identity failure";
+        cleanup_evidence = path,
+    )
 end
 
 function _metamdbg_openat_entry_exists(
@@ -9308,8 +9811,13 @@ function _metamdbg_unlinkat(
 )::Nothing
     normalized_component =
         _metamdbg_require_single_path_component(component)
-    remove_directory_flag = directory_entry ?
-                            (Sys.isapple() ? 0x0080 : 0x0200) : 0
+    remove_directory_flag = if !directory_entry
+        0
+    elseif Sys.isapple()
+        0x0080
+    else
+        0x0200
+    end
     result = ccall(
         :unlinkat,
         Cint,
@@ -9328,8 +9836,35 @@ function _metamdbg_unlinkat(
     return nothing
 end
 
+function _close_metamdbg_raw_descriptor!(
+        descriptor::Cint,
+        label::AbstractString,
+)::Nothing
+    close_result = ccall(:close, Cint, (Cint,), descriptor)
+    close_result == 0 || throw(SystemError(
+        "close $(label)",
+        Base.Libc.errno(),
+    ))
+    return nothing
+end
+
+function _close_metamdbg_directory_stream!(
+        directory_stream::Ptr{Cvoid},
+)::Nothing
+    close_result =
+        ccall(:closedir, Cint, (Ptr{Cvoid},), directory_stream)
+    close_result == 0 || throw(SystemError(
+        "closedir metaMDBG quarantine directory descriptor",
+        Base.Libc.errno(),
+    ))
+    return nothing
+end
+
 function _metamdbg_descriptor_directory_entries(
-        directory::Base.Filesystem.File,
+        directory::Base.Filesystem.File;
+        raw_descriptor_closer::Function = _close_metamdbg_raw_descriptor!,
+        directory_stream_closer::Function =
+            _close_metamdbg_directory_stream!,
 )::Vector{String}
     descriptor = _metamdbg_file_descriptor_number(directory)
     independent_descriptor = ccall(
@@ -9360,11 +9895,21 @@ function _metamdbg_descriptor_directory_entries(
     )
     if directory_stream == C_NULL
         saved_errno = Base.Libc.errno()
-        ccall(:close, Cint, (Cint,), independent_descriptor)
-        throw(SystemError(
+        primary_error = SystemError(
             "fdopendir metaMDBG quarantine directory descriptor",
             saved_errno,
-        ))
+        )
+        _run_cleanup_after_primary_error!(
+            () -> raw_descriptor_closer(
+                independent_descriptor,
+                "independent metaMDBG directory scan descriptor",
+            ),
+            primary_error,
+            "metaMDBG independent directory-scan descriptor cleanup failed " *
+            "while preserving the primary fdopendir failure";
+            cleanup_evidence = independent_descriptor,
+        )
+        throw(primary_error)
     end
     ccall(:rewinddir, Cvoid, (Ptr{Cvoid},), directory_stream)
     name_offset = if Sys.isapple()
@@ -9399,17 +9944,17 @@ function _metamdbg_descriptor_directory_entries(
                 _metamdbg_require_single_path_component(name),
             )
         end
-    finally
-        close_result =
-            ccall(:closedir, Cint, (Ptr{Cvoid},), directory_stream)
-        if close_result != 0
-            saved_errno = Base.Libc.errno()
-            throw(SystemError(
-                "closedir metaMDBG quarantine directory descriptor",
-                saved_errno,
-            ))
-        end
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> directory_stream_closer(directory_stream),
+            primary_error,
+            "metaMDBG directory-stream cleanup failed while preserving the " *
+            "primary enumeration failure";
+            cleanup_evidence = descriptor,
+        )
+        Base.rethrow()
     end
+    directory_stream_closer(directory_stream)
     sort!(entries)
     return entries
 end
@@ -9417,52 +9962,188 @@ end
 function _remove_metamdbg_quarantined_directory_contents!(
         directory::Base.Filesystem.File,
         label::AbstractString,
+        ;
+        child_closer::Function = close,
+        child_opener::Function = _metamdbg_openat,
+        pre_child_open_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        pre_child_unlink_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
 )::Nothing
     for _attempt in 1:3
         entries = _metamdbg_descriptor_directory_entries(directory)
         isempty(entries) && return nothing
         for entry_name in entries
-            result = ccall(
-                :unlinkat,
-                Cint,
-                (Cint, Cstring, Cint),
-                _metamdbg_file_descriptor_number(directory),
+            entry_path = joinpath(String(label), entry_name)
+            snapshot = _metamdbg_openat_entry_snapshot(
+                directory,
                 entry_name,
-                Cint(0),
+                entry_path;
+                descriptor_closer = child_closer,
             )
-            result == 0 && continue
+            pre_child_open_hook(
+                entry_path,
+                snapshot.identity,
+                snapshot.entry_kind,
+            )
+            child_flags = Base.JL_O_RDONLY |
+                          Base.JL_O_NONBLOCK |
+                          Base.JL_O_NOFOLLOW |
+                          Base.JL_O_CLOEXEC
+            snapshot.entry_kind == :directory &&
+                (child_flags |= Base.JL_O_DIRECTORY)
             child = try
-                _metamdbg_openat(
+                child_opener(
                     directory,
                     entry_name,
-                    Base.JL_O_RDONLY |
-                    Base.JL_O_DIRECTORY |
-                    Base.JL_O_NOFOLLOW |
-                    Base.JL_O_CLOEXEC,
+                    child_flags,
                 )
             catch caught
+                caught isa InterruptException && rethrow()
                 error(
-                    "metaMDBG could not remove quarantined entry " *
+                    "metaMDBG could not bind quarantined entry " *
                     "$(repr(entry_name)) from $(label): " *
                     sprint(showerror, caught),
                 )
             end
-            try
-                _remove_metamdbg_quarantined_directory_contents!(
-                    child,
-                    "$(label)/$(entry_name)",
-                )
-                _fsync_metamdbg_descriptor(
-                    Base.fd(child),
-                    "$(label)/$(entry_name)",
-                )
-            finally
-                close(child)
-            end
-            _metamdbg_unlinkat(
-                directory,
-                entry_name;
-                directory_entry = true,
+            _run_with_cleanup!(
+                () -> begin
+                    _require_metamdbg_quarantined_payload_descriptor(
+                        child,
+                        entry_path,
+                        snapshot.identity,
+                        snapshot.entry_kind,
+                    )
+                    observed_identity = _metamdbg_openat_entry_identity(
+                        directory,
+                        entry_name,
+                        entry_path,
+                        snapshot.entry_kind == :directory;
+                        descriptor_closer = child_closer,
+                    )
+                    _metamdbg_path_identity_matches(
+                        observed_identity,
+                        snapshot.identity,
+                    ) || error(
+                        "metaMDBG quarantined child changed before its " *
+                        "bound descriptor was validated: $(entry_path).",
+                    )
+                    quarantine_name =
+                        ".mycelia-child.removing." *
+                        bytes2hex(Random.rand(UInt8, 16))
+                    quarantine_path =
+                        joinpath(String(label), quarantine_name)
+                    _metamdbg_renameat_noreplace(
+                        directory,
+                        entry_name,
+                        directory,
+                        quarantine_name,
+                    )
+                    moved_identity = _metamdbg_openat_entry_identity(
+                        directory,
+                        quarantine_name,
+                        quarantine_path,
+                        snapshot.entry_kind == :directory;
+                        descriptor_closer = child_closer,
+                    )
+                    expected_quarantine_identity = merge(
+                        snapshot.identity,
+                        (; path = quarantine_path),
+                    )
+                    _metamdbg_path_identity_matches(
+                        moved_identity,
+                        expected_quarantine_identity,
+                    ) || error(
+                        "metaMDBG moved a replacement quarantined child " *
+                        "into fail-closed evidence: $(quarantine_path).",
+                    )
+                    !_metamdbg_openat_entry_exists(
+                        directory,
+                        entry_name,
+                    ) || error(
+                        "metaMDBG quarantined child name reappeared after " *
+                        "its no-clobber transition: $(entry_path).",
+                    )
+                    _fsync_metamdbg_descriptor(Base.fd(directory), label)
+                    if snapshot.entry_kind == :directory
+                        _require_metamdbg_quarantined_payload_descriptor(
+                            child,
+                            quarantine_path,
+                            snapshot.identity,
+                            snapshot.entry_kind,
+                        )
+                        _remove_metamdbg_quarantined_directory_contents!(
+                            child,
+                            quarantine_path;
+                            child_closer,
+                            child_opener,
+                            pre_child_open_hook,
+                            pre_child_unlink_hook,
+                        )
+                        _fsync_metamdbg_descriptor(
+                            Base.fd(child),
+                            quarantine_path,
+                        )
+                    end
+                    pre_child_unlink_hook(
+                        entry_path,
+                        quarantine_path,
+                        snapshot.identity,
+                        snapshot.entry_kind,
+                    )
+                    _require_metamdbg_quarantined_payload_descriptor(
+                        child,
+                        quarantine_path,
+                        snapshot.identity,
+                        snapshot.entry_kind,
+                    )
+                    final_identity = _metamdbg_openat_entry_identity(
+                        directory,
+                        quarantine_name,
+                        quarantine_path,
+                        snapshot.entry_kind == :directory;
+                        descriptor_closer = child_closer,
+                    )
+                    _metamdbg_path_identity_matches(
+                        final_identity,
+                        expected_quarantine_identity,
+                    ) || error(
+                        "metaMDBG quarantined child was replaced before " *
+                        "exact unlink: $(quarantine_path).",
+                    )
+                    _metamdbg_unlinkat(
+                        directory,
+                        quarantine_name;
+                        directory_entry =
+                            snapshot.entry_kind == :directory,
+                    )
+                    !_metamdbg_openat_entry_exists(
+                        directory,
+                        quarantine_name,
+                    ) || error(
+                        "metaMDBG quarantined child reappeared after exact " *
+                        "unlink: $(quarantine_path).",
+                    )
+                    !_metamdbg_openat_entry_exists(
+                        directory,
+                        entry_name,
+                    ) || error(
+                        "metaMDBG quarantined child source name reappeared " *
+                        "after exact unlink: $(entry_path).",
+                    )
+                    return nothing
+                end,
+                () -> child_closer(child),
+                "metaMDBG quarantined child descriptor cleanup failed " *
+                "while preserving the primary exact-removal failure";
+                cleanup_evidence = entry_path,
             )
         end
         _fsync_metamdbg_descriptor(Base.fd(directory), label)
@@ -9522,6 +10203,7 @@ function _metamdbg_removal_quarantine_evidence(
         outdir::AbstractString;
         post_reservation_scan_hook::Function =
             (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
 )::Vector{String}
     canonical_outdir = _metamdbg_canonical_output_path(outdir)
     parent_path = dirname(canonical_outdir)
@@ -9598,9 +10280,18 @@ function _metamdbg_removal_quarantine_evidence(
                     "metaMDBG canonical output directory changed during " *
                     "removal-evidence scan: $(canonical_outdir).",
                 )
-            finally
-                close(output_directory)
+            catch primary_error
+                _run_cleanup_after_primary_error!(
+                    () -> descriptor_closer(output_directory),
+                    primary_error,
+                    "metaMDBG output-directory scan descriptor cleanup " *
+                    "failed while preserving the primary evidence-scan " *
+                    "failure";
+                    cleanup_evidence = canonical_outdir,
+                )
+                Base.rethrow()
             end
+            descriptor_closer(output_directory)
         end
 
         reservation_prefix =
@@ -9629,17 +10320,17 @@ function _metamdbg_removal_quarantine_evidence(
                 Base.JL_O_CLOEXEC,
             )
             reservation_path = joinpath(parent_identity.path, entry_name)
-            reservation_status = stat(reservation)
-            isdir(reservation_status) || error(
-                "metaMDBG submission reservation changed type during " *
-                "removal-evidence scan: $(reservation_path).",
-            )
-            reservation_identity = (;
-                path = reservation_path,
-                device = reservation_status.device,
-                inode = reservation_status.inode,
-            )
             try
+                reservation_status = stat(reservation)
+                isdir(reservation_status) || error(
+                    "metaMDBG submission reservation changed type during " *
+                    "removal-evidence scan: $(reservation_path).",
+                )
+                reservation_identity = (;
+                    path = reservation_path,
+                    device = reservation_status.device,
+                    inode = reservation_status.inode,
+                )
                 nested_entries =
                     _metamdbg_descriptor_directory_entries(reservation)
                 for nested_name in nested_entries
@@ -9682,9 +10373,17 @@ function _metamdbg_removal_quarantine_evidence(
                     "metaMDBG submission reservation entry set changed " *
                     "during removal-evidence scan: $(reservation_path).",
                 )
-            finally
-                close(reservation)
+            catch primary_error
+                _run_cleanup_after_primary_error!(
+                    () -> descriptor_closer(reservation),
+                    primary_error,
+                    "metaMDBG reservation scan descriptor cleanup failed " *
+                    "while preserving the primary evidence-scan failure";
+                    cleanup_evidence = reservation_path,
+                )
+                Base.rethrow()
             end
+            descriptor_closer(reservation)
         end
         final_parent_entries = _metamdbg_descriptor_directory_entries(parent)
         final_relevant_parent_entries = sort!(String[
@@ -9735,9 +10434,18 @@ function _metamdbg_removal_quarantine_evidence(
                     "metaMDBG canonical output directory removal-evidence " *
                     "entry set changed during scan: $(canonical_outdir).",
                 )
-            finally
-                close(output_directory)
+            catch primary_error
+                _run_cleanup_after_primary_error!(
+                    () -> descriptor_closer(output_directory),
+                    primary_error,
+                    "metaMDBG final output-directory scan descriptor cleanup " *
+                    "failed while preserving the primary evidence-scan " *
+                    "failure";
+                    cleanup_evidence = canonical_outdir,
+                )
+                Base.rethrow()
             end
+            descriptor_closer(output_directory)
         end
         _require_unchanged_metamdbg_directory_descriptor(
             parent,
@@ -9749,9 +10457,17 @@ function _metamdbg_removal_quarantine_evidence(
             "metaMDBG removal-evidence parent changed during restart scan: " *
             "$(parent_identity.path).",
         )
-    finally
-        close(parent)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> descriptor_closer(parent),
+            primary_error,
+            "metaMDBG removal-evidence parent descriptor cleanup failed " *
+            "while preserving the primary restart-scan failure";
+            cleanup_evidence = parent_identity.path,
+        )
+        Base.rethrow()
     end
+    descriptor_closer(parent)
     return sort!(unique!(evidence))
 end
 
@@ -9774,6 +10490,8 @@ function _create_metamdbg_removal_quarantine!(
         path::AbstractString,
         expected_identity::NamedTuple,
         entry_kind::Symbol,
+        ;
+        descriptor_closer::Function = close,
 )::NamedTuple
     quarantine_name = _metamdbg_removal_quarantine_name(path)
     _metamdbg_mkdirat(parent, quarantine_name, 0o700)
@@ -9813,22 +10531,27 @@ function _create_metamdbg_removal_quarantine!(
             Base.JL_O_CLOEXEC;
             mode = 0o600,
         )
-        try
-            write(manifest, JSON.json((;
-                schema_version = 1,
-                operation = "remove-exact-metamdbg-durable-entry",
-                target_path = normpath(abspath(String(path))),
-                target_kind = String(entry_kind),
-                expected_device = expected_identity.device,
-                expected_inode = expected_identity.inode,
-            )) * "\n")
-            _fsync_metamdbg_descriptor(
-                Base.fd(manifest),
-                joinpath(quarantine_path, manifest_name),
-            )
-        finally
-            close(manifest)
-        end
+        _run_with_cleanup!(
+            () -> begin
+                write(manifest, JSON.json((;
+                    schema_version = 1,
+                    operation = "remove-exact-metamdbg-durable-entry",
+                    target_path = normpath(abspath(String(path))),
+                    target_kind = String(entry_kind),
+                    expected_device = expected_identity.device,
+                    expected_inode = expected_identity.inode,
+                )) * "\n")
+                _fsync_metamdbg_descriptor(
+                    Base.fd(manifest),
+                    joinpath(quarantine_path, manifest_name),
+                )
+                return nothing
+            end,
+            () -> descriptor_closer(manifest),
+            "metaMDBG removal-quarantine manifest descriptor cleanup failed " *
+            "while preserving the primary manifest-write failure";
+            cleanup_evidence = joinpath(quarantine_path, manifest_name),
+        )
         _fsync_bound_metamdbg_directory(
             quarantine,
             quarantine_identity,
@@ -9846,35 +10569,50 @@ function _create_metamdbg_removal_quarantine!(
             quarantine_identity,
             manifest_name,
         )
-    catch caught
-        if quarantine !== nothing && isopen(quarantine)
-            close(quarantine)
-        end
-        try
-            _fsync_bound_metamdbg_directory(
-                parent,
-                parent_identity,
-                parent_identity.path,
+    catch primary_error
+        evidence_state = Ref("not observable")
+        cleanup_quarantine = function ()
+            _run_cleanup_steps!(
+                (
+                    () -> begin
+                        if quarantine !== nothing && isopen(quarantine)
+                            descriptor_closer(quarantine)
+                        end
+                        return nothing
+                    end,
+                    () -> _fsync_bound_metamdbg_directory(
+                        parent,
+                        parent_identity,
+                        parent_identity.path,
+                    ),
+                    () -> begin
+                        evidence_exists = _metamdbg_openat_entry_exists(
+                            parent,
+                            quarantine_name,
+                        )
+                        evidence_state[] = evidence_exists ?
+                                           "retained" : "not observable"
+                        return nothing
+                    end,
+                ),
+                "metaMDBG removal-quarantine",
             )
-        catch sync_error
-            caught isa InterruptException && rethrow()
-            error(
-                "metaMDBG removal-quarantine creation failed and its " *
-                "fail-closed evidence could not be durably synchronized at " *
-                "$(quarantine_path). Creation cause: " *
-                "$(sprint(showerror, caught)). Sync cause: " *
-                "$(sprint(showerror, sync_error))",
-            )
+            return nothing
         end
-        caught isa InterruptException && rethrow()
-        evidence_exists =
-            _metamdbg_openat_entry_exists(parent, quarantine_name)
-        evidence_state = evidence_exists ? "retained" : "not observable"
-        error(
-            "metaMDBG removal-quarantine creation failed; fail-closed " *
-            "evidence is $(evidence_state) at $(quarantine_path). Cause: " *
-            sprint(showerror, caught),
+        _run_cleanup_after_primary_error!(
+            cleanup_quarantine,
+            primary_error,
+            "metaMDBG removal-quarantine cleanup failed while preserving the " *
+            "primary creation failure";
+            cleanup_evidence = quarantine_path,
         )
+        @warn(
+            "metaMDBG removal-quarantine creation failed with fail-closed evidence",
+            quarantine_path,
+            evidence_state = evidence_state[],
+            primary_error,
+        )
+        Base.rethrow()
     end
 end
 
@@ -9928,6 +10666,18 @@ function _remove_exact_metamdbg_durable_entry!(
             (_payload::Base.Filesystem.File, _path::AbstractString) -> nothing,
         pre_quarantine_directory_unlink_hook::Function =
             (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        nested_child_pre_open_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        nested_child_pre_unlink_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        descriptor_closer::Function = close,
 )::Nothing
     entry_kind in (:file, :directory) || throw(ArgumentError(
         "metaMDBG durable entry kind must be :file or :directory.",
@@ -9978,22 +10728,27 @@ function _remove_exact_metamdbg_durable_entry!(
                 Base.JL_O_NOFOLLOW |
                 Base.JL_O_CLOEXEC,
             )
-            try
-                _require_metamdbg_quarantined_payload_descriptor(
-                    source_directory,
-                    normalized_path,
-                    expected_identity,
-                    entry_kind,
-                )
-                isempty(_metamdbg_descriptor_directory_entries(
-                    source_directory,
-                )) || error(
-                    "metaMDBG refuses nonrecursive removal of a nonempty " *
-                    "durable directory: $(normalized_path).",
-                )
-            finally
-                close(source_directory)
-            end
+            _run_with_cleanup!(
+                () -> begin
+                    _require_metamdbg_quarantined_payload_descriptor(
+                        source_directory,
+                        normalized_path,
+                        expected_identity,
+                        entry_kind,
+                    )
+                    isempty(_metamdbg_descriptor_directory_entries(
+                        source_directory,
+                    )) || error(
+                        "metaMDBG refuses nonrecursive removal of a " *
+                        "nonempty durable directory: $(normalized_path).",
+                    )
+                    return nothing
+                end,
+                () -> descriptor_closer(source_directory),
+                "metaMDBG source-directory descriptor cleanup failed while " *
+                "preserving the primary nonrecursive-removal failure";
+                cleanup_evidence = normalized_path,
+            )
         end
         quarantine = _create_metamdbg_removal_quarantine!(
             parent,
@@ -10001,6 +10756,8 @@ function _remove_exact_metamdbg_durable_entry!(
             normalized_path,
             expected_identity,
             entry_kind,
+            ;
+            descriptor_closer,
         )
         quarantine_path = quarantine.quarantine_path
         payload_path = joinpath(quarantine_path, payload_name)
@@ -10112,7 +10869,10 @@ function _remove_exact_metamdbg_durable_entry!(
         elseif entry_kind == :directory && recursive
             _remove_metamdbg_quarantined_directory_contents!(
                 payload,
-                payload_path,
+                payload_path;
+                child_closer = descriptor_closer,
+                pre_child_open_hook = nested_child_pre_open_hook,
+                pre_child_unlink_hook = nested_child_pre_unlink_hook,
             )
             pre_quarantine_final_unlink_hook(
                 normalized_path,
@@ -10229,7 +10989,7 @@ function _remove_exact_metamdbg_durable_entry!(
             "metaMDBG removal quarantine was replaced before final unlink: " *
             "$(quarantine_path).",
         )
-        close(quarantine.quarantine)
+        descriptor_closer(quarantine.quarantine)
         _metamdbg_unlinkat(
             parent,
             quarantine.quarantine_name;
@@ -10258,24 +11018,100 @@ function _remove_exact_metamdbg_durable_entry!(
             "$(parent_identity.path).",
         )
     catch caught
-        caught isa InterruptException && rethrow()
-        if quarantine_path === nothing || quarantine_removed
-            rethrow()
+        primary_error = if caught isa InterruptException ||
+                           quarantine_path === nothing || quarantine_removed
+            caught
+        else
+            ErrorException(
+                "metaMDBG retained fail-closed durable removal evidence at " *
+                "$(quarantine_path). Cause: $(sprint(showerror, caught))",
+            )
         end
-        error(
-            "metaMDBG retained fail-closed durable removal evidence at " *
-            "$(quarantine_path). Cause: $(sprint(showerror, caught))",
+        _run_cleanup_after_primary_error!(
+            () -> _run_cleanup_steps!(
+                (
+                    () -> begin
+                        if payload !== nothing && isopen(payload)
+                            descriptor_closer(payload)
+                        end
+                        return nothing
+                    end,
+                    () -> begin
+                        if quarantine !== nothing &&
+                           isopen(quarantine.quarantine)
+                            descriptor_closer(quarantine.quarantine)
+                        end
+                        return nothing
+                    end,
+                    () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+                ),
+                "metaMDBG exact durable-entry descriptors",
+            ),
+            primary_error,
+            "metaMDBG exact durable-entry descriptor cleanup failed while " *
+            "preserving the primary removal failure";
+            cleanup_evidence = something(quarantine_path, normalized_path),
         )
-    finally
-        if payload !== nothing && isopen(payload)
-            close(payload)
-        end
-        if quarantine !== nothing && isopen(quarantine.quarantine)
-            close(quarantine.quarantine)
-        end
-        close(parent)
+        primary_error === caught ? Base.rethrow() : throw(primary_error)
     end
+    _run_cleanup_steps!(
+        (
+            () -> begin
+                if payload !== nothing && isopen(payload)
+                    descriptor_closer(payload)
+                end
+                return nothing
+            end,
+            () -> begin
+                if quarantine !== nothing && isopen(quarantine.quarantine)
+                    descriptor_closer(quarantine.quarantine)
+                end
+                return nothing
+            end,
+            () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+        ),
+        "metaMDBG exact durable-entry descriptors",
+    )
     return nothing
+end
+
+function _remove_exact_assembly_durable_file!(
+        path::AbstractString,
+        expected_identity::NamedTuple;
+        remover::Union{Nothing, Function} = nothing,
+        pre_quarantine_rename_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        pre_quarantine_unlink_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        post_quarantine_validation_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        pre_quarantine_final_unlink_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        post_quarantine_destination_fsync_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        pre_source_parent_fsync_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        quarantined_payload_validator::Function =
+            (_payload::Base.Filesystem.File, _path::AbstractString) -> nothing,
+        pre_quarantine_directory_unlink_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        descriptor_closer::Function = close,
+)::Nothing
+    return _remove_exact_metamdbg_durable_entry!(
+        path,
+        expected_identity,
+        :file;
+        remover,
+        pre_quarantine_rename_hook,
+        pre_quarantine_unlink_hook,
+        post_quarantine_validation_hook,
+        pre_quarantine_final_unlink_hook,
+        post_quarantine_destination_fsync_hook,
+        pre_source_parent_fsync_hook,
+        quarantined_payload_validator,
+        pre_quarantine_directory_unlink_hook,
+        descriptor_closer,
+    )
 end
 
 function _remove_exact_metamdbg_durable_file!(
@@ -10298,11 +11134,11 @@ function _remove_exact_metamdbg_durable_file!(
             (_payload::Base.Filesystem.File, _path::AbstractString) -> nothing,
         pre_quarantine_directory_unlink_hook::Function =
             (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        descriptor_closer::Function = close,
 )::Nothing
-    return _remove_exact_metamdbg_durable_entry!(
+    return _remove_exact_assembly_durable_file!(
         path,
-        expected_identity,
-        :file;
+        expected_identity;
         remover,
         pre_quarantine_rename_hook,
         pre_quarantine_unlink_hook,
@@ -10312,6 +11148,61 @@ function _remove_exact_metamdbg_durable_file!(
         pre_source_parent_fsync_hook,
         quarantined_payload_validator,
         pre_quarantine_directory_unlink_hook,
+        descriptor_closer,
+    )
+end
+
+function _remove_exact_assembly_durable_directory!(
+        path::AbstractString,
+        expected_identity::NamedTuple;
+        recursive::Bool = false,
+        remover::Union{Nothing, Function} = nothing,
+        pre_quarantine_rename_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        pre_quarantine_unlink_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        post_quarantine_validation_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        pre_quarantine_final_unlink_hook::Function =
+            (_path::AbstractString, _payload::AbstractString) -> nothing,
+        post_quarantine_destination_fsync_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        pre_source_parent_fsync_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        quarantined_payload_validator::Function =
+            (_payload::Base.Filesystem.File, _path::AbstractString) -> nothing,
+        pre_quarantine_directory_unlink_hook::Function =
+            (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        nested_child_pre_open_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        nested_child_pre_unlink_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        descriptor_closer::Function = close,
+)::Nothing
+    return _remove_exact_metamdbg_durable_entry!(
+        path,
+        expected_identity,
+        :directory;
+        recursive,
+        remover,
+        pre_quarantine_rename_hook,
+        pre_quarantine_unlink_hook,
+        post_quarantine_validation_hook,
+        pre_quarantine_final_unlink_hook,
+        post_quarantine_destination_fsync_hook,
+        pre_source_parent_fsync_hook,
+        quarantined_payload_validator,
+        pre_quarantine_directory_unlink_hook,
+        nested_child_pre_open_hook,
+        nested_child_pre_unlink_hook,
+        descriptor_closer,
     )
 end
 
@@ -10336,11 +11227,22 @@ function _remove_exact_metamdbg_durable_directory!(
             (_payload::Base.Filesystem.File, _path::AbstractString) -> nothing,
         pre_quarantine_directory_unlink_hook::Function =
             (_path::AbstractString, _quarantine::AbstractString) -> nothing,
+        nested_child_pre_open_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        nested_child_pre_unlink_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+            _identity::NamedTuple,
+            _entry_kind::Symbol,
+        ) -> nothing,
+        descriptor_closer::Function = close,
 )::Nothing
-    return _remove_exact_metamdbg_durable_entry!(
+    return _remove_exact_assembly_durable_directory!(
         path,
-        expected_identity,
-        :directory;
+        expected_identity;
         recursive,
         remover,
         pre_quarantine_rename_hook,
@@ -10351,6 +11253,9 @@ function _remove_exact_metamdbg_durable_directory!(
         pre_source_parent_fsync_hook,
         quarantined_payload_validator,
         pre_quarantine_directory_unlink_hook,
+        nested_child_pre_open_hook,
+        nested_child_pre_unlink_hook,
+        descriptor_closer,
     )
 end
 
@@ -10409,6 +11314,11 @@ end
 
 function _publish_metamdbg_output_root_reservation_marker!(
         reservation::NamedTuple,
+        ;
+        after_temporary_binding_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
 )::String
     marker = reservation.output_root_reservation_marker
     if ispath(marker) || islink(marker)
@@ -10419,14 +11329,67 @@ function _publish_metamdbg_output_root_reservation_marker!(
     end
     temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
-    published = false
+    cleanup_temporary = function ()
+        _run_cleanup_steps!(
+            (
+                () -> isopen(temporary_io) ? close(temporary_io) : nothing,
+                () -> begin
+                    if _output_root_path_entry_exists(temporary_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            temporary_path,
+                            temporary_identity,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG shared output-root marker temporary artifact",
+        )
+        return nothing
+    end
+    cleanup_failed_publication = function ()
+        _run_cleanup_steps!(
+            (
+                cleanup_temporary,
+                () -> begin
+                    if _output_root_path_entry_exists(marker)
+                        _remove_exact_metamdbg_durable_file!(
+                            marker,
+                            merge(temporary_identity, (; path = marker)),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG shared output-root marker publication",
+        )
+        return nothing
+    end
     try
+        after_temporary_binding_hook(temporary_path, temporary_identity)
         write(temporary_io, reservation.output_root_reservation_contents)
         chmod(temporary_path, 0o600)
         _fsync_metamdbg_file(temporary_io, temporary_path)
         close(temporary_io)
+        observed_temporary_identity =
+            _metamdbg_regular_file_identity(temporary_path)
+        _metamdbg_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "metaMDBG output-root marker temporary artifact was replaced " *
+            "before publication: $(temporary_path).",
+        )
         Base.Filesystem.hardlink(temporary_path, marker)
-        published = true
+        post_hardlink_hook(marker, temporary_identity)
+        observed_marker_identity = _metamdbg_regular_file_identity(marker)
+        _metamdbg_path_identity_matches(
+            observed_marker_identity,
+            merge(temporary_identity, (; path = marker)),
+        ) && Base.Filesystem.samefile(temporary_path, marker) || error(
+            "metaMDBG output-root marker publication did not bind its " *
+            "validated temporary inode: $(marker).",
+        )
         _fsync_metamdbg_directory(dirname(marker))
         _remove_exact_metamdbg_durable_file!(
             temporary_path,
@@ -10434,33 +11397,16 @@ function _publish_metamdbg_output_root_reservation_marker!(
         )
         _require_metamdbg_output_root_reservation_marker!(reservation)
     catch primary_error
-        isopen(temporary_io) && close(temporary_io)
-        if _output_root_path_entry_exists(temporary_path)
-            try
-                _remove_exact_metamdbg_durable_file!(
-                    temporary_path,
-                    temporary_identity,
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to clean an unpublished shared " *
-                      "output-root marker while preserving the primary " *
-                      "publication failure" temporary_path primary_error cleanup_error
-            end
-        end
-        if published && (ispath(marker) || islink(marker))
-            try
-                _remove_exact_metamdbg_durable_file!(
-                    marker,
-                    merge(temporary_identity, (; path = marker)),
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to remove an invalid newly published " *
-                      "shared output-root marker while preserving the " *
-                      "primary publication failure" marker primary_error cleanup_error
-            end
-        end
+        _run_cleanup_after_primary_error!(
+            cleanup_failed_publication,
+            primary_error,
+            "metaMDBG shared output-root marker cleanup failed while " *
+            "preserving the primary publication failure";
+            cleanup_evidence = marker,
+        )
         Base.rethrow()
     end
+    cleanup_temporary()
     return marker
 end
 
@@ -10616,6 +11562,7 @@ function _metamdbg_submission_reservation_from_path(
         ;
         allow_provisional::Bool = false,
         require_output_root_reservation::Bool = true,
+        json_parser::Function = JSON.parse,
 )::NamedTuple
     normalized_path = normpath(abspath(path))
     path_state = _metamdbg_submission_reservation_path_state(
@@ -10662,8 +11609,9 @@ function _metamdbg_submission_reservation_from_path(
     end
     contents = read(marker, String)
     parsed = try
-        JSON.parse(contents)
+        json_parser(contents)
     catch caught
+        caught isa InterruptException && rethrow()
         error(
             "metaMDBG submission reservation contract is not valid JSON: " *
             "$(marker). Cause: $(sprint(showerror, caught))",
@@ -10819,8 +11767,9 @@ function _metamdbg_submission_reservation_from_path(
         end
         job_contents = read(expected.job_marker, String)
         parsed_job = try
-            JSON.parse(job_contents)
+            json_parser(job_contents)
         catch caught
+            caught isa InterruptException && rethrow()
             error(
                 "metaMDBG submission job record is not valid JSON: " *
                 "$(expected.job_marker). Cause: $(sprint(showerror, caught))",
@@ -11008,8 +11957,11 @@ function _create_metamdbg_submission_reservation!(
             _METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME,
         ),
     ))
-    output_root_marker_published = false
     output_root_marker_identity = nothing
+    published_reservation_identity = merge(
+        temporary_identity,
+        (; path = normpath(abspath(String(reservation.path)))),
+    )
     try
         open(temporary_reservation.contract_marker, "w") do output
             write(output, reservation.contents)
@@ -11022,42 +11974,86 @@ function _create_metamdbg_submission_reservation!(
         _fsync_metamdbg_directory(temporary_path)
         _fsync_metamdbg_directory(reservation_parent)
         _publish_metamdbg_output_root_reservation_marker!(reservation)
-        output_root_marker_published = true
         output_root_marker_identity = _metamdbg_regular_file_identity(
             reservation.output_root_reservation_marker,
         )
         _require_metamdbg_submission_reservation!(temporary_reservation)
         pre_rename_hook(temporary_reservation)
+        _metamdbg_directory_path_identity(temporary_path) ==
+            temporary_identity || error(
+            "metaMDBG temporary submission reservation was replaced before " *
+            "publication: $(temporary_path).",
+        )
         mv(temporary_path, reservation.path)
+        _metamdbg_directory_path_identity(reservation.path) ==
+            published_reservation_identity || error(
+            "metaMDBG published submission reservation did not retain its " *
+            "validated temporary directory identity: $(reservation.path).",
+        )
         post_rename_hook(reservation)
+        _metamdbg_directory_path_identity(reservation.path) ==
+            published_reservation_identity || error(
+            "metaMDBG published submission reservation was replaced after " *
+            "publication: $(reservation.path).",
+        )
         _fsync_metamdbg_directory(reservation_parent)
+        _metamdbg_directory_path_identity(reservation.path) ==
+            published_reservation_identity || error(
+            "metaMDBG published submission reservation changed while its " *
+            "parent was made durable: $(reservation.path).",
+        )
         _require_metamdbg_submission_reservation!(reservation)
     catch primary_error
-        try
-            if _output_root_path_entry_exists(reservation.path)
-                _remove_metamdbg_submission_reservation!(reservation)
-            else
-                if _output_root_path_entry_exists(temporary_path)
-                    _remove_exact_metamdbg_durable_directory!(
-                        temporary_path,
-                        temporary_identity;
-                        recursive = true,
-                    )
-                end
-                if output_root_marker_published &&
-                   (ispath(reservation.output_root_reservation_marker) ||
-                    islink(reservation.output_root_reservation_marker))
-                    _remove_exact_metamdbg_durable_file!(
-                        reservation.output_root_reservation_marker,
-                        output_root_marker_identity,
-                    )
-                end
-            end
-        catch cleanup_error
-            @warn "metaMDBG failed to clean an incomplete submission " *
-                  "reservation while preserving the primary reservation " *
-                  "failure" reservation primary_error cleanup_error
+        cleanup_incomplete_reservation = function ()
+            _run_cleanup_steps!(
+                (
+                    () -> begin
+                        if _output_root_path_entry_exists(reservation.path)
+                            _remove_exact_metamdbg_durable_directory!(
+                                reservation.path,
+                                published_reservation_identity;
+                                recursive = true,
+                            )
+                        elseif _output_root_path_entry_exists(temporary_path)
+                            _remove_exact_metamdbg_durable_directory!(
+                                temporary_path,
+                                temporary_identity;
+                                recursive = true,
+                            )
+                        end
+                        return nothing
+                    end,
+                    () -> begin
+                        if _output_root_path_entry_exists(
+                            reservation.output_root_reservation_marker,
+                        )
+                            output_root_marker_identity === nothing && error(
+                                "metaMDBG retained an unbound shared " *
+                                "output-root reservation after failed " *
+                                "submission reservation publication: " *
+                                reservation.output_root_reservation_marker,
+                            )
+                            marker_identity =
+                                something(output_root_marker_identity)
+                            _remove_exact_metamdbg_durable_file!(
+                                reservation.output_root_reservation_marker,
+                                marker_identity,
+                            )
+                        end
+                        return nothing
+                    end,
+                ),
+                "metaMDBG incomplete submission reservation",
+            )
+            return nothing
         end
+        _run_cleanup_after_primary_error!(
+            cleanup_incomplete_reservation,
+            primary_error,
+            "metaMDBG failed to clean an incomplete submission reservation " *
+            "while preserving the primary reservation failure";
+            cleanup_evidence = reservation,
+        )
         Base.rethrow()
     end
     return reservation
@@ -11105,6 +12101,32 @@ function _bind_metamdbg_submission_job!(
     pending_record = nothing
     bound_owner = nothing
     committed = false
+    cleanup_binding = function ()
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if pending_io !== nothing && isopen(pending_io)
+                        close(pending_io)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if committed && pending_record isa NamedTuple &&
+                       bound_owner isa NamedTuple &&
+                       _output_root_path_entry_exists(pending_path)
+                        _remove_metamdbg_pending_submission_job_record!(
+                            bound_owner,
+                            pending_record;
+                            pending_remover = pending_job_record_remover,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG scheduler-job binding",
+        )
+        return nothing
+    end
     try
         pending_io = Base.Filesystem.open(
             pending_path,
@@ -11168,26 +12190,16 @@ function _bind_metamdbg_submission_job!(
         )
         _require_metamdbg_submission_reservation!(bound_owner)
     catch primary_error
-        if pending_io !== nothing && isopen(pending_io)
-            close(pending_io)
-        end
-        if committed && pending_record isa NamedTuple &&
-           bound_owner isa NamedTuple &&
-           _output_root_path_entry_exists(pending_path)
-            try
-                _remove_metamdbg_pending_submission_job_record!(
-                    bound_owner,
-                    pending_record;
-                    pending_remover = pending_job_record_remover,
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to clean its committed pending " *
-                      "scheduler job record while preserving the primary " *
-                      "bind failure" pending_path primary_error cleanup_error
-            end
-        end
+        _run_cleanup_after_primary_error!(
+            cleanup_binding,
+            primary_error,
+            "metaMDBG scheduler-job binding cleanup failed while preserving " *
+            "the primary bind failure";
+            cleanup_evidence = pending_path,
+        )
         Base.rethrow()
     end
+    cleanup_binding()
     return bound_owner
 end
 
@@ -11475,6 +12487,8 @@ end
 function _remove_metamdbg_submission_reservation!(
         reservation::NamedTuple,
         ;
+        pre_private_rename_hook::Function =
+            (_reservation::NamedTuple) -> nothing,
         post_private_rename_hook::Function =
             (_reservation::NamedTuple) -> nothing,
         post_shared_release_hook::Function =
@@ -11503,8 +12517,11 @@ function _remove_metamdbg_submission_reservation!(
         reservation.path,
         reservation.canonical_outdir,
     )
+    transition_identity = nothing
     transition = if path_state in (:published, :provisional)
         _require_metamdbg_submission_reservation!(reservation)
+        source_identity =
+            _metamdbg_directory_path_identity(reservation.path)
         reclaiming_path = reservation.reclaiming_path
         if _output_root_path_entry_exists(reclaiming_path)
             error(
@@ -11512,13 +12529,35 @@ function _remove_metamdbg_submission_reservation!(
                 "reclaim transition: $(reclaiming_path).",
             )
         end
+        pre_private_rename_hook(reservation)
+        _metamdbg_directory_path_identity(reservation.path) ==
+            source_identity || error(
+            "metaMDBG submission reservation was replaced before its " *
+            "identity-bound reclaim transition: $(reservation.path).",
+        )
         mv(reservation.path, reclaiming_path)
+        transition_identity = merge(
+            source_identity,
+            (; path = normpath(abspath(String(reclaiming_path)))),
+        )
+        _metamdbg_directory_path_identity(reclaiming_path) ==
+            transition_identity || error(
+            "metaMDBG reclaim transition did not retain the validated " *
+            "submission reservation identity: $(reclaiming_path).",
+        )
         _fsync_metamdbg_directory(dirname(reclaiming_path))
+        _metamdbg_directory_path_identity(reclaiming_path) ==
+            transition_identity || error(
+            "metaMDBG reclaim transition changed while its parent was made " *
+            "durable: $(reclaiming_path).",
+        )
         _metamdbg_submission_reservation_from_path(
             reclaiming_path,
             reservation.canonical_outdir,
         )
     elseif path_state == :reclaiming
+        transition_identity =
+            _metamdbg_directory_path_identity(reservation.path)
         _metamdbg_submission_reservation_from_path(
             reservation.path,
             reservation.canonical_outdir,
@@ -11530,6 +12569,11 @@ function _remove_metamdbg_submission_reservation!(
         )
     end
     post_private_rename_hook(transition)
+    _metamdbg_directory_path_identity(transition.path) ==
+        transition_identity || error(
+        "metaMDBG reclaim transition was replaced after its private rename: " *
+        "$(transition.path).",
+    )
     if _output_root_path_entry_exists(output_root_marker)
         _require_metamdbg_output_root_reservation_marker!(transition)
         output_root_marker_identity = _metamdbg_regular_file_identity(
@@ -11545,6 +12589,11 @@ function _remove_metamdbg_submission_reservation!(
         "reclaim: $(output_root_marker).",
     )
     post_shared_release_hook(transition)
+    _metamdbg_directory_path_identity(transition.path) ==
+        transition_identity || error(
+        "metaMDBG reclaim transition was replaced after releasing its " *
+        "shared reservation: $(transition.path).",
+    )
     current = _metamdbg_submission_reservation_from_path(
         transition.path,
         transition.canonical_outdir,
@@ -11553,10 +12602,14 @@ function _remove_metamdbg_submission_reservation!(
         "metaMDBG explicit reclaim did not reach its durable shared-release " *
         "state.",
     )
-    current_identity = _metamdbg_directory_path_identity(current.path)
+    _metamdbg_directory_path_identity(current.path) ==
+        transition_identity || error(
+        "metaMDBG reclaim transition changed before exact recursive removal: " *
+        "$(current.path).",
+    )
     _remove_exact_metamdbg_durable_directory!(
         current.path,
-        current_identity;
+        transition_identity;
         recursive = true,
     )
     return nothing
@@ -11726,6 +12779,16 @@ end
 function _write_metamdbg_contract!(
         outputs::NamedTuple,
         input_contract::NamedTuple,
+        ;
+        after_temporary_binding_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
 )::String
     marker = outputs.contract_marker
     if ispath(marker) || islink(marker)
@@ -11736,8 +12799,44 @@ function _write_metamdbg_contract!(
     end
     temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
-    published = false
+    cleanup_temporary = function ()
+        _run_cleanup_steps!(
+            (
+                () -> isopen(temporary_io) ? close(temporary_io) : nothing,
+                () -> begin
+                    if _output_root_path_entry_exists(temporary_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            temporary_path,
+                            temporary_identity,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG provenance-contract temporary artifact",
+        )
+        return nothing
+    end
+    cleanup_failed_publication = function ()
+        _run_cleanup_steps!(
+            (
+                cleanup_temporary,
+                () -> begin
+                    if _output_root_path_entry_exists(marker)
+                        _remove_exact_metamdbg_durable_file!(
+                            marker,
+                            merge(temporary_identity, (; path = marker)),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG provenance-contract publication",
+        )
+        return nothing
+    end
     try
+        after_temporary_binding_hook(temporary_path, temporary_identity)
         write(temporary_io, input_contract.contents)
         chmod(temporary_path, 0o600)
         _fsync_metamdbg_file(temporary_io, temporary_path)
@@ -11745,8 +12844,25 @@ function _write_metamdbg_contract!(
         filesize(temporary_path) > 0 || error(
             "Failed to write metaMDBG provenance contract marker: $(marker).",
         )
+        observed_temporary_identity =
+            _metamdbg_regular_file_identity(temporary_path)
+        _metamdbg_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "metaMDBG provenance-contract temporary artifact was replaced " *
+            "before publication: $(temporary_path).",
+        )
         Base.Filesystem.hardlink(temporary_path, marker)
-        published = true
+        post_hardlink_hook(marker, temporary_identity)
+        observed_marker_identity = _metamdbg_regular_file_identity(marker)
+        _metamdbg_path_identity_matches(
+            observed_marker_identity,
+            merge(temporary_identity, (; path = marker)),
+        ) && Base.Filesystem.samefile(temporary_path, marker) || error(
+            "metaMDBG provenance-contract publication did not bind its " *
+            "validated temporary inode: $(marker).",
+        )
         _fsync_metamdbg_directory(dirname(marker))
         _remove_exact_metamdbg_durable_file!(
             temporary_path,
@@ -11755,29 +12871,22 @@ function _write_metamdbg_contract!(
         read(marker, String) == input_contract.contents || error(
             "Failed to verify metaMDBG provenance contract marker: $(marker).",
         )
+        publication_recorder(
+            marker,
+            merge(temporary_identity, (; path = marker)),
+            _metamdbg_sha256(marker),
+        )
     catch primary_error
-        if published && (ispath(marker) || islink(marker))
-            try
-                _remove_exact_metamdbg_durable_file!(
-                    marker,
-                    merge(temporary_identity, (; path = marker)),
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to remove an invalid newly published " *
-                      "contract marker while preserving the primary " *
-                      "publication failure" marker primary_error cleanup_error
-            end
-        end
+        _run_cleanup_after_primary_error!(
+            cleanup_failed_publication,
+            primary_error,
+            "metaMDBG provenance-contract cleanup failed while preserving " *
+            "the primary publication failure";
+            cleanup_evidence = marker,
+        )
         Base.rethrow()
-    finally
-        isopen(temporary_io) && close(temporary_io)
-        if _output_root_path_entry_exists(temporary_path)
-            _remove_exact_metamdbg_durable_file!(
-                temporary_path,
-                temporary_identity,
-            )
-        end
     end
+    cleanup_temporary()
     return marker
 end
 
@@ -11785,7 +12894,7 @@ function _metamdbg_nonempty_file(path::AbstractString)::Bool
     return isfile(path) && !islink(path) && filesize(path) > 0
 end
 
-function _require_metamdbg_regular_file(
+function _require_assembly_regular_file(
         path::AbstractString,
         label::AbstractString,
 )::String
@@ -11799,11 +12908,20 @@ function _require_metamdbg_regular_file(
     return normalized_path
 end
 
-function _require_valid_metamdbg_fasta(
+function _require_metamdbg_regular_file(
         path::AbstractString,
         label::AbstractString,
 )::String
-    normalized_path = _require_metamdbg_regular_file(path, label)
+    return _require_assembly_regular_file(path, label)
+end
+
+function _require_valid_assembly_fasta(
+        path::AbstractString,
+        label::AbstractString,
+        ;
+        reader_closer::Function = close,
+)::String
+    normalized_path = _require_assembly_regular_file(path, label)
     reader = try
         Mycelia.open_fastx(normalized_path)
     catch caught
@@ -11853,21 +12971,43 @@ function _require_valid_metamdbg_fasta(
             record_count += 1
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        if caught isa ErrorException && startswith(caught.msg, String(label))
-            rethrow()
+        primary_error = if caught isa InterruptException ||
+                           (caught isa ErrorException &&
+                            startswith(caught.msg, String(label)))
+            caught
+        else
+            ErrorException(
+                "$(label) is not valid FASTA: $(normalized_path). Cause: " *
+                sprint(showerror, caught),
+            )
         end
-        error(
-            "$(label) is not valid FASTA: $(normalized_path). Cause: " *
-            sprint(showerror, caught),
+        _run_cleanup_after_primary_error!(
+            () -> reader_closer(reader),
+            primary_error,
+            "metaMDBG FASTA reader cleanup failed while preserving the " *
+            "primary validation failure";
+            cleanup_evidence = normalized_path,
         )
-    finally
-        close(reader)
+        primary_error === caught ? Base.rethrow() : throw(primary_error)
     end
+    reader_closer(reader)
     record_count > 0 || error(
         "$(label) contains no FASTA records: $(normalized_path).",
     )
     return normalized_path
+end
+
+function _require_valid_metamdbg_fasta(
+        path::AbstractString,
+        label::AbstractString,
+        ;
+        reader_closer::Function = close,
+)::String
+    return _require_valid_assembly_fasta(
+        path,
+        label;
+        reader_closer,
+    )
 end
 
 function _require_valid_metamdbg_gfa_identifier(
@@ -12100,7 +13240,7 @@ function _metamdbg_gfa_path_step_identifiers(
     return identifiers
 end
 
-function _require_valid_metamdbg_gfa_input(
+function _require_valid_assembly_gfa_input(
         input::IO,
         label::AbstractString,
         normalized_path::AbstractString,
@@ -12319,19 +13459,38 @@ function _require_valid_metamdbg_gfa_input(
     return nothing
 end
 
-function _require_valid_metamdbg_gfa(
+function _require_valid_metamdbg_gfa_input(
+        input::IO,
+        label::AbstractString,
+        normalized_path::AbstractString,
+)::Nothing
+    return _require_valid_assembly_gfa_input(
+        input,
+        label,
+        normalized_path,
+    )
+end
+
+function _require_valid_assembly_gfa(
         path::AbstractString,
         label::AbstractString,
 )::String
-    normalized_path = _require_metamdbg_regular_file(path, label)
+    normalized_path = _require_assembly_regular_file(path, label)
     open(normalized_path, "r") do input
-        _require_valid_metamdbg_gfa_input(
+        _require_valid_assembly_gfa_input(
             input,
             label,
             normalized_path,
         )
     end
     return normalized_path
+end
+
+function _require_valid_metamdbg_gfa(
+        path::AbstractString,
+        label::AbstractString,
+)::String
+    return _require_valid_assembly_gfa(path, label)
 end
 
 function _existing_metamdbg_contigs(
@@ -12353,50 +13512,256 @@ function _existing_metamdbg_contigs(
     return nothing
 end
 
+function _require_exact_metamdbg_file_digest(
+        path::AbstractString,
+        expected_identity::NamedTuple,
+        expected_sha256::AbstractString,
+        label::AbstractString;
+        samefile_path::Union{Nothing, AbstractString} = nothing,
+)::Nothing
+    observed_before = _metamdbg_regular_file_identity(path)
+    _metamdbg_path_identity_matches(observed_before, expected_identity) ||
+        error("$(label) changed identity before digest validation: $(path).")
+    if samefile_path !== nothing
+        Base.Filesystem.samefile(path, samefile_path) || error(
+            "$(label) does not retain its validated hardlink identity: " *
+            "$(path).",
+        )
+    end
+    observed_sha256 = _metamdbg_sha256(path)
+    observed_after = _metamdbg_regular_file_identity(path)
+    _metamdbg_path_identity_matches(observed_after, expected_identity) ||
+        error("$(label) changed identity during digest validation: $(path).")
+    observed_sha256 == expected_sha256 || error(
+        "$(label) content digest changed after publication: $(path).",
+    )
+    return nothing
+end
+
+function _fsync_exact_metamdbg_regular_file(
+        path::AbstractString,
+        expected_identity::NamedTuple,
+        label::AbstractString;
+        descriptor_closer::Function = close,
+)::Nothing
+    file = Base.Filesystem.open(
+        path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    _run_with_cleanup!(
+        () -> begin
+            _require_metamdbg_quarantined_payload_descriptor(
+                file,
+                path,
+                expected_identity,
+                :file,
+            )
+            _fsync_metamdbg_descriptor(Base.fd(file), label)
+            _require_metamdbg_quarantined_payload_descriptor(
+                file,
+                path,
+                expected_identity,
+                :file,
+            )
+            observed_identity = _metamdbg_regular_file_identity(path)
+            _metamdbg_path_identity_matches(
+                observed_identity,
+                expected_identity,
+            ) || error(
+                "$(label) changed identity while it was fsynced: $(path).",
+            )
+            return nothing
+        end,
+        () -> descriptor_closer(file),
+        "metaMDBG exact-file fsync descriptor cleanup failed while " *
+        "preserving the primary durability failure";
+        cleanup_evidence = path,
+    )
+    return nothing
+end
+
 function _gzip_metamdbg_contigs!(
         plain_path::AbstractString,
-        gzip_path::AbstractString,
+        gzip_path::AbstractString;
+        after_temporary_binding_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
 )::String
+    _output_root_path_entry_exists(gzip_path) && error(
+        "Refusing to overwrite an existing metaMDBG compressed contigs " *
+        "artifact: $(gzip_path).",
+    )
     temporary_path, temporary_io = mktemp(
         dirname(gzip_path);
         cleanup = false,
     )
-    close(temporary_io)
-    try
-        open(plain_path, "r") do input
-            open(temporary_path, "w") do raw_output
-                gzip_output = CodecZlib.GzipCompressorStream(raw_output)
-                try
-                    buffer = Vector{UInt8}(undef, 1024 * 1024)
-                    while !eof(input)
-                        bytes_read = readbytes!(input, buffer)
-                        bytes_read == 0 && break
-                        write(gzip_output, view(buffer, 1:bytes_read))
+    temporary_identity = _metamdbg_regular_file_identity(temporary_path)
+    input = nothing
+    gzip_output = nothing
+    close_streams = function ()
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if gzip_output !== nothing && isopen(gzip_output)
+                        close(gzip_output)
                     end
-                finally
-                    close(gzip_output)
-                end
-            end
+                    return nothing
+                end,
+                () -> isopen(temporary_io) ? close(temporary_io) : nothing,
+                () -> begin
+                    if input !== nothing && isopen(input)
+                        close(input)
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG contig-compression streams",
+        )
+        return nothing
+    end
+    cleanup_temporary = function ()
+        _run_cleanup_steps!(
+            (
+                close_streams,
+                () -> begin
+                    if _output_root_path_entry_exists(temporary_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            temporary_path,
+                            temporary_identity,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG contig-compression temporary artifact",
+        )
+        return nothing
+    end
+    cleanup_failed_publication = function ()
+        _run_cleanup_steps!(
+            (
+                cleanup_temporary,
+                () -> begin
+                    if _output_root_path_entry_exists(gzip_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            gzip_path,
+                            merge(temporary_identity, (; path = gzip_path)),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG contig-compression publication",
+        )
+        return nothing
+    end
+    try
+        after_temporary_binding_hook(temporary_path, temporary_identity)
+        input = open(plain_path, "r")
+        gzip_output = CodecZlib.GzipCompressorStream(temporary_io)
+        buffer = Vector{UInt8}(undef, 1024 * 1024)
+        while !eof(input)
+            bytes_read = readbytes!(input, buffer)
+            bytes_read == 0 && break
+            write(gzip_output, view(buffer, 1:bytes_read))
         end
+        close_streams()
+        observed_temporary_identity =
+            _metamdbg_regular_file_identity(temporary_path)
+        _metamdbg_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "metaMDBG compressed-contigs temporary artifact was replaced " *
+            "before publication: $(temporary_path).",
+        )
         _metamdbg_nonempty_file(temporary_path) || error(
             "Failed to gzip metaMDBG contigs from $(plain_path).",
         )
-        mv(temporary_path, gzip_path; force = true)
-    finally
-        rm(temporary_path; force = true)
+        _fsync_exact_metamdbg_regular_file(
+            temporary_path,
+            temporary_identity,
+            "metaMDBG compressed-contigs temporary artifact",
+        )
+        expected_gzip_sha256 = _metamdbg_sha256(temporary_path)
+        _require_exact_metamdbg_file_digest(
+            temporary_path,
+            temporary_identity,
+            expected_gzip_sha256,
+            "metaMDBG compressed-contigs temporary artifact",
+        )
+        Base.Filesystem.hardlink(temporary_path, gzip_path)
+        post_hardlink_hook(gzip_path, temporary_identity)
+        expected_gzip_identity =
+            merge(temporary_identity, (; path = gzip_path))
+        _require_exact_metamdbg_file_digest(
+            gzip_path,
+            expected_gzip_identity,
+            expected_gzip_sha256,
+            "metaMDBG compressed-contigs publication";
+            samefile_path = temporary_path,
+        )
+        _fsync_metamdbg_directory(dirname(gzip_path))
+        _require_exact_metamdbg_file_digest(
+            gzip_path,
+            expected_gzip_identity,
+            expected_gzip_sha256,
+            "metaMDBG compressed-contigs publication after directory fsync";
+            samefile_path = temporary_path,
+        )
+        _remove_exact_metamdbg_durable_file!(
+            temporary_path,
+            temporary_identity,
+        )
+        _require_exact_metamdbg_file_digest(
+            gzip_path,
+            expected_gzip_identity,
+            expected_gzip_sha256,
+            "metaMDBG compressed-contigs final publication",
+        )
+        publication_recorder(
+            gzip_path,
+            expected_gzip_identity,
+            expected_gzip_sha256,
+        )
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_failed_publication,
+            primary_error,
+            "metaMDBG contig-compression cleanup failed while preserving " *
+            "the primary compression failure";
+            cleanup_evidence = temporary_path,
+        )
+        Base.rethrow()
     end
+    cleanup_temporary()
     return String(gzip_path)
 end
 
 function _normalize_metamdbg_contigs!(
         outputs::NamedTuple,
+        ;
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
 )::Union{Nothing, String}
     existing_contigs = _existing_metamdbg_contigs(outputs)
     existing_contigs === nothing && return nothing
     existing_contigs == outputs.contigs_gz && return outputs.contigs_gz
     compressed_contigs = _gzip_metamdbg_contigs!(
         outputs.contigs_plain,
-        outputs.contigs_gz,
+        outputs.contigs_gz;
+        publication_recorder,
     )
     return _require_valid_metamdbg_fasta(
         compressed_contigs,
@@ -12433,9 +13798,135 @@ function _metamdbg_all_graph_candidates(
     ))
 end
 
+function _metamdbg_symlink_identity(path::AbstractString)::NamedTuple
+    normalized_path = normpath(abspath(String(path)))
+    islink(normalized_path) || error(
+        "metaMDBG graph alias must be a symbolic link: $(normalized_path).",
+    )
+    alias_status = lstat(normalized_path)
+    return (;
+        path = normalized_path,
+        device = alias_status.device,
+        inode = alias_status.inode,
+        target = readlink(normalized_path),
+    )
+end
+
+# POSIX on macOS cannot atomically condition link, rename, or unlink on a
+# previously observed inode. Mycelia therefore uses no-clobber transitions
+# with immediate before/after identity checks and retains mismatches as
+# fail-closed evidence. This does not claim protection from a malicious
+# same-UID process that wins the final instruction-sized syscall race.
+function _remove_exact_metamdbg_symlink!(
+        path::AbstractString,
+        expected_identity::NamedTuple;
+        pre_quarantine_rename_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+        ) -> nothing,
+        pre_quarantine_unlink_hook::Function = (
+            _path::AbstractString,
+            _quarantine_path::AbstractString,
+        ) -> nothing,
+        descriptor_closer::Function = close,
+)::Nothing
+    normalized_path = normpath(abspath(String(path)))
+    expected_identity.path == normalized_path || error(
+        "metaMDBG graph-alias removal identity targets another path: " *
+        "$(normalized_path).",
+    )
+    parent_identity =
+        _metamdbg_directory_path_identity(dirname(normalized_path))
+    parent = Base.Filesystem.open(
+        parent_identity.path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_DIRECTORY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    source_name = basename(normalized_path)
+    quarantine_name = _metamdbg_removal_quarantine_name(source_name)
+    quarantine_path = joinpath(parent_identity.path, quarantine_name)
+    try
+        _require_unchanged_metamdbg_directory_descriptor(
+            parent,
+            parent_identity,
+            parent_identity.path,
+        )
+        _metamdbg_symlink_identity(normalized_path) == expected_identity ||
+            error(
+                "metaMDBG refuses to remove a replacement graph alias: " *
+                "$(normalized_path).",
+            )
+        pre_quarantine_rename_hook(normalized_path, quarantine_path)
+        _metamdbg_renameat_noreplace(
+            parent,
+            source_name,
+            parent,
+            quarantine_name,
+        )
+        expected_quarantine_identity =
+            merge(expected_identity, (; path = quarantine_path))
+        _metamdbg_symlink_identity(quarantine_path) ==
+            expected_quarantine_identity || error(
+            "metaMDBG moved a replacement graph alias into fail-closed " *
+            "rollback evidence: $(quarantine_path).",
+        )
+        !_metamdbg_openat_entry_exists(parent, source_name) || error(
+            "metaMDBG graph-alias source name reappeared after rollback " *
+            "quarantine: $(normalized_path).",
+        )
+        _fsync_bound_metamdbg_directory(
+            parent,
+            parent_identity,
+            parent_identity.path,
+        )
+        pre_quarantine_unlink_hook(normalized_path, quarantine_path)
+        _metamdbg_symlink_identity(quarantine_path) ==
+            expected_quarantine_identity || error(
+            "metaMDBG graph-alias rollback evidence was replaced before " *
+            "exact unlink: $(quarantine_path).",
+        )
+        _metamdbg_unlinkat(parent, quarantine_name)
+        !_metamdbg_openat_entry_exists(parent, quarantine_name) || error(
+            "metaMDBG graph-alias rollback evidence reappeared after exact " *
+            "unlink: $(quarantine_path).",
+        )
+        !_metamdbg_openat_entry_exists(parent, source_name) || error(
+            "metaMDBG graph-alias source name reappeared after exact " *
+            "rollback: $(normalized_path).",
+        )
+        _fsync_bound_metamdbg_directory(
+            parent,
+            parent_identity,
+            parent_identity.path,
+        )
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> isopen(parent) ? descriptor_closer(parent) : nothing,
+            primary_error,
+            "metaMDBG graph-alias rollback descriptor cleanup failed while " *
+            "preserving the primary rollback failure";
+            cleanup_evidence = quarantine_path,
+        )
+        Base.rethrow()
+    end
+    descriptor_closer(parent)
+    return nothing
+end
+
 function _normalize_metamdbg_graph!(
         outputs::NamedTuple,
         graph_k::Int,
+        ;
+        created_symlink_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+        ) -> nothing,
+        post_symlink_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+        ) -> nothing,
 )::Union{Nothing, String}
     _require_positive_metamdbg_graph_k(graph_k)
     candidates = _metamdbg_graph_candidates(outputs, graph_k)
@@ -12457,18 +13948,148 @@ function _normalize_metamdbg_graph!(
         "metaMDBG graph artifact",
     )
 
-    if ispath(outputs.graph_alias) || islink(outputs.graph_alias)
-        rm(outputs.graph_alias; force = true)
-    end
-    symlink(basename(graph_source), outputs.graph_alias)
-    if !islink(outputs.graph_alias) || !isfile(outputs.graph_alias) ||
-       filesize(outputs.graph_alias) == 0
+    expected_alias_target = basename(graph_source)
+    if islink(outputs.graph_alias)
+        readlink(outputs.graph_alias) == expected_alias_target &&
+            isfile(outputs.graph_alias) &&
+            Base.Filesystem.samefile(outputs.graph_alias, graph_source) ||
+            error(
+                "metaMDBG refuses to replace an existing nonexact graph " *
+                "alias: $(outputs.graph_alias).",
+            )
+        return outputs.graph_alias
+    elseif ispath(outputs.graph_alias)
         error(
-            "metaMDBG graph alias does not resolve to a nonempty artifact: " *
+            "metaMDBG refuses to overwrite an existing graph-alias path: " *
             outputs.graph_alias,
         )
     end
+    symlink(expected_alias_target, outputs.graph_alias)
+    created_alias_identity =
+        _metamdbg_symlink_identity(outputs.graph_alias)
+    created_symlink_hook(outputs.graph_alias, created_alias_identity)
+    post_symlink_hook(outputs.graph_alias, created_alias_identity)
+    observed_alias_identity =
+        _metamdbg_symlink_identity(outputs.graph_alias)
+    if observed_alias_identity != created_alias_identity ||
+       observed_alias_identity.target != expected_alias_target ||
+       !isfile(outputs.graph_alias) ||
+       !Base.Filesystem.samefile(outputs.graph_alias, graph_source) ||
+       filesize(outputs.graph_alias) == 0
+        error(
+            "metaMDBG graph alias changed after exact creation or does not " *
+            "resolve to its validated graph artifact: $(outputs.graph_alias).",
+        )
+    end
     return outputs.graph_alias
+end
+
+function _metamdbg_descriptor_sha256(input::IO)::String
+    seekstart(input)
+    digest = SHA.bytes2hex(SHA.sha256(input))
+    seekstart(input)
+    return digest
+end
+
+function _record_metamdbg_file_publication!(
+        publications::Vector{NamedTuple},
+        path::AbstractString,
+        identity::NamedTuple,
+        sha256::AbstractString,
+)::Nothing
+    push!(publications, (;
+        kind = :file,
+        path = String(path),
+        identity,
+        sha256 = String(sha256),
+    ))
+    return nothing
+end
+
+function _record_metamdbg_symlink_publication!(
+        publications::Vector{NamedTuple},
+        path::AbstractString,
+        identity::NamedTuple,
+)::Nothing
+    push!(publications, (;
+        kind = :symlink,
+        path = String(path),
+        identity,
+    ))
+    return nothing
+end
+
+function _rollback_metamdbg_publication!(
+        publication::NamedTuple,
+)::Nothing
+    _output_root_path_entry_exists(publication.path) || return nothing
+    if publication.kind == :file
+        function validate_payload(
+                payload::Base.Filesystem.File,
+                payload_path::AbstractString,
+        )::Nothing
+            observed_sha256 = _metamdbg_descriptor_sha256(payload)
+            observed_sha256 == publication.sha256 || error(
+                "metaMDBG retained in-place-mutated publication rollback " *
+                "evidence: $(payload_path).",
+            )
+            return nothing
+        end
+        _remove_exact_metamdbg_durable_file!(
+            publication.path,
+            publication.identity;
+            quarantined_payload_validator = validate_payload,
+        )
+    elseif publication.kind == :symlink
+        _remove_exact_metamdbg_symlink!(
+            publication.path,
+            publication.identity,
+        )
+    else
+        error(
+            "metaMDBG publication ledger has unsupported kind " *
+            "$(publication.kind).",
+        )
+    end
+    return nothing
+end
+
+function _rollback_metamdbg_publications!(
+        publications::Vector{NamedTuple},
+)::Nothing
+    cleanup_steps = Tuple(
+        () -> _rollback_metamdbg_publication!(publication)
+        for publication in Iterators.reverse(publications)
+    )
+    _run_cleanup_steps!(
+        cleanup_steps,
+        "metaMDBG newly created publication ledger",
+    )
+    return nothing
+end
+
+function _metamdbg_publication_recorders(
+        publications::Vector{NamedTuple},
+)::NamedTuple
+    file = (
+        path::AbstractString,
+        identity::NamedTuple,
+        sha256::AbstractString,
+    ) -> _record_metamdbg_file_publication!(
+        publications,
+        path,
+        identity,
+        sha256,
+    )
+    symlink = (
+        path::AbstractString,
+        identity::NamedTuple,
+    ) -> _record_metamdbg_symlink_publication!(
+        publications,
+        path,
+        identity,
+    )
+    return (; file, symlink)
 end
 
 function _require_metamdbg_artifacts!(
@@ -12476,6 +14097,15 @@ function _require_metamdbg_artifacts!(
         graph_k::Int,
         ;
         output_root_identity::Union{Nothing, NamedTuple} = nothing,
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
+        created_graph_alias_hook::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+        ) -> nothing,
 )::NamedTuple
     _require_positive_metamdbg_graph_k(graph_k)
     if output_root_identity !== nothing
@@ -12484,12 +14114,19 @@ function _require_metamdbg_artifacts!(
             outputs.outdir,
         )
     end
-    contigs = _normalize_metamdbg_contigs!(outputs)
+    contigs = _normalize_metamdbg_contigs!(
+        outputs;
+        publication_recorder,
+    )
     contigs === nothing && error(
         "metaMDBG produced neither contigs.fasta.gz nor contigs.fasta in " *
         outputs.outdir,
     )
-    graph = _normalize_metamdbg_graph!(outputs, graph_k)
+    graph = _normalize_metamdbg_graph!(
+        outputs,
+        graph_k;
+        created_symlink_hook = created_graph_alias_hook,
+    )
     graph === nothing && error(
         "metaMDBG produced no nonempty assemblyGraph_k$(graph_k)_*bps.gfa " *
         "artifact in $(outputs.outdir).",
@@ -12511,6 +14148,170 @@ function _require_metamdbg_artifacts!(
         )
     end
     return (; outdir = outputs.outdir, contigs, graph)
+end
+
+function _metamdbg_regular_file_snapshot(
+        path::AbstractString,
+        label::AbstractString,
+        ;
+        digest_function::Function = _metamdbg_descriptor_sha256,
+        descriptor_closer::Function = close,
+)::NamedTuple
+    identity = _metamdbg_regular_file_identity(path)
+    input = Base.Filesystem.open(
+        identity.path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    return _run_with_cleanup!(
+        () -> begin
+            _require_metamdbg_quarantined_payload_descriptor(
+                input,
+                identity.path,
+                identity,
+                :file,
+            )
+            input_status = stat(input)
+            sha256 = String(digest_function(input))
+            _require_metamdbg_quarantined_payload_descriptor(
+                input,
+                identity.path,
+                identity,
+                :file,
+            )
+            _metamdbg_regular_file_identity(identity.path) == identity ||
+                error("$(label) changed identity during snapshot capture.")
+            filesize(identity.path) == input_status.size || error(
+                "$(label) changed size during snapshot capture.",
+            )
+            return (;
+                identity,
+                size_bytes = Int64(input_status.size),
+                sha256,
+            )
+        end,
+        () -> descriptor_closer(input),
+        "$(label) snapshot descriptor cleanup failed while preserving the " *
+        "primary snapshot failure";
+        cleanup_evidence = identity.path,
+    )
+end
+
+function _metamdbg_artifact_snapshot(
+        artifacts::NamedTuple,
+        ;
+        digest_function::Function = _metamdbg_descriptor_sha256,
+)::NamedTuple
+    contigs = _metamdbg_regular_file_snapshot(
+        artifacts.contigs,
+        "metaMDBG contigs artifact",
+        ;
+        digest_function,
+    )
+    graph_alias = _metamdbg_symlink_identity(artifacts.graph)
+    graph_source_path = realpath(artifacts.graph)
+    graph_alias.target == basename(graph_source_path) || error(
+        "metaMDBG graph alias target changed during snapshot capture: " *
+        "$(artifacts.graph).",
+    )
+    Base.Filesystem.samefile(artifacts.graph, graph_source_path) || error(
+        "metaMDBG graph alias changed referent during snapshot capture: " *
+        "$(artifacts.graph).",
+    )
+    graph_source = _metamdbg_regular_file_snapshot(
+        graph_source_path,
+        "metaMDBG graph-source artifact",
+        ;
+        digest_function,
+    )
+    _metamdbg_symlink_identity(artifacts.graph) == graph_alias || error(
+        "metaMDBG graph alias changed during snapshot capture: " *
+        "$(artifacts.graph).",
+    )
+    realpath(artifacts.graph) == graph_source_path || error(
+        "metaMDBG graph alias changed referent during snapshot capture: " *
+        "$(artifacts.graph).",
+    )
+    return (; contigs, graph_alias, graph_source)
+end
+
+function _validated_metamdbg_contract_snapshot(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+)::NamedTuple
+    snapshot_before = _metamdbg_regular_file_snapshot(
+        outputs.contract_marker,
+        "metaMDBG provenance contract",
+    )
+    _require_metamdbg_contract!(outputs, input_contract)
+    snapshot_after = _metamdbg_regular_file_snapshot(
+        outputs.contract_marker,
+        "metaMDBG provenance contract",
+    )
+    snapshot_after == snapshot_before || error(
+        "metaMDBG provenance contract changed during exact validation.",
+    )
+    return snapshot_after
+end
+
+function _require_unchanged_metamdbg_contract!(
+        outputs::NamedTuple,
+        input_contract::NamedTuple,
+        expected_snapshot::NamedTuple,
+)::NamedTuple
+    observed = _validated_metamdbg_contract_snapshot(
+        outputs,
+        input_contract,
+    )
+    observed == expected_snapshot || error(
+        "metaMDBG provenance contract changed after exact publication.",
+    )
+    return observed
+end
+
+function _validated_metamdbg_artifact_snapshot(
+        artifacts::NamedTuple,
+        ;
+        digest_function::Function = _metamdbg_descriptor_sha256,
+)::NamedTuple
+    snapshot_before = _metamdbg_artifact_snapshot(
+        artifacts;
+        digest_function,
+    )
+    _require_valid_metamdbg_fasta(
+        artifacts.contigs,
+        "metaMDBG validated contigs artifact",
+    )
+    _require_valid_metamdbg_gfa(
+        snapshot_before.graph_source.identity.path,
+        "metaMDBG validated graph artifact",
+    )
+    snapshot_after = _metamdbg_artifact_snapshot(
+        artifacts;
+        digest_function,
+    )
+    snapshot_after == snapshot_before || error(
+        "metaMDBG artifacts changed during semantic validation.",
+    )
+    return snapshot_after
+end
+
+function _require_unchanged_metamdbg_artifacts!(
+        artifacts::NamedTuple,
+        expected_snapshot::NamedTuple,
+        phase::AbstractString,
+        ;
+        digest_function::Function = _metamdbg_descriptor_sha256,
+)::NamedTuple
+    observed = _metamdbg_artifact_snapshot(
+        artifacts;
+        digest_function,
+    )
+    observed == expected_snapshot || error(
+        "metaMDBG artifacts changed $(phase).",
+    )
+    return observed
 end
 
 function _metamdbg_completion_toolchain_summary(
@@ -12560,6 +14361,7 @@ function _metamdbg_completion_manifest(
         toolchain::NamedTuple,
         ;
         digest_function::Function = _metamdbg_sha256,
+        artifact_snapshot::Union{Nothing, NamedTuple} = nothing,
 )::NamedTuple
     _require_positive_metamdbg_graph_k(graph_k)
     toolchain_summary = _metamdbg_completion_toolchain_summary(toolchain)
@@ -12567,6 +14369,29 @@ function _metamdbg_completion_manifest(
     contigs_path = realpath(artifacts.contigs)
     graph_alias_path = normpath(abspath(artifacts.graph))
     graph_source_path = realpath(artifacts.graph)
+    contigs_size, contigs_sha256, graph_size, graph_sha256 =
+        if artifact_snapshot === nothing
+            (
+                Int64(filesize(contigs_path)),
+                String(digest_function(contigs_path)),
+                Int64(filesize(graph_source_path)),
+                String(digest_function(graph_source_path)),
+            )
+        else
+            snapshot = something(artifact_snapshot)
+            snapshot.contigs.identity.path == contigs_path || error(
+                "metaMDBG contigs snapshot targets another artifact.",
+            )
+            snapshot.graph_source.identity.path == graph_source_path || error(
+                "metaMDBG graph snapshot targets another artifact.",
+            )
+            (
+                Int64(snapshot.contigs.size_bytes),
+                String(snapshot.contigs.sha256),
+                Int64(snapshot.graph_source.size_bytes),
+                String(snapshot.graph_source.sha256),
+            )
+        end
     manifest = (;
         schema_version = _METAMDBG_COMPLETION_SCHEMA_VERSION,
         workflow = (;
@@ -12581,16 +14406,16 @@ function _metamdbg_completion_manifest(
             contigs = (;
                 canonical_path_sha256 =
                     _metamdbg_string_sha256(contigs_path),
-                size_bytes = Int64(filesize(contigs_path)),
-                sha256 = String(digest_function(contigs_path)),
+                size_bytes = contigs_size,
+                sha256 = contigs_sha256,
             ),
             graph = (;
                 alias_path_sha256 =
                     _metamdbg_string_sha256(graph_alias_path),
                 source_path_sha256 =
                     _metamdbg_string_sha256(graph_source_path),
-                size_bytes = Int64(filesize(graph_source_path)),
-                sha256 = String(digest_function(graph_source_path)),
+                size_bytes = graph_size,
+                sha256 = graph_sha256,
             ),
         ),
     )
@@ -12608,6 +14433,16 @@ end
 function _write_metamdbg_completion_manifest!(
         outputs::NamedTuple,
         completion::NamedTuple,
+        ;
+        after_temporary_binding_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
 )::String
     marker = outputs.completion_marker
     if ispath(marker) || islink(marker)
@@ -12618,14 +14453,67 @@ function _write_metamdbg_completion_manifest!(
     end
     temporary_path, temporary_io = mktemp(dirname(marker); cleanup = false)
     temporary_identity = _metamdbg_regular_file_identity(temporary_path)
-    published = false
+    cleanup_temporary = function ()
+        _run_cleanup_steps!(
+            (
+                () -> isopen(temporary_io) ? close(temporary_io) : nothing,
+                () -> begin
+                    if _output_root_path_entry_exists(temporary_path)
+                        _remove_exact_metamdbg_durable_file!(
+                            temporary_path,
+                            temporary_identity,
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG completion-manifest temporary artifact",
+        )
+        return nothing
+    end
+    cleanup_failed_publication = function ()
+        _run_cleanup_steps!(
+            (
+                cleanup_temporary,
+                () -> begin
+                    if _output_root_path_entry_exists(marker)
+                        _remove_exact_metamdbg_durable_file!(
+                            marker,
+                            merge(temporary_identity, (; path = marker)),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "metaMDBG completion-manifest publication",
+        )
+        return nothing
+    end
     try
+        after_temporary_binding_hook(temporary_path, temporary_identity)
         write(temporary_io, completion.contents)
         chmod(temporary_path, 0o600)
         _fsync_metamdbg_file(temporary_io, temporary_path)
         close(temporary_io)
+        observed_temporary_identity =
+            _metamdbg_regular_file_identity(temporary_path)
+        _metamdbg_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "metaMDBG completion-manifest temporary artifact was replaced " *
+            "before publication: $(temporary_path).",
+        )
         Base.Filesystem.hardlink(temporary_path, marker)
-        published = true
+        post_hardlink_hook(marker, temporary_identity)
+        observed_marker_identity = _metamdbg_regular_file_identity(marker)
+        _metamdbg_path_identity_matches(
+            observed_marker_identity,
+            merge(temporary_identity, (; path = marker)),
+        ) && Base.Filesystem.samefile(temporary_path, marker) || error(
+            "metaMDBG completion-manifest publication did not bind its " *
+            "validated temporary inode: $(marker).",
+        )
         _fsync_metamdbg_directory(dirname(marker))
         _remove_exact_metamdbg_durable_file!(
             temporary_path,
@@ -12634,34 +14522,22 @@ function _write_metamdbg_completion_manifest!(
         read(marker, String) == completion.contents || error(
             "Failed to write metaMDBG completion manifest: $(marker).",
         )
+        publication_recorder(
+            marker,
+            merge(temporary_identity, (; path = marker)),
+            _metamdbg_sha256(marker),
+        )
     catch primary_error
-        isopen(temporary_io) && close(temporary_io)
-        if _output_root_path_entry_exists(temporary_path)
-            try
-                _remove_exact_metamdbg_durable_file!(
-                    temporary_path,
-                    temporary_identity,
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to clean an unpublished completion " *
-                      "manifest while preserving the primary publication " *
-                      "failure" temporary_path primary_error cleanup_error
-            end
-        end
-        if published && _output_root_path_entry_exists(marker)
-            try
-                _remove_exact_metamdbg_durable_file!(
-                    marker,
-                    merge(temporary_identity, (; path = marker)),
-                )
-            catch cleanup_error
-                @warn "metaMDBG failed to remove an invalid newly published " *
-                      "completion manifest while preserving the primary " *
-                      "publication failure" marker primary_error cleanup_error
-            end
-        end
+        _run_cleanup_after_primary_error!(
+            cleanup_failed_publication,
+            primary_error,
+            "metaMDBG completion-manifest cleanup failed while preserving " *
+            "the primary publication failure";
+            cleanup_evidence = marker,
+        )
         Base.rethrow()
     end
+    cleanup_temporary()
     return marker
 end
 
@@ -12700,6 +14576,7 @@ function _require_metamdbg_completion_manifest!(
         graph_k::Int,
         ;
         digest_function::Function = _metamdbg_sha256,
+        json_parser::Function = JSON.parse,
 )::NamedTuple
     _require_positive_metamdbg_graph_k(graph_k)
     marker = outputs.completion_marker
@@ -12711,8 +14588,9 @@ function _require_metamdbg_completion_manifest!(
     end
     actual_contents = read(marker, String)
     parsed = try
-        JSON.parse(actual_contents)
+        json_parser(actual_contents)
     catch caught
+        caught isa InterruptException && rethrow()
         error(
             "metaMDBG completion manifest is not valid JSON: $(marker). " *
             "Cause: $(sprint(showerror, caught))",
@@ -12758,6 +14636,51 @@ function _require_metamdbg_completion_manifest!(
     return expected
 end
 
+function _validated_metamdbg_completion_snapshot(
+        outputs::NamedTuple,
+        artifacts::NamedTuple,
+        input_contract::NamedTuple,
+        graph_k::Int,
+        ;
+        digest_function::Function = _metamdbg_sha256,
+        json_parser::Function = JSON.parse,
+)::NamedTuple
+    snapshot_before = _metamdbg_regular_file_snapshot(
+        outputs.completion_marker,
+        "metaMDBG completion manifest",
+    )
+    completion = _require_metamdbg_completion_manifest!(
+        outputs,
+        artifacts,
+        input_contract,
+        graph_k;
+        digest_function,
+        json_parser,
+    )
+    snapshot_after = _metamdbg_regular_file_snapshot(
+        outputs.completion_marker,
+        "metaMDBG completion manifest",
+    )
+    snapshot_after == snapshot_before || error(
+        "metaMDBG completion manifest changed during exact validation.",
+    )
+    return (; completion, snapshot = snapshot_after)
+end
+
+function _require_unchanged_metamdbg_completion_snapshot!(
+        outputs::NamedTuple,
+        expected_snapshot::NamedTuple,
+)::NamedTuple
+    observed = _metamdbg_regular_file_snapshot(
+        outputs.completion_marker,
+        "metaMDBG completion manifest",
+    )
+    observed == expected_snapshot || error(
+        "metaMDBG completion manifest changed after exact validation.",
+    )
+    return observed
+end
+
 function _metamdbg_shell_literal(value::AbstractString)::String
     occursin('\0', value) && throw(ArgumentError(
         "metaMDBG cannot embed a NUL byte in generated shell source.",
@@ -12781,6 +14704,7 @@ function _metamdbg_executor_script(
         post_queued_marker_release_hook::Union{Nothing, String} = nothing,
         post_runtime_marker_release_hook::Union{Nothing, String} = nothing,
         post_consumed_owner_rename_hook::Union{Nothing, String} = nothing,
+        pre_contigs_publication_hook::Union{Nothing, String} = nothing,
         post_completion_publication_hook::Union{Nothing, String} = nothing,
         directory_enumerator_post_open_hook::Union{Nothing, String} = nothing,
         directory_enumerator_post_enumeration_hook::Union{Nothing, String} =
@@ -12793,6 +14717,7 @@ function _metamdbg_executor_script(
             Nothing,
             String,
         } = nothing,
+        post_package_inventory_hook::Union{Nothing, String} = nothing,
         lock_retry_attempts::Int = _METAMDBG_OUTPUT_LOCK_RETRY_ATTEMPTS,
         lock_retry_delay_seconds::Real =
             _METAMDBG_OUTPUT_LOCK_RETRY_DELAY_SECONDS,
@@ -12839,6 +14764,9 @@ function _metamdbg_executor_script(
             post_directory_enumeration_hook =
                 directory_enumerator_post_directory_enumeration_hook,
         ),
+    )
+    consumed_owner_validator = _metamdbg_shell_literal(
+        _metamdbg_runtime_consumed_owner_validator_python(),
     )
     input_declaration_lines = String[]
     input_validation_function_lines = String[
@@ -12945,6 +14873,10 @@ function _metamdbg_executor_script(
         "submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.path))",
         "runtime_submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.runtime_path))",
         "consumed_submission_reservation_dir=$(_metamdbg_shell_literal(effective_submission_reservation.consumed_path))",
+        "runtime_submission_reservation_contract=\"\$runtime_submission_reservation_dir/$(_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME)\"",
+        "runtime_submission_reservation_job=\"\$runtime_submission_reservation_dir/$(_METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME)\"",
+        "consumed_submission_reservation_contract=\"\$consumed_submission_reservation_dir/$(_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME)\"",
+        "consumed_submission_reservation_job=\"\$consumed_submission_reservation_dir/$(_METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME)\"",
         "submission_reservation_contract=$(_metamdbg_shell_literal(effective_submission_reservation.contract_marker))",
         "submission_reservation_job=$(_metamdbg_shell_literal(effective_submission_reservation.job_marker))",
         "submission_output_root_reservation=$(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_marker))",
@@ -12977,6 +14909,17 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG submission reservation owner or mode is invalid\" >&2",
         "  return 1",
         "fi",
+        "observed_submission_owner_record_identity=\$(metamdbg_directory_identity \"\$submission_reservation_dir\") || observed_submission_owner_record_identity=",
+        "if [ -z \"\$observed_submission_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its queued owner-record identity\" >&2",
+        "  return 1",
+        "fi",
+        "if [ -z \"\$bound_submission_owner_record_identity\" ]; then",
+        "  bound_submission_owner_record_identity=\$observed_submission_owner_record_identity",
+        "elif [ \"\$observed_submission_owner_record_identity\" != \"\$bound_submission_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG queued owner-record identity changed after binding\" >&2",
+        "  return 1",
+        "fi",
         "if [ ! -f \"\$submission_reservation_contract\" ] || [ -L \"\$submission_reservation_contract\" ] || [ ! -s \"\$submission_reservation_contract\" ]; then",
         "  echo \"metaMDBG submission reservation contract is missing, empty, or not regular\" >&2",
         "  return 1",
@@ -13001,6 +14944,17 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG shared output-root reservation does not match this owner capability\" >&2",
         "  return 1",
         "}",
+        "observed_submission_output_root_reservation_identity=\$(metamdbg_file_identity \"\$submission_output_root_reservation\") || observed_submission_output_root_reservation_identity=",
+        "if [ -z \"\$observed_submission_output_root_reservation_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its queued shared-reservation identity\" >&2",
+        "  return 1",
+        "fi",
+        "if [ -z \"\$bound_submission_output_root_reservation_identity\" ]; then",
+        "  bound_submission_output_root_reservation_identity=\$observed_submission_output_root_reservation_identity",
+        "elif [ \"\$observed_submission_output_root_reservation_identity\" != \"\$bound_submission_output_root_reservation_identity\" ]; then",
+        "  echo \"metaMDBG queued shared-reservation identity changed after binding\" >&2",
+        "  return 1",
+        "fi",
         "if [ -z \"\${SLURM_JOB_ID:-}\" ]; then",
         "  echo \"metaMDBG bound submission reservation requires SLURM_JOB_ID\" >&2",
         "  return 1",
@@ -13011,6 +14965,9 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG runtime refuses pending scheduler job evidence; complete exact binding recovery before scheduler release\" >&2",
         "  return 1",
         "fi",
+        "reservation_inventory_index=\$((reservation_inventory_index + 1))",
+        "reservation_entries_file=\"\$secure_tmpdir/" *
+        "submission-reservation.\${reservation_inventory_index}.paths\"",
         "collect_metamdbg_directory_entries \"\$submission_reservation_dir\" \"\$reservation_entries_file\" \"submission reservation\"",
         "reservation_entry_count=0",
         "while IFS= read -r -d '' reservation_entry; do",
@@ -13041,6 +14998,19 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG submission reservation job record does not match exact SLURM job and cluster\" >&2",
         "    return 1",
         "  }",
+        "fi",
+        "observed_runtime_contract_identity=\$(metamdbg_file_identity \"\$submission_reservation_contract\")",
+        "observed_runtime_job_identity=\$(metamdbg_file_identity \"\$submission_reservation_job\")",
+        "observed_runtime_contract_sha256=\$(sha256_file \"\$submission_reservation_contract\")",
+        "observed_runtime_job_sha256=\$(sha256_file \"\$submission_reservation_job\")",
+        "if [ -z \"\$bound_runtime_contract_identity\" ]; then",
+        "  bound_runtime_contract_identity=\$observed_runtime_contract_identity",
+        "  bound_runtime_job_identity=\$observed_runtime_job_identity",
+        "  expected_runtime_contract_sha256=\$observed_runtime_contract_sha256",
+        "  expected_runtime_job_sha256=\$observed_runtime_job_sha256",
+        "elif [ \"\$observed_runtime_contract_identity\" != \"\$bound_runtime_contract_identity\" ] || [ \"\$observed_runtime_job_identity\" != \"\$bound_runtime_job_identity\" ] || [ \"\$observed_runtime_contract_sha256\" != \"\$expected_runtime_contract_sha256\" ] || [ \"\$observed_runtime_job_sha256\" != \"\$expected_runtime_job_sha256\" ]; then",
+        "  echo \"metaMDBG queued owner children changed after binding\" >&2",
+        "  return 1",
         "fi",
         "}",
     ]
@@ -13104,41 +15074,119 @@ function _metamdbg_executor_script(
         "  local reservation_lock_prefix=\"\${5:-}\"",
         "  local reservation_durable_prefix=\"\${6:-}\"",
         "  local reservation_pending_prefix=\"\${7:-}\"",
-        "  local attempt_inventory=\"\${inventory_path}.attempt\"",
-        "  local attempt_errors=\"\${inventory_path}.errors\"",
+        "  local attempt_inventory",
+        "  local attempt_errors",
         "  local enumeration_attempt=1",
         "  local last_inventory_byte",
+        "  local attempt_inventory_identity",
+        "  if [ -e \"\$inventory_path\" ] || [ -L \"\$inventory_path\" ]; then",
+        "    echo \"metaMDBG refuses to overwrite an existing directory " *
+        "inventory: \$inventory_path\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    return 1",
+        "  fi",
         "  while [ \"\$enumeration_attempt\" -le 3 ]; do",
-        "    rm -f -- \"\$attempt_inventory\" \"\$attempt_errors\"",
+        "    attempt_inventory=\"\${inventory_path}.attempt.\${enumeration_attempt}\"",
+        "    attempt_errors=\"\${inventory_path}.errors.\${enumeration_attempt}\"",
+        "    if [ -e \"\$attempt_inventory\" ] || " *
+        "[ -L \"\$attempt_inventory\" ] || " *
+        "[ -e \"\$attempt_errors\" ] || " *
+        "[ -L \"\$attempt_errors\" ]; then",
+        "      echo \"metaMDBG directory-enumeration attempt evidence already exists\" >&2",
+        "      preserve_secure_tmpdir=1",
+        "      return 1",
+        "    fi",
         "    if [ ! -d \"\$enumeration_root\" ] || [ -L \"\$enumeration_root\" ]; then",
-        "      rm -f -- \"\$inventory_path\"",
         "      echo \"metaMDBG cannot enumerate \$inventory_label because its root is missing, replaced, or not a regular directory: \$enumeration_root\" >&2",
+        "      preserve_secure_tmpdir=1",
         "      return 1",
         "    fi",
         "    if \"\$conda_runner\" run -n \"\$environment_name\" python -c $(directory_enumerator) \"\$enumeration_root\" \"\$attempt_inventory\" \"\$enumeration_mode\" \"\$reservation_lock_prefix\" \"\$reservation_durable_prefix\" \"\$reservation_pending_prefix\" 2> \"\$attempt_errors\"; then",
         "      if [ ! -f \"\$attempt_inventory\" ] || [ -L \"\$attempt_inventory\" ]; then",
         "        printf '%s\\n' \"metaMDBG enumerator exited successfully without a regular inventory\" > \"\$attempt_errors\"",
         "      elif [ -s \"\$attempt_inventory\" ]; then",
+        "        attempt_inventory_identity=" *
+        "\$(metamdbg_file_identity \"\$attempt_inventory\") || " *
+        "attempt_inventory_identity=",
+        "        if [ -z \"\$attempt_inventory_identity\" ]; then",
+        "          echo \"metaMDBG could not bind its " *
+        "directory-enumeration inventory\" >&2",
+        "          preserve_secure_tmpdir=1",
+        "          return 1",
+        "        fi",
         "        last_inventory_byte=\$(tail -c 1 \"\$attempt_inventory\" | od -An -t u1 | tr -d '[:space:]')",
         "        if [ \"\$last_inventory_byte\" = 0 ]; then",
-        "          mv -- \"\$attempt_inventory\" \"\$inventory_path\"",
-        "          rm -f -- \"\$attempt_errors\"",
+        "          if [ \"\$(metamdbg_file_identity " *
+        "\"\$attempt_inventory\")\" != " *
+        "\"\$attempt_inventory_identity\" ]; then",
+        "            echo \"metaMDBG directory-enumeration inventory " *
+        "changed before publication\" >&2",
+        "            preserve_secure_tmpdir=1",
+        "            return 1",
+        "          fi",
+        "          if ! mv -n -- \"\$attempt_inventory\" " *
+        "\"\$inventory_path\"; then",
+        "            echo \"metaMDBG directory-inventory publication " *
+        "command failed\" >&2",
+        "            preserve_secure_tmpdir=1",
+        "            return 1",
+        "          fi",
+        "          if [ -e \"\$attempt_inventory\" ] || " *
+        "[ -L \"\$attempt_inventory\" ]; then",
+        "            echo \"metaMDBG refused to overwrite a concurrent " *
+        "directory inventory\" >&2",
+        "            preserve_secure_tmpdir=1",
+        "            return 1",
+        "          fi",
+        "          if [ \"\$(metamdbg_file_identity " *
+        "\"\$inventory_path\")\" != " *
+        "\"\$attempt_inventory_identity\" ]; then",
+        "            echo \"metaMDBG published directory inventory changed identity\" >&2",
+        "            preserve_secure_tmpdir=1",
+        "            return 1",
+        "          fi",
         "          return 0",
         "        fi",
         "        printf '%s\\n' \"metaMDBG successful inventory contains an unterminated NUL record\" > \"\$attempt_errors\"",
         "      else",
-        "        mv -- \"\$attempt_inventory\" \"\$inventory_path\"",
-        "        rm -f -- \"\$attempt_errors\"",
+        "        attempt_inventory_identity=" *
+        "\$(metamdbg_file_identity \"\$attempt_inventory\") || " *
+        "attempt_inventory_identity=",
+        "        if [ -z \"\$attempt_inventory_identity\" ]; then",
+        "          echo \"metaMDBG could not bind its empty directory inventory\" >&2",
+        "          preserve_secure_tmpdir=1",
+        "          return 1",
+        "        fi",
+        "        if ! mv -n -- \"\$attempt_inventory\" " *
+        "\"\$inventory_path\"; then",
+        "          echo \"metaMDBG empty directory-inventory publication " *
+        "command failed\" >&2",
+        "          preserve_secure_tmpdir=1",
+        "          return 1",
+        "        fi",
+        "        if [ -e \"\$attempt_inventory\" ] || [ -L \"\$attempt_inventory\" ]; then",
+        "          echo \"metaMDBG refused to overwrite a concurrent " *
+        "directory inventory\" >&2",
+        "          preserve_secure_tmpdir=1",
+        "          return 1",
+        "        fi",
+        "        if [ \"\$(metamdbg_file_identity " *
+        "\"\$inventory_path\")\" != " *
+        "\"\$attempt_inventory_identity\" ]; then",
+        "          echo \"metaMDBG published empty directory inventory " *
+        "changed identity\" >&2",
+        "          preserve_secure_tmpdir=1",
+        "          return 1",
+        "        fi",
         "        return 0",
         "      fi",
         "    fi",
         "    if [ \"\$enumeration_attempt\" -eq 3 ] && [ -s \"\$attempt_errors\" ]; then",
         "      cat \"\$attempt_errors\" >&2",
         "    fi",
-        "    rm -f -- \"\$attempt_inventory\" \"\$attempt_errors\"",
         "    enumeration_attempt=\$((enumeration_attempt + 1))",
         "  done",
-        "  rm -f -- \"\$inventory_path\"",
+        "  preserve_secure_tmpdir=1",
         "  echo \"metaMDBG could not completely enumerate \$inventory_label after 3 attempts; refusing execution\" >&2",
         "  return 1",
         "}",
@@ -13222,17 +15270,63 @@ function _metamdbg_executor_script(
         "  echo \"metaMDBG runtime or consumed owner state already exists for this capability\" >&2",
         "  exit 1",
         "fi",
-        "mv -- \"\$submission_reservation_dir\" \"\$runtime_submission_reservation_dir\"",
+        "if [ \"\$(metamdbg_directory_identity \"\$submission_reservation_dir\")\" != \"\$bound_submission_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG queued owner record changed before runtime transition\" >&2",
+        "  exit 1",
+        "fi",
+        "if ! mv -n -- \"\$submission_reservation_dir\" " *
+        "\"\$runtime_submission_reservation_dir\"; then",
+        "  echo \"metaMDBG queued-to-runtime owner transition command " *
+        "failed\" >&2",
+        "  cleanup_safe_to_release_domain=0",
+        "  if [ ! -e \"\$submission_reservation_dir\" ] && " *
+        "[ ! -L \"\$submission_reservation_dir\" ] && " *
+        "[ -d \"\$runtime_submission_reservation_dir\" ] && " *
+        "[ ! -L \"\$runtime_submission_reservation_dir\" ]; then",
+        "    bound_runtime_owner_record_identity=" *
+        "\$(metamdbg_directory_identity " *
+        "\"\$runtime_submission_reservation_dir\") || " *
+        "bound_runtime_owner_record_identity=",
+        "    if [ \"\$bound_runtime_owner_record_identity\" = " *
+        "\"\$bound_submission_owner_record_identity\" ]; then",
+        "      runtime_owner_record_acquired=1",
+        "    fi",
+        "  fi",
+        "  exit 1",
+        "fi",
+        "if [ -e \"\$submission_reservation_dir\" ] || [ -L \"\$submission_reservation_dir\" ]; then",
+        "  echo \"metaMDBG refused to overwrite a concurrent runtime owner record\" >&2",
+        "  exit 1",
+        "fi",
         "runtime_owner_record_acquired=1",
         "bound_runtime_owner_record_identity=\$(metamdbg_directory_identity \"\$runtime_submission_reservation_dir\") || bound_runtime_owner_record_identity=",
-        "if [ -z \"\$bound_runtime_owner_record_identity\" ]; then",
-        "  echo \"metaMDBG could not bind its durable runtime owner record identity\" >&2",
+        "if [ -z \"\$bound_runtime_owner_record_identity\" ] || [ \"\$bound_runtime_owner_record_identity\" != \"\$bound_submission_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG runtime owner transition did not retain its bound identity\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ ! -f \"\$runtime_submission_reservation_contract\" ] || [ -L \"\$runtime_submission_reservation_contract\" ] || [ ! -f \"\$runtime_submission_reservation_job\" ] || [ -L \"\$runtime_submission_reservation_job\" ]; then",
+        "  echo \"metaMDBG runtime owner children changed type after private transition\" >&2",
+        "  exit 1",
+        "fi",
+        "if [ \"\$(metamdbg_file_identity \"\$runtime_submission_reservation_contract\")\" != \"\$bound_runtime_contract_identity\" ] || [ \"\$(sha256_file \"\$runtime_submission_reservation_contract\")\" != \"\$expected_runtime_contract_sha256\" ] || [ \"\$(metamdbg_file_identity \"\$runtime_submission_reservation_job\")\" != \"\$bound_runtime_job_identity\" ] || [ \"\$(sha256_file \"\$runtime_submission_reservation_job\")\" != \"\$expected_runtime_job_sha256\" ]; then",
+        "  echo \"metaMDBG runtime owner children changed during private transition\" >&2",
+        "  cleanup_safe_to_release_domain=0",
         "  exit 1",
         "fi",
         "fsync_file_and_parent \"\$runtime_submission_reservation_dir\"",
         (post_runtime_private_rename_hook === nothing ? "true" :
          post_runtime_private_rename_hook),
-        "if ! rm -- \"\$submission_output_root_reservation\"; then",
+        "if [ \"\$(metamdbg_directory_identity \"\$runtime_submission_reservation_dir\")\" != \"\$bound_runtime_owner_record_identity\" ]; then",
+        "  echo \"metaMDBG runtime owner record changed after its private transition\" >&2",
+        "  cleanup_safe_to_release_domain=0",
+        "  exit 1",
+        "fi",
+        "if [ \"\$(metamdbg_file_identity \"\$runtime_submission_reservation_contract\")\" != \"\$bound_runtime_contract_identity\" ] || [ \"\$(sha256_file \"\$runtime_submission_reservation_contract\")\" != \"\$expected_runtime_contract_sha256\" ] || [ \"\$(metamdbg_file_identity \"\$runtime_submission_reservation_job\")\" != \"\$bound_runtime_job_identity\" ] || [ \"\$(sha256_file \"\$runtime_submission_reservation_job\")\" != \"\$expected_runtime_job_sha256\" ]; then",
+        "  echo \"metaMDBG runtime owner children changed after private transition\" >&2",
+        "  cleanup_safe_to_release_domain=0",
+        "  exit 1",
+        "fi",
+        "if ! remove_bound_queued_output_root_reservation; then",
         "  echo \"metaMDBG failed to consume its queued shared output-root reservation\" >&2",
         "  cleanup_safe_to_release_domain=0",
         "  exit 1",
@@ -13280,16 +15374,45 @@ function _metamdbg_executor_script(
         input_declaration_lines...,
         "secure_tmpdir=",
         "bound_outdir_identity=",
+        "bound_secure_tmpdir_identity=",
+        "bound_completion_marker_identity=",
+        "bound_contract_marker_identity=",
+        "bound_contigs_publication_identity=",
+        "bound_graph_alias_publication_identity=",
+        "expected_contract_sha256=",
+        "expected_contigs_gz_sha256=",
+        "expected_graph_alias_target=",
+        "artifact_contigs_identity=",
+        "artifact_contigs_size=",
+        "artifact_contigs_sha256=",
+        "artifact_graph_alias_identity=",
+        "artifact_graph_alias_target=",
+        "artifact_graph_source_identity=",
+        "artifact_graph_source_canonical=",
+        "artifact_graph_size=",
+        "artifact_graph_sha256=",
+        "bound_submission_owner_record_identity=",
+        "bound_submission_output_root_reservation_identity=",
         "bound_lock_identity=",
         "bound_runtime_output_root_reservation_identity=",
         "bound_runtime_owner_record_identity=",
+        "bound_runtime_contract_identity=",
+        "bound_runtime_job_identity=",
+        "expected_runtime_contract_sha256=",
+        "expected_runtime_job_sha256=",
         "lock_acquired=0",
         "output_root_runtime_reservation_acquired=0",
         "runtime_owner_record_acquired=0",
         "queued_output_root_reservation_released=0",
         "output_root_scan_index=0",
+        "reservation_inventory_index=0",
         "preserve_secure_tmpdir=0",
         "cleanup_safe_to_release_domain=1",
+        "published_contigs=0",
+        "published_graph_alias=0",
+        "published_contract=0",
+        "published_completion=0",
+        "workflow_complete=0",
         "lock_retry_attempts=$(lock_retry_attempts)",
         "lock_retry_delay_seconds=$(Float64(lock_retry_delay_seconds))",
         "sha256_stream() {",
@@ -13321,6 +15444,172 @@ function _metamdbg_executor_script(
         "    stat -Lc '%d:%i' -- \"\$path\"",
         "  else",
         "    stat -f '%d:%i' -- \"\$path\"",
+        "  fi",
+        "}",
+        "metamdbg_file_identity() {",
+        "  local path=\"\$1\"",
+        "  if stat -Lc '%d:%i' -- \"\$path\" >/dev/null 2>&1; then",
+        "    stat -Lc '%d:%i' -- \"\$path\"",
+        "  else",
+        "    stat -f '%d:%i' -- \"\$path\"",
+        "  fi",
+        "}",
+        "metamdbg_symlink_identity() {",
+        "  local path=\"\$1\"",
+        "  if stat -c '%d:%i' -- \"\$path\" >/dev/null 2>&1; then",
+        "    stat -c '%d:%i' -- \"\$path\"",
+        "  else",
+        "    stat -f '%d:%i' -- \"\$path\"",
+        "  fi",
+        "}",
+        "remove_bound_regular_publication() {",
+        "  local path=\"\$1\"",
+        "  local expected_identity=\"\$2\"",
+        "  local expected_sha256=\"\$3\"",
+        "  local label=\"\$4\"",
+        "  local observed_identity",
+        "  local observed_sha256",
+        "  local quarantine_path",
+        "  if [ ! -f \"\$path\" ] || [ -L \"\$path\" ]; then",
+        "    echo \"metaMDBG \$label is missing, replaced, or not regular during rollback\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_file_identity \"\$path\") || observed_identity=",
+        "  observed_sha256=\$(sha256_file \"\$path\") || observed_sha256=",
+        "  if [ -z \"\$observed_identity\" ] || [ \"\$observed_identity\" != \"\$expected_identity\" ] || [ \"\$observed_sha256\" != \"\$expected_sha256\" ]; then",
+        "    echo \"metaMDBG retained nonexact \$label rollback evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  quarantine_path=\"\${path}.removing.\${outdir_identity}.\${SLURM_JOB_ID}.\${label}\"",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG refuses to overwrite \$label rollback evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! mv -n -- \"\$path\" \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG \$label rollback quarantine command failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$path\" ] || [ -L \"\$path\" ]; then",
+        "    echo \"metaMDBG could not quarantine its exact \$label\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ ! -f \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG \$label rollback quarantine changed type\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_file_identity \"\$quarantine_path\") || observed_identity=",
+        "  observed_sha256=\$(sha256_file \"\$quarantine_path\") || observed_sha256=",
+        "  if [ \"\$observed_identity\" != \"\$expected_identity\" ] || [ \"\$observed_sha256\" != \"\$expected_sha256\" ]; then",
+        "    echo \"metaMDBG retained replaced \$label rollback quarantine\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! rm -- \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG exact \$label rollback unlink failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG exact \$label rollback evidence remained after unlink\" >&2",
+        "    return 1",
+        "  fi",
+        "  fsync_file_and_parent \"\$outdir\"",
+        "}",
+        "remove_bound_symlink_publication() {",
+        "  local path=\"\$1\"",
+        "  local expected_identity=\"\$2\"",
+        "  local expected_target=\"\$3\"",
+        "  local label=\"\$4\"",
+        "  local observed_identity",
+        "  local observed_target",
+        "  local quarantine_path",
+        "  if [ ! -L \"\$path\" ]; then",
+        "    echo \"metaMDBG \$label is missing or replaced during rollback\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_symlink_identity \"\$path\") || observed_identity=",
+        "  observed_target=\$(readlink -- \"\$path\") || observed_target=",
+        "  if [ -z \"\$observed_identity\" ] || [ \"\$observed_identity\" != \"\$expected_identity\" ] || [ \"\$observed_target\" != \"\$expected_target\" ]; then",
+        "    echo \"metaMDBG retained nonexact \$label rollback evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  quarantine_path=\"\${path}.removing.\${outdir_identity}.\${SLURM_JOB_ID}.\${label}\"",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG refuses to overwrite \$label rollback evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! mv -n -- \"\$path\" \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG \$label rollback quarantine command failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$path\" ] || [ -L \"\$path\" ]; then",
+        "    echo \"metaMDBG could not quarantine its exact \$label\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ ! -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG \$label rollback quarantine changed type\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_symlink_identity \"\$quarantine_path\") || observed_identity=",
+        "  observed_target=\$(readlink -- \"\$quarantine_path\") || observed_target=",
+        "  if [ \"\$observed_identity\" != \"\$expected_identity\" ] || [ \"\$observed_target\" != \"\$expected_target\" ]; then",
+        "    echo \"metaMDBG retained replaced \$label rollback quarantine\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! rm -- \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG exact \$label rollback unlink failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG exact \$label rollback evidence remained after unlink\" >&2",
+        "    return 1",
+        "  fi",
+        "  fsync_file_and_parent \"\$outdir\"",
+        "}",
+        "remove_bound_completion_marker() {",
+        "  remove_bound_regular_publication \"\$completion_marker\" \"\$bound_completion_marker_identity\" \"\$expected_completion_sha256\" \"completion-marker\"",
+        "}",
+        "remove_bound_queued_output_root_reservation() {",
+        "  local observed_identity",
+        "  local quarantine_path",
+        "  if [ ! -f \"\$submission_output_root_reservation\" ] || [ -L \"\$submission_output_root_reservation\" ]; then",
+        "    echo \"metaMDBG queued shared reservation changed type before exact release\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_file_identity \"\$submission_output_root_reservation\") || observed_identity=",
+        "  if [ \"\$observed_identity\" != \"\$bound_submission_output_root_reservation_identity\" ] || ! cmp -s -- \"\$expected_output_root_reservation\" \"\$submission_output_root_reservation\"; then",
+        "    echo \"metaMDBG retained replaced queued shared-reservation evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  quarantine_path=\"\${submission_output_root_reservation}.removing.\${SLURM_JOB_ID}\"",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG refuses to overwrite queued shared-reservation release evidence\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! mv -n -- \"\$submission_output_root_reservation\" " *
+        "\"\$quarantine_path\"; then",
+        "    echo \"metaMDBG queued shared-reservation quarantine " *
+        "command failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$submission_output_root_reservation\" ] || [ -L \"\$submission_output_root_reservation\" ]; then",
+        "    echo \"metaMDBG could not quarantine its exact queued shared reservation\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ ! -f \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG queued shared-reservation quarantine changed type\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_file_identity \"\$quarantine_path\") || observed_identity=",
+        "  if [ \"\$observed_identity\" != \"\$bound_submission_output_root_reservation_identity\" ] || ! cmp -s -- \"\$expected_output_root_reservation\" \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG retained replaced queued shared-reservation quarantine\" >&2",
+        "    return 1",
+        "  fi",
+        "  if ! rm -- \"\$quarantine_path\"; then",
+        "    echo \"metaMDBG exact queued shared-reservation unlink failed\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ -e \"\$quarantine_path\" ] || [ -L \"\$quarantine_path\" ]; then",
+        "    echo \"metaMDBG exact queued shared-reservation evidence remained after unlink\" >&2",
+        "    return 1",
         "  fi",
         "}",
         "bind_metamdbg_output_root() {",
@@ -13381,16 +15670,81 @@ function _metamdbg_executor_script(
         "cleanup_metamdbg_lifecycle() {",
         "  local status=\$?",
         "  local observed_lock_identity",
+        "  local observed_secure_tmpdir_identity",
+        "  local secure_tmpdir_quarantine",
         "  trap - EXIT INT TERM HUP",
+        "  if [ \"\$status\" -ne 0 ] && [ \"\$workflow_complete\" -eq 0 ]; then",
+        "    if [ \"\$published_completion\" -eq 1 ]; then",
+        "      if remove_bound_completion_marker; then",
+        "        published_completion=0",
+        "      else",
+        "        echo \"metaMDBG retained nonexact completion evidence " *
+        "after exact rollback failure\" >&2",
+        "        preserve_secure_tmpdir=1",
+        "        cleanup_safe_to_release_domain=0",
+        "      fi",
+        "    fi",
+        "    if [ \"\$published_contract\" -eq 1 ]; then",
+        "      if remove_bound_regular_publication \"\$contract_marker\" \"\$bound_contract_marker_identity\" \"\$expected_contract_sha256\" \"contract-marker\"; then",
+        "        published_contract=0",
+        "      else",
+        "        preserve_secure_tmpdir=1",
+        "        cleanup_safe_to_release_domain=0",
+        "      fi",
+        "    fi",
+        "    if [ \"\$published_graph_alias\" -eq 1 ]; then",
+        "      if remove_bound_symlink_publication \"\$graph_alias\" \"\$bound_graph_alias_publication_identity\" \"\$expected_graph_alias_target\" \"graph-alias\"; then",
+        "        published_graph_alias=0",
+        "      else",
+        "        preserve_secure_tmpdir=1",
+        "        cleanup_safe_to_release_domain=0",
+        "      fi",
+        "    fi",
+        "    if [ \"\$published_contigs\" -eq 1 ]; then",
+        "      if remove_bound_regular_publication \"\$contigs_gz\" \"\$bound_contigs_publication_identity\" \"\$expected_contigs_gz_sha256\" \"compressed-contigs\"; then",
+        "        published_contigs=0",
+        "      else",
+        "        preserve_secure_tmpdir=1",
+        "        cleanup_safe_to_release_domain=0",
+        "      fi",
+        "    fi",
+        "  fi",
         "  if [ -n \"\$secure_tmpdir\" ]; then",
         "    if [ \"\$preserve_secure_tmpdir\" -eq 1 ]; then",
         "      echo \"metaMDBG retained secure lifecycle recovery state: \$secure_tmpdir\" >&2",
         "      cleanup_safe_to_release_domain=0",
         "      [ \"\$status\" -ne 0 ] || status=1",
-        "    elif ! rm -rf -- \"\$secure_tmpdir\"; then",
-        "      echo \"metaMDBG failed to remove secure lifecycle temporary directory\" >&2",
+        "    elif [ ! -d \"\$secure_tmpdir\" ] || [ -L \"\$secure_tmpdir\" ]; then",
+        "      echo \"metaMDBG secure lifecycle temporary directory was replaced before cleanup\" >&2",
         "      cleanup_safe_to_release_domain=0",
         "      [ \"\$status\" -ne 0 ] || status=1",
+        "    else",
+        "      observed_secure_tmpdir_identity=\$(metamdbg_directory_identity \"\$secure_tmpdir\") || observed_secure_tmpdir_identity=",
+        "      secure_tmpdir_quarantine=\"\${secure_tmpdir}.removing\"",
+        "      if [ -z \"\$observed_secure_tmpdir_identity\" ] || [ \"\$observed_secure_tmpdir_identity\" != \"\$bound_secure_tmpdir_identity\" ]; then",
+        "        echo \"metaMDBG secure lifecycle temporary directory identity changed before cleanup\" >&2",
+        "        cleanup_safe_to_release_domain=0",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      elif [ -e \"\$secure_tmpdir_quarantine\" ] || [ -L \"\$secure_tmpdir_quarantine\" ]; then",
+        "        echo \"metaMDBG refuses to overwrite secure lifecycle cleanup evidence\" >&2",
+        "        cleanup_safe_to_release_domain=0",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      elif ! mv -n -- \"\$secure_tmpdir\" \"\$secure_tmpdir_quarantine\" || [ -e \"\$secure_tmpdir\" ] || [ -L \"\$secure_tmpdir\" ]; then",
+        "        echo \"metaMDBG failed to quarantine its exact secure lifecycle temporary directory\" >&2",
+        "        cleanup_safe_to_release_domain=0",
+        "        [ \"\$status\" -ne 0 ] || status=1",
+        "      else",
+        "        observed_secure_tmpdir_identity=\$(metamdbg_directory_identity \"\$secure_tmpdir_quarantine\") || observed_secure_tmpdir_identity=",
+        "        if [ -z \"\$observed_secure_tmpdir_identity\" ] || [ \"\$observed_secure_tmpdir_identity\" != \"\$bound_secure_tmpdir_identity\" ]; then",
+        "          echo \"metaMDBG secure lifecycle cleanup quarantine did not retain its bound identity\" >&2",
+        "          cleanup_safe_to_release_domain=0",
+        "          [ \"\$status\" -ne 0 ] || status=1",
+        "        elif ! rm -rf -- \"\$secure_tmpdir_quarantine\"; then",
+        "          echo \"metaMDBG failed to remove its identity-bound secure lifecycle cleanup quarantine\" >&2",
+        "          cleanup_safe_to_release_domain=0",
+        "          [ \"\$status\" -ne 0 ] || status=1",
+        "        fi",
+        "      fi",
         "    fi",
         "  fi",
         "  if [ \"\$output_root_runtime_reservation_acquired\" -eq 1 ] && ! require_owned_runtime_output_root_reservation; then",
@@ -13453,11 +15807,23 @@ function _metamdbg_executor_script(
         "      elif [ -e \"\$consumed_submission_reservation_dir\" ] || [ -L \"\$consumed_submission_reservation_dir\" ]; then",
         "        echo \"metaMDBG refuses to overwrite an existing consumed owner record\" >&2",
         "        [ \"\$status\" -ne 0 ] || status=1",
-        "      elif mv -- \"\$runtime_submission_reservation_dir\" \"\$consumed_submission_reservation_dir\"; then",
+        "      elif mv -n -- \"\$runtime_submission_reservation_dir\" \"\$consumed_submission_reservation_dir\" && [ ! -e \"\$runtime_submission_reservation_dir\" ] && [ ! -L \"\$runtime_submission_reservation_dir\" ]; then",
+        "        observed_runtime_owner_identity=\$(metamdbg_directory_identity \"\$consumed_submission_reservation_dir\") || observed_runtime_owner_identity=",
+        "        if [ \"\$observed_runtime_owner_identity\" != \"\$bound_runtime_owner_record_identity\" ]; then",
+        "          echo \"metaMDBG consumed owner transition did not retain its bound identity\" >&2",
+        "          [ \"\$status\" -ne 0 ] || status=1",
+        "        else",
         (post_consumed_owner_rename_hook === nothing ? "        true" :
-         "        $(post_consumed_owner_rename_hook)"),
-        "        fsync_file_and_parent \"\$consumed_submission_reservation_dir\"",
-        "        runtime_owner_record_acquired=0",
+         "          $(post_consumed_owner_rename_hook)"),
+        "          observed_runtime_owner_identity=\$(metamdbg_directory_identity \"\$consumed_submission_reservation_dir\") || observed_runtime_owner_identity=",
+        "          if [ \"\$observed_runtime_owner_identity\" != \"\$bound_runtime_owner_record_identity\" ]; then",
+        "            echo \"metaMDBG consumed owner record changed after its durable transition\" >&2",
+        "            [ \"\$status\" -ne 0 ] || status=1",
+        "          else",
+        "            fsync_file_and_parent \"\$consumed_submission_reservation_dir\"",
+        "            runtime_owner_record_acquired=0",
+        "          fi",
+        "        fi",
         "      else",
         "        echo \"metaMDBG failed to publish its durable consumed owner record\" >&2",
         "        [ \"\$status\" -ne 0 ] || status=1",
@@ -13465,6 +15831,62 @@ function _metamdbg_executor_script(
         "    else",
         "      echo \"metaMDBG retained its durable runtime owner record after lifecycle cleanup failure: \$runtime_submission_reservation_dir\" >&2",
         "      [ \"\$status\" -ne 0 ] || status=1",
+        "    fi",
+        "  fi",
+        "  if [ \"\$status\" -eq 0 ]; then",
+        "    final_lifecycle_invalid=0",
+        "    for released_path in \"\$submission_reservation_dir\" \"\$submission_output_root_reservation\" \"\$runtime_submission_reservation_dir\" \"\$runtime_output_root_reservation\" \"\$lock_dir\" \"\$runtime_cleanup_failure_reservation\" \"\$pending_submission_job\" \"\$pending_cluster_submission_job\"; do",
+        "      if [ -e \"\$released_path\" ] || [ -L \"\$released_path\" ]; then",
+        "        echo \"metaMDBG released lifecycle path reappeared before successful exit: \$released_path\" >&2",
+        "        final_lifecycle_invalid=1",
+        "      fi",
+        "    done",
+        "    observed_consumed_owner_identity=",
+        "    if [ -d \"\$consumed_submission_reservation_dir\" ] && [ ! -L \"\$consumed_submission_reservation_dir\" ]; then",
+        "      observed_consumed_owner_identity=\$(metamdbg_directory_identity \"\$consumed_submission_reservation_dir\") || observed_consumed_owner_identity=",
+        "    fi",
+        "    if [ -z \"\$observed_consumed_owner_identity\" ] || [ \"\$observed_consumed_owner_identity\" != \"\$bound_runtime_owner_record_identity\" ]; then",
+        "      echo \"metaMDBG consumed lifecycle owner is missing or changed before successful exit\" >&2",
+        "      final_lifecycle_invalid=1",
+        "    else",
+        "      if ! \"\$conda_runner\" run -n \"\$environment_name\" " *
+        "python -c $(consumed_owner_validator) " *
+        "\"\$consumed_submission_reservation_dir\" " *
+        "\"\$bound_runtime_owner_record_identity\" " *
+        "\"$(_METAMDBG_SUBMISSION_RESERVATION_CONTRACT_FILENAME)\" " *
+        "\"$(_METAMDBG_SUBMISSION_RESERVATION_JOB_FILENAME)\"; then",
+        "        echo \"metaMDBG consumed lifecycle owner has an unexpected entry set\" >&2",
+        "        final_lifecycle_invalid=1",
+        "      fi",
+        "      if [ ! -f \"\$consumed_submission_reservation_contract\" ] || [ -L \"\$consumed_submission_reservation_contract\" ] || [ \"\$(metamdbg_file_uid \"\$consumed_submission_reservation_contract\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$consumed_submission_reservation_contract\")\" != \"600\" ] || [ \"\$(metamdbg_file_identity \"\$consumed_submission_reservation_contract\")\" != \"\$bound_runtime_contract_identity\" ] || [ \"\$(sha256_file \"\$consumed_submission_reservation_contract\")\" != \"\$expected_runtime_contract_sha256\" ]; then",
+        "        echo \"metaMDBG consumed lifecycle contract changed before successful exit\" >&2",
+        "        final_lifecycle_invalid=1",
+        "      fi",
+        "      if [ ! -f \"\$consumed_submission_reservation_job\" ] || [ -L \"\$consumed_submission_reservation_job\" ] || [ \"\$(metamdbg_file_uid \"\$consumed_submission_reservation_job\")\" != \"\$(id -u)\" ] || [ \"\$(metamdbg_file_mode \"\$consumed_submission_reservation_job\")\" != \"600\" ] || [ \"\$(metamdbg_file_identity \"\$consumed_submission_reservation_job\")\" != \"\$bound_runtime_job_identity\" ] || [ \"\$(sha256_file \"\$consumed_submission_reservation_job\")\" != \"\$expected_runtime_job_sha256\" ]; then",
+        "        echo \"metaMDBG consumed lifecycle job record changed before successful exit\" >&2",
+        "        final_lifecycle_invalid=1",
+        "      fi",
+        "    fi",
+        "    if ! validate_metamdbg_inputs; then",
+        "      echo \"metaMDBG source inputs changed during final lifecycle cleanup\" >&2",
+        "      final_lifecycle_invalid=1",
+        "    fi",
+        "    if ! require_unchanged_metamdbg_contract; then",
+        "      echo \"metaMDBG provenance contract changed during final lifecycle cleanup\" >&2",
+        "      final_lifecycle_invalid=1",
+        "    fi",
+        "    if ! require_unchanged_metamdbg_artifacts \"during final lifecycle cleanup\"; then",
+        "      final_lifecycle_invalid=1",
+        "    fi",
+        "    if ! require_unchanged_metamdbg_output_root; then",
+        "      final_lifecycle_invalid=1",
+        "    fi",
+        "    if [ ! -f \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ] || [ ! -s \"\$completion_marker\" ] || [ \"\$(metamdbg_file_identity \"\$completion_marker\")\" != \"\$bound_completion_marker_identity\" ] || [ \"\$(sha256_file \"\$completion_marker\")\" != \"\$expected_completion_sha256\" ]; then",
+        "      echo \"metaMDBG completion manifest changed during final lifecycle cleanup\" >&2",
+        "      final_lifecycle_invalid=1",
+        "    fi",
+        "    if [ \"\$final_lifecycle_invalid\" -ne 0 ]; then",
+        "      status=1",
         "    fi",
         "  fi",
         "  exit \"\$status\"",
@@ -13475,9 +15897,16 @@ function _metamdbg_executor_script(
         "trap 'exit 143' TERM",
         "secure_tmpdir=\$(mktemp -d \"\$outdir_parent/.mycelia-metamdbg-tmp.\${outdir_identity}.XXXXXXXXXX\")",
         "chmod 700 \"\$secure_tmpdir\"",
+        "bound_secure_tmpdir_identity=\$(metamdbg_directory_identity \"\$secure_tmpdir\") || bound_secure_tmpdir_identity=",
+        "if [ -z \"\$bound_secure_tmpdir_identity\" ]; then",
+        "  echo \"metaMDBG could not bind its secure lifecycle temporary directory identity\" >&2",
+        "  preserve_secure_tmpdir=1",
+        "  exit 1",
+        "fi",
         "expected_contract=\"\$secure_tmpdir/expected-contract.json\"",
         "contract_new=\"\$secure_tmpdir/contract.new\"",
         "contigs_new=\"\$secure_tmpdir/contigs.fasta.new.gz\"",
+        "graph_alias_new=\"\$secure_tmpdir/graph-alias.new\"",
         "package_inventory_before=\"\$secure_tmpdir/conda-packages.before.json\"",
         "package_inventory_normalized=\"\$secure_tmpdir/conda-packages.before.tsv\"",
         "package_inventory_after=\"\$secure_tmpdir/conda-packages.after.json\"",
@@ -13486,10 +15915,10 @@ function _metamdbg_executor_script(
         "completion_new=\"\$secure_tmpdir/completion.new\"",
         "printf '%s' $(_metamdbg_shell_literal(input_contract.contents)) > \"\$expected_contract\"",
         "chmod 600 \"\$expected_contract\"",
+        "expected_contract_sha256=\$(sha256_file \"\$expected_contract\")",
         "expected_reservation=\"\$secure_tmpdir/expected-reservation.json\"",
         "expected_reservation_job=\"\$secure_tmpdir/expected-reservation-job.json\"",
         "expected_output_root_reservation=\"\$secure_tmpdir/expected-output-root-reservation.json\"",
-        "reservation_entries_file=\"\$secure_tmpdir/submission-reservation.paths\"",
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.contents)) > \"\$expected_reservation\"",
         "chmod 600 \"\$expected_reservation\"",
         "printf '%s' $(_metamdbg_shell_literal(effective_submission_reservation.output_root_reservation_contents)) > \"\$expected_output_root_reservation\"",
@@ -13563,6 +15992,11 @@ function _metamdbg_executor_script(
         "    echo \"metaMDBG existing output contract does not match this invocation\" >&2",
         "    exit 1",
         "  }",
+        "  bound_contract_marker_identity=\$(metamdbg_file_identity \"\$contract_marker\")",
+        "  if [ \"\$(sha256_file \"\$contract_marker\")\" != \"\$expected_contract_sha256\" ]; then",
+        "    echo \"metaMDBG existing output contract changed during exact binding\" >&2",
+        "    exit 1",
+        "  fi",
         "  contract_exists=1",
         "fi",
         "if [ \"\$contract_exists\" -eq 1 ] && [ ! -e \"\$completion_marker\" ]; then",
@@ -13672,6 +16106,82 @@ function _metamdbg_executor_script(
         "  }",
         "  require_unchanged_metamdbg_output_root",
         "}",
+        "observe_metamdbg_artifact_snapshot() {",
+        "  if [ ! -f \"\$contigs_gz\" ] || [ -L \"\$contigs_gz\" ] || [ ! -s \"\$contigs_gz\" ]; then",
+        "    echo \"metaMDBG compressed contigs changed type during artifact snapshot\" >&2",
+        "    return 1",
+        "  fi",
+        "  if [ ! -L \"\$graph_alias\" ] || [ ! -f \"\$graph_alias\" ] || [ ! -s \"\$graph_alias\" ]; then",
+        "    echo \"metaMDBG graph alias changed type during artifact snapshot\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_contigs_identity=\$(metamdbg_file_identity \"\$contigs_gz\") || return 1",
+        "  observed_contigs_size=\$(wc -c < \"\$contigs_gz\" | tr -d '[:space:]') || return 1",
+        "  observed_contigs_sha256=\$(sha256_file \"\$contigs_gz\") || return 1",
+        "  observed_graph_alias_identity=\$(metamdbg_symlink_identity \"\$graph_alias\") || return 1",
+        "  observed_graph_alias_target=\$(readlink -- \"\$graph_alias\") || return 1",
+        "  observed_graph_source_parent=\$(cd -- \"\$(dirname -- \"\$graph_source\")\" && pwd -P) || return 1",
+        "  observed_graph_source_canonical=\"\$observed_graph_source_parent/\$(basename -- \"\$graph_source\")\"",
+        "  if [ \"\$observed_graph_alias_target\" != \"\$(basename -- \"\$observed_graph_source_canonical\")\" ]; then",
+        "    echo \"metaMDBG graph alias changed target during artifact snapshot\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_graph_source_identity=\$(metamdbg_file_identity \"\$observed_graph_source_canonical\") || return 1",
+        "  observed_graph_size=\$(wc -c < \"\$observed_graph_source_canonical\" | tr -d '[:space:]') || return 1",
+        "  observed_graph_sha256=\$(sha256_file \"\$observed_graph_source_canonical\") || return 1",
+        "}",
+        "metamdbg_artifact_snapshot_matches() {",
+        "  [ \"\$observed_contigs_identity\" = \"\$artifact_contigs_identity\" ] &&",
+        "  [ \"\$observed_contigs_size\" = \"\$artifact_contigs_size\" ] &&",
+        "  [ \"\$observed_contigs_sha256\" = \"\$artifact_contigs_sha256\" ] &&",
+        "  [ \"\$observed_graph_alias_identity\" = \"\$artifact_graph_alias_identity\" ] &&",
+        "  [ \"\$observed_graph_alias_target\" = \"\$artifact_graph_alias_target\" ] &&",
+        "  [ \"\$observed_graph_source_identity\" = \"\$artifact_graph_source_identity\" ] &&",
+        "  [ \"\$observed_graph_source_canonical\" = \"\$artifact_graph_source_canonical\" ] &&",
+        "  [ \"\$observed_graph_size\" = \"\$artifact_graph_size\" ] &&",
+        "  [ \"\$observed_graph_sha256\" = \"\$artifact_graph_sha256\" ]",
+        "}",
+        "capture_metamdbg_artifact_snapshot() {",
+        "  observe_metamdbg_artifact_snapshot || return 1",
+        "  artifact_contigs_identity=\$observed_contigs_identity",
+        "  artifact_contigs_size=\$observed_contigs_size",
+        "  artifact_contigs_sha256=\$observed_contigs_sha256",
+        "  artifact_graph_alias_identity=\$observed_graph_alias_identity",
+        "  artifact_graph_alias_target=\$observed_graph_alias_target",
+        "  artifact_graph_source_identity=\$observed_graph_source_identity",
+        "  artifact_graph_source_canonical=\$observed_graph_source_canonical",
+        "  artifact_graph_size=\$observed_graph_size",
+        "  artifact_graph_sha256=\$observed_graph_sha256",
+        "  validate_contigs \"\$contigs_gz\" || return 1",
+        "  validate_gfa \"\$graph_source\" || return 1",
+        "  observe_metamdbg_artifact_snapshot || return 1",
+        "  metamdbg_artifact_snapshot_matches || {",
+        "    echo \"metaMDBG artifacts changed during semantic snapshot validation\" >&2",
+        "    return 1",
+        "  }",
+        "}",
+        "require_unchanged_metamdbg_artifacts() {",
+        "  local phase=\"\$1\"",
+        "  observe_metamdbg_artifact_snapshot || return 1",
+        "  metamdbg_artifact_snapshot_matches || {",
+        "    echo \"metaMDBG artifacts changed \$phase\" >&2",
+        "    return 1",
+        "  }",
+        "}",
+        "require_unchanged_metamdbg_contract() {",
+        "  local observed_identity",
+        "  local observed_sha256",
+        "  if [ ! -f \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ] || [ ! -s \"\$contract_marker\" ]; then",
+        "    echo \"metaMDBG provenance contract changed type after exact binding\" >&2",
+        "    return 1",
+        "  fi",
+        "  observed_identity=\$(metamdbg_file_identity \"\$contract_marker\")",
+        "  observed_sha256=\$(sha256_file \"\$contract_marker\")",
+        "  if [ \"\$observed_identity\" != \"\$bound_contract_marker_identity\" ] || [ \"\$observed_sha256\" != \"\$expected_contract_sha256\" ]; then",
+        "    echo \"metaMDBG provenance contract changed after exact binding\" >&2",
+        "    return 1",
+        "  fi",
+        "}",
         "find_metamdbg_graph() {",
         "  local all_candidates=()",
         "  local requested_candidates=()",
@@ -13718,12 +16228,47 @@ function _metamdbg_executor_script(
         "  validate_contigs \"\$contigs_gz\"",
         "else",
         "  validate_contigs \"\$contigs_plain\"",
+        "  if [ -e \"\$contigs_new\" ] || [ -L \"\$contigs_new\" ]; then",
+        "    echo \"metaMDBG secure compressed-contigs publication path already exists\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
         "  gzip -c -- \"\$contigs_plain\" > \"\$contigs_new\"",
         "  chmod 600 \"\$contigs_new\"",
         "  validate_contigs \"\$contigs_new\"",
+        "  expected_contigs_gz_sha256=\$(sha256_file \"\$contigs_new\")",
+        "  bound_contigs_publication_identity=\$(metamdbg_file_identity \"\$contigs_new\")",
         "  require_unchanged_metamdbg_output_root",
-        "  mv -f -- \"\$contigs_new\" \"\$contigs_gz\"",
+        (pre_contigs_publication_hook === nothing ? "  true" :
+         "  $(pre_contigs_publication_hook)"),
+        "  if ! mv -n -- \"\$contigs_new\" \"\$contigs_gz\"; then",
+        "    if [ ! -e \"\$contigs_new\" ] && [ ! -L \"\$contigs_new\" ] && [ -f \"\$contigs_gz\" ] && [ ! -L \"\$contigs_gz\" ] && [ \"\$(metamdbg_file_identity \"\$contigs_gz\")\" = \"\$bound_contigs_publication_identity\" ]; then",
+        "      published_contigs=1",
+        "    fi",
+        "    echo \"metaMDBG compressed-contigs publication command " *
+        "failed\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  if [ -e \"\$contigs_new\" ] || [ -L \"\$contigs_new\" ]; then",
+        "    echo \"metaMDBG refused to overwrite a concurrent compressed-contigs artifact\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  published_contigs=1",
         "  require_unchanged_metamdbg_output_root",
+        "  if [ \"\$(metamdbg_file_identity \"\$contigs_gz\")\" != \"\$bound_contigs_publication_identity\" ]; then",
+        "    echo \"metaMDBG compressed-contigs publication changed identity\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  validate_contigs \"\$contigs_gz\"",
+        "  actual_contigs_gz_sha256=\$(sha256_file \"\$contigs_gz\")",
+        "  if [ \"\$actual_contigs_gz_sha256\" != \"\$expected_contigs_gz_sha256\" ]; then",
+        "    echo \"metaMDBG compressed-contigs artifact changed during no-clobber publication\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
         "fi",
         "validate_contigs \"\$contigs_gz\"",
         "graph_status=0",
@@ -13744,19 +16289,65 @@ function _metamdbg_executor_script(
         "require_unchanged_metamdbg_output_root",
         "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact\"",
         "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact\"",
-        "rm -f -- \"\$graph_alias\"",
-        "ln -s -- \"\$(basename \"\$graph_source\")\" \"\$graph_alias\"",
+        "graph_alias_target=\$(basename \"\$graph_source\")",
+        "expected_graph_alias_target=\$graph_alias_target",
+        "if [ -L \"\$graph_alias\" ]; then",
+        "  [ \"\$(readlink -- \"\$graph_alias\")\" = \"\$graph_alias_target\" ] || {",
+        "    echo \"metaMDBG refuses to replace a nonexact graph alias\" >&2",
+        "    exit 1",
+        "  }",
+        "elif [ -e \"\$graph_alias\" ]; then",
+        "  echo \"metaMDBG refuses to overwrite an existing graph-alias path\" >&2",
+        "  exit 1",
+        "else",
+        "  if [ -e \"\$graph_alias_new\" ] || [ -L \"\$graph_alias_new\" ]; then",
+        "    echo \"metaMDBG secure graph-alias publication path already exists\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  ln -s -- \"\$graph_alias_target\" \"\$graph_alias_new\"",
+        "  bound_graph_alias_publication_identity=\$(metamdbg_symlink_identity \"\$graph_alias_new\")",
+        "  if ! mv -n -- \"\$graph_alias_new\" \"\$graph_alias\"; then",
+        "    if [ ! -e \"\$graph_alias_new\" ] && [ ! -L \"\$graph_alias_new\" ] && [ -L \"\$graph_alias\" ] && [ \"\$(metamdbg_symlink_identity \"\$graph_alias\")\" = \"\$bound_graph_alias_publication_identity\" ]; then",
+        "      published_graph_alias=1",
+        "    fi",
+        "    echo \"metaMDBG graph-alias publication command failed\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  if [ -e \"\$graph_alias_new\" ] || [ -L \"\$graph_alias_new\" ]; then",
+        "    echo \"metaMDBG refused to overwrite a concurrent graph alias\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  published_graph_alias=1",
+        "  if [ \"\$(metamdbg_symlink_identity \"\$graph_alias\")\" != \"\$bound_graph_alias_publication_identity\" ] || [ \"\$(readlink -- \"\$graph_alias\")\" != \"\$expected_graph_alias_target\" ]; then",
+        "    echo \"metaMDBG graph-alias publication changed identity or target\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "fi",
         "require_unchanged_metamdbg_output_root",
-        "test -L \"\$graph_alias\" && test -f \"\$graph_alias\" && test -s \"\$graph_alias\"",
+        "if ! { test -L \"\$graph_alias\" && " *
+        "test -f \"\$graph_alias\" && test -s \"\$graph_alias\"; }; then",
+        "  echo \"metaMDBG graph alias is missing, replaced, dangling, or " *
+        "empty after publication\" >&2",
+        "  preserve_secure_tmpdir=1",
+        "  exit 1",
+        "fi",
+        "capture_metamdbg_artifact_snapshot",
         "validate_contigs \"\$contigs_gz\"",
         "validate_gfa \"\$graph_source\"",
         "validate_staged_metamdbg_inputs",
         "validate_metamdbg_inputs",
         "capture_package_inventory \"\$package_inventory_after\" \"\$package_inventory_after_normalized\"",
+        (post_package_inventory_hook === nothing ? "true" :
+         post_package_inventory_hook),
         "cmp -s -- \"\$package_inventory_normalized\" \"\$package_inventory_after_normalized\" || {",
         "  echo \"metaMDBG resolved package inventory changed while assembly tools were running\" >&2",
         "  exit 1",
         "}",
+        "require_unchanged_metamdbg_artifacts \"after package-inventory validation\"",
         "if [ -e \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ]; then",
         "  echo \"metaMDBG refuses to overwrite an existing completion manifest\" >&2",
         "  exit 1",
@@ -13771,10 +16362,11 @@ function _metamdbg_executor_script(
         "contigs_path_sha256=\$(sha256_text \"\$contigs_canonical\")",
         "graph_alias_path_sha256=\$(sha256_text \"\$graph_alias\")",
         "graph_source_path_sha256=\$(sha256_text \"\$graph_source_canonical\")",
-        "contigs_size=\$(wc -c < \"\$contigs_canonical\" | tr -d '[:space:]')",
-        "graph_size=\$(wc -c < \"\$graph_source_canonical\" | tr -d '[:space:]')",
-        "contigs_sha256=\$(sha256_file \"\$contigs_canonical\")",
-        "graph_sha256=\$(sha256_file \"\$graph_source_canonical\")",
+        "require_unchanged_metamdbg_artifacts \"before completion-manifest construction\"",
+        "contigs_size=\$artifact_contigs_size",
+        "graph_size=\$artifact_graph_size",
+        "contigs_sha256=\$artifact_contigs_sha256",
+        "graph_sha256=\$artifact_graph_sha256",
         "printf '%s' '{\"schema_version\":$(_METAMDBG_COMPLETION_SCHEMA_VERSION),\"workflow\":{' > \"\$completion_payload\"",
         "printf '\"canonical_outdir_sha256\":\"%s\",' \"\$outdir_sha256\" >> \"\$completion_payload\"",
         "printf '\"input_contract_signature\":\"%s\",' \"\$expected_input_contract_signature\" >> \"\$completion_payload\"",
@@ -13799,10 +16391,13 @@ function _metamdbg_executor_script(
         "printf '}\\n' >> \"\$completion_new\"",
         "chmod 600 \"\$completion_new\"",
         "expected_completion_sha256=\$(sha256_file \"\$completion_new\")",
+        "bound_completion_marker_identity=\$(metamdbg_file_identity \"\$completion_new\")",
+        "require_unchanged_metamdbg_artifacts \"after completion-manifest construction\"",
         "validate_metamdbg_inputs",
         "if [ \"\$contract_exists\" -eq 1 ]; then",
         "  require_unchanged_metamdbg_output_root",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
+        "  require_unchanged_metamdbg_contract",
         "else",
         "  if [ -e \"\$contract_marker\" ] || [ -L \"\$contract_marker\" ]; then",
         "    echo \"metaMDBG provenance marker appeared during locked execution\" >&2",
@@ -13811,39 +16406,77 @@ function _metamdbg_executor_script(
         "  cp -- \"\$expected_contract\" \"\$contract_new\"",
         "  chmod 600 \"\$contract_new\"",
         "  fsync_file_and_parent \"\$contract_new\"",
+        "  expected_contract_sha256=\$(sha256_file \"\$contract_new\")",
+        "  bound_contract_marker_identity=\$(metamdbg_file_identity \"\$contract_new\")",
         "  require_unchanged_metamdbg_output_root",
-        "  mv -n -- \"\$contract_new\" \"\$contract_marker\"",
+        "  if ! mv -n -- \"\$contract_new\" " *
+        "\"\$contract_marker\"; then",
+        "    if [ ! -e \"\$contract_new\" ] && [ ! -L \"\$contract_new\" ] && [ -f \"\$contract_marker\" ] && [ ! -L \"\$contract_marker\" ] && [ \"\$(metamdbg_file_identity \"\$contract_marker\")\" = \"\$bound_contract_marker_identity\" ]; then",
+        "      published_contract=1",
+        "    fi",
+        "    echo \"metaMDBG provenance-marker publication command " *
+        "failed\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  if [ -e \"\$contract_new\" ] || [ -L \"\$contract_new\" ]; then",
+        "    echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
+        "    exit 1",
+        "  fi",
+        "  published_contract=1",
         "  fsync_file_and_parent \"\$contract_marker\"",
         "  require_unchanged_metamdbg_output_root",
-        "  if [ -e \"\$contract_new\" ]; then",
-        "    echo \"metaMDBG refused to overwrite a concurrent provenance marker\" >&2",
+        "  if [ \"\$(metamdbg_file_identity \"\$contract_marker\")\" != \"\$bound_contract_marker_identity\" ] || [ \"\$(sha256_file \"\$contract_marker\")\" != \"\$expected_contract_sha256\" ]; then",
+        "    echo \"metaMDBG provenance-marker publication changed identity or content\" >&2",
+        "    preserve_secure_tmpdir=1",
         "    exit 1",
         "  fi",
         "  cmp -s -- \"\$expected_contract\" \"\$contract_marker\"",
         "fi",
+        "require_unchanged_metamdbg_contract",
+        "require_unchanged_metamdbg_artifacts \"after provenance-contract publication\"",
         "require_unchanged_metamdbg_output_root",
         "require_metamdbg_artifact_containment \"\$contigs_gz\" \"metaMDBG contigs artifact before completion publication\"",
         "require_metamdbg_artifact_containment \"\$graph_source\" \"metaMDBG graph artifact before completion publication\"",
         "fsync_file_and_parent \"\$completion_new\"",
-        "mv -n -- \"\$completion_new\" \"\$completion_marker\"",
-        "fsync_file_and_parent \"\$completion_marker\"",
-        "require_unchanged_metamdbg_output_root",
-        "if [ -e \"\$completion_new\" ]; then",
+        "if ! mv -n -- \"\$completion_new\" " *
+        "\"\$completion_marker\"; then",
+        "  if [ ! -e \"\$completion_new\" ] && [ ! -L \"\$completion_new\" ] && [ -f \"\$completion_marker\" ] && [ ! -L \"\$completion_marker\" ] && [ \"\$(metamdbg_file_identity \"\$completion_marker\")\" = \"\$bound_completion_marker_identity\" ]; then",
+        "    published_completion=1",
+        "  fi",
+        "  echo \"metaMDBG completion-manifest publication command " *
+        "failed\" >&2",
+        "  preserve_secure_tmpdir=1",
+        "  exit 1",
+        "fi",
+        "if [ -e \"\$completion_new\" ] || [ -L \"\$completion_new\" ]; then",
         "  echo \"metaMDBG refused to overwrite a concurrent completion manifest\" >&2",
         "  exit 1",
         "fi",
+        "published_completion=1",
+        "fsync_file_and_parent \"\$completion_marker\"",
+        "require_unchanged_metamdbg_output_root",
         "if [ ! -f \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ] || [ ! -s \"\$completion_marker\" ]; then",
         "  echo \"metaMDBG failed to publish a regular completion manifest\" >&2",
         "  exit 1",
         "fi",
-        completion_publication_hook...,
-        "require_unchanged_metamdbg_output_root",
-        "actual_completion_sha256=\$(sha256_file \"\$completion_marker\")",
-        "if [ \"\$actual_completion_sha256\" != \"\$expected_completion_sha256\" ]; then",
-        "  rm -f -- \"\$completion_marker\"",
-        "  echo \"metaMDBG published completion manifest changed unexpectedly\" >&2",
+        "if [ \"\$(metamdbg_file_identity \"\$completion_marker\")\" != \"\$bound_completion_marker_identity\" ]; then",
+        "  echo \"metaMDBG published completion-marker identity changed\" >&2",
+        "  preserve_secure_tmpdir=1",
         "  exit 1",
         "fi",
+        completion_publication_hook...,
+        "require_unchanged_metamdbg_output_root",
+        "validate_staged_metamdbg_inputs",
+        "validate_metamdbg_inputs",
+        "require_unchanged_metamdbg_contract",
+        "actual_completion_sha256=\$(sha256_file \"\$completion_marker\")",
+        "if [ \"\$actual_completion_sha256\" != \"\$expected_completion_sha256\" ]; then",
+        "  echo \"metaMDBG published completion manifest changed unexpectedly; retained fail-closed evidence\" >&2",
+        "  preserve_secure_tmpdir=1",
+        "  exit 1",
+        "fi",
+        "require_unchanged_metamdbg_artifacts \"after completion-manifest publication\"",
         "published_graph_source_parent=\$(cd -- \"\$(dirname -- \"\$graph_alias\")\" && pwd -P)",
         "published_graph_source_canonical=\"\$published_graph_source_parent/\$(readlink -- \"\$graph_alias\")\"",
         "published_contigs_size=\$(wc -c < \"\$contigs_canonical\" | tr -d '[:space:]')",
@@ -13851,10 +16484,26 @@ function _metamdbg_executor_script(
         "published_contigs_sha256=\$(sha256_file \"\$contigs_canonical\")",
         "published_graph_sha256=\$(sha256_file \"\$published_graph_source_canonical\")",
         "if [ \"\$published_graph_source_canonical\" != \"\$graph_source_canonical\" ] || [ \"\$published_contigs_size\" != \"\$contigs_size\" ] || [ \"\$published_graph_size\" != \"\$graph_size\" ] || [ \"\$published_contigs_sha256\" != \"\$contigs_sha256\" ] || [ \"\$published_graph_sha256\" != \"\$graph_sha256\" ]; then",
-        "  rm -f -- \"\$completion_marker\"",
-        "  echo \"metaMDBG artifacts changed after completion publication; removed stale completion manifest\" >&2",
+        "  if ! remove_bound_completion_marker; then",
+        "    echo \"metaMDBG artifacts changed after completion publication; retained nonexact completion evidence\" >&2",
+        "    preserve_secure_tmpdir=1",
+        "    exit 1",
+        "  fi",
+        "  published_completion=0",
+        "  echo \"metaMDBG artifacts changed after completion publication; removed the exact stale completion manifest\" >&2",
         "  exit 1",
         "fi",
+        "validate_staged_metamdbg_inputs",
+        "validate_metamdbg_inputs",
+        "require_unchanged_metamdbg_contract",
+        "require_unchanged_metamdbg_artifacts \"before successful lifecycle completion\"",
+        "require_unchanged_metamdbg_output_root",
+        "require_owned_runtime_output_root_reservation",
+        "if [ ! -f \"\$completion_marker\" ] || [ -L \"\$completion_marker\" ] || [ ! -s \"\$completion_marker\" ] || [ \"\$(metamdbg_file_identity \"\$completion_marker\")\" != \"\$bound_completion_marker_identity\" ] || [ \"\$(sha256_file \"\$completion_marker\")\" != \"\$expected_completion_sha256\" ]; then",
+        "  echo \"metaMDBG completion manifest changed before successful lifecycle completion\" >&2",
+        "  exit 1",
+        "fi",
+        "workflow_complete=1",
     ]
     return join(lines, "\n")
 end
@@ -13994,6 +16643,15 @@ function _metamdbg_existing_artifacts(
         graph_k::Int,
         ;
         output_root_identity::Union{Nothing, NamedTuple} = nothing,
+        publication_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+            _sha256::AbstractString,
+        ) -> nothing,
+        graph_alias_recorder::Function = (
+            _path::AbstractString,
+            _identity::NamedTuple,
+        ) -> nothing,
 )::Union{Nothing, NamedTuple}
     _require_positive_metamdbg_graph_k(graph_k)
     if output_root_identity !== nothing
@@ -14002,7 +16660,10 @@ function _metamdbg_existing_artifacts(
             outputs.outdir,
         )
     end
-    existing_contigs = _normalize_metamdbg_contigs!(outputs)
+    existing_contigs = _normalize_metamdbg_contigs!(
+        outputs;
+        publication_recorder,
+    )
     requested_graphs = _metamdbg_graph_candidates(outputs, graph_k)
     all_graphs = _metamdbg_all_graph_candidates(outputs)
     existing_graph = if isempty(all_graphs)
@@ -14014,7 +16675,11 @@ function _metamdbg_existing_artifacts(
             "graph_k; choose a fresh output root.",
         )
     else
-        _normalize_metamdbg_graph!(outputs, graph_k)
+        _normalize_metamdbg_graph!(
+            outputs,
+            graph_k;
+            created_symlink_hook = graph_alias_recorder,
+        )
     end
     if existing_contigs !== nothing && existing_graph !== nothing
         if output_root_identity !== nothing
@@ -14059,7 +16724,258 @@ function _metamdbg_existing_artifacts(
     return nothing
 end
 
-function _require_successful_metamdbg_submission(
+function _verified_existing_metamdbg_result(
+        outputs::NamedTuple,
+        selected_input::NamedTuple,
+        abundance_min::Int,
+        input_contract::NamedTuple,
+        toolchain::NamedTuple,
+        graph_k::Int;
+        input_digest_function::Function = _metamdbg_sha256,
+)::NamedTuple
+    publications = NamedTuple[]
+    recorders = _metamdbg_publication_recorders(publications)
+    try
+        has_contract = _prepare_metamdbg_output_root!(
+            outputs,
+            input_contract,
+        )
+        initial_contract_snapshot = has_contract ?
+                                    _validated_metamdbg_contract_snapshot(
+            outputs,
+            input_contract,
+        ) : nothing
+        output_root_identity =
+            _metamdbg_output_root_identity(outputs.outdir)
+        existing_artifacts = _metamdbg_existing_artifacts(
+            outputs,
+            graph_k;
+            output_root_identity,
+            publication_recorder = recorders.file,
+            graph_alias_recorder = recorders.symlink,
+        )
+        if existing_artifacts === nothing
+            isempty(publications) || error(
+                "metaMDBG preflight created publications without a " *
+                "complete reusable artifact set.",
+            )
+            return (;
+                result = nothing,
+                has_contract,
+                output_root_identity,
+                contract_snapshot = initial_contract_snapshot,
+            )
+        end
+        has_contract || error(
+            "metaMDBG complete output is missing its provenance contract.",
+        )
+        artifact_snapshot = _validated_metamdbg_artifact_snapshot(
+            existing_artifacts,
+        )
+        contract_snapshot = something(initial_contract_snapshot)
+        if !isfile(outputs.completion_marker) ||
+           islink(outputs.completion_marker) ||
+           filesize(outputs.completion_marker) == 0
+            _require_metamdbg_completion_manifest!(
+                outputs,
+                existing_artifacts,
+                input_contract,
+                graph_k,
+            )
+        end
+        completion_snapshot = _metamdbg_regular_file_snapshot(
+            outputs.completion_marker,
+            "metaMDBG completion manifest",
+        )
+        _require_current_metamdbg_input_contract!(
+            selected_input,
+            abundance_min,
+            input_contract,
+            toolchain;
+            digest_function = input_digest_function,
+        )
+        _require_unchanged_metamdbg_contract!(
+            outputs,
+            input_contract,
+            contract_snapshot,
+        )
+        _require_unchanged_metamdbg_completion_snapshot!(
+            outputs,
+            completion_snapshot,
+        )
+        _require_unchanged_metamdbg_artifacts!(
+            existing_artifacts,
+            artifact_snapshot,
+            "after reusable input-contract validation",
+        )
+        validated_completion = _validated_metamdbg_completion_snapshot(
+            outputs,
+            existing_artifacts,
+            input_contract,
+            graph_k,
+        )
+        completion = validated_completion.completion
+        validated_completion.snapshot == completion_snapshot || error(
+            "metaMDBG completion manifest changed before exact validation.",
+        )
+        _require_unchanged_metamdbg_contract!(
+            outputs,
+            input_contract,
+            contract_snapshot,
+        )
+        _require_unchanged_metamdbg_artifacts!(
+            existing_artifacts,
+            artifact_snapshot,
+            "after reusable completion-manifest validation",
+        )
+        _require_unchanged_metamdbg_output_root(
+            output_root_identity,
+            outputs.outdir,
+        )
+        _require_unchanged_metamdbg_contract!(
+            outputs,
+            input_contract,
+            contract_snapshot,
+        )
+        _require_unchanged_metamdbg_completion_snapshot!(
+            outputs,
+            validated_completion.snapshot,
+        )
+        result = _metamdbg_complete_result(
+            outputs,
+            existing_artifacts,
+            input_contract,
+            graph_k,
+            completion,
+        )
+        return (; result, has_contract, output_root_identity)
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            () -> _rollback_metamdbg_publications!(publications),
+            primary_error,
+            "metaMDBG failed to roll back normalized preflight " *
+            "publications while preserving the primary completion " *
+            "validation failure";
+            cleanup_evidence = outputs,
+        )
+        Base.rethrow()
+    end
+end
+
+function _metamdbg_submission_failure_details(
+        submission::Any,
+)::String
+    return isempty(submission.errors) ?
+           "the backend reported no error details" :
+           join(submission.errors, "; ")
+end
+
+function _require_verifiable_metamdbg_accepted_record(
+        record::Any,
+)::NamedTuple
+    record isa NamedTuple || error(
+        "metaMDBG accepted-sbatch callback did not receive a NamedTuple.",
+    )
+    keys(record) == (
+        :held,
+        :job_id,
+        :job_cluster,
+        :stdout,
+        :artifact_path,
+    ) || error(
+        "metaMDBG accepted-sbatch callback received a noncanonical record " *
+        "shape.",
+    )
+    record.held === true || error(
+        "metaMDBG accepted-sbatch callback did not verify the exact job as " *
+        "held.",
+    )
+    record.job_id isa AbstractString || error(
+        "metaMDBG accepted-sbatch callback received no exact job id.",
+    )
+    job_id = _normalize_metamdbg_job_id(record.job_id)
+    String(record.job_id) == job_id || error(
+        "metaMDBG accepted-sbatch callback received a non-exact job id: " *
+        "$(repr(record.job_id)).",
+    )
+    record.job_cluster === nothing ||
+        record.job_cluster isa AbstractString || error(
+        "metaMDBG accepted-sbatch callback received an invalid job cluster.",
+    )
+    job_cluster = _normalize_metamdbg_job_cluster(record.job_cluster)
+    if record.job_cluster !== nothing
+        String(record.job_cluster) == job_cluster || error(
+            "metaMDBG accepted-sbatch callback received a non-exact job " *
+            "cluster: $(repr(record.job_cluster)).",
+        )
+    end
+    record.stdout isa AbstractString || error(
+        "metaMDBG accepted-sbatch callback received no exact stdout evidence.",
+    )
+    stdout = String(record.stdout)
+    Mycelia._extract_sbatch_job_reference(stdout) == (;
+        job_id,
+        job_cluster,
+    ) || error(
+        "metaMDBG accepted-sbatch callback stdout did not contain its exact " *
+        "job reference.",
+    )
+    record.artifact_path isa AbstractString &&
+        !isempty(String(record.artifact_path)) || error(
+        "metaMDBG accepted-sbatch callback received no artifact path.",
+    )
+    return (;
+        held = true,
+        job_id,
+        job_cluster,
+        stdout,
+        artifact_path = String(record.artifact_path),
+    )
+end
+
+function _require_metamdbg_submission_matches_accepted_record(
+        submission::Any,
+        record::NamedTuple,
+)::Nothing
+    submission isa Mycelia.SubmitResult || error(
+        "metaMDBG accepted-sbatch callback has no matching SubmitResult.",
+    )
+    submission.held === record.held || error(
+        "metaMDBG accepted-sbatch callback and SubmitResult disagree about " *
+        "held state.",
+    )
+    submission.job_id == record.job_id || error(
+        "metaMDBG accepted-sbatch callback and SubmitResult disagree about " *
+        "the exact job id.",
+    )
+    submission.job_cluster == record.job_cluster || error(
+        "metaMDBG accepted-sbatch callback and SubmitResult disagree about " *
+        "the exact job cluster.",
+    )
+    submission.stdout == record.stdout || error(
+        "metaMDBG accepted-sbatch callback and SubmitResult disagree about " *
+        "exact stdout evidence.",
+    )
+    submission.artifact_path == record.artifact_path || error(
+        "metaMDBG accepted-sbatch callback and SubmitResult disagree about " *
+        "the submission artifact path.",
+    )
+    return nothing
+end
+
+function _invoke_metamdbg_submission_job_binder(
+        binder::Function,
+        reservation::NamedTuple,
+        job_id::AbstractString,
+        job_cluster::Union{Nothing, AbstractString},
+)::Any
+    if job_cluster === nothing
+        return binder(reservation, job_id)
+    end
+    return binder(reservation, job_id, job_cluster)
+end
+
+function _require_verifiable_metamdbg_submission(
         submission::Any,
         ;
         require_sbatch::Bool = false,
@@ -14071,11 +16987,12 @@ function _require_successful_metamdbg_submission(
         )
     end
     if submission isa Mycelia.SubmitResult
-        if !submission.ok
-            error_details = isempty(submission.errors) ?
-                            "the backend reported no error details" :
-                            join(submission.errors, "; ")
-            error("metaMDBG submission failed: $(error_details)")
+        if !submission.ok &&
+           submission.scheduler_acceptance != :accepted
+            error(
+                "metaMDBG submission failed: " *
+                _metamdbg_submission_failure_details(submission),
+            )
         end
         submission.dry_run && error(
             "metaMDBG real submission unexpectedly returned a dry-run result.",
@@ -14110,18 +17027,19 @@ function _require_successful_metamdbg_submission(
                 "$(repr(submission.job_cluster)).",
             )
         end
-        if submission.stdout !== nothing
-            stdout_job_reference = Mycelia._extract_sbatch_job_reference(
-                submission.stdout,
-            )
-            stdout_job_reference == (;
-                job_id = normalized_job_id,
-                job_cluster = normalized_job_cluster,
-            ) || error(
-                "metaMDBG sbatch submission stdout did not contain the exact " *
-                "returned job reference.",
-            )
-        end
+        submission.stdout isa AbstractString || error(
+            "metaMDBG sbatch submission returned no exact stdout evidence.",
+        )
+        stdout_job_reference = Mycelia._extract_sbatch_job_reference(
+            submission.stdout,
+        )
+        stdout_job_reference == (;
+            job_id = normalized_job_id,
+            job_cluster = normalized_job_cluster,
+        ) || error(
+            "metaMDBG sbatch submission stdout did not contain the exact " *
+            "returned job reference.",
+        )
     end
     return submission
 end
@@ -14154,6 +17072,45 @@ function _metamdbg_submission_recovery_guidance(
            "reclaim the reservation."
 end
 
+function _metamdbg_accepted_callback_interrupt_message(
+        recovery_owner::NamedTuple,
+        job_id::AbstractString,
+        job_cluster::Union{Nothing, AbstractString},
+        durably_bound::Bool,
+)::String
+    job_reference = job_cluster === nothing ?
+                    String(job_id) : "$(job_id);$(job_cluster)"
+    message =
+        "metaMDBG scheduler accepted exact held SLURM job " *
+        "$(job_reference), but its synchronous durable binding callback was " *
+        "interrupted; the job was not released. "
+    if durably_bound
+        message *= "Its exact scheduler reference was durably bound. "
+    else
+        message *=
+            "Durable binding did not complete; the exact owner and any " *
+            "pending scheduler-job evidence were preserved. "
+    end
+    return message * _metamdbg_submission_recovery_guidance(
+        recovery_owner,
+        job_id,
+        job_cluster,
+    )
+end
+
+function _metamdbg_unrecorded_callback_interrupt_message(
+        reservation::NamedTuple,
+)::String
+    return "metaMDBG accepted-sbatch callback was interrupted before it " *
+           "retained a canonical exact scheduler reference; scheduler " *
+           "acceptance is known, but the exact accepted job reference is " *
+           "unavailable to wrapper state. The job was not released. The unbound " *
+           "reservation was preserved at $(reservation.path); scheduler name " *
+           "$(reservation.scheduler_job_name). Inspect that exact name with " *
+           "`squeue --name $(reservation.scheduler_job_name)` before binding " *
+           "or reclaiming the reservation."
+end
+
 function _release_metamdbg_submission_job!(
         reservation::NamedTuple,
         job_id::AbstractString,
@@ -14170,6 +17127,7 @@ function _release_metamdbg_submission_job!(
             job_cluster = normalized_job_cluster,
         )
     catch caught
+        caught isa InterruptException && rethrow()
         error(
             "metaMDBG failed to release its durably bound scheduler job. " *
             _metamdbg_submission_recovery_guidance(
@@ -14344,6 +17302,7 @@ function _run_metamdbg(;
             _ensure_metamdbg_installed(conda_runner = runner),
         local_runner::Function = Base.run,
         submission_runner::Function = Mycelia.execute,
+        submission_runner_accepts_callback::Bool = false,
         submission_job_binder::Function =
             _bind_metamdbg_submission_job_after_submit!,
         submission_release_runner::Function = Mycelia.release_slurm_job,
@@ -14407,6 +17366,9 @@ function _run_metamdbg(;
     gfa_command = `$(resolved_conda_runner) run --live-stream -n $(METAMDBG_ENV_NAME) $(gfa_cmd_args)`
     if resolved_executor isa Mycelia.LocalExecutor
         return _with_metamdbg_output_domain_lock(outputs.outdir) do
+            publications = NamedTuple[]
+            publication_recorders =
+                _metamdbg_publication_recorders(publications)
             _require_no_active_metamdbg_submission_reservation!(
                 outputs.outdir,
             )
@@ -14414,48 +17376,21 @@ function _run_metamdbg(;
                 selected_input,
                 input_contract.input_snapshot,
             )
-            has_contract = _prepare_metamdbg_output_root!(
+            verified_existing = _verified_existing_metamdbg_result(
                 outputs,
+                selected_input,
+                abundance_min,
                 input_contract,
-            )
-            output_root_identity =
-                _metamdbg_output_root_identity(outputs.outdir)
-            existing_artifacts = _metamdbg_existing_artifacts(
-                outputs,
+                toolchain,
                 graph_k;
-                output_root_identity,
+                input_digest_function,
             )
-            if existing_artifacts !== nothing
-                has_contract || error(
-                    "metaMDBG complete output is missing its provenance contract.",
-                )
-                _require_metamdbg_contract!(outputs, input_contract)
-                _require_current_metamdbg_input_contract!(
-                    selected_input,
-                    abundance_min,
-                    input_contract,
-                    toolchain,
-                    ;
-                    digest_function = input_digest_function,
-                )
-                completion = _require_metamdbg_completion_manifest!(
-                    outputs,
-                    existing_artifacts,
-                    input_contract,
-                    graph_k,
-                )
-                _require_unchanged_metamdbg_output_root(
-                    output_root_identity,
-                    outputs.outdir,
-                )
-                return _metamdbg_complete_result(
-                    outputs,
-                    existing_artifacts,
-                    input_contract,
-                    graph_k,
-                    completion,
-                )
-            end
+            verified_existing.result !== nothing &&
+                return verified_existing.result
+            has_contract = verified_existing.has_contract
+            output_root_identity = verified_existing.output_root_identity
+            initial_contract_snapshot =
+                verified_existing.contract_snapshot
 
             realized_toolchain_before = _require_expected_metamdbg_toolchain(
                 _with_metamdbg_output_root_guard(
@@ -14473,7 +17408,7 @@ function _run_metamdbg(;
                 input_contract,
                 dirname(outputs.outdir),
             )
-            artifacts, realized_toolchain = try
+            execution_result = try
                 staged_asm_args = String[
                     "metaMDBG",
                     "asm",
@@ -14502,7 +17437,10 @@ function _run_metamdbg(;
                 ) do
                     local_runner(staged_asm_command)
                 end
-                existing_contigs = _normalize_metamdbg_contigs!(outputs)
+                existing_contigs = _normalize_metamdbg_contigs!(
+                    outputs;
+                    publication_recorder = publication_recorders.file,
+                )
                 existing_contigs === nothing && error(
                     "metaMDBG assembly produced no sequence-bearing contigs " *
                     "artifact in $(outputs.outdir).",
@@ -14525,7 +17463,14 @@ function _run_metamdbg(;
                     outputs,
                     graph_k;
                     output_root_identity,
+                    publication_recorder = publication_recorders.file,
+                    created_graph_alias_hook =
+                        publication_recorders.symlink,
                 )
+                artifact_snapshot =
+                    _validated_metamdbg_artifact_snapshot(
+                        completed_artifacts,
+                    )
                 toolchain_after = _require_unchanged_metamdbg_toolchain(
                     realized_toolchain_before,
                     _with_metamdbg_output_root_guard(
@@ -14538,72 +17483,165 @@ function _run_metamdbg(;
                         )
                     end,
                 )
-                completed_artifacts, toolchain_after
-            finally
-                _cleanup_staged_metamdbg_inputs!(staged)
+                _require_unchanged_metamdbg_artifacts!(
+                    completed_artifacts,
+                    artifact_snapshot,
+                    "after post-execution toolchain validation",
+                )
+                completed_artifacts, toolchain_after, artifact_snapshot
+            catch primary_error
+                _run_cleanup_after_primary_error!(
+                    () -> _run_cleanup_steps!(
+                        (
+                            () -> _cleanup_staged_metamdbg_inputs!(staged),
+                            () -> _rollback_metamdbg_publications!(
+                                publications,
+                            ),
+                        ),
+                        "metaMDBG failed local workflow",
+                    ),
+                    primary_error,
+                    "metaMDBG retained staged-input or newly created " *
+                    "publication evidence while preserving the primary " *
+                    "local workflow failure";
+                    cleanup_evidence = (;
+                        staged = staged.root,
+                        outputs,
+                    ),
+                )
+                Base.rethrow()
             end
-            completion = _metamdbg_completion_manifest(
-                outputs,
-                artifacts,
-                input_contract,
-                graph_k,
-                realized_toolchain,
-            )
-            _require_current_metamdbg_input_contract!(
-                selected_input,
-                abundance_min,
-                input_contract,
-                toolchain,
-                ;
-                digest_function = input_digest_function,
-            )
-            _require_unchanged_metamdbg_output_root(
-                output_root_identity,
-                outputs.outdir,
-            )
-            _require_metamdbg_artifact_containment(
-                artifacts.contigs,
-                "metaMDBG contigs artifact before provenance publication",
-                output_root_identity,
-            )
-            _require_metamdbg_artifact_containment(
-                artifacts.graph,
-                "metaMDBG graph artifact before provenance publication",
-                output_root_identity,
-            )
-            wrote_contract = false
-            wrote_completion = false
-            contract_identity = nothing
-            completion_identity = nothing
             try
-                if has_contract
-                    _require_metamdbg_contract!(outputs, input_contract)
+                _cleanup_staged_metamdbg_inputs!(staged)
+            catch primary_error
+                _run_cleanup_after_primary_error!(
+                    () -> _rollback_metamdbg_publications!(publications),
+                    primary_error,
+                    "metaMDBG failed to roll back newly created " *
+                    "publications after staged-input cleanup failure";
+                    cleanup_evidence = outputs,
+                )
+                Base.rethrow()
+            end
+            artifacts, realized_toolchain, artifact_snapshot = execution_result
+            try
+                _require_unchanged_metamdbg_artifacts!(
+                    artifacts,
+                    artifact_snapshot,
+                    "before completion-manifest construction",
+                )
+                completion = _metamdbg_completion_manifest(
+                    outputs,
+                    artifacts,
+                    input_contract,
+                    graph_k,
+                    realized_toolchain,
+                    ;
+                    artifact_snapshot,
+                )
+                _require_unchanged_metamdbg_artifacts!(
+                    artifacts,
+                    artifact_snapshot,
+                    "after completion-manifest construction",
+                )
+                _require_current_metamdbg_input_contract!(
+                    selected_input,
+                    abundance_min,
+                    input_contract,
+                    toolchain;
+                    digest_function = input_digest_function,
+                )
+                _require_unchanged_metamdbg_output_root(
+                    output_root_identity,
+                    outputs.outdir,
+                )
+                _require_metamdbg_artifact_containment(
+                    artifacts.contigs,
+                    "metaMDBG contigs artifact before provenance " *
+                    "publication",
+                    output_root_identity,
+                )
+                _require_metamdbg_artifact_containment(
+                    artifacts.graph,
+                    "metaMDBG graph artifact before provenance " *
+                    "publication",
+                    output_root_identity,
+                )
+                contract_snapshot = if has_contract
+                    _require_unchanged_metamdbg_contract!(
+                        outputs,
+                        input_contract,
+                        something(initial_contract_snapshot),
+                    )
                 else
                     _require_unchanged_metamdbg_output_root(
                         output_root_identity,
                         outputs.outdir,
                     )
-                    _write_metamdbg_contract!(outputs, input_contract)
-                    wrote_contract = true
-                    contract_identity = _metamdbg_regular_file_identity(
-                        outputs.contract_marker,
+                    _write_metamdbg_contract!(
+                        outputs,
+                        input_contract;
+                        publication_recorder =
+                            publication_recorders.file,
+                    )
+                    _validated_metamdbg_contract_snapshot(
+                        outputs,
+                        input_contract,
                     )
                 end
                 _require_metamdbg_contract!(outputs, input_contract)
+                _require_unchanged_metamdbg_artifacts!(
+                    artifacts,
+                    artifact_snapshot,
+                    "after provenance-contract publication",
+                )
                 _require_unchanged_metamdbg_output_root(
                     output_root_identity,
                     outputs.outdir,
                 )
-                _write_metamdbg_completion_manifest!(outputs, completion)
-                wrote_completion = true
-                completion_identity = _metamdbg_regular_file_identity(
-                    outputs.completion_marker,
-                )
-                completion = _require_metamdbg_completion_manifest!(
+                _write_metamdbg_completion_manifest!(
                     outputs,
-                    artifacts,
+                    completion;
+                    publication_recorder = publication_recorders.file,
+                )
+                _require_current_metamdbg_input_contract!(
+                    selected_input,
+                    abundance_min,
                     input_contract,
-                    graph_k,
+                    toolchain;
+                    digest_function = input_digest_function,
+                )
+                _require_unchanged_metamdbg_contract!(
+                    outputs,
+                    input_contract,
+                    contract_snapshot,
+                )
+                _require_unchanged_metamdbg_artifacts!(
+                    artifacts,
+                    artifact_snapshot,
+                    "after completion-manifest publication",
+                )
+                validated_completion =
+                    _validated_metamdbg_completion_snapshot(
+                        outputs,
+                        artifacts,
+                        input_contract,
+                        graph_k,
+                    )
+                completion = validated_completion.completion
+                _require_unchanged_metamdbg_contract!(
+                    outputs,
+                    input_contract,
+                    contract_snapshot,
+                )
+                _require_unchanged_metamdbg_artifacts!(
+                    artifacts,
+                    artifact_snapshot,
+                    "after completion-manifest validation",
+                )
+                _require_unchanged_metamdbg_completion_snapshot!(
+                    outputs,
+                    validated_completion.snapshot,
                 )
                 _require_unchanged_metamdbg_output_root(
                     output_root_identity,
@@ -14617,30 +17655,14 @@ function _run_metamdbg(;
                     completion,
                 )
             catch primary_error
-                if wrote_completion
-                    try
-                        _remove_exact_metamdbg_durable_file!(
-                            outputs.completion_marker,
-                            completion_identity,
-                        )
-                    catch cleanup_error
-                        @warn "metaMDBG failed to remove a newly written stale " *
-                              "completion manifest while preserving the " *
-                              "primary completion failure" outputs primary_error cleanup_error
-                    end
-                end
-                if wrote_contract
-                    try
-                        _remove_exact_metamdbg_durable_file!(
-                            outputs.contract_marker,
-                            contract_identity,
-                        )
-                    catch cleanup_error
-                        @warn "metaMDBG failed to remove a newly written stale " *
-                              "contract while preserving the primary input " *
-                              "contract failure" outputs primary_error cleanup_error
-                    end
-                end
+                _run_cleanup_after_primary_error!(
+                    () -> _rollback_metamdbg_publications!(publications),
+                    primary_error,
+                    "metaMDBG failed to roll back newly published workflow " *
+                    "artifacts while preserving the primary completion " *
+                    "failure";
+                    cleanup_evidence = outputs,
+                )
                 Base.rethrow()
             end
         end
@@ -14652,36 +17674,16 @@ function _run_metamdbg(;
             selected_input,
             input_contract.input_snapshot,
         )
-        has_contract = _prepare_metamdbg_output_root!(outputs, input_contract)
-        existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
-        if existing_artifacts === nothing
-            return nothing
-        end
-        has_contract || error(
-            "metaMDBG complete output is missing its provenance contract.",
-        )
-        _require_metamdbg_contract!(outputs, input_contract)
-        _require_current_metamdbg_input_contract!(
+        verified_existing = _verified_existing_metamdbg_result(
+            outputs,
             selected_input,
             abundance_min,
             input_contract,
             toolchain,
-            ;
-            digest_function = input_digest_function,
+            graph_k;
+            input_digest_function,
         )
-        completion = _require_metamdbg_completion_manifest!(
-            outputs,
-            existing_artifacts,
-            input_contract,
-            graph_k,
-        )
-        return _metamdbg_complete_result(
-            outputs,
-            existing_artifacts,
-            input_contract,
-            graph_k,
-            completion,
-        )
+        return verified_existing.result
     end
     complete_result !== nothing && return complete_result
 
@@ -14752,35 +17754,17 @@ function _run_metamdbg(;
             selected_input,
             input_contract.input_snapshot,
         )
-        has_contract = _prepare_metamdbg_output_root!(outputs, input_contract)
-        existing_artifacts = _metamdbg_existing_artifacts(outputs, graph_k)
-        if existing_artifacts !== nothing
-            has_contract || error(
-                "metaMDBG complete output is missing its provenance contract.",
-            )
-            _require_metamdbg_contract!(outputs, input_contract)
-            _require_current_metamdbg_input_contract!(
-                selected_input,
-                abundance_min,
-                input_contract,
-                toolchain,
-                ;
-                digest_function = input_digest_function,
-            )
-            completion = _require_metamdbg_completion_manifest!(
-                outputs,
-                existing_artifacts,
-                input_contract,
-                graph_k,
-            )
-            return _metamdbg_complete_result(
-                outputs,
-                existing_artifacts,
-                input_contract,
-                graph_k,
-                completion,
-            )
-        end
+        verified_existing = _verified_existing_metamdbg_result(
+            outputs,
+            selected_input,
+            abundance_min,
+            input_contract,
+            toolchain,
+            graph_k;
+            input_digest_function,
+        )
+        verified_existing.result !== nothing &&
+            return verified_existing.result
         _require_current_metamdbg_input_snapshot!(
             selected_input,
             input_contract.input_snapshot,
@@ -14801,21 +17785,131 @@ function _run_metamdbg(;
     end
     newly_complete !== nothing && return newly_complete
 
+    use_accepted_sbatch_callback =
+        resolved_executor isa Mycelia.SlurmExecutor &&
+        (submission_runner === Mycelia.execute ||
+         submission_runner_accepts_callback)
+    accepted_callback_calls = Ref(0)
+    accepted_record = Ref{Any}(nothing)
+    accepted_bound_reservation = Ref{Any}(nothing)
+    accepted_callback_error = Ref{Any}(nothing)
+    accepted_sbatch_callback = function (raw_record::Any)
+        try
+            accepted_callback_calls[] += 1
+            accepted_callback_calls[] == 1 || error(
+                "metaMDBG accepted-sbatch callback was invoked more than " *
+                "once for one scheduler submission.",
+            )
+            record = _require_verifiable_metamdbg_accepted_record(raw_record)
+            accepted_record[] = record
+            bound = _invoke_metamdbg_submission_job_binder(
+                submission_job_binder,
+                submission_reservation,
+                record.job_id,
+                record.job_cluster,
+            )
+            bound isa NamedTuple || error(
+                "metaMDBG accepted-sbatch callback binder returned no durable " *
+                "reservation.",
+            )
+            bound.job_id == record.job_id || error(
+                "metaMDBG accepted-sbatch callback binder changed the exact " *
+                "job id.",
+            )
+            bound.job_cluster == record.job_cluster || error(
+                "metaMDBG accepted-sbatch callback binder changed the exact " *
+                "job cluster.",
+            )
+            accepted_bound_reservation[] = bound
+        catch caught
+            retained_error = accepted_callback_error[]
+            retained_error isa InterruptException && throw(retained_error)
+            accepted_callback_error[] = caught
+            Base.rethrow()
+        end
+        return nothing
+    end
+
     submission_attempt = nothing
     submission_attempt_started = false
     submission = try
         submission_attempt_started = true
-        submission_attempt = submission_runner(job, scheduler_executor)
-        _require_successful_metamdbg_submission(
+        submission_attempt = if use_accepted_sbatch_callback
+            submission_runner(
+                job,
+                scheduler_executor;
+                accepted_sbatch_callback,
+            )
+        else
+            submission_runner(job, scheduler_executor)
+        end
+        _require_verifiable_metamdbg_submission(
             submission_attempt;
             require_sbatch = resolved_executor isa Mycelia.SlurmExecutor,
         )
     catch primary_error
+        callback_record = accepted_record[]
+        callback_error = accepted_callback_error[]
+        if use_accepted_sbatch_callback &&
+           callback_error isa InterruptException &&
+           !(callback_record isa NamedTuple)
+            @warn _metamdbg_unrecorded_callback_interrupt_message(
+                submission_reservation,
+            ) callback_error primary_error
+            throw(callback_error)
+        end
+        if use_accepted_sbatch_callback && callback_record isa NamedTuple
+            callback_reference = if callback_record.job_cluster === nothing
+                callback_record.job_id
+            else
+                "$(callback_record.job_id);$(callback_record.job_cluster)"
+            end
+            bound = accepted_bound_reservation[]
+            recovery_owner = bound isa NamedTuple ?
+                             bound : submission_reservation
+            if callback_error isa InterruptException
+                @warn _metamdbg_accepted_callback_interrupt_message(
+                    recovery_owner,
+                    callback_record.job_id,
+                    callback_record.job_cluster,
+                    bound isa NamedTuple,
+                ) callback_error primary_error
+                throw(callback_error)
+            end
+            callback_failure_message =
+                "metaMDBG scheduler accepted exact held SLURM job " *
+                "$(callback_reference) before submission control flow " *
+                "failed; the job was not released. "
+            if bound isa NamedTuple
+                callback_failure_message *=
+                    "Its exact scheduler reference was durably bound. "
+            else
+                callback_failure_message *=
+                    "Durable binding did not complete; the exact owner and " *
+                    "any pending scheduler-job evidence were preserved. "
+            end
+            if callback_error !== nothing && callback_error !== primary_error
+                callback_failure_message *=
+                    "Accepted-callback failure: " *
+                    "$(sprint(showerror, callback_error)). "
+            end
+            callback_failure_message *=
+                _metamdbg_submission_recovery_guidance(
+                    recovery_owner,
+                    callback_record.job_id,
+                    callback_record.job_cluster,
+                ) * " Cause: $(sprint(showerror, primary_error))"
+            if primary_error isa InterruptException
+                @warn callback_failure_message primary_error
+                Base.rethrow()
+            end
+            error(callback_failure_message)
+        end
         if _metamdbg_submission_acceptance_is_ambiguous(
             submission_attempt,
             submission_attempt_started,
         )
-            error(
+            ambiguity_message =
                 "metaMDBG received an ambiguous response after attempting a " *
                 "held SLURM submission. The unbound reservation was preserved " *
                 "at $(submission_reservation.path); scheduler name " *
@@ -14823,8 +17917,12 @@ function _run_metamdbg(;
                 "exact name with `squeue --name " *
                 "$(submission_reservation.scheduler_job_name)` before binding " *
                 "or reclaiming the reservation. Cause: " *
-                sprint(showerror, primary_error),
-            )
+                sprint(showerror, primary_error)
+            if primary_error isa InterruptException
+                @warn ambiguity_message primary_error
+                Base.rethrow()
+            end
+            error(ambiguity_message)
         end
         try
             _cleanup_metamdbg_submission_reservation_after_failure!(
@@ -14832,33 +17930,175 @@ function _run_metamdbg(;
                 submission_reservation,
             )
         catch cleanup_error
-            @warn "metaMDBG failed to clean its submission reservation " *
-                  "while preserving the primary submission failure" outputs primary_error cleanup_error
+            _handle_cleanup_failure_with_primary(
+                primary_error,
+                cleanup_error,
+                "metaMDBG failed to clean its submission reservation while " *
+                "preserving the primary submission failure";
+                cleanup_evidence = outputs,
+            )
         end
         Base.rethrow()
     end
     submission_job_id = String(submission.job_id)
     submission_job_cluster = submission.job_cluster
-    bound_submission_reservation = try
-        submission_job_cluster === nothing ?
-        submission_job_binder(
-            submission_reservation,
-            submission_job_id,
-        ) :
-        submission_job_binder(
-            submission_reservation,
-            submission_job_id,
-            submission_job_cluster,
-        )
-    catch caught
-        error(
-            "metaMDBG submitted SLURM job $(submission_job_id) held but could " *
-            "not durably bind job.json; the job was not released. " *
+    submission_job_reference = if submission_job_cluster === nothing
+        submission_job_id
+    else
+        "$(submission_job_id);$(submission_job_cluster)"
+    end
+    submission_audit_failure = if submission isa Mycelia.SubmitResult &&
+                                  !submission.ok
+        _metamdbg_submission_failure_details(submission)
+    else
+        nothing
+    end
+    bound_submission_reservation = if use_accepted_sbatch_callback
+        callback_record = accepted_record[]
+        callback_error = accepted_callback_error[]
+        bound = accepted_bound_reservation[]
+        recovery_owner = bound isa NamedTuple ? bound : submission_reservation
+        canonical_job_id, canonical_job_cluster = if callback_record isa NamedTuple
+            (callback_record.job_id, callback_record.job_cluster)
+        else
+            (submission_job_id, submission_job_cluster)
+        end
+        canonical_job_reference = if canonical_job_cluster === nothing
+            canonical_job_id
+        else
+            "$(canonical_job_id);$(canonical_job_cluster)"
+        end
+        if callback_error isa InterruptException
+            @warn _metamdbg_accepted_callback_interrupt_message(
+                recovery_owner,
+                canonical_job_id,
+                canonical_job_cluster,
+                bound isa NamedTuple,
+            ) callback_error
+            throw(callback_error)
+        end
+        if accepted_callback_calls[] != 1
+            error(
+                "metaMDBG received exact accepted SLURM job " *
+                "$(canonical_job_reference), but the backend did not invoke " *
+                "its accepted-sbatch callback exactly once; the job was not " *
+                "released. " *
+                _metamdbg_submission_recovery_guidance(
+                    recovery_owner,
+                    canonical_job_id,
+                    canonical_job_cluster,
+                ),
+            )
+        end
+        if !(callback_record isa NamedTuple)
+            callback_failure = callback_error === nothing ?
+                               "the callback retained no exact validated record" :
+                               sprint(showerror, callback_error)
+            error(
+                "metaMDBG accepted-sbatch callback could not validate exact " *
+                "SLURM job $(submission_job_reference); the job was not " *
+                "released. Callback failure: $(callback_failure). " *
+                _metamdbg_submission_recovery_guidance(
+                    recovery_owner,
+                    submission_job_id,
+                    submission_job_cluster,
+                ),
+            )
+        end
+        try
+            _require_metamdbg_submission_matches_accepted_record(
+                submission,
+                callback_record,
+            )
+        catch caught
+            caught isa InterruptException && Base.rethrow()
+            error(
+                "metaMDBG accepted-sbatch callback and SubmitResult " *
+                "disagreed for callback-authoritative exact held job " *
+                "$(canonical_job_reference); " *
+                "the job was not released. " *
+                _metamdbg_submission_recovery_guidance(
+                    recovery_owner,
+                    callback_record.job_id,
+                    callback_record.job_cluster,
+                ) * " Cause: $(sprint(showerror, caught))",
+            )
+        end
+        if callback_error !== nothing
+            callback_failure_message =
+                "metaMDBG scheduler accepted exact held SLURM job " *
+                "$(submission_job_reference), but its synchronous durable " *
+                "binding callback failed; the job was not released. "
+            if submission_audit_failure !== nothing
+                callback_failure_message *=
+                    "Backend failure details: " *
+                    "$(submission_audit_failure). "
+            end
+            callback_failure_message *=
+                "Callback failure: $(sprint(showerror, callback_error)). " *
+                _metamdbg_submission_recovery_guidance(
+                    recovery_owner,
+                    submission_job_id,
+                    submission_job_cluster,
+                )
+            error(callback_failure_message)
+        end
+        bound isa NamedTuple || error(
+            "metaMDBG accepted-sbatch callback returned without a durable " *
+            "binding for exact held job $(submission_job_reference); the job " *
+            "was not released. " *
             _metamdbg_submission_recovery_guidance(
                 submission_reservation,
                 submission_job_id,
                 submission_job_cluster,
-            ) * " Cause: $(sprint(showerror, caught))",
+            ),
+        )
+        bound
+    else
+        try
+            _invoke_metamdbg_submission_job_binder(
+                submission_job_binder,
+                submission_reservation,
+                submission_job_id,
+                submission_job_cluster,
+            )
+        catch caught
+            binding_failure_message =
+                "metaMDBG scheduler accepted exact held SLURM job " *
+                "$(submission_job_reference), but could not durably bind " *
+                "job.json; the job was not released. "
+            if submission_audit_failure !== nothing
+                binding_failure_message *=
+                    "The backend audit failed after scheduler acceptance: " *
+                    "$(submission_audit_failure). "
+            end
+            binding_failure_message *= _metamdbg_submission_recovery_guidance(
+                submission_reservation,
+                submission_job_id,
+                submission_job_cluster,
+            )
+            if caught isa InterruptException
+                @warn binding_failure_message caught
+                Base.rethrow()
+            end
+            error(
+                binding_failure_message *
+                " Binding failure: $(sprint(showerror, caught))",
+            )
+        end
+    end
+    if submission_audit_failure !== nothing
+        error(
+            "metaMDBG scheduler accepted exact held SLURM job " *
+            "$(submission_job_reference), but the backend audit failed after " *
+            "scheduler acceptance: $(submission_audit_failure). Its exact " *
+            "scheduler reference was durably bound and the job was not " *
+            "released. " *
+            _metamdbg_submission_recovery_guidance(
+                bound_submission_reservation,
+                submission_job_id,
+                submission_job_cluster,
+            ),
         )
     end
     released_submission_reservation = _release_metamdbg_submission_job!(
@@ -15555,9 +18795,17 @@ function reclaim_metamdbg_submission_reservation!(
         try
             current = recover_current()
             _remove_metamdbg_runtime_recovery_state!(current, metadata)
-        finally
-            Base.close(lock_handle)
+        catch primary_error
+            _run_cleanup_after_primary_error!(
+                () -> Base.close(lock_handle),
+                primary_error,
+                "metaMDBG runtime-recovery lock cleanup failed while " *
+                "preserving the primary reclaim failure";
+                cleanup_evidence = reservation_lock_path,
+            )
+            Base.rethrow()
         end
+        Base.close(lock_handle)
     elseif reservation_state in reclaim_states
         _with_metamdbg_output_domain_lock(
             outputs.outdir;
@@ -15671,12 +18919,14 @@ from this wrapper rather than advertised as a false combined-input contract.
 Synchronous execution and complete reuse return `status = :complete`, `outdir`,
 the sequence-bearing `contigs.fasta.gz`, a stable `assemblyGraph_k<k>.gfa`
 alias, the input-contract marker, an atomic completion manifest, and exact
-resolved toolchain-inventory provenance. Nonlocal execution
+resolved package-inventory digest/count provenance. Nonlocal execution
 returns `status = :planned` for collected/dry-run jobs or `:submitted` for a
 real submission, together with the backend `submission` result and
 `expected_artifacts`; submitted results also include the exact random-owner
 `submission_reservation` cancellation capability. Planned paths are not
-reported as completed artifacts.
+reported as completed artifacts. Planned and submitted results carry expected
+specification provenance only; they do not claim a realized package inventory.
+The submitted runtime records realized inventory only when execution completes.
 The graph alias resolves to metaMDBG's validated dynamic
 `assemblyGraph_k<k>_<length>bps.gfa` artifact.
 
@@ -15706,9 +18956,11 @@ The graph alias resolves to metaMDBG's validated dynamic
   One output root owns exactly one `graph_k`; request another graph in a fresh
   output root.
 - Every nonlocal job embeds an adjacent, contract-addressed submission
-  reservation. Real submissions create it atomically before submission and the
-  runtime consumes it under the output lock; collected and dry-run jobs persist
-  no reservation and therefore fail closed if executed directly. Active
+  reservation. Before scheduler submission, real submissions durably publish
+  it through an atomic same-parent rename; provisional owner/shared-marker
+  crash windows remain inspectable. The runtime consumes the reservation under
+  the output lock; collected and dry-run jobs persist no reservation and
+  therefore fail closed if executed directly. Active
   federated submissions preserve the exact `(job_id, job_cluster)` identity in
   pending, committed, runtime, inspection, release, and reclaim state; generated
   runtimes require matching `SLURM_JOB_ID` and `SLURM_CLUSTER_NAME`, and held
@@ -15754,9 +19006,12 @@ The graph alias resolves to metaMDBG's validated dynamic
   terminal-completed can be reclaimed from freshly inspected, identity-bound
   metadata with its exact job id and cluster and `confirm_terminal = :failed` or
   `:completed`.
-- Installs metaMDBG exactly 1.4 from a checksum-verified, spec-hash-addressed
-  environment and records a normalized digest over every resolved package's
-  name, version, build, and channel before execution.
+- Completed local or generated-runtime execution uses metaMDBG exactly 1.4 from
+  a checksum-verified, spec-hash-addressed environment and records a normalized
+  digest and count over every resolved package's name, version, build, and
+  channel. Contract-verified reuse reports the digest and count bound by its
+  completion manifest; planned and submitted results retain only the expected
+  environment specification until runtime completion.
 - Local and executor lifecycles validate nonempty unique FASTA identifiers,
   gap-free IUPAC DNA FASTA, and strict H/S/L/P GFA1 structure, shared segment/
   path naming, and typed A/i/f/Z/J/H/B optional tags. GFA validation is two-pass

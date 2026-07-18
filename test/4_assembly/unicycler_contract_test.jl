@@ -1,6 +1,7 @@
 # Default-CI lifecycle and provenance tests for the common Unicycler wrapper.
 # All external effects are injected; no Conda environment or assembler runs.
 
+import Logging
 import Mycelia
 import Test
 
@@ -84,6 +85,78 @@ function _test_unicycler_error(
         Test.@test occursin(expected_message, sprint(showerror, exception))
     end
     return nothing
+end
+
+mutable struct _TestUnicyclerNoWholeReadIO{T <: IO} <: IO
+    input::T
+    whole_read_calls::Base.RefValue{Int}
+end
+
+function Base.read(
+        input::_TestUnicyclerNoWholeReadIO,
+)::Vector{UInt8}
+    input.whole_read_calls[] += 1
+    error("whole-artifact read(input) is forbidden in this test")
+end
+
+function Base.eof(input::_TestUnicyclerNoWholeReadIO)::Bool
+    return eof(input.input)
+end
+
+function Base.isopen(input::_TestUnicyclerNoWholeReadIO)::Bool
+    return isopen(input.input)
+end
+
+function Base.close(input::_TestUnicyclerNoWholeReadIO)::Nothing
+    close(input.input)
+    return nothing
+end
+
+function Base.seek(
+        input::_TestUnicyclerNoWholeReadIO,
+        position::Integer,
+)::_TestUnicyclerNoWholeReadIO
+    seek(input.input, position)
+    return input
+end
+
+function Base.seekstart(
+        input::_TestUnicyclerNoWholeReadIO,
+)::_TestUnicyclerNoWholeReadIO
+    seekstart(input.input)
+    return input
+end
+
+function Base.position(input::_TestUnicyclerNoWholeReadIO)::Integer
+    return position(input.input)
+end
+
+function Base.bytesavailable(input::_TestUnicyclerNoWholeReadIO)::Int
+    return bytesavailable(input.input)
+end
+
+function Base.readbytes!(
+        input::_TestUnicyclerNoWholeReadIO,
+        buffer::AbstractVector{UInt8},
+        count::Integer = length(buffer),
+)::Int
+    return readbytes!(input.input, buffer, count)
+end
+
+function Base.unsafe_read(
+        input::_TestUnicyclerNoWholeReadIO,
+        pointer::Ptr{UInt8},
+        count::UInt,
+)::Nothing
+    Base.unsafe_read(input.input, pointer, count)
+    return nothing
+end
+
+function Base.read(
+        input::_TestUnicyclerNoWholeReadIO,
+        ::Type{UInt8},
+)::UInt8
+    return read(input.input, UInt8)
 end
 
 Test.@testset "common Unicycler wrapper contract" begin
@@ -191,6 +264,8 @@ Test.@testset "common Unicycler wrapper contract" begin
             write(r1, original_r1)
             write(r2, original_r2)
             write(long_reads, original_long)
+            malformed = joinpath(temp_dir, "malformed.fastq")
+            write(malformed, "@broken\nACGT\n+\n")
             scratch_root = joinpath(temp_dir, "scratch")
             mkpath(scratch_root)
             environment_prefix = joinpath(temp_dir, "unicycler-env")
@@ -421,6 +496,51 @@ Test.@testset "common Unicycler wrapper contract" begin
             Test.@test read(sentinel, String) == "retain"
             Test.@test Set(readdir(scratch_root)) == before_entries
 
+            replacement_outdir = joinpath(temp_dir, "replacement-output")
+            held_empty_outdir = joinpath(temp_dir, "held-empty-output")
+            mkpath(replacement_outdir)
+            replacement_sentinel = joinpath(
+                replacement_outdir,
+                "replacement-must-survive",
+            )
+            removal_commands = Ref(0)
+            observed_empty_output_replacement = try
+                Mycelia._run_unicycler(;
+                    short_1 = r1,
+                    short_2 = r2,
+                    long_reads,
+                    outdir = replacement_outdir,
+                    environment_prefix,
+                    environment_lock_path,
+                    input_spool_parent = scratch_root,
+                    environment_preparer = (_runner, _prefix) -> nothing,
+                    toolchain_inspector = (_runner, _prefix) ->
+                        _test_unicycler_toolchain(),
+                    environment_lock_runner =
+                        direct_environment_lock_runner,
+                    output_lock_runner,
+                    pre_empty_output_removal_hook = (path, _identity) -> begin
+                        mv(path, held_empty_outdir)
+                        mkpath(path)
+                        write(replacement_sentinel, "retain\n")
+                    end,
+                    command_runner = _command ->
+                        (removal_commands[] += 1),
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_empty_output_replacement isa ArgumentError
+            Test.@test occursin(
+                "replaced before identity-bound nonrecursive removal",
+                sprint(showerror, observed_empty_output_replacement),
+            )
+            Test.@test read(replacement_sentinel, String) == "retain\n"
+            Test.@test isdir(held_empty_outdir)
+            Test.@test removal_commands[] == 0
+            Test.@test Set(readdir(scratch_root)) == before_entries
+
             event_outdir = joinpath(temp_dir, "ordered-success")
             events = String[]
             consumed_paths = Ref{NamedTuple}()
@@ -586,6 +706,404 @@ Test.@testset "common Unicycler wrapper contract" begin
             )
             Test.@test !ispath(mutated_spool_root[])
             Test.@test Set(readdir(scratch_root)) == before_entries
+
+            for (case_label, primary_error) in (
+                    (
+                        :ordinary,
+                        ErrorException("synthetic Unicycler primary failure"),
+                    ),
+                    (:interrupt, InterruptException()),
+            )
+                failure_outdir = joinpath(
+                    temp_dir,
+                    "cleanup-preserves-$(case_label)-primary",
+                )
+                displaced_spool = joinpath(
+                    temp_dir,
+                    "displaced-$(case_label)-unicycler-spool",
+                )
+                captured_spool = Ref("")
+                replacement_marker = Ref("")
+                observed_error = Test.@test_logs (
+                    :warn,
+                    r"retained private input spool cleanup evidence",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    try
+                        Mycelia._run_unicycler(;
+                            short_1 = r1,
+                            short_2 = r2,
+                            long_reads,
+                            outdir = failure_outdir,
+                            environment_prefix,
+                            environment_lock_path,
+                            input_spool_parent = scratch_root,
+                            after_input_spool_materialization_hook = snapshots ->
+                                (captured_spool[] = snapshots.spool_root),
+                            environment_preparer = (_runner, _prefix) -> nothing,
+                            toolchain_inspector = (_runner, _prefix) ->
+                                _test_unicycler_toolchain(),
+                            environment_lock_runner =
+                                (action, _lock_path) -> action(),
+                            output_lock_runner,
+                            command_runner = _command -> begin
+                                mv(captured_spool[], displaced_spool)
+                                mkpath(captured_spool[])
+                                replacement_marker[] = joinpath(
+                                    captured_spool[],
+                                    "replacement-marker.txt",
+                                )
+                                write(
+                                    replacement_marker[],
+                                    "preserve replacement\n",
+                                )
+                                throw(primary_error)
+                            end,
+                        )
+                        nothing
+                    catch caught
+                        caught
+                    end
+                end
+                Test.@test observed_error === primary_error
+                Test.@test read(replacement_marker[], String) ==
+                           "preserve replacement\n"
+                Test.@test isdir(displaced_spool)
+                rm(captured_spool[]; recursive = true, force = true)
+                rm(displaced_spool; recursive = true, force = true)
+                Test.@test Set(readdir(scratch_root)) == before_entries
+            end
+
+            function cleanup_precedence_error(
+                    primary_error::Any,
+                    cleanup_error::Any,
+            )::Any
+                try
+                    throw(primary_error)
+                catch caught_primary
+                    try
+                        throw(cleanup_error)
+                    catch caught_cleanup
+                        Mycelia._handle_cleanup_failure_with_primary(
+                            caught_primary,
+                            caught_cleanup,
+                            "synthetic cleanup precedence";
+                            cleanup_evidence = "fixture",
+                        )
+                    end
+                    Base.rethrow()
+                end
+            end
+            ordinary_primary = ErrorException("ordinary primary")
+            cleanup_interrupt = InterruptException()
+            observed_cleanup_interrupt = try
+                cleanup_precedence_error(
+                    ordinary_primary,
+                    cleanup_interrupt,
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_cleanup_interrupt === cleanup_interrupt
+            primary_interrupt = InterruptException()
+            second_cleanup_interrupt = InterruptException()
+            observed_primary_interrupt = Test.@test_logs (
+                :warn,
+                r"synthetic cleanup precedence",
+            ) min_level=Logging.Warn begin
+                try
+                    cleanup_precedence_error(
+                        primary_interrupt,
+                        second_cleanup_interrupt,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_primary_interrupt === primary_interrupt
+
+            cleanup_order = Symbol[]
+            ordinary_cleanup = ErrorException("ordinary cleanup")
+            selected_cleanup_interrupt = InterruptException()
+            observed_step_error = Test.@test_logs (
+                :warn,
+                r"additional cleanup failure",
+            ) min_level=Logging.Warn begin
+                try
+                    Mycelia._run_cleanup_steps!(
+                        (
+                            () -> push!(cleanup_order, :first),
+                            () -> begin
+                                push!(cleanup_order, :ordinary_error)
+                                throw(ordinary_cleanup)
+                            end,
+                            () -> begin
+                                push!(cleanup_order, :interrupt_error)
+                                throw(selected_cleanup_interrupt)
+                            end,
+                            () -> push!(cleanup_order, :last),
+                        ),
+                        "synthetic ordered cleanup",
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_step_error === selected_cleanup_interrupt
+            Test.@test cleanup_order == [
+                :first,
+                :ordinary_error,
+                :interrupt_error,
+                :last,
+            ]
+
+            single_cleanup_error = ErrorException(
+                "synthetic single FASTQ close failure",
+            )
+            observed_single_cleanup = try
+                Mycelia._validate_unicycler_fastq(
+                    r1,
+                    "close-injected single read";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        throw(single_cleanup_error)
+                    end,
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_single_cleanup === single_cleanup_error
+
+            primary_fastq_error = Test.@test_logs (
+                :warn,
+                r"FASTQ reader cleanup failed while preserving",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._validate_unicycler_fastq(
+                        malformed,
+                        "close-injected malformed read";
+                        reader_closer = reader -> begin
+                            close(reader)
+                            error("synthetic ordinary reader cleanup failure")
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test primary_fastq_error isa ArgumentError
+            Test.@test occursin(
+                "valid FASTQ",
+                sprint(showerror, primary_fastq_error),
+            )
+
+            paired_close_calls = Ref(0)
+            paired_ordinary_cleanup = ErrorException(
+                "synthetic paired ordinary close failure",
+            )
+            paired_interrupt_cleanup = InterruptException()
+            observed_paired_cleanup = Test.@test_logs (
+                :warn,
+                r"additional cleanup failure",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._validate_unicycler_paired_fastqs(
+                        r1,
+                        r2;
+                        reader_closer = reader -> begin
+                            paired_close_calls[] += 1
+                            close(reader)
+                            paired_close_calls[] == 1 &&
+                                throw(paired_ordinary_cleanup)
+                            throw(paired_interrupt_cleanup)
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_paired_cleanup === paired_interrupt_cleanup
+            Test.@test paired_close_calls[] == 2
+
+            bad_prebound = merge(
+                _test_unicycler_prebound_descriptor(r1),
+                (; sha256 = repeat("0", 64)),
+            )
+            observed_prebound_primary = Test.@test_logs (
+                :warn,
+                r"descriptor cleanup failed while preserving",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._require_unchanged_unicycler_prebound_input(
+                        bad_prebound,
+                        "close-injected prebound read";
+                        input_closer = input -> begin
+                            close(input)
+                            error("synthetic prebound descriptor close failure")
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_prebound_primary isa ErrorException
+            Test.@test occursin(
+                "content changed",
+                sprint(showerror, observed_prebound_primary),
+            )
+
+            exact_spool_root = mktempdir(
+                scratch_root;
+                prefix = "close-injected-spool-",
+                cleanup = false,
+            )
+            exact_spool_identity =
+                Mycelia._unicycler_spool_root_identity(exact_spool_root)
+            mismatched_spool_identity = merge(
+                exact_spool_identity,
+                (; inode = exact_spool_identity.inode + 1),
+            )
+            spool_close_calls = Ref(0)
+            observed_spool_primary = Test.@test_logs (
+                :warn,
+                r"descriptor cleanup failed while preserving",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._remove_exact_private_input_spool_root!(
+                        mismatched_spool_identity,
+                        "close-injected Unicycler";
+                        descriptor_closer = descriptor -> begin
+                            spool_close_calls[] += 1
+                            close(descriptor)
+                            error("synthetic spool descriptor close failure")
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_spool_primary isa ErrorException
+            Test.@test occursin(
+                "changed before cleanup",
+                sprint(showerror, observed_spool_primary),
+            )
+            Test.@test spool_close_calls[] == 2
+            rm(exact_spool_root; recursive = true, force = true)
+
+            stable_copy_root = mktempdir(
+                scratch_root;
+                prefix = "close-injected-copy-",
+                cleanup = false,
+            )
+            stable_copy_source = Mycelia._unicycler_input_source_snapshot(
+                r1,
+                "close-injected stable source",
+            )
+            stable_copy_close_calls = Ref(0)
+            stable_copy_interrupt = InterruptException()
+            observed_stable_copy_cleanup = Test.@test_logs (
+                :warn,
+                r"additional cleanup failure",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._unicycler_stable_input_snapshot(
+                        stable_copy_source,
+                        "close-injected stable source",
+                        stable_copy_root,
+                        "input";
+                        stream_closer = stream -> begin
+                            stable_copy_close_calls[] += 1
+                            close(stream)
+                            stable_copy_close_calls[] == 1 && error(
+                                "synthetic stable-copy ordinary close failure",
+                            )
+                            throw(stable_copy_interrupt)
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_stable_copy_cleanup === stable_copy_interrupt
+            Test.@test stable_copy_close_calls[] == 2
+            rm(stable_copy_root; recursive = true, force = true)
+
+            contract_fixture = Dict{String, Any}(
+                "schema" => "close-and-aba-fixture",
+            )
+            aba_outdir = joinpath(temp_dir, "contract-aba")
+            mkpath(aba_outdir)
+            aba_temporary = Ref("")
+            held_aba_temporary = joinpath(aba_outdir, "held-temporary")
+            aba_replacement = "replacement must survive\n"
+            observed_contract_aba = Test.@test_logs (
+                :warn,
+                r"run-contract cleanup failed while preserving",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._write_unicycler_run_contract(
+                        aba_outdir,
+                        contract_fixture;
+                        after_temporary_binding_hook =
+                            (temporary_path, _identity) -> begin
+                                aba_temporary[] = temporary_path
+                                mv(temporary_path, held_aba_temporary)
+                                write(temporary_path, aba_replacement)
+                            end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_contract_aba isa ErrorException
+            Test.@test occursin(
+                "temporary artifact was replaced",
+                sprint(showerror, observed_contract_aba),
+            )
+            Test.@test read(aba_temporary[], String) == aba_replacement
+            Test.@test isfile(held_aba_temporary)
+            Test.@test !ispath(joinpath(
+                aba_outdir,
+                Mycelia._UNICYCLER_CONTRACT_FILENAME,
+            ))
+            rm(aba_temporary[]; force = true)
+            rm(held_aba_temporary; force = true)
+
+            hardlink_outdir = joinpath(temp_dir, "contract-hardlink-interrupt")
+            mkpath(hardlink_outdir)
+            hardlink_temporary = Ref("")
+            hardlink_primary = ErrorException(
+                "synthetic post-hardlink publication failure",
+            )
+            observed_hardlink_primary = try
+                Mycelia._write_unicycler_run_contract(
+                    hardlink_outdir,
+                    contract_fixture;
+                    after_temporary_binding_hook =
+                        (temporary_path, _identity) ->
+                            (hardlink_temporary[] = temporary_path),
+                    post_hardlink_hook = (_path, _identity) ->
+                        throw(hardlink_primary),
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_hardlink_primary === hardlink_primary
+            Test.@test !ispath(hardlink_temporary[])
+            Test.@test !ispath(joinpath(
+                hardlink_outdir,
+                Mycelia._UNICYCLER_CONTRACT_FILENAME,
+            ))
         end
     end
 
@@ -1196,6 +1714,213 @@ Test.@testset "common Unicycler wrapper contract" begin
                 "changed after its validated semantic artifact snapshot",
             )
             Test.@test reuse_fingerprint_calls[] == 6
+        end
+    end
+
+    Test.@testset "semantic artifact snapshots stream normalized digests" begin
+        mktempdir() do temp_dir
+            output_dir = joinpath(temp_dir, "streaming")
+            mkpath(output_dir)
+            assembly = joinpath(output_dir, "assembly.fasta")
+            graph = joinpath(output_dir, "assembly.gfa")
+            write(assembly, ">contig-a\nacgt\n>contig-b\nNNry\n")
+            write(
+                graph,
+                "H\tVN:Z:1.0\n" *
+                "S\tcontig-a\tACGT\n" *
+                "S\tcontig-b\tNNRY\n",
+            )
+
+            artifact_whole_reads = Ref(0)
+            streamed_sha256 = Mycelia._unicycler_streaming_artifact_sha256(
+                assembly;
+                input_opener = path -> _TestUnicyclerNoWholeReadIO(
+                    open(path, "r"),
+                    artifact_whole_reads,
+                ),
+            )
+            Test.@test length(streamed_sha256) == 64
+            Test.@test artifact_whole_reads[] == 0
+
+            fasta_whole_reads = Ref(0)
+            fasta_digests = Mycelia._unicycler_fasta_sequence_digests(
+                assembly,
+                "streamed assembly FASTA";
+                reader_opener = path -> Mycelia.FASTX.FASTA.Reader(
+                    _TestUnicyclerNoWholeReadIO(
+                        open(path, "r"),
+                        fasta_whole_reads,
+                    ),
+                ),
+            )
+            graph_whole_reads = Ref(0)
+            graph_digests =
+                Mycelia._unicycler_gfa_segment_sequence_digests(
+                    graph,
+                    "streamed assembly GFA";
+                    input_opener = path -> _TestUnicyclerNoWholeReadIO(
+                        open(path, "r"),
+                        graph_whole_reads,
+                    ),
+                )
+            Test.@test fasta_digests == graph_digests
+            Test.@test sort!(collect(keys(fasta_digests))) ==
+                       ["contig-a", "contig-b"]
+            Test.@test all(digest -> length(digest) == 64, values(fasta_digests))
+            Test.@test all(digest -> digest != "ACGT", values(fasta_digests))
+            Test.@test fasta_whole_reads[] == 0
+            Test.@test graph_whole_reads[] == 0
+
+            observed_paths = String[]
+            snapshots = Mycelia._unicycler_semantic_artifact_snapshots(
+                assembly,
+                graph,
+                output_dir;
+                fasta_sequence_digester = (path, label) -> begin
+                    push!(observed_paths, path)
+                    return Mycelia._unicycler_fasta_sequence_digests(
+                        path,
+                        label,
+                    )
+                end,
+                gfa_sequence_digester = (path, label) -> begin
+                    push!(observed_paths, path)
+                    return Mycelia._unicycler_gfa_segment_sequence_digests(
+                        path,
+                        label,
+                    )
+                end,
+            )
+            Test.@test observed_paths == [assembly, graph]
+            Test.@test !hasproperty(snapshots, :bytes)
+            Test.@test !hasproperty(snapshots.snapshots, :bytes)
+
+            mutation_dir = joinpath(temp_dir, "mutation")
+            mkpath(mutation_dir)
+            mutation_assembly = joinpath(mutation_dir, "assembly.fasta")
+            write(mutation_assembly, ">contig\nACGT\n")
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_streaming_semantic_artifact_snapshot(
+                    mutation_assembly,
+                    "assembly FASTA",
+                    mutation_dir,
+                    (path, label) -> begin
+                        write(path, ">contig\nTGCA\n")
+                        return Mycelia._unicycler_fasta_sequence_digests(
+                            path,
+                            label,
+                        )
+                    end,
+                ),
+                "changed while its streaming semantic artifact snapshot",
+            )
+
+            invalid_fasta = joinpath(temp_dir, "invalid.fasta")
+            write(invalid_fasta, ">invalid\nACGZ\n")
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_fasta_sequence_digests(
+                    invalid_fasta,
+                    "invalid assembly FASTA",
+                ),
+                "contains invalid DNA",
+            )
+            invalid_gfa = joinpath(temp_dir, "invalid.gfa")
+            write(invalid_gfa, "H\tVN:Z:1.0\nS\tinvalid\tACGZ\n")
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_gfa_segment_sequence_digests(
+                    invalid_gfa,
+                    "invalid assembly GFA",
+                ),
+                "invalid DNA for GFA segment",
+            )
+            duplicate_gfa = joinpath(temp_dir, "duplicate.gfa")
+            write(
+                duplicate_gfa,
+                "H\tVN:Z:1.0\nS\tduplicate\tACGT\n" *
+                "S\tduplicate\tTGCA\n",
+            )
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_gfa_segment_sequence_digests(
+                    duplicate_gfa,
+                    "duplicate assembly GFA",
+                ),
+                "duplicate GFA segment/path name",
+            )
+
+            hash_close_calls = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_streaming_artifact_sha256(
+                    assembly;
+                    input_closer = input -> begin
+                        hash_close_calls[] += 1
+                        close(input)
+                        error("synthetic streaming digest close failure")
+                    end,
+                ),
+                "synthetic streaming digest close failure",
+            )
+            Test.@test hash_close_calls[] == 1
+
+            gfa_close_calls = Ref(0)
+            _test_unicycler_error(
+                () -> Mycelia._unicycler_gfa_segment_sequence_digests(
+                    graph,
+                    "close-injected assembly GFA";
+                    input_closer = input -> begin
+                        gfa_close_calls[] += 1
+                        close(input)
+                        error("synthetic GFA digest close failure")
+                    end,
+                ),
+                "synthetic GFA digest close failure",
+            )
+            Test.@test gfa_close_calls[] == 1
+
+            duplicate_fasta = joinpath(temp_dir, "duplicate.fasta")
+            write(duplicate_fasta, ">duplicate\nACGT\n>duplicate\nTGCA\n")
+            duplicate_reader = Mycelia.open_fastx(duplicate_fasta)
+            observed_primary = Test.@test_logs (
+                :warn,
+                r"FASTA digest reader cleanup failed while preserving",
+            ) min_level=Logging.Warn match_mode=:any begin
+                try
+                    Mycelia._unicycler_fasta_sequence_digests_from_reader(
+                        duplicate_reader,
+                        duplicate_fasta,
+                        "close-injected assembly FASTA";
+                        reader_closer = reader -> begin
+                            close(reader)
+                            error("synthetic FASTA digest close failure")
+                        end,
+                    )
+                    nothing
+                catch caught
+                    caught
+                end
+            end
+            Test.@test observed_primary isa ErrorException
+            Test.@test occursin(
+                "duplicate FASTA identifier",
+                sprint(showerror, observed_primary),
+            )
+
+            duplicate_interrupt_reader = Mycelia.open_fastx(duplicate_fasta)
+            cleanup_interrupt = InterruptException()
+            observed_interrupt = try
+                Mycelia._unicycler_fasta_sequence_digests_from_reader(
+                    duplicate_interrupt_reader,
+                    duplicate_fasta,
+                    "interrupt-close-injected assembly FASTA";
+                    reader_closer = reader -> begin
+                        close(reader)
+                        throw(cleanup_interrupt)
+                    end,
+                )
+                nothing
+            catch caught
+                caught
+            end
+            Test.@test observed_interrupt === cleanup_interrupt
         end
     end
 

@@ -73,39 +73,18 @@ end
 function _canonical_autocycler_conda_runner(
         conda_runner::AbstractString = _conda_runner(),
 )::String
-    reported_runner = String(conda_runner)
-    isempty(strip(reported_runner)) && throw(ArgumentError(
-        "Autocycler conda_runner must be a non-empty executable name or path.",
-    ))
-    executable = Sys.which(reported_runner)
-    candidate = executable === nothing ?
-                abspath(reported_runner) : String(executable)
-    return ispath(candidate) ? realpath(candidate) : normpath(candidate)
+    return _canonical_conda_runner(conda_runner; subject = "Autocycler")
 end
 
 function _canonical_autocycler_environment_prefix(
         environment_prefix::AbstractString,
 )::String
-    reported_prefix = String(environment_prefix)
-    isempty(strip(reported_prefix)) && throw(ArgumentError(
-        "Autocycler environment_prefix must be a non-empty path.",
-    ))
-    normalized_prefix = normpath(abspath(reported_prefix))
-    existing_ancestor = normalized_prefix
-    missing_components = String[]
-    while !ispath(existing_ancestor) && !islink(existing_ancestor)
-        parent = dirname(existing_ancestor)
-        parent == existing_ancestor && break
-        pushfirst!(missing_components, basename(existing_ancestor))
-        existing_ancestor = parent
-    end
-    isdir(existing_ancestor) || throw(ArgumentError(
-        "Autocycler environment prefix has a non-directory existing " *
-        "ancestor: $(existing_ancestor)",
-    ))
-    canonical_ancestor = realpath(existing_ancestor)
-    return isempty(missing_components) ? canonical_ancestor :
-           normpath(joinpath(canonical_ancestor, missing_components...))
+    return _canonical_conda_environment_prefix(
+        environment_prefix;
+        subject = "Autocycler",
+        repr_existing_ancestor = false,
+        ancestor_message_period = false,
+    )
 end
 
 function _autocycler_environment_prefix(
@@ -116,13 +95,6 @@ function _autocycler_environment_prefix(
     return _canonical_autocycler_environment_prefix(
         joinpath(conda_root, "envs", AUTOCYCLER_ENV_NAME),
     )
-end
-
-function _autocycler_install_lock_path(
-        conda_runner::AbstractString = _conda_runner(),
-)::String
-    environment_prefix = _autocycler_environment_prefix(conda_runner)
-    return _autocycler_install_lock_path_from_prefix(environment_prefix)
 end
 
 function _autocycler_install_lock_path_from_prefix(
@@ -148,24 +120,46 @@ function _autocycler_sha256(bytes::AbstractVector{UInt8})::String
     return SHA.bytes2hex(SHA.sha256(bytes))
 end
 
-function _autocycler_spooled_input_snapshot(
+function _autocycler_sha256(input::IO)::String
+    seekstart(input)
+    digest = SHA.bytes2hex(SHA.sha256(input))
+    seekstart(input)
+    return digest
+end
+
+function _autocycler_script_descriptor_identity(
+        input::Base.Filesystem.File,
         path::AbstractString,
-        label::AbstractString,
-        ;
-        spool_parent::Union{Nothing, AbstractString} = nothing,
-        byte_ceiling::Integer = AUTOCYCLER_DEFAULT_INPUT_SPOOL_BYTE_CEILING,
-        available_bytes_reader::Function = parent -> diskstat(parent).available,
-        after_copy_hook::Function = binding -> nothing,
 )::NamedTuple
-    bindings = _autocycler_spooled_input_snapshots(
-        (path,),
-        (label,);
-        spool_parent,
-        byte_ceiling,
-        available_bytes_reader,
-        after_copy_hook,
+    input_status = stat(input)
+    isfile(input_status) || error(
+        "Downloaded Autocycler script descriptor is not a regular file: " *
+        "$(path).",
     )
-    return only(bindings.inputs)
+    input_status.uid == Base.Libc.getuid() || error(
+        "Downloaded Autocycler script descriptor is not owned by the current " *
+        "user: $(path).",
+    )
+    input_status.size > 0 || error("Downloaded Autocycler script is empty.")
+    return (;
+        path = normpath(abspath(String(path))),
+        device = input_status.device,
+        inode = input_status.inode,
+    )
+end
+
+function _run_autocycler_cleanup_after_failure!(
+        cleanup_runner::Function,
+        primary_error::Any,
+        cleanup_label::AbstractString,
+)::Nothing
+    _run_cleanup_after_primary_error!(
+        cleanup_runner,
+        primary_error,
+        "$(cleanup_label) cleanup failed while preserving the primary error";
+        cleanup_evidence = String(cleanup_label),
+    )
+    return nothing
 end
 
 function _autocycler_input_source_snapshot(
@@ -189,52 +183,12 @@ function _normalize_autocycler_prebound_input(
         path::AbstractString,
         label::AbstractString,
 )::NamedTuple
-    required_fields = (
-        :path,
-        :canonical_path,
-        :size_bytes,
-        :sha256,
-        :device,
-        :inode,
+    return _normalize_prebound_input_descriptor(
+        descriptor,
+        path,
+        label;
+        subject = "Autocycler",
     )
-    keys(descriptor) == required_fields || throw(ArgumentError(
-        "Autocycler prebound $(label) contract must have fields " *
-        "$(required_fields), got $(keys(descriptor)).",
-    ))
-    normalized_path = normpath(abspath(String(path)))
-    normalized_path == normpath(abspath(String(descriptor.path))) || throw(
-        ArgumentError(
-            "Autocycler prebound $(label) path does not match its contract.",
-        ),
-    )
-    isfile(normalized_path) && !islink(normalized_path) || throw(ArgumentError(
-        "Autocycler prebound $(label) must be a regular non-symlink file.",
-    ))
-    canonical_path = realpath(normalized_path)
-    canonical_path == String(descriptor.canonical_path) || throw(ArgumentError(
-        "Autocycler prebound $(label) canonical path does not match its contract.",
-    ))
-    status = stat(normalized_path)
-    normalized = (;
-        path = normalized_path,
-        canonical_path,
-        size_bytes = Int(descriptor.size_bytes),
-        sha256 = String(descriptor.sha256),
-        device = UInt64(descriptor.device),
-        inode = UInt64(descriptor.inode),
-    )
-    normalized.size_bytes > 0 || throw(ArgumentError(
-        "Autocycler prebound $(label) must be non-empty.",
-    ))
-    UInt64(status.device) == normalized.device &&
-        UInt64(status.inode) == normalized.inode &&
-        filesize(normalized_path) == normalized.size_bytes || throw(
-        ArgumentError(
-            "Autocycler prebound $(label) physical identity or size changed " *
-            "before child-lock acquisition.",
-        ),
-    )
-    return normalized
 end
 
 function _require_unchanged_autocycler_prebound_input(
@@ -253,7 +207,7 @@ function _require_unchanged_autocycler_prebound_input(
         Base.JL_O_NOFOLLOW |
         Base.JL_O_CLOEXEC,
     )
-    try
+    result = try
         before = stat(input)
         UInt64(before.device) == expected.device &&
             UInt64(before.inode) == expected.inode &&
@@ -273,15 +227,22 @@ function _require_unchanged_autocycler_prebound_input(
             "Autocycler prebound $(label) content changed before any child " *
             "tool side effect.",
         )
-        return (;
+        (;
             path = expected.path,
             canonical_path = expected.canonical_path,
             size_bytes = expected.size_bytes,
             sha256 = expected.sha256,
         )
-    finally
-        close(input)
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> close(input),
+            caught,
+            "Autocycler prebound $(label) input stream",
+        )
+        rethrow()
     end
+    close(input)
+    return result
 end
 
 function _autocycler_prebound_input_binding(
@@ -420,6 +381,17 @@ function _require_unchanged_autocycler_spool_root(
     return nothing
 end
 
+function _close_autocycler_copy_streams!(output::Any, input::Any)::Nothing
+    _run_cleanup_steps!(
+        (
+            () -> output === nothing ? nothing : close(output),
+            () -> close(input),
+        ),
+        "Autocycler input-copy streams",
+    )
+    return nothing
+end
+
 function _autocycler_copy_input_snapshot!(
         source::NamedTuple,
         spool_path::AbstractString,
@@ -472,10 +444,15 @@ function _autocycler_copy_input_snapshot!(
             "$(label) grew while its private stable input snapshot was " *
             "materialized.",
         ))
-    finally
-        output === nothing || close(output)
-        close(input)
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> _close_autocycler_copy_streams!(output, input),
+            caught,
+            "Autocycler input-copy stream",
+        )
+        rethrow()
     end
+    _close_autocycler_copy_streams!(output, input)
     try
         after_copy_hook((; source, spool_path = String(spool_path), label))
         observed = _autocycler_input_source_snapshot(source.path, label)
@@ -587,9 +564,9 @@ function _autocycler_spooled_input_snapshots(
         end
         return (; inputs = Tuple(inputs), spool_root, total_bytes)
     catch caught
-        _remove_exact_private_input_spool_root!(
+        _cleanup_autocycler_input_spool_after_failure!(
             spool_root_identity,
-            "Autocycler",
+            caught,
         )
         caught isa InterruptException && rethrow()
         if caught isa Base.IOError || caught isa SystemError
@@ -611,17 +588,22 @@ function _cleanup_autocycler_input_spool!(binding::NamedTuple)::Nothing
     return nothing
 end
 
-function _with_autocycler_spooled_input_snapshot(
-        function_to_run::Function,
-        path::AbstractString,
-        label::AbstractString,
-)::Any
-    binding = _autocycler_spooled_input_snapshot(path, label)
-    try
-        return function_to_run(binding)
-    finally
-        _cleanup_autocycler_input_spool!(binding)
-    end
+function _cleanup_autocycler_input_spool_after_failure!(
+        spool_root_identity::NamedTuple,
+        primary_error::Any,
+        ;
+        cleanup_runner::Function = () ->
+            _remove_exact_private_input_spool_root!(
+                spool_root_identity,
+                "Autocycler",
+            ),
+)::Nothing
+    _run_autocycler_cleanup_after_failure!(
+        cleanup_runner,
+        primary_error,
+        "Autocycler input spool",
+    )
+    return nothing
 end
 
 function _with_autocycler_spooled_input_snapshots(
@@ -631,11 +613,17 @@ function _with_autocycler_spooled_input_snapshots(
         kwargs...,
 )::Any
     bindings = _autocycler_spooled_input_snapshots(paths, labels; kwargs...)
-    try
-        return action(bindings.inputs)
-    finally
-        _cleanup_autocycler_input_spool!(first(bindings.inputs))
+    result = try
+        action(bindings.inputs)
+    catch caught
+        _cleanup_autocycler_input_spool_after_failure!(
+            first(bindings.inputs).spool_root_identity,
+            caught,
+        )
+        rethrow()
     end
+    _cleanup_autocycler_input_spool!(first(bindings.inputs))
+    return result
 end
 
 function _autocycler_input_snapshot(
@@ -775,20 +763,92 @@ end
 function _install_verified_autocycler_script!(
         script_path::AbstractString;
         downloader::Function = Downloads.download,
+        after_verification_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        post_hardlink_hook::Function =
+            (_path::AbstractString, _identity::NamedTuple) -> nothing,
+        descriptor_closer::Function = close,
+        exact_remover::Function = _remove_exact_assembly_durable_file!,
 )::String
-    normalized_script_path = abspath(script_path)
-    mkpath(dirname(normalized_script_path))
+    normalized_script_path = normpath(abspath(String(script_path)))
+    script_parent = dirname(normalized_script_path)
+    mkpath(script_parent)
     temporary_path, temporary_io = mktemp(
-        dirname(normalized_script_path);
+        script_parent;
         cleanup = false,
     )
-    close(temporary_io)
+    temporary_identity = _assembly_regular_file_identity(temporary_path)
+    downloaded_input = nothing
+    published_input = nothing
+    publication_cleanup_enabled = false
+    cleanup_installation = function ()
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if published_input !== nothing && isopen(published_input)
+                        descriptor_closer(published_input)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if downloaded_input !== nothing && isopen(downloaded_input)
+                        descriptor_closer(downloaded_input)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if isopen(temporary_io)
+                        descriptor_closer(temporary_io)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if _autocycler_path_entry_exists(temporary_path)
+                        exact_remover(temporary_path, temporary_identity)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if publication_cleanup_enabled &&
+                       _autocycler_path_entry_exists(normalized_script_path)
+                        exact_remover(
+                            normalized_script_path,
+                            merge(
+                                temporary_identity,
+                                (; path = normalized_script_path),
+                            ),
+                        )
+                    end
+                    return nothing
+                end,
+            ),
+            "Autocycler verified-script installation",
+        )
+        return nothing
+    end
     try
+        descriptor_closer(temporary_io)
         downloader(AUTOCYCLER_SCRIPT_URL, temporary_path)
-        if !isfile(temporary_path) || filesize(temporary_path) == 0
-            throw(ErrorException("Downloaded Autocycler script is empty."))
-        end
-        actual_sha256 = _autocycler_sha256(temporary_path)
+        downloaded_input = Base.Filesystem.open(
+            temporary_path,
+            Base.JL_O_RDONLY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        )
+        temporary_identity = _autocycler_script_descriptor_identity(
+            downloaded_input,
+            temporary_path,
+        )
+        observed_temporary_identity =
+            _assembly_regular_file_identity(temporary_path)
+        _assembly_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "Downloaded Autocycler script path changed before descriptor " *
+            "verification: $(temporary_path).",
+        )
+        actual_sha256 = _autocycler_sha256(downloaded_input)
         if actual_sha256 != AUTOCYCLER_SCRIPT_SHA256
             throw(
                 ErrorException(
@@ -798,27 +858,132 @@ function _install_verified_autocycler_script!(
                 ),
             )
         end
-        mv(temporary_path, normalized_script_path; force = true)
-        Base.chmod(normalized_script_path, 0o755)
-    finally
-        rm(temporary_path; force = true)
+        chmod_result = ccall(
+            :fchmod,
+            Cint,
+            (Cint, Base.Cmode_t),
+            _assembly_file_descriptor_number(downloaded_input),
+            Base.Cmode_t(0o755),
+        )
+        if chmod_result != 0
+            saved_errno = Base.Libc.errno()
+            throw(SystemError(
+                "fchmod downloaded Autocycler script $(temporary_path)",
+                saved_errno,
+            ))
+        end
+        _fsync_assembly_descriptor(
+            Base.fd(downloaded_input),
+            temporary_path,
+        )
+        after_verification_hook(temporary_path, temporary_identity)
+        observed_temporary_identity =
+            _assembly_regular_file_identity(temporary_path)
+        _assembly_path_identity_matches(
+            observed_temporary_identity,
+            temporary_identity,
+        ) || error(
+            "Verified Autocycler script temporary artifact was replaced " *
+            "before publication: $(temporary_path).",
+        )
+        _autocycler_script_descriptor_identity(
+            downloaded_input,
+            temporary_path,
+        ) == temporary_identity || error(
+            "Verified Autocycler script descriptor changed before publication: " *
+            "$(temporary_path).",
+        )
+
+        if _autocycler_path_entry_exists(normalized_script_path)
+            existing_identity =
+                _assembly_regular_file_identity(normalized_script_path)
+            exact_remover(normalized_script_path, existing_identity)
+        end
+        !_autocycler_path_entry_exists(normalized_script_path) || error(
+            "Autocycler script destination remained occupied after exact " *
+            "replacement cleanup: $(normalized_script_path).",
+        )
+        publication_cleanup_enabled = true
+        Base.Filesystem.hardlink(temporary_path, normalized_script_path)
+        post_hardlink_hook(normalized_script_path, temporary_identity)
+        observed_published_identity =
+            _assembly_regular_file_identity(normalized_script_path)
+        _assembly_path_identity_matches(
+            observed_published_identity,
+            merge(temporary_identity, (; path = normalized_script_path)),
+        ) && Base.Filesystem.samefile(
+            temporary_path,
+            normalized_script_path,
+        ) || error(
+            "Autocycler script publication did not bind its verified " *
+            "temporary inode: $(normalized_script_path).",
+        )
+        _fsync_assembly_directory(script_parent)
+        published_input = Base.Filesystem.open(
+            normalized_script_path,
+            Base.JL_O_RDONLY |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        )
+        published_identity = _autocycler_script_descriptor_identity(
+            published_input,
+            normalized_script_path,
+        )
+        _assembly_path_identity_matches(
+            published_identity,
+            merge(temporary_identity, (; path = normalized_script_path)),
+        ) || error(
+            "Published Autocycler script descriptor does not bind the verified " *
+            "temporary inode: $(normalized_script_path).",
+        )
+        _autocycler_sha256(published_input) == AUTOCYCLER_SCRIPT_SHA256 || error(
+            "Published Autocycler script descriptor failed checksum " *
+            "verification: $(normalized_script_path).",
+        )
+        exact_remover(temporary_path, temporary_identity)
+        _assembly_path_identity_matches(
+            _assembly_regular_file_identity(normalized_script_path),
+            merge(temporary_identity, (; path = normalized_script_path)),
+        ) || error(
+            "Published Autocycler script changed after temporary-link cleanup: " *
+            "$(normalized_script_path).",
+        )
+        _autocycler_sha256(published_input) == AUTOCYCLER_SCRIPT_SHA256 || error(
+            "Published Autocycler script descriptor changed during " *
+            "temporary-link cleanup: $(normalized_script_path).",
+        )
+        (stat(published_input).mode & 0o777) == 0o755 || error(
+            "Published Autocycler script mode changed during temporary-link " *
+            "cleanup: $(normalized_script_path).",
+        )
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if published_input !== nothing && isopen(published_input)
+                        descriptor_closer(published_input)
+                    end
+                    return nothing
+                end,
+                () -> begin
+                    if downloaded_input !== nothing && isopen(downloaded_input)
+                        descriptor_closer(downloaded_input)
+                    end
+                    return nothing
+                end,
+            ),
+            "Autocycler verified-script descriptors",
+        )
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_installation,
+            primary_error,
+            "Autocycler verified-script cleanup failed while preserving the " *
+            "primary installation failure";
+            cleanup_evidence = temporary_path,
+        )
+        Base.rethrow()
     end
     return normalized_script_path
-end
-
-function _autocycler_package_record_field(
-        package_record::Union{NamedTuple, AbstractDict},
-        field::Symbol,
-)::Any
-    if package_record isa NamedTuple
-        return hasproperty(package_record, field) ?
-               getproperty(package_record, field) : nothing
-    end
-    return get(
-        package_record,
-        String(field),
-        get(package_record, field, nothing),
-    )
 end
 
 function _normalize_autocycler_package_inventory(
@@ -837,12 +1002,12 @@ function _normalize_autocycler_package_inventory(
                 "is not an object.",
             ),
         )
-        name = _autocycler_package_record_field(package_record, :name)
-        version = _autocycler_package_record_field(package_record, :version)
-        build = _autocycler_package_record_field(package_record, :build_string)
+        name = _conda_package_record_field(package_record, :name)
+        version = _conda_package_record_field(package_record, :version)
+        build = _conda_package_record_field(package_record, :build_string)
         build === nothing &&
-            (build = _autocycler_package_record_field(package_record, :build))
-        channel = _autocycler_package_record_field(package_record, :channel)
+            (build = _conda_package_record_field(package_record, :build))
+        channel = _conda_package_record_field(package_record, :channel)
         fields = (; name, version, build, channel)
         for (field_name, value) in pairs(fields)
             value isa AbstractString && !isempty(value) || throw(
@@ -939,17 +1104,6 @@ function _autocycler_environment_packages(;
         ErrorException("Conda package inventory was not a JSON array."),
     )
     return _normalize_autocycler_package_inventory(package_records)
-end
-
-function _missing_autocycler_packages(
-        package_records::AbstractVector,
-)::Vector{String}
-    inventory = _normalize_autocycler_package_inventory(package_records)
-    names = Set(record.name for record in inventory)
-    return String[
-        package for package in AUTOCYCLER_REQUIRED_PACKAGES if
-        !(package in names)
-    ]
 end
 
 function _autocycler_numeric_version(
@@ -1507,29 +1661,47 @@ function _autocycler_artifact_snapshot(
     )
 end
 
-function _autocycler_buffered_artifact_snapshot(
+function _autocycler_cleanup_artifact_snapshot(
         path::AbstractString,
         workflow_root::AbstractString,
         label::AbstractString,
 )::NamedTuple
-    normalized_path = _require_contained_regular_autocycler_artifact(
+    before_identity = _assembly_regular_file_identity(path)
+    content_snapshot = _autocycler_artifact_snapshot(
         path,
         workflow_root,
         label,
     )
-    bytes = open(normalized_path, "r") do input
-        read(input)
-    end
-    isempty(bytes) && throw(ErrorException(
-        "$(label) became empty while its immutable byte snapshot was read: " *
-        "$(normalized_path)",
-    ))
-    snapshot = (
-        path = normalized_path,
-        size_bytes = length(bytes),
-        sha256 = _autocycler_sha256(bytes),
+    after_identity = _assembly_regular_file_identity(path)
+    before_identity == after_identity || error(
+        "$(label) changed physical identity while its cleanup snapshot was " *
+        "captured: $(content_snapshot.path).",
     )
-    return (; snapshot, bytes)
+    return (;
+        path = content_snapshot.path,
+        device = before_identity.device,
+        inode = before_identity.inode,
+        size_bytes = content_snapshot.size_bytes,
+        sha256 = content_snapshot.sha256,
+    )
+end
+
+function _require_unchanged_autocycler_cleanup_artifact(
+        expected_snapshot::NamedTuple,
+        path::AbstractString,
+        workflow_root::AbstractString,
+        label::AbstractString,
+)::NamedTuple
+    observed_snapshot = _autocycler_cleanup_artifact_snapshot(
+        path,
+        workflow_root,
+        label,
+    )
+    observed_snapshot == expected_snapshot || error(
+        "$(label) changed identity, size, or SHA-256 before exact cleanup: " *
+        "$(observed_snapshot.path).",
+    )
+    return observed_snapshot
 end
 
 function _require_unchanged_autocycler_artifact(
@@ -1556,89 +1728,113 @@ function _require_unchanged_autocycler_artifact(
     return observed_snapshot
 end
 
-function _autocycler_fasta_sequence_map_from_reader(
-        reader::Any,
-        path::AbstractString,
-        label::AbstractString,
-)::Dict{String, String}
-    sequences = Dict{String, String}()
-    try
-        for (record_count, record) in enumerate(reader)
-            record isa FASTX.FASTA.Record || throw(
-                ErrorException(
-                    "$(label) is not valid FASTA: $(path).",
-                ),
-            )
-            identifier = String(FASTX.identifier(record))
-            isempty(identifier) && throw(
-                ErrorException(
-                    "$(label) contains an empty FASTA identifier at record " *
-                    "$(record_count): $(path).",
-                ),
-            )
-            haskey(sequences, identifier) && throw(
-                ErrorException(
-                    "$(label) contains duplicate FASTA identifier " *
-                    "$(repr(identifier)): $(path).",
-                ),
-            )
-            sequence = FASTX.sequence(String, record)
-            isempty(sequence) && throw(
-                ErrorException(
-                    "$(label) contains an empty FASTA sequence at record " *
-                    "$(record_count): $(path).",
-                ),
-            )
-            occursin(
-                r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$",
-                sequence,
-            ) || throw(
-                ErrorException(
-                    "$(label) contains invalid DNA at FASTA record " *
-                    "$(record_count): $(path).",
-                ),
-            )
-            try
-                BioSequences.LongDNA{4}(sequence)
-            catch error
-                error isa InterruptException && rethrow()
-                throw(
-                    ErrorException(
-                        "$(label) contains invalid DNA at FASTA record " *
-                        "$(record_count): $(path). Cause: " *
-                        sprint(showerror, error),
-                    ),
-                )
-            end
-            sequences[identifier] = uppercase(sequence)
-        end
-    catch error
-        error isa InterruptException && rethrow()
-        if error isa ErrorException && startswith(error.msg, String(label))
-            rethrow()
-        end
-        throw(
-            ErrorException(
-                "$(label) is not valid FASTA: $(path). Cause: " *
-                sprint(showerror, error),
-            ),
-        )
-    finally
-        close(reader)
-    end
-    isempty(sequences) && throw(
-        ErrorException("$(label) contains no FASTA records: $(path)."),
-    )
-    return sequences
+function _autocycler_sequence_sha256(
+        sequence::AbstractString,
+)::String
+    normalized_sequence = uppercase(String(sequence))
+    return _autocycler_sha256(codeunits(normalized_sequence))
 end
 
-function _autocycler_fasta_sequence_map(
-        bytes::AbstractVector{UInt8},
+function _autocycler_fasta_sequence_digest_map_from_reader(
+        reader::Any,
         path::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_closer::Function = close,
 )::Dict{String, String}
-    reader = FASTX.FASTA.Reader(IOBuffer(bytes))
-    return _autocycler_fasta_sequence_map_from_reader(reader, path, label)
+    sequence_digests = Dict{String, String}()
+    try
+        try
+            for (record_count, record) in enumerate(reader)
+                record isa FASTX.FASTA.Record || throw(
+                    ErrorException(
+                        "$(label) is not valid FASTA: $(path).",
+                    ),
+                )
+                identifier = String(FASTX.identifier(record))
+                isempty(identifier) && throw(
+                    ErrorException(
+                        "$(label) contains an empty FASTA identifier at " *
+                        "record $(record_count): $(path).",
+                    ),
+                )
+                haskey(sequence_digests, identifier) && throw(
+                    ErrorException(
+                        "$(label) contains duplicate FASTA identifier " *
+                        "$(repr(identifier)): $(path).",
+                    ),
+                )
+                sequence = FASTX.sequence(String, record)
+                isempty(sequence) && throw(
+                    ErrorException(
+                        "$(label) contains an empty FASTA sequence at record " *
+                        "$(record_count): $(path).",
+                    ),
+                )
+                occursin(
+                    r"^[ACGTRYSWKMBDHVNacgtryswkmbdhvn]+$",
+                    sequence,
+                ) || throw(
+                    ErrorException(
+                        "$(label) contains invalid DNA at FASTA record " *
+                        "$(record_count): $(path).",
+                    ),
+                )
+                try
+                    BioSequences.LongDNA{4}(sequence)
+                catch error
+                    error isa InterruptException && rethrow()
+                    throw(
+                        ErrorException(
+                            "$(label) contains invalid DNA at FASTA record " *
+                            "$(record_count): $(path). Cause: " *
+                            sprint(showerror, error),
+                        ),
+                    )
+                end
+                sequence_digests[identifier] =
+                    _autocycler_sequence_sha256(sequence)
+            end
+        catch error
+            error isa InterruptException && rethrow()
+            if error isa ErrorException && startswith(error.msg, String(label))
+                rethrow()
+            end
+            throw(
+                ErrorException(
+                    "$(label) is not valid FASTA: $(path). Cause: " *
+                    sprint(showerror, error),
+                ),
+            )
+        end
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> reader_closer(reader),
+            caught,
+            "Autocycler $(label) FASTA reader",
+        )
+        rethrow()
+    end
+    reader_closer(reader)
+    isempty(sequence_digests) && throw(
+        ErrorException("$(label) contains no FASTA records: $(path)."),
+    )
+    return sequence_digests
+end
+
+function _autocycler_fasta_sequence_digest_map(
+        path::AbstractString,
+        label::AbstractString;
+        reader_opener::Function = open_fastx,
+        reader_closer::Function = close,
+)::Dict{String, String}
+    normalized_path = String(path)
+    reader = reader_opener(normalized_path)
+    return _autocycler_fasta_sequence_digest_map_from_reader(
+        reader,
+        normalized_path,
+        label;
+        reader_closer,
+    )
 end
 
 function _require_matching_autocycler_contig_identifiers(
@@ -1660,51 +1856,74 @@ function _require_matching_autocycler_contig_identifiers(
     )
 end
 
-function _require_valid_autocycler_gfa(
+function _autocycler_gfa_sequence_digest_map_from_reader(
+        input::IO,
         path::AbstractString,
-        label::AbstractString,
-)::String
-    return _require_valid_metamdbg_gfa(path, label)
+        label::AbstractString;
+        reader_closer::Function = close,
+)::Dict{String, String}
+    sequence_digests = Dict{String, String}()
+    try
+        _require_valid_assembly_gfa_input(input, label, path)
+        seekstart(input)
+        for (line_number, line) in enumerate(eachline(input))
+            startswith(line, "S\t") || continue
+            fields = split(line, '\t'; keepempty = true)
+            length(fields) >= 3 || throw(
+                ErrorException(
+                    "$(label) has a malformed segment at line " *
+                    "$(line_number): $(path).",
+                ),
+            )
+            identifier = String(fields[2])
+            sequence = String(fields[3])
+            (isempty(sequence) || sequence == "*") && throw(
+                ErrorException(
+                    "$(label) segment $(repr(identifier)) has no sequence, " *
+                    "so it cannot be verified against the companion FASTA.",
+                ),
+            )
+            haskey(sequence_digests, identifier) && throw(
+                ErrorException(
+                    "$(label) contains duplicate segment identifier " *
+                    "$(repr(identifier)).",
+                ),
+            )
+            sequence_digests[identifier] =
+                _autocycler_sequence_sha256(sequence)
+        end
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> reader_closer(input),
+            caught,
+            "Autocycler $(label) GFA reader",
+        )
+        rethrow()
+    end
+    reader_closer(input)
+    isempty(sequence_digests) && throw(
+        ErrorException(
+            "$(label) contains no sequence-bearing GFA segments.",
+        ),
+    )
+    return sequence_digests
 end
 
-function _autocycler_gfa_sequence_map(
-        bytes::AbstractVector{UInt8},
+function _autocycler_gfa_sequence_digest_map(
         path::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_opener::Function =
+            (artifact_path::AbstractString) -> open(artifact_path, "r"),
+        reader_closer::Function = close,
 )::Dict{String, String}
-    input = IOBuffer(bytes)
-    _require_valid_metamdbg_gfa_input(input, label, path)
-    seekstart(input)
-    sequences = Dict{String, String}()
-    for (line_number, line) in enumerate(eachline(input))
-        startswith(line, "S\t") || continue
-        fields = split(line, '\t'; keepempty = true)
-        length(fields) >= 3 || throw(
-            ErrorException(
-                "$(label) has a malformed segment at line $(line_number): " *
-                "$(path).",
-            ),
-        )
-        identifier = fields[2]
-        sequence = uppercase(fields[3])
-        (isempty(sequence) || sequence == "*") && throw(
-            ErrorException(
-                "$(label) segment $(repr(identifier)) has no sequence, so it " *
-                "cannot be verified against the companion FASTA.",
-            ),
-        )
-        haskey(sequences, identifier) && throw(
-            ErrorException(
-                "$(label) contains duplicate segment identifier " *
-                "$(repr(identifier)).",
-            ),
-        )
-        sequences[identifier] = sequence
-    end
-    isempty(sequences) && throw(
-        ErrorException("$(label) contains no sequence-bearing GFA segments."),
+    normalized_path = String(path)
+    input = reader_opener(normalized_path)
+    return _autocycler_gfa_sequence_digest_map_from_reader(
+        input,
+        normalized_path,
+        label;
+        reader_closer,
     )
-    return sequences
 end
 
 function _require_matching_autocycler_companion_sequence_maps(
@@ -1735,180 +1954,129 @@ function _require_matching_autocycler_companion_sequence_maps(
     return nothing
 end
 
-function _require_matching_autocycler_companion_artifacts(
-        assembly_bytes::AbstractVector{UInt8},
-        assembly::AbstractString,
-        graph_bytes::AbstractVector{UInt8},
-        graph::AbstractString,
-)::Nothing
-    fasta_sequences = _autocycler_fasta_sequence_map(
-        assembly_bytes,
-        assembly,
-        "Autocycler consensus FASTA",
-    )
-    gfa_sequences = _autocycler_gfa_sequence_map(
-        graph_bytes,
-        graph,
-        "Autocycler consensus GFA",
-    )
-    return _require_matching_autocycler_companion_sequence_maps(
-        fasta_sequences,
-        gfa_sequences,
-    )
-end
-
 function _require_expected_autocycler_artifact_snapshot(
         expected_snapshot::NamedTuple,
-        buffered_snapshot::NamedTuple,
+        observed_snapshot::NamedTuple,
         label::AbstractString,
 )::Nothing
-    buffered_snapshot == expected_snapshot && return nothing
+    observed_snapshot == expected_snapshot && return nothing
     throw(ErrorException(
-        "$(label) changed before immutable semantic validation: expected " *
+        "$(label) changed before streamed semantic validation: expected " *
         "size=$(expected_snapshot.size_bytes), " *
         "sha256=$(expected_snapshot.sha256); observed " *
-        "size=$(buffered_snapshot.size_bytes), " *
-        "sha256=$(buffered_snapshot.sha256).",
+        "size=$(observed_snapshot.size_bytes), " *
+        "sha256=$(observed_snapshot.sha256).",
     ))
 end
 
-function _autocycler_buffered_semantic_fasta(
+function _autocycler_streamed_semantic_fasta(
         expected_snapshot::NamedTuple,
         path::AbstractString,
         workflow_root::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_opener::Function = open_fastx,
+        reader_closer::Function = close,
 )::NamedTuple
-    buffered = _autocycler_buffered_artifact_snapshot(
+    observed_snapshot = _autocycler_artifact_snapshot(
         path,
         workflow_root,
         label,
     )
     _require_expected_autocycler_artifact_snapshot(
         expected_snapshot,
-        buffered.snapshot,
+        observed_snapshot,
         label,
     )
-    sequences = _autocycler_fasta_sequence_map(
-        buffered.bytes,
-        buffered.snapshot.path,
-        label,
+    sequence_digests = _autocycler_fasta_sequence_digest_map(
+        observed_snapshot.path,
+        label;
+        reader_opener,
+        reader_closer,
     )
     _require_unchanged_autocycler_artifact(
         expected_snapshot,
-        buffered.snapshot.path,
+        observed_snapshot.path,
         workflow_root,
         label,
     )
     return (;
-        path = buffered.snapshot.path,
-        snapshot = buffered.snapshot,
-        sequences,
+        path = observed_snapshot.path,
+        snapshot = observed_snapshot,
+        sequence_digests,
     )
 end
 
-function _autocycler_buffered_semantic_gfa(
+function _autocycler_streamed_semantic_gfa(
         expected_snapshot::NamedTuple,
         path::AbstractString,
         workflow_root::AbstractString,
-        label::AbstractString,
+        label::AbstractString;
+        reader_opener::Function =
+            (artifact_path::AbstractString) -> open(artifact_path, "r"),
+        reader_closer::Function = close,
 )::NamedTuple
-    buffered = _autocycler_buffered_artifact_snapshot(
+    observed_snapshot = _autocycler_artifact_snapshot(
         path,
         workflow_root,
         label,
     )
     _require_expected_autocycler_artifact_snapshot(
         expected_snapshot,
-        buffered.snapshot,
+        observed_snapshot,
         label,
     )
-    sequences = _autocycler_gfa_sequence_map(
-        buffered.bytes,
-        buffered.snapshot.path,
-        label,
+    sequence_digests = _autocycler_gfa_sequence_digest_map(
+        observed_snapshot.path,
+        label;
+        reader_opener,
+        reader_closer,
     )
     _require_unchanged_autocycler_artifact(
         expected_snapshot,
-        buffered.snapshot.path,
+        observed_snapshot.path,
         workflow_root,
         label,
     )
     return (;
-        path = buffered.snapshot.path,
-        snapshot = buffered.snapshot,
-        sequences,
+        path = observed_snapshot.path,
+        snapshot = observed_snapshot,
+        sequence_digests,
     )
-end
-
-function _autocycler_pair_identifier(identifier::AbstractString)::String
-    first_token = first(split(String(identifier)))
-    return replace(first_token, r"/[12]$" => "")
-end
-
-function _autocycler_identifier_pair_role(
-        identifier::AbstractString,
-)::Union{Nothing, Int}
-    first_token = first(split(String(identifier)))
-    role_match = match(r"/([12])$", first_token)
-    return role_match === nothing ? nothing :
-           parse(Int, something(only(role_match.captures)))
-end
-
-function _autocycler_casava_pair_role(
-        description::AbstractString,
-)::Union{Nothing, Int}
-    description_tokens = split(String(description))
-    length(description_tokens) >= 2 || return nothing
-    role_match = match(
-        r"^([12]):[YN]:[0-9]+:[A-Za-z0-9+_-]+$",
-        description_tokens[2],
-    )
-    return role_match === nothing ? nothing :
-           parse(Int, something(only(role_match.captures)))
-end
-
-function _autocycler_pair_role(
-        identifier::AbstractString,
-        description::AbstractString = "",
-)::Union{Nothing, Int}
-    identifier_role = _autocycler_identifier_pair_role(identifier)
-    casava_role = _autocycler_casava_pair_role(description)
-    if identifier_role !== nothing && casava_role !== nothing &&
-       identifier_role != casava_role
-        throw(
-            ArgumentError(
-                "FASTQ identifier and CASAVA description contain conflicting " *
-                "explicit mate roles: identifier=$(repr(String(identifier))), " *
-                "description=$(repr(String(description))).",
-            ),
-        )
-    end
-    return identifier_role === nothing ? casava_role : identifier_role
 end
 
 function _validate_autocycler_fastq_reader(
         reader::Any,
         path::AbstractString,
         label::AbstractString,
+        ;
+        reader_closer::Function = close,
 )::Int
     record_count = 0
     try
-        for record in reader
-            record isa FASTX.FASTQ.Record || throw(ArgumentError(
-                "$(label) must be a FASTQ file: $(abspath(path))",
+        try
+            for record in reader
+                record isa FASTX.FASTQ.Record || throw(ArgumentError(
+                    "$(label) must be a FASTQ file: $(abspath(path))",
+                ))
+                record_count += 1
+            end
+        catch caught
+            caught isa InterruptException && rethrow()
+            caught isa ArgumentError && rethrow()
+            throw(ArgumentError(
+                "$(label) must be a FASTQ file: $(abspath(path)). Cause: " *
+                sprint(showerror, caught),
             ))
-            record_count += 1
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        caught isa ArgumentError && rethrow()
-        throw(ArgumentError(
-            "$(label) must be a FASTQ file: $(abspath(path)). Cause: " *
-            sprint(showerror, caught),
-        ))
-    finally
-        close(reader)
+        _run_autocycler_cleanup_after_failure!(
+            () -> reader_closer(reader),
+            caught,
+            "Autocycler $(label) FASTQ reader",
+        )
+        rethrow()
     end
+    reader_closer(reader)
     record_count > 0 || throw(ArgumentError("$(label) must be non-empty."))
     return record_count
 end
@@ -1927,96 +2095,120 @@ end
 function _validate_autocycler_paired_fastqs(
         short_reads_1::AbstractString,
         short_reads_2::AbstractString,
+        ;
+        reader_opener::Function = Mycelia.open_fastx,
+        reader_closer::Function = close,
 )::Int
     !Base.Filesystem.samefile(short_reads_1, short_reads_2) || throw(ArgumentError(
         "Autocycler paired short-read R1 and R2 must be distinct files.",
     ))
-    reader_1 = Mycelia.open_fastx(short_reads_1)
+    reader_1 = reader_opener(short_reads_1)
     reader_2 = try
-        Mycelia.open_fastx(short_reads_2)
-    catch
-        try
-            close(reader_1)
-        finally
-            rethrow()
-        end
+        reader_opener(short_reads_2)
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> reader_closer(reader_1),
+            caught,
+            "Autocycler paired FASTQ R1 reader",
+        )
+        rethrow()
     end
     return _validate_autocycler_paired_fastq_readers(
         reader_1,
         reader_2,
+        ;
+        reader_closer,
     )
 end
 
 function _validate_autocycler_paired_fastq_readers(
         reader_1::Any,
         reader_2::Any,
+        ;
+        reader_closer::Function = close,
 )::Int
     pair_count = 0
+    close_readers = function ()
+        _run_cleanup_steps!(
+            (
+                () -> reader_closer(reader_1),
+                () -> reader_closer(reader_2),
+            ),
+            "Autocycler paired FASTQ readers",
+        )
+        return nothing
+    end
     try
-        next_1 = iterate(reader_1)
-        next_2 = iterate(reader_2)
-        while next_1 !== nothing || next_2 !== nothing
-            if next_1 === nothing || next_2 === nothing
-                throw(
-                    ArgumentError(
-                        "Autocycler paired short reads have different counts " *
-                        "after $(pair_count) complete pairs.",
-                    ),
-                )
+        try
+            next_1 = iterate(reader_1)
+            next_2 = iterate(reader_2)
+            while next_1 !== nothing || next_2 !== nothing
+                if next_1 === nothing || next_2 === nothing
+                    throw(
+                        ArgumentError(
+                            "Autocycler paired short reads have different " *
+                            "counts after $(pair_count) complete pairs.",
+                        ),
+                    )
+                end
+                record_1, state_1 = next_1
+                record_2, state_2 = next_2
+                pair_count += 1
+                if !(record_1 isa FASTX.FASTQ.Record) ||
+                   !(record_2 isa FASTX.FASTQ.Record)
+                    throw(
+                        ArgumentError(
+                            "Autocycler paired short-read inputs must be " *
+                            "FASTQ files.",
+                        ),
+                    )
+                end
+                identifier_1 = String(FASTX.identifier(record_1))
+                identifier_2 = String(FASTX.identifier(record_2))
+                description_1 = String(FASTX.description(record_1))
+                description_2 = String(FASTX.description(record_2))
+                role_1 = _fastq_explicit_pair_role(identifier_1, description_1)
+                role_2 = _fastq_explicit_pair_role(identifier_2, description_2)
+                roles_valid = (role_1 === nothing && role_2 === nothing) ||
+                              (role_1 == 1 && role_2 == 2)
+                roles_valid || throw(ArgumentError(
+                    "Autocycler paired short reads have invalid explicit " *
+                    "mate roles at record $(pair_count): " *
+                    "R1=$(repr(identifier_1)), R2=$(repr(identifier_2)); " *
+                    "expected R1 role 1 then R2 role 2 from /1,/2 suffixes " *
+                    "or CASAVA descriptions.",
+                ))
+                if _fastq_pair_identifier(identifier_1) !=
+                   _fastq_pair_identifier(identifier_2)
+                    throw(
+                        ArgumentError(
+                            "Autocycler paired short reads are out of sync " *
+                            "at record $(pair_count): " *
+                            "R1=$(repr(identifier_1)), " *
+                            "R2=$(repr(identifier_2)).",
+                        ),
+                    )
+                end
+                next_1 = iterate(reader_1, state_1)
+                next_2 = iterate(reader_2, state_2)
             end
-            record_1, state_1 = next_1
-            record_2, state_2 = next_2
-            pair_count += 1
-            if !(record_1 isa FASTX.FASTQ.Record) ||
-               !(record_2 isa FASTX.FASTQ.Record)
-                throw(
-                    ArgumentError(
-                        "Autocycler paired short-read inputs must be FASTQ files.",
-                    ),
-                )
-            end
-            identifier_1 = String(FASTX.identifier(record_1))
-            identifier_2 = String(FASTX.identifier(record_2))
-            description_1 = String(FASTX.description(record_1))
-            description_2 = String(FASTX.description(record_2))
-            role_1 = _autocycler_pair_role(identifier_1, description_1)
-            role_2 = _autocycler_pair_role(identifier_2, description_2)
-            roles_valid = (role_1 === nothing && role_2 === nothing) ||
-                          (role_1 == 1 && role_2 == 2)
-            roles_valid || throw(ArgumentError(
-                "Autocycler paired short reads have invalid explicit mate " *
-                "roles at record $(pair_count): " *
-                "R1=$(repr(identifier_1)), R2=$(repr(identifier_2)); " *
-                "expected R1 role 1 then R2 role 2 from /1,/2 suffixes or " *
-                "CASAVA descriptions.",
+        catch caught
+            caught isa InterruptException && rethrow()
+            caught isa ArgumentError && rethrow()
+            throw(ArgumentError(
+                "Autocycler paired short-read inputs must be FASTQ files. " *
+                "Cause: $(sprint(showerror, caught))",
             ))
-            if _autocycler_pair_identifier(identifier_1) !=
-               _autocycler_pair_identifier(identifier_2)
-                throw(
-                    ArgumentError(
-                        "Autocycler paired short reads are out of sync at " *
-                        "record $(pair_count): R1=$(repr(identifier_1)), " *
-                        "R2=$(repr(identifier_2)).",
-                    ),
-                )
-            end
-            next_1 = iterate(reader_1, state_1)
-            next_2 = iterate(reader_2, state_2)
         end
     catch caught
-        caught isa InterruptException && rethrow()
-        caught isa ArgumentError && rethrow()
-        throw(ArgumentError(
-            "Autocycler paired short-read inputs must be FASTQ files. " *
-            "Cause: $(sprint(showerror, caught))",
-        ))
-    finally
-        try
-            close(reader_1)
-        finally
-            close(reader_2)
-        end
+        _run_autocycler_cleanup_after_failure!(
+            close_readers,
+            caught,
+            "Autocycler paired FASTQ readers",
+        )
+        rethrow()
     end
+    close_readers()
     pair_count > 0 || throw(
         ArgumentError("Autocycler paired short reads must be non-empty."),
     )
@@ -2093,11 +2285,6 @@ function _autocycler_output_adjacent_spool_parent(
     return realpath(parent)
 end
 
-function _autocycler_output_lock_path(out_dir::AbstractString)::String
-    canonical_out_dir = _canonical_autocycler_output_path(out_dir)
-    return _autocycler_output_lock_path_from_canonical(canonical_out_dir)
-end
-
 function _autocycler_output_lock_path_from_canonical(
         canonical_out_dir::AbstractString,
 )::String
@@ -2148,11 +2335,18 @@ function _with_autocycler_output_lock(
         "Autocycler output directory is already reserved by another " *
         "output-root workflow: $(lock_path)",
     ))
-    try
-        return locked_action()
-    finally
-        Base.close(lock_handle)
+    result = try
+        locked_action()
+    catch caught
+        _run_autocycler_cleanup_after_failure!(
+            () -> Base.close(lock_handle),
+            caught,
+            "Autocycler output-lock handle",
+        )
+        rethrow()
     end
+    Base.close(lock_handle)
+    return result
 end
 
 function _validate_autocycler_parameters(
@@ -2628,68 +2822,536 @@ function _require_safe_autocycler_step_paths(
     return nothing
 end
 
+function _require_exact_autocycler_cleanup_payload(
+        payload::Base.Filesystem.File,
+        payload_path::AbstractString,
+        expected_snapshot::NamedTuple,
+)::Nothing
+    payload_status = stat(payload)
+    isfile(payload_status) || error(
+        "Autocycler polishing cleanup payload is not a regular file: " *
+        "$(payload_path).",
+    )
+    payload_status.device == expected_snapshot.device &&
+        payload_status.inode == expected_snapshot.inode || error(
+        "Autocycler polishing cleanup payload changed physical identity: " *
+        "$(payload_path).",
+    )
+    Int(payload_status.size) == expected_snapshot.size_bytes || error(
+        "Autocycler polishing cleanup payload changed size: " *
+        "$(payload_path).",
+    )
+    observed_sha256 = _autocycler_sha256(payload)
+    observed_sha256 == expected_snapshot.sha256 || error(
+        "Autocycler polishing cleanup payload changed SHA-256: " *
+        "$(payload_path).",
+    )
+    return nothing
+end
+
+function _remove_exact_autocycler_polishing_intermediate!(
+        path::AbstractString,
+        expected_snapshot::NamedTuple,
+)::Nothing
+    _remove_exact_assembly_durable_file!(
+        path,
+        expected_snapshot;
+        quarantined_payload_validator = (
+                payload::Base.Filesystem.File,
+                payload_path::AbstractString,
+        ) -> _require_exact_autocycler_cleanup_payload(
+            payload,
+            payload_path,
+            expected_snapshot,
+        ),
+    )
+    return nothing
+end
+
 function _cleanup_autocycler_polishing_intermediates!(
         paths::AbstractVector{<:AbstractString};
         workflow_root::AbstractString,
+        expected_snapshots::AbstractDict,
         directory_identities::Tuple = (),
-        remover::Function = path -> rm(path; force = true),
+        artifact_validator::Function =
+            _require_unchanged_autocycler_cleanup_artifact,
+        exact_remover::Function =
+            _remove_exact_autocycler_polishing_intermediate!,
 )::Vector{String}
     normalized_paths = String[
         normpath(abspath(String(path))) for path in paths
     ]
-    cleanup_failures = Set{String}()
-    for normalized_path in normalized_paths
-        cleanup_error = nothing
-        try
-            for identity in directory_identities
-                _require_unchanged_autocycler_directory(
-                    identity,
-                    workflow_root,
-                )
-            end
-            _require_planned_autocycler_path_containment(
+    cleanup_failures = Dict{String, Any}()
+    cleanup_steps = Tuple(
+        () -> begin
+            expected_snapshot = get(
+                expected_snapshots,
                 normalized_path,
-                workflow_root,
-                "Autocycler polishing cleanup target",
+                nothing,
             )
-            remover(normalized_path)
-        catch error
-            error isa InterruptException && rethrow()
-            cleanup_error = error
-        end
-        if cleanup_error !== nothing
-            push!(cleanup_failures, normalized_path)
-            cleanup_message =
-                "Autocycler could not remove a polishing intermediate"
-            @warn cleanup_message path = normalized_path cleanup_error
-        end
+            if expected_snapshot === nothing
+                if ispath(normalized_path) || islink(normalized_path)
+                    cleanup_failures[normalized_path] = ErrorException(
+                        "Autocycler polishing intermediate has no bound " *
+                        "identity/SHA-256 snapshot.",
+                    )
+                    @warn(
+                        "Autocycler retained an unbound polishing intermediate",
+                        path = normalized_path,
+                    )
+                end
+                return nothing
+            end
+            try
+                for identity in directory_identities
+                    _require_unchanged_autocycler_directory(
+                        identity,
+                        workflow_root,
+                    )
+                end
+                _require_planned_autocycler_path_containment(
+                    normalized_path,
+                    workflow_root,
+                    "Autocycler polishing cleanup target",
+                )
+                artifact_validator(
+                    expected_snapshot,
+                    normalized_path,
+                    workflow_root,
+                    "Autocycler polishing cleanup target",
+                )
+                exact_remover(normalized_path, expected_snapshot)
+            catch cleanup_error
+                cleanup_failures[normalized_path] = cleanup_error
+                if !(cleanup_error isa InterruptException)
+                    @warn(
+                        "Autocycler could not remove a polishing intermediate",
+                        path = normalized_path,
+                        cleanup_error,
+                    )
+                end
+                throw(cleanup_error)
+            end
+            return nothing
+        end for normalized_path in normalized_paths
+    )
+    aggregate_error = try
+        _run_cleanup_steps!(
+            cleanup_steps,
+            "Autocycler polishing intermediates",
+        )
+        nothing
+    catch cleanup_error
+        cleanup_error
     end
 
-    # A later remover callback can recreate a path visited earlier. Rescan the
-    # complete plan only after every removal attempt so no retained capability
-    # can disappear from the returned inventory.
+    # A later exact-removal callback can recreate a path visited earlier.
+    # Rescan the complete plan after every attempt, including Interrupts, so
+    # retained evidence is inventoried before the selected Interrupt escapes.
     retained = String[]
     for normalized_path in normalized_paths
         if ispath(normalized_path) || islink(normalized_path)
             push!(retained, normalized_path)
-            if !(normalized_path in cleanup_failures)
-                retained_message =
-                    "Autocycler retained a polishing intermediate after cleanup"
-                @warn retained_message path = normalized_path
+            if !haskey(cleanup_failures, normalized_path)
+                @warn(
+                    "Autocycler retained a polishing intermediate after cleanup",
+                    path = normalized_path,
+                )
             end
         end
     end
+    aggregate_error isa InterruptException && throw(aggregate_error)
     return retained
 end
 
-function _default_autocycler_step_runner(step::NamedTuple)::Nothing
+function _autocycler_stdout_parent_descriptor_identity(
+        parent::Base.Filesystem.File,
+        expected_identity::NamedTuple,
+)::NamedTuple
+    parent_status = stat(parent)
+    isdir(parent_status) || error(
+        "Autocycler stdout parent descriptor is not a directory: " *
+        "$(expected_identity.path).",
+    )
+    parent_status.uid == Base.Libc.getuid() || error(
+        "Autocycler stdout parent descriptor is not owned by the current " *
+        "user: $(expected_identity.path).",
+    )
+    observed_identity = (;
+        path = expected_identity.path,
+        device = parent_status.device,
+        inode = parent_status.inode,
+        label = expected_identity.label,
+    )
+    observed_identity == expected_identity || error(
+        "Autocycler stdout parent descriptor changed physical identity: " *
+        "$(expected_identity.path).",
+    )
+    return observed_identity
+end
+
+function _open_exclusive_autocycler_stdout(
+        parent::Base.Filesystem.File,
+        component::AbstractString,
+)::Base.Filesystem.File
+    normalized_component = String(component)
+    normalized_component == basename(normalized_component) &&
+        normalized_component ∉ ("", ".", "..") || throw(
+        ArgumentError(
+            "Autocycler stdout must use one non-special basename relative " *
+            "to its bound parent directory.",
+        ),
+    )
+    descriptor = ccall(
+        :openat,
+        Cint,
+        (Cint, Cstring, Cint, Base.Cmode_t),
+        _assembly_file_descriptor_number(parent),
+        normalized_component,
+        Cint(
+            Base.JL_O_WRONLY |
+            Base.JL_O_CREAT |
+            Base.JL_O_EXCL |
+            Base.JL_O_NOFOLLOW |
+            Base.JL_O_CLOEXEC,
+        ),
+        Base.Cmode_t(0o600),
+    )
+    if descriptor < 0
+        saved_errno = Base.Libc.errno()
+        throw(SystemError(
+            "open exclusive Autocycler stdout $(repr(normalized_component))",
+            saved_errno,
+        ))
+    end
+    return Base.Filesystem.File(Base.RawFD(descriptor))
+end
+
+function _set_autocycler_stdout_descriptor_mode!(
+        output::Base.Filesystem.File,
+        path::AbstractString,
+)::Nothing
+    result = ccall(
+        :fchmod,
+        Cint,
+        (Cint, Base.Cmode_t),
+        _assembly_file_descriptor_number(output),
+        Base.Cmode_t(0o600),
+    )
+    if result != 0
+        saved_errno = Base.Libc.errno()
+        throw(SystemError(
+            "fchmod Autocycler stdout $(path)",
+            saved_errno,
+        ))
+    end
+    return nothing
+end
+
+function _autocycler_stdout_descriptor_identity(
+        output::Base.Filesystem.File,
+        path::AbstractString;
+        require_mode::Bool = true,
+)::NamedTuple
+    output_status = stat(output)
+    isfile(output_status) || error(
+        "Autocycler stdout descriptor is not a regular file: $(path).",
+    )
+    output_status.uid == Base.Libc.getuid() || error(
+        "Autocycler stdout descriptor is not owned by the current user: " *
+        "$(path).",
+    )
+    mode = UInt64(output_status.mode) & UInt64(0o777)
+    if require_mode && mode != UInt64(0o600)
+        error("Autocycler stdout descriptor mode is not 0600: $(path).")
+    end
+    return (;
+        path = normpath(abspath(String(path))),
+        device = output_status.device,
+        inode = output_status.inode,
+        owner = output_status.uid,
+        mode,
+    )
+end
+
+function _autocycler_stdout_path_identity(
+        path::AbstractString;
+        require_mode::Bool = true,
+)::NamedTuple
+    normalized_path = normpath(abspath(String(path)))
+    path_status = lstat(normalized_path)
+    isfile(path_status) && !islink(path_status) || error(
+        "Autocycler stdout path is not a regular non-symlink file: " *
+        "$(normalized_path).",
+    )
+    path_status.uid == Base.Libc.getuid() || error(
+        "Autocycler stdout path is not owned by the current user: " *
+        "$(normalized_path).",
+    )
+    mode = UInt64(path_status.mode) & UInt64(0o777)
+    if require_mode && mode != UInt64(0o600)
+        error(
+            "Autocycler stdout path mode is not 0600: $(normalized_path).",
+        )
+    end
+    return (;
+        path = normalized_path,
+        device = path_status.device,
+        inode = path_status.inode,
+        owner = path_status.uid,
+        mode,
+    )
+end
+
+function _autocycler_owned_stdout_cleanup_identity(
+        binding::NamedTuple,
+        parent_identity::NamedTuple,
+        workflow_root::AbstractString,
+)::NamedTuple
+    _require_unchanged_autocycler_directory(
+        parent_identity,
+        workflow_root,
+    )
+    return _autocycler_stdout_path_identity(
+        binding.path;
+        require_mode = false,
+    )
+end
+
+function _cleanup_owned_autocycler_stdout!(
+        binding::Union{Nothing, NamedTuple},
+        parent_identity::Union{Nothing, NamedTuple},
+        workflow_root::AbstractString;
+        identity_validator::Function =
+            _autocycler_owned_stdout_cleanup_identity,
+        exact_remover::Function = _remove_exact_assembly_durable_file!,
+)::Nothing
+    binding === nothing && return nothing
+    parent_identity === nothing && return nothing
+    if !ispath(binding.path) && !islink(binding.path)
+        return nothing
+    end
+    observed_identity = try
+        identity_validator(binding, parent_identity, workflow_root)
+    catch identity_error
+        identity_error isa InterruptException && rethrow()
+        @warn(
+            "Autocycler retained a stdout cleanup candidate because exact " *
+            "ownership could not be proved",
+            path = binding.path,
+            identity_error,
+        )
+        return nothing
+    end
+    identity_matches = _assembly_path_identity_matches(
+        observed_identity,
+        binding.identity,
+    )
+    owner_matches = hasproperty(binding.identity, :owner) &&
+                    observed_identity.owner == binding.identity.owner
+    if !identity_matches || !owner_matches
+        @warn(
+            "Autocycler retained a stdout cleanup candidate with a changed " *
+            "physical identity",
+            path = binding.path,
+            expected_identity = binding.identity,
+            observed_identity,
+        )
+        return nothing
+    end
+    exact_remover(binding.path, binding.identity)
+    return nothing
+end
+
+function _default_autocycler_step_runner(
+        step::NamedTuple;
+        workflow_root::Union{Nothing, AbstractString} = nothing,
+        directory_identities::Tuple = (),
+        pre_stdout_creation_hook::Function =
+            (_path::AbstractString, _parent::NamedTuple) -> nothing,
+        post_stdout_creation_hook::Function =
+            (_path::AbstractString, _binding::NamedTuple) -> nothing,
+        process_runner::Function = Base.run,
+        descriptor_closer::Function = close,
+        exact_remover::Function = _remove_exact_assembly_durable_file!,
+)::Nothing
     if isnothing(step.stdout)
-        Base.run(step.command)
-    else
-        mkpath(dirname(step.stdout))
-        Base.open(step.stdout, "w") do io
-            Base.run(Base.pipeline(step.command; stdout = io))
-        end
+        process_runner(step.command)
+        return nothing
+    end
+    workflow_root === nothing && throw(
+        ArgumentError(
+            "Autocycler stdout creation requires a bound workflow root.",
+        ),
+    )
+    normalized_root = String(workflow_root)
+    stdout_path = _require_planned_autocycler_path_containment(
+        String(step.stdout),
+        normalized_root,
+        "Autocycler workflow step $(step.name) stdout",
+    )
+    stdout_parent_path = dirname(stdout_path)
+    mkpath(stdout_parent_path)
+    parent_identity = _autocycler_directory_identity(
+        stdout_parent_path,
+        normalized_root,
+        "Autocycler workflow step $(step.name) stdout parent",
+    )
+    for identity in directory_identities
+        _require_unchanged_autocycler_directory(identity, normalized_root)
+    end
+    parent = Base.Filesystem.open(
+        stdout_parent_path,
+        Base.JL_O_RDONLY |
+        Base.JL_O_DIRECTORY |
+        Base.JL_O_NONBLOCK |
+        Base.JL_O_NOFOLLOW |
+        Base.JL_O_CLOEXEC,
+    )
+    output = nothing
+    output_binding = nothing
+    cleanup_stdout = function ()
+        _run_cleanup_steps!(
+            (
+                () -> begin
+                    if output !== nothing && isopen(output)
+                        descriptor_closer(output)
+                    end
+                    return nothing
+                end,
+                () -> _cleanup_owned_autocycler_stdout!(
+                    output_binding,
+                    parent_identity,
+                    normalized_root;
+                    exact_remover,
+                ),
+                () -> begin
+                    if parent !== nothing && isopen(parent)
+                        descriptor_closer(parent)
+                    end
+                    return nothing
+                end,
+            ),
+            "Autocycler bound stdout",
+        )
+        return nothing
+    end
+    try
+        _autocycler_stdout_parent_descriptor_identity(
+            parent,
+            parent_identity,
+        )
+        _require_unchanged_autocycler_directory(
+            parent_identity,
+            normalized_root,
+        )
+        pre_stdout_creation_hook(stdout_path, parent_identity)
+        _autocycler_stdout_parent_descriptor_identity(
+            parent,
+            parent_identity,
+        )
+        _require_unchanged_autocycler_directory(
+            parent_identity,
+            normalized_root,
+        )
+        output = _open_exclusive_autocycler_stdout(
+            parent,
+            basename(stdout_path),
+        )
+        initial_output_identity = _autocycler_stdout_descriptor_identity(
+            output,
+            stdout_path;
+            require_mode = false,
+        )
+        output_binding = (;
+            path = stdout_path,
+            identity = initial_output_identity,
+        )
+        _set_autocycler_stdout_descriptor_mode!(output, stdout_path)
+        output_identity = _autocycler_stdout_descriptor_identity(
+            output,
+            stdout_path,
+        )
+        stat(output).size == 0 || error(
+            "New Autocycler stdout descriptor was not empty: " *
+            "$(stdout_path).",
+        )
+        _autocycler_stdout_path_identity(stdout_path) == output_identity ||
+            error(
+                "Autocycler stdout path did not bind its exclusive " *
+                "descriptor before execution: $(stdout_path).",
+            )
+        output_binding = (; path = stdout_path, identity = output_identity)
+        post_stdout_creation_hook(stdout_path, output_binding)
+        process_runner(Base.pipeline(step.command; stdout = output))
+        _autocycler_stdout_descriptor_identity(output, stdout_path) ==
+            output_identity || error(
+            "Autocycler stdout descriptor changed during execution: " *
+            "$(stdout_path).",
+        )
+        stat(output).size > 0 || error(
+            "Autocycler workflow step $(step.name) did not create a " *
+            "nonempty artifact: $(stdout_path)",
+        )
+        _autocycler_stdout_parent_descriptor_identity(
+            parent,
+            parent_identity,
+        )
+        _require_unchanged_autocycler_directory(
+            parent_identity,
+            normalized_root,
+        )
+        _autocycler_stdout_path_identity(stdout_path) == output_identity ||
+            error(
+                "Autocycler stdout path changed during execution: " *
+                "$(stdout_path).",
+            )
+        _fsync_assembly_descriptor(Base.fd(output), stdout_path)
+        _autocycler_stdout_descriptor_identity(output, stdout_path) ==
+            output_identity || error(
+            "Autocycler stdout descriptor changed during fsync: " *
+            "$(stdout_path).",
+        )
+        descriptor_closer(output)
+        isopen(output) && error(
+            "Autocycler stdout descriptor remained open after close: " *
+            "$(stdout_path).",
+        )
+        output = nothing
+        _autocycler_stdout_path_identity(stdout_path) == output_identity ||
+            error(
+                "Autocycler stdout path changed before parent fsync: " *
+                "$(stdout_path).",
+            )
+        _fsync_assembly_descriptor(Base.fd(parent), stdout_parent_path)
+        _autocycler_stdout_parent_descriptor_identity(
+            parent,
+            parent_identity,
+        )
+        _require_unchanged_autocycler_directory(
+            parent_identity,
+            normalized_root,
+        )
+        _autocycler_stdout_path_identity(stdout_path) == output_identity ||
+            error(
+                "Autocycler stdout path changed during parent fsync: " *
+                "$(stdout_path).",
+            )
+        descriptor_closer(parent)
+        isopen(parent) && error(
+            "Autocycler stdout parent descriptor remained open after close: " *
+            "$(stdout_parent_path).",
+        )
+        parent = nothing
+    catch primary_error
+        _run_cleanup_after_primary_error!(
+            cleanup_stdout,
+            primary_error,
+            "Autocycler stdout cleanup failed while preserving the primary " *
+            "step failure";
+            cleanup_evidence = stdout_path,
+        )
+        Base.rethrow()
     end
     return nothing
 end
@@ -2719,7 +3381,15 @@ function _execute_autocycler_steps(
             )
         end
         try
-            runner(step)
+            if runner === _default_autocycler_step_runner
+                _default_autocycler_step_runner(
+                    step;
+                    workflow_root,
+                    directory_identities,
+                )
+            else
+                runner(step)
+            end
         catch error
             if error isa InterruptException
                 rethrow()
@@ -3057,33 +3727,23 @@ function _run_autocycler_with_reserved_output(
         after_step = verify_long_read_after_step,
     )
     autocycler_output_snapshots = something(output_snapshots[])
-    buffered_assembly = _autocycler_buffered_artifact_snapshot(
+    bound_assembly = _autocycler_streamed_semantic_fasta(
+        autocycler_output_snapshots.assembly,
         plan.assembly,
         prepared_out_dir,
         "Autocycler consensus FASTA",
     )
-    _require_expected_autocycler_artifact_snapshot(
-        autocycler_output_snapshots.assembly,
-        buffered_assembly.snapshot,
-        "Autocycler consensus FASTA",
-    )
-    buffered_graph = _autocycler_buffered_artifact_snapshot(
+    bound_graph = _autocycler_streamed_semantic_gfa(
+        autocycler_output_snapshots.graph,
         plan.graph,
         prepared_out_dir,
         "Autocycler consensus GFA",
     )
-    _require_expected_autocycler_artifact_snapshot(
-        autocycler_output_snapshots.graph,
-        buffered_graph.snapshot,
-        "Autocycler consensus GFA",
-    )
-    assembly = buffered_assembly.snapshot.path
-    graph = buffered_graph.snapshot.path
-    _require_matching_autocycler_companion_artifacts(
-        buffered_assembly.bytes,
-        assembly,
-        buffered_graph.bytes,
-        graph,
+    assembly = bound_assembly.path
+    graph = bound_graph.path
+    _require_matching_autocycler_companion_sequence_maps(
+        bound_assembly.sequence_digests,
+        bound_graph.sequence_digests,
     )
     after_artifact_semantic_validation_hook((; assembly, graph))
     _require_unchanged_autocycler_artifact(
@@ -3224,21 +3884,21 @@ function _run_autocycler(
                 result.output_root_identity,
                 result.outdir,
             )
-            final_assembly_binding = _autocycler_buffered_semantic_fasta(
+            final_assembly_binding = _autocycler_streamed_semantic_fasta(
                 result.assembly_snapshot,
                 result.assembly,
                 result.outdir,
                 "Autocycler consensus FASTA",
             )
-            final_graph_binding = _autocycler_buffered_semantic_gfa(
+            final_graph_binding = _autocycler_streamed_semantic_gfa(
                 result.graph_snapshot,
                 result.graph,
                 result.outdir,
                 "Autocycler consensus GFA",
             )
             _require_matching_autocycler_companion_sequence_maps(
-                final_assembly_binding.sequences,
-                final_graph_binding.sequences,
+                final_assembly_binding.sequence_digests,
+                final_graph_binding.sequence_digests,
             )
             _require_unchanged_autocycler_artifact(
                 result.assembly_snapshot,
@@ -3303,7 +3963,9 @@ and after execution; any drift fails rather than returning ambiguous provenance.
 The reserved lifecycle first copies exactly the initially sized input into a
 read-only stable snapshot. Spooling rejects source growth, shrinkage, or physical
 replacement, enforces a cumulative byte ceiling, checks available space before
-copying, and removes partial snapshots on failure.
+copying, and attempts exact identity-bound cleanup of partial snapshots on
+failure. Cleanup failure is fail-loud and may retain/report evidence rather than
+delete a replacement or obscure the primary failure.
 
 The verified script and environment are compatibility-pinned to Autocycler 0.5.2.
 The upstream consensus model is intended for bacterial isolates whose alternative
@@ -3417,13 +4079,13 @@ function _run_autocycler_polished_with_reserved_output(
         autocycler_result.outdir,
         "Autocycler consensus GFA",
     )
-    bound_autocycler_assembly = _autocycler_buffered_semantic_fasta(
+    bound_autocycler_assembly = _autocycler_streamed_semantic_fasta(
         autocycler_result.assembly_snapshot,
         autocycler_result.assembly,
         autocycler_result.outdir,
         "Autocycler consensus FASTA",
     )
-    autocycler_identifiers = Set(keys(bound_autocycler_assembly.sequences))
+    autocycler_identifiers = Set(keys(bound_autocycler_assembly.sequence_digests))
     autocycler_assembly_snapshot = autocycler_result.assembly_snapshot
     autocycler_graph_snapshot = autocycler_result.graph_snapshot
 
@@ -3481,6 +4143,7 @@ function _run_autocycler_polished_with_reserved_output(
         step in polishing_plan.steps
     )
     produced_artifact_snapshots = Dict{Symbol, Vector{NamedTuple}}()
+    produced_cleanup_snapshots = Dict{Symbol, Vector{NamedTuple}}()
     function polishing_artifact_label(
             producer::Symbol,
             path::AbstractString,
@@ -3520,6 +4183,26 @@ function _run_autocycler_polished_with_reserved_output(
         )
         return snapshots[path_index]
     end
+    function bound_polishing_artifact_snapshots(
+            paths::AbstractVector{<:AbstractString},
+    )::Dict{String, NamedTuple}
+        requested_paths = Set(String(path) for path in paths)
+        bound_snapshots = Dict{String, NamedTuple}()
+        for (producer, produced_paths) in produced_artifact_paths
+            snapshots = get(produced_cleanup_snapshots, producer, nothing)
+            snapshots === nothing && continue
+            length(produced_paths) == length(snapshots) || error(
+                "Autocycler polishing step $(producer) output snapshot count " *
+                "changed before cleanup binding.",
+            )
+            for (produced_path, snapshot) in zip(produced_paths, snapshots)
+                produced_path in requested_paths || continue
+                bound_snapshots[produced_path] = snapshot
+            end
+        end
+        return bound_snapshots
+    end
+
     function verify_produced_artifacts(
             producer::Symbol,
             consumer::Symbol,
@@ -3619,12 +4302,20 @@ function _run_autocycler_polished_with_reserved_output(
             step::NamedTuple,
     )::Nothing
         verify_polishing_step_inputs(step)
-        produced_artifact_snapshots[step.name] = NamedTuple[
-            _autocycler_artifact_snapshot(
+        cleanup_snapshots = NamedTuple[
+            _autocycler_cleanup_artifact_snapshot(
                 path,
                 normalized_out_dir,
                 polishing_artifact_label(step.name, path),
             ) for path in produced_artifact_paths[step.name]
+        ]
+        produced_cleanup_snapshots[step.name] = cleanup_snapshots
+        produced_artifact_snapshots[step.name] = NamedTuple[
+            (;
+                path = snapshot.path,
+                size_bytes = snapshot.size_bytes,
+                sha256 = snapshot.sha256,
+            ) for snapshot in cleanup_snapshots
         ]
         return nothing
     end
@@ -3651,7 +4342,7 @@ function _run_autocycler_polished_with_reserved_output(
             normalized_out_dir,
             "Polypolish Autocycler assembly",
         )
-        bound_polypolish_assembly = _autocycler_buffered_semantic_fasta(
+        bound_polypolish_assembly = _autocycler_streamed_semantic_fasta(
             polypolish_snapshot,
             polishing_plan.polypolish_assembly,
             normalized_out_dir,
@@ -3670,7 +4361,7 @@ function _run_autocycler_polished_with_reserved_output(
             normalized_out_dir,
             "Autocycler consensus GFA",
         )
-        polypolish_identifiers = Set(keys(bound_polypolish_assembly.sequences))
+        polypolish_identifiers = Set(keys(bound_polypolish_assembly.sequence_digests))
         _require_matching_autocycler_contig_identifiers(
             autocycler_identifiers,
             polypolish_identifiers,
@@ -3699,7 +4390,7 @@ function _run_autocycler_polished_with_reserved_output(
             :pypolca,
             polishing_plan.pypolca_report,
         )
-        bound_final_assembly = _autocycler_buffered_semantic_fasta(
+        bound_final_assembly = _autocycler_streamed_semantic_fasta(
             final_assembly_snapshot,
             polishing_plan.assembly,
             normalized_out_dir,
@@ -3708,14 +4399,14 @@ function _run_autocycler_polished_with_reserved_output(
         validated_final_assembly = bound_final_assembly.path
 
         bound_final_autocycler_assembly =
-            _autocycler_buffered_semantic_fasta(
+            _autocycler_streamed_semantic_fasta(
                 autocycler_assembly_snapshot,
                 autocycler_result.assembly,
                 normalized_out_dir,
                 "Autocycler consensus FASTA",
             )
         validated_autocycler_assembly = bound_final_autocycler_assembly.path
-        bound_final_graph = _autocycler_buffered_semantic_gfa(
+        bound_final_graph = _autocycler_streamed_semantic_gfa(
             autocycler_graph_snapshot,
             autocycler_result.graph,
             normalized_out_dir,
@@ -3723,7 +4414,7 @@ function _run_autocycler_polished_with_reserved_output(
         )
         validated_graph = bound_final_graph.path
         bound_final_polypolish_assembly =
-            _autocycler_buffered_semantic_fasta(
+            _autocycler_streamed_semantic_fasta(
                 polypolish_snapshot,
                 validated_polypolish_assembly,
                 normalized_out_dir,
@@ -3745,17 +4436,17 @@ function _run_autocycler_polished_with_reserved_output(
         )
 
         _require_matching_autocycler_companion_sequence_maps(
-            bound_final_autocycler_assembly.sequences,
-            bound_final_graph.sequences,
+            bound_final_autocycler_assembly.sequence_digests,
+            bound_final_graph.sequence_digests,
         )
 
         final_autocycler_identifiers = Set(keys(
-            bound_final_autocycler_assembly.sequences,
+            bound_final_autocycler_assembly.sequence_digests,
         ))
         final_polypolish_identifiers = Set(keys(
-            bound_final_polypolish_assembly.sequences,
+            bound_final_polypolish_assembly.sequence_digests,
         ))
-        final_identifiers = Set(keys(bound_final_assembly.sequences))
+        final_identifiers = Set(keys(bound_final_assembly.sequence_digests))
         _require_matching_autocycler_contig_identifiers(
             final_autocycler_identifiers,
             final_polypolish_identifiers,
@@ -3781,13 +4472,21 @@ function _run_autocycler_polished_with_reserved_output(
             pypolca_report_snapshot,
             polypolish_snapshot,
         )
-    catch
+    catch caught
         if !keep_intermediates
-            _cleanup_autocycler_polishing_intermediates!(
-                polishing_plan.intermediate_files;
-                workflow_root = normalized_out_dir,
-                directory_identities,
-                remover = intermediate_remover,
+            _run_autocycler_cleanup_after_failure!(
+                () -> _cleanup_autocycler_polishing_intermediates!(
+                    polishing_plan.intermediate_files;
+                    workflow_root = normalized_out_dir,
+                    expected_snapshots =
+                        bound_polishing_artifact_snapshots(
+                            polishing_plan.intermediate_files,
+                        ),
+                    directory_identities,
+                    exact_remover = intermediate_remover,
+                ),
+                caught,
+                "Autocycler polishing",
             )
         end
         rethrow()
@@ -3798,20 +4497,23 @@ function _run_autocycler_polished_with_reserved_output(
         _cleanup_autocycler_polishing_intermediates!(
             polishing_plan.intermediate_files;
             workflow_root = normalized_out_dir,
+            expected_snapshots = bound_polishing_artifact_snapshots(
+                polishing_plan.intermediate_files,
+            ),
             directory_identities,
-            remover = intermediate_remover,
+            exact_remover = intermediate_remover,
         )
     end
     verify_polishing_intermediate_artifacts(retained_intermediates)
 
-    bound_return_autocycler_assembly = _autocycler_buffered_semantic_fasta(
+    bound_return_autocycler_assembly = _autocycler_streamed_semantic_fasta(
         autocycler_assembly_snapshot,
         autocycler_assembly,
         normalized_out_dir,
         "Autocycler consensus FASTA",
     )
     autocycler_assembly = bound_return_autocycler_assembly.path
-    bound_return_graph = _autocycler_buffered_semantic_gfa(
+    bound_return_graph = _autocycler_streamed_semantic_gfa(
         autocycler_graph_snapshot,
         graph,
         normalized_out_dir,
@@ -3819,17 +4521,17 @@ function _run_autocycler_polished_with_reserved_output(
     )
     graph = bound_return_graph.path
     _require_matching_autocycler_companion_sequence_maps(
-        bound_return_autocycler_assembly.sequences,
-        bound_return_graph.sequences,
+        bound_return_autocycler_assembly.sequence_digests,
+        bound_return_graph.sequence_digests,
     )
-    bound_return_polypolish_assembly = _autocycler_buffered_semantic_fasta(
+    bound_return_polypolish_assembly = _autocycler_streamed_semantic_fasta(
         polypolish_snapshot,
         polypolish_assembly,
         normalized_out_dir,
         "Polypolish Autocycler assembly",
     )
     polypolish_assembly = bound_return_polypolish_assembly.path
-    bound_return_final_assembly = _autocycler_buffered_semantic_fasta(
+    bound_return_final_assembly = _autocycler_streamed_semantic_fasta(
         final_assembly_snapshot,
         final_assembly,
         normalized_out_dir,
@@ -3848,10 +4550,10 @@ function _run_autocycler_polished_with_reserved_output(
         "Pypolca report",
     )
     final_autocycler_identifiers =
-        Set(keys(bound_return_autocycler_assembly.sequences))
+        Set(keys(bound_return_autocycler_assembly.sequence_digests))
     final_polypolish_identifiers =
-        Set(keys(bound_return_polypolish_assembly.sequences))
-    final_identifiers = Set(keys(bound_return_final_assembly.sequences))
+        Set(keys(bound_return_polypolish_assembly.sequence_digests))
+    final_identifiers = Set(keys(bound_return_final_assembly.sequence_digests))
     _require_matching_autocycler_contig_identifiers(
         final_autocycler_identifiers,
         final_polypolish_identifiers,
@@ -3927,7 +4629,8 @@ function _run_autocycler_polished(
         runner::Function = _default_autocycler_step_runner,
         after_input_semantic_validation_hook::Function = snapshots -> nothing,
         after_artifact_semantic_validation_hook::Function = artifacts -> nothing,
-        intermediate_remover::Function = path -> rm(path; force = true),
+        intermediate_remover::Function =
+            _remove_exact_autocycler_polishing_intermediate!,
         output_lock_runner::Function = _with_autocycler_output_lock,
         environment_lock_path::Union{Nothing, AbstractString} = nothing,
         environment_lock_runner::Function = _with_autocycler_install_lock,
@@ -4218,10 +4921,12 @@ Polypolish result. `polypolish_careful=true` is the conservative default and can
 be disabled explicitly for sufficiently deep short-read data. The raw
 Autocycler GFA and unpolished FASTA are preserved alongside both polishing
 stages. Mate count/order/identifiers and all required environment packages are
-validated before long-read assembly starts. Large SAM, filtered-SAM, and BWA
-index intermediates are removed after success unless `keep_intermediates=true`.
-Route-owned BWA/SAM intermediates are also cleaned after a failed polishing run
-unless explicit retention was requested; diagnostic assembly artifacts remain.
+validated before long-read assembly starts. Exact identity-bound cleanup of
+large SAM, filtered-SAM, and BWA index intermediates is attempted after success
+unless `keep_intermediates=true`, and after failed polishing unless explicit
+retention was requested. Cleanup is never silent: a failure propagates with a
+failing run or retained evidence is reported with a successful result;
+diagnostic assembly artifacts remain.
 An adjacent interprocess lock reserves the output directory continuously across
 both long-read assembly and paired-short polishing. The shared environment/install
 lock is held across that same lifecycle. Full normalized Conda inventory snapshots
@@ -4243,7 +4948,10 @@ refuses any target whose ancestor or bound directory changed identity.
 All three inputs are copied once under the held output and environment
 reservations into read-only stable snapshots. Commands consume those snapshots;
 source growth, shrinkage, or replacement, insufficient free space, and a
-configured cumulative-byte-ceiling violation fail with partial-spool cleanup.
+configured cumulative-byte-ceiling violation fail after attempting exact
+identity-bound partial-spool cleanup. Cleanup failure remains fail-loud and may
+retain/report evidence instead of deleting a replacement or losing the primary
+failure context.
 
 This workflow remains compatibility-pinned to Autocycler 0.5.2 and retains the
 same bacterial-isolate/mostly-complete-alternative-assemblies applicability

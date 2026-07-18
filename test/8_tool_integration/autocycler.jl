@@ -21,6 +21,7 @@
 
 import Logging
 import Mycelia
+import SHA
 import Test
 
 if !isdefined(@__MODULE__, :_autocycler_smoke_prerequisites)
@@ -269,9 +270,13 @@ Test.@testset "Autocycler wrapper" begin
         Test.@test endswith(script_path, "autocycler_full.sh")
         Test.@test endswith(env_file_path, "environment.yml")
         Test.@test endswith(install_dir, joinpath("deps", "autocycler"))
+        default_install_lock_path =
+            Mycelia._autocycler_install_lock_path_from_prefix(
+                Mycelia._autocycler_environment_prefix(),
+            )
         Test.@test occursin(
             Mycelia.AUTOCYCLER_ENV_NAME,
-            basename(Mycelia._autocycler_install_lock_path()),
+            basename(default_install_lock_path),
         )
         shared_runner = "/opt/shared-conda/bin/conda"
         shared_prefix = joinpath(
@@ -281,16 +286,14 @@ Test.@testset "Autocycler wrapper" begin
         )
         Test.@test Mycelia._autocycler_environment_prefix(shared_runner) ==
                    shared_prefix
-        Test.@test Mycelia._autocycler_install_lock_path(shared_runner) ==
-                   joinpath(
+        shared_install_lock_path =
+            Mycelia._autocycler_install_lock_path_from_prefix(shared_prefix)
+        Test.@test shared_install_lock_path == joinpath(
             "/opt/shared-conda",
             ".mycelia-locks",
             "$(Mycelia.AUTOCYCLER_ENV_NAME).pid",
         )
-        Test.@test !occursin(
-            first(Base.DEPOT_PATH),
-            Mycelia._autocycler_install_lock_path(shared_runner),
-        )
+        Test.@test !occursin(first(Base.DEPOT_PATH), shared_install_lock_path)
         Test.@test Mycelia._require_verified_autocycler_environment_spec(
             env_file_path,
         ) == abspath(env_file_path)
@@ -308,9 +311,6 @@ Test.@testset "Autocycler wrapper" begin
             ) == realpath(physical_runner)
             Test.@test Mycelia._autocycler_environment_prefix(alias_runner) ==
                        Mycelia._autocycler_environment_prefix(physical_runner)
-            Test.@test Mycelia._autocycler_install_lock_path(alias_runner) ==
-                       Mycelia._autocycler_install_lock_path(physical_runner)
-
             environment_file = joinpath(temp_dir, "environment.yml")
             write(environment_file, "name: synthetic\n")
             exact_prefix = joinpath(
@@ -622,6 +622,228 @@ Test.@testset "Autocycler wrapper" begin
                 downloader,
             ) == abspath(installed_script)
             Test.@test Mycelia._autocycler_script_is_verified(installed_script)
+        end
+
+        Test.@testset "Verified script publication is identity-bound" begin
+            bundled_script = Mycelia._autocycler_paths()[2]
+            downloader = function (
+                    _url::AbstractString,
+                    destination::AbstractString,
+            )
+                cp(bundled_script, destination; force = true)
+                return String(destination)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                captured_temporary = Ref("")
+                held_temporary = joinpath(temp_dir, "held-verified-script")
+                replacement_contents = "unverified temporary replacement\n"
+                observed_aba = Test.@test_logs (
+                    :warn,
+                    r"verified-script cleanup failed while preserving",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    _autocycler_test_error() do
+                        Mycelia._install_verified_autocycler_script!(
+                            installed_script;
+                            downloader,
+                            after_verification_hook =
+                                (temporary_path, _identity) -> begin
+                                    captured_temporary[] = temporary_path
+                                    mv(temporary_path, held_temporary)
+                                    write(temporary_path, replacement_contents)
+                                end,
+                        )
+                    end
+                end
+                Test.@test observed_aba isa ErrorException
+                Test.@test occursin(
+                    "temporary artifact was replaced before publication",
+                    sprint(showerror, observed_aba),
+                )
+                Test.@test read(captured_temporary[], String) ==
+                           replacement_contents
+                Test.@test Mycelia._autocycler_sha256(held_temporary) ==
+                           Mycelia.AUTOCYCLER_SCRIPT_SHA256
+                Test.@test !ispath(installed_script)
+                rm(captured_temporary[]; force = true)
+                rm(held_temporary; force = true)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                held_publication = joinpath(temp_dir, "held-publication")
+                replacement_contents = "unverified published replacement\n"
+                observed_publication_aba = Test.@test_logs (
+                    :warn,
+                    r"verified-script cleanup failed while preserving",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    _autocycler_test_error() do
+                        Mycelia._install_verified_autocycler_script!(
+                            installed_script;
+                            downloader,
+                            post_hardlink_hook =
+                                (published_path, _identity) -> begin
+                                    mv(published_path, held_publication)
+                                    write(
+                                        published_path,
+                                        replacement_contents,
+                                    )
+                                end,
+                        )
+                    end
+                end
+                Test.@test observed_publication_aba isa ErrorException
+                Test.@test occursin(
+                    "publication did not bind its verified temporary inode",
+                    sprint(showerror, observed_publication_aba),
+                )
+                Test.@test read(installed_script, String) == replacement_contents
+                Test.@test Mycelia._autocycler_sha256(held_publication) ==
+                           Mycelia.AUTOCYCLER_SCRIPT_SHA256
+                rm(installed_script; force = true)
+                rm(held_publication; force = true)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                temporary_path = Ref("")
+                mutation_injected = Ref(false)
+                replacement_contents = "mutated published script\n"
+                function injected_exact_remover(
+                        path::AbstractString,
+                        identity::NamedTuple,
+                )::Nothing
+                    if path == temporary_path[] && isfile(installed_script)
+                        write(installed_script, replacement_contents)
+                        mutation_injected[] = true
+                    end
+                    Mycelia._remove_exact_assembly_durable_file!(path, identity)
+                    return nothing
+                end
+                observed_content_mutation = _autocycler_test_error() do
+                    Mycelia._install_verified_autocycler_script!(
+                        installed_script;
+                        downloader,
+                        after_verification_hook = (path, _identity) ->
+                            (temporary_path[] = path),
+                        exact_remover = injected_exact_remover,
+                    )
+                end
+                Test.@test mutation_injected[]
+                Test.@test observed_content_mutation isa ErrorException
+                Test.@test occursin(
+                    "changed during temporary-link cleanup",
+                    sprint(showerror, observed_content_mutation),
+                )
+                Test.@test !ispath(temporary_path[])
+                Test.@test !ispath(installed_script)
+            end
+        end
+
+        Test.@testset "Verified script cleanup preserves error precedence" begin
+            bundled_script = Mycelia._autocycler_paths()[2]
+            downloader = function (
+                    _url::AbstractString,
+                    destination::AbstractString,
+            )
+                cp(bundled_script, destination; force = true)
+                return String(destination)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                temporary_path = Ref("")
+                primary_error = ErrorException("synthetic install primary")
+                cleanup_interrupt = InterruptException()
+                close_calls = Ref(0)
+                observed_error = _autocycler_test_error() do
+                    Mycelia._install_verified_autocycler_script!(
+                        installed_script;
+                        downloader,
+                        after_verification_hook = (path, _identity) -> begin
+                            temporary_path[] = path
+                            throw(primary_error)
+                        end,
+                        descriptor_closer = input -> begin
+                            close(input)
+                            if input isa Base.Filesystem.File
+                                close_calls[] += 1
+                                throw(cleanup_interrupt)
+                            end
+                            return nothing
+                        end,
+                    )
+                end
+                Test.@test observed_error === cleanup_interrupt
+                Test.@test close_calls[] == 1
+                Test.@test !ispath(temporary_path[])
+                Test.@test !ispath(installed_script)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                temporary_path = Ref("")
+                primary_interrupt = InterruptException()
+                cleanup_error = ErrorException("synthetic install cleanup")
+                close_calls = Ref(0)
+                observed_error = Test.@test_logs (
+                    :warn,
+                    r"verified-script cleanup failed while preserving",
+                ) min_level=Logging.Warn match_mode=:any begin
+                    _autocycler_test_error() do
+                        Mycelia._install_verified_autocycler_script!(
+                            installed_script;
+                            downloader,
+                            after_verification_hook = (path, _identity) -> begin
+                                temporary_path[] = path
+                                throw(primary_interrupt)
+                            end,
+                            descriptor_closer = input -> begin
+                                close(input)
+                                if input isa Base.Filesystem.File
+                                    close_calls[] += 1
+                                    throw(cleanup_error)
+                                end
+                                return nothing
+                            end,
+                        )
+                    end
+                end
+                Test.@test observed_error === primary_interrupt
+                Test.@test close_calls[] == 1
+                Test.@test !ispath(temporary_path[])
+                Test.@test !ispath(installed_script)
+            end
+
+            mktempdir() do temp_dir
+                installed_script = joinpath(temp_dir, "autocycler_full.sh")
+                temporary_path = Ref("")
+                success_cleanup_error =
+                    ErrorException("synthetic successful install close failure")
+                descriptor_close_calls = Ref(0)
+                observed_error = _autocycler_test_error() do
+                    Mycelia._install_verified_autocycler_script!(
+                        installed_script;
+                        downloader,
+                        after_verification_hook = (path, _identity) ->
+                            (temporary_path[] = path),
+                        descriptor_closer = input -> begin
+                            close(input)
+                            if input isa Base.Filesystem.File
+                                descriptor_close_calls[] += 1
+                                descriptor_close_calls[] == 1 &&
+                                    throw(success_cleanup_error)
+                            end
+                            return nothing
+                        end,
+                    )
+                end
+                Test.@test observed_error === success_cleanup_error
+                Test.@test descriptor_close_calls[] == 2
+                Test.@test !ispath(temporary_path[])
+                Test.@test !ispath(installed_script)
+            end
         end
 
         parsed_inventory = Mycelia._autocycler_environment_packages(;
@@ -1318,8 +1540,9 @@ Test.@testset "Autocycler wrapper" begin
                 Mycelia._output_root_reservation_lock_path_from_canonical(
                     expected_canonical_alias,
                 )
-            Test.@test Mycelia._autocycler_output_lock_path(aliased_output) ==
-                       expected_alias_lock
+            Test.@test Mycelia._canonical_autocycler_output_path(
+                aliased_output,
+            ) == expected_canonical_alias
 
             retarget_target = joinpath(temp_dir, "retarget-target")
             mkpath(retarget_target)
@@ -1585,19 +1808,116 @@ Test.@testset "Autocycler wrapper" begin
                 sprint(showerror, symlink_error),
             )
 
-            intermediate = joinpath(temp_dir, "intermediate.sam")
-            rm(intermediate; force = true)
-            write(intermediate, "owned\n")
+            first_intermediate = joinpath(temp_dir, "first-intermediate.sam")
+            second_intermediate = joinpath(temp_dir, "second-intermediate.sam")
+            write(first_intermediate, "first owned\n")
+            write(second_intermediate, "second owned\n")
+            cleanup_snapshots = Dict(
+                first_intermediate =>
+                    Mycelia._autocycler_cleanup_artifact_snapshot(
+                        first_intermediate,
+                        temp_dir,
+                        "first cleanup intermediate",
+                    ),
+                second_intermediate =>
+                    Mycelia._autocycler_cleanup_artifact_snapshot(
+                        second_intermediate,
+                        temp_dir,
+                        "second cleanup intermediate",
+                    ),
+            )
+            selected_cleanup_interrupt = InterruptException()
+            cleanup_attempts = String[]
+            function interrupting_remover(
+                    target::AbstractString,
+                    expected_snapshot::NamedTuple,
+            )::Nothing
+                normalized_target = String(target)
+                push!(cleanup_attempts, normalized_target)
+                normalized_target == first_intermediate &&
+                    throw(selected_cleanup_interrupt)
+                Mycelia._remove_exact_autocycler_polishing_intermediate!(
+                    normalized_target,
+                    expected_snapshot,
+                )
+                return nothing
+            end
             cleanup_interrupt = _autocycler_test_error() do
                 Mycelia._cleanup_autocycler_polishing_intermediates!(
-                    [intermediate];
+                    [first_intermediate, second_intermediate];
                     workflow_root = temp_dir,
-                    remover = (_path::AbstractString) ->
-                        throw(InterruptException()),
+                    expected_snapshots = cleanup_snapshots,
+                    exact_remover = interrupting_remover,
                 )
             end
-            Test.@test cleanup_interrupt isa InterruptException
-            Test.@test isfile(intermediate)
+            Test.@test cleanup_interrupt === selected_cleanup_interrupt
+            Test.@test cleanup_attempts ==
+                       [first_intermediate, second_intermediate]
+            Test.@test isfile(first_intermediate)
+            Test.@test !ispath(second_intermediate)
+
+            replacement_intermediate =
+                joinpath(temp_dir, "replacement-intermediate.sam")
+            replacement_contents = "same-path replacement sentinel\n"
+            write(replacement_intermediate, "original owned artifact\n")
+            replacement_snapshot =
+                Mycelia._autocycler_cleanup_artifact_snapshot(
+                    replacement_intermediate,
+                    temp_dir,
+                    "replacement cleanup intermediate",
+                )
+            replacement_validator_calls = Ref(0)
+            function replacement_validator(
+                    expected_snapshot::NamedTuple,
+                    target::AbstractString,
+                    workflow_root::AbstractString,
+                    label::AbstractString,
+            )::NamedTuple
+                observed_snapshot =
+                    Mycelia._require_unchanged_autocycler_cleanup_artifact(
+                        expected_snapshot,
+                        target,
+                        workflow_root,
+                        label,
+                    )
+                replacement_validator_calls[] += 1
+                rm(target)
+                write(target, replacement_contents)
+                return observed_snapshot
+            end
+            replacement_retained = Test.@test_logs (
+                :warn,
+                r"could not remove a polishing intermediate",
+            ) min_level=Logging.Warn begin
+                Mycelia._cleanup_autocycler_polishing_intermediates!(
+                    [replacement_intermediate];
+                    workflow_root = temp_dir,
+                    expected_snapshots = Dict(
+                        replacement_intermediate => replacement_snapshot,
+                    ),
+                    artifact_validator = replacement_validator,
+                )
+            end
+            Test.@test replacement_validator_calls[] == 1
+            Test.@test replacement_retained == [replacement_intermediate]
+            Test.@test read(replacement_intermediate, String) ==
+                       replacement_contents
+
+            unbound_intermediate = joinpath(temp_dir, "unbound.sam")
+            unbound_contents = "unbound sentinel\n"
+            write(unbound_intermediate, unbound_contents)
+            unbound_retained = Test.@test_logs (
+                :warn,
+                r"retained an unbound polishing intermediate",
+            ) min_level=Logging.Warn begin
+                Mycelia._cleanup_autocycler_polishing_intermediates!(
+                    [unbound_intermediate];
+                    workflow_root = temp_dir,
+                    expected_snapshots = Dict{String, NamedTuple}(),
+                )
+            end
+            Test.@test unbound_retained == [unbound_intermediate]
+            Test.@test read(unbound_intermediate, String) == unbound_contents
 
             dangling_intermediate = joinpath(temp_dir, "dangling.sam")
             symlink(
@@ -1606,16 +1926,270 @@ Test.@testset "Autocycler wrapper" begin
             )
             dangling_retained = Test.@test_logs (
                 :warn,
-                r"could not remove a polishing intermediate",
+                r"retained an unbound polishing intermediate",
             ) min_level=Logging.Warn begin
                 Mycelia._cleanup_autocycler_polishing_intermediates!(
                     [dangling_intermediate];
                     workflow_root = temp_dir,
-                    remover = (_path::AbstractString) -> nothing,
+                    expected_snapshots = Dict{String, NamedTuple}(),
                 )
             end
             Test.@test dangling_retained == [dangling_intermediate]
             Test.@test islink(dangling_intermediate)
+        end
+    end
+
+    Test.@testset "Exclusive descriptor-bound step stdout" begin
+        mktempdir() do temp_dir
+            workflow_root = joinpath(temp_dir, "workflow")
+            mkpath(workflow_root)
+            root_identity = Mycelia._autocycler_directory_identity(
+                workflow_root,
+                workflow_root,
+                "Autocycler stdout test root",
+            )
+            directory_identities = (root_identity,)
+            function stdout_step(
+                    path::AbstractString,
+                    contents::AbstractString = "bound stdout\n",
+            )::NamedTuple
+                return (;
+                    name = :exclusive_stdout,
+                    command = `printf $(String(contents))`,
+                    stdout = String(path),
+                    expected_outputs = String[String(path)],
+                )
+            end
+
+            bound_output = joinpath(workflow_root, "bound.txt")
+            Mycelia._execute_autocycler_steps(
+                (stdout_step(bound_output),);
+                workflow_root,
+                directory_identities,
+            )
+            Test.@test read(bound_output, String) == "bound stdout\n"
+            Test.@test UInt64(stat(bound_output).mode) & UInt64(0o777) ==
+                       UInt64(0o600)
+
+            identity_interrupt_output =
+                joinpath(workflow_root, "identity-interrupt.txt")
+            identity_interrupt_contents = "identity interrupt sentinel\n"
+            write(identity_interrupt_output, identity_interrupt_contents)
+            chmod(identity_interrupt_output, 0o600)
+            identity_interrupt_binding = (;
+                path = identity_interrupt_output,
+                identity = Mycelia._autocycler_stdout_path_identity(
+                    identity_interrupt_output,
+                ),
+            )
+            identity_interrupt = InterruptException()
+            identity_remover_calls = Ref(0)
+            identity_interrupt_result = _autocycler_test_error() do
+                Mycelia._cleanup_owned_autocycler_stdout!(
+                    identity_interrupt_binding,
+                    root_identity,
+                    workflow_root;
+                    identity_validator = (
+                            _binding::NamedTuple,
+                            _parent_identity::NamedTuple,
+                            _root::AbstractString,
+                    ) -> throw(identity_interrupt),
+                    exact_remover = (
+                            _path::AbstractString,
+                            _identity::NamedTuple,
+                    ) -> begin
+                        identity_remover_calls[] += 1
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test identity_interrupt_result === identity_interrupt
+            Test.@test identity_remover_calls[] == 0
+            Test.@test read(identity_interrupt_output, String) ==
+                       identity_interrupt_contents
+
+            before_step_output = joinpath(workflow_root, "before-step.txt")
+            before_step_error = _autocycler_test_error() do
+                Mycelia._execute_autocycler_steps(
+                    (stdout_step(before_step_output),);
+                    workflow_root,
+                    directory_identities,
+                    before_step = (_step::NamedTuple) -> write(
+                        before_step_output,
+                        "concurrent owner\n",
+                    ),
+                )
+            end
+            Test.@test before_step_error isa SystemError
+            Test.@test occursin(
+                "open exclusive Autocycler stdout",
+                sprint(showerror, before_step_error),
+            )
+            Test.@test read(before_step_output, String) ==
+                       "concurrent owner\n"
+
+            external_target = joinpath(temp_dir, "external-sentinel.txt")
+            write(external_target, "external sentinel\n")
+            planted_link = joinpath(workflow_root, "planted-link.txt")
+            planted_link_error = _autocycler_test_error() do
+                Mycelia._execute_autocycler_steps(
+                    (stdout_step(planted_link),);
+                    workflow_root,
+                    directory_identities,
+                    before_step = (_step::NamedTuple) -> symlink(
+                        external_target,
+                        planted_link,
+                    ),
+                )
+            end
+            Test.@test planted_link_error isa ErrorException
+            Test.@test occursin(
+                "symbolic-link component",
+                sprint(showerror, planted_link_error),
+            )
+            Test.@test read(external_target, String) == "external sentinel\n"
+            Test.@test islink(planted_link)
+
+            concurrent_output = joinpath(workflow_root, "concurrent.txt")
+            concurrent_error = _autocycler_test_error() do
+                Mycelia._default_autocycler_step_runner(
+                    stdout_step(concurrent_output);
+                    workflow_root,
+                    directory_identities,
+                    pre_stdout_creation_hook = (
+                            path::AbstractString,
+                            _parent::NamedTuple,
+                    ) -> write(path, "won race\n"),
+                )
+            end
+            Test.@test concurrent_error isa SystemError
+            Test.@test read(concurrent_output, String) == "won race\n"
+
+            rebound_output = joinpath(workflow_root, "rebound.txt")
+            displaced_output = joinpath(workflow_root, "displaced.txt")
+            rebound_error = Test.@test_logs (
+                :warn,
+                r"exact ownership could not be proved",
+            ) min_level=Logging.Warn match_mode=:any begin
+                _autocycler_test_error() do
+                    Mycelia._default_autocycler_step_runner(
+                        stdout_step(rebound_output, "descriptor stream\n");
+                        workflow_root,
+                        directory_identities,
+                        post_stdout_creation_hook = (
+                                path::AbstractString,
+                                _binding::NamedTuple,
+                        ) -> begin
+                            mv(path, displaced_output)
+                            symlink(external_target, path)
+                            return nothing
+                        end,
+                    )
+                end
+            end
+            Test.@test rebound_error isa ErrorException
+            Test.@test occursin(
+                "stdout path is not a regular non-symlink file",
+                sprint(showerror, rebound_error),
+            )
+            Test.@test read(external_target, String) == "external sentinel\n"
+            Test.@test read(displaced_output, String) == "descriptor stream\n"
+            Test.@test islink(rebound_output)
+
+            runner_output = joinpath(workflow_root, "runner-failure.txt")
+            runner_primary = ErrorException("synthetic stdout runner failure")
+            runner_result = _autocycler_test_error() do
+                Mycelia._default_autocycler_step_runner(
+                    stdout_step(runner_output);
+                    workflow_root,
+                    directory_identities,
+                    process_runner = (_pipeline::Any) -> throw(runner_primary),
+                )
+            end
+            Test.@test runner_result === runner_primary
+            Test.@test !ispath(runner_output)
+
+            interrupt_output = joinpath(workflow_root, "interrupt-primary.txt")
+            primary_interrupt = InterruptException()
+            ordinary_close = ErrorException("synthetic stdout close failure")
+            interrupt_close_calls = Ref(0)
+            interrupt_result = Test.@test_logs (
+                :warn,
+                r"stdout cleanup failed while preserving the primary step failure",
+            ) min_level=Logging.Warn begin
+                _autocycler_test_error() do
+                    Mycelia._default_autocycler_step_runner(
+                        stdout_step(interrupt_output);
+                        workflow_root,
+                        directory_identities,
+                        process_runner = (_pipeline::Any) ->
+                            throw(primary_interrupt),
+                        descriptor_closer = (
+                                descriptor::Base.Filesystem.File,
+                        ) -> begin
+                            interrupt_close_calls[] += 1
+                            close(descriptor)
+                            interrupt_close_calls[] == 1 &&
+                                throw(ordinary_close)
+                            return nothing
+                        end,
+                    )
+                end
+            end
+            Test.@test interrupt_result === primary_interrupt
+            Test.@test interrupt_close_calls[] == 2
+            Test.@test !ispath(interrupt_output)
+
+            cleanup_interrupt_output =
+                joinpath(workflow_root, "cleanup-interrupt.txt")
+            ordinary_runner = ErrorException("synthetic ordinary runner failure")
+            cleanup_interrupt = InterruptException()
+            cleanup_interrupt_close_calls = Ref(0)
+            cleanup_interrupt_result = _autocycler_test_error() do
+                Mycelia._default_autocycler_step_runner(
+                    stdout_step(cleanup_interrupt_output);
+                    workflow_root,
+                    directory_identities,
+                    process_runner = (_pipeline::Any) ->
+                        throw(ordinary_runner),
+                    descriptor_closer = (
+                            descriptor::Base.Filesystem.File,
+                    ) -> begin
+                        cleanup_interrupt_close_calls[] += 1
+                        close(descriptor)
+                        cleanup_interrupt_close_calls[] == 1 &&
+                            throw(cleanup_interrupt)
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test cleanup_interrupt_result === cleanup_interrupt
+            Test.@test cleanup_interrupt_close_calls[] == 2
+            Test.@test !ispath(cleanup_interrupt_output)
+
+            close_output = joinpath(workflow_root, "close-failure.txt")
+            successful_close_error =
+                ErrorException("synthetic successful stdout close failure")
+            successful_close_calls = Ref(0)
+            successful_close_result = _autocycler_test_error() do
+                Mycelia._default_autocycler_step_runner(
+                    stdout_step(close_output);
+                    workflow_root,
+                    directory_identities,
+                    descriptor_closer = (
+                            descriptor::Base.Filesystem.File,
+                    ) -> begin
+                        successful_close_calls[] += 1
+                        close(descriptor)
+                        successful_close_calls[] == 1 &&
+                            throw(successful_close_error)
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test successful_close_result === successful_close_error
+            Test.@test successful_close_calls[] == 2
+            Test.@test !ispath(close_output)
         end
     end
 
@@ -1635,7 +2209,10 @@ Test.@testset "Autocycler wrapper" begin
                 "envs",
                 Mycelia.AUTOCYCLER_ENV_NAME,
             )
-            output_lock_path = Mycelia._autocycler_output_lock_path(out_dir)
+            output_lock_path =
+                Mycelia._autocycler_output_lock_path_from_canonical(
+                    Mycelia._canonical_autocycler_output_path(out_dir),
+                )
             environment_lock_path = joinpath(temp_dir, "environment.pid")
             environment_lock_active = Ref(false)
             environment_lock_runner = function (
@@ -1876,7 +2453,7 @@ Test.@testset "Autocycler wrapper" begin
                 "L\tleft\t+\tright\t-\t1M\n" *
                 "P\tprimary\tleft+,right-\t1M\n",
             )
-            Test.@test Mycelia._require_valid_autocycler_gfa(
+            Test.@test Mycelia._require_valid_assembly_gfa(
                 structured_gfa,
                 "Autocycler structured GFA",
             ) == structured_gfa
@@ -1888,7 +2465,7 @@ Test.@testset "Autocycler wrapper" begin
                 "S\tright\tTGCA\n" *
                 "P\tprimary\tleft,half+,right-\t1M\n",
             )
-            Test.@test Mycelia._require_valid_autocycler_gfa(
+            Test.@test Mycelia._require_valid_assembly_gfa(
                 comma_identifier_gfa,
                 "Autocycler comma-safe GFA",
             ) == comma_identifier_gfa
@@ -1956,7 +2533,7 @@ Test.@testset "Autocycler wrapper" begin
                 )
                 write(malformed_path, malformed_case.contents)
                 malformed_error = _autocycler_test_error() do
-                    Mycelia._require_valid_autocycler_gfa(
+                    Mycelia._require_valid_assembly_gfa(
                         malformed_path,
                         "Autocycler malformed GFA",
                     )
@@ -2045,6 +2622,158 @@ Test.@testset "Autocycler wrapper" begin
                 "symlinked artifact",
                 sprint(showerror, symlinked_gfa_error),
             )
+        end
+    end
+
+    Test.@testset "Streaming FASTA and GFA semantic validation" begin
+        mktempdir() do temp_dir
+            fasta_path = joinpath(temp_dir, "streamed.fasta")
+            gfa_path = joinpath(temp_dir, "streamed.gfa")
+            write(fasta_path, ">contig_1\nacgtnry\n")
+            write(
+                gfa_path,
+                "H\tVN:Z:1.0\nS\tcontig_1\tACGTNRY\tdp:f:20.0\n",
+            )
+            expected_digest = SHA.bytes2hex(
+                SHA.sha256(codeunits("ACGTNRY")),
+            )
+            fasta_snapshot = Mycelia._autocycler_artifact_snapshot(
+                fasta_path,
+                temp_dir,
+                "Streaming test FASTA",
+            )
+            gfa_snapshot = Mycelia._autocycler_artifact_snapshot(
+                gfa_path,
+                temp_dir,
+                "Streaming test GFA",
+            )
+
+            open(fasta_path, "r") do input
+                Test.@test Mycelia._autocycler_sha256(input) ==
+                           fasta_snapshot.sha256
+                Test.@test position(input) == 0
+            end
+
+            fasta_opened_paths = String[]
+            fasta_close_calls = Ref(0)
+            fasta_binding = Mycelia._autocycler_streamed_semantic_fasta(
+                fasta_snapshot,
+                fasta_path,
+                temp_dir,
+                "Streaming test FASTA";
+                reader_opener = (path::AbstractString) -> begin
+                    push!(fasta_opened_paths, String(path))
+                    return Mycelia.open_fastx(path)
+                end,
+                reader_closer = (reader::Any) -> begin
+                    fasta_close_calls[] += 1
+                    close(reader)
+                    return nothing
+                end,
+            )
+            Test.@test fasta_opened_paths == [fasta_path]
+            Test.@test fasta_close_calls[] == 1
+            Test.@test propertynames(fasta_binding) ==
+                       (:path, :snapshot, :sequence_digests)
+            Test.@test fasta_binding.sequence_digests ==
+                       Dict("contig_1" => expected_digest)
+            Test.@test all(
+                digest -> ncodeunits(digest) == 64,
+                values(fasta_binding.sequence_digests),
+            )
+
+            gfa_opened_paths = String[]
+            gfa_close_calls = Ref(0)
+            gfa_binding = Mycelia._autocycler_streamed_semantic_gfa(
+                gfa_snapshot,
+                gfa_path,
+                temp_dir,
+                "Streaming test GFA";
+                reader_opener = (path::AbstractString) -> begin
+                    push!(gfa_opened_paths, String(path))
+                    return open(path, "r")
+                end,
+                reader_closer = (input::IO) -> begin
+                    gfa_close_calls[] += 1
+                    close(input)
+                    return nothing
+                end,
+            )
+            Test.@test gfa_opened_paths == [gfa_path]
+            Test.@test gfa_close_calls[] == 1
+            Test.@test propertynames(gfa_binding) ==
+                       (:path, :snapshot, :sequence_digests)
+            Test.@test gfa_binding.sequence_digests ==
+                       fasta_binding.sequence_digests
+
+            fasta_primary = ErrorException("Synthetic primary FASTA failure")
+            fasta_cleanup = ErrorException("Synthetic FASTA cleanup failure")
+            fasta_primary_result = Test.@test_logs (
+                :warn,
+                r"Autocycler Synthetic FASTA reader cleanup failed",
+            ) min_level=Logging.Warn begin
+                _autocycler_test_error() do
+                    Mycelia._autocycler_fasta_sequence_digest_map_from_reader(
+                        (throw(fasta_primary) for _value in (nothing,)),
+                        fasta_path,
+                        "Synthetic";
+                        reader_closer = (_reader::Any) -> throw(fasta_cleanup),
+                    )
+                end
+            end
+            Test.@test fasta_primary_result === fasta_primary
+
+            malformed_gfa_input = IOBuffer("not GFA\n")
+            gfa_cleanup = ErrorException("Synthetic GFA cleanup failure")
+            gfa_primary_result = Test.@test_logs (
+                :warn,
+                r"Autocycler Synthetic GFA reader cleanup failed",
+            ) min_level=Logging.Warn begin
+                _autocycler_test_error() do
+                    Mycelia._autocycler_gfa_sequence_digest_map_from_reader(
+                        malformed_gfa_input,
+                        gfa_path,
+                        "Synthetic";
+                        reader_closer = (input::IO) -> begin
+                            close(input)
+                            throw(gfa_cleanup)
+                        end,
+                    )
+                end
+            end
+            Test.@test gfa_primary_result isa ErrorException
+            Test.@test occursin(
+                "unknown GFA record type",
+                sprint(showerror, gfa_primary_result),
+            )
+
+            fasta_success_cleanup =
+                ErrorException("Synthetic successful FASTA close failure")
+            fasta_success_result = _autocycler_test_error() do
+                Mycelia._autocycler_fasta_sequence_digest_map(
+                    fasta_path,
+                    "Synthetic";
+                    reader_closer = (reader::Any) -> begin
+                        close(reader)
+                        throw(fasta_success_cleanup)
+                    end,
+                )
+            end
+            Test.@test fasta_success_result === fasta_success_cleanup
+
+            gfa_success_cleanup =
+                ErrorException("Synthetic successful GFA close failure")
+            gfa_success_result = _autocycler_test_error() do
+                Mycelia._autocycler_gfa_sequence_digest_map(
+                    gfa_path,
+                    "Synthetic";
+                    reader_closer = (input::IO) -> begin
+                        close(input)
+                        throw(gfa_success_cleanup)
+                    end,
+                )
+            end
+            Test.@test gfa_success_result === gfa_success_cleanup
         end
     end
 
@@ -2158,7 +2887,9 @@ Test.@testset "Autocycler wrapper" begin
                 Mycelia.AUTOCYCLER_ENV_NAME,
             )
             polished_lock_path =
-                Mycelia._autocycler_output_lock_path(polished_out_dir)
+                Mycelia._autocycler_output_lock_path_from_canonical(
+                    Mycelia._canonical_autocycler_output_path(polished_out_dir),
+                )
             environment_lock_path = joinpath(temp_dir, "polished-environment.pid")
             environment_lock_active = Ref(false)
             environment_lock_runner = function (
@@ -2538,7 +3269,7 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test mutated_graph_error isa ErrorException
             Test.@test occursin(
-                "Autocycler consensus GFA changed before immutable semantic " *
+                "Autocycler consensus GFA changed before streamed semantic " *
                 "validation",
                 sprint(showerror, mutated_graph_error),
             )
@@ -2571,7 +3302,7 @@ Test.@testset "Autocycler wrapper" begin
             end
             Test.@test malformed_raw_error isa ErrorException
             Test.@test occursin(
-                "Autocycler consensus FASTA changed before immutable semantic " *
+                "Autocycler consensus FASTA changed before streamed semantic " *
                 "validation",
                 sprint(showerror, malformed_raw_error),
             )
@@ -2767,14 +3498,20 @@ Test.@testset "Autocycler wrapper" begin
 
             cleanup_attempts = String[]
             cleanup_failure_path = Ref("")
-            cleanup_remover = function (path::AbstractString)
+            cleanup_remover = function (
+                    path::AbstractString,
+                    expected_snapshot::NamedTuple,
+            )
                 normalized_path = String(path)
                 push!(cleanup_attempts, normalized_path)
                 if endswith(normalized_path, "filtered_1.sam")
                     cleanup_failure_path[] = normalized_path
                     throw(ErrorException("synthetic cleanup failure"))
                 end
-                rm(normalized_path; force = true)
+                Mycelia._remove_exact_autocycler_polishing_intermediate!(
+                    normalized_path,
+                    expected_snapshot,
+                )
                 return nothing
             end
             cleanup_result = Test.@test_logs (
@@ -2818,14 +3555,20 @@ Test.@testset "Autocycler wrapper" begin
             recreated_path = Ref("")
             recreated_contents = Ref("")
             recreation_attempts = String[]
-            function recreating_remover(path::AbstractString)::Nothing
+            function recreating_remover(
+                    path::AbstractString,
+                    expected_snapshot::NamedTuple,
+            )::Nothing
                 normalized_path = String(path)
                 push!(recreation_attempts, normalized_path)
                 if length(recreation_attempts) == 1
                     recreated_path[] = normalized_path
                     recreated_contents[] = read(normalized_path, String)
                 end
-                rm(normalized_path; force = true)
+                Mycelia._remove_exact_autocycler_polishing_intermediate!(
+                    normalized_path,
+                    expected_snapshot,
+                )
                 if length(recreation_attempts) == 2
                     write(recreated_path[], recreated_contents[])
                 end
@@ -2862,6 +3605,7 @@ Test.@testset "Autocycler wrapper" begin
             cleanup_mutated_intermediate = Ref("")
             function cleanup_intermediate_mutating_remover(
                     path::AbstractString,
+                    expected_snapshot::NamedTuple,
             )::Nothing
                 normalized_path = String(path)
                 if endswith(normalized_path, "filtered_1.sam")
@@ -2869,7 +3613,10 @@ Test.@testset "Autocycler wrapper" begin
                     write(normalized_path, "mutated during failed cleanup\n")
                     throw(ErrorException("synthetic mutating cleanup failure"))
                 end
-                rm(normalized_path; force = true)
+                Mycelia._remove_exact_autocycler_polishing_intermediate!(
+                    normalized_path,
+                    expected_snapshot,
+                )
                 return nothing
             end
             cleanup_intermediate_mutation_error = Test.@test_logs (
@@ -2900,7 +3647,10 @@ Test.@testset "Autocycler wrapper" begin
             cleanup_mutation_out_dir =
                 joinpath(temp_dir, "cleanup-mutated-final-assembly")
             cleanup_mutated_final = Ref(false)
-            cleanup_mutating_remover = function (path::AbstractString)
+            cleanup_mutating_remover = function (
+                    path::AbstractString,
+                    expected_snapshot::NamedTuple,
+            )
                 if !cleanup_mutated_final[]
                     write(
                         joinpath(
@@ -2913,7 +3663,10 @@ Test.@testset "Autocycler wrapper" begin
                     )
                     cleanup_mutated_final[] = true
                 end
-                rm(path; force = true)
+                Mycelia._remove_exact_autocycler_polishing_intermediate!(
+                    path,
+                    expected_snapshot,
+                )
                 return nothing
             end
             cleanup_mutation_error = _autocycler_test_error() do
@@ -2930,7 +3683,7 @@ Test.@testset "Autocycler wrapper" begin
             Test.@test cleanup_mutation_error isa ErrorException
             Test.@test cleanup_mutated_final[]
             Test.@test occursin(
-                "Pypolca-polished Autocycler assembly changed before immutable " *
+                "Pypolca-polished Autocycler assembly changed before streamed " *
                 "semantic validation",
                 sprint(showerror, cleanup_mutation_error),
             )
@@ -3052,6 +3805,184 @@ Test.@testset "Autocycler wrapper" begin
         end
     end
 
+    Test.@testset "FASTQ reader cleanup precedence and ordering" begin
+        function throwing_reader(error::Any)::Any
+            return (throw(error) for _value in (nothing,))
+        end
+
+        ordinary_primary = ArgumentError("synthetic FASTQ primary failure")
+        ordinary_cleanup = ErrorException("synthetic reader close failure")
+        observed_ordinary_primary = Test.@test_logs (
+            :warn,
+            r"Synthetic FASTQ reader cleanup failed",
+        ) min_level=Logging.Warn begin
+            _autocycler_test_error() do
+                Mycelia._validate_autocycler_fastq_reader(
+                    throwing_reader(ordinary_primary),
+                    "synthetic.fastq",
+                    "Synthetic";
+                    reader_closer = (_reader::Any) -> throw(ordinary_cleanup),
+                )
+            end
+        end
+        Test.@test observed_ordinary_primary === ordinary_primary
+
+        primary_interrupt = InterruptException()
+        observed_primary_interrupt = Test.@test_logs (
+            :warn,
+            r"Synthetic FASTQ reader cleanup failed",
+        ) min_level=Logging.Warn begin
+            _autocycler_test_error() do
+                Mycelia._validate_autocycler_fastq_reader(
+                    throwing_reader(primary_interrupt),
+                    "synthetic.fastq",
+                    "Synthetic";
+                    reader_closer = (_reader::Any) -> throw(ordinary_cleanup),
+                )
+            end
+        end
+        Test.@test observed_primary_interrupt === primary_interrupt
+
+        cleanup_interrupt = InterruptException()
+        observed_cleanup_interrupt = _autocycler_test_error() do
+            Mycelia._validate_autocycler_fastq_reader(
+                throwing_reader(ordinary_primary),
+                "synthetic.fastq",
+                "Synthetic";
+                reader_closer = (_reader::Any) -> throw(cleanup_interrupt),
+            )
+        end
+        Test.@test observed_cleanup_interrupt === cleanup_interrupt
+
+        mktempdir() do temp_dir
+            valid_read = joinpath(temp_dir, "valid.fastq")
+            write(valid_read, "@read\nACGT\n+\nIIII\n")
+            valid_reader = Mycelia.open_fastx(valid_read)
+            success_cleanup_error =
+                ErrorException("synthetic successful reader close failure")
+            observed_success_cleanup = _autocycler_test_error() do
+                Mycelia._validate_autocycler_fastq_reader(
+                    valid_reader,
+                    valid_read,
+                    "Valid";
+                    reader_closer = (reader::Any) -> begin
+                        close(reader)
+                        throw(success_cleanup_error)
+                    end,
+                )
+            end
+            Test.@test observed_success_cleanup === success_cleanup_error
+
+            short_reads_1 = joinpath(temp_dir, "R1.fastq")
+            short_reads_2 = joinpath(temp_dir, "R2.fastq")
+            write(short_reads_1, "@pair/1\nACGT\n+\nIIII\n")
+            write(short_reads_2, "@pair/2\nACGT\n+\nIIII\n")
+            opener_primary = ErrorException("synthetic R2 open failure")
+            opener_cleanup_interrupt = InterruptException()
+            opener_calls = Ref(0)
+            opener_reader = Ref(:reader_1)
+            opener_close_calls = Ref(0)
+            observed_opener_cleanup = _autocycler_test_error() do
+                Mycelia._validate_autocycler_paired_fastqs(
+                    short_reads_1,
+                    short_reads_2;
+                    reader_opener = (_path::AbstractString) -> begin
+                        opener_calls[] += 1
+                        opener_calls[] == 1 && return opener_reader
+                        throw(opener_primary)
+                    end,
+                    reader_closer = (reader::Any) -> begin
+                        Test.@test reader === opener_reader
+                        opener_close_calls[] += 1
+                        throw(opener_cleanup_interrupt)
+                    end,
+                )
+            end
+            Test.@test observed_opener_cleanup === opener_cleanup_interrupt
+            Test.@test opener_calls[] == 2
+            Test.@test opener_close_calls[] == 1
+
+            reader_1 = Mycelia.open_fastx(short_reads_1)
+            reader_2 = Mycelia.open_fastx(short_reads_2)
+            close_order = Symbol[]
+            paired_success_cleanup =
+                ErrorException("synthetic paired close failure")
+            observed_paired_success_cleanup = _autocycler_test_error() do
+                Mycelia._validate_autocycler_paired_fastq_readers(
+                    reader_1,
+                    reader_2;
+                    reader_closer = (reader::Any) -> begin
+                        if reader === reader_1
+                            push!(close_order, :reader_1)
+                            close(reader)
+                            throw(paired_success_cleanup)
+                        end
+                        Test.@test reader === reader_2
+                        push!(close_order, :reader_2)
+                        close(reader)
+                        return nothing
+                    end,
+                )
+            end
+            Test.@test observed_paired_success_cleanup ===
+                       paired_success_cleanup
+            Test.@test close_order == [:reader_1, :reader_2]
+        end
+
+        paired_primary = ArgumentError("synthetic paired FASTQ primary")
+        paired_reader_1 = throwing_reader(paired_primary)
+        paired_reader_2 = Ref(:reader_2)
+        paired_cleanup_interrupt = InterruptException()
+        paired_close_order = Symbol[]
+        observed_paired_cleanup_interrupt = _autocycler_test_error() do
+            Mycelia._validate_autocycler_paired_fastq_readers(
+                paired_reader_1,
+                paired_reader_2;
+                reader_closer = (reader::Any) -> begin
+                    if reader === paired_reader_1
+                        push!(paired_close_order, :reader_1)
+                        return nothing
+                    end
+                    Test.@test reader === paired_reader_2
+                    push!(paired_close_order, :reader_2)
+                    throw(paired_cleanup_interrupt)
+                end,
+            )
+        end
+        Test.@test observed_paired_cleanup_interrupt ===
+                   paired_cleanup_interrupt
+        Test.@test paired_close_order == [:reader_1, :reader_2]
+
+        paired_primary_interrupt = InterruptException()
+        interrupt_reader_1 = throwing_reader(paired_primary_interrupt)
+        interrupt_reader_2 = Ref(:reader_2)
+        paired_ordinary_cleanup = ErrorException("synthetic paired close")
+        interrupt_close_order = Symbol[]
+        observed_paired_primary_interrupt = Test.@test_logs (
+            :warn,
+            r"paired FASTQ readers cleanup failed",
+        ) min_level=Logging.Warn begin
+            _autocycler_test_error() do
+                Mycelia._validate_autocycler_paired_fastq_readers(
+                    interrupt_reader_1,
+                    interrupt_reader_2;
+                    reader_closer = (reader::Any) -> begin
+                        if reader === interrupt_reader_1
+                            push!(interrupt_close_order, :reader_1)
+                            throw(paired_ordinary_cleanup)
+                        end
+                        Test.@test reader === interrupt_reader_2
+                        push!(interrupt_close_order, :reader_2)
+                        return nothing
+                    end,
+                )
+            end
+        end
+        Test.@test observed_paired_primary_interrupt ===
+                   paired_primary_interrupt
+        Test.@test interrupt_close_order == [:reader_1, :reader_2]
+    end
+
     Test.@testset "Failed polishing cleans only route-owned intermediates" begin
         mktempdir() do temp_dir
             long_reads = joinpath(temp_dir, "long.fastq")
@@ -3107,6 +4038,29 @@ Test.@testset "Autocycler wrapper" begin
                 Test.@test isfile(polishing_plan.assembly)
                 Test.@test isfile(polishing_plan.pypolca_report)
             end
+
+            primary_tool_error = ErrorException(
+                "synthetic tool error before failure cleanup",
+            )
+            cleanup_interrupt_error = _autocycler_test_error() do
+                Mycelia._run_autocycler_polished(
+                    long_reads,
+                    short_reads_1,
+                    short_reads_2,
+                    joinpath(temp_dir, "failure-cleanup-interrupt");
+                    dependency_checker = _autocycler_test_toolchain,
+                    runner = step -> begin
+                        _autocycler_test_runner!(step)
+                        step.name == :pypolca && throw(primary_tool_error)
+                        return nothing
+                    end,
+                    intermediate_remover = (
+                            _path::AbstractString,
+                            _expected_snapshot::NamedTuple,
+                    ) -> throw(InterruptException()),
+                )
+            end
+            Test.@test cleanup_interrupt_error isa InterruptException
         end
     end
 
@@ -3816,7 +4770,11 @@ Test.@testset "Autocycler blank environment paths fail before output" begin
                 sprint(showerror, error),
             )
             Test.@test !ispath(out_dir)
-            Test.@test !ispath(Mycelia._autocycler_output_lock_path(out_dir))
+            Test.@test !ispath(
+                Mycelia._autocycler_output_lock_path_from_canonical(
+                    Mycelia._canonical_autocycler_output_path(out_dir),
+                ),
+            )
         end
     end
 end
@@ -3940,25 +4898,30 @@ Test.@testset "Autocycler bounded reserved input spooling" begin
 
         displaced_root = joinpath(temp_dir, "displaced-autocycler-spool")
         replacement_root = Ref("")
-        root_replacement_error = _autocycler_test_error() do
-            Mycelia._autocycler_spooled_input_snapshots(
-                (long_reads,),
-                ("Long-read FASTQ",);
-                spool_parent = scratch_root,
-                after_copy_hook = binding -> begin
-                    replacement_root[] = dirname(binding.spool_path)
-                    mv(replacement_root[], displaced_root)
-                    mkpath(replacement_root[])
-                    write(
-                        joinpath(replacement_root[], "replacement-marker"),
-                        "retain",
-                    )
-                end,
-            )
+        root_replacement_error = Test.@test_logs (
+            :warn,
+            r"input spool cleanup failed while preserving the primary error",
+        ) min_level=Logging.Warn match_mode=:any begin
+            _autocycler_test_error() do
+                Mycelia._autocycler_spooled_input_snapshots(
+                    (long_reads,),
+                    ("Long-read FASTQ",);
+                    spool_parent = scratch_root,
+                    after_copy_hook = binding -> begin
+                        replacement_root[] = dirname(binding.spool_path)
+                        mv(replacement_root[], displaced_root)
+                        mkpath(replacement_root[])
+                        write(
+                            joinpath(replacement_root[], "replacement-marker"),
+                            "retain",
+                        )
+                    end,
+                )
+            end
         end
         Test.@test root_replacement_error isa ErrorException
         Test.@test occursin(
-            "spool root changed",
+            "private stable input snapshot was replaced",
             sprint(showerror, root_replacement_error),
         )
         Test.@test read(
@@ -3967,6 +4930,144 @@ Test.@testset "Autocycler bounded reserved input spooling" begin
         ) == "retain"
         rm(replacement_root[]; recursive = true, force = true)
         rm(displaced_root; recursive = true, force = true)
+        Test.@test Set(readdir(scratch_root)) == before_entries
+
+        function replace_spool_root!(
+                spool_root::AbstractString,
+                displaced_path::AbstractString,
+        )::Nothing
+            mv(spool_root, displaced_path)
+            mkpath(spool_root)
+            write(joinpath(spool_root, "replacement-marker"), "retain")
+            return nothing
+        end
+
+        copy_primary = ErrorException("synthetic primary copy failure")
+        copy_root = Ref("")
+        copy_displaced = joinpath(temp_dir, "copy-primary-displaced")
+        copy_error = Test.@test_logs (
+            :warn,
+            r"input spool cleanup failed while preserving the primary error",
+        ) min_level=Logging.Warn match_mode=:any begin
+            _autocycler_test_error() do
+                Mycelia._autocycler_spooled_input_snapshots(
+                    (long_reads,),
+                    ("Long-read FASTQ",);
+                    spool_parent = scratch_root,
+                    after_copy_hook = binding -> begin
+                        copy_root[] = dirname(binding.spool_path)
+                        replace_spool_root!(copy_root[], copy_displaced)
+                        throw(copy_primary)
+                    end,
+                )
+            end
+        end
+        Test.@test copy_error === copy_primary
+        Test.@test read(
+            joinpath(copy_root[], "replacement-marker"),
+            String,
+        ) == "retain"
+        Test.@test isdir(copy_displaced)
+        rm(copy_root[]; recursive = true, force = true)
+        rm(copy_displaced; recursive = true, force = true)
+
+        action_primary = ErrorException("synthetic primary action failure")
+        action_root = Ref("")
+        action_displaced = joinpath(temp_dir, "action-primary-displaced")
+        action_error = Test.@test_logs (
+            :warn,
+            r"input spool cleanup failed while preserving the primary error",
+        ) min_level=Logging.Warn match_mode=:any begin
+            _autocycler_test_error() do
+                Mycelia._with_autocycler_spooled_input_snapshots(
+                    (long_reads,),
+                    ("Long-read FASTQ",),
+                ) do bindings
+                    binding = only(bindings)
+                    action_root[] = binding.spool_root
+                    replace_spool_root!(action_root[], action_displaced)
+                    throw(action_primary)
+                end
+            end
+        end
+        Test.@test action_error === action_primary
+        Test.@test isfile(joinpath(action_root[], "replacement-marker"))
+        Test.@test isdir(action_displaced)
+        rm(action_root[]; recursive = true, force = true)
+        rm(action_displaced; recursive = true, force = true)
+
+        interrupt_root = Ref("")
+        interrupt_displaced = joinpath(temp_dir, "interrupt-displaced")
+        interrupt_error = Test.@test_logs (
+            :warn,
+            r"input spool cleanup failed while preserving the primary error",
+        ) min_level=Logging.Warn match_mode=:any begin
+            _autocycler_test_error() do
+                Mycelia._with_autocycler_spooled_input_snapshots(
+                    (long_reads,),
+                    ("Long-read FASTQ",);
+                    spool_parent = scratch_root,
+                ) do bindings
+                    interrupt_root[] = only(bindings).spool_root
+                    replace_spool_root!(
+                        interrupt_root[],
+                        interrupt_displaced,
+                    )
+                    throw(InterruptException())
+                end
+            end
+        end
+        Test.@test interrupt_error isa InterruptException
+        Test.@test isfile(joinpath(interrupt_root[], "replacement-marker"))
+        Test.@test isdir(interrupt_displaced)
+        rm(interrupt_root[]; recursive = true, force = true)
+        rm(interrupt_displaced; recursive = true, force = true)
+
+        synthetic_identity = (; path = "synthetic-autocycler-spool")
+        cleanup_interrupt = _autocycler_test_error() do
+            Mycelia._cleanup_autocycler_input_spool_after_failure!(
+                synthetic_identity,
+                ErrorException("ordinary primary");
+                cleanup_runner = () -> throw(InterruptException()),
+            )
+        end
+        Test.@test cleanup_interrupt isa InterruptException
+
+        preserved_primary_interrupt = Test.@test_logs (
+            :warn,
+            r"input spool cleanup failed while preserving the primary error",
+        ) min_level=Logging.Warn begin
+            Mycelia._cleanup_autocycler_input_spool_after_failure!(
+                synthetic_identity,
+                InterruptException();
+                cleanup_runner = () -> throw(InterruptException()),
+            )
+            :primary_interrupt_preserved
+        end
+        Test.@test preserved_primary_interrupt == :primary_interrupt_preserved
+
+        success_root = Ref("")
+        success_displaced = joinpath(temp_dir, "success-displaced")
+        success_cleanup_error = _autocycler_test_error() do
+            Mycelia._with_autocycler_spooled_input_snapshots(
+                (long_reads,),
+                ("Long-read FASTQ",),
+            ) do bindings
+                binding = only(bindings)
+                success_root[] = binding.spool_root
+                replace_spool_root!(success_root[], success_displaced)
+                return :completed
+            end
+        end
+        Test.@test success_cleanup_error isa ErrorException
+        Test.@test occursin(
+            "spool root changed before cleanup",
+            sprint(showerror, success_cleanup_error),
+        )
+        Test.@test isfile(joinpath(success_root[], "replacement-marker"))
+        Test.@test isdir(success_displaced)
+        rm(success_root[]; recursive = true, force = true)
+        rm(success_displaced; recursive = true, force = true)
         Test.@test Set(readdir(scratch_root)) == before_entries
 
         output_reserved = Ref(false)
@@ -4197,10 +5298,11 @@ Test.@testset "Autocycler input content lifecycle binding" begin
                 close(compressor)
             end
         end
-        gzip_binding = Mycelia._autocycler_spooled_input_snapshot(
-            gzip_input,
-            "Gzip long-read FASTQ",
+        gzip_bindings = Mycelia._autocycler_spooled_input_snapshots(
+            (gzip_input,),
+            ("Gzip long-read FASTQ",),
         )
+        gzip_binding = only(gzip_bindings.inputs)
         gzip_spool_root = gzip_binding.spool_root
         try
             Test.@test endswith(gzip_binding.semantic_path, ".fastq.gz")
@@ -4221,27 +5323,19 @@ Test.@testset "Autocycler input content lifecycle binding" begin
         write(malformed_pair_r2, ">pair/2\nACGT\n")
         malformed_spool_roots = String[]
         malformed_pair_error = _autocycler_test_error() do
-            Mycelia._with_autocycler_spooled_input_snapshot(
-                malformed_pair_r1,
-                "Malformed pair R1",
-            ) do short_read_1_binding
-                push!(
+            Mycelia._with_autocycler_spooled_input_snapshots(
+                (malformed_pair_r1, malformed_pair_r2),
+                ("Malformed pair R1", "Malformed pair R2"),
+            ) do bindings
+                short_read_1_binding, short_read_2_binding = bindings
+                append!(
                     malformed_spool_roots,
-                    short_read_1_binding.spool_root,
+                    String[binding.spool_root for binding in bindings],
                 )
-                return Mycelia._with_autocycler_spooled_input_snapshot(
-                    malformed_pair_r2,
-                    "Malformed pair R2",
-                ) do short_read_2_binding
-                    push!(
-                        malformed_spool_roots,
-                        short_read_2_binding.spool_root,
-                    )
-                    return Mycelia._validate_autocycler_paired_fastqs(
-                        short_read_1_binding.semantic_path,
-                        short_read_2_binding.semantic_path,
-                    )
-                end
+                return Mycelia._validate_autocycler_paired_fastqs(
+                    short_read_1_binding.semantic_path,
+                    short_read_2_binding.semantic_path,
+                )
             end
         end
         Test.@test malformed_pair_error isa ArgumentError
