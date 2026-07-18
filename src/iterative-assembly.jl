@@ -434,95 +434,96 @@ const _CHECKPOINT_ITERATION_STAT_KEYS = Dict{String, Symbol}(
     "total_reads" => :total_reads,
     "improvement_rate" => :improvement_rate,
     "runtime_seconds" => :runtime_seconds,
-    "memory_kmers" => :memory_kmers,
+    "memory_kmers" => :memory_kmers
 )
 const _CHECKPOINT_INDEL_TELEMETRY_KEYS = Dict{String, Symbol}(
-    string(key) => key for key in (
-        :profile_requested,
-        :requested,
-        :attempted,
-        :completed,
-        :truncated,
-        :engaged,
-        :admitted,
-        :admitted_windows,
-        :rejected_windows,
-        :graph_source,
-        :decision_reason,
-        :frontier_work_limit,
-        :frontier_metric_sample_limit,
-        :raw_frontier_evaluated,
-        :cleaned_frontier_evaluated,
-        :bounded_windowing_forced,
-        :substitution_decode_memory_gated,
-        :raw_frontier_metrics,
-        :cleaned_frontier_metrics,
-        :graph_cleanup,
-        :ladder_index,
-        :k,
-        :iteration,
-    )
+    string(key) => key
+for key in (
+    :profile_requested,
+    :requested,
+    :attempted,
+    :completed,
+    :truncated,
+    :engaged,
+    :admitted,
+    :admitted_windows,
+    :rejected_windows,
+    :graph_source,
+    :decision_reason,
+    :frontier_work_limit,
+    :frontier_metric_sample_limit,
+    :raw_frontier_evaluated,
+    :cleaned_frontier_evaluated,
+    :bounded_windowing_forced,
+    :substitution_decode_memory_gated,
+    :raw_frontier_metrics,
+    :cleaned_frontier_metrics,
+    :graph_cleanup,
+    :ladder_index,
+    :k,
+    :iteration
 )
-const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS =
-    Set{Symbol}(values(_CHECKPOINT_INDEL_TELEMETRY_KEYS))
+)
+const _CHECKPOINT_REQUIRED_INDEL_TELEMETRY_KEYS = Set{Symbol}(values(_CHECKPOINT_INDEL_TELEMETRY_KEYS))
 const _CHECKPOINT_INDEL_METRIC_KEYS = Dict{String, Symbol}(
-    string(key) => key for key in (
-        :anchored,
-        :window_length,
-        :vertex_count,
-        :edge_count,
-        :branch_vertices,
-        :join_vertices,
-        :branch_fraction,
-        :join_fraction,
-        :max_out_degree,
-        :frontier_area,
-        :edge_expansions,
-        :peak_frontier,
-        :completed_columns,
-        :frontier_work,
-        :reason,
-        :read_index,
-        :window_start,
-        :window_stop,
-        :admitted,
-    )
+    string(key) => key
+for key in (
+    :anchored,
+    :window_length,
+    :vertex_count,
+    :edge_count,
+    :branch_vertices,
+    :join_vertices,
+    :branch_fraction,
+    :join_fraction,
+    :max_out_degree,
+    :frontier_area,
+    :edge_expansions,
+    :peak_frontier,
+    :completed_columns,
+    :frontier_work,
+    :reason,
+    :read_index,
+    :window_start,
+    :window_stop,
+    :admitted
 )
-const _CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS =
-    Base.Set{Symbol}(values(_CHECKPOINT_INDEL_METRIC_KEYS))
+)
+const _CHECKPOINT_REQUIRED_INDEL_METRIC_KEYS = Base.Set{Symbol}(values(_CHECKPOINT_INDEL_METRIC_KEYS))
 const _CHECKPOINT_ENCODE_ERROR_INDEL_METRIC_KEYS = Base.Set{Symbol}((
     :anchored,
     :reason,
     :read_index,
     :window_start,
     :window_stop,
-    :admitted,
+    :admitted
 ))
 const _CHECKPOINT_GRAPH_SOURCES = Dict{String, Symbol}(
     "raw" => :raw,
     "cleaned" => :cleaned,
     "mixed" => :mixed,
-    "substitution" => :substitution,
+    "substitution" => :substitution
 )
 const _CHECKPOINT_DECISION_REASONS = Dict{String, Symbol}(
-    string(reason) => reason for reason in (
-        :not_evaluated,
-        :profile_disabled,
-        :unrestricted_semantics,
-        :explicit_decode_floor,
-        :bounded_windows_unavailable,
-        :no_candidate_windows,
-        :weighted_graph_memory_limit,
-        :weighted_graph_out_of_memory,
-        :raw_frontier_affordable,
-        :cleaning_out_of_memory,
-        :cleaning_memory_limit,
-        :cleaning_lost_window_anchor,
-        :sparse_frontier_affordable,
-        :mixed_frontier_affordable,
-        :cleaned_frontier_affordable,
-        :frontier_budget_exceeded,
-    )
+    string(reason) => reason
+for reason in (
+    :not_evaluated,
+    :profile_disabled,
+    :unrestricted_semantics,
+    :explicit_decode_floor,
+    :bounded_windows_unavailable,
+    :no_candidate_windows,
+    :weighted_graph_memory_limit,
+    :weighted_graph_out_of_memory,
+    :raw_frontier_affordable,
+    :cleaning_out_of_memory,
+    :cleaning_memory_limit,
+    :cleaning_lost_window_anchor,
+    :sparse_frontier_affordable,
+    :mixed_frontier_affordable,
+    :cleaned_frontier_affordable,
+    :frontier_budget_exceeded
+)
 )
 const _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS = Base.Set{Symbol}((
     :no_candidate_windows,
@@ -535,19 +536,20 @@ const _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS = Base.Set{Symbol}((
     :sparse_frontier_affordable,
     :mixed_frontier_affordable,
     :cleaned_frontier_affordable,
-    :frontier_budget_exceeded,
+    :frontier_budget_exceeded
 ))
 const _CHECKPOINT_FRONTIER_REASONS = Dict{String, Symbol}(
-    string(reason) => reason for reason in (
-        :complete,
-        :encode_error,
-        :empty_graph,
-        :empty_observation,
-        :unanchored_start,
-        :no_start_state,
-        :work_limit,
-        :frontier_exhausted,
-    )
+    string(reason) => reason
+for reason in (
+    :complete,
+    :encode_error,
+    :empty_graph,
+    :empty_observation,
+    :unanchored_start,
+    :no_start_state,
+    :work_limit,
+    :frontier_exhausted
+)
 )
 const _CHECKPOINT_GRAPH_CLEANUP_KEYS = Set{String}((
     "graph_cleanup_vertices_before",
@@ -562,7 +564,7 @@ const _CHECKPOINT_GRAPH_CLEANUP_KEYS = Set{String}((
     "current_live_bytes",
     "projected_graph_variants",
     "projected_peak_bytes",
-    "memory_limit",
+    "memory_limit"
 ))
 const _CHECKPOINT_ROOT_KEYS = Set{String}((
     "resume_configuration",
@@ -582,7 +584,7 @@ const _CHECKPOINT_ROOT_KEYS = Set{String}((
     "current_fastq_file",
     "current_fastq_sha256",
     "timestamp",
-    "runtime_so_far",
+    "runtime_so_far"
 ))
 
 function _checkpoint_key_string(key::Any, context::String)::String
@@ -604,7 +606,7 @@ end
 function _checkpoint_checked_add(
         left::Int,
         right::Int,
-        field::String,
+        field::String
 )::Int
     try
         return Base.Checked.checked_add(left, right)
@@ -633,7 +635,7 @@ end
 function _checkpoint_enum_symbol(
         value::Any,
         allowed::Dict{String, Symbol},
-        field::String,
+        field::String
 )::Symbol
     (value isa AbstractString || value isa Symbol) || throw(ArgumentError(
         "checkpoint $field must be a string"))
@@ -646,7 +648,7 @@ end
 function _checkpoint_symbolized_dict(
         serialized::AbstractDict,
         allowed::Dict{String, Symbol},
-        context::String,
+        context::String
 )::Dict{Symbol, Any}
     length(serialized) <= length(allowed) || throw(ArgumentError(
         "$context contains too many fields"))
@@ -676,7 +678,7 @@ end
 
 function _checkpoint_configuration_exact_equal(
         saved::Any,
-        expected::Any,
+        expected::Any
 )::Bool
     if saved isa AbstractDict || expected isa AbstractDict
         saved isa AbstractDict && expected isa AbstractDict || return false
@@ -686,14 +688,14 @@ function _checkpoint_configuration_exact_equal(
         return all(
             _checkpoint_configuration_exact_equal(
                 saved_dict[key], expected_dict[key])
-            for key in keys(expected_dict)
+        for key in keys(expected_dict)
         )
     elseif saved isa AbstractVector || expected isa AbstractVector
         saved isa AbstractVector && expected isa AbstractVector || return false
         length(saved) == length(expected) || return false
         return all(
             _checkpoint_configuration_exact_equal(saved_value, expected_value)
-            for (saved_value, expected_value) in zip(saved, expected)
+        for (saved_value, expected_value) in zip(saved, expected)
         )
     end
     return typeof(saved) === typeof(expected) && isequal(saved, expected)
@@ -707,11 +709,11 @@ function _validate_checkpoint_root_types(parsed::AbstractDict)::Nothing
     parsed["corrector_diagnostics"] isa AbstractDict || throw(ArgumentError(
         "checkpoint corrector_diagnostics must be an object"))
     for key in (
-            "k_progression",
-            "indel_rung_telemetry",
-            "skip_fractions",
-            "cheap_correction_counts",
-            "decode_gated_rungs",
+        "k_progression",
+        "indel_rung_telemetry",
+        "skip_fractions",
+        "cheap_correction_counts",
+        "decode_gated_rungs"
     )
         parsed[key] isa AbstractVector || throw(ArgumentError(
             "checkpoint $key must be an array"))
@@ -721,11 +723,11 @@ function _validate_checkpoint_root_types(parsed::AbstractDict)::Nothing
             "checkpoint $key must be a string"))
     end
     for key in (
-            "current_k",
-            "current_iteration",
-            "next_k",
-            "next_iteration",
-            "total_improvements",
+        "current_k",
+        "current_iteration",
+        "next_k",
+        "next_iteration",
+        "total_improvements"
     )
         _checkpoint_nonnegative_int(parsed[key], key)
     end
@@ -750,7 +752,7 @@ end
 
 function _parse_iterative_checkpoint(
         path::String;
-        after_initial_size_check::F = () -> nothing,
+        after_initial_size_check::F = () -> nothing
 )::AbstractDict where {F}
     parsed = Base.open(path, "r") do io
         _validate_iterative_checkpoint_size(Base.stat(io).size)
@@ -780,7 +782,7 @@ end
 
 function _load_hashed_input_fastq(
         canonical_fastq::String;
-        after_initial_hash::F = () -> nothing,
+        after_initial_hash::F = () -> nothing
 )::Tuple{String, Vector{FASTX.FASTQ.Record}} where {F}
     return open(canonical_fastq, "r") do io
         initial_sha256 = SHA.bytes2hex(SHA.sha256(io))
@@ -807,11 +809,12 @@ end
 
 function _canonical_output_subdirectory(
         output_dir::String,
-        name::String,
+        name::String
 )::String
     candidate = joinpath(output_dir, name)
-    islink(candidate) && !ispath(candidate) && throw(ArgumentError(
-        "output $name directory is a broken symlink"))
+    islink(candidate) && !ispath(candidate) &&
+        throw(ArgumentError(
+            "output $name directory is a broken symlink"))
     if ispath(candidate)
         isdir(candidate) || throw(ArgumentError(
             "output $name path exists but is not a directory"))
@@ -820,7 +823,7 @@ function _canonical_output_subdirectory(
     end
     canonical = realpath(candidate)
     canonical != output_dir &&
-        _path_is_within_directory(canonical, output_dir) || throw(ArgumentError(
+    _path_is_within_directory(canonical, output_dir) || throw(ArgumentError(
         "output $name directory must resolve inside output_dir"))
     return canonical
 end
@@ -830,7 +833,7 @@ function _load_validated_checkpoint_fastq(
         expected_sha256::AbstractString,
         canonical_output_dir::String,
         expected_basename::String;
-        after_initial_hash::F = () -> nothing,
+        after_initial_hash::F = () -> nothing
 )::Tuple{String, Vector{FASTX.FASTQ.Record}} where {F}
     occursin(r"^[0-9a-f]{64}$", expected_sha256) || throw(ArgumentError(
         "checkpoint current_fastq_sha256 must be a lowercase SHA-256 digest"))
@@ -870,13 +873,11 @@ function _checkpoint_indel_params(
         "base_error_rate" => params.base_error_rate,
         "insertion_fraction" => params.insertion_fraction,
         "deletion_fraction" => params.deletion_fraction,
-        "insertion_extend_probability" =>
-            params.insertion_extend_probability,
-        "deletion_extend_probability" =>
-            params.deletion_extend_probability,
+        "insertion_extend_probability" => params.insertion_extend_probability,
+        "deletion_extend_probability" => params.deletion_extend_probability,
         "deletion_max_run" => params.deletion_max_run,
         "max_insertion_run" => params.max_insertion_run,
-        "band_width" => params.band_width,
+        "band_width" => params.band_width
     )
 end
 
@@ -904,7 +905,7 @@ function _iterative_checkpoint_configuration(;
         decode_gate_density::Union{Nothing, Float64},
         indel_params::Union{Nothing, IndelDecodeParams},
         substitution_error_rate::Union{Nothing, Float64},
-        indel_schedule::Symbol,
+        indel_schedule::Symbol
 )::Dict{String, Any}
     return Dict{String, Any}(
         "version" => _ITERATIVE_CHECKPOINT_CONFIGURATION_VERSION,
@@ -931,13 +932,13 @@ function _iterative_checkpoint_configuration(;
         "decode_gate_density" => decode_gate_density,
         "indel_params" => _checkpoint_indel_params(indel_params),
         "substitution_error_rate" => substitution_error_rate,
-        "indel_schedule" => string(indel_schedule),
+        "indel_schedule" => string(indel_schedule)
     )
 end
 
 function _validate_checkpoint_configuration(
         resume_data::AbstractDict,
-        configuration::Dict{String, Any},
+        configuration::Dict{String, Any}
 )::Nothing
     saved = get(resume_data, "resume_configuration", nothing)
     saved isa AbstractDict || throw(ArgumentError(
@@ -947,14 +948,13 @@ function _validate_checkpoint_configuration(
     expected_configuration = _checkpoint_configuration_dict(configuration)
     _checkpoint_configuration_exact_equal(
         saved_configuration, expected_configuration) && return nothing
-    mismatched = sort!(String[
-        key for key in union(
-            keys(saved_configuration), keys(expected_configuration))
-        if !haskey(saved_configuration, key) ||
-           !haskey(expected_configuration, key) ||
-           !_checkpoint_configuration_exact_equal(
-            saved_configuration[key], expected_configuration[key])
-    ])
+    mismatched = sort!(String[key
+                              for key in union(
+                                      keys(saved_configuration), keys(expected_configuration))
+                              if !haskey(saved_configuration, key) ||
+                                 !haskey(expected_configuration, key) ||
+                                 !_checkpoint_configuration_exact_equal(
+                                     saved_configuration[key], expected_configuration[key])])
     throw(ArgumentError(
         "checkpoint resume_configuration does not match this invocation: " *
         join(mismatched, ", ")))
@@ -1000,13 +1000,13 @@ function _empty_indel_rung_telemetry(profile_requested::Bool)::Dict{Symbol, Any}
         :substitution_decode_memory_gated => false,
         :raw_frontier_metrics => Dict{Symbol, Any}[],
         :cleaned_frontier_metrics => Dict{Symbol, Any}[],
-        :graph_cleanup => Dict{String, Any}(),
+        :graph_cleanup => Dict{String, Any}()
     )
 end
 
 function _validate_indel_telemetry_counters(
         telemetry::AbstractDict;
-        context::AbstractString = "indel telemetry",
+        context::AbstractString = "indel telemetry"
 )::Nothing
     counter_keys = (:requested, :attempted, :completed, :truncated, :engaged)
     for key in counter_keys
@@ -1034,18 +1034,18 @@ end
 
 function _symbolize_indel_frontier_metric(
         metric::AbstractDict,
-        require_schema_v2::Bool = false,
+        require_schema_v2::Bool = false
 )::Dict{Symbol, Any}
     normalized = _checkpoint_symbolized_dict(
         metric,
         _CHECKPOINT_INDEL_METRIC_KEYS,
-        "checkpoint indel frontier metric",
+        "checkpoint indel frontier metric"
     )
     if haskey(normalized, :reason)
         normalized[:reason] = _checkpoint_enum_symbol(
             normalized[:reason],
             _CHECKPOINT_FRONTIER_REASONS,
-            "indel frontier metric reason",
+            "indel frontier metric reason"
         )
     elseif require_schema_v2
         throw(ArgumentError(
@@ -1070,20 +1070,20 @@ function _symbolize_indel_frontier_metric(
             normalized[key], "indel frontier metric $key")
     end
     for key in (
-            :window_length,
-            :vertex_count,
-            :edge_count,
-            :branch_vertices,
-            :join_vertices,
-            :max_out_degree,
-            :frontier_area,
-            :edge_expansions,
-            :peak_frontier,
-            :completed_columns,
-            :frontier_work,
-            :read_index,
-            :window_start,
-            :window_stop,
+        :window_length,
+        :vertex_count,
+        :edge_count,
+        :branch_vertices,
+        :join_vertices,
+        :max_out_degree,
+        :frontier_area,
+        :edge_expansions,
+        :peak_frontier,
+        :completed_columns,
+        :frontier_work,
+        :read_index,
+        :window_start,
+        :window_stop
     )
         haskey(normalized, key) || continue
         normalized[key] = _checkpoint_nonnegative_int(
@@ -1105,7 +1105,7 @@ end
 function _validate_indel_frontier_metric(
         metric::Dict{Symbol, Any},
         k::Int,
-        work_limit::Int,
+        work_limit::Int
 )::Nothing
     read_index = metric[:read_index]
     window_start = metric[:window_start]
@@ -1149,7 +1149,7 @@ function _validate_indel_frontier_metric(
             "checkpoint indel frontier metric positive completed_columns " *
             "requires a positive peak_frontier"))
         maximum_frontier_area = if completed_columns <= div(
-                typemax(Int), metric[:peak_frontier])
+            typemax(Int), metric[:peak_frontier])
             completed_columns * metric[:peak_frontier]
         else
             typemax(Int)
@@ -1242,12 +1242,12 @@ end
 
 function _normalize_indel_rung_telemetry(
         row::AbstractDict,
-        require_schema_v2::Bool = true,
+        require_schema_v2::Bool = true
 )::Dict{Symbol, Any}
     serialized = _checkpoint_symbolized_dict(
         row,
         _CHECKPOINT_INDEL_TELEMETRY_KEYS,
-        "checkpoint indel telemetry row",
+        "checkpoint indel telemetry row"
     )
     if require_schema_v2
         missing = sort!(collect(setdiff(
@@ -1258,7 +1258,7 @@ function _normalize_indel_rung_telemetry(
     end
     profile_requested = _checkpoint_bool(
         serialized[:profile_requested],
-        "indel telemetry profile_requested",
+        "indel telemetry profile_requested"
     )
     normalized = _empty_indel_rung_telemetry(profile_requested)
     merge!(normalized, serialized)
@@ -1266,17 +1266,17 @@ function _normalize_indel_rung_telemetry(
     normalized[:graph_source] = _checkpoint_enum_symbol(
         normalized[:graph_source],
         _CHECKPOINT_GRAPH_SOURCES,
-        "indel telemetry graph_source",
+        "indel telemetry graph_source"
     )
     normalized[:decision_reason] = _checkpoint_enum_symbol(
         normalized[:decision_reason],
         _CHECKPOINT_DECISION_REASONS,
-        "indel telemetry decision_reason",
+        "indel telemetry decision_reason"
     )
     for key in (
-            :admitted,
-            :bounded_windowing_forced,
-            :substitution_decode_memory_gated,
+        :admitted,
+        :bounded_windowing_forced,
+        :substitution_decode_memory_gated
     )
         normalized[key] = _checkpoint_bool(
             normalized[key], "indel telemetry $key")
@@ -1292,7 +1292,7 @@ function _normalize_indel_rung_telemetry(
         :frontier_work_limit,
         :frontier_metric_sample_limit,
         :raw_frontier_evaluated,
-        :cleaned_frontier_evaluated,
+        :cleaned_frontier_evaluated
     )
     for key in counter_keys
         normalized[key] = _checkpoint_nonnegative_int(
@@ -1305,11 +1305,11 @@ function _normalize_indel_rung_telemetry(
     end
     if require_schema_v2
         normalized[:frontier_work_limit] ==
-            _DEFAULT_INDEL_FRONTIER_WORK_LIMIT || throw(ArgumentError(
+        _DEFAULT_INDEL_FRONTIER_WORK_LIMIT || throw(ArgumentError(
             "checkpoint indel telemetry frontier_work_limit must equal " *
             "$_DEFAULT_INDEL_FRONTIER_WORK_LIMIT"))
         normalized[:frontier_metric_sample_limit] ==
-            _INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT || throw(ArgumentError(
+        _INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT || throw(ArgumentError(
             "checkpoint indel telemetry frontier_metric_sample_limit must " *
             "equal $_INDEL_FRONTIER_TELEMETRY_SAMPLE_LIMIT"))
     end
@@ -1323,16 +1323,14 @@ function _normalize_indel_rung_telemetry(
         all(metric isa AbstractDict for metric in metrics) ||
             throw(ArgumentError(
                 "checkpoint indel telemetry $key contains a non-object metric"))
-        normalized[key] = Dict{Symbol, Any}[
-            _symbolize_indel_frontier_metric(metric, require_schema_v2)
-            for metric in metrics
-        ]
+        normalized[key] = Dict{Symbol, Any}[_symbolize_indel_frontier_metric(metric, require_schema_v2)
+                                            for metric in metrics]
         if require_schema_v2
             for metric in normalized[key]
                 _validate_indel_frontier_metric(
                     metric,
                     normalized[:k],
-                    normalized[:frontier_work_limit],
+                    normalized[:frontier_work_limit]
                 )
             end
         end
@@ -1340,8 +1338,8 @@ function _normalize_indel_rung_telemetry(
     if require_schema_v2
         sample_limit = normalized[:frontier_metric_sample_limit]
         for (metric_key, evaluated_key) in (
-                (:raw_frontier_metrics, :raw_frontier_evaluated),
-                (:cleaned_frontier_metrics, :cleaned_frontier_evaluated),
+            (:raw_frontier_metrics, :raw_frontier_evaluated),
+            (:cleaned_frontier_metrics, :cleaned_frontier_evaluated)
         )
             expected_samples = min(normalized[evaluated_key], sample_limit)
             length(normalized[metric_key]) == expected_samples ||
@@ -1363,16 +1361,16 @@ function _normalize_indel_rung_telemetry(
         serialized_cleanup[serialized_key] = value
     end
     for key in (
-            "graph_cleanup_vertices_before",
-            "graph_cleanup_vertices_after",
-            "graph_cleanup_tips_removed",
-            "graph_cleanup_bubbles_collapsed",
-            "graph_cleanup_components_pruned",
-            "graph_cleanup_component_vertices_removed",
-            "measured_graph_bytes",
-            "current_live_bytes",
-            "projected_graph_variants",
-            "projected_peak_bytes",
+        "graph_cleanup_vertices_before",
+        "graph_cleanup_vertices_after",
+        "graph_cleanup_tips_removed",
+        "graph_cleanup_bubbles_collapsed",
+        "graph_cleanup_components_pruned",
+        "graph_cleanup_component_vertices_removed",
+        "measured_graph_bytes",
+        "current_live_bytes",
+        "projected_graph_variants",
+        "projected_peak_bytes"
     )
         haskey(serialized_cleanup, key) || continue
         serialized_cleanup[key] = _checkpoint_nonnegative_int(
@@ -1382,7 +1380,7 @@ function _normalize_indel_rung_telemetry(
        serialized_cleanup["memory_limit"] !== nothing
         serialized_cleanup["memory_limit"] = _checkpoint_nonnegative_int(
             serialized_cleanup["memory_limit"],
-            "indel telemetry graph_cleanup memory_limit",
+            "indel telemetry graph_cleanup memory_limit"
         )
     end
     for key in ("graph_cleanup_status", "graph_cleanup_error_type")
@@ -1400,7 +1398,7 @@ function _normalize_indel_rung_telemetry(
     admitted_and_rejected = _checkpoint_checked_add(
         admitted_windows,
         rejected_windows,
-        "indel telemetry admitted + rejected",
+        "indel telemetry admitted + rejected"
     )
     admitted_and_rejected <= requested || throw(ArgumentError(
         "checkpoint indel telemetry admitted + rejected exceeds requested"))
@@ -1409,8 +1407,7 @@ function _normalize_indel_rung_telemetry(
     normalized[:cleaned_frontier_evaluated] <= requested || throw(ArgumentError(
         "checkpoint cleaned frontier evaluations exceed requested windows"))
     if require_schema_v2
-        if normalized[:decision_reason] in
-           _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS
+        if normalized[:decision_reason] in _CHECKPOINT_FRONTIER_EVALUATED_DECISION_REASONS
             normalized[:raw_frontier_evaluated] == requested || throw(ArgumentError(
                 "checkpoint raw frontier evaluations must equal requested windows " *
                 "for a frontier-evaluated decision"))
@@ -1423,21 +1420,22 @@ function _normalize_indel_rung_telemetry(
                     "admitted_windows for a frontier-evaluated decision"))
         end
         normalized[:cleaned_frontier_evaluated] <=
-            normalized[:raw_frontier_evaluated] || throw(ArgumentError(
+        normalized[:raw_frontier_evaluated] || throw(ArgumentError(
             "checkpoint cleaned frontier evaluations exceed raw evaluations"))
     end
     if !profile_requested && any(
-            normalized[key] != 0 for key in (
-                :requested,
-                :attempted,
-                :completed,
-                :truncated,
-                :engaged,
-                :admitted_windows,
-                :rejected_windows,
-                :raw_frontier_evaluated,
-                :cleaned_frontier_evaluated,
-            ))
+        normalized[key] != 0
+    for key in (
+        :requested,
+        :attempted,
+        :completed,
+        :truncated,
+        :engaged,
+        :admitted_windows,
+        :rejected_windows,
+        :raw_frontier_evaluated,
+        :cleaned_frontier_evaluated
+    ))
         throw(ArgumentError(
             "profile-disabled checkpoint indel telemetry must have zero counters"))
     end
@@ -1455,10 +1453,8 @@ function _restore_indel_rung_telemetry(
     all(row isa AbstractDict for row in rows) || throw(ArgumentError(
         "checkpoint indel_rung_telemetry contains a non-object row"))
     require_schema_v2 = haskey(resume_data, "resume_configuration")
-    return Dict{Symbol, Any}[
-        _normalize_indel_rung_telemetry(row, require_schema_v2)
-        for row in rows
-    ]
+    return Dict{Symbol, Any}[_normalize_indel_rung_telemetry(row, require_schema_v2)
+                             for row in rows]
 end
 
 function _symbolize_iteration_stats(
@@ -1467,7 +1463,7 @@ function _symbolize_iteration_stats(
     stats = _checkpoint_symbolized_dict(
         serialized,
         _CHECKPOINT_ITERATION_STAT_KEYS,
-        "checkpoint iteration history row",
+        "checkpoint iteration history row"
     )
     Set(keys(stats)) == Set(values(_CHECKPOINT_ITERATION_STAT_KEYS)) ||
         throw(ArgumentError(
@@ -1500,7 +1496,7 @@ end
 
 function _restore_iteration_history(
         resume_data::AbstractDict,
-        max_iterations_per_k::Int,
+        max_iterations_per_k::Int
 )::Dict{Int, Vector{Dict{Symbol, Any}}}
     serialized = get(resume_data, "iteration_history", nothing)
     serialized isa AbstractDict || throw(ArgumentError(
@@ -1530,9 +1526,8 @@ function _restore_iteration_history(
         all(row isa AbstractDict for row in serialized_rows) ||
             throw(ArgumentError(
                 "checkpoint history for k=$serialized_k contains a non-object row"))
-        history[k] = Dict{Symbol, Any}[
-            _symbolize_iteration_stats(row) for row in serialized_rows
-        ]
+        history[k] = Dict{Symbol, Any}[_symbolize_iteration_stats(row)
+                                       for row in serialized_rows]
     end
     return history
 end
@@ -1540,23 +1535,21 @@ end
 function _restore_checkpoint_counter_vector(
         resume_data::AbstractDict,
         key::String,
-        maximum_length::Int,
+        maximum_length::Int
 )::Vector{Int}
     serialized = get(resume_data, key, Any[])
     serialized isa AbstractVector || throw(ArgumentError(
         "checkpoint $key must be an array"))
     length(serialized) <= maximum_length || throw(ArgumentError(
         "checkpoint $key exceeds its collection limit"))
-    return Int[
-        _checkpoint_nonnegative_int(value, "$key[$index]")
-        for (index, value) in enumerate(serialized)
-    ]
+    return Int[_checkpoint_nonnegative_int(value, "$key[$index]")
+               for (index, value) in enumerate(serialized)]
 end
 
 function _restore_checkpoint_fraction_vector(
         resume_data::AbstractDict,
         key::String,
-        maximum_length::Int,
+        maximum_length::Int
 )::Vector{Float64}
     serialized = get(resume_data, key, Any[])
     serialized isa AbstractVector || throw(ArgumentError(
@@ -1590,11 +1583,11 @@ function _restore_corrector_diagnostics(
         "trace_contract_errors",
         "window_anchor_rejections",
         "window_divergences",
-        "substitution_length_divergences",
+        "substitution_length_divergences"
     ))
     serialized_keys = Set{String}(
         _checkpoint_key_string(key, "checkpoint corrector_diagnostics")
-        for key in keys(serialized)
+    for key in keys(serialized)
     )
     serialized_keys == allowed || throw(ArgumentError(
         "checkpoint corrector_diagnostics must contain exactly: " *
@@ -1616,7 +1609,7 @@ function _validate_checkpoint_history(
         k_progression::Vector{Int},
         iteration_history::Dict{Int, Vector{Dict{Symbol, Any}}},
         completed_k::Int,
-        completed_iteration::Int,
+        completed_iteration::Int
 )::Nothing
     isempty(k_progression) && throw(ArgumentError(
         "checkpoint k_progression must contain at least one completed rung"))
@@ -1653,7 +1646,7 @@ end
 function _validate_checkpoint_progression_schedule(
         k_progression::Vector{Int},
         max_k::Int,
-        k_schedule::Union{Nothing, Vector{Int}},
+        k_schedule::Union{Nothing, Vector{Int}}
 )::Nothing
     expected = Int[first(k_progression)]
     while length(expected) < length(k_progression)
@@ -1673,7 +1666,7 @@ function _validated_checkpoint_cursor(
         completed_iteration::Int,
         max_k::Int,
         max_iterations_per_k::Int,
-        k_schedule::Union{Nothing, Vector{Int}},
+        k_schedule::Union{Nothing, Vector{Int}}
 )::Tuple{Int, Int, Bool}
     next_k = _checkpoint_nonnegative_int(
         resume_data["next_k"], "next_k")
@@ -1750,7 +1743,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
         indel_schedule::Symbol = :unrestricted,
         substitution_error_rate::Union{Nothing, Float64} = nothing,
-        materialize_final_assembly::Bool = true,
+        materialize_final_assembly::Bool = true
 )::Dict{Symbol, Any}
     if indel_params !== nothing && substitution_error_rate !== nothing
         throw(ArgumentError(
@@ -1842,17 +1835,18 @@ function mycelia_iterative_assemble(input_fastq::String;
 
     # Resolve pre-existing symlinks before any checkpoint/progress I/O. A link may
     # target another directory inside this output root, but never escape it.
-    checkpoints_dir, graphs_dir, progress_dir = if enable_checkpointing
+    checkpoints_dir, graphs_dir,
+    progress_dir = if enable_checkpointing
         (
             _canonical_output_subdirectory(output_dir, "checkpoints"),
             _canonical_output_subdirectory(output_dir, "graphs"),
-            _canonical_output_subdirectory(output_dir, "progress"),
+            _canonical_output_subdirectory(output_dir, "progress")
         )
     else
         (
             joinpath(output_dir, "checkpoints"),
             joinpath(output_dir, "graphs"),
-            joinpath(output_dir, "progress"),
+            joinpath(output_dir, "progress")
         )
     end
 
@@ -1883,8 +1877,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         Nothing, Vector{FASTX.FASTQ.Record}} = nothing
     input_fastq_sha256 = ""
     if resume_data === nothing
-        input_fastq_sha256, fresh_reads =
-            _load_hashed_input_fastq(canonical_input_fastq)
+        input_fastq_sha256, fresh_reads = _load_hashed_input_fastq(canonical_input_fastq)
         initial_input_reads = fresh_reads
     else
         input_fastq_sha256 = _stream_sha256_file(canonical_input_fastq)
@@ -1913,7 +1906,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         decode_gate_density = decode_gate_density,
         indel_params = indel_params,
         substitution_error_rate = substitution_error_rate,
-        indel_schedule = indel_schedule,
+        indel_schedule = indel_schedule
     )
 
     # Initialize or resume from checkpoint
@@ -1936,10 +1929,8 @@ function mycelia_iterative_assemble(input_fastq::String;
         length(serialized_progression) <= _ITERATIVE_CHECKPOINT_MAX_K_RUNGS ||
             throw(ArgumentError(
                 "checkpoint k_progression exceeds the k-rung limit"))
-        k_progression = Int[
-            _checkpoint_nonnegative_int(value, "k_progression[$index]")
-            for (index, value) in enumerate(serialized_progression)
-        ]
+        k_progression = Int[_checkpoint_nonnegative_int(value, "k_progression[$index]")
+                            for (index, value) in enumerate(serialized_progression)]
         iteration_history = _restore_iteration_history(
             resume_data, max_iterations_per_k)
         total_improvements = _checkpoint_nonnegative_int(
@@ -1947,9 +1938,9 @@ function mycelia_iterative_assemble(input_fastq::String;
         expected_total_improvements = _checkpoint_checked_sum(
             (
                 row[:improvements_made]
-                for rows in values(iteration_history) for row in rows
+            for rows in values(iteration_history) for row in rows
             ),
-            "total_improvements",
+            "total_improvements"
         )
         total_improvements == expected_total_improvements || throw(ArgumentError(
             "checkpoint total_improvements does not equal iteration history"))
@@ -1963,7 +1954,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             k_progression,
             iteration_history,
             completed_checkpoint_k,
-            completed_checkpoint_iteration,
+            completed_checkpoint_iteration
         )
 
         if verbose
@@ -1999,7 +1990,7 @@ function mycelia_iterative_assemble(input_fastq::String;
     k_schedule = build_k_ladder(
         schedule_initial_k, max_k;
         k_ladder = k_ladder,
-        n_k_rungs = n_k_rungs,
+        n_k_rungs = n_k_rungs
     )
     resume_configuration["schedule_initial_k"] = schedule_initial_k
     resume_configuration["resolved_k_schedule"] = k_schedule
@@ -2018,36 +2009,37 @@ function mycelia_iterative_assemble(input_fastq::String;
             "checkpoint current_fastq_sha256 must be a string"))
         completed_history_row = last(
             iteration_history[something(completed_checkpoint_k)])
-        expected_current_fastq_basename =
-            "reads_k$(something(completed_checkpoint_k))_" *
-            "iter$(something(completed_checkpoint_iteration))_" *
-            "$(completed_history_row[:timestamp]).fastq"
-        current_fastq_file, resume_fastq_reads =
-            _load_validated_checkpoint_fastq(
-                serialized_current_fastq,
-                saved_fastq_sha256,
-                output_dir,
-                expected_current_fastq_basename,
-            )
+        expected_current_fastq_basename = "reads_k$(something(completed_checkpoint_k))_" *
+                                          "iter$(something(completed_checkpoint_iteration))_" *
+                                          "$(completed_history_row[:timestamp]).fastq"
+        current_fastq_file,
+        resume_fastq_reads = _load_validated_checkpoint_fastq(
+            serialized_current_fastq,
+            saved_fastq_sha256,
+            output_dir,
+            expected_current_fastq_basename
+        )
     end
     if verbose && k_schedule !== nothing
         println("K-mer ladder (coarse progression): $(k_schedule)")
     end
 
     if resume_data !== nothing
-        k, resume_iteration, resume_run_complete = _validated_checkpoint_cursor(
+        k, resume_iteration,
+        resume_run_complete = _validated_checkpoint_cursor(
             resume_data,
             something(completed_checkpoint_k),
             something(completed_checkpoint_iteration),
             max_k,
             max_iterations_per_k,
-            k_schedule,
+            k_schedule
         )
         resume_existing_rung = !resume_run_complete &&
                                k == completed_checkpoint_k
-        resume_existing_rung && soft_em && throw(ArgumentError(
-            "cannot resume soft_em=true within k=$k because the prior soft-edge " *
-            "accumulator is not checkpointed; resume from the next k rung"))
+        resume_existing_rung && soft_em &&
+            throw(ArgumentError(
+                "cannot resume soft_em=true within k=$k because the prior soft-edge " *
+                "accumulator is not checkpointed; resume from the next k rung"))
     end
 
     # -- Low-k decode gating (td-9h5r) -----------------------------------------
@@ -2096,7 +2088,7 @@ function mycelia_iterative_assemble(input_fastq::String;
     completed_passes = resume_data === nothing ? 0 :
                        _checkpoint_checked_sum(
         (length(rows) for rows in values(iteration_history)),
-        "completed pass count",
+        "completed pass count"
     )
     decode_gated_rungs = if resume_data === nothing
         Int[]
@@ -2104,7 +2096,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         _restore_checkpoint_counter_vector(
             resume_data,
             "decode_gated_rungs",
-            min(_ITERATIVE_CHECKPOINT_MAX_K_RUNGS, length(k_progression)),
+            min(_ITERATIVE_CHECKPOINT_MAX_K_RUNGS, length(k_progression))
         )
     end
     all(rung in k_progression for rung in decode_gated_rungs) ||
@@ -2157,13 +2149,11 @@ function mycelia_iterative_assemble(input_fastq::String;
         length(indel_rung_telemetry) == expected_passes || throw(ArgumentError(
             "checkpoint indel telemetry has $(length(indel_rung_telemetry)) " *
             "rows; expected $expected_passes completed passes"))
-        telemetry_cursor = Tuple{Int, Int, Int}[
-            (
-                Int(row[:ladder_index]),
-                Int(row[:k]),
-                Int(row[:iteration]),
-            ) for row in indel_rung_telemetry
-        ]
+        telemetry_cursor = Tuple{Int, Int, Int}[(
+                                                    Int(row[:ladder_index]),
+                                                    Int(row[:k]),
+                                                    Int(row[:iteration])
+                                                ) for row in indel_rung_telemetry]
         history_cursor = Tuple{Int, Int, Int}[]
         for (ladder_index, history_k) in enumerate(k_progression)
             for row in get(iteration_history, history_k, Dict{Symbol, Any}[])
@@ -2176,7 +2166,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         expected_profile_requested = indel_params !== nothing
         all(
             row[:profile_requested] == expected_profile_requested
-            for row in indel_rung_telemetry
+        for row in indel_rung_telemetry
         ) || throw(ArgumentError(
             "checkpoint indel telemetry profile_requested does not match " *
             "invocation indel_params"))
@@ -2188,29 +2178,29 @@ function mycelia_iterative_assemble(input_fastq::String;
         corrector_diagnostics.indel_attempts,
         _checkpoint_checked_sum(
             (row[:attempted] for row in indel_rung_telemetry),
-            "restored indel attempted total",
-        ),
+            "restored indel attempted total"
+        )
     )
     Threads.atomic_add!(
         corrector_diagnostics.indel_decodes,
         _checkpoint_checked_sum(
             (row[:completed] for row in indel_rung_telemetry),
-            "restored indel completed total",
-        ),
+            "restored indel completed total"
+        )
     )
     Threads.atomic_add!(
         corrector_diagnostics.truncated_decodes,
         _checkpoint_checked_sum(
             (row[:truncated] for row in indel_rung_telemetry),
-            "restored indel truncated total",
-        ),
+            "restored indel truncated total"
+        )
     )
     Threads.atomic_add!(
         corrector_diagnostics.indel_engaged,
         _checkpoint_checked_sum(
             (row[:engaged] for row in indel_rung_telemetry),
-            "restored indel engaged total",
-        ),
+            "restored indel engaged total"
+        )
     )
     if resume_data !== nothing
         saved_diagnostics = _restore_corrector_diagnostics(resume_data)
@@ -2228,7 +2218,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             saved_diagnostics["window_divergences"])
         Threads.atomic_add!(
             corrector_diagnostics.substitution_length_divergences,
-            saved_diagnostics["substitution_length_divergences"],
+            saved_diagnostics["substitution_length_divergences"]
         )
     end
 
@@ -2261,7 +2251,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             iteration = something(resume_iteration, 1)
             improvements_this_k = _checkpoint_checked_sum(
                 (row[:improvements_made] for row in iteration_history[k]),
-                "restored improvements for k=$k",
+                "restored improvements for k=$k"
             )
             resume_existing_rung = false
             resume_iteration = nothing
@@ -2313,7 +2303,8 @@ function mycelia_iterative_assemble(input_fastq::String;
             if verbose
                 println("Building qualmer graph with k=$k...")
             end
-            graph = Mycelia.Rhizomorph.build_qualmer_graph(current_reads, k; mode = graph_mode,
+            graph = Mycelia.Rhizomorph.build_qualmer_graph(
+                current_reads, k; mode = graph_mode,
                 min_count = qualmer_prefilter_min_count)
             num_kmers = length(MetaGraphsNext.labels(graph))
 
@@ -2398,8 +2389,7 @@ function mycelia_iterative_assemble(input_fastq::String;
             pass_skip_fraction = 0.0
             pass_cheap_corrections = 0
             pass_decode_gated = false
-            pass_indel_telemetry =
-                _empty_indel_rung_telemetry(indel_params !== nothing)
+            pass_indel_telemetry = _empty_indel_rung_telemetry(indel_params !== nothing)
             updated_reads,
             improvements_made,
             pass_skip_fraction,
@@ -2425,7 +2415,7 @@ function mycelia_iterative_assemble(input_fastq::String;
                 substitution_error_rate = substitution_error_rate,
                 indel_schedule = indel_schedule,
                 rung_telemetry = pass_indel_telemetry,
-                memory_limit = memory_limit,
+                memory_limit = memory_limit
             )
             push!(skip_fractions, pass_skip_fraction)
             push!(cheap_correction_counts, pass_cheap_corrections)
@@ -2463,12 +2453,12 @@ function mycelia_iterative_assemble(input_fastq::String;
             improvements_this_k = _checkpoint_checked_add(
                 improvements_this_k,
                 improvements_made,
-                "improvements for k=$k",
+                "improvements for k=$k"
             )
             total_improvements = _checkpoint_checked_add(
                 total_improvements,
                 improvements_made,
-                "total_improvements",
+                "total_improvements"
             )
 
             if verbose
@@ -2498,15 +2488,14 @@ function mycelia_iterative_assemble(input_fastq::String;
             # Persist the NEXT-pass cursor, not merely the pass that just
             # completed. This is the same decision used below during uninterrupted
             # execution, so resume never replays a pass or shifts rung telemetry.
-            continue_current_k =
-                iteration < max_iterations_per_k &&
-                !(stop_on_no_change && improvements_made == 0) &&
-                sufficient_improvements(
-                    improvements_made,
-                    length(current_reads),
-                    improvement_threshold;
-                    iteration_history = iteration_history[k],
-                )
+            continue_current_k = iteration < max_iterations_per_k &&
+                                 !(stop_on_no_change && improvements_made == 0) &&
+                                 sufficient_improvements(
+                                     improvements_made,
+                                     length(current_reads),
+                                     improvement_threshold;
+                                     iteration_history = iteration_history[k]
+                                 )
             checkpoint_next_k = continue_current_k ?
                                 k : _next_k_in_progression(k, max_k, k_schedule)
             checkpoint_next_iteration = continue_current_k ? iteration + 1 : 1
@@ -2536,22 +2525,17 @@ function mycelia_iterative_assemble(input_fastq::String;
                     "decode_gated_rungs" => decode_gated_rungs,
                     "corrector_diagnostics" => Dict(
                         "structural" => corrector_diagnostics.structural_errors[],
-                        "unkmerizable" =>
-                            corrector_diagnostics.unkmerizable_reads[],
+                        "unkmerizable" => corrector_diagnostics.unkmerizable_reads[],
                         "gate_skipped" => corrector_diagnostics.gate_skipped[],
-                        "trace_contract_errors" =>
-                            corrector_diagnostics.trace_contract_errors[],
-                        "window_anchor_rejections" =>
-                            corrector_diagnostics.window_anchor_rejections[],
-                        "window_divergences" =>
-                            corrector_diagnostics.window_divergences[],
-                        "substitution_length_divergences" =>
-                            corrector_diagnostics.substitution_length_divergences[],
+                        "trace_contract_errors" => corrector_diagnostics.trace_contract_errors[],
+                        "window_anchor_rejections" => corrector_diagnostics.window_anchor_rejections[],
+                        "window_divergences" => corrector_diagnostics.window_divergences[],
+                        "substitution_length_divergences" => corrector_diagnostics.substitution_length_divergences[]
                     ),
                     "current_fastq_file" => output_file,
                     "current_fastq_sha256" => _stream_sha256_file(output_file),
                     "timestamp" => Dates.format(Dates.now(), "yyyy-mm-dd HH:MM:SS"),
-                    "runtime_so_far" => pass_runtime_so_far,
+                    "runtime_so_far" => pass_runtime_so_far
                 )
 
                 _write_json_atomically(checkpoint_file, checkpoint_data)
@@ -2569,8 +2553,8 @@ function mycelia_iterative_assemble(input_fastq::String;
                         "total_improvements" => total_improvements,
                         "improvement_rate" => improvement_rate,
                         "runtime_seconds" => iteration_time,
-                        "timestamp" => timestamp,
-                    ),
+                        "timestamp" => timestamp
+                    )
                 )
 
                 if verbose
@@ -2649,7 +2633,7 @@ function mycelia_iterative_assemble(input_fastq::String;
         indel_schedule = indel_schedule,
         indel_rung_telemetry = indel_rung_telemetry,
         validated_final_fastq_path = resume_run_complete ?
-                                      current_fastq_file : nothing,
+                                     current_fastq_file : nothing,
         validated_final_reads = resume_run_complete ?
                                 resume_fastq_reads : nothing,
         # Final-pass graph reuse (td-04tb): hand the corrector's last-pass qualmer
@@ -3030,7 +3014,7 @@ function _hard_window_ranges(read::FASTX.FASTQ.Record, k::Int, hard_vertices::Ab
         pad = pad,
         max_window = max_window,
         graph_mode = graph_mode,
-        complete_span = complete_span,
+        complete_span = complete_span
     )
 end
 
@@ -3041,7 +3025,7 @@ function _hard_window_ranges(
         pad::Int = 1,
         max_window::Int = 500,
         graph_mode::Symbol = :canonical,
-        complete_span::Bool = false,
+        complete_span::Bool = false
 )::Vector{UnitRange{Int}}
     max_window >= k || throw(ArgumentError(
         "max_window must be at least k=$k, got $max_window"))
@@ -3074,10 +3058,8 @@ function _hard_window_ranges(
         # This is the historical substitution-only range selection. Keep it exact:
         # changing which tail bases are decoded would violate the byte-identity
         # oracle even though the underlying substitution kernel is unchanged.
-        return [
-            first(range):min(last(range), first(range) + max_window - 1)
-            for range in merged
-        ]
+        return [first(range):min(last(range), first(range) + max_window - 1)
+                for range in merged]
     end
 
     partitioned = UnitRange{Int}[]
@@ -3141,13 +3123,13 @@ function _indel_frontier_metrics_dict(
         :peak_frontier => metrics.peak_frontier,
         :completed_columns => metrics.completed_columns,
         :frontier_work => metrics.frontier_work,
-        :reason => metrics.reason,
+        :reason => metrics.reason
     )
 end
 
 function _indel_frontier_admitted(
         metrics::Any,
-        work_limit::Int,
+        work_limit::Int
 )::Bool
     return metrics.anchored && metrics.reason == :complete &&
            metrics.completed_columns == metrics.window_length &&
@@ -3159,10 +3141,10 @@ function _indel_candidate_windows(
         k::Int,
         hard_vertices::AbstractSet,
         skip_flags::Vector{Bool},
-        graph_mode::Symbol,
+        graph_mode::Symbol
 )::Tuple{
         Vector{Tuple{Int, UnitRange{Int}}},
-        Dict{Int, BioSequences.LongDNA{4}},
+        Dict{Int, BioSequences.LongDNA{4}}
 }
     candidates = Tuple{Int, UnitRange{Int}}[]
     read_sequences = Dict{Int, BioSequences.LongDNA{4}}()
@@ -3187,7 +3169,7 @@ end
 
 function _indel_probe_config(
         params::IndelDecodeParams,
-        graph_mode::Symbol,
+        graph_mode::Symbol
 )::Any
     return Mycelia.ViterbiCorrectionConfig(
         alphabet = :DNA,
@@ -3202,7 +3184,7 @@ function _indel_probe_config(
         deletion_extend_probability = params.deletion_extend_probability,
         deletion_max_run = params.deletion_max_run,
         max_insertion_run = params.max_insertion_run,
-        band_width = params.band_width,
+        band_width = params.band_width
     )
 end
 
@@ -3214,7 +3196,7 @@ function _probe_indel_window(
         config::Any,
         graph_mode::Symbol,
         work_limit::Int,
-        graph_summary::NamedTuple,
+        graph_summary::NamedTuple
 )::Any
     window_sequence = sequence[window]
     observations = [kmer for (kmer, _) in Kmers.UnambiguousDNAMers{k}(window_sequence)]
@@ -3223,7 +3205,7 @@ function _probe_indel_window(
         config = config,
         strand_mode = graph_mode,
         work_limit = work_limit,
-        graph_summary = graph_summary,
+        graph_summary = graph_summary
     )
 end
 
@@ -3235,7 +3217,7 @@ function _probe_indel_window_metric(
         config::Any,
         graph_mode::Symbol,
         work_limit::Int,
-        graph_summary::NamedTuple,
+        graph_summary::NamedTuple
 )::Tuple{Dict{Symbol, Any}, Bool}
     try
         metrics = _probe_indel_window(
@@ -3243,16 +3225,16 @@ function _probe_indel_window_metric(
             graph_summary)
         return (
             _indel_frontier_metrics_dict(metrics),
-            _indel_frontier_admitted(metrics, work_limit),
+            _indel_frontier_admitted(metrics, work_limit)
         )
     catch exception
         exception isa BioSequences.EncodeError || rethrow()
         return (
             Dict{Symbol, Any}(
                 :anchored => false,
-                :reason => :encode_error,
+                :reason => :encode_error
             ),
-            false,
+            false
         )
     end
 end
@@ -3270,7 +3252,7 @@ function _evaluate_indel_frontier_schedule(
             Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator} = nothing,
         memory_limit::Union{Nothing, Int} = nothing,
         clean_graph!::C = _clean_indel_frontier_graph!,
-        weighted_graph_builder::W = build_correction_weighted_graph,
+        weighted_graph_builder::W = build_correction_weighted_graph
 )::NamedTuple where {C, W}
     return Mycelia.Rhizomorph._with_soft_edge_weight_scope(
         raw_graph, prior_soft_weights) do
@@ -3286,14 +3268,14 @@ function _evaluate_indel_frontier_schedule(
             prior_soft_weights = prior_soft_weights,
             memory_limit = memory_limit,
             clean_graph! = clean_graph!,
-            weighted_graph_builder = weighted_graph_builder,
+            weighted_graph_builder = weighted_graph_builder
         )
     end
 end
 
 function _clean_indel_frontier_graph!(
         graph::MetaGraphsNext.MetaGraph,
-        k::Int,
+        k::Int
 )::Dict{String, Any}
     return Mycelia.Rhizomorph.clean_corrector_graph!(graph; k = k)
 end
@@ -3309,7 +3291,7 @@ end
 
 function _indel_additional_graph_bytes(
         graph_bytes::Int,
-        variants::Int,
+        variants::Int
 )::Int
     additional_variants = variants - 1
     additional_variants <= 0 && return 0
@@ -3320,7 +3302,7 @@ end
 function _indel_graph_variants_fit_memory(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
-        memory_limit::Union{Nothing, Int},
+        memory_limit::Union{Nothing, Int}
 )::Bool
     variants > 0 || throw(ArgumentError("variants must be positive, got $variants"))
     memory_limit === nothing && return true
@@ -3336,7 +3318,7 @@ function _indel_graph_memory_telemetry(
         raw_graph::MetaGraphsNext.MetaGraph,
         variants::Int,
         memory_limit::Union{Nothing, Int},
-        status::String,
+        status::String
 )::Dict{String, Any}
     graph_bytes = _indel_graph_memory_bytes(raw_graph)
     current_live_bytes = Int(Base.gc_live_bytes())
@@ -3349,13 +3331,13 @@ function _indel_graph_memory_telemetry(
         "current_live_bytes" => current_live_bytes,
         "projected_graph_variants" => variants,
         "projected_peak_bytes" => projected_peak,
-        "memory_limit" => memory_limit,
+        "memory_limit" => memory_limit
     )
 end
 
 function _try_build_correction_weighted_graph(
         graph::MetaGraphsNext.MetaGraph,
-        weighted_graph_builder::W,
+        weighted_graph_builder::W
 )::Tuple{Any, Bool} where {W}
     try
         return (weighted_graph_builder(graph), false)
@@ -3379,9 +3361,10 @@ function _evaluate_indel_frontier_schedule_impl(
             Nothing, Mycelia.Rhizomorph.SoftEdgeWeightAccumulator},
         memory_limit::Union{Nothing, Int},
         clean_graph!::C,
-        weighted_graph_builder::W,
+        weighted_graph_builder::W
 )::NamedTuple where {C, W}
-    candidates, read_sequences = _indel_candidate_windows(
+    candidates,
+    read_sequences = _indel_candidate_windows(
         reads, k, hard_vertices, skip_flags, graph_mode)
     requested = length(candidates)
     window_sources = Dict{Int, Dict{UnitRange{Int}, Symbol}}()
@@ -3406,7 +3389,7 @@ function _evaluate_indel_frontier_schedule_impl(
             cleaned_evaluated = 0,
             raw_metrics = Dict{Symbol, Any}[],
             cleaned_metrics = Dict{Symbol, Any}[],
-            cleanup = Dict{String, Any}(),
+            cleanup = Dict{String, Any}()
         )
     end
 
@@ -3417,7 +3400,8 @@ function _evaluate_indel_frontier_schedule_impl(
     raw_admitted = fill(false, requested)
     raw_anchored = fill(false, requested)
     for (candidate_index, (read_index, window)) in enumerate(candidates)
-        metric, admitted = _probe_indel_window_metric(
+        metric,
+        admitted = _probe_indel_window_metric(
             raw_graph,
             read_sequences[read_index],
             window,
@@ -3425,7 +3409,7 @@ function _evaluate_indel_frontier_schedule_impl(
             config,
             graph_mode,
             work_limit,
-            raw_summary,
+            raw_summary
         )
         metric[:read_index] = read_index
         metric[:window_start] = first(window)
@@ -3463,12 +3447,12 @@ function _evaluate_indel_frontier_schedule_impl(
                 cleaned_evaluated = 0,
                 raw_metrics,
                 cleaned_metrics = Dict{Symbol, Any}[],
-                cleanup,
+                cleanup
             )
         end
-        raw_weighted_graph, weighted_out_of_memory =
-            _try_build_correction_weighted_graph(
-                raw_graph, weighted_graph_builder)
+        raw_weighted_graph,
+        weighted_out_of_memory = _try_build_correction_weighted_graph(
+            raw_graph, weighted_graph_builder)
         if weighted_out_of_memory
             for (read_index, window) in candidates
                 window_sources[read_index][window] = :substitution
@@ -3491,7 +3475,7 @@ function _evaluate_indel_frontier_schedule_impl(
                 cleaned_metrics = Dict{Symbol, Any}[],
                 cleanup = Dict{String, Any}(
                     "graph_cleanup_status" => "weighted_out_of_memory",
-                ),
+                )
             )
         end
         return (
@@ -3510,7 +3494,7 @@ function _evaluate_indel_frontier_schedule_impl(
             cleaned_evaluated = 0,
             raw_metrics,
             cleaned_metrics = Dict{Symbol, Any}[],
-            cleanup = Dict{String, Any}(),
+            cleanup = Dict{String, Any}()
         )
     end
 
@@ -3536,11 +3520,11 @@ function _evaluate_indel_frontier_schedule_impl(
             # runs; the outer scope still preserves the raw snapshot exactly.
             Mycelia.Rhizomorph._with_soft_edge_weight_scope(
                 cleaned_graph, prior_soft_weights) do
-                cleaned_summary =
-                    Mycelia._indel_frontier_graph_summary(cleaned_graph)
+                cleaned_summary = Mycelia._indel_frontier_graph_summary(cleaned_graph)
                 for (candidate_index, (read_index, window)) in enumerate(candidates)
                     raw_admitted[candidate_index] && continue
-                    metric, admitted = _probe_indel_window_metric(
+                    metric,
+                    admitted = _probe_indel_window_metric(
                         cleaned_graph,
                         read_sequences[read_index],
                         window,
@@ -3548,7 +3532,7 @@ function _evaluate_indel_frontier_schedule_impl(
                         config,
                         graph_mode,
                         work_limit,
-                        cleaned_summary,
+                        cleaned_summary
                     )
                     metric[:read_index] = read_index
                     metric[:window_start] = first(window)
@@ -3565,8 +3549,7 @@ function _evaluate_indel_frontier_schedule_impl(
                     admitted && (window_sources[read_index][window] = :cleaned)
                 end
                 if any(cleaned_admitted)
-                    cleaned_weighted_graph =
-                        weighted_graph_builder(cleaned_graph)
+                    cleaned_weighted_graph = weighted_graph_builder(cleaned_graph)
                 end
             end
             cleaning_status = :complete
@@ -3589,7 +3572,7 @@ function _evaluate_indel_frontier_schedule_impl(
             GC.gc(true)
             cleanup = Dict{String, Any}(
                 "graph_cleanup_status" => "out_of_memory",
-                "graph_cleanup_error_type" => "OutOfMemoryError",
+                "graph_cleanup_error_type" => "OutOfMemoryError"
             )
             cleaning_status = :out_of_memory
         end
@@ -3622,7 +3605,7 @@ function _evaluate_indel_frontier_schedule_impl(
             cleaned_evaluated,
             raw_metrics,
             cleaned_metrics,
-            cleanup,
+            cleanup
         )
     end
 
@@ -3675,15 +3658,15 @@ function _evaluate_indel_frontier_schedule_impl(
                 cleaned_evaluated,
                 raw_metrics,
                 cleaned_metrics,
-                cleanup,
+                cleanup
             )
         end
         raw_weighted_graph = nothing
         weighted_out_of_memory = false
         if needs_raw_graph
-            raw_weighted_graph, weighted_out_of_memory =
-                _try_build_correction_weighted_graph(
-                    raw_graph, weighted_graph_builder)
+            raw_weighted_graph,
+            weighted_out_of_memory = _try_build_correction_weighted_graph(
+                raw_graph, weighted_graph_builder)
         end
         if weighted_out_of_memory
             for (read_index, window) in candidates
@@ -3707,7 +3690,7 @@ function _evaluate_indel_frontier_schedule_impl(
                 cleaned_metrics,
                 cleanup = Dict{String, Any}(
                     "graph_cleanup_status" => "weighted_out_of_memory",
-                ),
+                )
             )
         end
         return (
@@ -3726,7 +3709,7 @@ function _evaluate_indel_frontier_schedule_impl(
             cleaned_evaluated,
             raw_metrics,
             cleaned_metrics,
-            cleanup,
+            cleanup
         )
     end
 
@@ -3757,7 +3740,7 @@ function _evaluate_indel_frontier_schedule_impl(
         cleaned_evaluated,
         raw_metrics,
         cleaned_metrics,
-        cleanup,
+        cleanup
     )
 end
 
@@ -3856,11 +3839,10 @@ const _VALID_INDEL_WINDOW_SOURCES = (:raw, :cleaned, :substitution)
 
 function _merge_soft_edge_weights!(
         destination::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
-        staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator,
+        staged::Mycelia.Rhizomorph.SoftEdgeWeightAccumulator
 )::Nothing
     for (edge_id, weight) in staged.weights
-        destination.weights[edge_id] =
-            get(destination.weights, edge_id, 0.0) + weight
+        destination.weights[edge_id] = get(destination.weights, edge_id, 0.0) + weight
     end
     return nothing
 end
@@ -3868,7 +3850,7 @@ end
 function _validate_indel_window_sources(
         sources::Union{Nothing, Dict{UnitRange{Int}, Symbol}},
         cleaned_graph::Any,
-        cleaned_weighted_graph::Any,
+        cleaned_weighted_graph::Any
 )::Nothing
     sources === nothing && return nothing
     for (window, source) in sources
@@ -3890,7 +3872,7 @@ function _trim_indel_window_overlap(
         decoded_sequence::Vector{Char},
         decoded_quality::Vector{Char},
         window_start::Int,
-        overlap_prefix::Int,
+        overlap_prefix::Int
 )::Union{Nothing, Tuple{Vector{Char}, Vector{Char}}}
     overlap_prefix == 0 && return (decoded_sequence, decoded_quality)
     overlap_prefix > 0 || throw(ArgumentError(
@@ -3906,7 +3888,7 @@ function _trim_indel_window_overlap(
     decoded_sequence[1:overlap_prefix] == expected_prefix || return nothing
     return (
         decoded_sequence[(overlap_prefix + 1):end],
-        decoded_quality[(overlap_prefix + 1):end],
+        decoded_quality[(overlap_prefix + 1):end]
     )
 end
 
@@ -3914,7 +3896,7 @@ function _indel_window_terminal_anchor_matches(
         original_sequence::Vector{Char},
         decoded_sequence::Vector{Char},
         window_stop::Int,
-        overlap_suffix::Int,
+        overlap_suffix::Int
 )::Bool
     overlap_suffix == 0 && return true
     overlap_suffix > 0 || throw(ArgumentError(
@@ -3945,7 +3927,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         max_window::Int = 500,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
         substitution_error_rate::Union{Nothing, Float64} = nothing,
-        read_improver::F = improve_read_likelihood,
+        read_improver::F = improve_read_likelihood
 )::Tuple{FASTX.FASTQ.Record, Bool, Int, Int} where {F}
     _validate_indel_window_sources(
         indel_window_sources, cleaned_graph, cleaned_weighted_graph)
@@ -4024,7 +4006,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
             if soft_weights !== nothing
                 _merge_soft_edge_weights!(
                     soft_weights,
-                    Base.something(staged_soft_weights),
+                    Base.something(staged_soft_weights)
                 )
             end
             continue
@@ -4034,7 +4016,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         dseq_chars = collect(dseq)
         dqual_chars = collect(dqual)
         if !_indel_window_terminal_anchor_matches(
-                seq_chars, dseq_chars, hi, overlap_suffix)
+            seq_chars, dseq_chars, hi, overlap_suffix)
             # The preceding window owns the shared coordinates, while the next
             # decode starts from their original k-mer. Accept the correction only
             # when both independent decodes therefore meet at the same graph state.
@@ -4052,7 +4034,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
                 dseq_chars,
                 dqual_chars,
                 lo,
-                overlap_prefix,
+                overlap_prefix
             )
             if trimmed === nothing
                 diagnostics === nothing ||
@@ -4091,7 +4073,7 @@ function improve_read_likelihood_windowed_detail(read::FASTX.FASTQ.Record, graph
         if accepted_window && soft_weights !== nothing
             _merge_soft_edge_weights!(
                 soft_weights,
-                something(staged_soft_weights),
+                something(staged_soft_weights)
             )
         end
     end
@@ -4178,7 +4160,7 @@ function _unrestricted_indel_decode_units(
         k::Int,
         hard_vertices::Union{Nothing, AbstractSet},
         windowed_decode::Bool,
-        graph_mode::Symbol,
+        graph_mode::Symbol
 )::Int
     if !windowed_decode || hard_vertices === nothing ||
        !_windowed_decode_read_is_long(read, k)
@@ -4191,7 +4173,7 @@ function _unrestricted_indel_decode_units(
         pad = k,
         max_window = _INDEL_FRONTIER_MAX_WINDOW,
         graph_mode = graph_mode,
-        complete_span = true,
+        complete_span = true
     )
     return count(window -> length(window) >= k, windows)
 end
@@ -4465,7 +4447,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
         indel_schedule::Symbol = :unrestricted,
         rung_telemetry::Union{Nothing, Dict{Symbol, Any}} = nothing,
         memory_limit::Union{Nothing, Int} = nothing,
-        weighted_graph_builder::W = build_correction_weighted_graph,
+        weighted_graph_builder::W = build_correction_weighted_graph
 )::Tuple{Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool} where {W}
     return Mycelia.Rhizomorph._with_soft_edge_weight_scope(
         graph, prior_soft_weights) do
@@ -4493,7 +4475,7 @@ function improve_read_set_likelihood(reads::Vector{<:FASTX.FASTQ.Record}, graph,
             indel_schedule = indel_schedule,
             rung_telemetry = rung_telemetry,
             memory_limit = memory_limit,
-            weighted_graph_builder = weighted_graph_builder,
+            weighted_graph_builder = weighted_graph_builder
         )
     end
 end
@@ -4521,7 +4503,7 @@ function _improve_read_set_likelihood_impl(
         indel_schedule::Symbol,
         rung_telemetry::Union{Nothing, Dict{Symbol, Any}},
         memory_limit::Union{Nothing, Int},
-        weighted_graph_builder::W,
+        weighted_graph_builder::W
 )::Tuple{Vector{FASTX.FASTQ.Record}, Int, Float64, Int, Bool} where {W}
     indel_schedule in (:unrestricted, :frontier_budgeted) ||
         throw(ArgumentError("indel_schedule must be :unrestricted or " *
@@ -4639,7 +4621,7 @@ function _improve_read_set_likelihood_impl(
                 k,
                 hard_vertices,
                 windowed_decode,
-                graph_mode,
+                graph_mode
             )
         end
         pass_indel_telemetry[:requested] = requested_units
@@ -4659,7 +4641,7 @@ function _improve_read_set_likelihood_impl(
             indel_params, graph_mode;
             prior_soft_weights = prior_soft_weights,
             memory_limit = memory_limit,
-            weighted_graph_builder = weighted_graph_builder,
+            weighted_graph_builder = weighted_graph_builder
         )
         pass_indel_telemetry[:requested] = decision.requested
         pass_indel_telemetry[:admitted] = decision.admitted
@@ -4675,13 +4657,12 @@ function _improve_read_set_likelihood_impl(
         indel_admitted = decision.admitted
         scheduled_weighted_graph_oom = decision.decision_reason in (
             :weighted_graph_out_of_memory,
-            :cleaning_out_of_memory,
+            :cleaning_out_of_memory
         )
         # Retain the full map even when every pair-HMM window is rejected: those
         # entries explicitly route the same bounded windows through substitution.
         scheduled_window_sources = decision.window_sources
-        pass_indel_telemetry[:bounded_windowing_forced] =
-            !isempty(scheduled_window_sources)
+        pass_indel_telemetry[:bounded_windowing_forced] = !isempty(scheduled_window_sources)
         if indel_admitted
             scheduled_weighted_graph = decision.raw_weighted_graph
             scheduled_cleaned_graph = decision.cleaned_graph
@@ -4718,7 +4699,7 @@ function _improve_read_set_likelihood_impl(
 
     scheduled_sources = Set(
         source for sources in values(scheduled_window_sources)
-        for source in values(sources))
+    for source in values(sources))
     needs_raw_weighted_graph = isempty(scheduled_sources) ||
                                :raw in scheduled_sources ||
                                :substitution in scheduled_sources
@@ -4726,13 +4707,12 @@ function _improve_read_set_likelihood_impl(
     # fallback, which needs one raw weighted copy. Honor the configured memory
     # ceiling before allocating it. Explicit :unrestricted semantics and the
     # profile-disabled legacy path bypass this scheduler-specific gate.
-    substitution_memory_gated =
-        indel_schedule == :frontier_budgeted &&
-        !isempty(scheduled_sources) &&
-        needs_raw_weighted_graph &&
-        scheduled_weighted_graph === nothing &&
-        (scheduled_weighted_graph_oom ||
-         !_indel_graph_variants_fit_memory(decode_graph, 2, memory_limit))
+    substitution_memory_gated = indel_schedule == :frontier_budgeted &&
+                                !isempty(scheduled_sources) &&
+                                needs_raw_weighted_graph &&
+                                scheduled_weighted_graph === nothing &&
+                                (scheduled_weighted_graph_oom ||
+                                 !_indel_graph_variants_fit_memory(decode_graph, 2, memory_limit))
     if substitution_memory_gated
         pass_decode_off = true
         pass_indel_telemetry[:substitution_decode_memory_gated] = true
@@ -4813,8 +4793,7 @@ function _improve_read_set_likelihood_impl(
     # Capture the completed raw+cleaned snapshot here and bind it around every
     # child iteration. The snapshot is copy-on-write/read-only, so all children
     # may share it without locking; an unrelated child with no binding stays raw.
-    parallel_soft_edge_weight_snapshot =
-        Mycelia.Rhizomorph._current_soft_edge_weight_snapshot()
+    parallel_soft_edge_weight_snapshot = Mycelia.Rhizomorph._current_soft_edge_weight_snapshot()
 
     # Process in batches for memory efficiency. `work_reads` is the Stage 0
     # cheaply-corrected read set (== `reads` when cheap_correct is off), so the
@@ -4856,13 +4835,14 @@ function _improve_read_set_likelihood_impl(
                             weighted_graph = pass_weighted_graph,
                             cleaned_graph = scheduled_cleaned_graph,
                             cleaned_weighted_graph =
-                                scheduled_cleaned_weighted_graph,
+                            scheduled_cleaned_weighted_graph,
                             indel_window_sources = read_window_sources,
                             diagnostics = diag,
                             calibrated_gap_threshold = calibrated_gap_threshold,
                             indel_params = effective_indel_params,
-                            substitution_error_rate = substitution_error_rate,
-                        ) : improve_read_likelihood(
+                            substitution_error_rate = substitution_error_rate
+                        ) :
+                                       improve_read_likelihood(
                             read, decode_graph, k;
                             graph_mode = graph_mode,
                             beam_width = beam_width,
@@ -4870,7 +4850,7 @@ function _improve_read_set_likelihood_impl(
                             diagnostics = diag,
                             indel_params = effective_indel_params,
                             substitution_error_rate = substitution_error_rate,
-                            calibrated_gap_threshold = calibrated_gap_threshold,
+                            calibrated_gap_threshold = calibrated_gap_threshold
                         )
                         batch_results[i] = (improved_read, was_improved)
                     end
@@ -4937,8 +4917,16 @@ function _improve_read_set_likelihood_impl(
             println("    Batch $batch_num/$total_batches: $(batch_improvements)/$(length(batch_reads)) improvements ($(round(improvement_rate, digits=1))%)")
         end
 
-        # Force garbage collection between batches for memory efficiency
-        if batch_end < total_reads
+        # Between-batch GC is opt-in (td-jbjd opt5). The forced stop-the-world
+        # GC.gc() here parked ALL @threads decode workers between batches — the
+        # mechanism most consistent with the observed ~286% CPU on a flat/bounded
+        # memory plateau — while buying nothing once memory is already bounded.
+        # Default OFF (the speedup); a memory-constrained host can re-enable it via
+        # MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES. GC is output-neutral, so corrected
+        # reads are byte-identical either way. (The OOM-handler GC.gc(true) calls
+        # elsewhere in this file are unaffected — they stay for fail-closed safety.)
+        if batch_end < total_reads &&
+           get(ENV, "MYCELIA_CORRECTOR_GC_BETWEEN_BATCHES", "false") in ("1", "true", "yes")
             GC.gc()
         end
     end
@@ -4989,8 +4977,8 @@ function _improve_read_set_likelihood_impl(
         @warn "iterative corrector: pair-HMM traceback contract failed; rejected " *
               "decode(s) before correction or soft-EM side effects." total_reads trace_contract_errors = trace_contract_this_pass
     end
-    window_anchor_rejections_this_pass =
-        diag.window_anchor_rejections[] - window_anchor_rejections_before
+    window_anchor_rejections_this_pass = diag.window_anchor_rejections[] -
+                                         window_anchor_rejections_before
     if window_anchor_rejections_this_pass > 0
         @warn "iterative corrector: rejected independently decoded indel window(s) " *
               "whose terminal overlap did not match the following window's " *
@@ -5000,10 +4988,10 @@ function _improve_read_set_likelihood_impl(
     attempted_indel_this_pass = diag.indel_attempts[] - indel_attempts_before
     if attempted_indel_this_pass > 0 &&
        truncated_this_pass / attempted_indel_this_pass >= 0.5
-        @warn "iterative corrector: high noncompleted pair-HMM decode fraction; " *
-              "truncated/no-path/failed calls were rejected before correction or " *
-              "soft-EM side effects." total_reads attempted_indel_outcomes = attempted_indel_this_pass truncated_decodes = truncated_this_pass fraction = round(
-            truncated_this_pass / attempted_indel_this_pass, digits = 3)
+        @warn "iterative corrector: high noncompleted pair-HMM decode fraction; "*
+              "truncated/no-path/failed calls were rejected before correction or "*
+              "soft-EM side effects." total_reads attempted_indel_outcomes=attempted_indel_this_pass truncated_decodes=truncated_this_pass fraction=round(
+            truncated_this_pass/attempted_indel_this_pass, digits = 3)
     end
 
     # A requested calibrated gate that silently fell open on a substitution decode
@@ -5044,19 +5032,15 @@ function _improve_read_set_likelihood_impl(
         else
             @warn "iterative corrector: substitution decode reconstruction was "*
                   "length-divergent; failed open to the original (uncorrected) read to "*
-            "preserve the length contract." total_reads substitution_length_divergences=subst_len_div_this_pass fraction=round(
+                  "preserve the length contract." total_reads substitution_length_divergences=subst_len_div_this_pass fraction=round(
                 subst_len_div_fraction, digits = 3)
         end
     end
 
-    pass_indel_telemetry[:attempted] =
-        diag.indel_attempts[] - indel_attempts_before
-    pass_indel_telemetry[:completed] =
-        diag.indel_decodes[] - indel_decodes_before
-    pass_indel_telemetry[:truncated] =
-        diag.truncated_decodes[] - truncated_before
-    pass_indel_telemetry[:engaged] =
-        diag.indel_engaged[] - indel_engaged_before
+    pass_indel_telemetry[:attempted] = diag.indel_attempts[] - indel_attempts_before
+    pass_indel_telemetry[:completed] = diag.indel_decodes[] - indel_decodes_before
+    pass_indel_telemetry[:truncated] = diag.truncated_decodes[] - truncated_before
+    pass_indel_telemetry[:engaged] = diag.indel_engaged[] - indel_engaged_before
     _validate_indel_telemetry_counters(
         pass_indel_telemetry; context = "live indel telemetry")
 
@@ -5855,14 +5839,14 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     # Calculate summary statistics
     total_iterations = _checkpoint_checked_sum(
         (length(iterations) for iterations in values(iteration_history)),
-        "final iteration count",
+        "final iteration count"
     )
     total_improvements = _checkpoint_checked_sum(
         (
             iter[:improvements_made]
-            for iterations in values(iteration_history) for iter in iterations
+        for iterations in values(iteration_history) for iter in iterations
         ),
-        "final total_improvements",
+        "final total_improvements"
     )
 
     # The historical API materializes every corrected sequence by default. Disk-
@@ -5900,7 +5884,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :trace_contract_errors => 0,
             :window_anchor_rejections => 0,
             :window_divergences => 0,
-            :substitution_length_divergences => 0,
+            :substitution_length_divergences => 0
         )
     else
         Dict(
@@ -5914,30 +5898,29 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
             :trace_contract_errors => diagnostics.trace_contract_errors[],
             :window_anchor_rejections => diagnostics.window_anchor_rejections[],
             :window_divergences => diagnostics.window_divergences[],
-            :substitution_length_divergences =>
-                diagnostics.substitution_length_divergences[],
+            :substitution_length_divergences => diagnostics.substitution_length_divergences[]
         )
     end
 
     indel_requested = _checkpoint_checked_sum(
         (get(rung, :requested, 0) for rung in indel_rung_telemetry),
-        "final indel requested total",
+        "final indel requested total"
     )
     indel_attempted = _checkpoint_checked_sum(
         (get(rung, :attempted, 0) for rung in indel_rung_telemetry),
-        "final indel attempted total",
+        "final indel attempted total"
     )
     indel_completed = _checkpoint_checked_sum(
         (get(rung, :completed, 0) for rung in indel_rung_telemetry),
-        "final indel completed total",
+        "final indel completed total"
     )
     indel_truncated = _checkpoint_checked_sum(
         (get(rung, :truncated, 0) for rung in indel_rung_telemetry),
-        "final indel truncated total",
+        "final indel truncated total"
     )
     indel_engaged = _checkpoint_checked_sum(
         (get(rung, :engaged, 0) for rung in indel_rung_telemetry),
-        "final indel engaged total",
+        "final indel engaged total"
     )
 
     # Per-pass skip-fraction summary (FIX 6): min/mean/max across every k+iteration
@@ -5960,7 +5943,7 @@ function finalize_iterative_assembly(output_dir::String, k_progression::Vector{I
     # Stage 0 cheap-correction totals (td-bjnt).
     total_cheap_corrections = _checkpoint_checked_sum(
         cheap_correction_counts,
-        "final cheap correction total",
+        "final cheap correction total"
     )
 
     # Create comprehensive metadata
@@ -6082,7 +6065,7 @@ function iterative_assembly_summary(result::Dict)::String
         iterations = metadata[:iteration_history][k]
         total_improvements_k = _checkpoint_checked_sum(
             (iter[:improvements_made] for iter in iterations),
-            "report improvements for k=$k",
+            "report improvements for k=$k"
         )
         report *= "  k=$k: $(length(iterations)) iterations, $total_improvements_k improvements\n"
     end
@@ -6149,7 +6132,7 @@ function _iterative_viterbi_correction_config(;
         beam_score_margin::Float64,
         record_position_gaps::Bool,
         indel_params::Union{Nothing, IndelDecodeParams} = nothing,
-        substitution_error_rate::Union{Nothing, Float64} = nothing,
+        substitution_error_rate::Union{Nothing, Float64} = nothing
 )::Mycelia.ViterbiCorrectionConfig
     if indel_params !== nothing && substitution_error_rate !== nothing
         throw(ArgumentError(
@@ -6168,7 +6151,7 @@ function _iterative_viterbi_correction_config(;
             beam_width = beam_width,
             max_successors_per_state = max_successors_per_state,
             beam_score_margin = beam_score_margin,
-            record_position_gaps = record_position_gaps,
+            record_position_gaps = record_position_gaps
         )
     elseif indel_params === nothing
         return Mycelia.ViterbiCorrectionConfig(
@@ -6179,7 +6162,7 @@ function _iterative_viterbi_correction_config(;
             max_successors_per_state = max_successors_per_state,
             beam_score_margin = beam_score_margin,
             error_rate = substitution_error_rate,
-            record_position_gaps = record_position_gaps,
+            record_position_gaps = record_position_gaps
         )
     end
 
@@ -6199,7 +6182,7 @@ function _iterative_viterbi_correction_config(;
         deletion_max_run = indel_params.deletion_max_run,
         max_insertion_run = indel_params.max_insertion_run,
         band_width = indel_params.band_width,
-        record_position_gaps = record_position_gaps,
+        record_position_gaps = record_position_gaps
     )
 end
 
@@ -6219,7 +6202,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         substitution_error_rate::Union{Nothing, Float64} = nothing,
         calibrated_gap_threshold::Union{Float64, Nothing} = nothing,
         correction_kernel::F = Mycelia.correct_observations,
-        likelihood_calculator::L = Mycelia.calculate_sequence_likelihood,
+        likelihood_calculator::L = Mycelia.calculate_sequence_likelihood
 )::Union{Tuple{FASTX.FASTQ.Record, Float64}, Nothing} where {F, L}
     indel_attempt_started = false
     indel_outcome_recorded = false
@@ -6306,7 +6289,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             beam_score_margin = effective_margin,
             record_position_gaps = calibrated_gap_threshold !== nothing,
             indel_params = indel_params,
-            substitution_error_rate = substitution_error_rate,
+            substitution_error_rate = substitution_error_rate
         )
         if indel_params !== nothing && diagnostics !== nothing
             Threads.atomic_add!(diagnostics.indel_attempts, 1)
@@ -6331,9 +6314,9 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.truncated_decodes, 1)
                 reason = get(path_diagnostics, :reason, nothing)
                 if !(reason in (
-                        :no_finite_start_emission,
-                        :no_surviving_path,
-                        :target_unreachable,
+                    :no_finite_start_emission,
+                    :no_surviving_path,
+                    :target_unreachable
                 ))
                     Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
                 end
@@ -6375,12 +6358,11 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             completed_columns = get(path_diagnostics, :completed_columns, nothing)
             decoded_read_index = get(
                 path_diagnostics, :decoded_read_index, nothing)
-            complete_trace_contract =
-                truncated === false &&
-                typeof(completed_columns) === Int &&
-                completed_columns == length(observations) &&
-                typeof(decoded_read_index) === Int &&
-                decoded_read_index == length(observations)
+            complete_trace_contract = truncated === false &&
+                                      typeof(completed_columns) === Int &&
+                                      completed_columns == length(observations) &&
+                                      typeof(decoded_read_index) === Int &&
+                                      decoded_read_index == length(observations)
             if !complete_trace_contract
                 if diagnostics !== nothing
                     Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
@@ -6394,39 +6376,39 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 path_diagnostics, :read_index_trace, nothing)
             move_counts = get(path_diagnostics, :move_counts, nothing)
             decoded_graph_path = path_result.path
-            trace_field_types_valid =
-                move_trace isa AbstractVector{Symbol} &&
-                read_index_trace isa AbstractVector{Int} &&
-                move_counts isa AbstractDict{Symbol, Int} &&
-                decoded_graph_path !== nothing
-            move_count_contract =
-                trace_field_types_valid &&
-                length(move_counts) == 3 &&
-                all(haskey(move_counts, phase) for phase in (:M, :I, :D)) &&
-                all(
-                    typeof(move_counts[phase]) === Int &&
-                    move_counts[phase] >= 0
-                    for phase in (:M, :I, :D)
-                ) &&
-                all(
-                    move_counts[phase] == count(==(phase), move_trace)
-                    for phase in (:M, :I, :D)
-                )
-            graph_trace_contract =
-                trace_field_types_valid &&
-                typeof(get(path_diagnostics, :path_length, nothing)) === Int &&
-                path_diagnostics[:path_length] ==
-                length(decoded_graph_path.steps) &&
-                length(decoded_graph_path.steps) ==
-                count(!=(:I), move_trace) &&
-                length(corrected_path) == length(decoded_graph_path.steps) &&
-                all(
-                    isequal(
-                        corrected_path[index],
-                        decoded_graph_path.steps[index].vertex_label,
-                    )
-                    for index in eachindex(corrected_path)
-                )
+            trace_field_types_valid = move_trace isa AbstractVector{Symbol} &&
+                                      read_index_trace isa AbstractVector{Int} &&
+                                      move_counts isa AbstractDict{Symbol, Int} &&
+                                      decoded_graph_path !== nothing
+            move_count_contract = trace_field_types_valid &&
+                                  length(move_counts) == 3 &&
+                                  all(haskey(move_counts, phase)
+                                  for phase in (:M, :I, :D)) &&
+                                  all(
+                                      typeof(move_counts[phase]) === Int &&
+                                      move_counts[phase] >= 0
+                                  for phase in (:M, :I, :D)
+                                  ) &&
+                                  all(
+                                      move_counts[phase] == count(==(phase), move_trace)
+                                  for phase in (:M, :I, :D)
+                                  )
+            graph_trace_contract = trace_field_types_valid &&
+                                   typeof(get(path_diagnostics, :path_length, nothing)) ===
+                                   Int &&
+                                   path_diagnostics[:path_length] ==
+                                   length(decoded_graph_path.steps) &&
+                                   length(decoded_graph_path.steps) ==
+                                   count(!=(:I), move_trace) &&
+                                   length(corrected_path) ==
+                                   length(decoded_graph_path.steps) &&
+                                   all(
+                                       isequal(
+                                           corrected_path[index],
+                                           decoded_graph_path.steps[index].vertex_label
+                                       )
+                                   for index in eachindex(corrected_path)
+                                   )
             if !(move_count_contract && graph_trace_contract)
                 if diagnostics !== nothing
                     Threads.atomic_add!(diagnostics.trace_contract_errors, 1)
@@ -6437,8 +6419,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
             end
             validated_move_trace = move_trace
             validated_read_index_trace = read_index_trace
-            indel_trace_engaged =
-                move_counts[:I] + move_counts[:D] > 0
+            indel_trace_engaged = move_counts[:I] + move_counts[:D] > 0
         end
         corrected_sequence = Mycelia.Rhizomorph.path_to_sequence(corrected_path, graph)
         corrected_sequence_string = corrected_sequence isa AbstractString ?
@@ -6555,7 +6536,8 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
                 Threads.atomic_add!(diagnostics.substitution_length_divergences, 1)
             return nothing
         end
-        improved_quality, improved_likelihood = if indel_params === nothing
+        improved_quality,
+        improved_likelihood = if indel_params === nothing
             likelihood = likelihood_calculator(
                 corrected_sequence_string, quality_scores, graph, k;
                 graph_mode = graph_mode)
@@ -6574,7 +6556,7 @@ function try_viterbi_path_improvement(read::FASTX.FASTQ.Record,
         if soft_weights !== nothing
             _merge_soft_edge_weights!(
                 soft_weights,
-                something(staged_soft_weights),
+                something(staged_soft_weights)
             )
         end
         if indel_params !== nothing && diagnostics !== nothing
